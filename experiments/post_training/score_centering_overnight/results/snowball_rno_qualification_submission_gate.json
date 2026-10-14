@@ -1,0 +1,23 @@
+{
+  "run_id": "sc-snowball-runtime-qual-rno-noise005-sc-s0-a0-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "config_sha256": "060d669150560309ff2d9d424e0a60058693ab6fa86fe02893483f97bc639c0f",
+  "planned_updates": 5,
+  "purpose": "Qualify the exact five-node native Snowball GPU path on RNO before any long paired placement there; does not replace any1200 main or130 staleness calibration.",
+  "cluster": "cw-rno2a",
+  "priority": "batch",
+  "nodes": 5,
+  "gpus_per_node": 8,
+  "noise_scale": 0.05,
+  "sampler_refresh_period": 1,
+  "geometry": "Four8-H100 learners plus one8-H100 inference node; native PP2/EP8/TP1/CP1/SP1.",
+  "actual_gate_required": [
+    "All five finite applied updates with aligned naturalK128/chosen-q/TIS2, current attempt provenance, fixed512-response native batches and checkpoint5.",
+    "Full validation at0/5 and native grade replay/error disposition; usable rollouts, no quality improvement threshold.",
+    "Real FlashAttention on both pipeline stages and256 global-expert delta identity matching retained calibration."
+  ],
+  "preflight_exit_code": 0,
+  "preflight_log_sha256": "1241ce3245491241a386996e14af050bdc9fb8dbca4a95cdf64676c36553937a",
+  "completion_claim": false,
+  "observed_capacity": "Read-only21:46 snapshot: east256/256GPUsreserved/23pending; RNO500/512reserved/1pending with63 readyH100nodes. Neither snapshot reserves resources."
+}

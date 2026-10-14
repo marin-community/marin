@@ -68,7 +68,11 @@ def main() -> None:
             continue
         value = read_json(path)
         if isinstance(value, dict) and value.get("audit_passed") is True:
-            audits[value["run_id"]] = str(path.relative_to(repository))
+            audits[value["run_id"]] = {
+                "path": str(path.relative_to(repository)),
+                "archive_after_ms": value.get("archive_after_ms", 0),
+                "completed_updates": value["completed_updates"],
+            }
 
     for observed in csv.DictReader(args.jobs.open()):
         job_id = observed["job_id"]
@@ -102,15 +106,23 @@ def main() -> None:
         )
         assert row["priority_band"] == {"interactive": 2, "batch": 3}[row["priority"]]
         run_id = job_id.rsplit("/", 1)[-1]
-        if state == 4 and run_id in audits:
-            row["retained_audit"] = audits[run_id]
+        if run_id in audits:
+            row["retained_audit"] = audits[run_id]["path"]
+            row["scientific_completed_updates"] = audits[run_id]["completed_updates"]
 
     now = datetime.now(UTC)
     registry.update(observed_at=now.isoformat(), jobs=list(jobs.values()))
     costs = json.loads((campaign / "costs.json").read_text())
     attempts = {(row["task_id"], row["attempt_uid"]): row for row in costs["attempts"]}
     active = [row for row in costs.get("active_attempts", []) if row["cluster"] != args.cluster]
-    for observed in csv.DictReader(args.attempts.open()):
+    observed_attempts = list(csv.DictReader(args.attempts.open()))
+    starts = defaultdict(list)
+    for observed in observed_attempts:
+        if observed["started_at_ms"]:
+            starts[(observed["task_id"].rsplit("/", 1)[0], observed["attempt_id"])].append(
+                int(observed["started_at_ms"])
+            )
+    for observed in observed_attempts:
         job = jobs[observed["task_id"].rsplit("/", 1)[0]]
         key = observed["task_id"], observed["attempt_uid"]
         row = {**attempts.get(key, {}), **observed}
@@ -128,13 +140,24 @@ def main() -> None:
             assert not start or finish >= start
             row["allocated_seconds"] = (finish - start) / 1000 if start else 0
             row["allocated_h100_hours"] = row["allocated_seconds"] * row["gpus"] / 3600
-            row.setdefault(
-                "outcome", "succeeded; audit pending" if int(row["state"]) == 4 else "failed engineering attempt"
+            row["outcome"] = (
+                "task process succeeded; audit pending" if int(row["state"]) == 4 else "failed engineering attempt"
             )
             if row["terminal_reason"].startswith("PodDeleted:"):
                 row["outcome"] = "infrastructure interruption; controller restarted the job"
-            if job.get("retained_audit"):
-                row.update(outcome="succeeded with retained audit", retained_audit=job["retained_audit"])
+            run_id = job["job_id"].rsplit("/", 1)[-1]
+            audit = audits.get(run_id)
+            attempt_starts = starts[(job["job_id"], row["attempt_id"])]
+            selected_attempt = bool(audit and attempt_starts and min(attempt_starts) == audit["archive_after_ms"])
+            row.pop("retained_audit", None)
+            row["scientific_attempt_selected"] = selected_attempt
+            if selected_attempt:
+                row["retained_audit"] = audit["path"]
+                row["scientific_outputs_complete"] = True
+                if int(row["state"]) == 4:
+                    row["outcome"] = "task process succeeded in selected audited scientific attempt"
+            else:
+                row.pop("scientific_outputs_complete", None)
             attempts[key] = row
         elif start:
             row["observed_at"] = now.isoformat()

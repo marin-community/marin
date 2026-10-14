@@ -1,0 +1,9 @@
+{
+  "prior_terminal_attempts": 386,
+  "current_terminal_attempts": 398,
+  "prior_cost_intervals_unchanged": true,
+  "failed_optimizer_attempts_do_not_inherit_success": true,
+  "original_curriculum_sc1_selected_attempt": "0",
+  "curriculum_sc1_later_retries_remain_costs": true,
+  "basis": "Both current controller CSVs and exact per-audit selected start timestamps; task process outcome is separate from scientific completion. Every old interval is numerically unchanged."
+}

@@ -350,7 +350,8 @@
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
       "priority_band": 2,
       "configuration_sha256_basis": "published launcher-input bytes",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_qualification_tis.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_qualification_tis.json",
+      "scientific_completed_updates": 2
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-qual-sc-s0-a0-01a126ce",
@@ -369,7 +370,8 @@
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
       "priority_band": 2,
       "configuration_sha256_basis": "published launcher-input bytes",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_qualification_sc.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_qualification_sc.json",
+      "scientific_completed_updates": 2
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-clean-sc-s0-a0-01a126ce",
@@ -424,7 +426,8 @@
       "status": "terminal",
       "configuration_sha256_basis": "published launcher-input bytes",
       "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_main_noise005_sc_s0.json",
-      "scientific_scope": "native reasoning-stripping diagnostic; not faithful author completion grading"
+      "scientific_scope": "native reasoning-stripping diagnostic; not faithful author completion grading",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s1-a0-01a126ce",
@@ -443,7 +446,8 @@
       "status": "terminal",
       "configuration_sha256_basis": "published launcher-input bytes",
       "scientific_scope": "native reasoning-stripping diagnostic; not faithful author completion grading",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_main_noise005_sc_s1.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_main_noise005_sc_s1.json",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s2-a0-01a126ce",
@@ -462,7 +466,8 @@
       "status": "terminal",
       "configuration_sha256_basis": "published launcher-input bytes",
       "scientific_scope": "native reasoning-stripping diagnostic; not faithful author completion grading",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_groups_noise005_sc_s2.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_groups_noise005_sc_s2.json",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s0-a0-01a126ce",
@@ -499,7 +504,8 @@
       "status": "terminal",
       "configuration_sha256_basis": "published launcher-input bytes",
       "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_main_noise005_tis_s1.json",
-      "scientific_scope": "native reasoning-stripping diagnostic; not faithful author completion grading"
+      "scientific_scope": "native reasoning-stripping diagnostic; not faithful author completion grading",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a0-01a126ce",
@@ -553,7 +559,8 @@
       "priority_band": 2,
       "bundle_id": "50dc26d823ed43a3d2203bb3a42f42afecac4706027b5ea15062b425ab259d2c",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/stale_path_qualification_a1.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/stale_path_qualification_a1.json",
+      "scientific_completed_updates": 6
     },
     {
       "job_id": "/romain/sc-snowball-runtime-qual-sc-s0-a0-01a126ce",
@@ -571,7 +578,8 @@
       "priority_band": 3,
       "bundle_id": "b432408686474da1f792a9add344cec4b86a4eda619afbd3f3f3688c1de85399",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_runtime_qualification_a0.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_runtime_qualification_a0.json",
+      "scientific_completed_updates": 5
     },
     {
       "job_id": "/romain/sc-core-runtime-qual-sc-s0-a0-01a126ce",
@@ -589,7 +597,8 @@
       "priority_band": 3,
       "bundle_id": "9102669611c8889dc5ce17acfa9adac158e37d103dceaf8798b4e4d99c6e0bf6",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/core_runtime_qualification_sc.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/core_runtime_qualification_sc.json",
+      "scientific_completed_updates": 2
     },
     {
       "job_id": "/romain/sc-core-runtime-qual-tis-s0-a0-01a126ce",
@@ -607,7 +616,8 @@
       "priority_band": 3,
       "bundle_id": "9102669611c8889dc5ce17acfa9adac158e37d103dceaf8798b4e4d99c6e0bf6",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/core_runtime_qualification_tis.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/core_runtime_qualification_tis.json",
+      "scientific_completed_updates": 2
     },
     {
       "job_id": "/romain/sc-qwen-transfer-runtime-qual-sc-s0-a0-01a126ce",
@@ -625,7 +635,8 @@
       "priority_band": 2,
       "bundle_id": "f58a9faa6b23139188ea54cc5e632df513aa58e9c579ab3171d7a258ea90d19b",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_runtime_qualification_sc.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_runtime_qualification_sc.json",
+      "scientific_completed_updates": 2
     },
     {
       "job_id": "/romain/sc-qwen-transfer-runtime-qual-tis-s0-a0-01a126ce",
@@ -643,7 +654,8 @@
       "priority_band": 2,
       "bundle_id": "8d7f3542b260298dc18a605e195c9be92c22397cdcc46af24b700dd7e2b0807f",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_runtime_qualification_tis.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_runtime_qualification_tis.json",
+      "scientific_completed_updates": 2
     },
     {
       "job_id": "/romain/sc-snowball-runtime-qual-sc-s0-a1-01a126ce",
@@ -661,7 +673,8 @@
       "priority_band": 3,
       "bundle_id": "9d0b368b62d6db4dfd38d9ecc5538d4f6a50058e65a407ba44b0c82dc2da828c",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_runtime_qualification_a1.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_runtime_qualification_a1.json",
+      "scientific_completed_updates": 5
     },
     {
       "job_id": "/romain/sc-snowball-noise-calibration-001-tis-s0-a1-01a126ce",
@@ -679,7 +692,8 @@
       "priority_band": 3,
       "bundle_id": "dd3b57a16092ef2aeca31b20ce42e97d6a1db182e60551a7882d8eece8c82a40",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_noise001_calibration.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_noise001_calibration.json",
+      "scientific_completed_updates": 12
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-qual-sc-s0-a1-01a126ce",
@@ -697,7 +711,8 @@
       "priority_band": 2,
       "bundle_id": "733ad45819bba3e1ce3fb11102d678ea502facfaf07b87ff3dc893a5ed054eb1",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_full_completion_qualification_sc.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_full_completion_qualification_sc.json",
+      "scientific_completed_updates": 2
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-qual-tis-s0-a1-01a126ce",
@@ -714,7 +729,9 @@
       "status": "terminal",
       "priority_band": 2,
       "bundle_id": "733ad45819bba3e1ce3fb11102d678ea502facfaf07b87ff3dc893a5ed054eb1",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_full_completion_qualification_tis.json",
+      "scientific_completed_updates": 2
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s0-a1-01a126ce",
@@ -750,7 +767,8 @@
       "priority_band": 2,
       "bundle_id": "8377e831d77481bcadc688d7e5d94f9180a1ea00633eb2887eecd1c53d856a85",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_full_completion_qualification_tis.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_full_completion_qualification_tis.json",
+      "scientific_completed_updates": 2
     },
     {
       "job_id": "/romain/sc-qwen-transfer-runtime-qual-sc-s0-a1-01a126ce",
@@ -768,7 +786,8 @@
       "priority_band": 2,
       "bundle_id": "8377e831d77481bcadc688d7e5d94f9180a1ea00633eb2887eecd1c53d856a85",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_full_completion_qualification_sc.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_full_completion_qualification_sc.json",
+      "scientific_completed_updates": 2
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s0-a1-01a126ce",
@@ -804,7 +823,8 @@
       "priority_band": 3,
       "bundle_id": "a19dca49fbe2e7a94ff6a8d4a3a0d09a5be4b6b3e6f255f5d5bef32579478236",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_noise002_calibration.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_noise002_calibration.json",
+      "scientific_completed_updates": 12
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s1-a1-01a126ce",
@@ -840,7 +860,8 @@
       "priority_band": 3,
       "bundle_id": "ce1824ebb5ed376c7937cbf170b427cfdd42323d491c2fcd195aaa4497d96198",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_noise005_calibration.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_noise005_calibration.json",
+      "scientific_completed_updates": 12
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a1-01a126ce",
@@ -950,7 +971,8 @@
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
       "allocation_note": "Task CLI reports SchedulingGated with Kueue insufficient unused quota for16 H100 GPUs. No node or execution start is recorded; building is the backend Pending state here.",
       "allocation_evidence": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/reused-publication-sc-task-describe.txt",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/publication_qualification_sc.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/publication_qualification_sc.json",
+      "scientific_completed_updates": 3
     },
     {
       "job_id": "/romain/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce",
@@ -968,7 +990,8 @@
       "priority_band": 3,
       "bundle_id": "4cc56133abbd632e153fca275eebe2544b1644687b405f00d45ef6364f4f38c9",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_reused_publication_qualification_sc.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_reused_publication_qualification_sc.json",
+      "scientific_completed_updates": 2
     },
     {
       "job_id": "/romain/sc-skyrl-publication-qual-tis-s0-a0-01a126ce",
@@ -986,7 +1009,8 @@
       "priority_band": 3,
       "bundle_id": "dd511d6088a4b08d2b7c737a7db3eccc1da8571578dd0ea24aaeb8f6ebded2d3",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/publication_qualification_tis.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/publication_qualification_tis.json",
+      "scientific_completed_updates": 3
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s0-a2-01a126ce",
@@ -1141,7 +1165,8 @@
       "priority_band": 3,
       "bundle_id": "9523a77b3c8a910d27756016f7ffa2cbbe2953a72a0c94dd819e770fa60fe47b",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball617_qualification.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball617_qualification.json",
+      "scientific_completed_updates": 5
     },
     {
       "job_id": "/romain/sc-qwen-transfer-runtime-qual-tis-s0-a2-01a126ce",
@@ -1159,7 +1184,8 @@
       "priority_band": 3,
       "bundle_id": "45fc7866ed3292b8d16215e40f12e7a08e7a62f7d074d0428f20e89a01f2bd3b",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_reused_publication_qualification_tis.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_reused_publication_qualification_tis.json",
+      "scientific_completed_updates": 2
     },
     {
       "job_id": "/romain/sc-snowball-incumbent-runtime-qual-s0-a1-01a126ce",
@@ -1177,7 +1203,8 @@
       "priority_band": 3,
       "bundle_id": "4c0214528638de41c2c19dec20856f5ca03f856c8d3e3297fd798bf66ede230d",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball617_incumbent_qualification.json.gz"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball617_incumbent_qualification.json.gz",
+      "scientific_completed_updates": 5
     },
     {
       "job_id": "/romain/sc-skyrl-publication-qual-sc-s0-a1-01a126ce",
@@ -1195,7 +1222,8 @@
       "priority_band": 3,
       "bundle_id": "c28a9de7868fa59a124b773a966fce7b74247834f963a2512cc97e4d4dd3bcd1",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/append_only_qualification_sc.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/append_only_qualification_sc.json",
+      "scientific_completed_updates": 3
     },
     {
       "job_id": "/romain/sc-skyrl-publication-qual-tis-s0-a1-01a126ce",
@@ -1213,7 +1241,8 @@
       "priority_band": 3,
       "bundle_id": "09da412465aeba5d8fd0cdcd8752b5f8ec9033f3c4c42e75db0c55ecbdbf63c8",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/append_only_qualification_tis.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/append_only_qualification_tis.json",
+      "scientific_completed_updates": 3
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s0-a3-01a126ce",
@@ -1231,7 +1260,8 @@
       "priority_band": 3,
       "bundle_id": "f42aa144498b3c252851c9a8fda35f54494e66fe82bd90e00ff4bc562acbab3a",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-sc-s0-a3-01a126ce.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-sc-s0-a3-01a126ce.json",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-qwen-transfer-runtime-qual-sc-s0-a3-01a126ce",
@@ -1249,7 +1279,8 @@
       "priority_band": 3,
       "bundle_id": "09cee83279fe9243f74cac5d37762675edd66dfd1a6e1a921e322c23edf34df4",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen0212_sc_qualification.json.gz"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen0212_sc_qualification.json.gz",
+      "scientific_completed_updates": 2
     },
     {
       "job_id": "/romain/sc-snowball-runtime-qual-sc-s0-a3-01a126ce",
@@ -1267,7 +1298,8 @@
       "priority_band": 3,
       "bundle_id": "fbaa26afd32d314d1475688b8469e15009d823d24164b0cdfdaceb956bb99248",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball0212_qualification.json.gz"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball0212_qualification.json.gz",
+      "scientific_completed_updates": 5
     },
     {
       "job_id": "/romain/sc-qwen-transfer-runtime-qual-tis-s0-a3-01a126ce",
@@ -1285,7 +1317,8 @@
       "priority_band": 3,
       "bundle_id": "5c6c69d44be90a5a25be832b14d86404b835f439af9fdced4ab39f461cc4f30d",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen0212_tis_qualification.json.gz"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen0212_tis_qualification.json.gz",
+      "scientific_completed_updates": 2
     },
     {
       "job_id": "/romain/sc-snowball-incumbent-runtime-qual-s0-a2-01a126ce",
@@ -1303,7 +1336,8 @@
       "priority_band": 3,
       "bundle_id": "a647efc87416f65696bd02fb831c013d0d276f47579cb452858ab3704d061207",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball0212_incumbent_qualification.json.gz"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball0212_incumbent_qualification.json.gz",
+      "scientific_completed_updates": 5
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-clean-sc-s0-a3-01a126ce",
@@ -1321,7 +1355,8 @@
       "priority_band": 3,
       "bundle_id": "39a560e91f84eed7c4ca1a47087d9a577aff9dc0f9bac3b8d5a673e31a4ba4b4",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-clean-sc-s0-a3-01a126ce.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-clean-sc-s0-a3-01a126ce.json",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-clean-tis-s0-a3-01a126ce",
@@ -1339,7 +1374,8 @@
       "priority_band": 3,
       "bundle_id": "d5f9418c764bc353286cc655b148e7ec5e933749d2e8aba5250e20050ff899ea",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-clean-tis-s0-a3-01a126ce.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-clean-tis-s0-a3-01a126ce.json",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s1-a3-01a126ce",
@@ -1357,7 +1393,8 @@
       "priority_band": 3,
       "bundle_id": "8bf9f9ed519990c52be3f451866ceeea03fbc5d33cc60150ecd58a3aac2c7425",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-sc-s1-a3-01a126ce.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-sc-s1-a3-01a126ce.json",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s2-a3-01a126ce",
@@ -1375,7 +1412,8 @@
       "priority_band": 3,
       "bundle_id": "c56ee90f9526082c8a0265ea3b90ee90a12aa1acb04661291756d7201d4848ae",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-sc-s2-a3-01a126ce.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-sc-s2-a3-01a126ce.json",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s0-a3-01a126ce",
@@ -1393,7 +1431,8 @@
       "priority_band": 3,
       "bundle_id": "a38c42f54f486374430a45c86c2d615130c0040331b1402815115c72041fb5d3",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s0-a3-01a126ce.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s0-a3-01a126ce.json",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce",
@@ -1411,7 +1450,8 @@
       "priority_band": 3,
       "bundle_id": "706889f2a323f86f2f98dda218bf94aa3c7dae3c635a88c3a67c605397aa0b72",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce.json",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce",
@@ -1429,7 +1469,8 @@
       "priority_band": 3,
       "bundle_id": "41d679e0ae8d24a0f5dbcc9ca8b01ab60a575eec6d31984f474909456c9b1730",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce.json",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce",
@@ -1447,7 +1488,8 @@
       "priority_band": 3,
       "bundle_id": "684fd83f938b1edf23d1c7a4b0d636b775f053cab70934c1e675a65a35d167ff",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce.json.gz"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce.json.gz",
+      "scientific_completed_updates": 40
     },
     {
       "job_id": "/romain/sc-qwen-transfer-curriculum-tis-s0-pilot-a3-01a126ce",
@@ -1482,7 +1524,8 @@
       "priority_band": 2,
       "bundle_id": "77f3d5482a8cdf40d419ce7b1975b916c9c69c61f6ee244bc1503faa07a5dee9",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s0-pilot-a4-01a126ce.json.gz"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s0-pilot-a4-01a126ce.json.gz",
+      "scientific_completed_updates": 40
     },
     {
       "job_id": "/romain/sc-qwen-transfer-optimizer-sc-s0-pilot-a4-01a126ce",
@@ -1500,7 +1543,8 @@
       "priority_band": 2,
       "bundle_id": "74da8bec43a75e45467cf10d045e5bb99bb99962f98bae725ec665077e00e1fd",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s0-pilot-a4-01a126ce.json.gz"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s0-pilot-a4-01a126ce.json.gz",
+      "scientific_completed_updates": 40
     },
     {
       "job_id": "/romain/sc-qwen-transfer-optimizer-tis-s0-pilot-a4-01a126ce",
@@ -1518,7 +1562,8 @@
       "priority_band": 2,
       "bundle_id": "74da8bec43a75e45467cf10d045e5bb99bb99962f98bae725ec665077e00e1fd",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s0-pilot-a4-01a126ce.json.gz"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s0-pilot-a4-01a126ce.json.gz",
+      "scientific_completed_updates": 40
     },
     {
       "job_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-main-a2-01a126ce",
@@ -1620,7 +1665,9 @@
       "status": "terminal",
       "priority_band": 3,
       "bundle_id": "b6f0997ba1bc654238a44c250ba77b9ede3c5de6e6ff59e1dc0d0f56f806cea9",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce.json.gz",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-main-a3-01a126ce",
@@ -1672,7 +1719,8 @@
       "priority_band": 2,
       "bundle_id": "29be7ad3938b29cde02ea410d6fa98e7d222f96f065c3474644379869742005a",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-sc-s0-pilot-a4-01a126ce.json.gz"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-sc-s0-pilot-a4-01a126ce.json.gz",
+      "scientific_completed_updates": 40
     },
     {
       "job_id": "/romain/sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce",
@@ -1689,7 +1737,9 @@
       "status": "terminal",
       "priority_band": 2,
       "bundle_id": "a293722e05599f6db6183731e9230a0c41110f9a8d4f0ca52fa65299ccb67894",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce.json.gz",
+      "scientific_completed_updates": 40
     },
     {
       "job_id": "/romain/sc-qwen-transfer-runtime-qual-rno-sc-s0-a1-01a126ce",
@@ -1707,7 +1757,8 @@
       "priority_band": 3,
       "bundle_id": "91be69c0c10bd8f74bb81aac86b21d408469e369b84b2947143dde69842ed53d",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_rno_qualification_v1.json.gz"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_rno_qualification_v1.json.gz",
+      "scientific_completed_updates": 2
     },
     {
       "job_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce",
@@ -1725,7 +1776,8 @@
       "priority_band": 3,
       "bundle_id": "26b86a228c8b7152e1c354137d4d8382b1fea191359a9063894b72ef538ccc17",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce.json.gz"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce.json.gz",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-qwen-transfer-curriculum-sc-s1-main-rno-a1-01a126ce",
@@ -1742,7 +1794,9 @@
       "status": "terminal",
       "priority_band": 3,
       "bundle_id": "c7c74d850032a196bd743e51e5b980de6c4420b273de93bc53d540af3237bc02",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s1-main-rno-a1-01a126ce.json.gz",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-qwen-transfer-curriculum-sc-s2-main-rno-a1-01a126ce",
@@ -1759,7 +1813,9 @@
       "status": "terminal",
       "priority_band": 3,
       "bundle_id": "e31575d5577d680f7b5561ec0ccb119707fa096009f6ca05cccb4c26e4d3a3d4",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s2-main-rno-a1-01a126ce.json.gz",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-qwen-transfer-curriculum-tis-s0-main-rno-a1-01a126ce",
@@ -1811,7 +1867,8 @@
       "priority_band": 3,
       "bundle_id": "b526ef1d84ecaadd42b5a42daa8fa026cfc4715d21e2dfe9aa648823e812e879",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce.json.gz"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce.json.gz",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce",
@@ -1828,7 +1885,9 @@
       "status": "terminal",
       "priority_band": 3,
       "bundle_id": "e1059fca6e8cc7543b4b1902e21501f81a41da62f1feea84b2bdfdc63bcfc2f8",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce.json.gz",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce",
@@ -1845,7 +1904,9 @@
       "status": "terminal",
       "priority_band": 3,
       "bundle_id": "95c3c67242f3620d5b40c3318eb32f5ed03b1578328ac7f42980deef615f3827",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce.json.gz",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-qwen-transfer-optimizer-tis-s0-main-rno-a1-01a126ce",
@@ -1879,7 +1940,9 @@
       "status": "terminal",
       "priority_band": 3,
       "bundle_id": "15af1edf84fb91acf097bdb6c4145eba003d8fd3ebb6f3570d13f9a793323f12",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce.json.gz",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce",
@@ -1896,7 +1959,9 @@
       "status": "terminal",
       "priority_band": 3,
       "bundle_id": "024d1cfdb3007abac7e34e4d6b7ea8751f2178009c5d59580926ee4030a3523f",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce.json.gz",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce",
@@ -1913,7 +1978,9 @@
       "status": "terminal",
       "priority_band": 2,
       "bundle_id": "2de848750e3a1894bf4632a5a5ef8fee5c5809c870388f4604740301438ac005",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce.json.gz",
+      "scientific_completed_updates": 40
     },
     {
       "job_id": "/romain/sc-qwen-transfer-batching-tis-s0-pilot-a4-01a126ce",
@@ -1931,7 +1998,8 @@
       "priority_band": 2,
       "bundle_id": "b08afdd55cc102f8133e3ebb1cc139ae73fcc0b2551a005c4166191deb021332",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-tis-s0-pilot-a4-01a126ce.json.gz"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-tis-s0-pilot-a4-01a126ce.json.gz",
+      "scientific_completed_updates": 40
     },
     {
       "job_id": "/romain/sc-qwen-transfer-advantages-sc-s0-main-rno-a1-01a126ce",
@@ -1965,7 +2033,9 @@
       "status": "terminal",
       "priority_band": 3,
       "bundle_id": "f0a0550d12c9a3897d39498681f999ed4dd897687b08b1b47d348eafe043edf9",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce.json.gz",
+      "scientific_completed_updates": 1200
     },
     {
       "job_id": "/romain/sc-qwen-transfer-native-window-sc-s0-pilot-a4-01a126ce",
@@ -1983,7 +2053,8 @@
       "priority_band": 2,
       "bundle_id": "00ea4c3c9248b831e84c40405092b1f128bcc44b8b0ad36871fc52baab27d425",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-native-window-sc-s0-pilot-a4-01a126ce.json.gz"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-native-window-sc-s0-pilot-a4-01a126ce.json.gz",
+      "scientific_completed_updates": 40
     },
     {
       "job_id": "/romain/sc-qwen-transfer-native-window-tis-s0-pilot-a4-01a126ce",
@@ -2001,7 +2072,8 @@
       "priority_band": 2,
       "bundle_id": "660b723cd8f0a49442337bc7d4969b098126ecbdb090f3545135caec2a2c0b91",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-native-window-tis-s0-pilot-a4-01a126ce.json.gz"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-native-window-tis-s0-pilot-a4-01a126ce.json.gz",
+      "scientific_completed_updates": 40
     },
     {
       "job_id": "/romain/sc-qwen-transfer-curriculum-tis-s1-main-interactive-a1-01a126ce",
@@ -2018,7 +2090,9 @@
       "status": "terminal",
       "priority_band": 2,
       "bundle_id": "7eac7ada1cc3233a856636cc0c07a6862943d5f038f258381cbb752a46cb62c5",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s1-main-interactive-a1-01a126ce.json.gz",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-qwen-transfer-optimizer-tis-s0-main-interactive-a1-01a126ce",
@@ -2036,7 +2110,8 @@
       "priority_band": 2,
       "bundle_id": "d26afaadb73e85d561485b2d22eb07fbb0b32cdd36d129818900858ac020ff8d",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s0-main-interactive-a1-01a126ce.json.gz"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s0-main-interactive-a1-01a126ce.json.gz",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce",
@@ -2496,7 +2571,24 @@
       "priority_band": 3,
       "bundle_id": "3f8f3991b425a649120fd9b19fb9e32e18c5ebfe255628bdf124f1690bd12626",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-snowball-incumbent-main-s0-a2-01a126ce",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "h100_nodes": 5,
+      "h100_per_node": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_incumbent_main_v2/s0.yaml",
+      "configuration_sha256": "7776d7eed7336ba5abc855670dcc6b489141f0c9a6b167bd8c13a89a8bb63699",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-a2-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "071290e5f563621c55a866fe862f74335fe261c2a9c24eb9ce49f2f75489630a",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-14T20:48:19.249228+00:00"
+  "observed_at": "2026-10-14T21:46:38.500127+00:00"
 }
