@@ -41,7 +41,7 @@ import psutil
 from rigging.filesystem.storage_path import StoragePath
 
 from zephyr import counters, memory_budget
-from zephyr.plan import Scatter, StageContext, run_stage
+from zephyr.plan import ParquetOutput, Scatter, StageContext, run_stage
 from zephyr.stage_io import (
     ShardTask,
     StageRunner,
@@ -303,6 +303,7 @@ def _run_stage_with_ctx(
         shard_idx=task.shard_idx,
         scatter_op=scatter_op,
         total_shards=task.total_shards,
+        parquet_output=next((op for op in task.operations if isinstance(op, ParquetOutput)), None),
     )
 
 

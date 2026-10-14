@@ -22,16 +22,7 @@ from taskcompendium.pipeline.models import Controls, Converter, ImportRejection,
 from verifyit.modes.extract import extract_boxed
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
-
-AIME_VERIFIER = SourceReference(
-    "aime",
-    "88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
-    (
-        "https://github.com/marin-community/MarinSkyRL/tree/"
-        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
-    ),
-)
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 MATH_CONTROLS = Controls(golden=reference_reply)
 SOLUTION_FIELDS = ("solution", "answer_type", "extracted_answer", "source")
@@ -309,7 +300,6 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "gym/aime"),
-            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -329,7 +319,6 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "license:mit", "gym/aime"),
-            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -350,7 +339,6 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "gym/aime"),
-            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -370,7 +358,6 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "license:apache-2.0", "gym/aime"),
-            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -390,7 +377,6 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
-            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -410,14 +396,6 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "license:mit", "gym/gsm8k"),
-            verifier=SourceReference(
-                "gsm8k",
-                "60e40a6f794fad7e9527298d901ff35a7dc57f2e3d061661f386fbbea24293bc",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/gsm8k"
-                ),
-            ),
         ),
     ),
     MathSource(
@@ -437,7 +415,6 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "gym/aime"),
-            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -457,7 +434,6 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
-            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -474,7 +450,6 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "gym/aime"),
-            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -494,7 +469,6 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "license:apache-2.0", "gym/aime"),
-            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -514,7 +488,6 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "gym/aime"),
-            verifier=AIME_VERIFIER,
         ),
     ),
     MathSource(
@@ -532,7 +505,6 @@ SOURCES = (
             origin="MarinSkyRL",
             family="math-answer",
             tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
-            verifier=AIME_VERIFIER,
         ),
     ),
 )
