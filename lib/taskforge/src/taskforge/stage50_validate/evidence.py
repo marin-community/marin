@@ -3,6 +3,7 @@
 
 """The trial evidence for one item: outcomes by trial kind, and whether every trial was graded."""
 
+import math
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -20,6 +21,17 @@ class Incomplete:
     """Some trials have no grade; ``causes`` counts them by cause, ``UNCLASSIFIED`` included."""
 
     causes: Counter[Cause]
+
+
+def _solved(outcome: Graded) -> bool:
+    """The grader's pass flag, or else a reward at the scale's maximum, read within float rounding.
+
+    A grader that sums partial credits can land at 0.9999999999999999 for a full solve.
+    """
+    if outcome.grade.passed is not None:
+        return outcome.grade.passed
+    reward, score_max = outcome.reward, outcome.grade.score_max
+    return reward >= score_max or math.isclose(reward, score_max, rel_tol=1e-9, abs_tol=1e-9)
 
 
 @dataclass(frozen=True)
@@ -61,16 +73,14 @@ class Evidence:
         return Incomplete(causes) if causes else Complete()
 
     def reward_stats(self, kind: TrialKind) -> RewardStats:
+        """Reward, solve and failure counts over the graded outcomes of ``kind``."""
         graded = [outcome for outcome in self.outcomes.get(kind, ()) if isinstance(outcome, Graded)]
         retries = self.contract_retries.get(kind, 0)
         if not graded:
             return RewardStats(
                 graded=0, mean_reward=None, solved=0, timed_out=0, candidate_code_errors=0, contract_retries=retries
             )
-        solved = sum(
-            (outcome.reward >= outcome.grade.score_max) if outcome.grade.passed is None else outcome.grade.passed
-            for outcome in graded
-        )
+        solved = sum(_solved(outcome) for outcome in graded)
         return RewardStats(
             graded=len(graded),
             mean_reward=sum(outcome.reward for outcome in graded) / len(graded),

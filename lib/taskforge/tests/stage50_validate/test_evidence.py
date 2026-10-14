@@ -49,6 +49,12 @@ def test_statistics_use_graded_outcomes_only_and_ungraded_ones_make_evidence_inc
     assert evidence.status == Incomplete(Counter({Cause.MACHINE_START: 2, Cause.UNCLASSIFIED: 1}))
 
 
+def test_a_full_reward_within_float_rounding_counts_as_solved():
+    evidence = Evidence({TrialKind.SOLVER: (graded(0.9999999999999999), graded(0.999))}, {})
+
+    assert evidence.reward_stats(TrialKind.SOLVER).solved == 1
+
+
 def test_a_grader_pass_flag_overrides_the_full_reward_rule():
     evidence = Evidence({TrialKind.SOLVER: (graded(0.7, passed=True), graded(1.0, passed=False))}, {})
 
