@@ -46,7 +46,7 @@ ROLE_PLAN = SkyRLRolePlan(
 )
 
 
-def training_config(max_steps: int) -> dict:
+def training_config(max_steps: int, resume_path: str | None = None) -> dict:
     """Render the objective and runtime settings; SkyRLSpec supplies role geometry."""
     with Path(__file__).with_name("recipe.yaml").open() as stream:
         config = yaml.safe_load(stream)
@@ -55,7 +55,10 @@ def training_config(max_steps: int) -> dict:
         max_steps=max_steps,
         flash_attn=False,
         offload_optimizer_during_rollouts=True,
-        resume_mode="none",
+        resume_mode="from_path" if resume_path is not None else "none",
+        resume_path=resume_path,
+        restore_dataloader_state=True,
+        reset_global_step_on_resume=False,
         evaluation_runner="training",
         tracker_commit_each_step=True,
     )
@@ -89,7 +92,9 @@ def training_config(max_steps: int) -> dict:
     return config
 
 
-def build_run(*, model_uri: str, data_uri: str, data_version: str, max_steps: int) -> ArtifactStep:
+def build_run(
+    *, model_uri: str, data_uri: str, data_version: str, max_steps: int, resume_path: str | None = None
+) -> ArtifactStep:
     """Bind regional model bytes and native train/validation tasks to a 112-H100 run."""
     name = user_owned_name("models/snowball-smartie")
     model = ArtifactStep.adopt(
@@ -104,7 +109,7 @@ def build_run(*, model_uri: str, data_uri: str, data_version: str, max_steps: in
         SkyRLSpec(
             name=name,
             version=resolve_version(name, None),
-            config_yaml=yaml.safe_dump(training_config(max_steps), sort_keys=False),
+            config_yaml=yaml.safe_dump(training_config(max_steps, resume_path), sort_keys=False),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
                 step=model, tokenizer_uri=MODEL_REPOSITORY, tokenizer_revision=MODEL_REVISION, relative_path=""
@@ -138,13 +143,15 @@ def build_run(*, model_uri: str, data_uri: str, data_version: str, max_steps: in
 @click.option("--data-uri", required=True, help="Admitted mixed native-task directory, including validation.parquet.")
 @click.option("--data-version", required=True, help="Immutable admitted dataset version.")
 @click.option("--max-steps", type=click.IntRange(min=2), default=2, show_default=True)
+@click.option("--resume-path", help="Complete native training checkpoint; max-steps is the total update target.")
 @rl_build_options
-def main(model_uri: str, data_uri: str, data_version: str, max_steps: int) -> ArtifactStep:
+def main(model_uri: str, data_uri: str, data_version: str, max_steps: int, resume_path: str | None) -> ArtifactStep:
     return build_run(
         model_uri=model_uri,
         data_uri=data_uri,
         data_version=data_version,
         max_steps=max_steps,
+        resume_path=resume_path,
     )
 
 

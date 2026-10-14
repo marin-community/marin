@@ -29,18 +29,25 @@ print(json.dumps({
     "verified_boundaries": objective.boundary.uses_verified_boundaries,
     "sampling_kind": launch.skyrl.data.sampling.kind,
     "domain_weights": dict(launch.skyrl.data.sampling.domain_weights),
+    "resume_mode": launch.skyrl.trainer.resume_mode,
+    "resume_path": launch.skyrl.trainer.resume_path,
+    "restore_dataloader_state": launch.skyrl.trainer.restore_dataloader_state,
+    "reset_global_step_on_resume": launch.skyrl.trainer.reset_global_step_on_resume,
 }))
 """
 
 
 @pytest.mark.timeout(180)  # Cold installs resolve the pinned CPU launcher in its own environment.
-def test_joint_recipe_crosses_pinned_launcher_boundary(tmp_path):
+@pytest.mark.parametrize("resume", [False, True])
+def test_joint_recipe_crosses_pinned_launcher_boundary(tmp_path, resume):
+    resume_path = str(tmp_path / "global_step_2") if resume else None
     with build_context(BuildContext(versions=VersionCodex(default="dev"))):
         run = build_run(
             model_uri=str(tmp_path / "model"),
             data_uri=str(tmp_path / "data"),
             data_version="dev",
-            max_steps=2,
+            max_steps=6 if resume else 2,
+            resume_path=resume_path,
         )
     launch = run.build_config(StepContext.for_fingerprint(run.runtime_args, run.deps))
     path = tmp_path / "launch.yaml"
@@ -66,4 +73,8 @@ def test_joint_recipe_crosses_pinned_launcher_boundary(tmp_path):
             "stem_mcqa": 0.5,
             "structural": 1.0,
         },
+        "resume_mode": "from_path" if resume else "none",
+        "resume_path": resume_path,
+        "restore_dataloader_state": True,
+        "reset_global_step_on_resume": False,
     }
