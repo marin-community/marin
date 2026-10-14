@@ -268,7 +268,11 @@ def _resumed_record(
     try:
         record = read_record(record_path(records_prefix, resume_run_id))
     except FileNotFoundError as exc:
-        raise ValueError(f"No saved record for --resume-run-id {resume_run_id!r} under {records_prefix}") from exc
+        raise ValueError(
+            f"No saved record for --resume-run-id {resume_run_id!r} under {records_prefix}. "
+            "Check --platform and --accelerator, which determine the default records prefix, "
+            "or pass the original --records-prefix."
+        ) from exc
     previous_model = record.model
     if (
         record.run_id != resume_run_id

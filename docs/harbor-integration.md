@@ -77,6 +77,14 @@ uv run python -m experiments.evaluation.cli launch \
 Harbor policies pass pinned-schema and placeholder effective-job validation before the launcher
 opens an Iris client.
 
+To resume one Harbor run, pass its run ID with `--resume-run-id` and the original model, Harbor
+policy, runtime, version, and hosted judge settings. Wait for the original Iris group and any earlier
+retry to end before launching another: the saved record can be stale while a retry runs, and two
+Harbor drivers would share the same results directory. The default records prefix depends on the
+selected accelerator's target cluster. Use the original `--platform` and `--accelerator`, or pass
+the original `--records-prefix` explicitly.
+Add `--retry-unscored-harbor-trials` to retry known unscored trials; scored outcomes remain intact.
+
 ## Credentials
 
 Daytona-backed definitions in `experiments/evaluation/evals.py` own their credential references.

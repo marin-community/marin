@@ -175,7 +175,7 @@ def cli() -> None:
     help="Harbor JobConfig YAML or JSON. Repeatable and additive with --evals.",
 )
 @click.option(
-    "--resume-run-id", default=None, help="Resume one Harbor run from its saved record under --records-prefix."
+    "--resume-run-id", default=None, help="Resume one Harbor run from its record after all earlier Iris groups end."
 )
 @click.option(
     "--retry-unscored-harbor-trials",

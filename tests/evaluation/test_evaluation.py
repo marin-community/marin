@@ -2157,3 +2157,10 @@ def test_cli_recovers_existing_harbor_run_without_repeating_scored_trials(tmp_pa
     assert "model configuration differs" in rejected.output
     assert read_record(str(record_file)) == repaired
     assert all(trial_files[name].read_bytes() == payload for name, payload in scored_bytes.items())
+
+    monkeypatch.setattr("experiments.evaluation.cli.models", lambda: {"test-model": model})
+    other_prefix = [*arguments]
+    other_prefix[other_prefix.index("--records-prefix") + 1] = str(tmp_path / "other-records")
+    missing = CliRunner().invoke(cli, [*other_prefix, "--dry-run"])
+    assert missing.exit_code != 0
+    assert "--platform" in missing.output and "--records-prefix" in missing.output
