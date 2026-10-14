@@ -1,0 +1,96 @@
+{
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "stages": [
+    {
+      "stage": "curriculum",
+      "completed_updates": 40,
+      "replication_seed": 0,
+      "sc_quality": 0.2906706507304117,
+      "tis_quality": 0.23705179282868527,
+      "difference_percentage_points": 5.361885790172644,
+      "common_difference_percentage_points": 5.361885790172644,
+      "full_result": "results/qwen_curriculum40_paired_v4/paired_curriculum_results.json.gz",
+      "full_result_sha256": "563ab1c01192508c74d2111b93e3ec190ce2fedfe86bf83df47848eac3991146",
+      "main_horizon": 300,
+      "required_main_paired_seeds": [
+        0,
+        1,
+        2
+      ],
+      "main_complete": false
+    },
+    {
+      "stage": "optimizer",
+      "completed_updates": 40,
+      "replication_seed": 0,
+      "sc_quality": 0.33565737051792827,
+      "tis_quality": 0.34412350597609564,
+      "difference_percentage_points": -0.8466135458167379,
+      "common_difference_percentage_points": -0.8466135458167379,
+      "full_result": "results/qwen_optimizer40_paired_v5/paired_curriculum_results.json.gz",
+      "full_result_sha256": "aaa53074e57c3d3ed56f868fd11f6a9ca379fdd4c44cf8fd394cb8fd1626a00d",
+      "main_horizon": 300,
+      "required_main_paired_seeds": [
+        0,
+        1,
+        2
+      ],
+      "main_complete": false
+    },
+    {
+      "stage": "advantages",
+      "completed_updates": 40,
+      "replication_seed": 0,
+      "sc_quality": 0.34412350597609564,
+      "tis_quality": 0.33731739707835323,
+      "difference_percentage_points": 0.6806108897742413,
+      "common_difference_percentage_points": null,
+      "full_result": "results/qwen_advantages40_paired_v5/paired_curriculum_results.json.gz",
+      "full_result_sha256": "f5eea42f2d43cbb9361392949d21be52c18d344e76f2654b51620b13654fed1b",
+      "main_horizon": 300,
+      "required_main_paired_seeds": [
+        0,
+        1,
+        2
+      ],
+      "main_complete": false
+    },
+    {
+      "stage": "batching",
+      "completed_updates": 40,
+      "replication_seed": 0,
+      "sc_quality": 0.2407038512616202,
+      "tis_quality": 0.2250996015936255,
+      "difference_percentage_points": 1.56042496679947,
+      "common_difference_percentage_points": null,
+      "full_result": "results/qwen_batching40_paired_v5/paired_curriculum_results.json.gz",
+      "full_result_sha256": "c2f89a78151339130de47787b48c1824ae7c1bb679bbdbfaad6c70f1d9984e2f",
+      "main_horizon": 1200,
+      "required_main_paired_seeds": [
+        0,
+        1,
+        2
+      ],
+      "main_complete": false
+    },
+    {
+      "stage": "native-window",
+      "completed_updates": 40,
+      "replication_seed": 0,
+      "sc_quality": 0.3019179894179894,
+      "tis_quality": 0.328042328042328,
+      "difference_percentage_points": -2.6124338624338606,
+      "common_difference_percentage_points": -2.6560424966799445,
+      "full_result": "results/qwen_native_window40_paired_v5/paired_curriculum_results.json.gz",
+      "full_result_sha256": "a06d65401b82dac469feda1f9a8975d87612883a14b1100eb8020a3150e17560",
+      "main_horizon": 1200,
+      "required_main_paired_seeds": [
+        0,
+        1,
+        2
+      ],
+      "main_complete": false
+    }
+  ],
+  "scope": "Allfive cumulative40update exploratorypairedseed0 pilotscomplete. No populationinterval/equivalence; final3seedmaincomparisonsremainrequired. OneobservedfullymaskednativeTISgradingerrorinadvantagesstage explicitinfullreport;allotherpilotszeroexecution/gradingfailures. Everyinterrupted/redundantallocationretainedandcharged."
+}

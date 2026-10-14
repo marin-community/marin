@@ -1,0 +1,25 @@
+{
+  "runs": [
+    {
+      "run_id": "sc-qwen-transfer-native-window-sc-s0-pilot-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 3320,
+      "bytes": 1062002264,
+      "manifest_sha256": "eb3d1734a8252c4267af66ebe7c8f207757b74ab44761788a2ee1a56946b31f4",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-pilot-a4-01a126ce/retained-runtime/promotion-manifest-01a126ce.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s.",
+      "complete": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-native-window-tis-s0-pilot-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 3320,
+      "bytes": 1000403366,
+      "manifest_sha256": "5af32045dd522698fe83cddd6b925236e6eda36de9d63e732988dd15cda713d4",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-tis-s0-pilot-a4-01a126ce/retained-runtime/promotion-manifest-01a126ce.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s.",
+      "complete": true
+    }
+  ],
+  "scope": "BothterminalSUCCESS nativewindow40 originalattempt0 runtimegroups/logs/debug fullyretained; requirednativearchives/rawmetrics/checkpoints remain durableoriginalroots."
+}
