@@ -1337,7 +1337,15 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     ignore_files.append(line.split()[0])
 
         # Reference weights must never overwrite the newly trained export.
-        ignore_files.extend(["*.safetensors", "*.safetensors.index.json", "pytorch_model.bin.index.json"])
+        ignore_files.extend(
+            [
+                "*.safetensors",
+                "*.safetensors.index.json",
+                "pytorch_model.bin",
+                "pytorch_model-*.bin",
+                "pytorch_model.bin.index.json",
+            ]
+        )
         if _is_url_like(repo):
             reference_root = StoragePath(repo)
             walked_root = None

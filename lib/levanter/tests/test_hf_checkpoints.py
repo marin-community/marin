@@ -135,6 +135,8 @@ def test_url_reference_export_copies_code_and_preserves_trained_weights(
     fs.pipe(f"{reference}/nested/modeling_custom.py", b"CUSTOM_MODEL = True\n")
     fs.pipe(f"{reference}/.git/config", b"git metadata")
     fs.pipe(f"{reference}/reference-weights.safetensors", b"stale weights")
+    fs.pipe(f"{reference}/pytorch_model.bin", b"stale torch weights")
+    fs.pipe(f"{reference}/pytorch_model-00001-of-00002.bin", b"stale torch shard")
     fs.pipe(
         f"{reference}/{SAFE_TENSORS_INDEX_NAME}",
         json.dumps({"weight_map": {"transformer.wte.weight": "reference-weights.safetensors"}}).encode(),
@@ -155,6 +157,8 @@ def test_url_reference_export_copies_code_and_preserves_trained_weights(
     assert (tmp_path / "nested/modeling_custom.py").read_bytes() == b"CUSTOM_MODEL = True\n"
     assert not (tmp_path / ".git/config").exists()
     assert not (tmp_path / "reference-weights.safetensors").exists()
+    assert not (tmp_path / "pytorch_model.bin").exists()
+    assert not (tmp_path / "pytorch_model-00001-of-00002.bin").exists()
     if max_shard_size == 10**9:
         assert not (tmp_path / SAFE_TENSORS_INDEX_NAME).exists()
     if attributes is not None:
