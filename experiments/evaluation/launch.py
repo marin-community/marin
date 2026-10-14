@@ -35,6 +35,8 @@ from marin.evaluation.records import (
     EvalRef,
     ModelConfigRef,
     ModelRef,
+    read_record,
+    record_path,
 )
 from marin.evaluation.runner import (
     EndpointRoute,
@@ -80,6 +82,8 @@ class LaunchSpec:
     submission_cluster: str
     federated_cluster: str | None
     priority_band: int
+    retry_unscored_harbor_trials: bool = False
+    resume_run_id: str | None = None
     judge_model: ModelConfig | None = None
     judge_accelerator: str | None = None
     seed: int | None = None
@@ -162,6 +166,7 @@ def _resolve_definitions(
     limit: int | None,
     seed: int | None,
     version: str | None,
+    retry_unscored_harbor_trials: bool,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
     evalchemy_definitions = [definition for _, definition in definitions if isinstance(definition, EvalchemyDefinition)]
     evalchemy_sources = iter(load_evalchemy_config(definition.config_path) for definition in evalchemy_definitions)
@@ -208,7 +213,7 @@ def _resolve_definitions(
                 _ResolvedDefinition(
                     record_ref=definition.record_ref_for(config, runtime_task_limit),
                     runtime_descriptor=harbor_runtime_descriptor(config.error_taxonomy.commit, config.runtime_project),
-                    executor=definition.executor_for(config, model, runtime_task_limit),
+                    executor=definition.executor_for(config, model, runtime_task_limit, retry_unscored_harbor_trials),
                     endpoint_route=EndpointRoute.CAPABILITY,
                     secret_env=dict(definition.secret_env_for(config)),
                 ),
@@ -265,7 +270,15 @@ def build_evaluation_batch(
         isinstance(definition, HarborDefinition) for _, definition in requested_definitions
     ):
         model = replace(model, serve=resolved_serve_config(model))
-    definitions = _resolve_definitions(requested_definitions, model, spec.limit, spec.seed, spec.version)
+    if spec.retry_unscored_harbor_trials and spec.resume_run_id is None:
+        raise ValueError("--retry-unscored-harbor-trials requires --resume-run-id")
+    if spec.resume_run_id is not None and (
+        len(requested_definitions) != 1 or not isinstance(requested_definitions[0][1], HarborDefinition)
+    ):
+        raise ValueError("--resume-run-id requires exactly one Harbor evaluation")
+    definitions = _resolve_definitions(
+        requested_definitions, model, spec.limit, spec.seed, spec.version, spec.retry_unscored_harbor_trials
+    )
     model_ref = ModelRef(
         name=model.name,
         location=model.location,
@@ -283,7 +296,38 @@ def build_evaluation_batch(
     if judge is not None and any(isinstance(definition.executor, EvalchemyExecutor) for _, definition in definitions):
         raise ValueError("--judge-model serves Harbor verifiers only; remove it or drop the Evalchemy evaluations")
     records_prefix = records_prefix_for(accelerator, spec)
-    created_at = datetime.now(UTC).isoformat()
+    resumed_record = None
+    if spec.resume_run_id is not None:
+        if "/" in spec.resume_run_id or spec.resume_run_id in ("", ".", ".."):
+            raise ValueError("--resume-run-id must be a run identifier, not a path")
+        try:
+            resumed_record = read_record(record_path(records_prefix, spec.resume_run_id))
+        except FileNotFoundError as exc:
+            raise ValueError(
+                f"No saved record for --resume-run-id {spec.resume_run_id!r} under {records_prefix}"
+            ) from exc
+        previous_model = resumed_record.model
+        if (
+            resumed_record.run_id != spec.resume_run_id
+            or previous_model.name != model_ref.name
+            or previous_model.location != model_ref.location
+            or previous_model.backend != model_ref.backend
+            or previous_model.config is None
+            or previous_model.config != model_ref.config
+        ):
+            raise ValueError("Resumed run model configuration differs from this launch")
+        previous_judge = resumed_record.judge.model.config if resumed_record.judge is not None else None
+        requested_judge = ModelConfigRef.model_validate(asdict(judge.model)) if judge is not None else None
+        if (resumed_record.judge is not None) != (judge is not None) or previous_judge != requested_judge:
+            raise ValueError("Resumed run hosted judge configuration differs from this launch")
+        _, definition = definitions[0]
+        if (
+            resumed_record.evaluation != definition.record_ref
+            or resumed_record.provenance.eval_runtime != definition.runtime_descriptor
+            or resumed_record.version != spec.version
+        ):
+            raise ValueError("Resumed run evaluation configuration, runtime, or version differs from this launch")
+    created_at = resumed_record.created_at if resumed_record is not None else datetime.now(UTC).isoformat()
     evaluations: list[Evaluation] = []
     secret_env: dict[str, SecretSpec] = {}
     for eval_key, definition in definitions:
@@ -291,8 +335,12 @@ def build_evaluation_batch(
             if name in secret_env and secret_env[name] != spec_value:
                 raise ValueError(f"evaluations declare conflicting secret specifications for {name}")
             secret_env[name] = spec_value
-        run_id = _run_id(model.name, eval_key)
-        output_dir = prefix_join(records_prefix, f"{run_id}/results")
+        run_id = resumed_record.run_id if resumed_record is not None else _run_id(model.name, eval_key)
+        output_dir = (
+            resumed_record.results_path
+            if resumed_record is not None
+            else prefix_join(records_prefix, f"{run_id}/results")
+        )
         evaluations.append(
             Evaluation(
                 identity=EvaluationIdentity(

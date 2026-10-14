@@ -130,7 +130,8 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
             f"region_or_cluster={batch.accelerator.target_cluster or batch.accelerator.region}  "
             f"tasks={tasks}  "
             f"{agent_context}"
-            f"records={batch.records_prefix}"
+            f"records={batch.records_prefix}  run_id={evaluation.identity.run_id}  "
+            f"results={evaluation.identity.output_dir}"
         )
 
 
@@ -172,6 +173,14 @@ def cli() -> None:
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     multiple=True,
     help="Harbor JobConfig YAML or JSON. Repeatable and additive with --evals.",
+)
+@click.option(
+    "--resume-run-id", default=None, help="Resume one Harbor run from its saved record under --records-prefix."
+)
+@click.option(
+    "--retry-unscored-harbor-trials",
+    is_flag=True,
+    help="Retry known unscored Harbor trials in --resume-run-id; preserve scored and unknown-error outcomes.",
 )
 @click.option(
     "--platform",
@@ -216,6 +225,8 @@ def launch(
     evals_arg: str | None,
     evalchemy_config: tuple[Path, ...],
     harbor_config: tuple[Path, ...],
+    resume_run_id: str | None,
+    retry_unscored_harbor_trials: bool,
     platform: str | None,
     accelerator: str | None,
     limit: int | None,
@@ -264,6 +275,8 @@ def launch(
         submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
         federated_cluster=federated_cluster,
         priority_band=(job_pb2.PRIORITY_BAND_INHERIT if priority is None else priority_band_value(priority)),
+        resume_run_id=resume_run_id,
+        retry_unscored_harbor_trials=retry_unscored_harbor_trials,
         judge_model=selected_judge,
         judge_accelerator=judge_accelerator,
         version=version,

@@ -78,6 +78,7 @@ from marin.inference.types import OpenAIEndpoint, RunningModel
 from prometheus_client.parser import text_string_to_metric_families
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.evaluation import launch as launch_module
 from experiments.evaluation.cli import cli, resolve_model_config
 from experiments.evaluation.evals import (
     EVALS,
@@ -2044,3 +2045,115 @@ def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):
     assert batch.records_prefix == "gs://marin-eval-metadata/evals"
     evaluation = batch.evaluations[0]
     assert evaluation.identity.output_dir == f"{batch.records_prefix}/{evaluation.identity.run_id}/results"
+
+
+def test_cli_recovers_existing_harbor_run_without_repeating_scored_trials(tmp_path, monkeypatch):
+    _install_fake_harbor_preflight(monkeypatch)
+    preflight = launch_module.preflight_harbor_configs
+
+    def three_trial_preflight(requests, *, runtime_project):
+        return tuple(
+            replace(config, benchmark=config.benchmark.model_copy(update={"n_benchmark": 3, "n_attempted": 3}))
+            for config in preflight(requests, runtime_project=runtime_project)
+        )
+
+    monkeypatch.setattr(launch_module, "preflight_harbor_configs", three_trial_preflight)
+    monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
+    model = ModelConfig(name="test-model", location="org/checkpoint-one")
+    monkeypatch.setattr("experiments.evaluation.cli.models", lambda: {"test-model": model})
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
+    config_path = _write_harbor_config(tmp_path / "aime-policy.yaml")
+    spec = LaunchSpec(
+        model=model,
+        evals=(),
+        evalchemy_definitions=(),
+        harbor_definitions=(HarborDefinition(name="aime-policy", config_path=config_path),),
+        platform=Platform.GPU,
+        accelerator="H100x8",
+        limit=None,
+        records_prefix=str(tmp_path / "records"),
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+    original = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="test"), "tester")
+    initial_identity = original.evaluations[0].identity
+    session = _remote_session()
+    trial_files = {}
+    scored_bytes = {}
+
+    def first_driver(config, overlay, _env, _state):
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        job_dir.mkdir(parents=True)
+        (job_dir / "result.json").write_text(
+            json.dumps({"n_total_trials": 3, "benchmark_metadata": [config.benchmark.model_dump(mode="json")]})
+        )
+        for name, result in {
+            "scored": {"verifier_result": {"rewards": {"reward": 1}}},
+            "agent-failure": {"verifier_result": None, "exception_info": {"exception_type": "AgentError"}},
+            "infra-failure": {"verifier_result": None, "exception_info": {"exception_type": "InfrastructureError"}},
+        }.items():
+            path = job_dir / name / "result.json"
+            path.parent.mkdir()
+            path.write_text(json.dumps({"task_name": name, **result}))
+            trial_files[name] = path
+        scored_bytes.update({name: trial_files[name].read_bytes() for name in ("scored", "agent-failure")})
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", first_driver)
+    with pytest.raises(RuntimeError, match="1 of 1 evals failed"):
+        evaluate_batch(original, session, orchestrator_job_id="/initial", env_vars={"DAYTONA_API_KEY": "test-key"})
+    record_file = tmp_path / "records" / initial_identity.run_id / "record.json"
+    assert read_record(str(record_file)).coverage["aime"].n_scored == 2
+
+    def recovery_driver(_config, overlay, _env, _state):
+        assert str(Path(overlay.jobs_dir).parent) == initial_identity.output_dir
+        for name, payload in scored_bytes.items():
+            assert trial_files[name].read_bytes() == payload
+        retried = trial_files["infra-failure"]
+        assert not retried.parent.exists()
+        retried.parent.mkdir()
+        retried.write_text('{"task_name":"infra-failure","verifier_result":{"rewards":{"reward":1}}}')
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", recovery_driver)
+    monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", lambda **_kwargs: nullcontext(None))
+
+    def submit(batch, _client):
+        assert batch.evaluations[0].identity.run_id == initial_identity.run_id
+        evaluate_batch(batch, session, orchestrator_job_id="/recovery", env_vars={"DAYTONA_API_KEY": "test-key"})
+        return SimpleNamespace(group_id=batch.group_id, evaluations=(), model_name=batch.model.name)
+
+    monkeypatch.setattr("experiments.evaluation.cli.launch_group", submit)
+    arguments = [
+        "launch",
+        "--model",
+        "test-model",
+        "--harbor-config",
+        str(config_path),
+        "--platform",
+        "gpu",
+        "--accelerator",
+        "H100x8",
+        "--records-prefix",
+        spec.records_prefix,
+        "--resume-run-id",
+        initial_identity.run_id,
+        "--retry-unscored-harbor-trials",
+        "--no-wait",
+    ]
+    result = CliRunner().invoke(cli, arguments)
+    assert result.exit_code == 0, result.output
+    repaired = read_record(str(record_file))
+    assert repaired.status is RunStatus.SUCCEEDED
+    assert repaired.created_at == initial_identity.created_at
+    assert repaired.results_path == initial_identity.output_dir
+    assert repaired.coverage["aime"].n_scored == 3
+    assert repaired.canonical_metrics["aime"]["reward"] == pytest.approx(2 / 3)
+
+    monkeypatch.setattr(
+        "experiments.evaluation.cli.models", lambda: {"test-model": replace(model, location="org/checkpoint-two")}
+    )
+    rejected = CliRunner().invoke(cli, [*arguments, "--dry-run"])
+    assert rejected.exit_code != 0
+    assert "model configuration differs" in rejected.output
+    assert read_record(str(record_file)) == repaired
+    assert all(trial_files[name].read_bytes() == payload for name, payload in scored_bytes.items())
