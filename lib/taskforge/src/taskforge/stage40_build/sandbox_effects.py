@@ -36,13 +36,14 @@ from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import AnswerFormat, AnswerType, EnvironmentRequirements, Source, TaskResource
 
-from taskforge.sandbox.factories import grading_environment
+from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT, grading_environment
 from taskforge.sandbox.images import BUILD_LIMITS, DockerBuild, check_build_limits
 from taskforge.spec import draft
 from taskforge.spec.controls import candidate_turns
 from taskforge.spec.draft import MachineSettings, machine_runtime
 from taskforge.stage40_build.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
 from taskforge.stage40_build.infrastructure import InfrastructureCause, host_checked_factories, infrastructure_failure
+from taskforge.stage40_build.sdk import GRADER_TIMEOUT
 from taskforge.stage40_build.services import RLEnvBuildServices
 from taskforge.stage40_build.step_store import SDK_VERSION
 
@@ -50,8 +51,12 @@ MACHINE_CLEANUP_TIMEOUT = 120.0
 """Seconds ``build_machine`` and ``grade_candidate`` wait for a machine to close."""
 GRADE_CANDIDATE_MACHINE = draft.machine(startup_timeout=600.0)
 """The task and verifier machine settings ``grade_candidate`` uses unless the step passes its own."""
-GRADE_CANDIDATE_VERIFIER_TIMEOUT = 600.0
-"""Seconds ``grade_candidate`` allows one grading, verifier machine start included."""
+GRADE_CANDIDATE_VERIFIER_TIMEOUT = SANDBOX_SCHEDULING_TIMEOUT + GRADER_TIMEOUT
+"""Seconds ``grade_candidate`` allows one grading: the verifier machine's scheduling budget, then the grader's own.
+
+The sum keeps the deadline behind the factory's scheduling timeout, so a sandbox that never starts
+surfaces as the factory's ``SCHEDULING_TIMEOUT`` host failure rather than as this deadline.
+"""
 GRADE_CANDIDATE_SOURCE = "taskforge.grade_candidate"
 """``Source.dataset`` of the provisional task ``grade_candidate`` grades against."""
 IMAGE_REPOSITORY_PREFIX = "taskforge-tasks"

@@ -19,7 +19,9 @@ Only errors the program cannot have caused are infrastructure:
   Also deterministic on the host.
 * ``SCHEDULING_TIMEOUT``: the factory itself gave up waiting for a machine (Iris could not
   schedule the sandbox). The deadline a program sets with ``spec.machine(startup_timeout=...)`` is
-  enforced outside the factory and stays the program's.
+  enforced outside the factory and stays the program's. The engine's verifier deadline also covers
+  the verifier machine's start, so every such deadline exceeds ``SANDBOX_SCHEDULING_TIMEOUT``;
+  a shorter one would cancel the wait first and the factory's timeout would never be raised.
 * ``HOST_UNREACHABLE``: a connection to the machine host failed, or the controller answered an RPC
   with a transport, capacity or credential error.
 
