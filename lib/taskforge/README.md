@@ -264,6 +264,47 @@ refuses an import outside `ALLOWED_IMPORTS`, a missing `grader` step returning `
 program without a sink made by `@rl_env_build_sink`. Each refusal is a `ValueError` whose message
 the author receives.
 
+`stage40_build.agentic_author.author_round` is the agentic author: one agent session (`run_agent`,
+reasoning replay KEEP) per program round, working in a workspace that starts with the template as
+`program.py`, the proposal, the SDK reference and the template under the read-only `reference/`, and
+an empty `notes.md`. Its tools read, write and edit workspace files (`read_file`, `read_reference`,
+`write_file`, `edit_file`, `list_files`), run the loader (`run_loader`), build the program with the
+caller's `ProgramBuilder` (`run_build`, which must build as the caller's build stage does, on the same
+step store, so a program that built in the session rebuilds there from memo hits alone), grade a
+candidate against the last draft the session built (`run_grade_candidate`), and search and fetch the
+web when the proposal lists research. Every tool result is cut to 6,000 characters, head and tail.
+`submit(path, notes)` loads the file and refuses a loader failure or notes over 4,000 characters; a
+program that never built in the session is refused once and handed in untested when submitted again;
+an accepted submission ends the loop through `run_agent`'s `stop` callback. The session also stops
+when a turn's prompt and output plus `turn_max_tokens` exceed `session_token_cap`, at the turn budget,
+or after a third reply without a tool call (a reply cut at the output limit is nudged to take a
+smaller step instead). It writes, under the item's directory:
+
+```
+rounds/<n>/authored/<k>/
+  author.json        author_kind, status (accepted, handed_off, author_failed), revision, session_dir,
+                     mode, stop_reason, wall; accepted adds program_digest and tested
+  session.json       turns, tool calls by tool, tokens, cached share, prompts, stop reason, nudges,
+                     submissions, in-session builds
+  transcript.json    the opening and user turns, then each assistant turn with its tool calls and results
+  submit.json        accepted and every submit call with its outcome
+  program.py         accepted only: the submitted file's bytes
+  program.json       accepted only: program_manifest
+  record.json        accepted only: GlmAuthor's record fields, with author_kind and turns
+rounds/<n>/agentic/<k>/
+  conversation.json  the messages as sent, read by a same-session revision
+  workspace/         program.py, proposal.md, notes.md, reference/
+  runs/<j>/          one per in-session build: draft/ and run.json
+```
+
+Round 0 starts a fresh session. After a build failure, the session that submitted the program
+continues with the failure as its next user turn when it ended by `submit` within
+`revision_same_session` (its last prompt and its turns used); any other revision starts a fresh session
+from a copy of its workspace. A session that ends without a submission hands its workspace to a fresh
+session in the same round once (`handed_off`), and the next unsubmitted one ends the round
+`author_failed`; a session stopped by the context guard hands off up to four sessions per round. A
+relaunch never resumes a session mid-way: a session directory without an `author.json` starts a handoff.
+
 ## Validation
 
 `stage50_validate.lowering.lower(task, host, factories)` lowers a draft's task for the validating
@@ -274,6 +315,14 @@ step output: negative and malformed controls demand at most the ceiling, positiv
 (`spec.controls.check_expectations`), and a control that repeats a candidate the grader step
 graded, other than the reference and the empty answer, goes back to the model. A trial whose
 reward lies outside the grader's declared score range is `Ungraded(GRADER_REWARD_RANGE)`.
+
+`stage50_validate.preflight.preflight(task, host, factories, settings, deadlines)` lowers the task
+and, when its task machine lands on the local backend, runs the engine's own preparation once (machine
+start, resources, setup commands) with a probe that answers at once. A preparation failure re-lowers
+the task with the local backend withheld, so the task machine takes the container backend, and the
+result carries a `BackendFallback` (backends, cause, detail) for the lower record; any other probe
+outcome keeps the first lowering, and the probe records no evidence. A verifier machine never falls
+back.
 
 `stage50_validate.trials.run_trials(lowered, plan, settings, model)` runs k trials of a
 `LoweredTaskSpec` through `RolloutEngine`. Each attempt runs on
