@@ -358,22 +358,28 @@ class TritonBlockConfig:
 
 class _GpuFamily(StrEnum):
     AMD_INSTINCT = "amd_instinct"
+    # Data-center Blackwell: sm_100 and sm_103 (B200, GB200, B300).
     NVIDIA_BLACKWELL = "nvidia_blackwell"
-    NVIDIA = "nvidia"
-    # Any other GPU, or no GPU (the CPU interpreter).
+    # sm_90 (H100, H200, GH200).
+    NVIDIA_HOPPER = "nvidia_hopper"
+    # Any other GPU, or no GPU (the CPU interpreter). Earlier NVIDIA GPUs such as A100 and consumer
+    # Blackwell (sm_120) have too little shared memory per block for the Hopper and Blackwell configs.
     OTHER = "other"
 
 
 def _gpu_family() -> _GpuFamily:
     if jax.default_backend() != "gpu":
         return _GpuFamily.OTHER
-    device_kind = jax.devices("gpu")[0].device_kind
-    if "Instinct" in device_kind:
+    device = jax.devices("gpu")[0]
+    if "Instinct" in device.device_kind:
         return _GpuFamily.AMD_INSTINCT
-    if _is_blackwell_gpu_backend():
+    if "NVIDIA" not in device.device_kind:
+        return _GpuFamily.OTHER
+    major = device.compute_capability.split(".")[0]
+    if major == "9":
+        return _GpuFamily.NVIDIA_HOPPER
+    if major == "10":
         return _GpuFamily.NVIDIA_BLACKWELL
-    if "NVIDIA" in device_kind:
-        return _GpuFamily.NVIDIA
     return _GpuFamily.OTHER
 
 
@@ -396,7 +402,7 @@ _TILE_MAP_CONFIGS: dict[_GpuFamily, dict[RaggedLayout, TritonBlockConfig]] = {
         ),
     },
     # Swept on H100 and GB200 at the same shapes.
-    _GpuFamily.NVIDIA: {
+    _GpuFamily.NVIDIA_HOPPER: {
         RaggedLayout.FWD: TritonBlockConfig(
             block_m=128, block_n=256, block_k=64, num_warps=8, num_stages=4, num_xcds=1, group_m=8
         ),
@@ -414,8 +420,8 @@ _TILE_MAP_CONFIGS: dict[_GpuFamily, dict[RaggedLayout, TritonBlockConfig]] = {
 }
 # H100 drhs with fewer rows per group than this runs faster with smaller blocks: 12% faster at the
 # June shape with 512 rows per group, about even at 1024, and slower from 2048 up.
-_NVIDIA_DRHS_FEW_ROWS_PER_GROUP = 2048
-_NVIDIA_DRHS_FEW_ROWS_CONFIG = TritonBlockConfig(
+_HOPPER_DRHS_FEW_ROWS_PER_GROUP = 2048
+_HOPPER_DRHS_FEW_ROWS_CONFIG = TritonBlockConfig(
     block_m=128, block_n=128, block_k=32, num_warps=4, num_stages=4, num_xcds=1, group_m=8
 )
 
@@ -424,11 +430,11 @@ def _tile_map_block_config(layout: RaggedLayout, m: int, k: int, n: int, num_gro
     """Device-dependent block config for one layout, fitted to ``m x k x n`` (rows x contraction x columns)."""
     family = _gpu_family()
     if (
-        family == _GpuFamily.NVIDIA
+        family == _GpuFamily.NVIDIA_HOPPER
         and layout == RaggedLayout.DRHS
-        and k < _NVIDIA_DRHS_FEW_ROWS_PER_GROUP * num_groups
+        and k < _HOPPER_DRHS_FEW_ROWS_PER_GROUP * num_groups
     ):
-        config = _NVIDIA_DRHS_FEW_ROWS_CONFIG
+        config = _HOPPER_DRHS_FEW_ROWS_CONFIG
     else:
         config = _TILE_MAP_CONFIGS.get(family, {}).get(layout, _TILE_MAP_GENERIC_CONFIG)
     return config.fit(m, k, n)
@@ -727,7 +733,7 @@ _TRITON_KERNELS: dict[TritonKernelFamily, Callable[[jax.Array, jax.Array, jax.Ar
     TritonKernelFamily.TILE_MAP: _tile_map_pallas_call,
 }
 # GPU families that run the tile-map kernels; any other GPU runs the group-grid kernels.
-_TILE_MAP_GPU_FAMILIES = frozenset({_GpuFamily.AMD_INSTINCT, _GpuFamily.NVIDIA, _GpuFamily.NVIDIA_BLACKWELL})
+_TILE_MAP_GPU_FAMILIES = frozenset({_GpuFamily.AMD_INSTINCT, _GpuFamily.NVIDIA_HOPPER, _GpuFamily.NVIDIA_BLACKWELL})
 
 
 def _triton_kernel_family() -> TritonKernelFamily:

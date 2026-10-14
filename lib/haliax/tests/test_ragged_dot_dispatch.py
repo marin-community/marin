@@ -211,12 +211,9 @@ def _assert_close_to_reference(actual, expected, rtol):
 
 def _triton_f32_dots_use_tf32() -> bool:
     """Triton's dot defaults f32 inputs to TF32 on NVIDIA GPUs and on gfx942 (MI300X, MI325X), and to IEEE on gfx950."""
-    nvidia = (ragged_dot_module._GpuFamily.NVIDIA, ragged_dot_module._GpuFamily.NVIDIA_BLACKWELL)
-    if ragged_dot_module._gpu_family() in nvidia:
-        return True
-    # ROCm reports the gfx architecture name as the compute capability.
     device = jax.devices()[0]
-    return device.platform == "gpu" and device.compute_capability == "gfx942"
+    # ROCm reports the gfx architecture name as the compute capability.
+    return device.platform == "gpu" and ("NVIDIA" in device.device_kind or device.compute_capability == "gfx942")
 
 
 def _run_kernel_family(family: str, lhs, rhs, sizes, layout: str):
