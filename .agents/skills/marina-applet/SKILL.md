@@ -13,6 +13,11 @@ applet. Use
 backend reference. Treat those files and `marina --help` as authoritative when
 this skill disagrees with the checkout.
 
+Prefer a checked-in app under `infra/marina/apps/` when it will be updated
+regularly or maintained by peers. Keep its source, review history, and deployment
+path in the repository. Choose a dynamic applet for independently published
+reports, explorers, or small tools.
+
 ## Choose the applet shape
 
 Ensure the built package contains:

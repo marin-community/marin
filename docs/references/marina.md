@@ -16,10 +16,13 @@ without rebuilding the Marina image.
 | Migration | `migrate(engine)` at deploy | `migrate(connection)` inside the publish transaction |
 | Refresh work | Manifest-declared scheduled jobs | Explicit loader or bounded request-driven refresh; no background workers |
 
-Use an applet for a small report, explorer, or tool that needs independent
-publishing. Use a checked-in app when it needs scheduled ingestion, new server
-dependencies, or Marina's MCP and page-agent integrations. Applet backends use
-packages already installed in Marina and run as trusted plugins, not sandboxes.
+Use a checked-in app for apps you expect to update regularly or that peers will
+maintain. This keeps the source, review history, and deployment path in the
+repository. Also choose a checked-in app when it needs scheduled ingestion, new
+server dependencies, or Marina's MCP and page-agent integrations. Use an applet
+for a small report, explorer, or tool that needs independent publishing. Applet
+backends use packages already installed in Marina and run as trusted plugins,
+not sandboxes.
 
 ## Build and try it
 
