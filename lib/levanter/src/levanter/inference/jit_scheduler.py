@@ -30,6 +30,7 @@ class FinishReason(IntEnum):
     RUNNING = 0
     STOP = auto()
     LENGTH = auto()
+    ABORT = auto()
 
 
 class PackedSequence(eqx.Module):

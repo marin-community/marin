@@ -1,9 +1,11 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import dataclasses
 import json
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import equinox as eqx
@@ -25,10 +27,13 @@ try:
     from openai.types import Completion
 
     from levanter.inference.engine import (
+        InferenceEngine,
         InferenceEngineConfig,
         score_token_sequence_logprobs,
     )
     from levanter.inference.openai import (
+        InferenceBatch,
+        InferenceContext,
         InferenceResponse,
         InferenceServer,
         InferenceServerConfig,
@@ -676,9 +681,8 @@ class _TokenSensitiveCompletionModel(_DeterministicCompletionScoringModel):
         return hax.nn.one_hot((input_ids + 2) % 4, self.Vocab, dtype=jnp.float32), cache
 
 
-@pytest.fixture
-def exact_token_client():
-    config = InferenceServerConfig(
+def _exact_token_config():
+    return InferenceServerConfig(
         service=InferenceEngineConfig(
             max_seq_len=8,
             max_pages=4,
@@ -689,13 +693,23 @@ def exact_token_client():
             compute_dtype=jnp.float32,
         )
     )
+
+
+@pytest.fixture
+def exact_token_server():
+    config = _exact_token_config()
     with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
         server = InferenceServer.create(config, _TokenSensitiveCompletionModel(), _AliasingChatTokenizer())
     try:
-        with TestClient(server.app) as client:
-            yield client
+        yield server
     finally:
         server.inference_context.shutdown()
+
+
+@pytest.fixture
+def exact_token_client(exact_token_server):
+    with TestClient(exact_token_server.app) as client:
+        yield client
 
 
 def test_completion_integer_prompts_keep_token_identity_through_stopping(exact_token_client):
@@ -782,3 +796,139 @@ def test_chat_exact_token_continuation_matches_uninterrupted_decode(exact_token_
     assert chunks[0]["prompt_token_ids"] == full["prompt_token_ids"]
     assert chunks[0]["choices"][0]["token_ids"] == expected["token_ids"]
     assert chunks[-1]["choices"][0]["finish_reason"] == "length"
+
+
+def test_paused_server_returns_abort_then_resumes_exact_generation(exact_token_server):
+    request = {
+        "model": "gpt2",
+        "prompt": [0, 1],
+        "temperature": 0,
+        "max_tokens": 2,
+        "return_token_ids": True,
+        "logprobs": 0,
+    }
+    with TestClient(exact_token_server.app) as client:
+        before = client.post("/v1/completions", json=request)
+        exact_token_server.pause_generation()
+        aborted = client.post("/v1/completions", json=request)
+        echo_aborted = client.post("/v1/completions", json={**request, "echo": True, "logprobs": 1})
+        exact_token_server.resume_generation()
+        after = client.post("/v1/completions", json=request)
+    assert before.status_code == aborted.status_code == after.status_code == 200
+    assert aborted.json()["choices"][0]["finish_reason"] == "abort"
+    assert aborted.json()["choices"][0]["token_ids"] == []
+    assert aborted.json()["choices"][0]["logprobs"]["token_logprobs"] == []
+    assert aborted.json()["usage"]["completion_tokens"] == 0
+    assert echo_aborted.status_code == 200
+    assert echo_aborted.json()["choices"][0]["finish_reason"] == "abort"
+    assert echo_aborted.json()["choices"][0]["logprobs"] is None
+    assert before.json()["choices"] == after.json()["choices"]
+    assert after.json()["choices"][0]["token_ids"] == [3, 1]
+
+
+@pytest.mark.asyncio
+async def test_pause_invalidates_requests_collected_before_the_barrier():
+    config = _exact_token_config()
+    model = _TokenSensitiveCompletionModel()
+    tokenizer = _AliasingChatTokenizer()
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        engine = InferenceEngine.from_model_with_config(model, tokenizer, config.service)
+        context = InferenceContext(model, tokenizer, engine, config)
+        future = asyncio.get_running_loop().create_future()
+        context.submit_request([0, 1], 2, 0.0, 1.0, None, 0, future)
+        # The batching thread can have removed a request from its queue when pause begins.
+        collected = InferenceBatch([context.request_queue.get_nowait()])
+        context.pause_generation()
+        context.resume_generation()
+        context._execute_batch(collected)
+        aborted = await future
+        assert aborted[0].finish_reason == FinishReason.ABORT
+        assert aborted[0].tokens == aborted[0].logprobs == []
+        resumed_future = asyncio.get_running_loop().create_future()
+        context.submit_request([0, 1], 2, 0.0, 1.0, None, 0, resumed_future)
+        context._execute_batch(InferenceBatch([context.request_queue.get_nowait()]))
+        resumed = await resumed_future
+    assert resumed[0].finish_reason == FinishReason.LENGTH
+    assert resumed[0].tokens == [3, 1]
+
+
+class _BlockingTokenModel(_TokenSensitiveCompletionModel):
+    entered: threading.Event = eqx.field(static=True)
+    release: threading.Event = eqx.field(static=True)
+
+    def __init__(self, entered, release):
+        super().__init__()
+        self.entered = entered
+        self.release = release
+
+    def _wait_for_release(self):
+        self.entered.set()
+        assert self.release.wait(30), "test did not release the in-flight model call"
+
+    def decode(self, input_ids, cache, batch_info, pos_ids):
+        jax.debug.callback(self._wait_for_release)
+        return super().decode(input_ids, cache, batch_info, pos_ids)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_http_pause_preserves_partial_tokens_and_logprobs(stream):
+    entered, release = threading.Event(), threading.Event()
+    config = _exact_token_config()
+    model = _BlockingTokenModel(entered, release)
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, model, _AliasingChatTokenizer())
+    request = {
+        "model": "gpt2",
+        "messages": [{"role": "user", "content": "A"}],
+        "max_completion_tokens": 3,
+        "temperature": 0,
+        "logprobs": True,
+        "return_token_ids": True,
+        "stream": stream,
+    }
+    try:
+        with TestClient(server.app) as client, ThreadPoolExecutor(max_workers=2) as pool:
+            pending = pool.submit(client.post, "/v1/chat/completions", json=request)
+            assert entered.wait(30), "generation did not reach the model"
+            pausing = pool.submit(server.pause_generation)
+            assert server.inference_context.pause_event.wait(5)
+            release.set()
+            pausing.result(timeout=30)
+            response = pending.result(timeout=30)
+            assert response.status_code == 200, response.text
+            if stream:
+                chunks = [
+                    json.loads(line[6:])
+                    for line in response.text.splitlines()
+                    if line.startswith("data: ") and line != "data: [DONE]"
+                ]
+                content = chunks[0]
+                finish_reason = chunks[-1]["choices"][0]["finish_reason"]
+            else:
+                content = response.json()
+                finish_reason = content["choices"][0]["finish_reason"]
+            choice = content["choices"][0]
+            assert finish_reason == "abort"
+            assert content["prompt_token_ids"] == [0, 1]
+            assert choice["token_ids"] == [3]
+            partial_logprobs = choice["logprobs"]["content"]
+            assert len(partial_logprobs) == 1
+            server.resume_generation()
+            full = client.post("/v1/chat/completions", json={**request, "stream": False}).json()
+            continuation = client.post(
+                "/v1/chat/completions",
+                json={
+                    **request,
+                    "stream": False,
+                    "max_completion_tokens": 2,
+                    "_skyrl_exact_prompt_token_ids": [0, 1, 3],
+                },
+            ).json()
+            assert choice["token_ids"] + continuation["choices"][0]["token_ids"] == full["choices"][0]["token_ids"]
+            assert (
+                partial_logprobs + continuation["choices"][0]["logprobs"]["content"]
+                == full["choices"][0]["logprobs"]["content"]
+            )
+    finally:
+        release.set()
+        server.inference_context.shutdown()
