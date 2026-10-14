@@ -5,10 +5,13 @@
 
 import asyncio
 import io
+import logging
 import re
 import shlex
 import tarfile
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
 
 import shellsim
@@ -30,6 +33,8 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_CPU_LIMIT = 10_000_000_000
 DEFAULT_DISK_LIMIT = 512 * 1024 * 1024
@@ -101,6 +106,7 @@ class ShellSimMachine:
         )
         self._lock = asyncio.Lock()
         self._closed = False
+        self._running: asyncio.Task[shellsim.RunResult] | None = None
         self._shell = ShellSimShellSession(self)
         self.simulation.mkdir(spec.workdir, parents=True)
         for log_dir in ("/logs/agent", "/logs/verifier", "/logs/artifacts"):
@@ -112,14 +118,34 @@ class ShellSimMachine:
         initial = self._shell.shell.run(f"cd {shlex.quote(spec.workdir)}; {environment}")
         initial.check_returncode()
 
-    async def _run_source(
-        self, source: str, stdin: bytes = b"", *, shell: shellsim.ShellSession | None = None
-    ) -> shellsim.RunResult:
+    @asynccontextmanager
+    async def _simulation_turn(self) -> AsyncIterator[None]:
+        """Hold the simulation for one operation, after any command still running past its timeout.
+
+        The interpreter runs on one thread and cannot be interrupted, so a command whose caller
+        stopped waiting keeps simulating. The next operation waits for it under the lock rather
+        than running beside it, and the machine stays usable once it ends.
+        """
         if self._closed:
             raise RuntimeError("Machine is closed")
         async with self._lock:
+            if self._running is not None:
+                await asyncio.wait({self._running})
+                error = None if self._running.cancelled() else self._running.exception()
+                if error is not None:
+                    logger.warning("ShellSim command abandoned after its timeout failed: %s", error)
+                self._running = None
+            yield
+
+    async def _run_source(
+        self, source: str, stdin: bytes = b"", *, shell: shellsim.ShellSession | None = None
+    ) -> shellsim.RunResult:
+        async with self._simulation_turn():
             runner = self.simulation.run if shell is None else shell.run
-            result = await asyncio.to_thread(runner, source, stdin)
+            running = asyncio.create_task(asyncio.to_thread(runner, source, stdin))
+            self._running = running
+            result = await asyncio.shield(running)
+            self._running = None
             if self.simulation.terminated:
                 raise RuntimeError(f"ShellSim terminated: {result.stop_reason}")
             return result
@@ -145,7 +171,6 @@ class ShellSimMachine:
         try:
             result = await asyncio.wait_for(self._run_source(source, command.stdin), timeout=command.timeout)
         except TimeoutError:
-            self._closed = True
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
         except shellsim.SimulationError as error:
             stderr = str(error).encode()
@@ -169,9 +194,7 @@ class ShellSimMachine:
         )
 
     async def upload(self, source: Path, target: str) -> None:
-        if self._closed:
-            raise RuntimeError("Machine is closed")
-        async with self._lock:
+        async with self._simulation_turn():
             if source.is_dir():
                 await asyncio.to_thread(self.simulation.mount, source, target)
                 return
@@ -179,9 +202,7 @@ class ShellSimMachine:
             self.simulation.write_file(target, source.read_bytes(), mode=source.stat().st_mode & 0o7777)
 
     async def download(self, source: str, target: Path) -> None:
-        if self._closed:
-            raise RuntimeError("Machine is closed")
-        async with self._lock:
+        async with self._simulation_turn():
             if target.exists() and target.is_dir():
                 archive = f"/__harbor_download_{uuid.uuid4().hex}.tar"
                 command = f"tar -cf {shlex.quote(archive)} -C {shlex.quote(source)} ."

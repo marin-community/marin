@@ -40,6 +40,22 @@ def test_download_rejects_file_and_byte_overflow(limits):
     asyncio.run(check())
 
 
+def test_a_command_past_its_timeout_leaves_the_machine_usable() -> None:
+    """The timed-out command keeps simulating on its thread; the next command waits for it, then runs."""
+
+    async def scenario():
+        machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
+        loop = "i=0; while [ $i -lt 200000 ]; do i=$((i+1)); done"
+        slow = await machine.run(Command(("sh", "-c", loop), timeout=0.05))
+        after = await machine.run(Command(("echo", "after"), timeout=10))
+        await machine.close()
+        return slow, after
+
+    slow, after = asyncio.run(scenario())
+    assert slow.reason is ExitReason.TIMED_OUT
+    assert (after.exit_code, after.stdout) == (0, b"after\n")
+
+
 def test_shell_state_and_one_shot_command() -> None:
     async def check() -> None:
         machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec(), env={"INITIAL": "base"}))
