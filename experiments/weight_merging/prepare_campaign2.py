@@ -1,14 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Copy the frozen campaign recipes with explicit parent and output locations."""
+"""Download the frozen campaign recipes and copy them with explicit parent and output locations."""
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 
-TEMPLATES = Path(__file__).parent / "campaign2"
+from huggingface_hub import snapshot_download
+
+RECIPES_REPO = "open-athena/Snowball-67B-A2B-Model-Merging-Artifacts-2026.10.09"
+RECIPES_REVISION = "2f161ef8c2ba8adad763d762b228acff2fbaa151"
+RECIPES_SUBFOLDER = "campaign2-recipes"
 HISTORICAL_OUTPUT = "s3://marin-us-east-02a/marin/weight-merging/campaign2-20261009"
+CALIBRATION_DATA = Path(__file__).parent / "campaign2" / "calibration.jsonl"
 
 
 def main() -> None:
@@ -18,8 +24,24 @@ def main() -> None:
     parser.add_argument("--bfcl", required=True)
     parser.add_argument("--output-prefix", required=True)
     parser.add_argument("--recipes", type=Path, required=True)
+    parser.add_argument("--recipes-repo", default=RECIPES_REPO)
+    parser.add_argument("--recipes-revision", default=RECIPES_REVISION)
     args = parser.parse_args()
-    sources = json.loads((TEMPLATES / "avg-01.json").read_text())
+    templates = (
+        Path(
+            snapshot_download(
+                repo_id=args.recipes_repo,
+                repo_type="dataset",
+                revision=args.recipes_revision,
+                allow_patterns=[f"{RECIPES_SUBFOLDER}/*.json", f"{RECIPES_SUBFOLDER}/calibration.jsonl"],
+            )
+        )
+        / RECIPES_SUBFOLDER
+    )
+    if not CALIBRATION_DATA.exists():
+        shutil.copyfile(templates / "calibration.jsonl", CALIBRATION_DATA)
+        print(f"Wrote missing calibration data to {CALIBRATION_DATA}")
+    sources = json.loads((templates / "avg-01.json").read_text())
     replacements = {
         sources["base"]["path"]: args.base.rstrip("/"),
         sources["donors"][0]["path"]: args.nupa.rstrip("/"),
@@ -27,7 +49,7 @@ def main() -> None:
         HISTORICAL_OUTPUT: args.output_prefix.rstrip("/"),
     }
     args.recipes.mkdir(parents=True, exist_ok=False)
-    for path in sorted(TEMPLATES.glob("*.json")):
+    for path in sorted(templates.glob("*.json")):
         payload = path.read_text()
         if "output" not in json.loads(payload):
             continue
