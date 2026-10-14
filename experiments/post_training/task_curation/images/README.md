@@ -90,17 +90,20 @@ campaign uses; it writes the artifacts there. A CoreWeave prefix needs the
 
 An environment's identity is the SHA-256 of its `requirements`, `apt`, `files`
 (each path with its archive's URL, SHA-256 and member), `env`, the `dockerfile`
-fragment's bytes, Python 3.12, the platform `linux/amd64`, the digest-pinned
-base image, the path, mode and content digest of every `verifyit` file
-(skipping `__pycache__`), and its placement. The repository is not part of the
+fragment's bytes, the `uv` upload-date cutoff `EXCLUDE_NEWER`, Python 3.12, the
+platform `linux/amd64`, the digest-pinned base image, the path, mode and
+content digest of every `verifyit` file (skipping `__pycache__`), and its
+placement. The repository is not part of the
 identity. The build:
 
 1. refuses a `dockerfile` or `verifyit` file that git does not track, and an
    executable `verifyit` file, because a workspace bundle has neither and would
    compute another identity;
 2. compiles `requirements` with `uv pip compile --generate-hashes
-   --python-version 3.12 --python-platform x86_64-unknown-linux-gnu`, and
-   downloads each `files` archive, verifies its SHA-256 and extracts the member
+   --exclude-newer <EXCLUDE_NEWER> --python-version 3.12 --python-platform
+   x86_64-unknown-linux-gnu`, so transitive packages resolve to the newest
+   release before the cutoff and two builds of one identity produce one lock,
+   and downloads each `files` archive, verifies its SHA-256 and extracts the member
    under `files/<path>` in the build context;
 3. for an environment placed in a built image, generates a Dockerfile from the
    pinned `iris-task` base that runs `apt-get install` of `apt`, `COPY files/ /`,
@@ -114,8 +117,8 @@ identity. The build:
 4. writes the artifact `images/env-<identity[:16]>`, which stores the lock as
    `requirements.lock`, `files.tar` (the placed tree, paths relative to `/`)
    when the environment places files, and `environment.json` (the sorted placed
-   paths and the `env`) when it declares either, and records the identity and
-   any built image digest. A worker builds its environment from the lock URL
+   paths, the SHA-256 of `files.tar` and the `env`) when it declares either, and
+   records the identity and any built image digest. A worker builds its environment from the lock URL
    alone, reading the manifest and files beside it.
 
 A second run with an unchanged declaration finds the artifact and starts no

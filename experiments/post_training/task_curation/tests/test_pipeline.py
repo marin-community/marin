@@ -184,6 +184,10 @@ PINNED_ARCHIVE = Archive("https://archives.invalid/data.zip", "0" * 64, "english
             lambda: Environment(files={"/usr/local/share/data/english": PINNED_ARCHIVE}),
             id="file-under-system-directory",
         ),
+        pytest.param(
+            lambda: Environment(files={DATA_PATH: PINNED_ARCHIVE, f"{DATA_PATH}/extra": PINNED_ARCHIVE}),
+            id="file-inside-another-file",
+        ),
         pytest.param(lambda: Environment(files={DATA_PATH: replace(PINNED_ARCHIVE, sha256="abc")}), id="bad-sha256"),
         pytest.param(
             lambda: Environment(files={DATA_PATH: replace(PINNED_ARCHIVE, member="../etc")}), id="escaping-member"

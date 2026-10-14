@@ -169,11 +169,13 @@ def test_declared_files_and_env_are_stored_for_the_worker_and_enter_the_image_be
     )
     (built,) = run(environment_artifact(environment, REPOSITORY))
     stored = StoragePath(built.path)
+    archive_bytes = (stored / "files.tar").read_bytes()
     assert json.loads((stored / "environment.json").read_text()) == {
         "files": [DATA_PATH],
+        "files_sha256": hashlib.sha256(archive_bytes).hexdigest(),
         "env": {"FIXTURE_DATA": "/srv/fixture"},
     }
-    with tarfile.open(fileobj=io.BytesIO((stored / "files.tar").read_bytes())) as tar:
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes)) as tar:
         members = {member.name: tar.extractfile(member).read() for member in tar.getmembers() if member.isfile()}
     assert members == {
         f"{DATA_PATH.removeprefix('/')}/{name.removeprefix('english/')}": content for name, content in DATA_FILES.items()

@@ -60,6 +60,8 @@ PYTHON_VERSION = "3.12"
 PYTHON_PLATFORM = "x86_64-unknown-linux-gnu"
 ENVIRONMENT_ARTIFACT_VERSION = "2026.10.08"
 IMAGE_COMPRESSION = "gzip"
+EXCLUDE_NEWER = "2026-10-14"
+"""Transitive packages resolve among releases uploaded before this date; move it forward with the pins."""
 BUILD_COMMAND = "uv run python -m experiments.post_training.task_curation.images --identity {identity}"
 
 
@@ -103,6 +105,7 @@ def environment_identity(environment: Environment) -> dict[str, Any]:
         },
         "env": dict(sorted(environment.env.items())),
         "dockerfile_sha256": _fragment_sha256(environment),
+        "exclude_newer": EXCLUDE_NEWER,
         "python": PYTHON_VERSION,
         "platform": PLATFORM,
         "base_image": BASE_IMAGE,
@@ -146,7 +149,11 @@ def environment_artifact(
 
 
 def compile_lock(requirements: tuple[str, ...], output: Path) -> None:
-    """Compile exact pins into a lock with hashes for the workers' Python version and platform."""
+    """Compile exact pins into a lock with hashes for the workers' Python version and platform.
+
+    Transitive packages resolve to the newest release before ``EXCLUDE_NEWER``, so two builds of one
+    identity resolve the same lock.
+    """
     with TemporaryDirectory() as directory:
         source = Path(directory) / "requirements.in"
         source.write_text("".join(f"{requirement}\n" for requirement in requirements))
@@ -158,6 +165,8 @@ def compile_lock(requirements: tuple[str, ...], output: Path) -> None:
                 "compile",
                 "--generate-hashes",
                 "--no-header",
+                "--exclude-newer",
+                EXCLUDE_NEWER,
                 "--python-version",
                 PYTHON_VERSION,
                 "--python-platform",
@@ -259,12 +268,20 @@ def write_context(environment: Environment, directory: Path) -> None:
     (directory / "Dockerfile").write_text(dockerfile(environment))
 
 
+def _without_mtime(member: tarfile.TarInfo) -> tarfile.TarInfo:
+    member.mtime = 0
+    return member
+
+
 def files_archive(files: Path) -> bytes:
-    """A tar of every file under ``files`` by its path relative to ``files``, as the worker extracts it."""
+    """A tar of every file under ``files`` by its path relative to ``files``, as the worker extracts it.
+
+    Member order and timestamps are fixed so the same files give the same archive digest.
+    """
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as tar:
         for path in sorted(file for file in files.rglob("*") if file.is_file()):
-            tar.add(path, arcname=path.relative_to(files).as_posix())
+            tar.add(path, arcname=path.relative_to(files).as_posix(), filter=_without_mtime)
     return buffer.getvalue()
 
 
@@ -366,7 +383,8 @@ def build_environment(environment: Environment, build: EnvironmentBuild) -> Envi
     if files is not None:
         (output / FILES_ARCHIVE).write_bytes(files)
     if environment.files or environment.env:
-        manifest = EnvironmentManifest(tuple(environment.files), environment.env)
+        files_sha256 = hashlib.sha256(files).hexdigest() if files is not None else None
+        manifest = EnvironmentManifest(tuple(environment.files), files_sha256, environment.env)
         (output / ENVIRONMENT_MANIFEST).write_text(dump_manifest(manifest))
     return EnvironmentArtifact(path=build.output_path, identity=build.identity, image=image)
 

@@ -3,6 +3,7 @@
 
 """The worker runtime resolved from a lock artifact and the files stored beside it."""
 
+import hashlib
 import io
 import json
 import tarfile
@@ -12,7 +13,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 from shellbox.machine import Mount
 
-from taskcompendium.runtime.local import LocalRuntime, extract_files, local_runtime
+from taskcompendium.runtime.local import EnvironmentManifest, LocalRuntime, extract_files, local_runtime
 
 
 @pytest.mark.parametrize(
@@ -21,7 +22,7 @@ from taskcompendium.runtime.local import LocalRuntime, extract_files, local_runt
 def test_runtime_parent_matches_executable_mounts(monkeypatch, cache_mounted, expected_parent):
     monkeypatch.setattr(Path, "is_mount", lambda self: cache_mounted and self == Path("/cache"))
 
-    runtime = LocalRuntime("fixture.lock", "0" * 64, (), {})
+    runtime = LocalRuntime("fixture.lock", "0" * 64)
     assert runtime.root.parent == expected_parent
 
 
@@ -40,9 +41,12 @@ def test_the_manifest_beside_the_lock_mounts_extracted_files_at_their_paths_and_
     lock.write_bytes(b"six==1.17.0\n")
     guest = "/srv/nltk_data/tokenizers/punkt_tab/english"
     env = {"NLTK_DATA": "/srv/nltk_data"}
-    (tmp_path / "environment.json").write_text(json.dumps({"files": [guest], "env": env}))
     archive = files_tar({f"{guest.removeprefix('/')}/abbrev.tab": b"etc\n"})
     (tmp_path / "files.tar").write_bytes(archive)
+    manifest = EnvironmentManifest((guest,), hashlib.sha256(archive).hexdigest(), env)
+    (tmp_path / "environment.json").write_text(
+        json.dumps({"files": [guest], "files_sha256": manifest.files_sha256, "env": env})
+    )
 
     runtime = replace(local_runtime(str(lock)), parent=tmp_path / "runtime")
     extract_files(archive, runtime.root / "files")
@@ -51,8 +55,10 @@ def test_the_manifest_beside_the_lock_mounts_extracted_files_at_their_paths_and_
     assert mount == Mount(runtime.root / "files" / guest.removeprefix("/"), PurePosixPath(guest))
     assert (mount.host / "abbrev.tab").read_bytes() == b"etc\n"
     assert runtime.env == env
-    bare = LocalRuntime(str(lock), runtime.lock_sha256, (), {})
-    assert len({runtime.identity, replace(runtime, env={}).identity, bare.identity}) == 3
+    bare = LocalRuntime(str(lock), runtime.lock_sha256)
+    other_archive = replace(runtime, manifest=replace(manifest, files_sha256="0" * 64))
+    other_env = replace(runtime, manifest=replace(manifest, env={}))
+    assert len({runtime.identity, other_archive.identity, other_env.identity, bare.identity}) == 4
 
 
 def test_a_lock_without_a_manifest_mounts_nothing_and_sets_no_variables(tmp_path):

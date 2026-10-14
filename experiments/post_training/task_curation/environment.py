@@ -4,7 +4,7 @@
 """Grader environment declarations and where the pipeline runs them."""
 
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -76,6 +76,10 @@ def _relative_or_escaping(path: str) -> bool:
     return not parts.is_absolute() or ".." in parts.parts
 
 
+def _under_another(path: str, paths: Iterable[str]) -> bool:
+    return any(other != path and PurePosixPath(path).is_relative_to(other) for other in paths)
+
+
 def _within_system_directories(path: str) -> bool:
     return any(PurePosixPath(path).is_relative_to(directory) for directory in SYSTEM_DIRECTORIES)
 
@@ -130,6 +134,9 @@ class Environment:
         system = [path for path in self.files if _within_system_directories(path)]
         if system:
             raise ValueError(f"files cannot be placed under the worker's read-only system directories: {system}")
+        nested = [path for path in self.files if _under_another(path, self.files)]
+        if nested:
+            raise ValueError(f"files cannot be placed inside another placed file; the worker mounts each one: {nested}")
         invalid_names = [name for name in self.env if VARIABLE_NAME.fullmatch(name) is None]
         if invalid_names:
             raise ValueError(f"env names must be environment variable names: {invalid_names}")

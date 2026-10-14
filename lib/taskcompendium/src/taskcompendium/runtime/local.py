@@ -49,19 +49,27 @@ EXECUTABLE_MODE = "100755"
 
 @dataclass(frozen=True)
 class EnvironmentManifest:
-    """What a worker needs beyond the lock: the absolute paths the environment places files at and its variables."""
+    """What a worker needs beyond the lock: the placed files' paths and archive digest, and the variables."""
 
     files: tuple[str, ...] = ()
+    files_sha256: str | None = None
+    """The SHA-256 of ``files.tar``, so a changed archive at the same paths builds a new worker environment."""
     env: Mapping[str, str] = field(default_factory=dict)
 
 
 def dump_manifest(manifest: EnvironmentManifest) -> str:
-    return json.dumps({"files": sorted(manifest.files), "env": dict(sorted(manifest.env.items()))})
+    return json.dumps(
+        {
+            "files": sorted(manifest.files),
+            "files_sha256": manifest.files_sha256,
+            "env": dict(sorted(manifest.env.items())),
+        }
+    )
 
 
 def load_manifest(text: str) -> EnvironmentManifest:
     declared = json.loads(text)
-    return EnvironmentManifest(tuple(declared["files"]), declared["env"])
+    return EnvironmentManifest(tuple(declared["files"]), declared["files_sha256"], declared["env"])
 
 
 class ContextFile(BaseModel):
@@ -126,27 +134,31 @@ def extract_files(archive: bytes, directory: Path) -> None:
 class LocalRuntime:
     """A Python environment under ``parent`` built from the lock at ``lock_url``.
 
-    ``lock_sha256`` is the digest of the lock, ``files`` the absolute paths the environment places files
-    at, from the ``files.tar`` beside the lock, and ``env`` the variables graders run with. The
-    environment's directory is named by its identity, so a changed lock builds a new one beside the old
-    and environments with the same packages, files and env share one.
+    ``lock_sha256`` is the digest of the lock, ``manifest`` names the absolute paths the environment places
+    files at, from the ``files.tar`` beside the lock, with that archive's digest, and the variables graders
+    run with. The environment's directory is named by its identity, so a changed lock or archive builds a
+    new one beside the old and environments with the same packages, files and env share one.
     """
 
     lock_url: str
     lock_sha256: str
-    files: tuple[str, ...]
-    env: Mapping[str, str]
+    manifest: EnvironmentManifest = EnvironmentManifest()
     parent: Path = field(default_factory=_runtime_parent)
+
+    @property
+    def env(self) -> Mapping[str, str]:
+        return self.manifest.env
 
     @cached_property
     def identity(self) -> str:
-        """The SHA-256 of the lock, the placed files' paths, the env, the Python version and the runtime files."""
+        """The SHA-256 of the lock, the placed files' paths and archive, the env, the Python version and the runtime."""
         return hashlib.sha256(
             json.dumps(
                 {
                     "lock_sha256": self.lock_sha256,
-                    "files": sorted(self.files),
-                    "env": dict(self.env),
+                    "files": sorted(self.manifest.files),
+                    "files_sha256": self.manifest.files_sha256,
+                    "env": dict(self.manifest.env),
                     "python": DEFAULT_PYTHON_VERSION,
                     "runtime": runtime_files(),
                 },
@@ -170,7 +182,7 @@ class LocalRuntime:
     def mounts(self) -> tuple[Mount, ...]:
         """Each placed file, from its copy under the root to the path the environment declares."""
         files = self.root / FILES_DIRECTORY
-        return tuple(Mount(files / path.removeprefix("/"), PurePosixPath(path)) for path in self.files)
+        return tuple(Mount(files / path.removeprefix("/"), PurePosixPath(path)) for path in self.manifest.files)
 
     def ensure_built(self) -> None:
         """Build the environment unless a complete one exists; concurrent callers on one host build it once.
@@ -204,8 +216,10 @@ class LocalRuntime:
             text=True,
         ).stdout.strip()
         (Path(purelib) / RUNTIME_PTH).write_text(f"{runtime}\n")
-        if self.files:
+        if self.manifest.files:
             archive = (StoragePath(self.lock_url).parent / FILES_ARCHIVE).read_bytes()
+            if hashlib.sha256(archive).hexdigest() != self.manifest.files_sha256:
+                raise ValueError(f"{FILES_ARCHIVE} beside {self.lock_url} does not match the manifest digest")
             extract_files(archive, self.root / FILES_DIRECTORY)
 
 
@@ -215,7 +229,7 @@ def local_runtime(lock_url: str) -> LocalRuntime:
     lock = StoragePath(lock_url)
     stored = lock.parent / ENVIRONMENT_MANIFEST
     manifest = load_manifest(stored.read_text()) if stored.exists() else EnvironmentManifest()
-    return LocalRuntime(lock_url, hashlib.sha256(lock.read_bytes()).hexdigest(), manifest.files, manifest.env)
+    return LocalRuntime(lock_url, hashlib.sha256(lock.read_bytes()).hexdigest(), manifest)
 
 
 @cache
