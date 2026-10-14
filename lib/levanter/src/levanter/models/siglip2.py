@@ -18,7 +18,7 @@ from typing import Self, Dict, Optional, Tuple, Type
 
 import jax
 from levanter.models.vision_model import VisionEncoderConfig
-from levanter.models.vision_transformer import vision_activation, vision_hidden_states, VisionEncoderLayer, VisionMLP
+from levanter.models.vision_model import vision_activation, vision_hidden_states, VisionEncoderLayer, VisionMLP
 import equinox as eqx
 import jax.numpy as jnp
 

@@ -14,7 +14,7 @@ from typing import Self, Dict, Optional, Tuple, Type
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 from levanter.models.vision_model import VisionEncoderConfig
-from levanter.models.vision_transformer import vision_activation, vision_hidden_states, VisionEncoderLayer
+from levanter.models.vision_model import vision_activation, vision_hidden_states, VisionEncoderLayer
 
 
 silence_transformer_nag()
