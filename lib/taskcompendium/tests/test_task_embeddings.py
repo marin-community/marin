@@ -1,0 +1,372 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+from finestore.reader import ReadView
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.readers import load_parquet
+from zephyr.stage_io import ZephyrWorkerError
+
+from taskcompendium.convert.answers import numeric_answer_task
+from taskcompendium.models import Source, TaskSpec
+from taskcompendium.pipeline.curriculum_alignment import (
+    AnchorKind,
+    AssignmentStatus,
+    CurriculumAnchor,
+    CurriculumVectors,
+    rank_task_batch,
+)
+from taskcompendium.pipeline.models import RawRow
+from taskcompendium.pipeline.review_requests import RequestObservation, RequestOutput
+from taskcompendium.pipeline.semantics import (
+    DescriptionModel,
+    SemanticProjection,
+    TaskInputFile,
+    describe_tasks,
+    prepare_semantic_inputs,
+    task_semantic_input,
+)
+from taskcompendium.pipeline.task_alignment import align_tasks
+from taskcompendium.pipeline.task_embeddings import EmbeddingSpec, embed_texts, task_text_records, text_record
+
+
+@pytest.fixture
+def context(tmp_path):
+    with ZephyrContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+        yield context
+
+
+@pytest.fixture
+def spec():
+    return EmbeddingSpec(
+        model="fixture-harrier",
+        revision="revision-1",
+        tokenizer_revision="revision-1",
+        dimensions=3,
+        max_tokens=512,
+        compute_dtype="float32",
+    )
+
+
+def task(identifier, prompt="Count two apples.", answer="817", dataset="private-source-label"):
+    result = numeric_answer_task(
+        RawRow(
+            id=identifier,
+            source=Source(dataset=dataset, revision="private-source-revision", importer_revision="1", row=identifier),
+            data={},
+        ),
+        prompt=prompt,
+        answer=answer,
+        tolerance_abs=0,
+        tolerance_rel=0,
+        evidence={"private": "PRIVATE_EVIDENCE"},
+    )
+    assert isinstance(result, TaskSpec)
+    return result
+
+
+@dataclass(frozen=True)
+class DescriptionTransport:
+    calls: str
+
+    def __call__(self, requests):
+        observations = []
+        for request in reversed(requests):
+            with Path(self.calls).open("a") as stream:
+                stream.write(json.dumps(request) + "\n")
+            public = request["body"]["messages"][-1]["content"]
+            missing = "UNSPECIFIED_OPERATION" in public
+            description = {
+                "status": "insufficient_context" if missing else "ready",
+                "reason": "The requested operation is absent" if missing else "",
+                "key": (
+                    None
+                    if missing
+                    else {
+                        "subject_domain": "arithmetic",
+                        "task_mechanic": "counting",
+                        "summary": "Count apples",
+                        "hardest_operation": "count",
+                        "required_operations": ["count"],
+                        "answer_form": "number",
+                    }
+                ),
+            }
+            response = {
+                "custom_id": request["custom_id"],
+                "response": {
+                    "status_code": 200,
+                    "body": {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {
+                                    "role": "assistant",
+                                    "tool_calls": [
+                                        {
+                                            "id": "description",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "describe_task",
+                                                "arguments": json.dumps(
+                                                    {"task_id": request["custom_id"], "description": description}
+                                                ),
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    },
+                },
+            }
+            observations.append(RequestObservation((request["custom_id"],), json.dumps(response)))
+        return RequestOutput(tuple(requests), observations)
+
+
+@dataclass(frozen=True)
+class EmbeddingProvider:
+    calls: str
+
+    def embed(self, texts):
+        with Path(self.calls).open("a") as stream:
+            for text in texts:
+                stream.write(json.dumps(text) + "\n")
+        return np.asarray([[1.0, float(len(text) % 7), 0.5] for text in texts], dtype=np.float32)
+
+
+def rows(paths):
+    return [row for path in paths for row in load_parquet(path)]
+
+
+def test_instruction_projection_excludes_private_contract_and_ignores_source_identity():
+    source = TaskInputFile("source-a", "key-a", "unused", "train", "admitted")
+    first = task_semantic_input(task("a"), source)
+    second = task_semantic_input(task("b", answer="999", dataset="other-private-source"), source)
+    assert first.content_hash == second.content_hash
+    assert first.task_hash != second.task_hash
+    assert first.content_hash != task_semantic_input(task("c", prompt="Sort the apples."), source).content_hash
+    public = json.loads(first.public_input)
+    assert public["context"]["events"][0]["content"] == "Count two apples."
+    assert not {"resources", "grader", "source", "tags"}.intersection(public)
+    assert "PRIVATE_EVIDENCE" not in first.public_input
+    assert "private-source" not in first.public_input
+    assert "817" not in first.public_input
+
+
+def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reuse_cache(context, tmp_path, spec):
+    raw = tmp_path / "tasks.parquet"
+    tasks = [task("a"), task("b"), task("c", prompt="UNSPECIFIED_OPERATION")]
+    pq.write_table(
+        pa.Table.from_pylist([{"task_json": item.model_dump_json()} for item in tasks] + [{"task_json": None}]), raw
+    )
+    inputs = prepare_semantic_inputs(
+        context,
+        sources=[TaskInputFile("source-a", "curation-key", str(raw), "train", "admitted")],
+        output_root=str(tmp_path / "inputs"),
+        sample_size=None,
+        seed=0,
+    )
+    transport = DescriptionTransport(str(tmp_path / "descriptions-called.jsonl"))
+    description_cache = str(tmp_path / "description-cache")
+    descriptions = describe_tasks(
+        context,
+        input_paths=inputs,
+        model=DescriptionModel("model", "revision"),
+        submit=transport,
+        cache_root=description_cache,
+        output_root=str(tmp_path / "descriptions"),
+    )
+    assert len(rows(inputs)) == 3
+    assert len(rows(descriptions)) == 2
+    assert len(Path(transport.calls).read_text().splitlines()) == 2
+    replay = describe_tasks(
+        context,
+        input_paths=inputs,
+        model=DescriptionModel("model", "revision"),
+        submit=transport,
+        cache_root=description_cache,
+        output_root=str(tmp_path / "descriptions-replay"),
+    )
+    assert sorted(rows(replay), key=lambda row: row["content_hash"]) == sorted(
+        rows(descriptions), key=lambda row: row["content_hash"]
+    )
+    assert len(Path(transport.calls).read_text().splitlines()) == 2
+
+    provider = EmbeddingProvider(str(tmp_path / "embeddings-called.jsonl"))
+    texts = [text for row in rows(descriptions) for text in task_text_records(row, spec)]
+    vector_cache = str(tmp_path / "vectors-cache")
+    vectors = embed_texts(
+        context,
+        texts=Dataset.from_list(texts),
+        spec=spec,
+        embedder=provider,
+        cache_root=vector_cache,
+        output_root=str(tmp_path / "vectors"),
+    )
+    assert len(rows(vectors)) == 3
+    for vector in rows(vectors):
+        assert np.linalg.norm(vector["embedding"]) == pytest.approx(1.0)
+
+    anchors = (
+        CurriculumAnchor(
+            anchor_id="domain",
+            kind=AnchorKind.SUBJECT,
+            subject_id="math",
+            capability_id=None,
+            projection=SemanticProjection.SUBJECT_DOMAIN,
+            text="Subject domain: arithmetic.",
+        ),
+        CurriculumAnchor(
+            anchor_id="count",
+            kind=AnchorKind.CAPABILITY,
+            subject_id="math",
+            capability_id="math.count",
+            projection=SemanticProjection.OPERATIONS,
+            text="Count items",
+        ),
+    )
+    anchor_texts = [text_record(anchor.text, anchor.projection, spec) for anchor in anchors]
+    anchor_paths = embed_texts(
+        context,
+        texts=Dataset.from_list(anchor_texts),
+        spec=spec,
+        embedder=provider,
+        cache_root=vector_cache,
+        output_root=str(tmp_path / "anchors"),
+    )
+    assert len(Path(provider.calls).read_text().splitlines()) == 4
+    anchor_by_key = {row["embedding_key"]: row["embedding"] for row in rows(anchor_paths)}
+    reference = CurriculumVectors(
+        anchors, np.asarray([anchor_by_key[row["embedding_key"]] for row in anchor_texts], dtype=np.float32)
+    )
+    assigned = align_tasks(
+        context,
+        input_paths=inputs,
+        description_paths=descriptions,
+        curriculum=reference,
+        curriculum_key="fixture",
+        cache_root=vector_cache,
+        spec=spec,
+        output_root=str(tmp_path / "aligned"),
+    )
+    output = {row["task_id"]: row for row in rows(assigned)}
+    assert set(output) == {"a", "b", "c"}
+    assert output["a"]["assignments"] == output["b"]["assignments"]
+    assert output["a"]["assignments"][0]["membership_similarity"] == pytest.approx(1.0)
+    assert output["c"]["description_status"] == "insufficient_context"
+    assert output["c"]["assignments"] == []
+
+    changed_anchor = text_record("Count and compare items", SemanticProjection.OPERATIONS, spec)
+    embed_texts(
+        context,
+        texts=Dataset.from_list([*texts, *anchor_texts, changed_anchor]),
+        spec=spec,
+        embedder=provider,
+        cache_root=vector_cache,
+        output_root=str(tmp_path / "curriculum-edit"),
+    )
+    assert len(Path(provider.calls).read_text().splitlines()) == 5
+    changed_spec = spec.model_copy(update={"max_tokens": 256})
+    embed_texts(
+        context,
+        texts=Dataset.from_list([text_record("Count items", SemanticProjection.OPERATIONS, changed_spec)]),
+        spec=changed_spec,
+        embedder=provider,
+        cache_root=vector_cache,
+        output_root=str(tmp_path / "spec-edit"),
+    )
+    assert len(Path(provider.calls).read_text().splitlines()) == 6
+
+
+def test_exact_alignment_keeps_multiple_subjects_and_rejects_weak_capabilities():
+    anchors = (
+        CurriculumAnchor(
+            anchor_id="domain",
+            kind="subject",
+            subject_id="math",
+            capability_id=None,
+            projection="subject_domain",
+            text="Math",
+        ),
+        CurriculumAnchor(
+            anchor_id="count",
+            kind="capability",
+            subject_id="math",
+            capability_id="count",
+            projection="operations",
+            text="Count",
+        ),
+        CurriculumAnchor(
+            anchor_id="compare",
+            kind="capability",
+            subject_id="math",
+            capability_id="compare",
+            projection="operations",
+            text="Compare",
+        ),
+        CurriculumAnchor(
+            anchor_id="mechanic",
+            kind="subject",
+            subject_id="practice",
+            capability_id=None,
+            projection="task_mechanic",
+            text="Calculation",
+        ),
+        CurriculumAnchor(
+            anchor_id="calculate",
+            kind="capability",
+            subject_id="practice",
+            capability_id="calculate",
+            projection="operations",
+            text="Calculate",
+        ),
+    )
+    references = np.asarray([[1, 0, 0], [1, 0, 0], [0, 1, 0], [1, 0, 0], [1, 0, 0]], dtype=np.float32)
+    membership = np.asarray([[1, 0, 0], [1, 0, 0], [1, 0, 0], [-1, 0, 0]], dtype=np.float32)
+    operations = np.asarray([[1, 0, 0], [1, 1, 0], [0, 0, 1], [1, 0, 0]], dtype=np.float32)
+    output = rank_task_batch(
+        CurriculumVectors(anchors, references),
+        {
+            SemanticProjection.SUBJECT_DOMAIN: membership,
+            SemanticProjection.TASK_MECHANIC: membership,
+            SemanticProjection.OPERATIONS: operations,
+        },
+    )
+    assert {row.subject_id for row in output[0] if row.status == AssignmentStatus.ASSIGNED} == {"math", "practice"}
+    assert next(row for row in output[0] if row.subject_id == "math").capability_id == "count"
+    tied = next(row for row in output[1] if row.subject_id == "math")
+    assert tied.status == AssignmentStatus.SUBJECT_ONLY
+    assert tied.capability_id is None
+    assert [candidate.capability_id for candidate in tied.candidates] == ["compare", "count"]
+    assert all(row.status == AssignmentStatus.SUBJECT_ONLY for row in output[2])
+    assert all(row.status == AssignmentStatus.OUT_OF_SCOPE for row in output[3])
+
+
+@dataclass(frozen=True)
+class ZeroEmbeddingProvider:
+    def embed(self, texts):
+        return np.zeros((len(texts), 3), dtype=np.float32)
+
+
+def test_invalid_provider_vectors_never_enter_persistent_cache(context, tmp_path, spec):
+    row = text_record("Count items", SemanticProjection.OPERATIONS, spec)
+    cache = str(tmp_path / "cache")
+    with pytest.raises(ZephyrWorkerError, match="zero vector"):
+        embed_texts(
+            context,
+            texts=Dataset.from_list([row]),
+            spec=spec,
+            embedder=ZeroEmbeddingProvider(),
+            cache_root=cache,
+            output_root=str(tmp_path / "failed"),
+        )
+    assert ReadView(cache).read_blobs([row["embedding_key"]]) == {}

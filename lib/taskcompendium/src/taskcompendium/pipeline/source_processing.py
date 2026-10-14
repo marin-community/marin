@@ -1062,6 +1062,7 @@ def _run_quick(
                 "source_dataset": recipe.source.dataset,
                 "source_revision": recipe.source.revision,
                 "recipe_revision": recipe.version,
+                "intended_use": recipe.intended_use.value,
                 "source_input": source_input,
                 "source_file_overrides": {name: asdict(file) for name, file in (source_overrides or {}).items()},
                 "reviewed": False,

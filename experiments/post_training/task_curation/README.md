@@ -219,6 +219,61 @@ For readable file diffs, repeat with one `--source` and
 includes file metadata and text changes, capped at 64 KiB per side per file with
 explicit truncation; binary files retain hashes. Full runs discard archive bytes.
 
+## Task and curriculum embeddings
+
+The canonical embedding graph consumes existing curation outputs and the immutable
+task curriculum. It runs every data pass through Zephyr: instruction projection,
+cached semantic descriptions, task vectors, curriculum anchor vectors and exact
+faceted alignment. The old curriculum OpenAI embedding CLI and SQLite cache are
+removed.
+
+Start with a seeded sample from a local QUICK conversion. QUICK does not admit
+tasks, so select the `converted` population explicitly:
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' \
+  --with-editable './lib/marin[cpu]' python \
+  -m experiments.post_training.task_curation.embed \
+  --curated 'Task Trove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2' \
+    /path/to/quick/tasktrove-nl2bash \
+  --cache-root /path/to/persistent/embedding-cache \
+  --population converted --sample-size 20 \
+  --model-revision YOUR_GLM_REVISION --base-url YOUR_GLM_ENDPOINT \
+  --embedding-backend cpu --compute-dtype float32
+```
+
+The command prints a plan. Add `--run` to execute; `GLM_BULK_TOKEN` supplies the
+description-model credential. Repeat `--curated SOURCE_ID ROOT` for more sources.
+For reviewed outputs, select `--population admitted`. Omit `--sample-size` to
+process complete selected populations. `--catalog-root` selects another immutable
+directory containing `curriculum.json`; otherwise the graph uses `TASK_CURRICULUM`.
+
+The annotator sees instructions and the public tool/answer contract. It does not
+read task files, source labels, private verifier resources or solutions. Tasks
+with the same public input share one description. Missing information about the
+requested operation produces `insufficient_context`.
+
+Tasks and curriculum anchors share projection instructions and the full Harrier
+embedding specification. FineStore stores vectors by rendered-text/specification
+hash, with batched reads and writes. A curriculum-only change reuses task
+descriptions and vectors. Keep the vector archive under a persistent retention
+policy: assignment workers read it in bounded batches. Independent Parquet vector
+outputs preserve each embedding stage's data and provenance.
+
+For an existing Iris-managed TEI Harrier pool, use `--embedding-backend tei
+--tei-endpoint NAME` and declare the pool's actual `--compute-dtype`. Configure
+the same checkpoint, tokenizer and token limit. Requests reject truncation.
+`--max-workers` and `--worker-memory` select the Zephyr worker pool; run the same
+entrypoint inside Iris with a storage-region cache root.
+
+Alignment uses the code constant `MAX_DISTANCE` in
+`taskcompendium.pipeline.curriculum_alignment` for subject and capability cosine
+distance. Changing the cutoff invalidates alignment without recomputing task or
+curriculum embeddings. Top-three alternatives and score margins remain available
+for inspecting placements. Out-of-scope tasks and subject matches with weak
+capability matches remain explicit outcomes. This pass does not change curation
+admission or train/eval use.
+
 ## Declaring a dataset
 
 Follow [Adding a dataset](datasets/README.md#adding-a-dataset). Edit declarations,

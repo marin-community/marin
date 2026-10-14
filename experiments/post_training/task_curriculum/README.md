@@ -145,41 +145,24 @@ implementation, repair, supplied-context extraction, calculation, explanation, r
 hardest and required operations rank capabilities after graph selection. Groups never receive assignment anchors or
 task mappings.
 
-Annotate each task once in model batches of 8–16. Persist the task-content hash, annotation prompt version, and model.
-Do not include curriculum labels in the prompt. `task_mapping/cli.py` caches each embedding by text and model, derives bootstrap
-anchors from curriculum outcomes and includes, accepts separate assignment anchors, and ranks with NumPy in bounded
-row batches. A curriculum edit re-embeds changed anchors and reuses task vectors. A semantic-key schema change requires
-reannotation; an embedding-model change requires re-embedding.
+The [curation embedding pipeline](../task_curation/README.md#task-and-curriculum-embeddings) owns task descriptions,
+task embeddings, curriculum anchor embeddings and assignment. The curriculum experiment supplies the immutable
+catalog; it has no separate embedding CLI or database.
 
-Run a pilot mapping with:
+The pipeline describes instructions and public answer/tool contracts without opening task files or exposing private
+grading resources. It retains task identity separately from public-content identity, so repeated content shares
+inference across source populations. Task and curriculum texts use the same Harrier checkpoint, tokenizer, projection
+instructions, last-token pooling and L2 normalization. Curriculum outcomes and includes provide capability anchors;
+root scopes provide subject membership anchors. Groups receive navigation rollups, not task assignments.
 
-```bash
-uv run python -m experiments.post_training.task_curriculum.task_mapping.cli \
-  --annotations /tmp/task-annotations-000.jsonl \
-  --catalog /tmp/task-curriculum-cross-domain-v2.json \
-  --assignment-anchors /tmp/assignment-anchors.jsonl \
-  --cache /tmp/curriculum-embeddings.sqlite \
-  --embedding-model text-embedding-3-small \
-  --top-k 3 \
-  --output /tmp/C14-mappings.jsonl
-```
+FineStore caches validated description requests and content-addressed vectors. A curriculum edit renders and embeds
+changed anchors, then realigns cached task vectors. Changing the description prompt/model can regenerate semantic
+keys; changing the embedding specification requires new vectors. Outputs remain outside the curriculum JSON.
 
-The output contains a membership score and section candidates for every graph. Thresholds are calibrated independently
-per graph on a frozen member, close-neighbor, overlap, and out-of-scope sample. Compare scores only within one
-projection. The mapper has no source-specific rules or per-task exceptions. Mapping is a diagnostic signal and is
-excluded from the curriculum promotion gate. Roughly 70% reasonable placement is adequate for initial scale-out.
-
-For the full TaskTrove run, materialize the approximately 4 GB clean release and shard annotation and embedding work.
-Keep these artifacts outside the curriculum JSON:
-
-- semantic keys by task-content hash, annotation schema, prompt, and model;
-- task vectors by semantic-key hash and embedding model;
-- assignment anchors and anchor vectors by catalog and embedding model;
-- graph calibration policies by catalog, anchor set, and labeled fixture; and
-- assignments by task vector, catalog, anchor set, and calibration policy.
-
-Use Parquet shards in GCS for the internal working set. A curated public snapshot can be published to Hugging Face.
-The local SQLite cache is only a single-node development cache.
+Exact cosine scoring ranks subjects and capabilities in bounded task batches. One code constant, `MAX_DISTANCE`,
+controls accepted cosine distance for both levels. Subject matches with weak capability matches do not become
+accepted capability assignments. Top-three alternatives and score margins support inspection. Mapping remains a
+diagnostic signal and is excluded from the curriculum promotion gate.
 
 ## Experiment history
 

@@ -9,8 +9,9 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from marin.processing.embeddings import tei as tei_client
 
-from experiments.datakit.embeddings.harrier import tei, tei_client
+from experiments.datakit.embeddings.harrier import tei
 from experiments.datakit.embeddings.harrier.pipeline import EmbeddingAttrData
 
 EMBEDDING_DIM = 4
@@ -74,7 +75,7 @@ def test_tei_client_retries_against_refreshed_endpoints(monkeypatch, transient_e
 
     monkeypatch.setattr(tei_client.urllib.request, "urlopen", urlopen)
 
-    embeddings = tei_client.TeiEmbeddingClient("tei", EMBEDDING_DIM).embed(["document"])
+    embeddings = tei_client.TeiEmbeddingClient("tei", EMBEDDING_DIM, truncate=True).embed(["document"])
 
     np.testing.assert_array_equal(embeddings, np.asarray([_embedding(0)], dtype=np.float32))
 
@@ -93,6 +94,6 @@ def test_tei_client_splits_large_requests_without_reordering(monkeypatch):
 
     monkeypatch.setattr(tei_client.urllib.request, "urlopen", urlopen)
 
-    embeddings = tei_client.TeiEmbeddingClient("tei", EMBEDDING_DIM).embed(["0", "1", "2", "3", "4"])
+    embeddings = tei_client.TeiEmbeddingClient("tei", EMBEDDING_DIM, truncate=True).embed(["0", "1", "2", "3", "4"])
 
     np.testing.assert_array_equal(embeddings[:, 0], np.arange(5, dtype=np.float32))

@@ -19,6 +19,10 @@ from huggingface_hub import snapshot_download
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import write_artifact
+from marin.processing.embeddings.harrier import HARRIER_DIMENSIONS as HARRIER_DIM
+from marin.processing.embeddings.harrier import HARRIER_MODEL as HARRIER_REPO
+from marin.processing.embeddings.harrier import HARRIER_REVISION
+from marin.processing.embeddings.tei import TeiEmbeddingClient
 from pydantic import BaseModel, Field
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
@@ -30,14 +34,9 @@ from zephyr.readers import load_file
 from zephyr.runners import InlineRunner
 from zephyr.worker_context import zephyr_worker_ctx
 
-from experiments.datakit.embeddings.harrier.tei_client import TeiEmbeddingClient
-
 logger = logging.getLogger(__name__)
 
 EMBEDDING_ATTR_DATA_VERSION = "2026.08.11"
-HARRIER_REPO = "microsoft/harrier-oss-v1-0.6b"
-HARRIER_REVISION = "f9b9dc8d367d443f2479d27aa5d8d2850c0774ee"
-HARRIER_DIM = 1_024
 HARRIER_MAX_TOKENS = 8_192
 HARRIER_MAX_RAW_TEXT_CHARS = 100_000
 HARRIER_MAX_WORKERS = 256
@@ -135,7 +134,7 @@ def stage_harrier(repo_id: str, revision: str, destination_path: str) -> str:
 
 @cache
 def _load_tei_embedder(endpoint_name: str) -> TeiEmbeddingClient:
-    return TeiEmbeddingClient(endpoint_name, HARRIER_DIM)
+    return TeiEmbeddingClient(endpoint_name, HARRIER_DIM, truncate=True)
 
 
 def _embed_shard(batches: Iterator[list[dict]], shard: ShardInfo) -> Iterator[dict]:
