@@ -16,6 +16,25 @@ uv run python -m experiments.grug.fast_track.belay_ckpt1 --size d1024 --submit -
 
 Extra launcher arguments go after the recipe's and override it.
 
+## Belay baseline tracks
+
+[`belay_tracks.py`](belay_tracks.py) defines the two minimal-confounder baselines of the Belay page: **Vanilla**
+(barebones Qwen3-style dense transformer, AdamW, 20 tokens per active parameter) and **Basic MoE** (128 experts
+top-4, two shared experts, MuonH, 60 tokens per active parameter). Runs of 2026-10-14 on 8×H100 (cw-us-east-02a);
+wall clock is the whole run including compile and the final eval, s/step is the median step after warmup, and
+active params exclude embeddings and the LM head.
+
+| track | size | active | total | steps | tokens | FLOPs | s/step | wall clock | MFU | Paloma macro bpb | W&B |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| Vanilla | d512 | 18.9M | 36M | 720 | 0.38B | 9.03e+16 | 0.071 | 2.0 min | 22.2% | 1.6205 | [belay-vanilla-d512](https://wandb.ai/marin-community/marin_moe/runs/belay-vanilla-d512) |
+| Vanilla | d768 | 56.6M | 82M | 2,161 | 1.13B | 6.42e+17 | 0.139 | 6.5 min | 26.9% | 1.4146 | [belay-vanilla-d768](https://wandb.ai/marin-community/marin_moe/runs/belay-vanilla-d768) |
+| Vanilla | d1024 | 151.0M | 185M | 2,881 | 3.02B | 3.95e+18 | 0.547 | 28.3 min | 31.5% | 1.3016 | [belay-vanilla-d1024](https://wandb.ai/marin-community/marin_moe/runs/belay-vanilla-d1024) |
+| Vanilla | d1280 | 275.3M | 317M | 5,251 | 5.51B | 1.22e+19 | 0.875 | 80.4 min | 33.9% | 1.2326 | [belay-vanilla-d1280](https://wandb.ai/marin-community/marin_moe/runs/belay-vanilla-d1280) |
+| Basic MoE | d512 | 17.2M | 180M | 1,971 | 1.03B | 2.24e+17 | 0.131 | 6.9 min | 10.9% | 1.3514 | [belay-moe-d512](https://wandb.ai/marin-community/marin_moe/runs/belay-moe-d512) |
+| Basic MoE | d768 | 48.5M | 512M | 5,547 | 2.91B | 1.42e+18 | 0.233 | 26.1 min | 14.0% | 1.2323 | [belay-moe-d768](https://wandb.ai/marin-community/marin_moe/runs/belay-moe-d768) |
+| Basic MoE | d1024 | 128.2M | 1332M | 7,334 | 7.69B | 8.57e+18 | 0.852 | 1.88 h | 17.5% | 1.1336 | [belay-moe-d1024](https://wandb.ai/marin-community/marin_moe/runs/belay-moe-d1024) |
+| Basic MoE | d1280 | 228.1M | 2403M | 13,053 | 13.69B | 2.54e+19 | 1.293 | 4.91 h | 19.0% | 1.0772 | [belay-moe-d1280](https://wandb.ai/marin-community/marin_moe/runs/belay-moe-d1280) |
+
 ## Files
 
 | file | contents |
