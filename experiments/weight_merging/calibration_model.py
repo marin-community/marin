@@ -150,15 +150,31 @@ class FrozenGrugBank:
         return coefficients
 
 
-def teacher_cache(bank: FrozenGrugBank, examples: list) -> dict:
-    cache = {}
+def allocate_chunk_counts(scores: dict[str, float], limits: dict[str, int], budget: int) -> dict[str, int]:
+    """Allocate chunks by importance per chunk, breaking ties in score-map order."""
+    chunks = dict.fromkeys(scores, 1)
+    if budget < len(chunks):
+        raise ValueError("Chunk budget must cover every coefficient group")
+    for _ in range(budget - len(chunks)):
+        eligible = [key for key in chunks if chunks[key] < limits[key]]
+        if not eligible:
+            break
+        selected = max(eligible, key=lambda key: scores[key] / chunks[key])
+        chunks[selected] += 1
+    return chunks
+
+
+def teacher_cache(bank: FrozenGrugBank, examples: list) -> dict[str, CalibrationOutput]:
+    cache: dict[str, CalibrationOutput] = {}
     for teacher in range(len(bank.states)):
         weights = bank.frozen_weights(teacher)
         with torch.no_grad():
             for example in examples:
                 if example.teacher == teacher:
                     output = bank.forward(weights, example.tokens, example.positions)
-                    cache[example.identity] = (output.logits.cpu(), tuple(state.cpu() for state in output.hidden_states))
+                    cache[example.identity] = CalibrationOutput(
+                        output.logits.cpu(), tuple(state.cpu() for state in output.hidden_states)
+                    )
                     del output
                     logging.info("Cached teacher %d: %s", teacher, example.identity)
         del weights

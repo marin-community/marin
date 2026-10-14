@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 INDEX_NAME = "model.safetensors.index.json"
 RECIPE_NAME = "merge-recipe.json"
 MANIFEST_NAME = "merge-manifest.json"
+INCOMPLETE_NAME = ".merge-incomplete"
 METADATA_NAMES = (
     "config.json",
     "generation_config.json",
@@ -70,6 +71,8 @@ class CheckpointReader:
     def __init__(self, source: CheckpointSource):
         self.source = source
         self.fs, self.path = filesystem_for(source.path)
+        if self.fs.exists(prefix_join(self.path, INCOMPLETE_NAME)):
+            raise ValueError(f"Incomplete merged checkpoint: {source.path}")
         if self.fs.exists(prefix_join(self.path, RECIPE_NAME)) and not self.fs.exists(
             prefix_join(self.path, MANIFEST_NAME)
         ):

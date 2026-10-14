@@ -9,6 +9,7 @@ import safetensors.torch
 import torch
 from marin.merging.learned import differentiable_weight_blend
 
+from experiments.weight_merging.calibration_model import allocate_chunk_counts
 from experiments.weight_merging.constrained_calibrated import blend_slice
 from experiments.weight_merging.serial_merge import main as serial_main
 from experiments.weight_merging.supports import (
@@ -17,6 +18,17 @@ from experiments.weight_merging.supports import (
     matched_random_allocation,
     structured_support,
 )
+
+
+@pytest.mark.parametrize(
+    "scores,limits,budget,expected",
+    [
+        ({"b": 0.0, "a": 0.0}, {"a": 3, "b": 3}, 3, {"b": 2, "a": 1}),
+        ({"a": 6.0, "b": 2.0}, {"a": 3, "b": 2}, 7, {"a": 3, "b": 2}),
+    ],
+)
+def test_chunk_allocation_preserves_tie_order_and_stops_at_capacity(scores, limits, budget, expected):
+    assert allocate_chunk_counts(scores, limits, budget) == expected
 
 
 def test_export_slices_match_training_chunks_that_cross_expert_boundaries():

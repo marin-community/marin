@@ -13,6 +13,17 @@ from marin.merging.arithmetic import MergeMethod, MergeParameters, RamParameters
 from marin.merging.checkpoint import CheckpointSource, RowMerge, merge_checkpoint
 
 
+def merge_parameters(values: dict) -> MergeParameters:
+    parameters = {
+        **values,
+        "method": MergeMethod(values["method"]),
+        "coefficients": tuple(values["coefficients"]),
+    }
+    if parameters.get("ram") is not None:
+        parameters["ram"] = RamParameters(**parameters["ram"])
+    return MergeParameters(**parameters)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recipe", type=Path, required=True)
@@ -21,16 +32,11 @@ def main() -> None:
     args = parser.parse_args()
     torch.set_num_threads(args.threads)
     recipe = json.loads(args.recipe.read_text())
-    parameters = recipe["parameters"]
-    parameters["method"] = MergeMethod(parameters["method"])
-    parameters["coefficients"] = tuple(parameters["coefficients"])
-    if parameters.get("ram") is not None:
-        parameters["ram"] = RamParameters(**parameters["ram"])
     merge_checkpoint(
         CheckpointSource(**recipe["anchor"]),
         [CheckpointSource(**source) for source in recipe["donors"]],
         recipe["output"],
-        MergeParameters(**parameters),
+        merge_parameters(recipe["parameters"]),
         code_revision=args.code_revision,
         preserve_rows={name: tuple(rows) for name, rows in recipe["preserve_rows"].items()},
         tensor_coefficients={name: tuple(values) for name, values in recipe["tensor_coefficients"].items()},

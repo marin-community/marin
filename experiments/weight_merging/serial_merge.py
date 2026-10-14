@@ -12,9 +12,13 @@ from pathlib import Path
 
 import torch
 from marin.merging.checkpoint import CheckpointReader, CheckpointSource
-from marin.merging.constrained import TensorSupport, export_constrained, validate_audit_location
+from marin.merging.constrained import (
+    TensorSupport,
+    export_constrained,
+    finalize_constrained_export,
+    validate_audit_location,
+)
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import StoragePath
 
 
 def blend_serial_row(previous, donor, selected, fraction, name, row, base):
@@ -47,14 +51,11 @@ def main() -> None:
         audit_fs, audit_path = filesystem_for(stage["audit"])
         validate_audit_location(stage["audit"], output)
         if audit_fs.exists(audit_path):
-            raise ValueError("Require a fresh audit outside the model directory")
+            raise FileExistsError(stage["audit"])
         start = time.monotonic()
         audit = export_constrained(original, output, support, recipe["support_cap"], transform)
-        if audit["changed_elements"] > int(recipe["change_cap"] * audit["total_elements"]):
-            raise ValueError("Serial stage exceeds original Base change cap")
         audit.update(recipe=recipe, serial_stage=index + 1, elapsed_seconds=time.monotonic() - start)
-        audit_fs.makedirs(str(StoragePath.parse(audit_path).parent), exist_ok=True)
-        audit_fs.pipe_file(audit_path, json.dumps(audit, indent=2).encode())
+        finalize_constrained_export(audit, stage["audit"], recipe["change_cap"])
         previous = CheckpointReader(CheckpointSource(output, f"{recipe['id']}:stage-{index+1}"))
     if stages[-1]["output"] != recipe["output"] or stages[-1]["audit"] != recipe["audit"]:
         raise ValueError("Serial final output does not match experiment recipe")

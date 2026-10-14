@@ -16,7 +16,7 @@ import torch
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from marin.merging.checkpoint import INDEX_NAME, CheckpointReader
+from marin.merging.checkpoint import INCOMPLETE_NAME, INDEX_NAME, CheckpointReader
 
 
 @dataclass(frozen=True)
@@ -53,6 +53,28 @@ def changed_elements(left: torch.Tensor, right: torch.Tensor) -> int:
     return int((a != b).any(dim=1).sum().item())
 
 
+def finalize_constrained_export(audit: dict, audit_url: str, change_cap: float) -> None:
+    """Publish and verify the external audit before making the checkpoint readable."""
+    validate_audit_location(audit_url, audit["output"])
+    if not 0 <= change_cap <= 0.25:
+        raise ValueError("Changed-weight cap must be within [0, 0.25]")
+    if audit["changed_elements"] > math.floor(change_cap * audit["total_elements"]):
+        raise ValueError("Actual changed elements exceed the experiment cap")
+    fs, path = filesystem_for(audit_url)
+    if fs.exists(path):
+        raise FileExistsError(audit_url)
+    output_fs, output_path = filesystem_for(audit["output"])
+    marker = prefix_join(output_path, INCOMPLETE_NAME)
+    if not output_fs.exists(marker):
+        raise ValueError("Checkpoint has no pending constrained export")
+    payload = json.dumps(audit, indent=2).encode()
+    fs.makedirs(str(StoragePath.parse(path).parent), exist_ok=True)
+    fs.pipe_file(path, payload)
+    if fs.cat_file(path) != payload:
+        raise ValueError("Stored audit differs from the completed export")
+    output_fs.rm(marker)
+
+
 def export_constrained(
     base: CheckpointReader,
     output: str,
@@ -62,9 +84,9 @@ def export_constrained(
 ) -> dict:
     """Export bounded edits and independently read back every object before returning an audit.
 
-    The caller must save the returned audit outside the model directory and only
-    expose the model after this function returns successfully. A failed export
-    remains incomplete and cannot be reused as a serial input.
+    The caller must pass the returned audit to ``finalize_constrained_export``.
+    The checkpoint remains unreadable until that external audit is saved and
+    verified. A failed export retains its incomplete marker.
     """
     if not 0 <= cap <= 0.25:
         raise ValueError("Changed-weight cap must be within [0, 0.25]")
@@ -103,11 +125,13 @@ def export_constrained(
         raise FileExistsError(output)
     if str(StoragePath.parse(output)).rstrip("/") == str(StoragePath.parse(base.source.path)).rstrip("/"):
         raise ValueError("Output cannot replace Base")
+    source_paths = sorted(base.fs.find(base.path))
     fs.makedirs(path, exist_ok=True)
+    fs.pipe_file(prefix_join(path, INCOMPLETE_NAME), b"")
     files = {}
     changes = 0
     shards = set(headers)
-    for source_path in sorted(base.fs.find(base.path)):
+    for source_path in source_paths:
         relative = StoragePath.parse(source_path).relative_to(StoragePath.parse(base.path))
         if not relative or relative.startswith("../"):
             raise ValueError(f"Invalid source path: {source_path}")
@@ -169,6 +193,7 @@ def export_constrained(
     if changes > math.floor(cap * total):
         raise ValueError("Stored checkpoint exceeds scalar budget")
     actual_files = {StoragePath.parse(p).relative_to(StoragePath.parse(path)) for p in fs.find(path)}
+    actual_files.discard(INCOMPLETE_NAME)
     if actual_files != files.keys():
         raise ValueError("Export contains unexpected or missing files")
     return {

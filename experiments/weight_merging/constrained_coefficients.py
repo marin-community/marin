@@ -11,7 +11,12 @@ import torch
 import torch.nn.functional as F
 from marin.merging.learned import differentiable_weight_blend
 
-from experiments.weight_merging.calibration_model import FrozenGrugBank, coefficient_group, teacher_cache
+from experiments.weight_merging.calibration_model import (
+    FrozenGrugBank,
+    allocate_chunk_counts,
+    coefficient_group,
+    teacher_cache,
+)
 
 logger = logging.getLogger(__name__)
 BLOCK_ELEMENTS = 4194304
@@ -59,16 +64,7 @@ def allocate_chunks(selected: dict, coefficients: torch.nn.ParameterDict, budget
                     donor[start : start + BLOCK_ELEMENTS].float() - anchor[start : start + BLOCK_ELEMENTS].float()
                 )
                 scores[group] += float(value) * difference.abs().sum().item()
-    chunks = dict.fromkeys(scores, 1)
-    if budget < len(chunks):
-        raise ValueError("Chunk budget is smaller than the layer count")
-    for _ in range(budget - len(chunks)):
-        eligible = [key for key in chunks if chunks[key] < limits[key]]
-        if not eligible:
-            break
-        chosen = max(sorted(eligible), key=lambda key: scores[key] / chunks[key])
-        chunks[chosen] += 1
-    return chunks
+    return allocate_chunk_counts({key: scores[key] for key in sorted(scores)}, limits, budget)
 
 
 def train_supported_coefficients(bank: FrozenGrugBank, examples: list, recipe: dict, write) -> None:
@@ -102,17 +98,17 @@ def train_supported_coefficients(bank: FrozenGrugBank, examples: list, recipe: d
             domain = domains[step % len(domains)]
             pool = by_domain[domain]
             example = pool[(step // len(domains)) % len(pool)]
-            target_logits, target_hidden = cache[example.identity]
+            target = cache[example.identity]
             optimizer.zero_grad(set_to_none=True)
             weights = supported_weights(bank, support, selected, coefficients)
             output = bank.forward(weights, example.tokens, example.positions)
             device = output.logits.device
             student_log = F.log_softmax(output.logits.float(), dim=-1)
-            teacher_log = F.log_softmax(target_logits.to(device).float(), dim=-1)
+            teacher_log = F.log_softmax(target.logits.to(device).float(), dim=-1)
             kl = F.kl_div(student_log, teacher_log, reduction="sum", log_target=True) / example.positions.numel()
             hidden = torch.zeros((), device=device)
             if config["hidden_weight"]:
-                for student, teacher in zip(output.hidden_states, target_hidden, strict=True):
+                for student, teacher in zip(output.hidden_states, target.hidden_states, strict=True):
                     teacher = teacher.to(student.device).float()
                     hidden = hidden + (
                         F.mse_loss(student.float(), teacher) / (teacher.square().mean() + config["hidden_epsilon"])

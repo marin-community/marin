@@ -22,7 +22,12 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from transformers import AutoTokenizer
 
-from experiments.weight_merging.calibration_model import FrozenGrugBank, coefficient_group, teacher_cache
+from experiments.weight_merging.calibration_model import (
+    FrozenGrugBank,
+    allocate_chunk_counts,
+    coefficient_group,
+    teacher_cache,
+)
 
 logger = logging.getLogger(__name__)
 CPU_BLOCK_ELEMENTS = 2**20
@@ -88,16 +93,7 @@ def allocate_chunks(bank: FrozenGrugBank, coefficients: torch.nn.ParameterDict, 
                     .item()
                 )
             scores[group] += float(value) * total
-    chunks = dict.fromkeys(scores, 1)
-    if budget < len(chunks):
-        raise ValueError("Chunk budget must cover every coefficient group")
-    for _ in range(budget - len(chunks)):
-        eligible = [key for key in chunks if chunks[key] < limits[key]]
-        if not eligible:
-            break
-        selected = max(eligible, key=lambda key: scores[key] / chunks[key])
-        chunks[selected] += 1
-    return chunks
+    return allocate_chunk_counts(scores, limits, budget)
 
 
 def train_coefficients(bank: FrozenGrugBank, examples: list[TokenExample], recipe: dict, write) -> None:
@@ -123,16 +119,16 @@ def train_coefficients(bank: FrozenGrugBank, examples: list[TokenExample], recip
                 if step % len(order) == 0:
                     rng.shuffle(order)
                 example = examples[order[step % len(order)]]
-                teacher_logits, teacher_hidden = cache[example.identity]
+                target = cache[example.identity]
                 optimizer.zero_grad(set_to_none=True)
                 weights = bank.learned_weights(coefficients, recipe["block_elements"])
                 output = bank.forward(weights, example.tokens, example.positions)
                 device = output.logits.device
                 student_log = F.log_softmax(output.logits.float(), dim=-1)
-                teacher_log = F.log_softmax(teacher_logits.to(device).float(), dim=-1)
+                teacher_log = F.log_softmax(target.logits.to(device).float(), dim=-1)
                 kl = F.kl_div(student_log, teacher_log, reduction="sum", log_target=True) / example.positions.numel()
                 hidden_loss = torch.zeros((), device=device)
-                for student, teacher in zip(output.hidden_states, teacher_hidden, strict=True):
+                for student, teacher in zip(output.hidden_states, target.hidden_states, strict=True):
                     hidden_loss = hidden_loss + F.mse_loss(student.float(), teacher.to(student.device).float()).to(
                         device
                     )

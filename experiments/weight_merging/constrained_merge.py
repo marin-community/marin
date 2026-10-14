@@ -11,12 +11,18 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
-from marin.merging.arithmetic import MergeMethod, MergeParameters, RamParameters, merge_tensor
+from marin.merging.arithmetic import merge_tensor
 from marin.merging.checkpoint import CheckpointReader, CheckpointSource
-from marin.merging.constrained import TensorSupport, export_constrained, validate_audit_location
+from marin.merging.constrained import (
+    TensorSupport,
+    export_constrained,
+    finalize_constrained_export,
+    validate_audit_location,
+)
 from marin.merging.isospectral import isospectral_merge
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import StoragePath
+
+from experiments.weight_merging.merge import merge_parameters
 
 
 def main() -> None:
@@ -29,18 +35,14 @@ def main() -> None:
     base = CheckpointReader(CheckpointSource(**recipe["base"]))
     donors = [CheckpointReader(CheckpointSource(**item)) for item in recipe["donors"]]
     support = tuple(TensorSupport(x["name"], None if x["rows"] is None else tuple(x["rows"])) for x in recipe["support"])
-    params = recipe["parameters"].copy()
+    params = recipe["parameters"]
     iso = params["method"] == "iso"
     if iso:
         parameters = None
         if not torch.cuda.is_available():
             raise ValueError("Campaign ISO conversion requires its reserved CUDA device")
     else:
-        params["method"] = MergeMethod(params["method"])
-        params["coefficients"] = tuple(params["coefficients"])
-        if params.get("ram") is not None:
-            params["ram"] = RamParameters(**params["ram"])
-        parameters = MergeParameters(**params)
+        parameters = merge_parameters(params)
     diagnostics = []
     measured_names = set()
     start = time.monotonic()
@@ -79,15 +81,12 @@ def main() -> None:
         return merge_tensor(value, values, parameters, tensor_name=f"{name}:{row}")
 
     audit = export_constrained(base, recipe["output"], support, recipe["support_cap"], transform)
-    if audit["changed_elements"] > int(recipe["change_cap"] * audit["total_elements"]):
-        raise ValueError("Actual changed elements exceed the experiment cap")
     audit["recipe"] = recipe
     audit["parameters"] = params if iso else asdict(parameters)
     audit["elapsed_seconds"] = time.monotonic() - start
     if iso:
         audit["iso_diagnostics"] = diagnostics
-    audit_fs.makedirs(str(StoragePath.parse(audit_path).parent), exist_ok=True)
-    audit_fs.pipe_file(audit_path, json.dumps(audit, indent=2).encode())
+    finalize_constrained_export(audit, recipe["audit"], recipe["change_cap"])
     logging.info("Completed policy audit: %s; changed %.6f%%", recipe["audit"], audit["changed_percent"])
 
 
