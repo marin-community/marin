@@ -70,7 +70,11 @@ EXAMPLES_GLOB = "train-*.jsonl.gz"
 EXAMPLE_SHARDS = 64
 """Files per example set: Levanter builds a chat cache with one worker per file."""
 QWEN3_EOS_TOKEN_IDS = (151645, 151643)  # <|im_end|> and <|endoftext|>
-GRUG_TRAIN_NODES = 4
+# Each 65,536-token sequence is split across the nodes (context parallelism), so more nodes leave each
+# GPU room for more sequences at once; 8 fit a batch of 64 without accumulating gradients, which
+# deadlocked in a collective on this mesh.
+GRUG_TRAIN_NODES = 8
+GRUG_SEQUENCES_PER_DEVICE = 8
 GRUG_CONVERSION_VERSION = "2026.10.09"
 ROWS_PER_BATCH = 64
 # Tokens an example adds beyond its prompt's served length and its action's bytes: the turn's
@@ -544,21 +548,21 @@ GRUG_BUDGET = SFTBudget(
     warmup=0,
     max_grad_norm=1.0,
     steps_per_eval=8,
-    # A whole per-device batch of 64k sequences needs hundreds of GiB per GPU; take one at a time.
-    per_device_parallelism=1,
+    per_device_parallelism=GRUG_SEQUENCES_PER_DEVICE,
 )
-# The update of the MarinSkyRL SFT and RL runs on Grug: batch 512 at 4e-6, gradients clipped at 0.5,
-# with a short warmup for the fresh optimizer. 19 updates are 9,728 examples, about one epoch of SWE's
-# hard band, the smallest, so every band trains on as many examples and none repeats one.
+# The largest batch Grug's 8-node mesh takes in one pass, at an LR between the MarinSkyRL runs' 4e-6
+# at batch 512 and 1e-6 at batch 16, gradients clipped at 0.5 as there, with a short warmup for the
+# fresh optimizer. 152 updates are 9,728 examples, about one epoch of SWE's hard band, the smallest,
+# so every band trains on as many examples and none repeats one.
 SWE_GRID_BUDGET = SFTBudget(
     seq_len=65536,
-    batch_size=512,
-    steps=19,
-    learning_rate=4e-6,
-    warmup=3,
+    batch_size=64,
+    steps=152,
+    learning_rate=2e-6,
+    warmup=8,
     max_grad_norm=0.5,
-    steps_per_eval=2,
-    per_device_parallelism=1,
+    steps_per_eval=10,
+    per_device_parallelism=GRUG_SEQUENCES_PER_DEVICE,
 )
 GRID_SEEDS = (0, 1, 2)
 
