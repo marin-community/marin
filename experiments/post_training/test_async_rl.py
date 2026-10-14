@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import json
 import subprocess
-from pathlib import Path
 
 import pytest
 from marin.execution.lazy import StepContext
+from marin.rl.skyrl import _launcher_command as launcher_command_for_test
 
 from experiments.post_training import async_rl
 from experiments.post_training.curriculum_rl.launch import SNOWBALL_POLICY
@@ -67,10 +67,11 @@ def test_launcher_composes_pinned_rollout_buffer_config(preset, training_type, t
     launch = run.rl.build_config(StepContext.for_fingerprint(run.rl.runtime_args, run.rl.deps))
     path = tmp_path / "launch.yaml"
     path.write_text(launch.launch_config_yaml)
-    project = Path(__file__).resolve().parents[2] / "config/external/MarinSkyRL"
-    # Use Marin's isolated lock so the test exercises the same SDK revision as the launcher.
+    command = launcher_command_for_test(str(path))
+    # Exercise the production bootstrap without invoking the job-submission CLI.
+    bootstrap = command[: command.index("marinskyrl")]
     result = subprocess.run(
-        ["uv", "run", "--frozen", "--project", str(project), "python", "-c", COMPOSE_LAUNCH, str(path)],
+        [*bootstrap, "python", "-c", COMPOSE_LAUNCH, str(path)],
         check=True,
         capture_output=True,
         text=True,
