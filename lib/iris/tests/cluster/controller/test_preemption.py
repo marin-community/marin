@@ -59,6 +59,7 @@ class FakeSchedulingContext:
         entity_attrs = {str(wid): dict(cap.attributes) for wid, cap in capacities.items()}
         self.index = ConstraintIndex.build(entity_attrs)
         self._soft_score_cache: dict[tuple[WorkerId, tuple[Constraint, ...]], int] = {}
+        self.accelerator_gate = None
 
     def matching_workers(self, constraints: list[Constraint]) -> set[WorkerId]:
         return {self._str_to_wid[s] for s in self.index.matching_entities(constraints)}

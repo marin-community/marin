@@ -248,9 +248,91 @@ def budget_list(ctx):
         click.echo("No user budgets found.")
         return
 
-    click.echo(f"{'USER':<30s} {'LIMIT':>10s} {'SPENT':>10s} {'MAX BAND':<15s}")
+    click.echo(f"{'USER':<30s} {'LIMIT':>10s} {'SPENT':>10s} {'MAX BAND':<15s} {'CAP (IN USE/MAX)':>16s}")
     for u in resp.users:
-        click.echo(f"{u.user_id:<30s} {u.budget_limit:>10d} {u.budget_spent:>10d} {priority_band_name(u.max_band):<15s}")
+        cap = f"{u.accelerators_in_use}/{u.max_accelerators}" if u.max_accelerators > 0 else "-"
+        click.echo(
+            f"{u.user_id:<30s} {u.budget_limit:>10d} {u.budget_spent:>10d} "
+            f"{priority_band_name(u.max_band):<15s} {cap:>16s}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# User accelerator caps
+# ---------------------------------------------------------------------------
+
+# Iris cannot derive one accelerators-per-node figure for a cluster (scale groups
+# differ), so node counts convert at an explicit rate, defaulting to 8-GPU nodes.
+DEFAULT_GPUS_PER_NODE = 8
+
+_GPUS_PER_NODE_OPTION = click.option(
+    "--gpus-per-node",
+    type=click.IntRange(min=1),
+    default=DEFAULT_GPUS_PER_NODE,
+    show_default=True,
+    help="Accelerators per node used to convert node counts (Iris does not derive node size from the cluster).",
+)
+
+
+def _nodes_text(accelerators: int, gpus_per_node: int) -> str:
+    nodes = accelerators / gpus_per_node
+    return f"{nodes:g} nodes ({accelerators} GPUs)"
+
+
+@user.group()
+@click.pass_context
+def cap(ctx):
+    """Manage hard per-user accelerator caps.
+
+    A capped user's pending tasks are not placed while their assigned/running
+    tasks (all bands, including BATCH) hold the cap. Running tasks are never
+    preempted by a cap change. The cap persists in the controller DB.
+    """
+    pass
+
+
+@cap.command("set")
+@click.argument("user_id")
+@click.argument("count", type=click.IntRange(min=1))
+@click.option("--nodes", "unit", flag_value="nodes", help="COUNT is nodes (times --gpus-per-node).")
+@click.option("--gpus", "unit", flag_value="gpus", help="COUNT is accelerators (GPUs / TPU chips).")
+@_GPUS_PER_NODE_OPTION
+@click.pass_context
+def cap_set(ctx, user_id: str, count: int, unit: str | None, gpus_per_node: int):
+    """Cap USER_ID at COUNT nodes or GPUs (admin only)."""
+    if unit is None:
+        raise click.UsageError("Pass --nodes or --gpus to say what COUNT measures.")
+    max_accelerators = count * gpus_per_node if unit == "nodes" else count
+    with rpc_client_for_ctx(ctx) as client:
+        client.set_user_cap(
+            controller_pb2.Controller.SetUserCapRequest(user_id=user_id, max_accelerators=max_accelerators)
+        )
+    click.echo(f"Cap set for {user_id}: {_nodes_text(max_accelerators, gpus_per_node)}")
+
+
+@cap.command("get")
+@click.argument("user_id")
+@_GPUS_PER_NODE_OPTION
+@click.pass_context
+def cap_get(ctx, user_id: str, gpus_per_node: int):
+    """Show USER_ID's cap, accelerators in use, and held jobs (admin only)."""
+    with rpc_client_for_ctx(ctx) as client:
+        resp = client.get_user_cap(controller_pb2.Controller.GetUserCapRequest(user_id=user_id))
+    cap_text = _nodes_text(resp.max_accelerators, gpus_per_node) if resp.max_accelerators > 0 else "none"
+    click.echo(
+        f"{resp.user_id}  cap {cap_text}  in use {_nodes_text(resp.accelerators_in_use, gpus_per_node)}  "
+        f"held {resp.held_jobs} jobs ({resp.held_tasks} tasks)"
+    )
+
+
+@cap.command("clear")
+@click.argument("user_id")
+@click.pass_context
+def cap_clear(ctx, user_id: str):
+    """Remove USER_ID's cap (admin only). Config does not re-apply it on restart."""
+    with rpc_client_for_ctx(ctx) as client:
+        client.set_user_cap(controller_pb2.Controller.SetUserCapRequest(user_id=user_id, max_accelerators=0))
+    click.echo(f"Cap cleared for {user_id}")
 
 
 # Register subcommand groups — imported at module level to ensure they are

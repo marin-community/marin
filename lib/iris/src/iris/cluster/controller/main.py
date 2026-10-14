@@ -274,6 +274,7 @@ def run_controller_serve(
         user_budget_defaults=UserBudgetDefaults(
             budget_limit=cluster_config.user_budget_defaults.budget_limit,
             max_band=cluster_config.user_budget_defaults.max_band,
+            max_accelerators=cluster_config.user_budget_defaults.max_accelerators,
         ),
     )
 

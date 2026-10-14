@@ -472,10 +472,12 @@ class UserBudgetDefaults:
 
     ``budget_limit=0`` means unlimited; positive values cap spend before
     ``compute_effective_band`` downgrades INTERACTIVE work to BATCH.
+    ``max_accelerators=0`` means no hard accelerator cap.
     """
 
     budget_limit: int = DEFAULT_USER_BUDGET_LIMIT
     max_band: int = DEFAULT_USER_BUDGET_MAX_BAND
+    max_accelerators: int = 0
 
 
 class WorkerUsability(StrEnum):

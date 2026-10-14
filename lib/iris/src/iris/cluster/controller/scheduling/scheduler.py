@@ -199,6 +199,25 @@ class JobRequirements:
     is_coscheduled: bool
     coscheduling_group_by: str | None
 
+    @property
+    def accelerator_count(self) -> int:
+        """Accelerators (GPUs + TPU chips) one task of this job holds."""
+        return self.req_gpu_count + self.req_tpu_count
+
+
+class AcceleratorGate(Protocol):
+    """Per-pass hard cap on the accelerators each job's owner may hold.
+
+    ``try_admit`` charges the owner when it admits, so successive admissions in
+    one pass see each other. Implemented by ``budget.AcceleratorCaps``.
+    """
+
+    def hold_reason(self, job_id: JobName, accelerators: int) -> str | None: ...
+
+    def try_admit(self, job_id: JobName, accelerators: int) -> bool: ...
+
+    def copy(self) -> "AcceleratorGate": ...
+
 
 @dataclass
 class WorkerCapacity:
@@ -368,6 +387,8 @@ class SchedulingContext:
     requested_bands: dict[JobName, int]
     user_budget_defaults: UserBudgetDefaults
     running_for_preemption: list[RunningTaskInfo] = field(default_factory=list)
+    # Hard per-identity accelerator cap; None places without a cap.
+    accelerator_gate: AcceleratorGate | None = None
 
     # Derived from ``workers`` in __post_init__.
     capacities: dict[WorkerId, WorkerCapacity] = field(init=False)
@@ -428,6 +449,7 @@ class SchedulingContext:
             requested_bands=self.requested_bands,
             user_budget_defaults=self.user_budget_defaults,
             running_for_preemption=self.running_for_preemption,
+            accelerator_gate=self.accelerator_gate,
         )
 
     def matching_workers(self, constraints: Sequence[Constraint]) -> set[WorkerId]:
@@ -745,7 +767,7 @@ class Scheduler:
             if req is None or not req.is_coscheduled:
                 continue
 
-            coscheduled_result = self._find_coscheduled_assignments(context, task_ids, req)
+            coscheduled_result = self._find_coscheduled_assignments(context, job_id, task_ids, req)
             if coscheduled_result:
                 result.assignments.extend(coscheduled_result)
                 for task_id, _ in coscheduled_result:
@@ -782,6 +804,11 @@ class Scheduler:
             if worker_id is None:
                 exhausted_jobs.add(job_id)
                 continue
+            # Admissions only grow usage within a pass, so a job refused once stays refused.
+            gate = context.accelerator_gate
+            if gate is not None and not gate.try_admit(job_id, req.accelerator_count):
+                exhausted_jobs.add(job_id)
+                continue
 
             capacity = context.capacities[worker_id]
             capacity.deduct(req)
@@ -799,6 +826,7 @@ class Scheduler:
     def _find_coscheduled_assignments(
         self,
         context: SchedulingContext,
+        job_id: JobName,
         task_ids: list[JobName],
         req: JobRequirements,
     ) -> list[tuple[JobName, WorkerId]] | None:
@@ -808,7 +836,8 @@ class Scheduler:
         value. Tasks are sorted by task_index and assigned to workers sorted by
         tpu-worker-id for deterministic ordering.
 
-        Returns None if no valid worker group exists with sufficient capacity.
+        Returns None if no valid worker group exists with sufficient capacity, or
+        if placing the whole gang would breach its owner's accelerator cap.
         """
         if req.coscheduling_group_by is None:
             return None
@@ -832,6 +861,10 @@ class Scheduler:
 
             if len(available) < num_tasks:
                 continue
+
+            gate = context.accelerator_gate
+            if gate is not None and not gate.try_admit(job_id, num_tasks * req.accelerator_count):
+                return None
 
             # Sort workers by tpu-worker-id for deterministic task-to-worker mapping
             available.sort(

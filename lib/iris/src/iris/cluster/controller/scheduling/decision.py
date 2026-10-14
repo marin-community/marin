@@ -8,6 +8,7 @@ Pure scheduling-layer helpers: they consume only ``scheduling.policy`` /
 carry no edge back to the controller's ops/reconcile/schema layer.
 """
 
+from iris.cluster.controller.budget import placement_accelerators
 from iris.cluster.controller.scheduling.policy import (
     PreemptionCandidate,
     PreemptionPlan,
@@ -70,10 +71,17 @@ def compute_diagnostics(
             unscheduled[job_id] = (task_id, 1)
 
     diagnostics: dict[str, str] = {}
+    gate = context.accelerator_gate
     for job_id, (representative_task, num_tasks) in unscheduled.items():
         req = jobs.get(job_id)
         if req is None:
             continue
+        if gate is not None:
+            needed = placement_accelerators(req.accelerator_count, num_tasks, req.is_coscheduled)
+            held = gate.hold_reason(job_id, needed)
+            if held is not None:
+                diagnostics[job_id.to_wire()] = held
+                continue
         diagnostics[job_id.to_wire()] = scheduler.get_job_scheduling_diagnostics(
             req,
             context,

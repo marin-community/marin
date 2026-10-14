@@ -5,7 +5,7 @@
 
 import logging
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
@@ -15,7 +15,7 @@ from iris.cluster.config import UserBudgetTier
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.codec import device_counts_from_json
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, JobName, UserBudgetDefaults
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, JobName, PendingTask, UserBudgetDefaults
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, PRIORITY_BAND_VALUES
 
@@ -68,6 +68,136 @@ def compute_user_spend(tx: Tx) -> dict[str, int]:
         value = resource_value(cpu, mem, accel)
         spend[user_id] += value * int(row.task_count)
     return dict(spend)
+
+
+def task_accelerators(res_device_json: str | None) -> int:
+    """Accelerators (GPUs + TPU chips) one task with this device spec holds."""
+    counts = device_counts_from_json(res_device_json)
+    return counts.gpu + counts.tpu
+
+
+def placement_accelerators(per_task: int, pending_tasks: int, coscheduled: bool) -> int:
+    """Accelerators one placement decision charges: the whole gang if coscheduled, else one task."""
+    return per_task * pending_tasks if coscheduled else per_task
+
+
+def compute_user_accelerators(tx: Tx) -> dict[str, int]:
+    """Return ``{budget_user_id: accelerators}`` held by each identity's active tasks.
+
+    Counts GPUs plus TPU chips per task, times the number of active (assigned,
+    building, or running) tasks, across every band including BATCH.
+    """
+    in_use: dict[str, int] = defaultdict(int)
+    for row in reads.user_active_resource_rows(tx):
+        accelerators = task_accelerators(row.res_device_json)
+        if accelerators:
+            in_use[budget_user_id(row.job_id, str(row.submitting_user))] += accelerators * int(row.task_count)
+    return dict(in_use)
+
+
+@dataclass
+class AcceleratorCaps:
+    """Hard per-identity accelerator caps for one placement pass.
+
+    ``caps`` holds only identities with a positive cap. ``in_use`` starts at what
+    each identity's active tasks hold and grows as the pass admits work, so a
+    single pass never places past a cap. Lowering a cap below ``in_use`` holds new
+    work but never touches running tasks.
+    """
+
+    caps: dict[str, int]
+    in_use: dict[str, int]
+    job_users: dict[JobName, str]
+
+    def hold_reason(self, job_id: JobName, accelerators: int) -> str | None:
+        """Why placing ``accelerators`` more for ``job_id`` would breach its identity's cap, or None."""
+        if accelerators <= 0:
+            return None
+        user = self.job_users.get(job_id)
+        cap = self.caps.get(user, 0) if user is not None else 0
+        if cap <= 0:
+            return None
+        used = self.in_use.get(user, 0)
+        if used + accelerators <= cap:
+            return None
+        return f"held: user cap {cap} accelerators ({used} in use, needs {accelerators})"
+
+    def try_admit(self, job_id: JobName, accelerators: int) -> bool:
+        """Charge ``accelerators`` to ``job_id``'s identity if it stays within the cap."""
+        if self.hold_reason(job_id, accelerators) is not None:
+            return False
+        user = self.job_users.get(job_id)
+        if accelerators > 0 and user is not None and user in self.caps:
+            self.in_use[user] = self.in_use.get(user, 0) + accelerators
+        return True
+
+    def copy(self) -> "AcceleratorCaps":
+        return AcceleratorCaps(caps=self.caps, in_use=dict(self.in_use), job_users=self.job_users)
+
+
+def build_accelerator_caps(
+    tx: Tx,
+    job_users: Mapping[JobName, str],
+    defaults: UserBudgetDefaults,
+) -> AcceleratorCaps:
+    """Resolve the caps of the identities owning ``job_users`` and their current usage.
+
+    An identity's cap is its ``user_budgets.max_accelerators`` row value, else
+    ``defaults.max_accelerators``. Usage is read only when some identity is capped.
+    """
+    row_caps = reads.get_all_user_accelerator_caps(tx)
+    caps: dict[str, int] = {}
+    for user in set(job_users.values()):
+        cap = row_caps.get(user, defaults.max_accelerators)
+        if cap > 0:
+            caps[user] = cap
+    in_use = compute_user_accelerators(tx) if caps else {}
+    return AcceleratorCaps(caps=caps, in_use=in_use, job_users=dict(job_users))
+
+
+@dataclass(frozen=True)
+class UserCapStatus:
+    user_id: str
+    max_accelerators: int
+    accelerators_in_use: int
+    held_tasks: int
+    held_jobs: int
+
+
+def user_cap_status(tx: Tx, user_id: str, defaults: UserBudgetDefaults) -> UserCapStatus:
+    """Report ``user_id``'s accelerator cap, usage, and pending work the cap holds.
+
+    A pending job counts as held when placing one of its tasks (or its whole
+    gang, if coscheduled) at current usage would breach the cap.
+    """
+    budget = reads.get_user_budget(tx, user_id)
+    cap = budget.max_accelerators if budget is not None else defaults.max_accelerators
+    in_use = compute_user_accelerators(tx).get(user_id, 0)
+    pending_by_job: dict[JobName, list[PendingTask]] = defaultdict(list)
+    for task in reads.pending_tasks_with_jobs(tx):
+        if budget_user_id(task.job_id, task.submitting_user) == user_id:
+            pending_by_job[task.job_id].append(task)
+    caps = AcceleratorCaps(
+        caps={user_id: cap} if cap > 0 else {},
+        in_use={user_id: in_use},
+        job_users={job_id: user_id for job_id in pending_by_job},
+    )
+    held_tasks = 0
+    held_jobs = 0
+    for job_id, tasks in pending_by_job.items():
+        needed = placement_accelerators(
+            task_accelerators(tasks[0].res_device_json), len(tasks), tasks[0].has_coscheduling
+        )
+        if caps.hold_reason(job_id, needed) is not None:
+            held_jobs += 1
+            held_tasks += len(tasks)
+    return UserCapStatus(
+        user_id=user_id,
+        max_accelerators=cap,
+        accelerators_in_use=in_use,
+        held_tasks=held_tasks,
+        held_jobs=held_jobs,
+    )
 
 
 def compute_effective_band(
@@ -151,6 +281,10 @@ def reconcile_user_budget_tiers(
     from :class:`UserBudgetDefaults` at read time (see
     :func:`compute_effective_band` and the launch guard in `jobs.py`).
 
+    Config seeds the accelerator cap, the DB decides: a tier's
+    ``max_accelerators`` is written only for users whose cap was never set at
+    runtime (``iris user cap set``), so a restart cannot undo an admin's cap.
+
     Returns the number of (user_id, tier) pairs applied; duplicate user_ids
     across tiers are counted per-apply since the later tier overwrites.
     """
@@ -168,6 +302,7 @@ def reconcile_user_budget_tiers(
                 if not user_id:
                     raise ValueError("UserBudgetTier.user_ids contains an empty entry")
                 writes.set_user_budget(_tx, user_id, tier.budget_limit, tier.max_band, now)
+                writes.seed_user_cap(_tx, user_id, tier.max_accelerators)
                 count += 1
     if count:
         logger.info("Reconciled %d user budget assignment(s) from cluster config", count)

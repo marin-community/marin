@@ -63,7 +63,9 @@ class ControllerServiceImpl:
         self._bundle_store = bundle_store
         resolved_auth = auth or ControllerAuth()
         resolved_budget_defaults = user_budget_defaults or UserBudgetDefaults()
-        self._accounts = accounts.AccountDependencies(db=db, auth=resolved_auth)
+        self._accounts = accounts.AccountDependencies(
+            db=db, auth=resolved_auth, user_budget_defaults=resolved_budget_defaults
+        )
         self._diagnostics = diagnostics.DiagnosticDependencies(db=db)
         self._checkpoint = checkpoint.CheckpointDependencies(runtime=controller)
         self._workers = workers.WorkerDependencies(db=db, runtime=controller, auth=resolved_auth)
@@ -296,6 +298,20 @@ class ControllerServiceImpl:
         ctx: RequestContext,
     ) -> controller_pb2.Controller.ListUserBudgetsResponse:
         return accounts.list_user_budgets(self._accounts, request, ctx)
+
+    def set_user_cap(
+        self,
+        request: controller_pb2.Controller.SetUserCapRequest,
+        ctx: RequestContext,
+    ) -> controller_pb2.Controller.SetUserCapResponse:
+        return accounts.set_user_cap(self._accounts, request, ctx)
+
+    def get_user_cap(
+        self,
+        request: controller_pb2.Controller.GetUserCapRequest,
+        ctx: RequestContext,
+    ) -> controller_pb2.Controller.GetUserCapResponse:
+        return accounts.get_user_cap(self._accounts, request, ctx)
 
     def get_scheduler_state(
         self,

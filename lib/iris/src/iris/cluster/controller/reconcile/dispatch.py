@@ -21,11 +21,14 @@ from sqlalchemy import select
 
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.budget import (
+    AcceleratorCaps,
     UserTask,
     budget_user_id,
+    build_accelerator_caps,
     compute_effective_band,
     compute_user_spend,
     interleave_by_user,
+    task_accelerators,
 )
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.run_templates import build_run_request_fields
@@ -53,6 +56,8 @@ class DispatchBatch:
 
     tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
     running_tasks: list[RunningTaskEntry] = field(default_factory=list)
+    cap_holds: dict[str, str] = field(default_factory=dict)
+    """Pending reason per job wire id for jobs whose owner's accelerator cap held them."""
 
 
 DISPATCH_PROMOTION_RATE = 512
@@ -145,6 +150,7 @@ class _RankRow:
     budget_user: str
     num_tasks: int
     has_coscheduling: bool
+    accelerators: int
     sort_key: _PriorityKey
 
 
@@ -160,6 +166,7 @@ def _ranking_rows(cur: Tx, *predicates) -> list[_RankRow]:
             jobs_table.c.submitting_user,
             jobs_table.c.num_tasks,
             job_config_table.c.has_coscheduling,
+            job_config_table.c.res_device_json,
             local_tasks.c.priority_neg_depth,
             local_tasks.c.priority_root_submitted_ms,
             local_tasks.c.submitted_at_ms,
@@ -175,6 +182,7 @@ def _ranking_rows(cur: Tx, *predicates) -> list[_RankRow]:
             budget_user=budget_user_id(r.job_id, str(r.submitting_user)),
             num_tasks=int(r.num_tasks),
             has_coscheduling=bool(r.has_coscheduling),
+            accelerators=task_accelerators(r.res_device_json),
             sort_key=_PriorityKey(
                 neg_depth=int(r.priority_neg_depth),
                 root_submitted_ms=int(r.priority_root_submitted_ms),
@@ -235,8 +243,13 @@ def _select_within_cap(
     ranked: list[list[_RankRow]],
     effective_bands: dict[JobName, int],
     max_promotions: int,
+    accelerator_caps: AcceleratorCaps,
 ) -> list[list[_RankRow]]:
     """Take units from the ranked list up to the ``max_promotions`` cap.
+
+    A unit whose owner's hard accelerator cap would be breached is skipped: no pod
+    is created for it, so Kueue never sees it. Each admitted unit charges the
+    owner, so one drain cannot overshoot a cap.
 
     A unit fits when it is no larger than the remaining budget. An oversized gang
     (larger than the cap itself) is promoted whole, since a partial pod group
@@ -256,11 +269,31 @@ def _select_within_cap(
         if barrier_band is not None and priority_band_rank(band) > priority_band_rank(barrier_band):
             break
         if len(unit) <= max_promotions - promoted or len(unit) > max_promotions:
+            if not accelerator_caps.try_admit(unit[0].job_id, sum(row.accelerators for row in unit)):
+                continue
             selected.append(unit)
             promoted += len(unit)
         elif barrier_band is None:
             barrier_band = band
     return selected
+
+
+def _cap_hold_reasons(
+    ranked: list[list[_RankRow]],
+    selected: list[list[_RankRow]],
+    accelerator_caps: AcceleratorCaps,
+) -> dict[str, str]:
+    """Pending reasons for unpromoted jobs the accelerator cap holds after this drain's admissions."""
+    selected_tasks = {row.task_id for unit in selected for row in unit}
+    holds: dict[str, str] = {}
+    for unit in ranked:
+        job_id = unit[0].job_id
+        if unit[0].task_id in selected_tasks:
+            continue
+        reason = accelerator_caps.hold_reason(job_id, sum(row.accelerators for row in unit))
+        if reason is not None:
+            holds[job_id.to_wire()] = reason
+    return holds
 
 
 def drain_for_dispatch(
@@ -313,6 +346,7 @@ def drain_for_dispatch(
 
     effective_bands: dict[JobName, int] = {}
     promote_units: list[list[_RankRow]] = []
+    cap_holds: dict[str, str] = {}
     if max_promotions > 0:
         candidates = _ranking_rows(cur, local_tasks.c.state == int(job_pb2.TASK_STATE_PENDING))
         if candidates:
@@ -328,7 +362,9 @@ def drain_for_dispatch(
                 for job_id in job_ids
             }
             units = _rank_promotion_units(_build_promotion_units(candidates), effective_bands, user_spend)
-            promote_units = _select_within_cap(units, effective_bands, max_promotions)
+            accelerator_caps = build_accelerator_caps(cur, budget_users, defaults)
+            promote_units = _select_within_cap(units, effective_bands, max_promotions, accelerator_caps)
+            cap_holds = _cap_hold_reasons(units, promote_units, accelerator_caps)
 
     # Load the runtime blobs for only the promoted rows, then stamp the effective
     # band and build a request per row, keeping the ranked order.
@@ -375,4 +411,5 @@ def drain_for_dispatch(
     return DispatchBatch(
         tasks_to_run=tasks_to_run,
         running_tasks=running_tasks,
+        cap_holds=cap_holds,
     )

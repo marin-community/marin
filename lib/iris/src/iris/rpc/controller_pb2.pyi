@@ -663,16 +663,20 @@ class Controller(_message.Message):
         user_id: str
         def __init__(self, user_id: _Optional[str] = ...) -> None: ...
     class GetUserBudgetResponse(_message.Message):
-        __slots__ = ("user_id", "budget_limit", "budget_spent", "max_band")
+        __slots__ = ("user_id", "budget_limit", "budget_spent", "max_band", "max_accelerators", "accelerators_in_use")
         USER_ID_FIELD_NUMBER: _ClassVar[int]
         BUDGET_LIMIT_FIELD_NUMBER: _ClassVar[int]
         BUDGET_SPENT_FIELD_NUMBER: _ClassVar[int]
         MAX_BAND_FIELD_NUMBER: _ClassVar[int]
+        MAX_ACCELERATORS_FIELD_NUMBER: _ClassVar[int]
+        ACCELERATORS_IN_USE_FIELD_NUMBER: _ClassVar[int]
         user_id: str
         budget_limit: int
         budget_spent: int
         max_band: _job_pb2.PriorityBand
-        def __init__(self, user_id: _Optional[str] = ..., budget_limit: _Optional[int] = ..., budget_spent: _Optional[int] = ..., max_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ...) -> None: ...
+        max_accelerators: int
+        accelerators_in_use: int
+        def __init__(self, user_id: _Optional[str] = ..., budget_limit: _Optional[int] = ..., budget_spent: _Optional[int] = ..., max_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., max_accelerators: _Optional[int] = ..., accelerators_in_use: _Optional[int] = ...) -> None: ...
     class ListUserBudgetsRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
@@ -681,6 +685,34 @@ class Controller(_message.Message):
         USERS_FIELD_NUMBER: _ClassVar[int]
         users: _containers.RepeatedCompositeFieldContainer[Controller.GetUserBudgetResponse]
         def __init__(self, users: _Optional[_Iterable[_Union[Controller.GetUserBudgetResponse, _Mapping]]] = ...) -> None: ...
+    class SetUserCapRequest(_message.Message):
+        __slots__ = ("user_id", "max_accelerators")
+        USER_ID_FIELD_NUMBER: _ClassVar[int]
+        MAX_ACCELERATORS_FIELD_NUMBER: _ClassVar[int]
+        user_id: str
+        max_accelerators: int
+        def __init__(self, user_id: _Optional[str] = ..., max_accelerators: _Optional[int] = ...) -> None: ...
+    class SetUserCapResponse(_message.Message):
+        __slots__ = ()
+        def __init__(self) -> None: ...
+    class GetUserCapRequest(_message.Message):
+        __slots__ = ("user_id",)
+        USER_ID_FIELD_NUMBER: _ClassVar[int]
+        user_id: str
+        def __init__(self, user_id: _Optional[str] = ...) -> None: ...
+    class GetUserCapResponse(_message.Message):
+        __slots__ = ("user_id", "max_accelerators", "accelerators_in_use", "held_tasks", "held_jobs")
+        USER_ID_FIELD_NUMBER: _ClassVar[int]
+        MAX_ACCELERATORS_FIELD_NUMBER: _ClassVar[int]
+        ACCELERATORS_IN_USE_FIELD_NUMBER: _ClassVar[int]
+        HELD_TASKS_FIELD_NUMBER: _ClassVar[int]
+        HELD_JOBS_FIELD_NUMBER: _ClassVar[int]
+        user_id: str
+        max_accelerators: int
+        accelerators_in_use: int
+        held_tasks: int
+        held_jobs: int
+        def __init__(self, user_id: _Optional[str] = ..., max_accelerators: _Optional[int] = ..., accelerators_in_use: _Optional[int] = ..., held_tasks: _Optional[int] = ..., held_jobs: _Optional[int] = ...) -> None: ...
     class GetSchedulerStateRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...

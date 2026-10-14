@@ -632,11 +632,34 @@ message Controller {
     int64 budget_limit = 2;
     int64 budget_spent = 3;      // current running resource value
     iris.job.PriorityBand max_band = 4;
+    int64 max_accelerators = 5;  // hard accelerator cap (0 = no cap)
+    int64 accelerators_in_use = 6;
   }
 
   message ListUserBudgetsRequest {}
   message ListUserBudgetsResponse {
     repeated GetUserBudgetResponse users = 1;
+  }
+
+  // Hard per-identity accelerator cap, enforced at placement: pending work that
+  // would push the identity past the cap stays PENDING until its tasks free
+  // accelerators. Set separately from the soft budget so a cap change does not
+  // restate the budget limit or band.
+  message SetUserCapRequest {
+    string user_id = 1;
+    int64 max_accelerators = 2;  // GPUs + TPU chips held across all bands (0 = no cap)
+  }
+  message SetUserCapResponse {}
+
+  message GetUserCapRequest {
+    string user_id = 1;
+  }
+  message GetUserCapResponse {
+    string user_id = 1;
+    int64 max_accelerators = 2;
+    int64 accelerators_in_use = 3;  // held by the identity's assigned/building/running tasks
+    int32 held_tasks = 4;           // pending tasks the cap holds at current usage
+    int32 held_jobs = 5;
   }
 
   // --- Scheduler State ---
@@ -920,6 +943,8 @@ service ControllerService {
   rpc SetUserBudget(Controller.SetUserBudgetRequest) returns (Controller.SetUserBudgetResponse);
   rpc GetUserBudget(Controller.GetUserBudgetRequest) returns (Controller.GetUserBudgetResponse);
   rpc ListUserBudgets(Controller.ListUserBudgetsRequest) returns (Controller.ListUserBudgetsResponse);
+  rpc SetUserCap(Controller.SetUserCapRequest) returns (Controller.SetUserCapResponse);
+  rpc GetUserCap(Controller.GetUserCapRequest) returns (Controller.GetUserCapResponse);
 
   // Scheduler state (dashboard)
   rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);

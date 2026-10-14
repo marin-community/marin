@@ -97,6 +97,12 @@ class ControllerService(Protocol):
     async def list_user_budgets(self, request: controller__pb2.Controller.ListUserBudgetsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListUserBudgetsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def set_user_cap(self, request: controller__pb2.Controller.SetUserCapRequest, ctx: RequestContext) -> controller__pb2.Controller.SetUserCapResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def get_user_cap(self, request: controller__pb2.Controller.GetUserCapRequest, ctx: RequestContext) -> controller__pb2.Controller.GetUserCapResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def get_scheduler_state(self, request: controller__pb2.Controller.GetSchedulerStateRequest, ctx: RequestContext) -> controller__pb2.Controller.GetSchedulerStateResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -374,6 +380,26 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.list_user_budgets,
+                ),
+                "/iris.cluster.ControllerService/SetUserCap": Endpoint.unary(
+                    method=MethodInfo(
+                        name="SetUserCap",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.SetUserCapRequest,
+                        output=controller__pb2.Controller.SetUserCapResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.set_user_cap,
+                ),
+                "/iris.cluster.ControllerService/GetUserCap": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetUserCap",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.GetUserCapRequest,
+                        output=controller__pb2.Controller.GetUserCapResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_user_cap,
                 ),
                 "/iris.cluster.ControllerService/GetSchedulerState": Endpoint.unary(
                     method=MethodInfo(
@@ -948,6 +974,46 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def set_user_cap(
+        self,
+        request: controller__pb2.Controller.SetUserCapRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.SetUserCapResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="SetUserCap",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.SetUserCapRequest,
+                output=controller__pb2.Controller.SetUserCapResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def get_user_cap(
+        self,
+        request: controller__pb2.Controller.GetUserCapRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.GetUserCapResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetUserCap",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.GetUserCapRequest,
+                output=controller__pb2.Controller.GetUserCapResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
     async def get_scheduler_state(
         self,
         request: controller__pb2.Controller.GetSchedulerStateRequest,
@@ -1202,6 +1268,10 @@ class ControllerServiceSync(Protocol):
     def get_user_budget(self, request: controller__pb2.Controller.GetUserBudgetRequest, ctx: RequestContext) -> controller__pb2.Controller.GetUserBudgetResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_user_budgets(self, request: controller__pb2.Controller.ListUserBudgetsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListUserBudgetsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def set_user_cap(self, request: controller__pb2.Controller.SetUserCapRequest, ctx: RequestContext) -> controller__pb2.Controller.SetUserCapResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_user_cap(self, request: controller__pb2.Controller.GetUserCapRequest, ctx: RequestContext) -> controller__pb2.Controller.GetUserCapResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_scheduler_state(self, request: controller__pb2.Controller.GetSchedulerStateRequest, ctx: RequestContext) -> controller__pb2.Controller.GetSchedulerStateResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -1476,6 +1546,26 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.list_user_budgets,
+                ),
+                "/iris.cluster.ControllerService/SetUserCap": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="SetUserCap",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.SetUserCapRequest,
+                        output=controller__pb2.Controller.SetUserCapResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.set_user_cap,
+                ),
+                "/iris.cluster.ControllerService/GetUserCap": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetUserCap",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.GetUserCapRequest,
+                        output=controller__pb2.Controller.GetUserCapResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_user_cap,
                 ),
                 "/iris.cluster.ControllerService/GetSchedulerState": EndpointSync.unary(
                     method=MethodInfo(
@@ -2044,6 +2134,46 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=controller__pb2.Controller.ListUserBudgetsRequest,
                 output=controller__pb2.Controller.ListUserBudgetsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def set_user_cap(
+        self,
+        request: controller__pb2.Controller.SetUserCapRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.SetUserCapResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="SetUserCap",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.SetUserCapRequest,
+                output=controller__pb2.Controller.SetUserCapResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_user_cap(
+        self,
+        request: controller__pb2.Controller.GetUserCapRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.GetUserCapResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetUserCap",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.GetUserCapRequest,
+                output=controller__pb2.Controller.GetUserCapResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

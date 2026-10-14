@@ -221,6 +221,32 @@ def test_non_admin_cannot_set_budget(service):
     assert exc.value.code == Code.PERMISSION_DENIED
 
 
+def _set_cap(user_id: str, max_accelerators: int):
+    return controller_pb2.Controller.SetUserCapRequest(user_id=user_id, max_accelerators=max_accelerators)
+
+
+def test_admin_sets_and_reads_user_cap(service):
+    _as_admin(service.set_user_cap, _set_cap("belay", 64), None)
+
+    cap = _as_admin(service.get_user_cap, controller_pb2.Controller.GetUserCapRequest(user_id="belay"), None)
+    assert (cap.max_accelerators, cap.accelerators_in_use, cap.held_jobs) == (64, 0, 0)
+    [listed] = _as_admin(service.list_user_budgets, controller_pb2.Controller.ListUserBudgetsRequest(), None).users
+    assert listed.max_accelerators == 64
+
+
+@pytest.mark.parametrize(
+    "call,request_proto",
+    [
+        ("set_user_cap", _set_cap("belay", 8)),
+        ("get_user_cap", controller_pb2.Controller.GetUserCapRequest(user_id="belay")),
+    ],
+)
+def test_non_admin_cannot_manage_user_cap(service, call, request_proto):
+    with pytest.raises(ConnectError) as exc:
+        _as_user(getattr(service, call), "belay", request_proto, None)
+    assert exc.value.code == Code.PERMISSION_DENIED
+
+
 def test_user_can_read_own_budget(service):
     """get_user_budget requires identity, not admin."""
     _as_admin(service.set_user_budget, _set_budget("alice", 5000), None)

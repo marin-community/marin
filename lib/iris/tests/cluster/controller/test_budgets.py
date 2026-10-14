@@ -181,3 +181,61 @@ def test_reconcile_sets_budget_for_any_user_without_a_users_row(db: ControllerDB
     budget = _get_user_budget(db, "henry")
     assert budget is not None
     assert budget.budget_limit == 75000
+
+
+# --- accelerator cap: config seeds, DB decides --------------------------------
+
+
+def _cap_tier(user_ids: list[str], max_accelerators: int) -> UserBudgetTier:
+    return UserBudgetTier(
+        user_ids=user_ids,
+        budget_limit=75000,
+        max_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        max_accelerators=max_accelerators,
+    )
+
+
+def test_reconcile_seeds_cap_from_config_when_none_set_at_runtime(db: ControllerDB) -> None:
+    reconcile_user_budget_tiers(db, [_cap_tier(["belay"], 64)], Timestamp.from_ms(1000))
+    reconcile_user_budget_tiers(db, [_cap_tier(["belay"], 32)], Timestamp.from_ms(2000))
+
+    budget = _get_user_budget(db, "belay")
+    assert budget is not None
+    assert budget.max_accelerators == 32
+
+
+def test_reconcile_does_not_overwrite_runtime_cap(db: ControllerDB) -> None:
+    reconcile_user_budget_tiers(db, [_cap_tier(["belay"], 64)], Timestamp.from_ms(1000))
+    with db.transaction() as tx:
+        writes.set_user_cap(
+            tx,
+            "belay",
+            16,
+            Timestamp.from_ms(2000),
+            default_budget_limit=0,
+            default_max_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        )
+
+    # Controller restart: the config tier is reapplied.
+    reconcile_user_budget_tiers(db, [_cap_tier(["belay"], 64)], Timestamp.from_ms(3000))
+
+    budget = _get_user_budget(db, "belay")
+    assert budget is not None
+    assert budget.max_accelerators == 16
+    assert budget.budget_limit == 75000
+
+
+def test_runtime_cap_on_user_without_row_keeps_default_budget(db: ControllerDB) -> None:
+    with db.transaction() as tx:
+        writes.set_user_cap(
+            tx,
+            "belay",
+            8,
+            Timestamp.from_ms(1000),
+            default_budget_limit=1000,
+            default_max_band=job_pb2.PRIORITY_BAND_BATCH,
+        )
+
+    budget = _get_user_budget(db, "belay")
+    assert budget is not None
+    assert (budget.max_accelerators, budget.budget_limit, budget.max_band) == (8, 1000, job_pb2.PRIORITY_BAND_BATCH)

@@ -29,7 +29,7 @@ from iris.cluster.controller.backend import (
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import tasks_table
-from iris.cluster.controller.writes import delete_job, set_user_budget
+from iris.cluster.controller.writes import delete_job, set_user_budget, set_user_cap
 from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.testing.controller import (
@@ -926,3 +926,26 @@ def test_apply_ignores_finished_task(state):
 
     task = query_task(state, task_id)
     assert task.state == job_pb2.TASK_STATE_SUCCEEDED
+
+
+def test_k8s_cap_held_job_reports_pending_reason(make_controller):
+    provider = FakeDirectProvider()
+    ctrl = make_controller(provider=provider, remote_state_dir="file:///tmp/iris-user-cap")
+    state = ControllerTestState(ctrl._db)
+    agent = "belay-agent@hai-gcp-models.iam.gserviceaccount.com"
+    with state._db.transaction() as cur:
+        set_user_cap(
+            cur, agent, 8, Timestamp.now(), default_budget_limit=0, default_max_band=job_pb2.PRIORITY_BAND_INTERACTIVE
+        )
+    jid = JobName.root("belay", "train")
+    req = make_direct_job_request("train", replicas=2)
+    req.name = jid.to_wire()
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
+    with state._db.transaction() as cur:
+        submit_job_in_tx(cur, job_id=jid, request=req, ts=Timestamp.now(), submitting_user=agent)
+
+    reconcile_once(ctrl)
+
+    [request] = provider.sync_calls[0].tasks_to_run
+    assert request.task_id == jid.task(0).to_wire()
+    assert ctrl.get_job_status(jid.to_wire()).job.pending_reason.startswith("held: user cap 8 accelerators")

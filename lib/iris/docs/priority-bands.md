@@ -124,6 +124,44 @@ If a higher-band submission is rejected:
 3. **Request an uplift.** If your work needs INTERACTIVE budget headroom or an
    admin-only band, ping [@Helw150](https://github.com/Helw150).
 
+## Hard accelerator caps
+
+The budget above is soft: an over-budget user still runs, only at BATCH. A
+**hard accelerator cap** bounds how many accelerators (GPUs plus TPU chips) one
+budget identity may hold at once, in every band including BATCH. It is meant for
+automation identities such as service accounts.
+
+- **Enforced at placement, not submission.** Submissions still succeed. A task
+  that would push its identity's in-use accelerators past the cap stays
+  `PENDING` and is not placed (worker scheduler) or given a pod (Kubernetes
+  dispatch drain) until enough of that identity's tasks finish. A coscheduled
+  gang is admitted or held whole. Held tasks never preempt other work and do not
+  drive autoscaler demand.
+- **In use** counts every assigned, building, or running task of the identity:
+  `(gpu + tpu count per task) * active tasks`. Child jobs inherit the root
+  submitter, so they count against the same identity. One scheduling pass
+  charges each admission as it goes, so a pass cannot overshoot.
+- **Changing the cap** takes effect on the next scheduling pass. Raising it
+  releases held tasks; lowering it never preempts or kills running tasks.
+- **Pending reason.** A held job reports
+  `held: user cap 64 accelerators (64 in use, needs 8)`.
+- **Config seeds, the DB decides.** `max_accelerators` on a `user_budgets` tier
+  seeds that user's cap at startup. Once an admin sets a cap at runtime
+  (`iris user cap set` / `clear`), restarts no longer overwrite it from config.
+  Users without a `user_budgets` row fall back, at read time, to
+  `user_budget_defaults.max_accelerators`. `0` means no cap.
+
+```bash
+iris user cap set belay-agent@hai-gcp-models.iam.gserviceaccount.com 8 --nodes   # 8 * 8 = 64 GPUs
+iris user cap set belay-agent@hai-gcp-models.iam.gserviceaccount.com 48 --gpus
+iris user cap get belay-agent@hai-gcp-models.iam.gserviceaccount.com
+iris user cap clear belay-agent@hai-gcp-models.iam.gserviceaccount.com
+```
+
+The cap is stored in accelerators. `--nodes` converts at `--gpus-per-node`
+(default 8), since Iris does not derive one node size for a cluster whose scale
+groups differ. Cap RPCs (`SetUserCap`, `GetUserCap`) are admin-only.
+
 ## See also
 
 - [`task-states.md`](task-states.md) — how preemption surfaces in task state

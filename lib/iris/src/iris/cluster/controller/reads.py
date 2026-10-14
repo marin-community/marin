@@ -156,6 +156,8 @@ class UserBudget:
     budget_limit: int
     max_band: int
     updated_at: Timestamp
+    max_accelerators: int
+    cap_set_at: Timestamp | None
 
 
 # ---------------------------------------------------------------------------
@@ -163,46 +165,41 @@ class UserBudget:
 # ---------------------------------------------------------------------------
 
 
-def get_user_budget(tx: Tx, user_id: str) -> UserBudget | None:
-    """Return :class:`UserBudget` for ``user_id``, or None."""
-    row = tx.execute(
-        select(
-            user_budgets_table.c.user_id,
-            user_budgets_table.c.budget_limit,
-            user_budgets_table.c.max_band,
-            user_budgets_table.c.updated_at_ms,
-        ).where(user_budgets_table.c.user_id == bindparam("user_id")),
-        {"user_id": user_id},
-    ).first()
-    if row is None:
-        return None
+_USER_BUDGET_COLS = (
+    user_budgets_table.c.user_id,
+    user_budgets_table.c.budget_limit,
+    user_budgets_table.c.max_band,
+    user_budgets_table.c.updated_at_ms,
+    user_budgets_table.c.max_accelerators,
+    user_budgets_table.c.cap_set_at_ms,
+)
+
+
+def _user_budget_from_row(row: Row) -> UserBudget:
     return UserBudget(
         user_id=str(row.user_id),
         budget_limit=int(row.budget_limit),
         max_band=int(row.max_band),
         updated_at=row.updated_at_ms,
+        max_accelerators=int(row.max_accelerators),
+        cap_set_at=row.cap_set_at_ms,
     )
+
+
+def get_user_budget(tx: Tx, user_id: str) -> UserBudget | None:
+    """Return :class:`UserBudget` for ``user_id``, or None."""
+    row = tx.execute(
+        select(*_USER_BUDGET_COLS).where(user_budgets_table.c.user_id == bindparam("user_id")),
+        {"user_id": user_id},
+    ).first()
+    if row is None:
+        return None
+    return _user_budget_from_row(row)
 
 
 def list_user_budgets(tx: Tx) -> list[UserBudget]:
     """Return every :class:`UserBudget` row."""
-    rows = tx.execute(
-        select(
-            user_budgets_table.c.user_id,
-            user_budgets_table.c.budget_limit,
-            user_budgets_table.c.max_band,
-            user_budgets_table.c.updated_at_ms,
-        )
-    ).all()
-    return [
-        UserBudget(
-            user_id=str(row.user_id),
-            budget_limit=int(row.budget_limit),
-            max_band=int(row.max_band),
-            updated_at=row.updated_at_ms,
-        )
-        for row in rows
-    ]
+    return [_user_budget_from_row(row) for row in tx.execute(select(*_USER_BUDGET_COLS)).all()]
 
 
 def get_all_user_budget_limits(tx: Tx) -> dict[str, int]:
@@ -214,6 +211,12 @@ def get_all_user_budget_limits(tx: Tx) -> dict[str, int]:
         )
     ).all()
     return {str(row.user_id): int(row.budget_limit) for row in rows}
+
+
+def get_all_user_accelerator_caps(tx: Tx) -> dict[str, int]:
+    """Return ``{user_id: max_accelerators}`` for every user with a budget row."""
+    rows = tx.execute(select(user_budgets_table.c.user_id, user_budgets_table.c.max_accelerators)).all()
+    return {str(row.user_id): int(row.max_accelerators) for row in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -957,7 +960,7 @@ def running_task_band_rows(tx: Tx) -> Sequence[Row]:
     return tx.execute(_RUNNING_TASK_BAND_STMT, {"state": job_pb2.TASK_STATE_RUNNING}).all()
 
 
-_USER_SPEND_STMT = (
+_USER_ACTIVE_RESOURCES_STMT = (
     select(
         local_tasks.c.job_id,
         jobs_table.c.submitting_user,
@@ -972,9 +975,10 @@ _USER_SPEND_STMT = (
         )
     )
     .where(hint_rare_state(local_tasks.c.state.in_(bindparam("states", expanding=True))))
-    .where(job_config_table.c.priority_band != job_pb2.PRIORITY_BAND_BATCH)
     .group_by(local_tasks.c.job_id, jobs_table.c.submitting_user)
 )
+
+_USER_SPEND_STMT = _USER_ACTIVE_RESOURCES_STMT.where(job_config_table.c.priority_band != job_pb2.PRIORITY_BAND_BATCH)
 
 
 def user_spend_rows(tx: Tx) -> Sequence[Row]:
@@ -986,6 +990,15 @@ def user_spend_rows(tx: Tx) -> Sequence[Row]:
     ``tasks.priority_band``, so scheduler-downgraded jobs still count.
     """
     return tx.execute(_USER_SPEND_STMT, {"states": list(ACTIVE_TASK_STATES)}).all()
+
+
+def user_active_resource_rows(tx: Tx) -> Sequence[Row]:
+    """Return per-job resource rows for active tasks in every band (hard-cap basis).
+
+    Same row shape as :func:`user_spend_rows`, but BATCH work is included: a hard
+    accelerator cap bounds what an identity holds, whatever band it runs in.
+    """
+    return tx.execute(_USER_ACTIVE_RESOURCES_STMT, {"states": list(ACTIVE_TASK_STATES)}).all()
 
 
 # ---------------------------------------------------------------------------

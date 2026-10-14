@@ -592,6 +592,10 @@ user_budgets_table = Table(
     Column("budget_limit", Integer, nullable=False, server_default="0"),
     Column("max_band", Integer, nullable=False, server_default="2"),
     Column("updated_at_ms", TimestampMsType, nullable=False),
+    # Hard cap on accelerators held by this identity's active tasks (0 = no cap).
+    Column("max_accelerators", Integer, nullable=False, server_default="0"),
+    # Set when an admin changes the cap at runtime; config reconcile leaves such caps alone.
+    Column("cap_set_at_ms", TimestampMsType, nullable=True),
 )
 
 

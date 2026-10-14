@@ -791,6 +791,46 @@ def set_user_budget(tx: Tx, user_id: str, budget_limit: int, max_band: int, now:
     tx.execute(stmt)
 
 
+@writes_to(user_budgets_table)
+def set_user_cap(
+    tx: Tx,
+    user_id: str,
+    max_accelerators: int,
+    now: Timestamp,
+    *,
+    default_budget_limit: int,
+    default_max_band: int,
+) -> None:
+    """Set a runtime accelerator cap, marking it so config reconcile leaves it alone.
+
+    A user without a budget row gets one carrying the default limit and band, so
+    setting a cap never changes the user's effective soft budget.
+    """
+    stmt = sqlite_insert(user_budgets_table).values(
+        user_id=user_id,
+        budget_limit=default_budget_limit,
+        max_band=default_max_band,
+        updated_at_ms=now,
+        max_accelerators=max_accelerators,
+        cap_set_at_ms=now,
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["user_id"],
+        set_={"max_accelerators": max_accelerators, "cap_set_at_ms": now, "updated_at_ms": now},
+    )
+    tx.execute(stmt)
+
+
+@writes_to(user_budgets_table)
+def seed_user_cap(tx: Tx, user_id: str, max_accelerators: int) -> None:
+    """Apply a config-provided accelerator cap unless an admin set one at runtime."""
+    tx.execute(
+        update(user_budgets_table)
+        .where(user_budgets_table.c.user_id == user_id, user_budgets_table.c.cap_set_at_ms.is_(None))
+        .values(max_accelerators=max_accelerators)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Federation (parent side): the handle + sync mirror; changelog retention
 # ---------------------------------------------------------------------------

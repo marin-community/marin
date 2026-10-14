@@ -712,11 +712,15 @@ class UserBudgetTier(_Config):
     user_ids: list[str] = Field(default_factory=list)
     budget_limit: int = 0  # resource-value spend before downgrade to BATCH (0 = unlimited)
     max_band: PriorityBandField = 0  # highest band these users may submit to
+    # Hard cap on accelerators these users' active tasks may hold (0 = no cap). Seeds the
+    # DB only when no runtime cap was set with `iris user cap set`.
+    max_accelerators: int = 0
 
 
 class UserBudgetDefaultsConfig(_Config):
     budget_limit: int = DEFAULT_USER_BUDGET_LIMIT
     max_band: PriorityBandField = DEFAULT_USER_BUDGET_MAX_BAND
+    max_accelerators: int = 0  # hard accelerator cap for users without a user_budgets row (0 = no cap)
 
 
 class EndpointSpec(_Config):

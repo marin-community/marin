@@ -642,8 +642,19 @@ uv run python lib/iris/scripts/job_profile_summary.py /user/job/id -o merged.fol
 ```bash
 iris login                            # IAP clusters: cache the IAP edge refresh token locally
 iris rpc controller list-users        # active users with task/job counts
-iris user budget list                 # per-user budget limits
+iris user budget list                 # per-user budget limits and accelerator caps (CAP = in use/max)
+iris user cap set USER 8 --nodes      # hard cap: at most 8 nodes (64 GPUs at --gpus-per-node 8)
+iris user cap get USER                # cap, accelerators in use, held jobs
+iris user cap clear USER              # remove the cap (config does not re-apply it on restart)
 ```
+
+A hard accelerator cap holds a user's pending tasks at placement (worker
+scheduler and Kubernetes dispatch) once their assigned/building/running tasks,
+in any band, hold the cap. Held jobs show `held: user cap N accelerators (M in
+use, ...)` as their pending reason. Raising the cap releases them on the next
+scheduling pass; lowering it never kills running work. A runtime-set cap
+survives controller restarts and overrides `user_budgets[].max_accelerators`
+from config. See [`docs/priority-bands.md`](docs/priority-bands.md#hard-accelerator-caps).
 
 Users authenticate **only through IAP**: the GCLB validates an OIDC token at the edge
 and forwards a signed assertion the controller verifies; the controller mints **no**

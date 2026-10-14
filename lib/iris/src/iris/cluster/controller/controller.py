@@ -569,6 +569,9 @@ class Controller:
         # RPC handlers read this dict instead of recomputing diagnostics,
         # avoiding expensive scheduler work on every CLI poll.
         self._scheduling_diagnostics: dict[str, str] = {}
+        # Accelerator-cap pending reasons from the latest Kubernetes dispatch drain,
+        # whose backend schedule phase produces no diagnostics of its own.
+        self._dispatch_cap_holds: dict[str, str] = {}
         self._scheduling_round: int = 0
 
         self._atexit_registered = False
@@ -1416,7 +1419,7 @@ class Controller:
 
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None:
         """Return cached scheduling diagnostic for a job, or None if unavailable."""
-        return self._scheduling_diagnostics.get(job_wire_id)
+        return self._scheduling_diagnostics.get(job_wire_id) or self._dispatch_cap_holds.get(job_wire_id)
 
     def _timeout_decisions(self, timeout_rows: Sequence[Row], now_ms: int) -> list[TerminalDecision]:
         """Turn execution-timeout rows from the snapshot into TIMEOUT decisions.
@@ -1498,6 +1501,8 @@ class Controller:
             )
         if batch.tasks_to_run:
             self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
+        if max_promotions > 0:
+            self._dispatch_cap_holds = batch.cap_holds
         return reads.ControlSnapshot(
             worker_addresses={},
             reconcile_rows=[],

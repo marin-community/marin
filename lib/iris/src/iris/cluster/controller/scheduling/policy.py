@@ -31,10 +31,13 @@ from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.budget import (
     UserTask,
     budget_user_id,
+    build_accelerator_caps,
     compute_effective_band,
     compute_user_spend,
     interleave_by_user,
+    placement_accelerators,
     resource_value,
+    task_accelerators,
 )
 from iris.cluster.controller.codec import (
     constraints_from_json,
@@ -47,6 +50,7 @@ from iris.cluster.controller.reads import WorkerAttrsSource
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
+    AcceleratorGate,
     JobRequirements,
     RunningTaskInfo,
     Scheduler,
@@ -251,6 +255,8 @@ def compute_demand_entries(
             t.priority_insertion,
         ),
     )
+    if ctx.accelerator_gate is not None:
+        pending = _drop_cap_held(pending, ctx.accelerator_gate.copy())
 
     tasks_by_job: dict[JobName, list[PendingTask]] = defaultdict(list)
     for task in pending:
@@ -351,6 +357,32 @@ def compute_demand_entries(
             )
 
     return demand_entries
+
+
+def _drop_cap_held(pending: list[PendingTask], gate: AcceleratorGate) -> list[PendingTask]:
+    """Drop pending tasks their owner's accelerator cap would hold, admitting in order.
+
+    Capped work must not drive autoscaler demand: the scheduler would never place
+    it on the capacity provisioned for it. ``gate`` is a scratch copy this charges.
+    """
+    tasks_per_job: dict[JobName, int] = defaultdict(int)
+    for task in pending:
+        tasks_per_job[task.job_id] += 1
+    gang_verdicts: dict[JobName, bool] = {}
+    kept: list[PendingTask] = []
+    for task in pending:
+        needed = placement_accelerators(
+            task_accelerators(task.res_device_json), tasks_per_job[task.job_id], task.has_coscheduling
+        )
+        if not task.has_coscheduling:
+            admitted = gate.try_admit(task.job_id, needed)
+        elif task.job_id in gang_verdicts:
+            admitted = gang_verdicts[task.job_id]
+        else:
+            admitted = gang_verdicts[task.job_id] = gate.try_admit(task.job_id, needed)
+        if admitted:
+            kept.append(task)
+    return kept
 
 
 def get_running_tasks_with_band_and_value(
@@ -702,6 +734,8 @@ def run_preemption_pass(
         if c.job_name.parent is not None:
             sibling_count[c.job_name.parent] += 1
 
+    gate = context.accelerator_gate
+
     for candidate in unscheduled_tasks:
         # Batch never preempts
         if candidate.band == job_pb2.PRIORITY_BAND_BATCH:
@@ -712,10 +746,22 @@ def run_preemption_pass(
             continue
 
         wanted_variant = candidate.requirements.device_variant
+        n_required = sibling_count.get(parent, 1) if parent is not None else 1
+
+        # A preemptor held by its owner's accelerator cap must not evict anyone;
+        # a satisfied one is charged so later preemptors see its accelerators.
+        capped = gate is not None and parent is not None
+        accelerators = placement_accelerators(
+            candidate.requirements.accelerator_count, n_required, candidate.requirements.is_coscheduled
+        )
+        if capped and gate.hold_reason(parent, accelerators) is not None:
+            continue
 
         if not candidate.requirements.is_coscheduled:
             eviction = _preempt_solo(candidate, wanted_variant, solo_victims, context)
             if eviction is not None:
+                if capped:
+                    gate.try_admit(parent, accelerators)
                 evictions.extend((candidate.job_name, v) for v in eviction.victims)
                 placements.extend(zip([candidate.job_name], eviction.claimed_workers, strict=False))
             continue
@@ -726,7 +772,6 @@ def run_preemption_pass(
         if parent is not None:
             attempted_coscheduled_jobs.add(parent)
 
-        n_required = sibling_count.get(parent, 1) if parent is not None else 1
         eviction = _preempt_coscheduled(candidate, wanted_variant, n_required, sorted_groups, context)
         if eviction is None:
             # No whole victim slice qualified; try freeing the gang's blocking
@@ -735,6 +780,8 @@ def run_preemption_pass(
                 candidate, n_required, solo_victims_by_worker, reserved_workers, context
             )
         if eviction is not None:
+            if capped:
+                gate.try_admit(parent, accelerators)
             evictions.extend((candidate.job_name, v) for v in eviction.victims)
             preemptor_tasks = (
                 pending_tasks_by_parent.get(parent, [candidate.job_name]) if parent else [candidate.job_name]
@@ -807,6 +854,11 @@ def build_scheduling_context(
         running = _running_tasks_with_band_and_value(snap)
 
     snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
+    accelerator_caps = build_accelerator_caps(
+        snap,
+        {task.job_id: budget_user_id(task.job_id, task.submitting_user) for task in pending},
+        defaults,
+    )
     return SchedulingContext(
         workers=snapshots,
         building_counts=building_counts,
@@ -820,6 +872,7 @@ def build_scheduling_context(
         requested_bands=requested_bands,
         user_budget_defaults=defaults,
         running_for_preemption=running,
+        accelerator_gate=accelerator_caps,
     )
 
 

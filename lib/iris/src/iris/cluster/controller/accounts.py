@@ -14,10 +14,10 @@ from sqlalchemy import bindparam, func, select
 
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import ControllerAuth
-from iris.cluster.controller.budget import compute_user_spend
+from iris.cluster.controller.budget import compute_user_accelerators, compute_user_spend, user_cap_status
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import jobs_table, tasks_table, user_budgets_table
-from iris.cluster.types import TERMINAL_JOB_STATES, USER_JOB_STATES
+from iris.cluster.types import TERMINAL_JOB_STATES, USER_JOB_STATES, UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthzAction, authorize
 from iris.rpc.proto_display import job_state_friendly, task_state_friendly
@@ -27,6 +27,7 @@ from iris.rpc.proto_display import job_state_friendly, task_state_friendly
 class AccountDependencies:
     db: ControllerDB
     auth: ControllerAuth
+    user_budget_defaults: UserBudgetDefaults
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,7 @@ def get_user_budget(
     with dependencies.db.read_snapshot() as snapshot:
         budget = reads.get_user_budget(snapshot, request.user_id)
         spend = compute_user_spend(snapshot)
+        accelerators = compute_user_accelerators(snapshot)
     if budget is None:
         raise ConnectError(Code.NOT_FOUND, f"No budget found for user {request.user_id}")
     return controller_pb2.Controller.GetUserBudgetResponse(
@@ -140,6 +142,8 @@ def get_user_budget(
         budget_limit=budget.budget_limit,
         budget_spent=spend.get(request.user_id, 0),
         max_band=budget.max_band,
+        max_accelerators=budget.max_accelerators,
+        accelerators_in_use=accelerators.get(request.user_id, 0),
     )
 
 
@@ -154,6 +158,7 @@ def list_user_budgets(
     with dependencies.db.read_snapshot() as snapshot:
         budgets = reads.list_user_budgets(snapshot)
         spend = compute_user_spend(snapshot)
+        accelerators = compute_user_accelerators(snapshot)
     return controller_pb2.Controller.ListUserBudgetsResponse(
         users=[
             controller_pb2.Controller.GetUserBudgetResponse(
@@ -161,9 +166,57 @@ def list_user_budgets(
                 budget_limit=budget.budget_limit,
                 budget_spent=spend.get(budget.user_id, 0),
                 max_band=budget.max_band,
+                max_accelerators=budget.max_accelerators,
+                accelerators_in_use=accelerators.get(budget.user_id, 0),
             )
             for budget in budgets
         ]
+    )
+
+
+def set_user_cap(
+    dependencies: AccountDependencies,
+    request: controller_pb2.Controller.SetUserCapRequest,
+    context: RequestContext,
+) -> controller_pb2.Controller.SetUserCapResponse:
+    """Set one identity's hard accelerator cap (0 = no cap); persists across restarts."""
+    del context
+    authorize(AuthzAction.MANAGE_BUDGETS)
+    if not request.user_id:
+        raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
+    if request.max_accelerators < 0:
+        raise ConnectError(Code.INVALID_ARGUMENT, f"max_accelerators must be >= 0, got {request.max_accelerators}")
+    defaults = dependencies.user_budget_defaults
+    with dependencies.db.transaction() as tx:
+        writes.set_user_cap(
+            tx,
+            request.user_id,
+            request.max_accelerators,
+            Timestamp.now(),
+            default_budget_limit=defaults.budget_limit,
+            default_max_band=defaults.max_band,
+        )
+    return controller_pb2.Controller.SetUserCapResponse()
+
+
+def get_user_cap(
+    dependencies: AccountDependencies,
+    request: controller_pb2.Controller.GetUserCapRequest,
+    context: RequestContext,
+) -> controller_pb2.Controller.GetUserCapResponse:
+    """Return one identity's accelerator cap, accelerators in use, and the pending work it holds."""
+    del context
+    authorize(AuthzAction.MANAGE_BUDGETS)
+    if not request.user_id:
+        raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
+    with dependencies.db.read_snapshot() as snapshot:
+        status = user_cap_status(snapshot, request.user_id, dependencies.user_budget_defaults)
+    return controller_pb2.Controller.GetUserCapResponse(
+        user_id=status.user_id,
+        max_accelerators=status.max_accelerators,
+        accelerators_in_use=status.accelerators_in_use,
+        held_tasks=status.held_tasks,
+        held_jobs=status.held_jobs,
     )
 
 
