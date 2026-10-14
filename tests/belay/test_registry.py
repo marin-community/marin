@@ -4,6 +4,7 @@
 import pytest
 
 from experiments.belay import registry as R
+from scripts.ci.belay_intake import IntakeComment, registry_entry
 
 
 def _experiment(**overrides) -> R.Experiment:
@@ -73,3 +74,22 @@ def test_page_data_uses_the_page_field_names():
     idea = R.page_data([_experiment()], "test")["ideas"][0]
     assert idea["id"] == "sqrt-softplus-router" and idea["xid"] == "X0001"
     assert idea["trials"][0]["delta"] == [-0.001, 0.002]
+
+
+def test_intake_bot_entries_are_valid_registry_files(tmp_path):
+    comment = IntakeComment(
+        comment_id=5,
+        author="someone",
+        url="https://github.com/o/r/issues/1#issuecomment-5",
+        updated_at="2026-10-14T00:00:00Z",
+        reactions=(),
+        body="**Title:** Per-head router temperature\n**Category:** Vibes\n**Idea:** learn it\nmore text",
+    )
+    filename, text = registry_entry("X0042", comment, "ClassicLarry")
+    (tmp_path / filename).write_text(text)
+    (experiment,) = R.load_registry(tmp_path)
+    assert experiment.id == "X0042" and experiment.slug == "per-head-router-temperature"
+    assert experiment.category == "Unsorted"  # not one of the categories
+    assert experiment.status is R.Status.APPROVED and experiment.source is R.Source.INTAKE
+    assert experiment.intake == R.Intake(url=comment.url, author="someone", approved_by="ClassicLarry")
+    assert experiment.summary == "learn it"

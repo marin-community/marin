@@ -40,6 +40,7 @@ CATEGORIES = (
     "Training dynamics and schedules",
     "Systems and speed",
     "Recipe stacks",
+    "Unsorted",
 )
 
 
