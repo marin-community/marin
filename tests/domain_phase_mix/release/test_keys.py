@@ -3,14 +3,18 @@ import pytest
 
 from experiments.domain_phase_mix.release import keys, tables
 
-BUCKETS = ["a", "b", "c"]
-
 
 def test_mixture_id_ignores_sub_1e9_noise_and_column_order():
     w1 = {"a": 0.5, "b": 0.3, "c": 0.2}
     w2 = {"c": 0.2 + 1e-12, "b": 0.3, "a": 0.5 - 1e-12}
     assert keys.mixture_id(w1) == keys.mixture_id(w2)
     assert keys.mixture_id(w1) != keys.mixture_id({"a": 0.5, "b": 0.2, "c": 0.3})
+
+
+def test_mixture_id_treats_negative_zero_as_zero():
+    assert keys.mixture_id({"a": 1.0, "b": 0.0}) == keys.mixture_id({"a": 1.0, "b": -1e-17})
+    w = {"a": 1.0, "b": 0.0}
+    assert keys.exposure_id(w, {"a": 1.0, "b": 0.0}, "v1") == keys.exposure_id(w, {"a": 1.0, "b": -0.0}, "v1")
 
 
 def test_exposure_id_separates_pool_fractions():

@@ -10,7 +10,8 @@ ROUND = 9
 
 
 def _canon(values: Mapping[str, float]) -> str:
-    return ";".join(f"{k}={round(float(v), ROUND):.{ROUND}f}" for k, v in sorted(values.items()))
+    # Adding 0.0 turns the -0.0 that rounding leaves from tiny negative noise into 0.0.
+    return ";".join(f"{k}={round(float(v), ROUND) + 0.0:.{ROUND}f}" for k, v in sorted(values.items()))
 
 
 def _sha(text: str) -> str:
@@ -57,5 +58,6 @@ def load_salt(path: Path) -> str:
     """The salt lives outside the repo; create it once with 32 random bytes."""
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(mode=0o600)
         path.write_text(secrets.token_hex(32))
     return path.read_text().strip()
