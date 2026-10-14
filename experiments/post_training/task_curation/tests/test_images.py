@@ -131,6 +131,16 @@ def test_editing_a_dockerfile_fragment_renames_the_environment_artifact(lock, fr
     assert environment_artifact(environment).name != original
 
 
+@pytest.mark.parametrize(
+    "instruction",
+    ["FROM debian:bookworm", "USER 65534", "WORKDIR /lean4", "COPY lean-toolchain /lean4/", 'ENTRYPOINT ["lake"]'],
+)
+def test_a_dockerfile_fragment_cannot_redirect_the_generated_steps_after_it(lock, fragment, instruction):
+    fragment.write_text(TOOLCHAIN_FRAGMENT + f"# {instruction}\nRUN true \\\n    && true\n{instruction}\n")
+    with pytest.raises(ValueError, match=instruction.split()[0]):
+        Environment(lock=lock, dockerfile=fragment)
+
+
 def test_a_dockerfile_fragment_builds_an_image_with_its_lines_between_apt_and_the_lock_sync(lock, fragment, docker_log):
     environment = Environment(lock=lock, apt=("build-essential",), dockerfile=fragment)
     (built,) = run(environment_artifact(environment, REPOSITORY))

@@ -158,7 +158,7 @@ grader requirements on each TaskSpec; execution selects suitable Shellbox machin
 | `apt` | Debian package names. |
 | `data` | Downloads; only `nltk:<package>` is supported. |
 | `image` | A digest-pinned image used as-is. It excludes every other field. |
-| `dockerfile` | A checked-in, self-contained Dockerfile fragment that installs a toolchain, such as Lean and Mathlib. The generated Dockerfile runs its lines after the apt step and before the lock sync; its bytes enter the identity. It excludes `image`. |
+| `dockerfile` | A checked-in, self-contained Dockerfile fragment that installs a toolchain, such as Lean and Mathlib, using only `ARG`, `ENV` and `RUN`. The generated Dockerfile runs its lines after the apt step and before the lock sync; its bytes enter the identity. It excludes `image`. |
 
 | Declaration | Placement | Recorded `EnvironmentRequirements` |
 |---|---|---|

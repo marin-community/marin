@@ -46,7 +46,12 @@ compiles proofs there through
 A `dockerfile` fragment is self-contained: it downloads what it installs inside
 its own `RUN` steps, so the build context carries only the lock and the generated
 Dockerfile. Its lines follow the apt step and precede the lock sync, so toolchain
-layers stay cached while the lock changes.
+layers stay cached while the lock changes. A fragment may use only `ARG`, `ENV`
+and `RUN` (`FRAGMENT_INSTRUCTIONS` in [`../environment.py`](../environment.py));
+the declaration refuses `FROM`, `USER`, `WORKDIR`, `SHELL`, `COPY`, `ADD`,
+`ENTRYPOINT`, `CMD` and the rest, because they would replace the base, break the
+generated package steps, or change the grader container. `ENV` persists into the
+image on purpose: it is how a fragment puts its toolchain on `PATH`.
 
 [`../datasets/grader.in`](../datasets/grader.in) lists the direct requirements
 grouped by the scorers that need them. Regenerate the lock after changing it:
