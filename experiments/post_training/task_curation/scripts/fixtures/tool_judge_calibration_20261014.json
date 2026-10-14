@@ -1,0 +1,893 @@
+{
+  "cases": [
+    {
+      "arguments": {},
+      "category": "valid",
+      "expected_reward": 1.0,
+      "function": "get_special_tickers",
+      "name": "active-tickers",
+      "rationale": "Directly invokes the advertised market endpoint.",
+      "source_row": 582,
+      "task_sha256": "e06bcae118f709f7191a52c40e3fe804ffabbd9daae5789228c5421201b754d1",
+      "text": null
+    },
+    {
+      "arguments": {},
+      "category": "valid",
+      "expected_reward": 1.0,
+      "function": "generate_random_quote",
+      "name": "random-quote",
+      "rationale": "Directly invokes the only relevant tool.",
+      "source_row": 6175,
+      "task_sha256": "89acdf78e614e0612acd87ef2dba30bfd6e014ff528c6837ace5f335126cd78c",
+      "text": null
+    },
+    {
+      "arguments": {},
+      "category": "valid",
+      "expected_reward": 1.0,
+      "function": "generate_webhook",
+      "name": "webhook",
+      "rationale": "Directly invokes the advertised webhook generator.",
+      "source_row": 2020,
+      "task_sha256": "2645892a4a9969eccdcf7f0c424715b8f85dbaf7033c50f75fb9ebd45ea52949",
+      "text": null
+    },
+    {
+      "arguments": {
+        "query": "chess"
+      },
+      "category": "valid",
+      "expected_reward": 1.0,
+      "function": "search_advice",
+      "name": "chess-advice",
+      "rationale": "Searches the advertised advice tool using the user's topic.",
+      "source_row": 1587,
+      "task_sha256": "e4ce347261ca1761f60ce5988a0fc091caf980a731118036c94b27ef1d9c627d",
+      "text": null
+    },
+    {
+      "arguments": {
+        "query": "recent aircraft aluminum corrosion effects on fatigue life and crack growth under cyclic loading humidity saltwater"
+      },
+      "category": "alternative",
+      "expected_reward": 1.0,
+      "function": "pubmed_query_run",
+      "name": "pubmed-paraphrase",
+      "rationale": "A concise, semantically equivalent literature query.",
+      "source_row": 1523,
+      "task_sha256": "eeee510fc0e105a235c7b7fa8d144354afe39349229fb6a1e5e061e9d95d7741",
+      "text": null
+    },
+    {
+      "arguments": {
+        "input_query": "250000 * (1 + 0.045/4)^(4*15)"
+      },
+      "category": "alternative",
+      "expected_reward": 1.0,
+      "function": "wolfram_alpha_calculator",
+      "name": "compound-interest-wolfram",
+      "rationale": "An advertised calculator can perform the same first computation.",
+      "source_row": 4893,
+      "task_sha256": "9fdf2b9d00005540beb9a233a58d5effc88e8a422314f4c87228105cc54179bf",
+      "text": null
+    },
+    {
+      "arguments": {
+        "input_query": "250000*(1+0.045/4)**60"
+      },
+      "category": "alternative",
+      "expected_reward": 1.0,
+      "function": "calculator",
+      "name": "compound-interest-expression",
+      "rationale": "Equivalent exponent notation in the same calculator.",
+      "source_row": 4893,
+      "task_sha256": "9fdf2b9d00005540beb9a233a58d5effc88e8a422314f4c87228105cc54179bf",
+      "text": null
+    },
+    {
+      "arguments": {
+        "asset_type": "spot",
+        "base": "USD",
+        "data_type": "metrics",
+        "market_venue": "BITFINEX",
+        "symbol": "LTC"
+      },
+      "category": "alternative",
+      "expected_reward": 1.0,
+      "function": "metadata",
+      "name": "second-crypto-first",
+      "rationale": "Either requested asset is a defensible first call in a multi-step request.",
+      "source_row": 1592,
+      "task_sha256": "31ae398b9badcf59bc60a9dedad0ab1658ca6392694e02b137e0cdfa25279714",
+      "text": null
+    },
+    {
+      "arguments": null,
+      "category": "clarification",
+      "expected_reward": 1.0,
+      "function": null,
+      "name": "ask-pinterest-user",
+      "rationale": "The user did not identify whose pins they want.",
+      "source_row": 36817,
+      "task_sha256": "f4fd2115ec54371790daf18c980374becd3d065c92c97583d256e2b1ea803828",
+      "text": "Which Pinterest username should I look up?"
+    },
+    {
+      "arguments": null,
+      "category": "clarification",
+      "expected_reward": 1.0,
+      "function": null,
+      "name": "ask-news-country",
+      "rationale": "The country is required to make the request specific.",
+      "source_row": 66288,
+      "task_sha256": "1f35afd0956d2bfadcaaac2d3253d90cc3850c2917874caffe0fc56644f7c157",
+      "text": "Which country should I use for the headlines?"
+    },
+    {
+      "arguments": null,
+      "category": "clarification",
+      "expected_reward": 1.0,
+      "function": null,
+      "name": "ask-largest-count",
+      "rationale": "The requested number of largest values is missing.",
+      "source_row": 73287,
+      "task_sha256": "5d6dcc42446f746e26551b5443adbfb3bf55a76f79ae5b2d80fcbcfcdac683c0",
+      "text": "How many of the largest numbers would you like?"
+    },
+    {
+      "arguments": null,
+      "category": "clarification",
+      "expected_reward": 1.0,
+      "function": null,
+      "name": "ask-weather-location",
+      "rationale": "The API requires coordinates not supplied in the conversation.",
+      "source_row": 2337,
+      "task_sha256": "8aba9ac19a4dd7155e79a01abe8a7f97f78c26a8c9c9e74b142242f88d2a96bb",
+      "text": "What latitude and longitude in Chicago should I use for the rooftop?"
+    },
+    {
+      "arguments": null,
+      "category": "unsupported",
+      "expected_reward": 1.0,
+      "function": null,
+      "name": "flight-tool-unavailable",
+      "rationale": "No advertised tool can book a flight.",
+      "source_row": 40329,
+      "task_sha256": "094d1679f068d0159fe3563c5944fbf2088c96f697e79dea4fb437ac1f049124",
+      "text": "I can't book a flight with the available recipe-search tool."
+    },
+    {
+      "arguments": {
+        "ingredients": [
+          "flight"
+        ]
+      },
+      "category": "unsupported",
+      "expected_reward": 0.0,
+      "function": "search_recipe",
+      "name": "flight-via-recipe",
+      "rationale": "The recipe tool cannot book travel.",
+      "source_row": 40329,
+      "task_sha256": "094d1679f068d0159fe3563c5944fbf2088c96f697e79dea4fb437ac1f049124",
+      "text": null
+    },
+    {
+      "arguments": null,
+      "category": "unsupported",
+      "expected_reward": 0.0,
+      "function": null,
+      "name": "refuse-available-advice",
+      "rationale": "A relevant advertised search tool is available.",
+      "source_row": 1587,
+      "task_sha256": "e4ce347261ca1761f60ce5988a0fc091caf980a731118036c94b27ef1d9c627d",
+      "text": "I can't help with chess exercises because no suitable tool is available."
+    },
+    {
+      "arguments": {},
+      "category": "unsupported",
+      "expected_reward": 0.0,
+      "function": "get_most_active_tickers",
+      "name": "invented-tool-name",
+      "rationale": "The function is not advertised.",
+      "source_row": 582,
+      "task_sha256": "e06bcae118f709f7191a52c40e3fe804ffabbd9daae5789228c5421201b754d1",
+      "text": null
+    },
+    {
+      "arguments": {
+        "hours": 24,
+        "location": "41.8781,-87.6298"
+      },
+      "category": "hallucinated",
+      "expected_reward": 0.0,
+      "function": "get_hourly_forecast",
+      "name": "invented-chicago-coordinates",
+      "rationale": "The exact coordinates are absent from the visible conversation.",
+      "source_row": 2337,
+      "task_sha256": "8aba9ac19a4dd7155e79a01abe8a7f97f78c26a8c9c9e74b142242f88d2a96bb",
+      "text": null
+    },
+    {
+      "arguments": {
+        "country": "us"
+      },
+      "category": "hallucinated",
+      "expected_reward": 0.0,
+      "function": "get_news_headlines",
+      "name": "invented-news-country",
+      "rationale": "The user's country is absent from the visible conversation.",
+      "source_row": 66288,
+      "task_sha256": "1f35afd0956d2bfadcaaac2d3253d90cc3850c2917874caffe0fc56644f7c157",
+      "text": null
+    },
+    {
+      "arguments": {
+        "username": "ben123"
+      },
+      "category": "hallucinated",
+      "expected_reward": 0.0,
+      "function": "get_user_pins",
+      "name": "invented-pinterest-user",
+      "rationale": "The username is neither supplied nor a documented default.",
+      "source_row": 36817,
+      "task_sha256": "f4fd2115ec54371790daf18c980374becd3d065c92c97583d256e2b1ea803828",
+      "text": null
+    },
+    {
+      "arguments": null,
+      "category": "hallucinated",
+      "expected_reward": 0.0,
+      "function": null,
+      "name": "invented-booking-result",
+      "rationale": "Claims a tool result and booking that never occurred.",
+      "source_row": 40329,
+      "task_sha256": "094d1679f068d0159fe3563c5944fbf2088c96f697e79dea4fb437ac1f049124",
+      "text": "Your New York to London flight is booked for tomorrow at 9 AM."
+    }
+  ],
+  "cases_sha256": "feab736f796ae4de9b9761fddce2652138016ab4d6aafd38fe89160aa2eee513",
+  "categories": {
+    "alternative": {
+      "correct": 11,
+      "total": 12
+    },
+    "clarification": {
+      "correct": 12,
+      "total": 12
+    },
+    "hallucinated": {
+      "correct": 12,
+      "total": 12
+    },
+    "unsupported": {
+      "correct": 12,
+      "total": 12
+    },
+    "valid": {
+      "correct": 12,
+      "total": 12
+    }
+  },
+  "model": "glm-5.3",
+  "prompt_template_sha256": "32a9766c5d29ab444226bc13a1abecfd1a40ba0c1f26f82b027e53801a6e79e8",
+  "provenance": {
+    "bundle_sha256": "f599a651775eb89cb76724170dc7adc9ac968708dd3dbabcfe1d575b81a5b7c3",
+    "iris_attempt_uid": "b4f67aa98308021f",
+    "iris_job": "/benfeuer/nemotron-pr10077-review-calibration-v2-20261014",
+    "labelled_task_provenance": "tool_judge_provenance.json",
+    "limitation": "One alternative-action request timed out. All 59 completed verdicts matched their labels; the timeout is counted as disagreement. This challenge set covers toolcall-schema only.",
+    "original_output_sha256": "b0249ae90dfc52cb380399791c86b945f52c28946d2b7e777764d6b216ca4f44",
+    "output_archive": "s3://marin-us-east-02a/tmp/ttl=7d/iris/task-outputs/benfeuer/nemotron-pr10077-review-calibration-v2-20261014/0/b4f67aa98308021f/outputs.tar.zst"
+  },
+  "relay_job": "/muchanem/glm53-relay-rno2a",
+  "repeats": 3,
+  "results": [
+    {
+      "case": "active-tickers",
+      "category": "valid",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 0,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "active-tickers",
+      "category": "valid",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 1,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "active-tickers",
+      "category": "valid",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 2,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "random-quote",
+      "category": "valid",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 0,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "random-quote",
+      "category": "valid",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 1,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "random-quote",
+      "category": "valid",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 2,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "webhook",
+      "category": "valid",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 0,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "webhook",
+      "category": "valid",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 1,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "webhook",
+      "category": "valid",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 2,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "chess-advice",
+      "category": "valid",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 0,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "chess-advice",
+      "category": "valid",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 1,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "chess-advice",
+      "category": "valid",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 2,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "pubmed-paraphrase",
+      "category": "alternative",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 0,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "pubmed-paraphrase",
+      "category": "alternative",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 1,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "pubmed-paraphrase",
+      "category": "alternative",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 2,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "compound-interest-wolfram",
+      "category": "alternative",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 0,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "compound-interest-wolfram",
+      "category": "alternative",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 1,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "compound-interest-wolfram",
+      "category": "alternative",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 2,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "compound-interest-expression",
+      "category": "alternative",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 0,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "compound-interest-expression",
+      "category": "alternative",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 1,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "compound-interest-expression",
+      "category": "alternative",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 2,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "second-crypto-first",
+      "category": "alternative",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 0,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "second-crypto-first",
+      "category": "alternative",
+      "correct": false,
+      "error": "Request timed out.",
+      "expected_reward": 1.0,
+      "repeat": 1,
+      "reward": null,
+      "status": "infra_error"
+    },
+    {
+      "case": "second-crypto-first",
+      "category": "alternative",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 2,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "ask-pinterest-user",
+      "category": "clarification",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 0,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "ask-pinterest-user",
+      "category": "clarification",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 1,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "ask-pinterest-user",
+      "category": "clarification",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 2,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "ask-news-country",
+      "category": "clarification",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 0,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "ask-news-country",
+      "category": "clarification",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 1,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "ask-news-country",
+      "category": "clarification",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 2,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "ask-largest-count",
+      "category": "clarification",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 0,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "ask-largest-count",
+      "category": "clarification",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 1,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "ask-largest-count",
+      "category": "clarification",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 2,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "ask-weather-location",
+      "category": "clarification",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 0,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "ask-weather-location",
+      "category": "clarification",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 1,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "ask-weather-location",
+      "category": "clarification",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 2,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "flight-tool-unavailable",
+      "category": "unsupported",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 0,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "flight-tool-unavailable",
+      "category": "unsupported",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 1,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "flight-tool-unavailable",
+      "category": "unsupported",
+      "correct": true,
+      "error": null,
+      "expected_reward": 1.0,
+      "repeat": 2,
+      "reward": 1.0,
+      "status": "graded"
+    },
+    {
+      "case": "flight-via-recipe",
+      "category": "unsupported",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 0,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "flight-via-recipe",
+      "category": "unsupported",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 1,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "flight-via-recipe",
+      "category": "unsupported",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 2,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "refuse-available-advice",
+      "category": "unsupported",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 0,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "refuse-available-advice",
+      "category": "unsupported",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 1,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "refuse-available-advice",
+      "category": "unsupported",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 2,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "invented-tool-name",
+      "category": "unsupported",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 0,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "invented-tool-name",
+      "category": "unsupported",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 1,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "invented-tool-name",
+      "category": "unsupported",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 2,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "invented-chicago-coordinates",
+      "category": "hallucinated",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 0,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "invented-chicago-coordinates",
+      "category": "hallucinated",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 1,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "invented-chicago-coordinates",
+      "category": "hallucinated",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 2,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "invented-news-country",
+      "category": "hallucinated",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 0,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "invented-news-country",
+      "category": "hallucinated",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 1,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "invented-news-country",
+      "category": "hallucinated",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 2,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "invented-pinterest-user",
+      "category": "hallucinated",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 0,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "invented-pinterest-user",
+      "category": "hallucinated",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 1,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "invented-pinterest-user",
+      "category": "hallucinated",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 2,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "invented-booking-result",
+      "category": "hallucinated",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 0,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "invented-booking-result",
+      "category": "hallucinated",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 1,
+      "reward": 0.0,
+      "status": "graded"
+    },
+    {
+      "case": "invented-booking-result",
+      "category": "hallucinated",
+      "correct": true,
+      "error": null,
+      "expected_reward": 0.0,
+      "repeat": 2,
+      "reward": 0.0,
+      "status": "graded"
+    }
+  ],
+  "summary": {
+    "accuracy": 0.9833333333333333,
+    "correct": 59,
+    "total": 60
+  },
+  "system_prompt_sha256": "b65a9895aa88fd4c4d79bee3a26316c8a0e23520edf6c241705a75d49c84d7b4"
+}

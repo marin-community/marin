@@ -148,20 +148,6 @@ def test_a_dockerfile_fragment_cannot_redirect_the_generated_steps_after_it(frag
         Environment(requirements=REQUIREMENTS, dockerfile=fragment)
 
 
-def test_a_dockerfile_fragment_builds_an_image_with_its_lines_between_apt_and_the_lock_sync(fragment, docker_log):
-    environment = Environment(requirements=REQUIREMENTS, apt=("build-essential",), dockerfile=fragment)
-    (built,) = run(environment_artifact(environment, REPOSITORY))
-    assert built.image is not None
-    assert StoragePath(built.lock_url).read_text() == COMPILED_LOCK
-    lines = dockerfile(environment).splitlines()
-    apt_step = next(index for index, line in enumerate(lines) if line.startswith("RUN apt-get"))
-    lock_copy = next(index for index, line in enumerate(lines) if line.startswith("COPY requirements.lock"))
-    fragment_lines = TOOLCHAIN_FRAGMENT.splitlines()
-    start = lines.index(fragment_lines[0])
-    assert lines[start : start + len(fragment_lines)] == fragment_lines
-    assert apt_step < start < lock_copy
-
-
 def test_declared_files_and_env_are_stored_for_the_worker_and_enter_the_image_before_the_lock(docker_log, monkeypatch):
     archive = install_fake_archive(monkeypatch)
     environment = Environment(

@@ -12,7 +12,6 @@ for ``taskcompendium.pipeline.source_processing.run_source_pipeline``. SAMPLE/FU
 
 import hashlib
 import json
-import os
 import re
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -73,16 +72,12 @@ from taskcompendium.pipeline.source_verification import SOURCE_VERIFICATION_REVI
 from taskcompendium.pipeline.sources import conversion_shards, source_files_identity, staged_files
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
 from taskcompendium.runtime.local import LOCK_FILE, LocalGraderMachines
+from verifyit.modes.grade_judge import JudgeConnection
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.runners import SubprocessRunner
 
-from experiments.post_training.glm import (
-    GLM_BULK_TOKEN_ENV,
-    GLM_REQUEST_ATTEMPTS,
-    GLM_REQUEST_TIMEOUT,
-    resolve_glm_base_url,
-)
+from experiments.post_training.glm import GLM_REQUEST_ATTEMPTS, GLM_REQUEST_TIMEOUT, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
@@ -298,11 +293,17 @@ class CampaignMachines:
         )
 
 
-def _reviewer(review: ReviewConfig, base_url: str, *, review_cache: str, review_concurrency: int) -> Reviewer:
-    token = os.environ[GLM_BULK_TOKEN_ENV]
+def _reviewer(
+    review: ReviewConfig,
+    base_url: str,
+    api_key: str,
+    *,
+    review_cache: str,
+    review_concurrency: int,
+) -> Reviewer:
     if review.mode == ReviewMode.CHAT:
         return ChatReviewer(
-            OpenAIChatClient(base_url, token, timeout=GLM_REQUEST_TIMEOUT),
+            OpenAIChatClient(base_url, api_key, timeout=GLM_REQUEST_TIMEOUT),
             review.model,
             review.model_revision,
             query_cache_root=review_cache,
@@ -310,7 +311,7 @@ def _reviewer(review: ReviewConfig, base_url: str, *, review_cache: str, review_
             max_batch_bytes=review.max_batch_bytes,
         )
     return BatchReviewer(
-        OpenAIBatchClient(base_url, token, timeout=GLM_REQUEST_TIMEOUT, request_attempts=GLM_REQUEST_ATTEMPTS),
+        OpenAIBatchClient(base_url, api_key, timeout=GLM_REQUEST_TIMEOUT, request_attempts=GLM_REQUEST_ATTEMPTS),
         review.model,
         review.model_revision,
         query_cache_root=review_cache,
@@ -378,19 +379,29 @@ def _source_config(
 
 
 def _execution_config(
-    settings: RecipeSettings, config: SourcePipelineConfig, rubric: str | None
+    settings: RecipeSettings, config: SourcePipelineConfig, rubric: str | None, controls: Controls | None
 ) -> SourcePipelineConfig:
-    if rubric is None or config.execution.reviewer is not None:
+    needs_reviewer = rubric is not None and config.execution.reviewer is None
+    needs_judge = controls is not None and settings.api_key is not None and config.judge_connection is None
+    if not needs_reviewer and not needs_judge:
         return config
-    if settings.review_cache is None:
-        raise click.UsageError("Recipe review requires --review-cache")
-    reviewer = _reviewer(
-        cast(ReviewConfig, config.review),
-        settings.base_url if settings.base_url is not None else resolve_glm_base_url(settings.relay_job),
-        review_cache=settings.review_cache,
-        review_concurrency=settings.review_concurrency,
-    )
-    return replace(config, execution=replace(config.execution, reviewer=reviewer))
+    if settings.api_key is None:
+        raise click.UsageError("Recipe review and judge controls require an API key")
+    base_url = settings.base_url if settings.base_url is not None else resolve_glm_base_url(settings.relay_job)
+    if needs_reviewer:
+        if settings.review_cache is None:
+            raise click.UsageError("Recipe review requires --review-cache")
+        reviewer = _reviewer(
+            cast(ReviewConfig, config.review),
+            base_url,
+            settings.api_key,
+            review_cache=settings.review_cache,
+            review_concurrency=settings.review_concurrency,
+        )
+        config = replace(config, execution=replace(config.execution, reviewer=reviewer))
+    if needs_judge:
+        config = replace(config, judge_connection=JudgeConnection(base_url, settings.api_key))
+    return config
 
 
 def process_rows(source: RlDataSource[CurationRecipe], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
@@ -742,7 +753,7 @@ def _run_source(
         built = EnvironmentArtifact.raw_load(run.grader_artifact) if run.grader_artifact is not None else None
         grader_environment = environment_requirements(pipeline.grader, built)
     assert options.recipe_settings is not None
-    config = _execution_config(options.recipe_settings, config, pipeline.rubric)
+    config = _execution_config(options.recipe_settings, config, pipeline.rubric, pipeline.controls)
     _validate_input_identity(pipeline, options.inputs, run.identity)
     file_overrides = (
         {name: SourceFileOverride(**file) for name, file in run.identity["input_overrides"]["files"].items()}

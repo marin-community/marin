@@ -31,7 +31,10 @@ echo "$*" >> "$FAKE_DOCKER_LOG"
 case "$1 $2" in
   "buildx version") echo "github.com/docker/buildx v0.0.0-fixture" ;;
   "buildx build") ;;
-  "buildx imagetools") printf '{"digest": "sha256:%s"}' "$(printf %s "$4" | sha256sum | cut -d' ' -f1)" ;;
+  "buildx imagetools")
+    digest=$(printf %s "$4" |
+      python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
+    printf '{"digest": "sha256:%s"}' "$digest" ;;
   *) exit 1 ;;
 esac
 """
@@ -47,7 +50,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 while IFS= read -r requirement; do
-  printf '%s \\\\\\n    --hash=sha256:%s\\n' "$requirement" "$(printf %s "$requirement" | sha256sum | cut -d' ' -f1)"
+  digest=$(printf %s "$requirement" |
+    python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
+  printf '%s \\\\\\n    --hash=sha256:%s\\n' "$requirement" "$digest"
 done < "$source" > "$output"
 """
 

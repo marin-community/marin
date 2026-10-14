@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from verifyit.spec import ExactSpec, PredictedActionSpec, Spec, StructuredExactSpec
+from verifyit.spec import ExactSpec, JudgeSpec, PredictedActionSpec, Spec, StructuredExactSpec
 
 from taskcompendium.direct_chat import unsupported_direct_chat_features
 from taskcompendium.models import (
@@ -63,9 +63,26 @@ def accepted_submission_types(verifier: Spec) -> tuple[type[Submission], ...]:
         return (JsonSubmission, StateSubmission)
     if isinstance(verifier, PredictedActionSpec):
         return (ActionSubmission,)
+    if isinstance(verifier, JudgeSpec):
+        return (TextSubmission, ActionSubmission)
     if isinstance(verifier, ExactSpec):
         return (TextSubmission, JsonSubmission, StateSubmission)
     return (TextSubmission,)
+
+
+def native_action_text(message: TextMessage | AssistantToolCalls) -> str:
+    """Serialize a typed final action for a private semantic judge, omitting transport call IDs."""
+    if isinstance(message, TextMessage):
+        value: dict[str, Any] = {"type": "message", "content": message.content}
+    elif len(message.calls) == 1:
+        call = message.calls[0]
+        value = {"type": "function_call", "name": call.name, "arguments": call.arguments}
+    else:
+        value = {
+            "type": "function_call_batch",
+            "calls": [{"name": call.name, "arguments": call.arguments} for call in message.calls],
+        }
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
 @dataclass(frozen=True)
