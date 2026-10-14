@@ -1,0 +1,20 @@
+[
+  {
+    "run": "sc-qwen-transfer-curriculum-tis-s1-main-interactive-a1-01a126ce",
+    "state": "submitted",
+    "cluster": "cw-us-east-02a",
+    "priority": "interactive",
+    "updates": 300,
+    "retired_owned_queued_predecessor": "sc-qwen-transfer-curriculum-tis-s1-main-rno-a1-01a126ce",
+    "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/curriculum-tis-s1-main-interactive-a1-submit.log"
+  },
+  {
+    "run": "sc-qwen-transfer-optimizer-tis-s0-main-interactive-a1-01a126ce",
+    "state": "submitted",
+    "cluster": "cw-us-east-02a",
+    "priority": "interactive",
+    "updates": 300,
+    "retired_owned_queued_predecessor": "sc-qwen-transfer-optimizer-tis-s0-main-rno-a1-01a126ce",
+    "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/optimizer-tis-s0-main-interactive-a1-submit.log"
+  }
+]
