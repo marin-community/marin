@@ -241,7 +241,7 @@ class ReplContext:
             def _reload(_current_model: LmHeadModel) -> LmHeadModel:
                 return model
 
-            self.server.reload(_reload)
+            self.server.reload(_reload, expected_version=self.server.model_version)
         else:
             with self.config.trainer.use_device_mesh():
                 self.server = InferenceServer.create(self.config.server, model=model, tokenizer=loaded_tokenizer)
