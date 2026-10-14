@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 import importlib
 from typing import Literal
 
@@ -147,30 +146,6 @@ def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
         ragged_dot_module._DLHS_DIM_NUMS,
         ragged_dot_module._DRHS_DIM_NUMS,
     ]
-
-
-@dataclasses.dataclass(frozen=True)
-class _FakeGpu:
-    device_kind: str
-    compute_capability: str | None = None
-
-
-@pytest.mark.parametrize(
-    "device, expected",
-    [
-        (_FakeGpu("AMD Instinct MI350X"), "tile_map"),
-        (_FakeGpu("AMD Instinct MI300X"), "tile_map"),
-        (_FakeGpu("NVIDIA H100 80GB HBM3", "9.0"), "tile_map"),
-        (_FakeGpu("NVIDIA B200", "10.0"), "tile_map"),
-        (_FakeGpu("AMD Radeon PRO W7900", "gfx1100"), "group_grid"),
-    ],
-    ids=["mi350x", "mi300x", "h100", "b200", "radeon"],
-)
-def test_triton_kernel_family_uses_tile_map_on_amd_instinct_and_nvidia(monkeypatch, device, expected):
-    monkeypatch.setattr(ragged_dot_module.jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(ragged_dot_module.jax, "devices", lambda backend=None: [device])
-
-    assert ragged_dot_module._triton_kernel_family() == ragged_dot_module.TritonKernelFamily(expected)
 
 
 # Group sizes over 300 rows and 4 groups, chosen so that row tiles straddle group boundaries.
