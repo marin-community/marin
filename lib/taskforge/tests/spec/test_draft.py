@@ -35,6 +35,7 @@ from taskcompendium.models import (
     JsonValueAnswer,
     NoGrader,
     PlainText,
+    ResourceGroups,
     RewardFileFormat,
     ScriptGrader,
     Source,
@@ -62,6 +63,7 @@ from taskforge.spec.draft import (
     FILESYSTEM_CAPABILITY,
     GRADER_VERDICT_PATH,
     LOCAL_CPYTHON,
+    LOCAL_READ_ONLY_ROOTS,
     PYTHON_GRADER_ARGV,
     SHELL_CAPABILITY,
     MachineSettings,
@@ -737,3 +739,21 @@ def test_a_package_machine_takes_no_image_and_one_requirement_per_package():
         requirements(image=IMAGE, packages=("numpy",))
     with pytest.raises(ValueError, match="without pip options"):
         requirements(image=None, packages=("numpy pandas\nscipy",))
+
+
+def test_a_grader_base_task_writing_under_a_read_only_root_keeps_its_image_on_the_local_host():
+    """Files the task ships under /opt cannot land on the local backend, so the task machine stays a container."""
+    shipped = cpython_task().model_copy(
+        update={"resources": ResourceGroups(worker=(file("opt/audit/README.md", "audit"),))}
+    )
+    lowered = lower_on_iris(shipped, (Backend.GVISOR, Backend.LOCAL))
+    plain = lower_on_iris(cpython_task(), (Backend.GVISOR, Backend.LOCAL))
+
+    assert machine_sources(lowered)[0] == ("gvisor", RegistryImage(GRADER_BASE_IMAGE))
+    assert machine_sources(lowered)[1] == ("local", LOCAL_CPYTHON)
+    assert machine_sources(plain)[0] == ("local", LOCAL_CPYTHON)
+
+
+def test_the_local_read_only_roots_match_shellbox():
+    local = pytest.importorskip("shellbox.backends.local.machine", reason="the local backend imports on Linux only")
+    assert LOCAL_READ_ONLY_ROOTS == local.SYSTEM_DIRECTORIES
