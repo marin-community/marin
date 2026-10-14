@@ -16,10 +16,10 @@ rung predicts the d6144 hero. ``d6144`` is the hero itself.
     d2048   11    11264    20072  every 5%    final only    926B    1.2B   27.7B    9.2e21
     d6144   11    11264   390251  every 3000  every 6k       18T     23B     535B    2.7e24
 
-At 4K, train batch is 1024 x racks; longer contexts shrink it to preserve tokens per step. Eval
-batch is 64 x racks (one sequence per device). Tokens/steps hold 791 tokens per active parameter
-(18T at d6144); FLOPs are the levanter analytic estimate (forward+backward, including attention and
-the latent-MoE correction).
+At 4K, train batch is 1024 x racks; longer contexts shrink it to preserve tokens per step (the d6144
+hero trains at 16K with batch 2816 from step 257553). Eval batch is 64 x racks (one sequence per
+device). Tokens/steps hold 791 tokens per active parameter (18T at d6144); FLOPs are the levanter
+analytic estimate (forward+backward, including attention and the latent-MoE correction).
 
 Changelog:
     2026-09-02 (#8818, PR #8833): decoupled weight decay on the attn_gate and router weights is on by

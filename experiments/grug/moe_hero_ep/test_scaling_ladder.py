@@ -141,12 +141,9 @@ def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
     ]
 
 
-@pytest.mark.parametrize(
-    ("size", "num_steps", "expected_simulated_epoching"),
-    [("d2048", None, True), ("d6144", None, False)],
-)
-def test_scaling_ladder_disables_simulated_epoching_above_flop_limit(size, num_steps, expected_simulated_epoching):
-    step = build_ladder_run(run_id=f"test-{size}", size=size, num_steps=num_steps, version="2026.08.18")
+@pytest.mark.parametrize(("size", "expected_simulated_epoching"), [("d2048", True), ("d6144", False)])
+def test_scaling_ladder_disables_simulated_epoching_above_flop_limit(size, expected_simulated_epoching):
+    step = build_ladder_run(run_id=f"test-{size}", size=size, version="2026.08.18")
     ctx = StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps)
 
     data = step.build_config(ctx).data

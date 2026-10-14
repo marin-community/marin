@@ -338,8 +338,8 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
     --version dev --run
 ```
 
-The default batch, 256 at 16K, keeps the production local batch of 4 sequences per GPU. The trace does not include
-the 11-rack `replica_dcn` collectives or their global histogram reduction.
+The default batch, 256 at 16K, keeps the production local batch of 4 sequences per GPU. The trace
+does not include the 11-rack `replica_dcn` collectives or their global histogram reduction.
 
 ### Profile-guided scheduling
 
@@ -435,11 +435,11 @@ checkpoint policy all follow `--size`:
 | d1024 | 2 | 2048 | 15,276 | every 5% | final only |
 | d1536 | 6 | 6144 | 15,128 | every 5% | final only |
 | d2048 | 11 | 11264 | 20,072 | every 5% | final only |
-| d6144 | 11 | 11264 | 390,251 | every 3000 | every 6k |
+| d6144 | 11 | 11264 at 4K, 2816 at 16K | 390,251 | every 3000 | every 6k |
 
-At 4K, train batch is 1024 × racks; longer contexts shrink it to keep the tokens per step (2816 for
-the d6144 hero at 16K); eval batch is 64 × racks (one sequence per device). The step budget is
-791 tokens per active parameter (18T at d6144); pass `--num-steps` to override.
+At 4K, train batch is 1024 × racks; longer contexts shrink it to keep the tokens per step. Eval
+batch is 64 × racks (one sequence per device). The step budget is 791 tokens per active parameter
+(18T at d6144); pass `--num-steps` to override.
 
 A rung resumes from the newest checkpoint it finds. The permanent checkpoints above go to the
 durable output root, and a rolling temporary checkpoint every hour goes to region-local temp
