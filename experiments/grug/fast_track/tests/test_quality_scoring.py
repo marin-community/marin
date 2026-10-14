@@ -125,8 +125,9 @@ def test_text_scorer_selects_only_after_the_deterministic_raw_prefix(raw_pool, z
 
 
 def test_embedding_scorer_receives_id_aligned_cached_features(raw_pool, zephyr_context, tmp_path, monkeypatch):
+    monkeypatch.setattr("experiments.grug.fast_track.quality_features.hero_data.MANIFEST_PREFIX", str(tmp_path))
     monkeypatch.setattr(
-        "experiments.grug.fast_track.quality_features.hero_data.harrier", lambda _source: str(tmp_path / "harrier")
+        "experiments.grug.fast_track.quality_features.hero_data.pinned_map", lambda _stage: {"source": "harrier"}
     )
 
     class EmbeddingScorer:
