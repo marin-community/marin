@@ -1,0 +1,71 @@
+{
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "configs": [
+    {
+      "arm": "sc",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v5/batching-sc-s0.yaml",
+      "sha256": "43f8ce47ed842e182574a72d288f6d1a91df86c302e6d666e2742c2327d34b18",
+      "cluster": "cw-us-east-02a",
+      "priority": "interactive",
+      "scientific_controller_attempt": 0
+    },
+    {
+      "arm": "tis",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v5/batching-tis-s0.yaml",
+      "sha256": "f2ba5bfc834ba231a5e164999c9022c112bda3e76364f5394612eb3931851122",
+      "cluster": "cw-us-east-02a",
+      "priority": "interactive",
+      "scientific_controller_attempt": 0
+    }
+  ],
+  "scope": "Exploratorypairedseed0 40updates cumulativebatching8groupsx4responses32physicalrows. No populationCI/equivalence. Zero native execution/grading failures in1280training and9036evaluationresponses/arm.",
+  "sc_interruption": "Original40+eval40+checkpoint40 completed beforePodDeleted; complete originaltimestamp-bounded audit passes. Redundantautomaticretrycanceledafteraudit,allallocationscharged.",
+  "sc_controller_rows": [
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "94018e97d2b04d4b",
+      "state": "7",
+      "exit_code": "",
+      "started_at_ms": "1791937965025",
+      "finished_at_ms": "1791939765408",
+      "node_name": "g83d11c",
+      "terminal_reason": "PodDeleted: pod was deleted while the attempt was active"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "474f9520c6571fd1",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1791937965025",
+      "finished_at_ms": "1791939765408",
+      "node_name": "g845f9c",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce/0",
+      "attempt_id": "1",
+      "attempt_uid": "11501408096bc85e",
+      "state": "6",
+      "exit_code": "",
+      "started_at_ms": "1791939771412",
+      "finished_at_ms": "1791940216977",
+      "node_name": "g83d11c",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce/1",
+      "attempt_id": "1",
+      "attempt_uid": "34d35c71df5fce3d",
+      "state": "6",
+      "exit_code": "",
+      "started_at_ms": "1791939771412",
+      "finished_at_ms": "1791940216977",
+      "node_name": "g845f9c",
+      "terminal_reason": ""
+    }
+  ],
+  "preserved_original_exports": "qwen_batching_and_optimizer_interrupted_attempts.json",
+  "final_main_horizon": 1200
+}

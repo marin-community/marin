@@ -1,0 +1,11 @@
+{
+  "run_id": "sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "scientific_controller_attempt": 0,
+  "objects": 343,
+  "bytes": 8388182279,
+  "manifest_sha256": "6c30a194994fcda8d23b9f86104ef9620d38d24130c0964635e3ef612b127873",
+  "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce/preserved-controller-attempt0-before-restart/completed-scientific-attempt-manifest.json",
+  "scope": "Complete audited original40 scientific attempt: selected native archives plus20 final checkpoint objects. Mutable metrics/captures are preserved by the separate snapshot manifest. Conditional same-bucket server copy preserves original ETags and bytes; underlying pod deletion is separately retained.",
+  "complete": true
+}

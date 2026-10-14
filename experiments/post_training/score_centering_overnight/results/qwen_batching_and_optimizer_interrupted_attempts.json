@@ -1,0 +1,110 @@
+{
+  "attempts": [
+    {
+      "job_id": "/romain/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "94018e97d2b04d4b",
+          "state": "7",
+          "exit_code": "",
+          "started_at_ms": "1791937965025",
+          "finished_at_ms": "1791939765408",
+          "node_name": "g83d11c",
+          "terminal_reason": "PodDeleted: pod was deleted while the attempt was active"
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "474f9520c6571fd1",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791937965025",
+          "finished_at_ms": "1791939765408",
+          "node_name": "g845f9c",
+          "terminal_reason": ""
+        }
+      ],
+      "controller_attempt": 0,
+      "surviving_published_updates": 40,
+      "objects": 83,
+      "bytes": 76489808,
+      "manifest_sha256": "edf873d8a9d1a20592830ed4cd108a5bf60043b8be756a5fd601d9cd4475d835",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce/preserved-controller-attempt0-before-restart/snapshot-manifest.json",
+      "scope": "Surviving original metrics, learner captures and trajectory exports written before terminal attempt0 interruption. Conditional same-bucket copy preserves bytes and provenance. Runtime groups/logs are promoted separately. This partial attempt does not establish a final endpoint."
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "6a5d18720c51eaf5",
+          "state": "10",
+          "exit_code": "137",
+          "started_at_ms": "1791937302513",
+          "finished_at_ms": "1791939826537",
+          "node_name": "g538126",
+          "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: eafd757b-a184-4a2a-a2cd-2047fc9c0731, JobUID: d27592aa-0ce2-4bd5-b553-57be4e64479d) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "cfa337067a4cc4d4",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791937302513",
+          "finished_at_ms": "1791939826537",
+          "node_name": "g538314",
+          "terminal_reason": ""
+        }
+      ],
+      "controller_attempt": 0,
+      "surviving_published_updates": 18,
+      "objects": 39,
+      "bytes": 35790857,
+      "manifest_sha256": "d425f834a474584229731ebc2e8388255303aca043fa45d9c6d88f47d8f5b219",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce/preserved-controller-attempt0-before-restart/snapshot-manifest.json",
+      "scope": "Surviving original metrics, learner captures and trajectory exports written before terminal attempt0 interruption. Conditional same-bucket copy preserves bytes and provenance. Runtime groups/logs are promoted separately. This partial attempt does not establish a final endpoint."
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "b9b907c876ada752",
+          "state": "10",
+          "exit_code": "137",
+          "started_at_ms": "1791937313410",
+          "finished_at_ms": "1791939608057",
+          "node_name": "g53c548",
+          "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 3601d7dc-cbc7-4ebf-90d5-61fd86ef209a, JobUID: bf5d33c1-bb65-4699-9e1c-ea96da43b647) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "38ac77cf9875814b",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791937313410",
+          "finished_at_ms": "1791939608057",
+          "node_name": "g5b3bc4",
+          "terminal_reason": ""
+        }
+      ],
+      "controller_attempt": 0,
+      "surviving_published_updates": 16,
+      "objects": 35,
+      "bytes": 31745367,
+      "manifest_sha256": "c644ed345e3844341517013897bf8567e9e49c226e1c03f44ff84216ea684665",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce/preserved-controller-attempt0-before-restart/snapshot-manifest.json",
+      "scope": "Surviving original metrics, learner captures and trajectory exports written before terminal attempt0 interruption. Conditional same-bucket copy preserves bytes and provenance. Runtime groups/logs are promoted separately. This partial attempt does not establish a final endpoint."
+    }
+  ],
+  "basis": "Observed PodDeleted/Kueuepreemption, originalbytes preserved conditionally before restartoverwrites; every attempt fully charged; scientific endpoints still require completeaudit."
+}
