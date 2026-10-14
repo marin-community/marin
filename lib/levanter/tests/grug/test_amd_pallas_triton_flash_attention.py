@@ -9,7 +9,7 @@ from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mes
 from jax.sharding import PartitionSpec as P
 
 from levanter.grug.attention import AttentionMask, reference_attention
-from levanter.grug.attention._pallas_triton_flash import TritonFlashBlockSizes, pallas_triton_flash_attention
+from levanter.grug.attention._amd_pallas_triton_flash import TritonFlashBlockSizes, pallas_triton_flash_attention
 
 # On a GPU the kernels compile through Triton; elsewhere they run in the Pallas interpreter.
 INTERPRET = jax.default_backend() != "gpu"

@@ -453,7 +453,7 @@ def attention(
 
         return gpu_fa4_cute_sm100_attention(q, k, v, mask)
     if implementation == "gpu_pallas_triton_flash":
-        from levanter.grug.attention._pallas_triton_flash import pallas_triton_flash_attention  # noqa: PLC0415
+        from levanter.grug.attention._amd_pallas_triton_flash import pallas_triton_flash_attention  # noqa: PLC0415
 
         if not isinstance(mask, AttentionMask):
             raise NotImplementedError("gpu_pallas_triton_flash needs an AttentionMask, not a dense mask or None.")
