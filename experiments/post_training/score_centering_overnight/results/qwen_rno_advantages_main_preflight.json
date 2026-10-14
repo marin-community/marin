@@ -1,0 +1,79 @@
+{
+  "configs": [
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/advantages-sc-s0.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v5/advantages-sc-s0.yaml",
+      "run": "sc-qwen-transfer-advantages-sc-s0-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "70b235c298e5a7d4a52291d7271ec4075829476e74ee22fdea275c9808755594",
+      "scientific_recipe_unchanged": true,
+      "submission_gate": "Complete advantages40 paired pilot audit; firstactualmain capture before other5"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/advantages-sc-s1.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v5/advantages-sc-s1.yaml",
+      "run": "sc-qwen-transfer-advantages-sc-s1-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "8e87c75d049d6503153dae2e087ab10b2702d375db01c920a045d38e8c83952b",
+      "scientific_recipe_unchanged": true,
+      "submission_gate": "Complete advantages40 paired pilot audit; firstactualmain capture before other5"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/advantages-sc-s2.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v5/advantages-sc-s2.yaml",
+      "run": "sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "c0382143d2cc83231f979cec2757bec72ffe36a9159acf4ba7d34a3c4dd30cfc",
+      "scientific_recipe_unchanged": true,
+      "submission_gate": "Complete advantages40 paired pilot audit; firstactualmain capture before other5"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/advantages-tis-s0.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v5/advantages-tis-s0.yaml",
+      "run": "sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "1a181c5161cfe4e8c455bc3d095559c8aa5b73927bd6c2f7fcebdf3b44ae855f",
+      "scientific_recipe_unchanged": true,
+      "submission_gate": "Complete advantages40 paired pilot audit; firstactualmain capture before other5"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/advantages-tis-s1.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v5/advantages-tis-s1.yaml",
+      "run": "sc-qwen-transfer-advantages-tis-s1-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "67cdb96c62735e54b07abf1ca26dce84d9d93e4f2e4f3763d8fcc5d79a995aa7",
+      "scientific_recipe_unchanged": true,
+      "submission_gate": "Complete advantages40 paired pilot audit; firstactualmain capture before other5"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/advantages-tis-s2.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v5/advantages-tis-s2.yaml",
+      "run": "sc-qwen-transfer-advantages-tis-s2-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "cd4a673fb3d409d36014297d0b21b6657f9c261593b88e38ca2be6566f8aeede",
+      "scientific_recipe_unchanged": true,
+      "submission_gate": "Complete advantages40 paired pilot audit; firstactualmain capture before other5"
+    }
+  ],
+  "all_preflights_passed": true,
+  "submitted": false,
+  "first_main_capture_gate": true
+}
