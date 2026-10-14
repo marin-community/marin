@@ -4,9 +4,9 @@
 """H100 dense-vs-MoE scaling ladder for the 16k-vocab BPE tokenizer study.
 
 Rungs d512 / d768 / d1024 / d1280 map the model, data, and optimizer onto Hopper nodes. This command
-trains on the in-region 16k BPE flat cache. The Hero-mix and quality tracks supply their own
-``TrainingSource``. Each variant (dense / MoE) has a baseline recipe. A run data-matches or
-compute-matches it (``--match``, default data), or sets ``--batch-size`` / ``--num-steps`` explicitly.
+trains on the in-region 16k BPE flat cache. The quality track supplies its own ``TrainingSource``.
+Each variant (dense / MoE) has a baseline recipe. A run data-matches or compute-matches it
+(``--match``, default data), or sets ``--batch-size`` / ``--num-steps`` explicitly.
 See README.md for launch commands.
 """
 
@@ -537,17 +537,6 @@ def rung_options[F: Callable[..., object]](command: F) -> F:
         command
     )
     return click.option("--size", type=click.Choice(H100_LADDER_SIZES), default="d512", show_default=True)(command)
-
-
-def ladder_options[F: Callable[..., object]](command: F) -> F:
-    """Add the rung, token budget, and seed options of a fast-track training command."""
-    command = seed_options(command)
-    command = click.option("--num-steps", type=click.IntRange(min=1), default=None)(command)
-    command = click.option("--batch-size", type=click.IntRange(min=1), default=None)(command)
-    command = click.option(
-        "--match", type=click.Choice([mode.value for mode in MatchMode]), default="data", show_default=True
-    )(command)
-    return rung_options(command)
 
 
 def _submit_to_cluster(run_id: str, *, target_cluster: str) -> NoReturn:

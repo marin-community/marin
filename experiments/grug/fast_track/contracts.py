@@ -82,7 +82,7 @@ def require_tokenizer_content(name: str, expected_hash: str, *, owner: str) -> N
 
 def adopt_artifact_path[A: Artifact](path: str, *, kind: type[A]) -> ArtifactStep[A]:
     """Adopt a completed artifact by path, with a name that the path identifies."""
-    digest = hashlib.sha256(path.encode()).hexdigest()[:20]
+    digest = hashlib.sha256(path.encode()).hexdigest()[:STEP_NAME_DIGEST_CHARS]
     artifact_name = f"fast-track/adopted/{kind.__name__}/{digest}"
     version = resolve_version(artifact_name, None)
     return ArtifactStep.adopt(user_namespaced_name(artifact_name, version), version, path, kind=kind)

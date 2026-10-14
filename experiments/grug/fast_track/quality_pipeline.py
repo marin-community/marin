@@ -60,6 +60,7 @@ from experiments.grug.fast_track.quality_features import (
 )
 from experiments.grug.fast_track.quality_labels import FittedRidgeQualityHead
 from experiments.grug.fast_track.ranked_pool import (
+    RANGE_FILE_PREFIX,
     PrefixResult,
     RangeTokenTotal,
     RankedPool,
@@ -586,7 +587,7 @@ def materialize_selected_pool(selected: SelectedQualityPool, *, ctx: ZephyrConte
 
     def write_selected_range(raw_shard_index: int, locators: Iterator[dict]) -> RangeTokenTotal:
         source_path = raw_paths[raw_shard_index]
-        path = prefix_join(output_path, f"range-{raw_shard_index:05d}.parquet")
+        path = prefix_join(output_path, f"{RANGE_FILE_PREFIX}{raw_shard_index:05d}.parquet")
         locator = next(locators, None)
         tokens = 0
 
