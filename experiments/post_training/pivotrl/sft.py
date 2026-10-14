@@ -17,7 +17,7 @@ import importlib
 import json
 import math
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import islice
 from typing import Any, Protocol
 
@@ -30,6 +30,8 @@ from fray.types import ResourceConfig
 from levanter.optim.config import AdamConfig
 from levanter.tokenizers import load_tokenizer
 from levanter.utils.mesh import MeshConfig
+from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
+from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.model_config import ModelConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
@@ -39,7 +41,7 @@ from marin.experiment.checkpoints import hf_to_levanter
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.nemotron_pivot import VALIDATION_FILENAME
-from marin.rl.pass_rates import PASS_RATES_FILENAME, PassRateTask
+from marin.rl.pass_rates import PASS_RATES_FILENAME, PassRateSampling, PassRateTask, measure_pass_rates
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
@@ -64,6 +66,7 @@ from experiments.sft.launcher import (
     SFTSpec,
     resources_from_accelerator,
     sft_step,
+    ttl_output_path,
 )
 
 EXAMPLES_GLOB = "train-*.jsonl.gz"
@@ -582,6 +585,88 @@ GRUG_K16_GRID_RUNS = (*k16_grid_runs(SWE_GRUG, SWE_GRID_BUDGET), *k16_grid_runs(
 SFT_RUNS = {run.name: run for run in (*QWEN_SMOKE_SFT_RUNS, *GRUG_SMOKE_SFT_RUNS, *GRUG_K16_GRID_RUNS)}
 
 
+def measure_checkpoint_pass_rates(
+    *,
+    checkpoint_path: str,
+    hf_step: int,
+    base_model: ModelConfig,
+    model_name: str,
+    rows_path: str,
+    rows_filename: str,
+    output_path: str,
+    task: str,
+    accelerator: AcceleratorChoice,
+    sampling: PassRateSampling,
+) -> None:
+    """:func:`measure_pass_rates` for an SFT run's final HF export, served like ``base_model``."""
+    location = f"{ttl_output_path(checkpoint_path, CHECKPOINT_TTL_DAYS)}/hf/step-{hf_step}"
+    model = replace(
+        base_model,
+        name=model_name,
+        location=location,
+        revision=None,
+        tokenizer=base_model.location,
+        tokenizer_revision=base_model.revision,
+    )
+    measure_pass_rates(
+        rows_path=rows_path,
+        rows_filename=rows_filename,
+        output_path=output_path,
+        task=task,
+        model=model,
+        accelerator=accelerator,
+        sampling=sampling,
+    )
+
+
+def heldout_eval_step(run: PivotSFTRun) -> ArtifactStep[Artifact]:
+    """Pass rates of the run's final checkpoint on its dataset's held-out turns, graded like pass rates."""
+    pivots = run.pivots
+    name = f"{pivots.candidates.dataset}-sft-heldout/{run.name}"
+    return apply(
+        user_owned_name(f"pivotrl/{name}"),
+        remote(
+            measure_checkpoint_pass_rates,
+            resources=ResourceConfig.with_cpu(cpu=8, ram="64g"),
+            env_vars=env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS),
+        ),
+        checkpoint_path=pivot_sft_step(run),
+        hf_step=run.budget.steps - 1,
+        base_model=pivots.model,
+        model_name=f"pivotrl-sft-{run.name}",
+        rows_path=full_candidate_step(pivots.candidates),
+        rows_filename=VALIDATION_FILENAME,
+        output_path=OUT,
+        task=pivots.candidates.task,
+        accelerator=pivots.accelerator,
+        sampling=HELDOUT_SAMPLING,
+    )
+
+
+def heldout_baseline_step(pivots: PivotRLRun) -> ArtifactStep[Artifact]:
+    """The untrained policy's pass rates on the same held-out turns."""
+    return apply(
+        user_owned_name(f"pivotrl/{pivots.candidates.dataset}-sft-heldout/{pivots.model.name}"),
+        remote(
+            measure_pass_rates,
+            resources=ResourceConfig.with_cpu(cpu=8, ram="64g"),
+            env_vars=env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS),
+        ),
+        rows_path=full_candidate_step(pivots.candidates),
+        rows_filename=VALIDATION_FILENAME,
+        output_path=OUT,
+        task=pivots.candidates.task,
+        model=pivots.model,
+        accelerator=pivots.accelerator,
+        sampling=HELDOUT_SAMPLING,
+    )
+
+
+# Held-out turns are sampled as pass rates sample candidates, four replies each, so the trained and
+# untrained policies are graded on the same footing.
+HELDOUT_SAMPLING = replace(SWE_GRUG.sampling, samples_per_row=4, seed=0)
+
+
 @click.command(help=__doc__)
 @click.option(
     "--experiment",
@@ -590,9 +675,16 @@ SFT_RUNS = {run.name: run for run in (*QWEN_SMOKE_SFT_RUNS, *GRUG_SMOKE_SFT_RUNS
     multiple=True,
     help="Run to build; repeatable. Default: every run.",
 )
+@click.option("--heldout-eval", is_flag=True, help="Build each run's held-out eval, and the untrained policy's.")
 @build_options
-def main(names: tuple[str, ...]) -> dict[str, ArtifactStep]:
-    return {name: pivot_sft_step(SFT_RUNS[name]) for name in names or SFT_RUNS}
+def main(names: tuple[str, ...], heldout_eval: bool) -> dict[str, ArtifactStep]:
+    runs = [SFT_RUNS[name] for name in names or SFT_RUNS]
+    if not heldout_eval:
+        return {run.name: pivot_sft_step(run) for run in runs}
+    steps = {f"{run.name}/heldout": heldout_eval_step(run) for run in runs}
+    for pivots in {run.pivots.name: run.pivots for run in runs}.values():
+        steps[f"{pivots.name}/heldout"] = heldout_baseline_step(pivots)
+    return steps
 
 
 if __name__ == "__main__":
