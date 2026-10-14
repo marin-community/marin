@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from dataclasses import asdict
+from functools import partial
 
 import click
 import pyarrow.parquet as pq
@@ -16,10 +17,16 @@ from rolloutengine.contracts import ModelRequest, ModelTurn
 from rolloutengine.engine import ShellboxRolloutEngine
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
+from taskcompendium.models import VerifyitGrader
 from verifyit.modes.grade_judge import JudgeConnection
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_url
 from experiments.post_training.task_curation.datasets.nemotron_ultra.calibrate_tool_judge import CASES
+
+
+async def replay(message: dict, request: ModelRequest) -> ModelTurn:
+    # Tokens are placeholders: this probe measures grading, not generation or loss.
+    return ModelTurn(message, (1,), (2,), None, "stop")
 
 
 async def check_grading(data: StoragePath, output: StoragePath, connection: JudgeConnection) -> None:
@@ -39,7 +46,7 @@ async def check_grading(data: StoragePath, output: StoragePath, connection: Judg
             raise ValueError(f"{split} identities differ from the conversion manifest")
         split_counts[split] = len(ids)
         for task in lowered:
-            if "toolcall_schema" in task.task.source.dataset:
+            if isinstance(task.task.grader, VerifyitGrader) and task.task.grader.mode == "judge":
                 row = int(task.task.source.row.rsplit(":", 1)[-1])
                 if row in tasks:
                     raise ValueError(f"Duplicate tool-call source row {row}")
@@ -59,12 +66,8 @@ async def check_grading(data: StoragePath, output: StoragePath, connection: Judg
             ],
         }
 
-        async def replay(request: ModelRequest) -> ModelTurn:
-            # Tokens are placeholders: this probe measures grading, not generation or loss.
-            return ModelTurn(message, (1,), (2,), None, "stop")
-
         record = await ShellboxRolloutEngine(
-            replay, {"daytona": DaytonaMachineFactory()}, judge_connection=connection
+            partial(replay, message), {"daytona": DaytonaMachineFactory()}, judge_connection=connection
         ).run(task)
         result = {
             "case": asdict(case),
