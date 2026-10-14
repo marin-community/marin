@@ -16,7 +16,8 @@ from typing import Any
 
 from pydantic import JsonValue, ValidationError
 
-from taskcompendium.convert.answers import unsupported
+from taskcompendium.chat import message_text
+from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.grader import GraderPackage
 from taskcompendium.models import (
     AnswerType,
@@ -40,23 +41,11 @@ REQUEST_FIELD = "responses_create_params"
 PLACEHOLDER_FIELD = "_hf_question_placeholder"
 STATE_FIELDS = ("environment", "scenario", "info", "metadata", "exp_cal_state")
 """Row fields that describe an agent's initial environment rather than its answer key."""
-TEXT_BLOCKS = frozenset({"input_text", "output_text", "text"})
 
 
 def blend_component(data: Mapping[str, Any]) -> str:
     """The blend component of a row: its ``dataset``, or ``agent:<name>`` for agent-keyed rows."""
     return data.get("dataset") or AGENT_COMPONENT_PREFIX + data["agent_ref"]["name"]
-
-
-def message_text(content: Any) -> str:
-    """Join text blocks, rejecting media rather than silently dropping their context."""
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        raise ValueError("Message content must be text or text blocks")
-    if any(block.get("type") not in TEXT_BLOCKS for block in content):
-        raise ValueError("Unsupported nontext message content")
-    return "".join(block["text"] for block in content)
 
 
 def conversation_events(
@@ -164,6 +153,11 @@ def blend_request(data: Mapping[str, Any]) -> BlendRequest | ImportRejection:
         tools = functions(request.get("tools", []))
     except (ValueError, KeyError, TypeError, ValidationError) as error:
         return unsupported("unsupported_request", str(error))
+    names = set()
+    for tool in tools:
+        if tool.name in names:
+            return source_defect("duplicate_tool_name", tool.name)
+        names.add(tool.name)
     contract = {key: value for key, value in data.items() if key not in {REQUEST_FIELD, "path"}}
     contract["request_options"] = {key: value for key, value in request.items() if key not in {"input", "tools"}}
     reasoning = [item for item in request["input"] if item.get("type") == "reasoning"]

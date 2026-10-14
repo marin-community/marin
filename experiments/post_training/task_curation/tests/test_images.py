@@ -6,6 +6,7 @@
 import hashlib
 import json
 import re
+import shlex
 from dataclasses import replace
 
 import pytest
@@ -15,17 +16,22 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images import __main__ as images
+from experiments.post_training.task_curation.images import build
 from experiments.post_training.task_curation.images.build import (
     IDENTITY_CHARS,
     EnvironmentBuild,
     build_environment,
     built_environment,
+    dockerfile,
     environment_artifact,
     identity_digest,
 )
 from experiments.post_training.task_curation.tests.image_builds import (
+    LOCK,
     REPOSITORY,
+    TOOLCHAIN_FRAGMENT,
     install_fake_build_tools,
+    tracked_fragment,
     tracked_lock,
 )
 
@@ -44,16 +50,37 @@ def lock(tmp_path):
     return tracked_lock(tmp_path)
 
 
+@pytest.fixture
+def fragment(lock):
+    return tracked_fragment(lock)
+
+
 def test_apt_packages_beyond_the_worker_image_push_an_image_and_record_its_digest(docker_log):
     environment = Environment(pypi=("numpy==2.3.5",), apt=("jq",), data=("nltk:punkt_tab",))
     (built,) = run(environment_artifact(environment, REPOSITORY))
     identity = identity_digest(environment)
     tag = f"{REPOSITORY}:task-curation-env-{identity[:IDENTITY_CHARS]}"
-    assert built.tag == tag
     assert built.image == f"{REPOSITORY}@sha256:{hashlib.sha256(tag.encode()).hexdigest()}"
     assert StoragePath(built.lock_url).read_text() == COMPILED
-    assert built.lock_sha256 == hashlib.sha256(COMPILED.encode()).hexdigest()
     assert built_environment(environment) == built
+    commands = [shlex.split(line) for line in docker_log.read_text().splitlines()]
+    export = next(command for command in commands if command[:2] == ["buildx", "build"])
+    parameters = dict(
+        option.split("=", 1)
+        for option in next(arg for arg in export if arg.startswith("--output=")).removeprefix("--output=").split(",")
+    )
+    assert parameters["compression"] == "gzip"
+    assert parameters["force-compression"] == "true"
+
+
+def test_image_serialization_changes_invalidate_built_images_but_preserve_worker_environments(lock, monkeypatch):
+    worker = Environment(lock=lock)
+    image = replace(worker, apt=("jq",))
+    worker_identity = environment_artifact(worker).name
+    image_identity = environment_artifact(image).name
+    monkeypatch.setattr(build, "IMAGE_COMPRESSION", "zstd")
+    assert environment_artifact(worker).name == worker_identity
+    assert environment_artifact(image).name != image_identity
 
 
 @pytest.mark.parametrize(
@@ -84,12 +111,46 @@ def test_an_unchanged_environment_resolves_without_building(lock, docker_log, mo
         pytest.param(lambda environment: replace(environment, lock=None, pypi=("numpy==2.3.5",)), id="pypi"),
         pytest.param(lambda environment: replace(environment, apt=("build-essential",)), id="apt"),
         pytest.param(lambda environment: replace(environment, data=("nltk:wordnet",)), id="data"),
+        pytest.param(
+            lambda environment: replace(environment, dockerfile=tracked_fragment(environment.lock)), id="dockerfile"
+        ),
     ],
 )
 def test_declaration_changes_rename_the_environment_artifact(lock, change):
     environment = Environment(lock=lock)
     original = environment_artifact(environment).name
     assert environment_artifact(change(environment)).name != original
+
+
+def test_editing_a_dockerfile_fragment_renames_the_environment_artifact(lock, fragment):
+    environment = Environment(lock=lock, dockerfile=fragment)
+    original = environment_artifact(environment).name
+    fragment.write_text(TOOLCHAIN_FRAGMENT + "RUN touch /opt/toolchain/patched\n")
+    assert environment_artifact(environment).name != original
+
+
+@pytest.mark.parametrize(
+    "instruction",
+    ["FROM debian:bookworm", "USER 65534", "WORKDIR /lean4", "COPY lean-toolchain /lean4/", 'ENTRYPOINT ["lake"]'],
+)
+def test_a_dockerfile_fragment_cannot_redirect_the_generated_steps_after_it(lock, fragment, instruction):
+    fragment.write_text(TOOLCHAIN_FRAGMENT + f"# {instruction}\nRUN true \\\n    && true\n{instruction}\n")
+    with pytest.raises(ValueError, match=instruction.split()[0]):
+        Environment(lock=lock, dockerfile=fragment)
+
+
+def test_a_dockerfile_fragment_builds_an_image_with_its_lines_between_apt_and_the_lock_sync(lock, fragment, docker_log):
+    environment = Environment(lock=lock, apt=("build-essential",), dockerfile=fragment)
+    (built,) = run(environment_artifact(environment, REPOSITORY))
+    assert built.image is not None
+    assert StoragePath(built.lock_url).read_text() == LOCK
+    lines = dockerfile(environment).splitlines()
+    apt_step = next(index for index, line in enumerate(lines) if line.startswith("RUN apt-get"))
+    lock_copy = next(index for index, line in enumerate(lines) if line.startswith("COPY requirements.lock"))
+    fragment_lines = TOOLCHAIN_FRAGMENT.splitlines()
+    start = lines.index(fragment_lines[0])
+    assert lines[start : start + len(fragment_lines)] == fragment_lines
+    assert apt_step < start < lock_copy
 
 
 def test_the_repository_is_where_a_build_pushes_not_identity(lock):

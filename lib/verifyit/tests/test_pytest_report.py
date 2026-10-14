@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from verifyit.grade import InvalidTask, Status, run
 from verifyit.modes import grade_pytest
-from verifyit.spec import PytestSpec, render_spec
+from verifyit.spec import PytestSpec, parse_spec, render_spec
 from verifyit.spec import TestIdMatching as IdMatching
 
 REAL_TESTS = """
@@ -150,7 +150,46 @@ def test_pytest_restored_source_failure_stays_unscored(tmp_path, implementation,
 def test_pytest_candidate_missing_dependency_stays_unscored(tmp_path):
     workspace = _project(tmp_path, "import missing_dependency\n")
     with pytest.raises(RuntimeError):
-        grade_pytest.grade(_spec(), tmp_path, workspace)
+        grade_pytest.grade(_spec(candidate_modules=("calc",)), tmp_path, workspace)
+
+
+def test_pytest_missing_dependency_imported_by_test_is_invalid_task(tmp_path):
+    workspace = _project(tmp_path, FIXED, "import missing_test_dependency\n")
+    with pytest.raises(InvalidTask, match="missing_test_dependency"):
+        grade_pytest.grade(_spec(paths=("tests/test_calc.py",)), tmp_path, workspace)
+
+
+@pytest.mark.parametrize("module", ["calc", "arithmetic.calc"])
+def test_pytest_missing_declared_candidate_module_scores_zero_then_implementation_passes(tmp_path, module):
+    workspace = _project(tmp_path, FIXED, REAL_TESTS.replace("from calc", f"from {module}"))
+    (workspace / "calc.py").unlink()
+    spec = parse_spec(render_spec(_spec(candidate_modules=(module,))))
+    assert isinstance(spec, PytestSpec)
+    failure = grade_pytest.grade(spec, tmp_path, workspace)
+    assert (failure.status, failure.reward) == (Status.SCORED, 0.0)
+    implementation = workspace.joinpath(*module.split(".")).with_suffix(".py")
+    implementation.parent.mkdir(parents=True, exist_ok=True)
+    implementation.write_text(FIXED)
+    success = grade_pytest.grade(spec, tmp_path, workspace)
+    assert (success.status, success.reward) == (Status.SCORED, 1.0)
+
+
+@pytest.mark.parametrize("namespace", ["app", "candidate"])
+def test_pytest_workspace_imports_declared_namespace_module(tmp_path, namespace):
+    workspace = tmp_path / namespace
+    workspace.mkdir()
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    test = tests_dir / "test_practical.py"
+    test.write_text(f"from {namespace}.practical import add\ndef test_add():\n    assert add(2, 3) == 5\n")
+    spec = _spec(candidate_modules=(f"{namespace}.practical",), paths=(str(test),))
+
+    missing = grade_pytest.grade(spec, tests_dir, workspace)
+    assert (missing.status, missing.reward) == (Status.SCORED, 0.0)
+
+    (workspace / "practical.py").write_text(FIXED)
+    passing = grade_pytest.grade(spec, tests_dir, workspace)
+    assert (passing.status, passing.reward) == (Status.SCORED, 1.0)
 
 
 def test_pytest_missing_candidate_submodule_scores_zero_then_repaired_package_passes(tmp_path):
@@ -395,7 +434,7 @@ def test_pytest_early_candidate_failure_cannot_hide_later_trusted_failure(tmp_pa
     (trusted / "tests").mkdir(parents=True)
     (trusted / "tests/test_protected.py").write_text("import missing_task_dependency\n")
     spec = _spec(paths=(first, "tests/test_protected.py"), batch_size=1, restore=("tests",))
-    with pytest.raises(RuntimeError):
+    with pytest.raises(InvalidTask, match="missing_task_dependency"):
         grade_pytest.grade(spec, trusted, workspace)
 
 

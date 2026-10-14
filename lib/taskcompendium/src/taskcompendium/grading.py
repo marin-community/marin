@@ -90,7 +90,7 @@ def _candidate(verifier: Spec, submission: Submission) -> Candidate:
         case PredictedActionSpec(), ActionSubmission(message=final):
             if not isinstance(final, AssistantToolCalls):
                 return ()
-            return tuple(CandidateCall(call.name, call.arguments) for call in final.calls)
+            return tuple(CandidateCall(call.name, call.object_arguments()) for call in final.calls)
         case ExactSpec(), JsonSubmission(value=value) | StateSubmission(value=value):
             if not isinstance(value, str):
                 raise SubmissionFailure("Text verifier requires a string JSON value")

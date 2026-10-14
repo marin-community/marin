@@ -40,7 +40,10 @@ process exit after a verdict has been written.
 | `script` | legacy `test.sh` fallback with normalized reward files and fail-closed errors |
 
 The `pytest` mode scores startup and collection errors attributed to editable candidate code as failed attempts.
-Missing dependencies, errors in restored task files, and genuine interruptions remain unscored.
+`PytestSpec.candidate_modules` names modules the task asks the candidate to implement.
+Missing imports of those modules score zero, including an empty submission.
+Workspace-qualified candidate packages add the workspace parent to Python's import path.
+Unlisted missing dependencies, errors in restored task files, and genuine interruptions remain unscored.
 `protected_paths_files` lists tests-directory manifests of trusted workspace paths restored by setup.
 Every batch is checked before returning a candidate startup or collection failure.
 
@@ -105,6 +108,13 @@ Verifyit's own attribution category, which determines whether an incomplete atte
 `json_comparison.json_values_equal` compares decoded JSON values with strict types and an optional
 float tolerance. `modes.grade_nl2bash` compares shell-output records as a multiset, preserving
 repeated records and rejecting unexpected errors.
+
+`structure_closure` classifies partial JSON, delimited JSON, paired markers, and required code
+fences. `closure_scoring` compares a completed outer region with a known reference and reports
+syntax, content preservation, and trailing output separately. `tool_call_markup` classifies
+completed `<tool_call>` markup in decoded assistant text. These helpers inspect text; the caller
+retains the sampled tokens, supplies any generation stop markers, and decides when a completed
+attempt can be scored.
 
 `candidate_spec(mode, parameters)` builds and validates the specification of an in-process mode
 from a JSON table. `grade_candidate(spec, candidate, resources)` scores an answer the caller

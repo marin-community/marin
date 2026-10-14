@@ -74,6 +74,7 @@ from .pipeline_stages import (
     SVAMP_RUBRIC,
     convert_svamp,
     fixture_recipe,
+    response,
     review_config,
     review_source,
     run_stages,
@@ -133,41 +134,6 @@ class BatchService:
         return Output("".join(json.dumps(row) + "\n" for row in rows))
 
 
-def response(task_id, confidence="high", quality="good"):
-    verdict = {
-        "task_id": task_id,
-        "quality": quality,
-        "confidence": confidence,
-        "reference_status": "consistent",
-        "defects": [],
-        "evidence": "The prompt supplies two apples and asks for the same count.",
-    }
-    return {
-        "custom_id": task_id,
-        "response": {
-            "status_code": 200,
-            "body": {
-                "choices": [
-                    {
-                        "finish_reason": "tool_calls",
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [
-                                {
-                                    "id": "call-0",
-                                    "type": "function",
-                                    "function": {"name": "review_task", "arguments": json.dumps(verdict)},
-                                }
-                            ],
-                        },
-                    }
-                ]
-            },
-        },
-    }
-
-
 @pytest.fixture
 def svamp_recipe():
     return fixture_recipe(convert_svamp, source=replace(SOURCE_FILES, patterns=("*.jsonl",)))
@@ -192,10 +158,7 @@ def test_review_tasks_propagates_unexpected_response_membership(apple_row, monke
         )
 
 
-def test_audit_reviews_only_eligible_tasks_and_writes_batch_evidence_once(
-    tmp_path, apple_row, svamp_recipe, monkeypatch
-):
-    monkeypatch.setattr("taskcompendium.pipeline.stages.AUDIT_SHARDS", 1)
+def test_audit_reviews_only_eligible_tasks_and_writes_batch_evidence_once(tmp_path, apple_row, svamp_recipe):
     service = BatchService()
     manifest = run_stages(
         svamp_recipe,
@@ -467,10 +430,9 @@ class ConcurrentBatchService(BatchService):
         return submission
 
 
-def test_one_preparation_partition_yields_independent_review_tasks(tmp_path, apple_row, svamp_recipe, monkeypatch):
+def test_one_preparation_partition_yields_independent_review_tasks(tmp_path, apple_row, svamp_recipe):
     # Both batches originate in one preparation partition. Their provider waits
     # can overlap only if preparation persists independently schedulable files.
-    monkeypatch.setattr("taskcompendium.pipeline.stages.AUDIT_SHARDS", 1)
     staged = tmp_path / "staged"
     staged.mkdir()
     rows = [{**apple_row, "Body": f"Person {index} has 2 apples."} for index in range(2)]
@@ -1161,7 +1123,7 @@ def test_trusted_panel_with_defects_infers_unsampled_rows_without_reviewing_them
     reviewer = BatchReviewer(service, "fixture", "quality-panel", max_attempts=1)
     config = review_config(reviewer)
     execution = AuditExecution(max_workers=1, review_batch_size=100, reviewer=reviewer)
-    prepare_source(str(staged), str(prepared), svamp_recipe, None, execution)
+    prepare_source(str(staged), str(prepared), svamp_recipe, None, execution, num_output_shards=1)
     report = assess_source_quality(str(prepared), str(quality), svamp_recipe, config, SourceQualityPolicy(), execution)
     assert report.status == "trust"
     audit_prepared_source(str(prepared), str(quality), str(audited), svamp_recipe, config, execution)
@@ -1212,7 +1174,7 @@ def test_source_quality_gate_reuses_reviews_and_preserves_all_rows(
     reviewer = BatchReviewer(service, "fixture", "quality-panel", max_attempts=1)
     config = review_config(reviewer)
     execution = AuditExecution(max_workers=2, review_batch_size=10, reviewer=reviewer)
-    prepare_source(str(staged), str(prepared), svamp_recipe, None, execution)
+    prepare_source(str(staged), str(prepared), svamp_recipe, None, execution, num_output_shards=1)
     assert not service.batches
     report = assess_source_quality(
         str(prepared),
@@ -1271,7 +1233,7 @@ def test_source_quality_without_eligible_tasks_retains_import_failures(tmp_path,
     config = review_config(reviewer)
     execution = AuditExecution(reviewer=reviewer)
     prepared, quality, audited = (str(tmp_path / name) for name in ("prepared", "quality", "audited"))
-    prepare_source(str(staged), prepared, svamp_recipe, None, execution)
+    prepare_source(str(staged), prepared, svamp_recipe, None, execution, num_output_shards=1)
     report = assess_source_quality(prepared, quality, svamp_recipe, config, SourceQualityPolicy(), execution)
     assert report.status == "reject" and report.population.eligible_count == 0
     assert report.population.input_count == 1 and report.defect_fraction == 1.0

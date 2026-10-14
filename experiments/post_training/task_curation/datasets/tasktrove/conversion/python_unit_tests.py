@@ -4,6 +4,7 @@
 """Self-contained Python implementation tasks graded by one pytest file."""
 
 import ast
+import re
 
 from verifyit.spec import PytestSpec
 
@@ -31,6 +32,23 @@ ORACLE_SCRIPT = """#!/bin/bash
 set -e
 cp /solution/solution.py /app/solution.py
 """
+PUBLIC_MODULE_PATH = re.compile(r"/app/([A-Za-z_]\w*)(?:/|\.py\b)")
+PUBLIC_MODULE_FILE = re.compile(r"(?<![\w/])([A-Za-z_]\w*)\.py\b")
+PUBLIC_APP_PATH = re.compile(r"/app/((?:[A-Za-z_]\w*/)*[A-Za-z_]\w*(?:\.py)?)")
+PUBLIC_APP_IMPORT = re.compile(r"\bfrom\s+app\s+import\b")
+
+
+def public_candidate_modules(instruction: str) -> tuple[str, ...]:
+    """Name modules and packages explicitly requested in the ``/app`` workspace."""
+    relative_files = set(PUBLIC_MODULE_FILE.findall(instruction))
+    modules = set(PUBLIC_MODULE_PATH.findall(instruction)) | relative_files
+    modules.update("app." + module for module in relative_files)
+    if PUBLIC_APP_IMPORT.search(instruction):
+        modules.add("app")
+    for path in PUBLIC_APP_PATH.findall(instruction):
+        parts = path.removesuffix(".py").split("/")
+        modules.update("app." + ".".join(parts[:index]) for index in range(1, len(parts) + 1))
+    return tuple(sorted(modules))
 
 
 def _validated_test_file(task: TaskFiles, test_files: tuple[str, ...]) -> str | Rejected:
@@ -77,11 +95,13 @@ def convert(task: TaskFiles, *, test_files: tuple[str, ...] = TEST_FILES) -> Con
         return solution_files
 
     data_files = {test_file: task.files[test_file], **task.under("setup_files/")}
+    instruction = task.text(INSTRUCTION)
     return ConvertedTask(
-        instruction=task.text(INSTRUCTION),
+        instruction=instruction,
         spec=PytestSpec(
             paths=(f"{TESTS_MOUNT}/{test_file.removeprefix('tests/')}",),
             python="python3",
+            candidate_modules=public_candidate_modules(instruction),
         ),
         dockerfile=task.text(DOCKERFILE),
         tags=("code", "python", "unit-test", "kata"),
