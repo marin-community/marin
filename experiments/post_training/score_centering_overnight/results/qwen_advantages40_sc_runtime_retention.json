@@ -1,0 +1,10 @@
+{
+  "run_id": "sc-qwen-transfer-advantages-sc-s0-pilot-a4-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "objects": 5560,
+  "bytes": 6918416566,
+  "manifest_sha256": "9bd12fea522dd132dbbab2b786f2577d82bd1117f0aeef7538d04eb8150c5c8c",
+  "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s0-pilot-a4-01a126ce/retained-runtime/promotion-manifest-01a126ce.json",
+  "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s.",
+  "complete": true
+}

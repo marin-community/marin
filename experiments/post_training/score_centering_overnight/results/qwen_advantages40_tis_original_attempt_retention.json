@@ -1,0 +1,11 @@
+{
+  "run_id": "sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "scientific_controller_attempt": 0,
+  "objects": 2583,
+  "bytes": 8471719802,
+  "manifest_sha256": "b357a7af2f1a5e0a8c6df2bfb3b532a5a40b3a9c8bc297099b487737dc9b4c7f",
+  "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce/preserved-controller-attempt0-before-restart/completed-scientific-attempt-manifest.json",
+  "scope": "Complete audited original40 scientific attempt: selected native archives plus20 final checkpoint objects. Mutable metrics/captures are preserved by the separate snapshot manifest. Conditional same-bucket server copy preserves original ETags and bytes; underlying pod deletion is separately retained.",
+  "complete": true
+}
