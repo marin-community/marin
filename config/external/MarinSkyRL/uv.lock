@@ -1645,7 +1645,7 @@ schema = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#b1edaa10d59ce9717d4c87f7b7fede119eb011c2" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#b52875912249c86f760f19277f6195e5fa12d7c3" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
