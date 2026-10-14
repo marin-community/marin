@@ -315,15 +315,21 @@ def _segmented_flash_attention_backward_sm100(
         tile_m=tile[0],
         tile_n=tile[1],
     )
-    dpsum, lse_log2 = _native_backward_preprocess(modules, q, out, dout, lse, tile=tile, softmax_scale=softmax_scale)
+    dq_accum_shape, dk_accum_shape, dv_accum_shape = _native_backward_accum_output_shapes(q, k, v, tile)
+    dpsum, lse_log2, dq_accum = _native_backward_preprocess(
+        modules, q, out, dout, lse, tile=tile, softmax_scale=softmax_scale, dq_accum_shape=dq_accum_shape
+    )
     accum_inputs, accum_outputs = _native_backward_accum_specs(modules, vector_elems=8)
+    num_inputs = len(accum_inputs)
     backward = cutlass_call(
         segmented_flash_attention_backward_sm100_launcher(
             modules, head_dim=q.shape[-1], head_dim_v=v.shape[-1], qhead_per_kvhead=ratio, config=config
         ),
-        output_shape_dtype=_native_backward_accum_output_shapes(q, k, v, tile),
-        input_spec=accum_inputs,
+        output_shape_dtype=(dq_accum_shape, dk_accum_shape, dv_accum_shape),
+        input_spec=(*accum_inputs, *accum_outputs),
         output_spec=accum_outputs,
+        # The kernel accumulates into zeroed buffers, which become the outputs in place.
+        input_output_aliases=((num_inputs, 0), (num_inputs + 1, 1), (num_inputs + 2, 2)),
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
@@ -341,6 +347,9 @@ def _segmented_flash_attention_backward_sm100(
         sparse.partial_block_idx,
         sparse.full_block_cnt,
         sparse.full_block_idx,
+        dq_accum,
+        jnp.zeros(dk_accum_shape.shape, dk_accum_shape.dtype),
+        jnp.zeros(dv_accum_shape.shape, dv_accum_shape.dtype),
     )
     return _native_backward_gradients(
         modules,
@@ -430,7 +439,7 @@ def segmented_flash_attention_backward_sm90_native(
     if qhead_per_kvhead == 1:
         raise NotImplementedError("native SM90 backward currently expects GQA so dK/dV accumulators are present.")
     dpsum, lse_log2 = _native_backward_preprocess(
-        modules, q, out, dout, lse, tile=sm90_config.tile, softmax_scale=softmax_scale
+        modules, q, out, dout, lse, tile=sm90_config.tile, softmax_scale=softmax_scale, dq_accum_shape=None
     )
 
     backward_input_spec, backward_output_spec = _native_backward_accum_specs(modules, vector_elems=8)
@@ -478,20 +487,30 @@ def _native_backward_preprocess(
     *,
     tile: tuple[int, int],
     softmax_scale: float,
-) -> tuple[jax.Array, jax.Array]:
+    dq_accum_shape: jax.ShapeDtypeStruct | None,
+) -> tuple[jax.Array, ...]:
+    """Return ``(dpsum, lse_log2)``, plus a zeroed dQ accumulator when ``dq_accum_shape`` is given."""
     inputs, outputs = _native_backward_preprocess_specs(modules, vector_elems=8)
+    output_shapes = _native_backward_preprocess_output_shapes(q, tile)
+    if dq_accum_shape is not None:
+        output_shapes = (*output_shapes, dq_accum_shape)
+        outputs = (*outputs, outputs[0])
     preprocess = cutlass_call(
         native_flash_attention_backward_preprocess_launcher(
-            modules, dtype=q.dtype, head_dim=q.shape[-1], head_dim_v=out.shape[-1], tile_m=tile[0]
+            modules,
+            dtype=q.dtype,
+            head_dim=q.shape[-1],
+            head_dim_v=out.shape[-1],
+            tile_m=tile[0],
+            clears_dq_accum=dq_accum_shape is not None,
         ),
-        output_shape_dtype=_native_backward_preprocess_output_shapes(q, tile),
+        output_shape_dtype=output_shapes,
         input_spec=inputs,
         output_spec=outputs,
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
-    dpsum, lse_log2 = preprocess(out, dout, lse)
-    return dpsum, lse_log2
+    return tuple(preprocess(out, dout, lse))
 
 
 def _native_backward_gradients(
