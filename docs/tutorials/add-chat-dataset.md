@@ -63,6 +63,13 @@ on the assistant message. For tools, pass the recorded definitions through
 the converter can associate results with calls before producing Harmony messages.
 Do not reconstruct tool definitions from observed arguments.
 
+The OpenAI-style adapter also accepts lists of text content blocks. It joins
+their text in order without adding whitespace; nontext blocks are rejected.
+Consecutive user messages are joined with two newlines. Responses API histories
+can record tool calls before a separate assistant text item from the same turn.
+If no tool observation has arrived, the adapter places the text item's analysis
+and commentary before the pending calls. It matches tool observations by call ID.
+
 Some agent datasets use a text protocol instead of API tool calls. Terminus is
 a terminal-agent protocol whose responses are JSON objects with a `commands`
 list and often `analysis`, `plan`, and `task_complete` fields. Its source exports
@@ -143,6 +150,30 @@ next user message, and each call must follow the preceding reply. Parallel calls
 do not trigger this filter. The count is `normalize_chat/repeated_tool_calls_filtered`.
 These filtered records are separate from malformed-record quarantines and the
 5% quarantine health limit.
+
+For preference data that needs repeated tool-call loops as rejected responses, pass
+`repeated_tool_call_policy=RepeatedToolCallPolicy.RETAIN` (import the enum from
+`marin.datakit.chat_normalize`) to
+`normalize_chat_to_parquet` or `normalize_chat_step`. This preserves the calls
+and observations while applying the structural validation used by the default policy.
+
+Offline preference traces may contain malformed generated arguments or calls to
+undeclared tools. Pass `invalid_tool_call_policy=InvalidToolCallPolicy.RETAIN`
+to the OpenAI adapter and chat normalizer to retain those predictions without
+inventing tool definitions. Ordinary SFT rejects them by default. Tool
+definitions and call/observation ordering are still validated.
+
+Parsing can lose sampled text even when it produces a nonempty tool call. For
+audited native traces, store `assistant_literals` as a list of strings in
+`CHAT_SCHEMA`, with one string per consecutive assistant turn. Decode captured
+completion IDs with the collection model's pinned tokenizer, remove its terminal
+EOS and translate reasoning delimiters to Marin format before storing the list.
+The normalizer requires explicit offline retention and includes the literals in
+the content hash. Shared rendering and masked tokenization use each literal as
+the complete assistant body, replacing the parsed prose and calls; tool
+observations retain their normal structure and masks. This preserves malformed
+syntax and loops without serializing a duplicate tool call. Literal capture and
+turn alignment must be audited by the source reader before normalization.
 
 ## 5. Register and verify the source
 
@@ -240,10 +271,13 @@ inference clients and serializes structured tool definitions as JSON. API tool
 reply IDs are resolved to function names; the rendered text omits the IDs. Reasoning
 from earlier turns is retained, and records may end with unanswered tool calls.
 Supported per-record `chat_template_kwargs` are `tools` (a list of
-recorded function definitions), `enable_thinking` (a boolean), and
-`custom_instructions` (a string). Chat normalization sets `enable_thinking` from
-the canonical messages: it is enabled when the conversation contains assistant
-analysis and disabled otherwise. The setting does not remove reasoning.
+recorded function definitions), `enable_thinking` (a boolean or model mode
+string), and `custom_instructions` (a string). For boolean `enable_thinking`,
+normalization sets it to true when assistant analysis is present and false
+otherwise. An explicit mode string, such as
+`chat_template_kwargs={"enable_thinking": "/think"}`, is preserved even when
+the recorded assistant turn has no analysis. `enable_thinking` does not remove
+recorded analysis text from the normalized history.
 
 All rendering helpers are in `marin.datakit.chat_render`.
 For an existing directory of normalized chat Parquet, use

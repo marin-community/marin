@@ -4,6 +4,7 @@
 import abc
 import contextlib
 import dataclasses
+import fnmatch
 import functools
 import json
 import logging
@@ -1288,7 +1289,10 @@ class HFCheckpointConverter(Generic[LevConfig]):
         # as a heuristic, we'll use .gitattributes to decide what to save: anything not in LFS will be saved
         # need to also save the .gitattributes file itself
         # TODO: .gitignore too? it's not used a lot with the hub
-        if os.path.exists(repo):
+        if _is_url_like(repo):
+            remote_attributes = StoragePath(repo) / ".gitattributes"
+            attributes_path = str(remote_attributes) if remote_attributes.exists() else None
+        elif os.path.exists(repo):
             # local path
             if revision is not None:
                 warnings.warn("Ignoring revision because this is a local path. We don't handle this case well yet")
@@ -1321,7 +1325,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             ]
         else:
             # read the attributes file and get the globs
-            with open(attributes_path) as f:
+            with StoragePath(attributes_path).open("r") as f:
                 attributes = f.read()
             ignore_files = [".git"]
             for line in attributes.split("\n"):
@@ -1332,6 +1336,28 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 if "filter=lfs" in line:
                     ignore_files.append(line.split()[0])
 
+        # Reference weights must never overwrite the newly trained export.
+        ignore_files.extend(["*.safetensors", "*.safetensors.index.json", "pytorch_model.bin.index.json"])
+        if _is_url_like(repo):
+            reference_root = StoragePath(repo)
+            walked_root = None
+            for directory, _, filenames in reference_root.walk():
+                # The filesystem may canonicalize the URI authority (for example memory://).
+                if walked_root is None:
+                    walked_root = directory
+                for filename in filenames:
+                    source = directory / filename
+                    relative = source.relative_to(walked_root)
+                    if any(
+                        fnmatch.fnmatch(relative, pattern)
+                        or any(fnmatch.fnmatch(part, pattern) for part in relative.split("/"))
+                        for pattern in ignore_files
+                    ):
+                        continue
+                    destination = os.path.join(path, relative)
+                    os.makedirs(os.path.dirname(destination), exist_ok=True)
+                    source.download_to(destination)
+            return
         if os.path.exists(repo):
             local_code_path = repo
         else:

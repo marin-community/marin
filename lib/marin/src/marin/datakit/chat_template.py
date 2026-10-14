@@ -108,7 +108,7 @@ You can use the following tools in your python code like regular functions:
     {%- if message.get('reasoning_content') -%}
       {{- '<|start_think|>' ~ message.reasoning_content ~ '<|end_think|>' -}}
     {%- endif -%}
-    {{- text(content) | trim -}}
+    {{- text(content) if message.get('captured_literal') else text(content) | trim -}}
     {{- tool_calls(message.get('tool_calls') or []) -}}
     {{- '<|eot_id|>' -}}
     {% endgeneration %}

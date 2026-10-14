@@ -1,13 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass
 from itertools import pairwise
 
+import jax
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
+from fray.current_client import set_current_client
+from fray.local_backend import LocalClient
+from haliax import Axis
 from levanter.data.text.formats import ChatProcessor, TextLmDatasetFormat
 from levanter.data.text.trace_chat import (
     TRACE_LABEL_ASSISTANT_TEXT,
@@ -16,9 +23,12 @@ from levanter.data.text.trace_chat import (
     TRACE_LABEL_OBSERVATION,
     TraceChatProcessor,
 )
+from levanter.store.cache import TreeCache
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
-from marin.datakit.chat_render import render_chat_record, render_marin_chat
+from marin.datakit.chat_normalize import CHAT_SCHEMA
+from marin.datakit.chat_render import chat_training_record, render_chat_record, render_marin_chat
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
+from marin.datakit.sft import SftInput, build_sft_store, sft_data_config
 from openai_harmony import Author, Message, Role
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
@@ -193,6 +203,158 @@ def test_tool_definitions_rendered(marin_chat_tokenizer: MarinTokenizer):
     assert "final_answer" in rendered
     assert "When you send a message containing Python code" in rendered
     assert "python_exec" in rendered
+
+
+def test_harmony_sft_projection_masks_user_and_keeps_reasoning(marin_chat_tokenizer: MarinTokenizer):
+    messages = [
+        Message.from_role_and_content(Role.USER, "What is 2 + 2?"),
+        Message.from_role_and_content(Role.ASSISTANT, "Add the two numbers.").with_channel("analysis"),
+        Message.from_role_and_content(Role.ASSISTANT, "4").with_channel("final"),
+    ]
+    record = {
+        "id": "arithmetic",
+        "messages": [message.to_dict() for message in messages],
+        "chat_template_kwargs": json.dumps({"enable_thinking": True}),
+    }
+    processor = ChatProcessor(
+        marin_chat_tokenizer,
+        chat_template=MARIN_CHAT_TEMPLATE,
+        system_prompt_field=None,
+        mask_user_turns=True,
+    )
+    encoded = processor([chat_training_record(record)])[0]
+    assistant_ids = [token for token, mask in zip(encoded["input_ids"], encoded["assistant_masks"], strict=True) if mask]
+    assistant_text = _decode(marin_chat_tokenizer, assistant_ids)
+
+    assert "Add the two numbers." in assistant_text
+    assert "4" in assistant_text
+    assert "What is 2 + 2?" not in assistant_text
+
+
+def test_harmony_sft_store_preserves_assistant_masks(marin_tokenizer_fixture: MarinTokenizerFixture, tmp_path):
+    messages = [
+        Message.from_role_and_content(Role.USER, "What is 2 + 2?"),
+        Message.from_role_and_content(Role.ASSISTANT, "Add two and two.").with_channel("analysis"),
+        Message.from_role_and_content(Role.ASSISTANT, "4").with_channel("final"),
+    ]
+    source_path = tmp_path / "source"
+    source_path.mkdir()
+    record = {
+        "id": "arithmetic",
+        "messages": [message.to_dict() for message in messages],
+        "chat_template_kwargs": json.dumps({"enable_thinking": True}),
+    }
+    pq.write_table(pa.Table.from_pylist([record], schema=CHAT_SCHEMA), source_path / "part.parquet")
+
+    with set_current_client(LocalClient()):
+        store = build_sft_store(
+            [SftInput("arithmetic", str(source_path))],
+            output_path=str(tmp_path / "store"),
+            tokenizer=marin_tokenizer_fixture.path,
+            max_length=256,
+            seed=0,
+            num_shards=1,
+            max_workers=1,
+        )
+
+    cache = TreeCache.load(
+        str(tmp_path / "store" / "train"),
+        {"input_ids": np.zeros(0, dtype=np.int32), "assistant_masks": np.zeros(0, dtype=np.int32)},
+    )
+    rows = asyncio.run(cache.get_batch([0]))
+    assert store.sources["arithmetic"].conversations == 1
+    assert store.sources["arithmetic"].assistant_tokens > 0
+    assert sum(rows[0]["assistant_masks"]) == store.sources["arithmetic"].assistant_tokens
+
+    dataset = (
+        sft_data_config({"arithmetic": store}, minimum_weight=0.01)
+        .train_sets(Axis("position", 256), initial_batch_size=1, key=jax.random.PRNGKey(0))["sft/source/arithmetic"]
+        .as_sync_dataset()
+    )
+    example = dataset[0]
+    trained_ids = [int(example.tokens[index + 1]) for index in np.flatnonzero(np.asarray(example.loss_weight[:-1]))]
+    trained_text = _decode(load_tokenizer(marin_tokenizer_fixture.path), trained_ids)
+    assert "Add two and two." in trained_text
+    assert "What is 2 + 2?" not in trained_text
+
+    with set_current_client(LocalClient()):
+        resumed = build_sft_store(
+            [SftInput("arithmetic", str(source_path))],
+            output_path=str(tmp_path / "store"),
+            tokenizer=marin_tokenizer_fixture.path,
+            max_length=256,
+            seed=0,
+            num_shards=1,
+            max_workers=1,
+        )
+    assert resumed.sources["arithmetic"] == store.sources["arithmetic"]
+    assert resumed.packed_sequences == store.packed_sequences
+
+
+def test_harmony_sft_store_counts_training_pack_boundaries(marin_tokenizer_fixture: MarinTokenizerFixture, tmp_path):
+    messages = [
+        Message.from_role_and_content(Role.USER, "Compute one plus one."),
+        Message.from_role_and_content(Role.ASSISTANT, "Two.").with_channel("final"),
+    ]
+    source_path = tmp_path / "source"
+    source_path.mkdir()
+    rows = [
+        {
+            "id": f"example-{index}",
+            "messages": [message.to_dict() for message in messages],
+            "chat_template_kwargs": json.dumps({"enable_thinking": True}),
+        }
+        for index in range(80)
+    ]
+    pq.write_table(pa.Table.from_pylist(rows, schema=CHAT_SCHEMA), source_path / "part.parquet")
+
+    with set_current_client(LocalClient()):
+        store = build_sft_store(
+            [SftInput("short", str(source_path))],
+            output_path=str(tmp_path / "store"),
+            tokenizer=marin_tokenizer_fixture.path,
+            max_length=32768,
+            seed=0,
+            num_shards=1,
+            max_workers=1,
+        )
+
+    training = sft_data_config({"short": store}, minimum_weight=0.01).train_sets(
+        Axis("position", 32768), initial_batch_size=1, key=jax.random.PRNGKey(0)
+    )["sft/source/short"]
+    assert store.sources["short"].conversations == 80
+    assert store.packed_sequences == len(training.as_sync_dataset()) == 1
+
+
+def test_harmony_sft_store_counts_all_overlength_source(marin_tokenizer_fixture: MarinTokenizerFixture, tmp_path):
+    source_path = tmp_path / "source"
+    source_path.mkdir()
+    record = {
+        "id": "long",
+        "messages": [
+            Message.from_role_and_content(Role.USER, "Explain arithmetic.").to_dict(),
+            Message.from_role_and_content(Role.ASSISTANT, "Addition combines quantities.")
+            .with_channel("final")
+            .to_dict(),
+        ],
+        "chat_template_kwargs": json.dumps({"enable_thinking": True}),
+    }
+    pq.write_table(pa.Table.from_pylist([record], schema=CHAT_SCHEMA), source_path / "part.parquet")
+
+    with set_current_client(LocalClient()):
+        store = build_sft_store(
+            [SftInput("long", str(source_path))],
+            output_path=str(tmp_path / "store"),
+            tokenizer=marin_tokenizer_fixture.path,
+            max_length=2,
+            seed=0,
+            num_shards=1,
+            max_workers=1,
+        )
+
+    assert store.sources["long"].overlength_conversations == 1
+    assert store.sources["long"].conversations == 0
+    assert store.packed_sequences == 0
 
 
 def test_chat_processor_renders_tool_calls(marin_chat_tokenizer: MarinTokenizer):

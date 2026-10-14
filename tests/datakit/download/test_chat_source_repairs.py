@@ -494,5 +494,18 @@ def test_swe_zero_preserves_system_instructions_when_translating_protocol() -> N
         ),
     ],
 )
-def test_chat_sources_quarantine_control_markup_instead_of_aborting(adapter, row):
-    assert adapter(row) == []
+@pytest.mark.parametrize("markup", ["</think>", "<|end_think|>"])
+def test_chat_sources_preserve_quoted_xml_but_quarantine_target_chat_tokens(adapter, row, markup):
+    row = json.loads(json.dumps(row).replace("</think>", markup))
+    documents = adapter(row)
+    if markup == "<|end_think|>":
+        assert documents == []
+        return
+    [document] = documents
+    normalized = _normalize_chat_record(document, "messages", "id")
+    assert any(
+        markup in part["text"]
+        for message in normalized["messages"]
+        if message["role"] in {"user", "tool"}
+        for part in message["content"]
+    )

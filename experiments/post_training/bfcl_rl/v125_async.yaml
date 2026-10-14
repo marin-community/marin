@@ -1,0 +1,201 @@
+format: marinskyrl-canonical-launch-v1
+arm: async
+job: glm53-rlvr1-async-sft-20260923
+source_repository: https://github.com/marin-community/MarinSkyRL
+source_commit: a9e3066e855e46c83e752f1c9da96c74b95757fb
+entrypoint: skyrl_train.entrypoints.fully_async
+starting_model: open-athena/Grug-67B-A2B-GLM53-RLVR-SFT-2026.09.23@227263f32121ac79ba96de6136b86221e58b05db
+iris:
+  cluster: cw-rno2a
+  target_cluster: cw-rno2a
+  runtime_profile: megatron
+  nodes: 10
+  gpus_per_node: 8
+  gpu_variant: H100
+  cpu_per_node: 48
+  memory_per_node: 1611Gi
+  disk_per_node: 21745Gi
+  priority: interactive
+skyrl:
+  context_budget:
+    request_window_tokens: 32768
+    max_new_tokens_per_turn: 16384
+    max_turns: 999999
+    generated_budget_fraction: 1.0
+  trainer:
+    strategy: megatron
+    seed: 42
+    flash_attn: true
+    gradient_checkpointing: true
+    gradient_checkpointing_use_reentrant: false
+    offload_optimizer_during_rollouts: true
+    algorithm:
+      advantage_estimator: rloo_n
+      advantage_batch_normalize: false
+      eps_clip_low: 0.2
+      eps_clip_high: 0.2
+      use_entropy_loss: false
+      use_kl_loss: false
+      use_kl_in_reward: false
+      loss_reduction: token_mean
+      group_advantage_min_size: 4
+      dynamic_sampling:
+        type: null
+      policy_loss_type: regular
+      use_tis: true
+      tis_imp_ratio_cap: 2.0
+      tito_full: true
+    epochs: 2
+    max_steps: 128
+    update_epochs_per_batch: 1
+    train_batch_size: 512
+    policy_mini_batch_size: 512
+    eval_batch_size: 100
+    micro_forward_batch_size_per_gpu: 1
+    micro_train_batch_size_per_gpu: 1
+    use_sample_packing: true
+    eval_before_train: true
+    eval_interval: 2
+    ckpt_interval: 2
+    max_ckpts_to_keep: 5
+    resume_mode: latest
+    logger: wandb
+    project_name: snowball-ultra-rlvr
+    policy:
+      optimizer_config:
+        optimizer: AdamW
+        lr: 4.0e-06
+        weight_decay: 0.0
+        max_grad_norm: 0.5
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 2
+        context_parallel_size: 1
+        expert_model_parallel_size: 16
+        expert_tensor_parallel_size: 1
+        ddp_config:
+          overlap_grad_reduce: false
+          overlap_param_gather: false
+          grad_reduce_in_fp32: false
+        logprob_chunk_size: 256
+        transformer_config_kwargs: {}
+        optimizer_checkpoint_sharding_type: dp_reshardable
+      model:
+        path: /tmp/Grug-67B-A2B-GLM53-RLVR-SFT-2026.09.23
+        source_uri: s3://marin-us-east-02a/marin/checkpoints/glm53-rlvr-snowball-sft-2026.09.23/hf/step-135
+        source_identity: open-athena/Grug-67B-A2B-GLM53-RLVR-SFT-2026.09.23@227263f32121ac79ba96de6136b86221e58b05db
+      fsdp_config:
+        moe_router_replay: true
+    ref:
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 2
+        context_parallel_size: 1
+        expert_model_parallel_size: 16
+        expert_tensor_parallel_size: 1
+        logprob_chunk_size: 256
+        transformer_config_kwargs: {}
+      fsdp_config:
+        moe_router_replay: true
+    placement:
+      colocate_all: false
+      colocate_policy_ref: true
+      policy_num_nodes: 4
+      policy_num_gpus_per_node: 8
+      ref_num_nodes: 4
+      ref_num_gpus_per_node: 8
+      # Reserve all four whole learner nodes before rollout actors are placed. Without this,
+      # Ray can scatter the packed DP4 engines and leave no realizable 4x8-GPU learner PG.
+      policy_strict_spread_pg: true
+    run_name: glm53-rlvr1-async-sft-20260923
+    export_path: s3://marin-us-east-02a/marin/users/benfeuer/skyrl/glm53-rlvr1-async-sft-20260923/exports
+    ckpt_path: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/users/benfeuer/glm53-rlvr1-async-sft-20260923/checkpoints
+    hf_hub_repo_id: null
+    debug_mode: distributed
+    restore_dataloader_state: true
+    hf_save_interval: -1
+    fully_async:
+      max_staleness_steps: 2
+      num_parallel_generation_workers: 512
+  generator:
+    backend: vllm
+    model_dtype: bfloat16
+    vllm_attention_backend: FLASH_ATTN
+    inference_engine_tensor_parallel_size: 1
+    inference_engine_data_parallel_size: 4
+    inference_engine_expert_parallel_size: 4
+    num_inference_engines: 12
+    n_samples_per_prompt: 16
+    eval_n_samples_per_prompt: 1
+    gpu_memory_utilization: 0.8
+    max_num_seqs: 16
+    max_num_batched_tokens: 16384
+    enable_prefix_caching: true
+    enable_chunked_prefill: true
+    enforce_eager: false
+    run_engines_locally: true
+    weight_sync_backend: nccl
+    async_engine: true
+    batched: false
+    require_exact_chat_transport: true
+    enable_http_endpoint: true
+    sampling_params:
+      temperature: 1.0
+      top_p: 1.0
+      top_k: -1
+      logprobs: 0
+    engine_init_kwargs:
+      enable_auto_tool_choice: true
+      tool_call_parser: hermes
+      served_model_name: Grug-67B-A2B-GLM53-RLVR-SFT-2026.09.23
+      enable_return_routed_experts: true
+    trajectory_retention:
+      output_path: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/users/benfeuer/glm53-rlvr1-async-sft-20260923/trajectories
+    chat_template:
+      source: file
+      name_or_path: /tmp/Grug-67B-A2B-GLM53-RLVR-SFT-2026.09.23/chat_template.jinja
+  environment:
+    skyrl_gym:
+      nemotron_ultra:
+        sandbox:
+          host: snowball-nemo-skills-sandbox.iris.svc.cluster.local
+          port: 6000
+        judges:
+          general:
+            base_url: https://api.together.xyz/v1
+            model: openai/gpt-oss-120b
+            api_key_env: TOGETHER_API_KEY
+            reasoning_effort: low
+            timeout_seconds: 600.0
+          safety:
+            base_url: https://api.together.xyz/v1
+            model: openai/gpt-oss-120b
+            api_key_env: TOGETHER_API_KEY
+            reasoning_effort: low
+            timeout_seconds: 600.0
+        genrm:
+          judge:
+            base_url: https://api.together.xyz/v1
+            model: openai/gpt-oss-120b
+            api_key_env: TOGETHER_API_KEY
+            response_transport: chat_completions
+            reasoning_effort: low
+            timeout_seconds: 600.0
+          max_output_tokens: 512
+          temperature: 0.0
+          top_p: 1.0
+          max_concurrent_comparisons: 2
+          num_rollouts_per_prompt: 16
+      max_env_workers: 8
+  data:
+    kind: parquet
+    train_data:
+      - s3://marin-us-east-02a/marin/users/benfeuer/datasets/snowball-ultra-rlvr/20260920-9e7a35d6c979/ordinary-only-v2-agentic57t-compatible/rlvr1/train.parquet
+    val_data:
+      - s3://marin-us-east-02a/marin/users/benfeuer/datasets/snowball-ultra-rlvr/20260920-9e7a35d6c979/ordinary-only-v2-agentic57t-compatible/rlvr1/validation.parquet
+    shuffle: false
+  extra_env:
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    NCCL_DEBUG: WARN
+  terminal_bench_config:
+    trials_dir: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/users/benfeuer/glm53-rlvr1-async-sft-20260923/trace_jobs
