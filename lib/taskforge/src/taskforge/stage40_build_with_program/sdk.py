@@ -116,8 +116,8 @@ say; say plainly what you could not confirm.\
 """
 
 SHELLSIM_FACTS = """\
-The task machine is ShellSim: a simulated shell with POSIX tools and a minimal `python3` shim, not \
-CPython. No pip, no network. The solver works in {workdir} through a `shell(command)` tool and ends \
+The task machine is ShellSim: a simulated shell with POSIX tools, `awk` and `jq`, and no Python at \
+all. No pip, no network. The solver works in {workdir} through a `shell(command)` tool and ends \
 with a final text reply. Private grader files are never installed in the solver's machine.\
 """
 
