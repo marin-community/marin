@@ -70,11 +70,10 @@ EXAMPLES_GLOB = "train-*.jsonl.gz"
 EXAMPLE_SHARDS = 64
 """Files per example set: Levanter builds a chat cache with one worker per file."""
 QWEN3_EOS_TOKEN_IDS = (151645, 151643)  # <|im_end|> and <|endoftext|>
-# Each 65,536-token sequence is split across the nodes (context parallelism), so more nodes leave each
-# GPU room for more sequences at once; 8 fit a batch of 64 without accumulating gradients, which
-# deadlocked in a collective on this mesh.
+# As the MarinSkyRL SFT on Grug did, each GPU keeps whole 65,536-token sequences, one at a time, and
+# updates accumulate gradients over the batch. Splitting sequences across nodes instead deadlocked a
+# collective inside the accumulation loop.
 GRUG_TRAIN_NODES = 8
-GRUG_SEQUENCES_PER_DEVICE = 8
 GRUG_CONVERSION_VERSION = "2026.10.09"
 ROWS_PER_BATCH = 64
 # Tokens an example adds beyond its prompt's served length and its action's bytes: the turn's
@@ -307,9 +306,10 @@ def qwen3_policy(model: ModelConfig) -> SFTPolicy:
 
 
 def grug_policy(model: ModelConfig) -> SFTPolicy:
-    """A Grug Datakit SFT export, converted to a Levanter Snowball checkpoint and trained on 4x8 H100.
+    """A Grug Datakit SFT export, converted to a Levanter Snowball checkpoint and trained on 8x8 H100.
 
-    The mesh follows the curriculum SFT trials (``experiments/post_training/curriculum_sft/trial.py``).
+    Nodes and each node's GPUs are both data parallel, so a GPU holds whole sequences; Snowball shards
+    parameters and optimizer state over expert x data, all 64 GPUs.
     """
     conversion = hf_to_levanter(
         model.location,
@@ -325,11 +325,10 @@ def grug_policy(model: ModelConfig) -> SFTPolicy:
         resources=ResourceConfig.with_gpu(
             "H100", count=8, cpu=32, ram="512g", disk="256g", replicas=GRUG_TRAIN_NODES, preemptible=False
         ),
-        # Snowball shards parameters over expert x (data, context); context spans the nodes.
         mesh=MeshConfig(
             axes={"data": 1, "replica": 1, "model": 1, "expert": -1},
-            dcn_axes={"context": GRUG_TRAIN_NODES},
-            compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context", "vocab": "model"},
+            dcn_axes={"data": GRUG_TRAIN_NODES},
+            compute_mapping={"batch": ["replica_dcn", "data", "expert"], "vocab": "model"},
         ),
     )
 
@@ -548,21 +547,21 @@ GRUG_BUDGET = SFTBudget(
     warmup=0,
     max_grad_norm=1.0,
     steps_per_eval=8,
-    per_device_parallelism=GRUG_SEQUENCES_PER_DEVICE,
+    per_device_parallelism=1,
 )
-# The largest batch Grug's 8-node mesh takes in one pass, at an LR between the MarinSkyRL runs' 4e-6
-# at batch 512 and 1e-6 at batch 16, gradients clipped at 0.5 as there, with a short warmup for the
-# fresh optimizer. 152 updates are 9,728 examples, about one epoch of SWE's hard band, the smallest,
-# so every band trains on as many examples and none repeats one.
+# The MarinSkyRL SFT on Grug (pivot-grug-20261005-swe-sft-all-1p5epochs): batch 512 of one sequence
+# per GPU at a constant 4e-6 with no warmup, gradients clipped at 0.5. 19 updates are 9,728 examples,
+# about one epoch of SWE's hard band, the smallest, so every band trains on as many examples and none
+# repeats one.
 SWE_GRID_BUDGET = SFTBudget(
     seq_len=65536,
-    batch_size=64,
-    steps=152,
-    learning_rate=2e-6,
-    warmup=8,
+    batch_size=512,
+    steps=19,
+    learning_rate=4e-6,
+    warmup=0,
     max_grad_norm=0.5,
-    steps_per_eval=10,
-    per_device_parallelism=GRUG_SEQUENCES_PER_DEVICE,
+    steps_per_eval=2,
+    per_device_parallelism=1,
 )
 GRID_SEEDS = (0, 1, 2)
 
