@@ -358,7 +358,7 @@ async def test_private_fixture_archive_removed_before_grading_or_grader_never_ru
     assert (tmp_path / "tests/config.json").is_file()
     assert machines.machines[0].closed
     if remove_exit_code:
-        assert (result.status, result.reward, result.failure) == (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)
+        assert (result.status, result.reward, result.failure) == (Outcome.INFRA_ERROR, None, GradingFailure.STAGING)
         assert archive.is_file()
         assert not (tmp_path / "logs/verifier/verdict.json").exists()
     else:

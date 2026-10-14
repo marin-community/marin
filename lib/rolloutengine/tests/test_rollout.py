@@ -580,6 +580,51 @@ async def test_reasoning_only_response_grades_missing_answer_or_existing_files(s
     assert (submitted.grade.status, submitted.grade.reward) == (Outcome.GRADED, 1.0)
 
 
+@pytest.mark.parametrize(
+    ("stalled", "failure", "error"),
+    [
+        ("-xf", GradingFailure.STAGING, "Verifier deadline expired while preparing the verifier machine"),
+        ("/tests/grade.sh", GradingFailure.TIMEOUT, "Verifier deadline expired"),
+    ],
+    ids=["during-staging", "during-the-grader"],
+)
+async def test_a_verifier_deadline_names_the_phase_it_expired_in(stalled, failure, error):
+    """A deadline that runs out while the verifier machine is being prepared is the host's, not the grader's."""
+
+    class StallingFactory(DockerMachineFactory):
+        backend = Backend.DOCKER
+
+        async def create(self, spec):
+            machine = await FixtureImageFactory().create(spec)
+
+            class Stalling:
+                async def run(self, command):
+                    if stalled in command.argv:
+                        await asyncio.Future()
+                    return await machine.run(command)
+
+                async def upload(self, source, target):
+                    await machine.upload(source, target)
+
+                async def download(self, source, target):
+                    await machine.download(source, target)
+
+                async def close(self):
+                    await machine.close()
+
+            return Stalling()
+
+    model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "12"}])
+    spec = lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), verifier_timeout=0.2)
+
+    with pytest.raises(RolloutInterrupted) as caught:
+        await RolloutEngine(model.complete, {"local": StallingFactory()}).run(spec)
+
+    assert caught.value.operation is RolloutOperation.GRADE
+    grade = caught.value.rollout.grade
+    assert (grade.status, grade.failure, grade.error) == (Outcome.INFRA_ERROR, failure, error)
+
+
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
 async def test_lowering_preserves_task_and_produces_private_grade_with_training_tokens(answer, reward):
     task = arithmetic_task()

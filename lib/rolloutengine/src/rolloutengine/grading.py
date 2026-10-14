@@ -11,7 +11,7 @@ from typing import Any
 from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory
 from taskcompendium.chat import chat_conversation
 from taskcompendium.grading import grade_answer
-from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.grading_result import GradeResult, GradingProgress, Outcome
 from taskcompendium.models import GradingAttempt, NoGrader, ScriptGrader, VerifyitGrader
 from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.output_capture import captured_output_files
@@ -30,8 +30,9 @@ async def _grade_rollout(
     resources: AsyncExitStack,
     *,
     stop_reason: str,
+    progress: GradingProgress,
 ) -> GradeResult:
-    """Grade in process, or in a fresh verifier machine that the attempt owns."""
+    """Grade in process, or in a fresh verifier machine that the attempt owns; ``progress`` follows the sandbox path."""
     task = lowered.task
     grader = task.grader
     if isinstance(grader, NoGrader):
@@ -58,4 +59,5 @@ async def _grade_rollout(
         _machine_spec(grader.environment, selection),
         task_machine=machine,
         timeout=timeout,
+        progress=progress,
     )
