@@ -138,7 +138,9 @@ async def build(tmp_path, proposal, services, program=PROGRAM, **options):
     )
 
 
-async def test_steps_without_a_dependency_between_them_run_together_and_outcomes_keep_the_program_order(tmp_path):
+async def test_steps_without_a_dependency_between_them_run_together_and_outcomes_keep_the_program_order(
+    tmp_path, proposal, services
+):
     spans: dict[str, tuple[float, float]] = {}
 
     async def linger(name: str) -> None:
@@ -158,20 +160,20 @@ async def test_steps_without_a_dependency_between_them_run_together_and_outcomes
 
     @rl_env_build_sink
     async def joined(
-        context: RLEnvBuildContext, slow_numbers: TaskResource, slow_grader: GraderPackage, proposal: dict
+        context: RLEnvBuildContext, slow_numbers: TaskResource, slow_grader: GraderPackage, proposal: TaskProposal
     ) -> TaskSpec:
         await linger("joined")
-        return toy_task(context.item_id, proposal["task"], slow_numbers, slow_grader)
+        return toy_task(context.item_id, slow_numbers, slow_grader, proposal.body)
 
     program = rl_env_build_program(slow_numbers, slow_grader, sink=joined)
-    draft = await build(tmp_path, program)
+    draft = await build(tmp_path, proposal, services, program)
 
     assert spans["slow_grader"][0] < spans["slow_numbers"][1], "the two steps did not overlap"
     assert spans["joined"][0] >= max(spans["slow_numbers"][1], spans["slow_grader"][1])
     assert [outcome.memo.name for outcome in draft.provenance.steps] == list(program.order)
 
 
-async def test_a_failing_step_ends_the_build_and_cancels_the_steps_still_running(tmp_path):
+async def test_a_failing_step_ends_the_build_and_cancels_the_steps_still_running(tmp_path, proposal, services):
     cancelled = asyncio.Event()
 
     @rl_env_build_step
@@ -193,7 +195,7 @@ async def test_a_failing_step_ends_the_build_and_cancels_the_steps_still_running
         raise AssertionError("unreachable")
 
     with pytest.raises(BuildFailure) as failure:
-        await build(tmp_path, rl_env_build_program(doomed, patient, sink=never))
+        await build(tmp_path, proposal, services, rl_env_build_program(doomed, patient, sink=never))
 
     assert (failure.value.step, cancelled.is_set()) == ("doomed", True)
 
