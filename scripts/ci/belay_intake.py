@@ -43,21 +43,9 @@ _ZERO_WIDTH_SPACE = "​"
 REGISTRY_BRANCH = "marin_belay_v1_registry"
 REGISTRY_DIR = "experiments/belay/registry"
 INTAKE_INDEX = f"{REGISTRY_DIR}/intake_ids.json"
-# experiments.belay.registry.CATEGORIES; an intake comment that names none of them is filed as "Unsorted".
-CATEGORIES = (
-    "Attention variants",
-    "Linear attention / KDA",
-    "Depth connections",
-    "Embeddings and inputs",
-    "MoE and routing",
-    "Optimizers",
-    "Normalization",
-    "Output head and loss",
-    "Training dynamics and schedules",
-    "Systems and speed",
-    "Recipe stacks",
-    "Unsorted",
-)
+# The registry's category list; an intake comment that names none of them is filed as UNSORTED.
+CATEGORIES_FILE = f"{REGISTRY_DIR}/categories.json"
+UNSORTED = "Unsorted"
 _FIELD_RE = re.compile(r"^\s*\*\*(Title|Category|Idea):\*\*\s*(.+?)\s*$", re.MULTILINE)
 _EXPERIMENT_FILE_RE = re.compile(r"^X(\d{4})-.*\.yaml$")
 
@@ -136,19 +124,21 @@ def next_experiment_id(filenames: list[str]) -> str:
     return f"X{max(numbers, default=0) + 1:04d}"
 
 
-def registry_entry(xid: str, comment: IntakeComment, approver: str) -> tuple[str, str]:
-    """``(filename, yaml)`` of the approved registry entry for an intake comment. Strings are JSON-quoted, which is
-    valid YAML, so writing it needs no YAML library."""
+def registry_entry(
+    experiment_id: str, comment: IntakeComment, approver: str, categories: frozenset[str]
+) -> tuple[str, str]:
+    """``(filename, yaml)`` of the approved registry entry for an intake comment."""
     fields = intake_fields(comment.body)
     first_line = next((line.strip() for line in comment.body.splitlines() if line.strip()), "Intake suggestion")
     name = fields.get("title", first_line)[:120]
     category = fields.get("category", "")
-    category = category if category in CATEGORIES else "Unsorted"
+    category = category if category in categories else UNSORTED
     summary = fields.get("idea", name)[:500]
     slug = slugify(name)
+    # JSON strings are valid YAML scalars, so the entry needs no YAML library.
     q = json.dumps
     lines = [
-        f"id: {xid}",
+        f"id: {experiment_id}",
         f"slug: {slug}",
         f"name: {q(name)}",
         f"category: {q(category)}",
@@ -162,7 +152,7 @@ def registry_entry(xid: str, comment: IntakeComment, approver: str) -> tuple[str
         f"  author: {q(comment.author)}",
         f"  approved_by: {q(approver)}",
     ]
-    return f"{xid}-{slug}.yaml", "\n".join(lines) + "\n"
+    return f"{experiment_id}-{slug}.yaml", "\n".join(lines) + "\n"
 
 
 def register(github: "GitHub", comment: IntakeComment, approver: str) -> str:
@@ -172,26 +162,33 @@ def register(github: "GitHub", comment: IntakeComment, approver: str) -> str:
     key = str(comment.comment_id)
     if key in index:
         return index[key]
-    xid = next_experiment_id(github.list_dir(REGISTRY_DIR, REGISTRY_BRANCH))
-    filename, entry = registry_entry(xid, comment, approver)
-    github.put_file(f"{REGISTRY_DIR}/{filename}", REGISTRY_BRANCH, entry, f"Belay registry: {xid} from intake {key}")
-    index[key] = xid
+    experiment_id = next_experiment_id(github.list_dir(REGISTRY_DIR, REGISTRY_BRANCH))
+    categories_file = github.get_file(CATEGORIES_FILE, REGISTRY_BRANCH)
+    if categories_file is None:
+        raise RuntimeError(f"{CATEGORIES_FILE} is missing on {REGISTRY_BRANCH}")
+    categories = frozenset(json.loads(categories_file[0]))
+    filename, entry = registry_entry(experiment_id, comment, approver, categories)
+    github.put_file(
+        f"{REGISTRY_DIR}/{filename}", REGISTRY_BRANCH, entry, f"Belay registry: {experiment_id} from intake {key}"
+    )
+    index[key] = experiment_id
     github.put_file(
         INTAKE_INDEX,
         REGISTRY_BRANCH,
         json.dumps(index, indent=1, sort_keys=True) + "\n",
-        f"Belay registry: intake {key} -> {xid}",
+        f"Belay registry: intake {key} -> {experiment_id}",
         sha=index_file[1] if index_file else None,
     )
-    return xid
+    return experiment_id
 
 
-def transfer_body(comment: IntakeComment, approver: str, xid: str) -> str:
+def transfer_body(comment: IntakeComment, approver: str, experiment_id: str) -> str:
     """The main-issue comment for an approved intake comment: id, attribution, the quoted text, and the marker."""
     text = _MENTION_RE.sub("@" + _ZERO_WIDTH_SPACE, comment.body).replace("<!--", "<" + _ZERO_WIDTH_SPACE + "!--")
     quoted = "\n".join(f"> {line}" if line else ">" for line in text.splitlines())
     return (
-        f"📥 **Intake suggestion {xid}** from {comment.author}, approved by {approver} ([original]({comment.url})):\n\n"
+        f"📥 **Intake suggestion {experiment_id}** from {comment.author}, approved by {approver} "
+        f"([original]({comment.url})):\n\n"
         f"{quoted}\n\n{_MARKER_TEMPLATE.format(comment.comment_id)}"
     )
 
@@ -298,8 +295,8 @@ def run(github: GitHub, *, intake_issue: int, target_issue: int, approvers: froz
     for comment, approver in pending:
         print(f"copy intake comment {comment.comment_id} by {comment.author} (approved by {approver})")
         if not dry_run:
-            xid = register(github, comment, approver)
-            github.post_comment(target_issue, transfer_body(comment, approver, xid))
+            experiment_id = register(github, comment, approver)
+            github.post_comment(target_issue, transfer_body(comment, approver, experiment_id))
             github.react(comment.comment_id, TRANSFERRED_REACTION)
     for comment_id in unmarked:
         print(f"add the missing rocket to already-copied intake comment {comment_id}")
