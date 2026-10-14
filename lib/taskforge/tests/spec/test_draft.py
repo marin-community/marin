@@ -13,7 +13,13 @@ from rolloutengine.machines import _machine_spec
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Backend, ExecutionRequirements, MachineSpec, NetworkPolicy, PackageSpec
+from shellbox.machine import (
+    Backend,
+    ExecutionRequirements,
+    MachineSpec,
+    NetworkPolicy,
+    PackageSpec,
+)
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
@@ -705,3 +711,29 @@ def test_a_task_image_stays_on_the_container_backend_beside_the_local_backend():
     lowered = lower_on_iris(docker_task(docker_grader()), (Backend.GVISOR, Backend.LOCAL))
 
     assert machine_sources(lowered) == (("gvisor", RegistryImage(IMAGE)), ("gvisor", RegistryImage(IMAGE)))
+
+
+def package_task() -> TaskSpec:
+    return cpython_task().model_copy(
+        update={"environment_requirements": requirements(image=None, packages=("numpy", "pandas"), setup=("true",))}
+    )
+
+
+def test_a_package_machine_installs_its_packages_on_the_local_backend():
+    lowered = lower_on_iris(package_task(), (Backend.GVISOR, Backend.LOCAL))
+
+    packages = PackageSpec(pypi_packages=("numpy", "pandas"))
+    assert machine_sources(lowered) == (("local", packages), ("local", LOCAL_CPYTHON))
+    assert lowered.task.environment_requirements.setup_commands == ("true",)
+
+
+def test_a_package_machine_is_refused_on_a_host_without_the_local_backend():
+    with pytest.raises(ValueError, match="Unknown Shellbox factory: 'local'"):
+        lower_on_iris(package_task(), (Backend.GVISOR,))
+
+
+def test_a_package_machine_takes_no_image_and_one_requirement_per_package():
+    with pytest.raises(ValueError, match="not both"):
+        requirements(image=IMAGE, packages=("numpy",))
+    with pytest.raises(ValueError, match="without pip options"):
+        requirements(image=None, packages=("numpy pandas\nscipy",))

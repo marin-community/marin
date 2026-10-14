@@ -25,7 +25,7 @@ from taskforge.stage10_proposal.model import ResearchKind
 
 SOURCES_STEP = "sources"
 
-type SolverMachine = Literal["shellsim", "cpython"]
+type SolverMachine = Literal["shellsim", "cpython", "packages"]
 
 
 @dataclass(frozen=True)
@@ -72,13 +72,15 @@ class Fixtures:
 
     ``agent_files`` paths are relative to the machine root, under ``workspace/``. ``private_files``
     paths are relative to the grader's private directory. ``solver_machine`` applies to a task
-    without its own image: ShellSim, or CPython on the grader base image.
+    without its own image: ShellSim, CPython on the grader base image, or CPython with the PyPI
+    ``packages``, which are empty for the other machines.
     """
 
     agent_files: tuple[TaskResource, ...]
     private_files: tuple[TaskResource, ...]
     facts: str
     solver_machine: SolverMachine
+    packages: tuple[str, ...]
 
 
 @dataclass(frozen=True)

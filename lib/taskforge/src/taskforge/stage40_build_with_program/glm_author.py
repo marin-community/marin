@@ -102,8 +102,11 @@ solver's machine.
 - ShellSim, the image-less task machine, has `sh`, coreutils, `awk`, `jq` and `python3` (CPython \
 3.13, standard library only), no pip and no network, a compute budget of a few seconds of Python per \
 machine and a virtual clock that advances only through `sleep`. A task whose solution needs more \
-computation than that, or a real clock, runs on `draft.requirements(image=GRADER_BASE_IMAGE, ...)`. \
-Never ask the solver to compute by hand.
+computation than that, or a real clock, runs on `draft.requirements(image=GRADER_BASE_IMAGE, ...)`, \
+and one that needs PyPI packages but no system packages runs on `draft.requirements(image=None, \
+packages=("numpy", ...), ...)`: CPython 3.12 with those packages, installed from wheels when the \
+machine starts, with no image to build. Publish a task image only for apt packages or another base \
+image. Never ask the solver to compute by hand.
 - Data and fixtures go in workspace files. The instruction stays within 500 words, never inlines \
 tables or file contents, names every literal the grader checks, never describes how grading works, \
 and never contains an answer the grader checks. RolloutEngine adds the shell tool and the \

@@ -11,7 +11,7 @@ from dataclasses import replace
 import pytest
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from rolloutengine.engine import RolloutEngine
-from shellbox.machine import Backend
+from shellbox.machine import Backend, PackageSpec
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ArtifactKind, ScriptGrader, VerifyitGrader
 from taskcompendium.runtime.resources import resource_bytes
@@ -30,6 +30,7 @@ from taskforge.stage40_build_with_program.sdk import (
     ATTEMPTS,
     WORKDIR,
     FileDraft,
+    FixturesDraft,
     GraderDraft,
     grader_package,
     machine_facts,
@@ -90,6 +91,7 @@ def serve_until_the_grader(fake_glm) -> None:
                 "private_files": [file("key.txt", "42")],
                 "facts": "6 * 7 = 42",
                 "solver_machine": "shellsim",
+                "packages": [],
             }
         )
     )
@@ -181,6 +183,7 @@ FIXTURES = Fixtures(
     private_files=(task_file(FileDraft.model_validate(file("key.txt", "42"))),),
     facts="6 * 7 = 42",
     solver_machine="shellsim",
+    packages=(),
 )
 
 
@@ -296,3 +299,27 @@ async def test_the_instructions_step_sends_back_an_instruction_with_a_problem(
 
     assert text.instruction == good
     assert problem in fake_glm.requests[1]["messages"][-2]["content"]
+
+
+async def test_package_fixtures_choose_a_package_machine_without_an_image(context, proposal):
+    fixtures = replace(FIXTURES, solver_machine="packages", packages=("numpy", "pandas==2.2.3"))
+    requirements = await standard.requirements.fn(context(), proposal, fixtures)
+    package = grader_package(GraderDraft.model_validate(grader_call(GOOD_GRADER)), fixtures, requirements)
+
+    assert (requirements.docker_image, requirements.package_spec) == (
+        None,
+        PackageSpec(pypi_packages=("numpy", "pandas==2.2.3")),
+    )
+    assert "`numpy`, `pandas==2.2.3`" in machine_facts(requirements)
+    assert isinstance(package.grader, ScriptGrader) and package.grader.environment.docker_image == GRADER_BASE_IMAGE
+
+
+@pytest.mark.parametrize(
+    ("machine", "packages"),
+    [("packages", []), ("shellsim", ["numpy"]), ("packages", ["--index-url=https://example.org"])],
+)
+def test_fixtures_list_packages_exactly_for_a_package_machine(machine, packages):
+    submission = {"agent_files": [], "private_files": [], "facts": "", "solver_machine": machine}
+
+    with pytest.raises(ValueError):
+        FixturesDraft.model_validate({**submission, "packages": packages})

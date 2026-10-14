@@ -13,7 +13,8 @@ limits, user, deadlines) is the ``LoweredTaskSpec`` RolloutEngine executes, and
 ``lower`` alone builds one, choosing each machine's backend for the host. A
 lowered spec is therefore bound to the host whose factories it names, and its
 task may name the software differently from the ``TaskSpec``: on a host with
-the local backend, ``GRADER_BASE_IMAGE`` becomes ``LOCAL_CPYTHON``.
+the local backend, ``GRADER_BASE_IMAGE`` becomes ``LOCAL_CPYTHON``, and on one
+without it a package machine becomes ``GRADER_BASE_IMAGE`` (``host_requirements``).
 
 Only ``_presentation`` builds the presented context, concrete tools and answer
 format, and only ``lower`` builds a ``LoweredTaskSpec``, so moving either is a
@@ -79,6 +80,7 @@ the machine's ``HostImage``, the venv's ``bin`` first on ``PATH``. Later machine
 the build. ``sh``, ``setsid``, ``tar`` and the other commands come from the host's system directories.
 """
 
+
 type Reward = StdoutReward | ExitCodeReward | FileReward
 
 ANSWER_PATH = "/app/answer.txt"
@@ -133,27 +135,54 @@ def file(path: str, content: str, mode: int = 0o644) -> TaskResource:
 
 
 def requirements(
-    *, image: str | None, setup: Sequence[str] = (), workdir: str = "/workspace", env: Mapping[str, str] | None = None
+    *,
+    image: str | None,
+    packages: Sequence[str] = (),
+    setup: Sequence[str] = (),
+    workdir: str = "/workspace",
+    env: Mapping[str, str] | None = None,
 ) -> EnvironmentRequirements:
     """The task machine's contents, all visible to the agent.
 
     ``image`` is a digest-pinned registry reference (an ``ImageBuilder`` output), whose commands
     run as Linux processes, or ``None`` for ShellSim's simulated shell and built-in filesystem with
-    the catalog's CPython (``SHELLSIM_CPYTHON``).
-    ``setup`` commands run with
+    the catalog's CPython (``SHELLSIM_CPYTHON``). ``packages`` instead names PyPI requirements
+    (``"numpy"``, ``"pandas==2.2.3"``) for a machine without an image: Linux processes with CPython
+    3.12 and those packages, installed from wheels when the machine starts, with no image to build
+    (``host_requirements`` says how each host provides them). ``setup`` commands run with
     ``sh -c`` as user ``0`` under the machine's startup timeout; a builder that
     needs a readiness check puts a wait loop there. Agent-visible files go to
     ``assemble(files=)``.
+
+    Raises:
+        ValueError: both ``image`` and ``packages`` are given, or a package is not one requirement
+            (``check_packages``).
     """
+    if image is not None and packages:
+        raise ValueError("A task machine names an image or packages, not both")
+    check_packages(packages)
+    if packages:
+        semantics, package_spec = CommandSemantics.LINUX_PROCESS, PackageSpec(pypi_packages=tuple(packages))
+    elif image is None:
+        semantics, package_spec = CommandSemantics.SHELL_SIMULATOR, SHELLSIM_CPYTHON
+    else:
+        semantics, package_spec = CommandSemantics.LINUX_PROCESS, None
     return EnvironmentRequirements(
         capabilities=(SHELL_CAPABILITY, FILESYSTEM_CAPABILITY),
-        command_semantics=CommandSemantics.SHELL_SIMULATOR if image is None else CommandSemantics.LINUX_PROCESS,
+        command_semantics=semantics,
         docker_image=image,
-        package_spec=SHELLSIM_CPYTHON if image is None else None,
+        package_spec=package_spec,
         working_directory=workdir,
         setup_commands=tuple(setup),
         environment_variables=dict(env or {}),
     )
+
+
+def check_packages(packages: Sequence[str]) -> None:
+    """Raise ``ValueError`` unless each entry is one PyPI requirement without pip options."""
+    malformed = [entry for entry in packages if not entry.strip() or entry.startswith("-") or {"\n", "\r"} & set(entry)]
+    if malformed:
+        raise ValueError(f"Packages are PyPI requirements, one per entry, without pip options: {malformed}")
 
 
 def machine(
@@ -467,9 +496,11 @@ def host_requirements(
 ) -> EnvironmentRequirements:
     """``requirements`` as a host with ``factories`` runs them.
 
-    A machine on ``GRADER_BASE_IMAGE`` runs ``LOCAL_CPYTHON`` on the local backend when ``factories``
-    hold one, and the image on the host's container backend otherwise. Every other requirement is
-    unchanged.
+    With a local factory, a machine on ``GRADER_BASE_IMAGE`` runs ``LOCAL_CPYTHON`` on the local
+    backend; without one it keeps the image, on the host's container backend. A package machine
+    (``requirements(packages=...)``) runs on the local backend only, its packages installed into a
+    uv venv at machine start; on a host without a local factory, RolloutEngine's lowering rejects
+    it as an unknown factory. Every other requirement is unchanged.
     """
     if requirements.docker_image == GRADER_BASE_IMAGE and Backend.LOCAL.value in factories:
         return requirements.model_copy(update={"docker_image": None, "package_spec": LOCAL_CPYTHON})

@@ -12,10 +12,12 @@ The steps, in run order:
 1. ``sources`` calls ``research`` for each research item of the proposal, concurrently. The notes
    feed the later steps.
 2. ``fixtures`` writes the solver-visible files and the private reference data, and picks the
-   solver machine a non-container task runs on: ShellSim, or the grader-base image's CPython when
-   solving takes more computation than ShellSim's budget or a real clock.
-3. ``requirements`` returns the task machine. A reasoning or shellsim proposal runs in ShellSim, or
-   on Taskforge's grader-base image when the fixtures chose CPython. A container proposal gets a
+   solver machine a non-container task runs on: ShellSim, the grader-base image's CPython when
+   solving takes more computation than ShellSim's budget or a real clock, or CPython with the PyPI
+   packages the fixtures list when solving needs them.
+3. ``requirements`` returns the task machine. A reasoning or shellsim proposal runs in ShellSim, on
+   Taskforge's grader-base image when the fixtures chose CPython, or on a package machine
+   (``draft.requirements(packages=...)``), which needs no image. A container proposal gets a
    ``DockerBuild``, which ``publish_image`` pushes; the step's output memoizes the pinned reference.
 4. ``grader`` writes the grader: an in-process verifyit grader (exact, numeric, math, mcq) when the
    answer is one value, otherwise a Python grader program in a verifier machine. Before it returns,
@@ -101,6 +103,7 @@ async def fixtures(context: RLEnvBuildContext, proposal: TaskProposal, sources: 
         private_files=tuple(task_file(f) for f in submitted.private_files),
         facts=submitted.facts,
         solver_machine=submitted.solver_machine,
+        packages=tuple(submitted.packages),
     )
 
 
@@ -110,7 +113,7 @@ async def requirements(
 ) -> EnvironmentRequirements:
     if proposal.header.environment is not Environment.CONTAINER:
         image = GRADER_BASE_IMAGE if fixtures.solver_machine == "cpython" else None
-        return draft.requirements(image=image, workdir=WORKDIR)
+        return draft.requirements(image=image, packages=fixtures.packages, workdir=WORKDIR)
     request = (
         f"Write the task image: a Dockerfile (WORKDIR {WORKDIR}, no network at run time) and any build-context "
         f"files it copies. {DOCKER_IMAGE_REQUIREMENTS} The image also provides python3: the grader runs in a "

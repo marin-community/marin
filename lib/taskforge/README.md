@@ -97,8 +97,9 @@ record, so a move of either is a single-site change.
 
 - `spec.draft.assemble(task_id, instruction, answer_type, answer_format, grader, source, *,
   environment, files, output_paths, system, final_tools, tags) -> TaskSpec`. `environment` is
-  `requirements(image=, setup=, workdir=, env=)`, whose commands run as Linux processes in the
-  image or, without one, in ShellSim's simulated shell, or `None` for a task without a machine.
+  `requirements(image=, packages=, setup=, workdir=, env=)`, whose commands run as Linux processes
+  in the image or with CPython 3.12 and the PyPI `packages`, or, with neither, in ShellSim's
+  simulated shell, or `None` for a task without a machine.
   `files` are agent-visible `file("workspace/x", ...)` resources relative to the machine root.
   `grader` is a `GraderPackage` from `answer_grader(spec)` (a verifyit mode graded in process, or
   in a verifier machine given `environment=`), `python_grader(script, config, environment=,
@@ -106,10 +107,12 @@ record, so a move of either is a single-site change.
   `script_grader(argv, reward, environment=, answer_path=, timeout=, ...)`.
   `grader_environment(task_image)` is the verifier machine's environment: the task image, or
   `sandbox.images.GRADER_BASE_IMAGE` for a task without one.
-- `spec.draft.lower(task, *, host, task_machine, verifier_machine, session, factories)` picks
-  ShellSim for a machine without an image or packages lock, the local backend for a lock alone,
-  and the host's container backend for an image, so a lowered spec is bound to its host. A grader
-  with an environment takes a verifier machine; no other grader does.
+- `spec.draft.lower(task, *, host, task_machine, verifier_machine, session, factories)` runs
+  each machine on `host_requirements` for `factories`: with the local backend, the grader base image
+  and package machines run there; without it, a package machine runs on the grader base image. It
+  picks the host's container backend for an image, the local backend for Linux processes without
+  one, and ShellSim otherwise, so a lowered spec is bound to its host. A grader with an environment
+  takes a verifier machine; no other grader does.
 - `spec.controls.Control` is one labeled candidate submission (`kind`, `category`, `concern`,
   `author`, a `Transcript` or `Workspace` payload, an `Expectation`). `concern` is `reference`,
   `acceptance`, `extraction` or `shortcut`, and the concern a control may carry follows its
