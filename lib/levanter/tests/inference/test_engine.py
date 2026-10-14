@@ -14,7 +14,7 @@ from jax.sharding import AxisType, Mesh, PartitionSpec as P
 
 import levanter.inference.engine as engine_module
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
-from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams
 from levanter.inference.page_table import PageTableSpec
 from levanter.layers.kv_cache import KvPageCache
 from levanter.utils.mesh import create_mesh_from_axis_specs
@@ -166,3 +166,30 @@ def test_generate_samples_explicit_token_and_vocabulary_shards():
         result = service.generate([request])
     assert result.tokens == [[3, 3, 3], [3, 3, 3]]
     assert all(np.isfinite(values).all() for values in result.logprobs)
+
+
+def test_generation_preserves_stop_and_length_reasons_across_clones_and_reuse():
+    service = _build_service()
+    stops = hax.named(jnp.array([[-1, 4], [3, 3]]), ("stop_seq", "position"))
+    requests = [
+        Request(
+            prompt_tokens=[1, 2],
+            request_id=0,
+            n_generations=2,
+            decode_params=dataclasses.replace(
+                SeqDecodingParams.default(), max_num_tokens=jnp.array(4), stop_tokens=stops
+            ),
+        ),
+        Request(
+            prompt_tokens=[1, 2],
+            request_id=1,
+            n_generations=1,
+            decode_params=dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.array(5)),
+        ),
+    ]
+    result = service.generate(requests)
+    assert result.tokens == [[3, 3], [3, 3], [3, 3, 3]]
+    # A matched stop wins when it coincides with the length limit.
+    assert result.finish_reasons == [FinishReason.STOP, FinishReason.STOP, FinishReason.LENGTH]
+    assert [len(row) for row in result.logprobs] == [2, 2, 3]
+    assert service.generate(requests[1:]).finish_reasons == [FinishReason.LENGTH]
