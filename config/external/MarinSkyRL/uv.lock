@@ -1064,8 +1064,8 @@ name = "httpcore2"
 version = "2.13.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11", marker = "sys_platform != 'emscripten'" },
-    { name = "truststore", marker = "sys_platform != 'emscripten'" },
+    { name = "h11" },
+    { name = "truststore" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/cb/f3/1db7aa2bc2524062192bb0e0323969492d1883152a232fe36eea65f4e35c/httpcore2-2.13.1.tar.gz", hash = "sha256:e0aa977abe17e69a3b820a24542a6fa88702676d83880b8d194dcd18408e5103", size = 68071, upload-time = "2026-09-23T07:47:22.372Z" }
 wheels = [
@@ -1413,7 +1413,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=b73a8af18dbbbacf44c643b103ad38acc752b2cd" }]
+requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=da27b4b66de0031b2429199f5b54ee177e1546d3" }]
 
 [[package]]
 name = "marin-finelog"
@@ -1572,6 +1572,7 @@ source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%
 dependencies = [
     { name = "marin-shellbox" },
     { name = "marin-taskcompendium" },
+    { name = "marin-verifyit" },
     { name = "pydantic" },
 ]
 
@@ -1633,7 +1634,7 @@ schema = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=b73a8af18dbbbacf44c643b103ad38acc752b2cd#b73a8af18dbbbacf44c643b103ad38acc752b2cd" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=da27b4b66de0031b2429199f5b54ee177e1546d3#da27b4b66de0031b2429199f5b54ee177e1546d3" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
