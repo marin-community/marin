@@ -159,6 +159,8 @@ def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
         raise InvalidTask("label_case must be sensitive or upper")
     if spec.rubric not in RUBRICS:
         raise InvalidTask(f"unknown judge rubric {spec.rubric!r}; known rubrics: {sorted(RUBRICS)}")
+    if not isinstance(spec.strip_candidate_reasoning_blocks, bool):
+        raise InvalidTask("strip_candidate_reasoning_blocks must be boolean")
     if spec.rubric == RUBRIC_LABELS and (
         not isinstance(spec.system_prompt, str)
         or not isinstance(spec.prompt_template, str)
@@ -227,6 +229,7 @@ def grade_judge_candidate(
     policy = empty_output_policy(spec)
     if not isinstance(candidate, str):
         raise InvalidTask("judge candidate must be text")
+    candidate = _answer_text(candidate, spec.strip_candidate_reasoning_blocks, strip_outer=False)
     if policy is EmptyOutputPolicy.ZERO and not candidate.strip():
         return scored(0.0, reason="no_output")
     context = context[:CONTEXT_LIMIT]
@@ -301,17 +304,25 @@ def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
         raise InvalidTask("judge template must include reference and candidate")
 
 
-def _label_answer(reply: str, strip_reasoning: bool) -> str:
+def _answer_text(
+    text: str,
+    strip_reasoning: bool,
+    *,
+    strip_outer: bool = True,
+    unfinished_error: str | None = None,
+) -> str:
     if not strip_reasoning:
-        return reply.strip()
+        return text.strip() if strip_outer else text
     pairs = (("<think>", "</think>"), ("<thinking>", "</thinking>"), ("<|start_think|>", "<|end_think|>"))
     for opening, closing in pairs:
-        reply = re.sub(re.escape(opening) + ".*?" + re.escape(closing), "", reply, flags=re.DOTALL)
-    closing = max((reply.rfind(end) + len(end) for _, end in pairs if end in reply), default=0)
-    reply = reply[closing:]
-    if any(start in reply for start, _ in pairs):
-        raise RuntimeError("judge has unfinished reasoning")
-    return reply.strip().removesuffix("<|eot_id|>").strip()
+        text = re.sub(re.escape(opening) + ".*?" + re.escape(closing), "", text, flags=re.DOTALL)
+    closing = max((text.rfind(end) + len(end) for _, end in pairs if end in text), default=0)
+    text = text[closing:]
+    if any(opening in text for opening, _ in pairs):
+        if unfinished_error is not None:
+            raise RuntimeError(unfinished_error)
+        return ""
+    return text.strip().removesuffix("<|eot_id|>").strip()
 
 
 def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: openai.OpenAI, model: str) -> Reward:
@@ -330,7 +341,7 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
             if index + 1 < len(budgets):
                 continue
             raise RuntimeError("judge completion is incomplete")
-        answer = _label_answer(content, spec.strip_reasoning_blocks)
+        answer = _answer_text(content, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning")
         if spec.label_case == "upper":
             answer = answer.upper()
         if spec.label_scan == "whole":
@@ -444,9 +455,9 @@ def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai
     base_url = connection.base_url.strip() if connection else os.environ.get(BASE_URL_ENV, "").strip()
     model = spec.model.strip() or os.environ.get(MODEL_ENV, "").strip()
     if not base_url:
-        raise RuntimeError(f"no judge endpoint: set {BASE_URL_ENV}")
+        raise InvalidTask(f"no judge endpoint: set {BASE_URL_ENV}")
     if not model:
-        raise RuntimeError(f"no judge model: set {MODEL_ENV} or the spec's model field")
+        raise InvalidTask(f"no judge model: set {MODEL_ENV} or the spec's model field")
     # Local OpenAI-compatible servers ignore the key, but the client insists on a non-empty one.
     options: dict[str, Any] = {"max_retries": 0} if spec.rubric == RUBRIC_LABELS else {}
     return (

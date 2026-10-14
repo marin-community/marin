@@ -55,7 +55,9 @@ async def upload_serial(tmp_path, payload, source_relative=""):
     source_file = source / source_relative if source_relative else source
     source_file.parent.mkdir(parents=True, exist_ok=True)
     source_file.write_bytes(payload)
-    machine = QemuMachine(MachineSpec(QemuBundle(tmp_path), workdir=str(tmp_path)), Acceleration.TCG)
+    machine = QemuMachine(
+        MachineSpec(QemuBundle(tmp_path), workdir=str(tmp_path)), Acceleration.TCG, bundle=QemuBundle(tmp_path)
+    )
     # The external guest fixture consumes the real serial framing and executes
     # the upload script with host equivalents of the guest's BusyBox tools.
     machine.process = await asyncio.create_subprocess_exec(
@@ -83,7 +85,7 @@ def test_upload_deadline_covers_guest_not_reading_serial_input(tmp_path, monkeyp
 async def stalled_upload(tmp_path):
     source = tmp_path / "source.bin"
     source.write_bytes(random.Random(3).randbytes(131072))
-    machine = QemuMachine(MachineSpec(QemuBundle(tmp_path)), Acceleration.TCG)
+    machine = QemuMachine(MachineSpec(QemuBundle(tmp_path)), Acceleration.TCG, bundle=QemuBundle(tmp_path))
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         "-c",

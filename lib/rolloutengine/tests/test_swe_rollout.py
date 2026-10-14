@@ -10,14 +10,14 @@ import shutil
 import subprocess
 
 import pytest
-from shellbox.machine import ExitReason, Result
+from shellbox.backends.docker.machine import DockerMachineFactory
+from shellbox.machine import Backend, ExitReason, Result
 from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.swe import SWEInstance, swe_task
-from taskcompendium.models import EnvironmentRequirements, Source, TaskSpec, TextMessage
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Source, TaskSpec, TextMessage
 
 from rolloutengine.task_session import WORKSPACE_INSTRUCTION
-
-from .test_rollout import ReplayModel, engine, lowered, machine_runtime
+from rolloutengine.test_support import ReplayModel, engine, lowered, machine_runtime
 
 
 class LocalGitMachine:
@@ -90,13 +90,20 @@ async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(
             eval_script='test "$(cat value.txt)" = fixed',
         ),
         source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
-        environment=EnvironmentRequirements(docker_image="fixture@sha256:" + "0" * 64, working_directory="/testbed"),
+        environment=EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            capabilities=("shell", "filesystem", "process", "git_repository"),
+            docker_image="fixture@sha256:" + "0" * 64,
+            working_directory="/testbed",
+        ),
     )
     task = TaskSpec.model_validate_json(task.model_dump_json())
     assert task.context.events == (TextMessage(role="user", content="Repair value.txt."),)
     machines = []
 
-    class Factory:
+    class Factory(DockerMachineFactory):
+        backend = Backend.DOCKER
+
         async def create(self, spec):
             root = tmp_path / f"machine-{len(machines)}"
             shutil.copytree(git_image, root / "testbed")
@@ -129,7 +136,7 @@ async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward)
     assert model.requests[0].messages[0] == {"role": "user", "content": "Repair value.txt."}
     assert len(model.requests[0].messages) == 2
-    assert model.requests[0].messages[1] == {"role": "user", "content": WORKSPACE_INSTRUCTION}
+    assert model.requests[0].messages[1] == {"role": "user", "content": WORKSPACE_INSTRUCTION.format(tool_name="shell")}
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["shell"]
     assert (git_image / "value.txt").read_text() == "broken\n"
     assert len(machines) == 2

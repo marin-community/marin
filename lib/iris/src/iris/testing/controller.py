@@ -311,7 +311,7 @@ def controller_factory(tmp_path) -> Iterator[Callable[..., Controller]]:
             log_service_address="",
             local_log_dir=config.local_state_dir / "log-server",
             host=config.host,
-            worker_token=config.auth.worker_token if config.auth and config.auth.worker_token else None,
+            worker_token_provider=config.auth.worker_token_provider if config.auth else None,
         )
         backend = provider if provider is not None else FakeProvider()
         controller = Controller(

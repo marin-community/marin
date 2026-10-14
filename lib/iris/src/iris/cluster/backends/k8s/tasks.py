@@ -19,13 +19,12 @@ from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
 from finelog.client.log_client import Table
 from google.protobuf import json_format
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 
 from iris.cluster.backends.k8s.output_contract import (
     OUTPUT_CONTAINER_NAME,
@@ -1418,8 +1417,9 @@ _GC_MAX_AGE_SECONDS = 3600  # 1 hour
 # as they exist — Kueue rebuilds the pod-group Workload from surviving labeled
 # pods — so they cannot get the 1h debugging window plain pods do: every held
 # slot is an idle GPU node. 1 minute is still far above pod-status poll
-# latency (the reconcile loop runs every few seconds), so prompt deletion
-# cannot race exit-status collection.
+# latency (the reconcile loop runs every few seconds). Both retention windows
+# start after the last container finishes so GC cannot immediately remove an
+# old task's final status.
 _GANG_GC_MAX_AGE_SECONDS = 60
 
 
@@ -2089,7 +2089,7 @@ class PeriodicProfiler:
         """
         dispatch = _K8sProfileDispatch(self._kubectl, target.pod_name)
         try:
-            data = capture_threads(dispatch, pid="1")
+            data = capture_threads(dispatch, pid="1", nonblocking=True)
         except Exception as e:
             logger.debug("PeriodicProfiler: thread dump failed for pod %s: %s", target.pod_name, e)
             return None
@@ -2876,9 +2876,9 @@ class K8sTaskProvider:
         through a lazy paged iterator, so neither its duration nor the size of the
         backlog it sweeps is anyone else's problem.
         """
-        now = datetime.now(UTC).timestamp()
-        cutoff = now - _GC_MAX_AGE_SECONDS
-        gang_cutoff = now - _GANG_GC_MAX_AGE_SECONDS
+        now = Timestamp.now()
+        cutoff = now.add(Duration.from_seconds(-_GC_MAX_AGE_SECONDS))
+        gang_cutoff = now.add(Duration.from_seconds(-_GANG_GC_MAX_AGE_SECONDS))
 
         # Pod-groups with live (Pending/Running) members share one Kueue
         # Workload across the gang; releasing it would evict the running
@@ -2914,7 +2914,19 @@ class K8sTaskProvider:
             created = meta.get("creationTimestamp", "")
             if not created:
                 continue
-            ts = parse_k8s_timestamp(created).timestamp()
+            finish_times = (
+                container_status.get("state", {}).get("terminated", {}).get("finishedAt")
+                for status_kind in ("initContainerStatuses", "containerStatuses")
+                for container_status in pod.get("status", {}).get(status_kind, [])
+            )
+            ts = max(
+                (
+                    Timestamp.from_seconds(parse_k8s_timestamp(finished).timestamp())
+                    for finished in finish_times
+                    if finished
+                ),
+                default=Timestamp.from_seconds(parse_k8s_timestamp(created).timestamp()),
+            )
             pod_group = meta.get("labels", {}).get(_KUEUE_POD_GROUP_NAME)
             # Gang sweep: a deletionTimestamp means a prior delete is
             # wedged on the Kueue finalizer; otherwise the shorter gang

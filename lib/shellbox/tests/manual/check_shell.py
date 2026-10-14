@@ -7,12 +7,13 @@ import argparse
 import asyncio
 from pathlib import Path
 
+from shellbox.backends.qemu.image import load_qemu_bundle
 from shellbox.backends.qemu.machine import Acceleration, QemuMachineFactory
-from shellbox.machine import Command, MachineSpec, QemuBundle, ShellStatus
+from shellbox.machine import Command, MachineSpec, ShellStatus
 
 
 async def main(bundle: Path) -> None:
-    machine = await QemuMachineFactory(Acceleration.TCG).create(MachineSpec(QemuBundle(bundle), cpus=2))
+    machine = await QemuMachineFactory(Acceleration.TCG).create(MachineSpec(load_qemu_bundle(bundle), cpus=2))
     try:
         # ACPI-free discovery must retain both CPUs and the virtio shell transport.
         cpus = await machine.run(Command(("cat", "/sys/devices/system/cpu/online")))

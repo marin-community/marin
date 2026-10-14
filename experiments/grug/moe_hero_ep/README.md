@@ -7,13 +7,13 @@ data-parallel rack uses one 64-device expert mesh.
 
 - Model: d6144, 48 layers, 384 routed experts of width 3072, top-8 routing, latent width 3072, and
   two shared experts of width 3072. Depth rounds up to the nearest even count.
-- Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 4096,
-  sliding window 2048, and every fourth layer full-causal with the final layer also global. SConv
-  and fused RoPE are on.
+- Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 16384
+  (4096 through step 257553), query/key multiplier 1.48 (1.3 at 4K), sliding window 2048, and every
+  fourth layer full-causal with the final layer also global. SConv and fused RoPE are on.
 - Mesh: 64-way expert parallelism across 16 workers with four GB200 GPUs each. Additional racks use
   the `replica_dcn` axis. Six experts are on each GPU in each rack.
-- Batch: The d6144 production run uses 11264 global sequences across 11 racks. A one-rack
-  diagnostic uses 1024 sequences.
+- Batch: Each rack holds 4,194,304 tokens per update. The d6144 production run uses 2816 global
+  sequences across 11 racks at 16K (11264 at 4K). A one-rack diagnostic defaults to 256 sequences.
 - Router: top-8 quantile balancing uses a global histogram with 10,000 bins. It has next-step,
   stop-gradient expert biases and no auxiliary balancing loss.
 - MoE backend: `ragged_all_to_all`. One update carries each (peer, local expert) pair, so rows
@@ -74,14 +74,19 @@ Launch the checkout or bundle pinned by `source_revision` on every JAX process
 with the same YAML. Use [Iris launch procedures](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md):
 
 ```bash
-uv run --package marin-levanter --extra gpu python -m \
+TMPDIR=/cache uv run --package marin-levanter --extra gpu python -m \
   experiments.grug.moe_hero_ep.ops.export_vllm --config_path export.yaml
 ```
 
+For remote output, use writable disk-backed scratch (`/cache` in Iris containers)
+with space for the largest serialized shard. Iris Docker's `/tmp` uses RAM.
+Local output is written directly to the destination.
+
 Keep the checkpoint immutable. Run one exporting gang per destination. The
 global device count must be divisible by `expert_axis_size * replica_axis_size`;
-both axes default to one. Every device must fit the largest expert bank.
-Process zero needs host RAM for one layer plus serialization buffers.
+both axes default to one. Every device must fit the largest expert bank in full.
+Files use Levanter's 5 GB shard target; a larger expert bank stays in one file.
+Process zero needs host RAM for one shard plus serialization buffers.
 
 Load the BF16 output with [Marin vLLM's split-expert loader](https://github.com/marin-community/vllm/pull/77).
 Tokenizer files are not copied. Set vLLM's `--tokenizer` and
@@ -159,6 +164,26 @@ state. Confirm new child progress from its Finelog execution, not inherited W&B
 rows. Before submission, the launcher posts source SHA, run and coordinator IDs,
 fork point, and checkpoint to [#8506](https://github.com/marin-community/marin/issues/8506);
 a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
+
+## Context-length switches
+
+The scaling ladder holds 4,194,304 tokens per rack per update, so the 11-rack hero uses batch 11264
+at 4K, 5632 at 8K, and 2816 at 16K with the same 390251-step schedule, learning rates, and weight
+decay. Eval runs at the training context, so the `eval_dropless/*` series shift at each switch.
+
+A switch's deploy PR edits Python only. It sets the `HERO_MODEL` fields in `heuristic.py`
+(`max_seq_len`, and `qk_mult`, `qk_mult_long_scale`, or `capacity_factor` as needed), appends the
+context the run is leaving, with the step N it ended at, to `HERO_CONTEXT_PHASES` in
+`launch_scaling_ladder.py`, and sets `HERO_FLOPS_BASELINE_TOTAL` to the parent's
+`throughput/total_gflops` × 1e9 at W&B `_step` N−1, which counts N updates. Later handoffs keep
+both. Trial arms run from a branch that sets the same `HERO_MODEL` fields and history, and override
+only `--qk-mult` and `--qk-mult-long-scale` on the command line. `qk_mult_long_scale` multiplies
+`qk_mult` on the global layers only. Each Harrier bucket skips the unread rest of the shuffle window
+it was reading at each switch, about 52B tokens at a 216000 handoff, so no data repeats. Keep the
+data seed, component order, and token store unchanged. The QK and capacity values need measured
+evidence, and a live switch needs a rehearsal from the handoff checkpoint and agreed trial
+thresholds; see the
+[context-switch inventory](https://github.com/marin-community/marin/issues/9615#issuecomment-5940217790).
 
 ## Coordinated garbage collection
 
@@ -238,10 +263,10 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | --- | --- |
 | `--gc-interval` | opts into cyclic GC at shared completed-step boundaries after warmup |
 | `--dp-racks` | sets the data-parallel rack count; `--batch-size` stays global |
-| `--batch-size` | sets global sequences per step and the optimizer token budget |
+| `--batch-size` | sets global sequences per step and the optimizer token budget; the default holds one hero rack's 4,194,304 tokens at the sequence length |
 | `--seq-len` | sets sequence length; the optimizer uses the resulting token budget |
 | `--context-axis-size`, `--expert-axis-size` | divide each rack between context and expert parallelism |
-| `--qk-mult` | multiplies Q before attention; default 1.3, extension recipe 1.84 |
+| `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.48; extension recipe 1.84), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (1.1386 gives 1.48 from 1.3; 1.2964 gives 1.68) |
 | `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
 | `--eval-every` | adds Paloma evaluation at the selected interval |
@@ -308,13 +333,13 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32576 \
   -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \
-    --run-id "$run_id" --num-steps 8 --schedule-steps 390251 --batch-size 1024 \
+    --run-id "$run_id" --num-steps 8 --schedule-steps 390251 \
     --profile-start-step 5 --profile-steps 2 --training-data synthetic \
     --version dev --run
 ```
 
-Batch 1024 keeps the production local batch of 16 sequences per GPU. The trace does not include
-the 11-rack `replica_dcn` collectives or their global histogram reduction.
+The default batch, 256 at 16K, keeps the production local batch of 4 sequences per GPU. The trace
+does not include the 11-rack `replica_dcn` collectives or their global histogram reduction.
 
 ### Profile-guided scheduling
 
@@ -410,10 +435,11 @@ checkpoint policy all follow `--size`:
 | d1024 | 2 | 2048 | 15,276 | every 5% | final only |
 | d1536 | 6 | 6144 | 15,128 | every 5% | final only |
 | d2048 | 11 | 11264 | 20,072 | every 5% | final only |
-| d6144 | 11 | 11264 | 390,251 | every 3000 | every 6k |
+| d6144 | 11 | 11264 at 4K, 2816 at 16K | 390,251 | every 3000 | every 6k |
 
-Train batch is 1024 × racks; eval batch is 64 × racks (one sequence per device). The step budget is
-791 tokens per active parameter (18T at d6144); pass `--num-steps` to override.
+At 4K, train batch is 1024 × racks; longer contexts shrink it to keep the tokens per step. Eval
+batch is 64 × racks (one sequence per device). The step budget is 791 tokens per active parameter
+(18T at d6144); pass `--num-steps` to override.
 
 A rung resumes from the newest checkpoint it finds. The permanent checkpoints above go to the
 durable output root, and a rolling temporary checkpoint every hour goes to region-local temp

@@ -3,22 +3,21 @@
 
 """Grade complete rollouts in real bubblewrap sandboxes built from package locks."""
 
-import hashlib
 import json
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
-from shellbox.machine import Backend, Machine, MachineFactory, MachineSpec
+from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavailable
+from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineFactory, MachineSpec
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import EnvironmentRequirements, ResourceGroups, ScriptGrader
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ResourceGroups, ScriptGrader
 from taskcompendium.runtime.resources import inline_resource
 
 from rolloutengine.lowering import lower_task
-
-from .test_rollout import TWELVE, ReplayModel, arithmetic_task, engine, lowered, machine_runtime
+from rolloutengine.test_support import TWELVE, ReplayModel, arithmetic_task, engine, lowered, machine_runtime
 
 SCRIPT = b"""
 import os
@@ -41,12 +40,15 @@ class DelegatingLocalFactory:
     def backend(self) -> Backend:
         return Backend.LOCAL
 
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        self.base.check_environment(requirements, spec)
+
     async def create(self, spec: MachineSpec) -> Machine:
         return await self.base.create(replace(spec, env={**spec.env, "WRAPPER_MARKER": "wrapped"}))
 
 
 @dataclass(frozen=True)
-class UnavailableLocalFactory:
+class UnavailableLocalFactory(LocalMachineFactory):
     backend: Backend = Backend.LOCAL
 
     async def create(self, _spec: MachineSpec) -> Machine:
@@ -55,8 +57,6 @@ class UnavailableLocalFactory:
 
 @pytest.fixture
 def local_grading_factory():
-    from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavailable  # noqa: PLC0415
-
     if os.geteuid() != 0:
         pytest.skip("Local grader staging requires a root host process")
     try:
@@ -69,11 +69,8 @@ def local_grading_factory():
 def lock_environment(tmp_path):
     lock = tmp_path / "requirements.lock"
     lock.write_bytes((Path(__file__).parent / "fixtures" / "local-grader.lock").read_bytes())
-    (tmp_path / ".artifact.json").write_text(
-        json.dumps({"result": {"lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest(), "data": []}})
-    )
     return EnvironmentRequirements(
-        compatible_backends=(Backend.LOCAL,),
+        command_semantics=CommandSemantics.LINUX_PROCESS,
         packages_lock=str(lock),
         setup_commands=("printf ready > /app/ready",),
         environment_variables={"GRADER_SETTING": "configured"},

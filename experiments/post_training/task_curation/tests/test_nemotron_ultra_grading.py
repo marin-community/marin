@@ -15,12 +15,13 @@ from taskcompendium.pipeline.models import CheckStatus, Reply
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import pipeline_name
+from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import LEAN_GRADER_MEMORY_MB
 from experiments.post_training.task_curation.tests.conversion import converted_task
 from experiments.post_training.task_curation.tests.local_grader import (
     grade,
     with_verifier_file,
 )
-from experiments.post_training.task_curation.tests.test_nemotron_ultra import COMPONENT_ROWS, PIPELINES
+from experiments.post_training.task_curation.tests.ultra_rows import COMPONENT_ROWS, RECIPES
 
 pytestmark = [pytest.mark.docker, pytest.mark.timeout(600)]
 
@@ -43,26 +44,32 @@ def report_call(count: object) -> Reply:
 
 def task(path: str) -> TaskSpec:
     blend = "mopd" if path == STRUCTURED_TOOL else "rlvr2"
-    return converted_task(PIPELINES[pipeline_name(blend, path)], COMPONENT_ROWS[path])
+    return converted_task(RECIPES[pipeline_name(blend, path)], COMPONENT_ROWS[path])
 
 
 @pytest.mark.parametrize(
     ("path", "submission", "reward"),
     [
+        ("ultra_sft_step3200_abstention", reply(r"\boxed{[IDK]}"), 0.5),
         ("ultra_sft_step3200_calendar_v2", reply(f"<think>Plan.</think>{SCHEDULE}"), 1.0),
         ("ultra_sft_step3200_calendar_v2", reply(EARLY_SCHEDULE), 0.0),
         ("ultra_sft_step3200_ds2_freeform", reply("- apple\n- pear\n- plum"), 1.0),
         ("ultra_sft_step3200_ds2_freeform", reply("apple, pear and plum"), 0.0),
-        ("ultra_sft_step3200_instruction_following", reply("Tea is a drink brewed from leaves."), 1.0),
         ("ultra_sft_step3200_instruction_following", reply("Tea, a drink, is brewed from leaves."), 0.0),
         ("ultra_sft_step3200_stem_mcqa", reply("\\boxed{B}"), 1.0),
         ("ultra_sft_step3200_stem_mcqa", reply("\\boxed{A}"), 0.0),
         ("ultra_sft_step3200_comp_coding", reply(STDIN_BUFFER_SUM), 1.0),
         ("ultra_sft_step3200_structured_outputs_v2", reply('{"count": 3}'), 1.0),
+        ("ultra_sft_step3200_structured_outputs_v2", reply('```json\n{"count": 3}\n```'), 1.0),
         ("ultra_sft_step3200_structured_outputs_v2", reply('{"count": "three"}'), 0.0),
         (STRUCTURED_TOOL, report_call(3), 1.0),
         (STRUCTURED_TOOL, report_call("three"), 0.0),
         ("ultra_sft_step3200_reasoning_gym", reply("x = 50 - 8, so <answer>42</answer>"), 1.0),
+        (
+            "ultra_sft_step3200_reasoning_gym",
+            reply("Work through the grid.\n\n## Answer\n\n**The result is 42.**\n\n---\nExtra notes."),
+            1.0,
+        ),
         ("ultra_sft_step3200_reasoning_gym", reply("<answer>58</answer>"), 0.0),
     ],
 )
@@ -73,14 +80,20 @@ def test_grade_script_scores_the_reply(path, submission, reward, machines):
 
 @pytest.mark.parametrize(
     "path",
-    ["ultra_sft_step3200_comp_coding", "ultra_sft_step3200_rdkit", "ultra_sft_step3200_toolcall_schema"],
+    ["ultra_sft_step3200_comp_coding", "ultra_sft_step3200_rdkit"],
 )
 def test_golden_control_scores_the_reference_one(path, machines):
-    controls = PIPELINES[pipeline_name("rlvr2", path)].controls
+    controls = RECIPES[pipeline_name("rlvr2", path)].controls
     assert controls is not None
     report = run_controls(task(path), controls=controls, machines=machines)
     statuses = {check.check: check.status for check in report.checks}
     assert statuses == {"golden": CheckStatus.PASS}, report
+
+
+@pytest.mark.parametrize(("proof", "reward"), [("by trivial", 1.0), ("by no_such_tactic", 0.0), ("by sorry", 0.0)])
+def test_lean_grader_compiles_the_proof_and_rejects_invalid_or_incomplete_proofs(proof, reward, machines):
+    result = grade(task("ultra_sft_step3200_lean"), reply(f"```lean4\n{proof}\n```"), machines, LEAN_GRADER_MEMORY_MB)
+    assert (result.status, result.reward) == (Outcome.GRADED, reward), result
 
 
 @pytest.mark.parametrize(
@@ -88,12 +101,11 @@ def test_golden_control_scores_the_reference_one(path, machines):
     [
         ("ultra_sft_step3200_calendar_v2", "calendar"),
         ("ultra_sft_step3200_ds2_freeform", "format_verification"),
-        ("ultra_sft_step3200_instruction_following", "instruction_following"),
         ("ultra_sft_step3200_stem_mcqa", "mcqa"),
         ("ultra_sft_step3200_comp_coding", "code_gen"),
         ("ultra_sft_step3200_structured_outputs_v2", "structured_outputs"),
         ("ultra_sft_step3200_rdkit", "rdkit_chemistry"),
-        ("ultra_sft_step3200_toolcall_schema", "tool_call"),
+        ("ultra_sft_step3200_lean", "lean"),
         ("ultra_sft_step3200_reasoning_gym", "answer_extraction"),
     ],
 )

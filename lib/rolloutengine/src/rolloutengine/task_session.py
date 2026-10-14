@@ -4,23 +4,23 @@
 """Shellbox task operations and public model request preparation."""
 
 import json
-from collections.abc import Mapping
-from contextlib import AsyncExitStack
 from typing import Any
 
-from shellbox.machine import Command, Machine, MachineFactory
 from taskcompendium.chat import assistant_message
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import (
     ANSWER_CALL_NAME,
     CONVERSATION_ANSWERS,
+    TOOL_ARGUMENTS_OBJECT_ERROR,
     AnswerCall,
     AnswerType,
     AssistantToolCalls,
     FinalAction,
+    FunctionCall,
     SessionGrader,
     TaskSpec,
 )
+from taskcompendium.runtime.shell import BoundShellTool, resolve_shell_tool, run_shell_call
 from taskcompendium.submission import (
     answer_call_tool,
     conversation_messages,
@@ -28,31 +28,14 @@ from taskcompendium.submission import (
     submission_instruction,
 )
 
-from rolloutengine.cleanup import _Cleanup
-from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, Transition
-from rolloutengine.grading import _grade_rollout
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, TaskSessionContext, Transition
 
-SHELL_TOOL_NAME = "shell"
 WORKSPACE_INSTRUCTION = (
-    "Use the shell tool to inspect and change the workspace. Send a final response when the task is completed."
+    "Use the {tool_name} tool to inspect and change the workspace. Send a final response when the task is completed."
 )
-SHELL_TOOL = {
-    "type": "function",
-    "function": {
-        "name": SHELL_TOOL_NAME,
-        "description": "Run a shell command in the task workspace. Files persist between commands.",
-        "parameters": {
-            "type": "object",
-            "properties": {"command": {"type": "string"}},
-            "required": ["command"],
-            "additionalProperties": False,
-        },
-    },
-}
 
 
-def session_start(task: TaskSpec) -> SessionStart:
+def session_start(task: TaskSpec, shell_tool: BoundShellTool | None) -> SessionStart:
     """Render only public task fields, with the answer format's instruction and tools."""
     answer_format = task.answer_format
     messages = conversation_messages(task.context.events)
@@ -75,12 +58,13 @@ def session_start(task: TaskSpec) -> SessionStart:
                 options["tool_choice"] = "required"
             if answer_format.max_calls == 1:
                 options["parallel_tool_calls"] = False
-    if "shell" in task.environment_requirements.capabilities:
-        if any(function.name == SHELL_TOOL_NAME for function in (*task.final_tools, *task.interaction_tools)):
-            raise ValueError("The shell tool name is reserved for the Shellbox session")
-        tools.append(SHELL_TOOL)
+    if shell_tool is not None:
+        if not task.tool_bindings:
+            tools.append({"type": "function", "function": shell_tool.definition.model_dump(exclude_none=True)})
         if task.answer_type == AnswerType.WORKSPACE_STATE:
-            messages.append({"role": "user", "content": WORKSPACE_INSTRUCTION})
+            messages.append(
+                {"role": "user", "content": WORKSPACE_INSTRUCTION.format(tool_name=shell_tool.definition.name)}
+            )
     if tools:
         options["tools"] = tools
     return SessionStart(tuple(messages), options)
@@ -89,22 +73,14 @@ def session_start(task: TaskSpec) -> SessionStart:
 class _ShellboxTaskSession:
     """Execute shell calls and grade final task evidence."""
 
-    def __init__(
-        self,
-        lowered: LoweredTaskSpec,
-        machine: Machine | None,
-        factories: Mapping[str, MachineFactory],
-        cleanup: _Cleanup,
-        resources: AsyncExitStack,
-    ):
-        self.lowered = lowered
-        self.machine = machine
-        self.factories = factories
-        self.cleanup = cleanup
-        self.resources = resources
+    def __init__(self, context: TaskSessionContext):
+        self.lowered = context.lowered
+        self.machine = context.machine
+        self.grader = context.require_task_grader()
+        self.shell_tool = resolve_shell_tool(context.lowered.task, context.lowered.session.shell_tool)
 
     async def prepare(self) -> SessionStart:
-        return session_start(self.lowered.task)
+        return session_start(self.lowered.task, self.shell_tool)
 
     async def advance(self, turn: ModelTurn) -> Transition:
         try:
@@ -119,50 +95,28 @@ class _ShellboxTaskSession:
             answer_call = isinstance(self.lowered.task.answer_format, AnswerCall) and call.name == ANSWER_CALL_NAME
             if call.name in final_tools or answer_call:
                 return Transition(done=True)
-            if call.name != SHELL_TOOL_NAME or set(call.arguments) != {"command"}:
-                observations.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.call_id,
-                        "content": json.dumps({"error": "This session requires shell(command: string) calls"}),
-                    }
-                )
-                continue
-            command = call.arguments["command"]
-            if not isinstance(command, str):
-                observations.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.call_id,
-                        "content": json.dumps({"error": "Shell command must be a string"}),
-                    }
-                )
-                continue
-            result = await self.machine.run(
-                Command(
-                    argv=("sh", "-c", command),
+            if not isinstance(call.arguments, dict):
+                observation = json.dumps({"error": TOOL_ARGUMENTS_OBJECT_ERROR})
+            elif self.shell_tool is None:
+                observation = json.dumps({"error": "No shell tool is available"})
+            else:
+                observation = await run_shell_call(
+                    self.machine,
+                    FunctionCall(name=call.name, arguments=call.arguments),
+                    self.shell_tool,
                     timeout=self.lowered.session.command_timeout,
                 )
-            )
             observations.append(
                 {
                     "role": "tool",
                     "tool_call_id": call.call_id,
-                    "content": json.dumps(
-                        {
-                            "stdout": result.stdout.decode(errors="replace"),
-                            "stderr": result.stderr.decode(errors="replace"),
-                            "exit_code": result.exit_code,
-                            "reason": result.reason.value,
-                            "truncated": result.stdout_truncated or result.stderr_truncated,
-                        }
-                    ),
+                    "content": observation,
                 }
             )
         return Transition(done=False, observations=tuple(observations))
 
-    async def grade(self, messages: tuple[dict[str, Any], ...]) -> GradeResult:
-        return await _grade_rollout(self.lowered, messages, self.machine, self.factories, self.cleanup, self.resources)
+    async def grade(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult:
+        return await self.grader(messages, stop_reason=stop_reason)
 
     async def close(self) -> None:
         pass

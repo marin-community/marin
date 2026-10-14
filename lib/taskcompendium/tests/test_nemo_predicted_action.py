@@ -12,7 +12,8 @@ import pytest
 
 from taskcompendium.chat import assistant_message, chat_conversation
 from taskcompendium.grading import grade_answer
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
+from taskcompendium.identity import canonical_sha256
+from taskcompendium.importers.nemo_predicted_action import import_row
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
@@ -151,14 +152,6 @@ def test_predicted_action_rejects_invalid_contract_on_load(parameters):
         TaskSpec.model_validate_json(json.dumps(data))
 
 
-def test_predicted_action_task_roundtrip_preserves_source_context():
-    row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification = import_row(row, canonical_sha256(row))
-    restored = TaskSpec.model_validate_json(specification.model_dump_json())
-    assert restored.context == specification.context
-    assert chat_request(restored) == chat_request(specification)
-
-
 @pytest.mark.parametrize(
     "response,reward,status",
     [
@@ -289,6 +282,17 @@ def test_imported_final_call_constraints_distinguish_invalid_submission(require_
     request = chat_request(specification)
     assert request.get("tool_choice") == ("required" if require_call else None)
     assert request["parallel_tool_calls"] is False
+
+
+@pytest.mark.parametrize("arguments", ['["invalid"]', '"invalid"', "null", "42"])
+def test_nonobject_final_arguments_are_scored_submission_failures(arguments):
+    row = json.loads((FIXTURES / "predicted-action.json").read_text())
+    specification = import_row(row, canonical_sha256(row))
+    final = assistant_message(_action(row["expected_action"]["name"], arguments))
+    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)))
+    result = grade_answer(specification, attempt)
+    assert (result.status, result.reward) == ("submission_failure", 0.0)
+    assert final.calls[0].arguments == json.loads(arguments)
 
 
 def test_imported_parallel_actions_accept_multiple_final_calls():

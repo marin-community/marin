@@ -40,7 +40,10 @@ process exit after a verdict has been written.
 | `script` | legacy `test.sh` fallback with normalized reward files and fail-closed errors |
 
 The `pytest` mode scores startup and collection errors attributed to editable candidate code as failed attempts.
-Missing dependencies, errors in restored task files, and genuine interruptions remain unscored.
+`PytestSpec.candidate_modules` names modules the task asks the candidate to implement.
+Missing imports of those modules score zero, including an empty submission.
+Workspace-qualified candidate packages add the workspace parent to Python's import path.
+Unlisted missing dependencies, errors in restored task files, and genuine interruptions remain unscored.
 `protected_paths_files` lists tests-directory manifests of trusted workspace paths restored by setup.
 Every batch is checked before returning a candidate startup or collection failure.
 
@@ -100,11 +103,18 @@ configures its scorer; callers own isolation when invoking its direct API.
 `adapters/` prepares framework observations for the shared modes. Frameworks retain task
 execution, dispatch, and dependency pins; installing this package does not enable an adapter.
 `preparation/` retains raw inputs and named normalization policies. Preparation failures carry
-Harbor's error categories from the pinned config-only `harbor-config` dependency.
+Verifyit's own attribution category, which determines whether an incomplete attempt can be scored.
 
 `json_comparison.json_values_equal` compares decoded JSON values with strict types and an optional
 float tolerance. `modes.grade_nl2bash` compares shell-output records as a multiset, preserving
 repeated records and rejecting unexpected errors.
+
+`structure_closure` classifies partial JSON, delimited JSON, paired markers, and required code
+fences. `closure_scoring` compares a completed outer region with a known reference and reports
+syntax, content preservation, and trailing output separately. `tool_call_markup` classifies
+completed `<tool_call>` markup in decoded assistant text. These helpers inspect text; the caller
+retains the sampled tokens, supplies any generation stop markers, and decides when a completed
+attempt can be scored.
 
 `candidate_spec(mode, parameters)` builds and validates the specification of an in-process mode
 from a JSON table. `grade_candidate(spec, candidate, resources)` scores an answer the caller
@@ -122,12 +132,12 @@ argument object as a JSON string in TOML so nested JSON null values survive `par
 ## Install and use
 
 ```bash
-uv tool install --python ">=3.11" \
-  "verifyit[answer] @ git+https://github.com/marin-community/marin@<sha>#subdirectory=lib/verifyit"
+uv tool install --python ">=3.11" "marin-verifyit[math]"
 ```
 
-Extras are `answer`, `schema`, `judge`, `reasoning-gym`, and `all`. Execution modes use the task
-image's toolchain.
+The `math` extra installs `math-verify` and `sympy` for symbolic expression grading. Exact,
+numeric, and multiple-choice modes work with the base package. Other extras are `schema`,
+`judge`, `reasoning-gym`, and `all`. Execution modes use the task image's toolchain.
 
 ```python
 from pathlib import Path
@@ -149,6 +159,21 @@ uv run --group test pytest lib/verifyit/tests
 ## Candidate scoring
 
 Callers that already extracted an answer use `verifyit.candidate.grade_candidate` for the in-process modes, or the per-mode candidate functions in `verifyit.modes`. Standard specs and script graders share the `Reward` and `Status` contract. Dataset declarations select the grader and lower source fields into its inputs. Shared comparisons belong in VerifyIT; source-specific reward functions stay with the dataset, in its grade scripts and the vendored source scorers they ship.
+
+For text candidates stored in a file, supply the contract and resource locations explicitly:
+
+```bash
+python -m verifyit.candidate_file \
+  --spec /tests/contract.toml --answer /app/answer.txt \
+  --workspace /app --logs-dir /logs/verifier \
+  --resources-manifest /tests/resources.json
+```
+
+The resource manifest is a JSON list of paths relative to its containing directory; use `[]`
+when there are no resources. The command passes the entire file text to `grade_candidate`,
+preserving its extraction rules, and writes the same verdict and reward files as `verifyit`.
+A missing answer scores zero. This entrypoint accepts text candidates; callers holding decoded
+JSON or function calls use the Python API.
 
 A `ScriptSpec` runs an ordinary grading script. The script may compose VerifyIT comparisons or implement its own scoring, and can declare `verdict_file` to distinguish scored results, invalid tasks and infrastructure failures. Fixtures are relative to the tests directory; candidate evidence belongs to the workspace.
 

@@ -2,7 +2,7 @@
 # the Marin-community repositories, and the durable wiki agents write to. The page talks
 # only to its own API under /echo/api/, which searches Postgres and reranks on the CPU.
 title = "Echo"
-description = "Search Marin's context: wiki notes, repository files, pull requests, issues, and Discord."
+description = "Search Marin’s wiki, repository files, pull requests, issues, and Discord. Find prior decisions and follow the sources behind them."
 connect_src = []
 build_command = "cd web && npm ci && npm run build"
 

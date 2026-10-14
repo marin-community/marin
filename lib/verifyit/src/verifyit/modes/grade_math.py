@@ -325,6 +325,11 @@ def _grade_symbolic(spec: MathSpec, workspace: Path) -> Reward:
         # Validate the reference even when no candidate was submitted.
         grade_math_candidate(spec, "")
         return scored(0.0, reason="no_output")
+    return grade_math_text_candidate(spec, text)
+
+
+def grade_math_text_candidate(spec: MathSpec, text: str) -> Reward:
+    """Extract math under the task's parsing profile and grade the result."""
     return grade_math_candidate(spec, math_answer(spec, text))
 
 
@@ -429,17 +434,26 @@ def grade_numeric_candidate(spec: NumericSpec, value: Fraction) -> Reward:
     )
 
 
-def _grade_numeric(spec: NumericSpec, workspace: Path) -> Reward:
+def validate_numeric(spec: NumericSpec) -> None:
     empty_output_policy(spec)
     numeric_tolerance(spec)
-    text = read_output(spec, workspace)
-    if text is None:
-        return scored(0.0, reason="no_output")
+
+
+def grade_numeric_text_candidate(spec: NumericSpec, text: str) -> Reward:
+    """Extract one exact numeric literal and apply the task's tolerances."""
     try:
         value = extract_numeric_candidate(text)
     except NumericCandidateError as error:
         return scored(0.0, reason="invalid_numeric_candidate", error=str(error))
     return grade_numeric_candidate(spec, value)
+
+
+def _grade_numeric(spec: NumericSpec, workspace: Path) -> Reward:
+    validate_numeric(spec)
+    text = read_output(spec, workspace)
+    if text is None:
+        return scored(0.0, reason="no_output")
+    return grade_numeric_text_candidate(spec, text)
 
 
 def grade(spec: MathSpec | NumericSpec, tests_dir: Path, workspace: Path) -> Reward:

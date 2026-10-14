@@ -166,15 +166,16 @@ def test_full_marin_suite_includes_experiment_tests(
 
     selection = select_changed_tests(changed_files, tmp_path, run_all_tests=run_all_tests)
 
-    assert leg_paths(selection.matrix, "marin") == ["tests", "experiments"]
+    assert leg_paths(selection.matrix, "marin") == ["experiments/moe/test_optimizer.py", "tests/test_root.py"]
 
 
 def test_deleted_experiment_source_runs_full_marin_suite(tmp_path: Path) -> None:
     write(tmp_path, "experiments/moe/test_optimizer.py", "from experiments.moe.optimizer import RATE\n")
+    write(tmp_path, "tests/test_root.py", "def test_root():\n    assert True\n")
 
     matrix = select_matrix(["experiments/moe/optimizer.py"], tmp_path)
 
-    assert leg_paths(matrix, "marin") == ["tests", "experiments"]
+    assert leg_paths(matrix, "marin") == ["experiments/moe/test_optimizer.py", "tests/test_root.py"]
 
 
 def test_deleted_experiment_test_is_not_handed_to_pytest(tmp_path: Path) -> None:
@@ -266,16 +267,30 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "changed_path,suites",
     [
-        ("lib/taskcompendium/src/taskcompendium/lowering.py", ["rolloutengine-unit", "taskcompendium-unit"]),
+        (
+            "lib/taskcompendium/src/taskcompendium/lowering.py",
+            ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"],
+        ),
         ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit"]),
-        ("lib/shellbox/src/shellbox/machine.py", ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit"]),
-        ("lib/shellbox/tests/test_docker_machine.py", ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit"]),
-        ("lib/shellbox/pyproject.toml", ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit"]),
+        (
+            "lib/shellbox/src/shellbox/machine.py",
+            ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit", "taskforge-unit"],
+        ),
+        (
+            "lib/shellbox/tests/test_docker_machine.py",
+            ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit", "taskforge-unit"],
+        ),
+        (
+            "lib/shellbox/pyproject.toml",
+            ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit", "taskforge-unit"],
+        ),
         (
             "lib/verifyit/src/verifyit/grading.py",
-            ["rolloutengine-unit", "taskcompendium-unit"],
+            ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"],
         ),
-        ("lib/rigging/src/rigging/message.py", ["rolloutengine-unit", "taskcompendium-unit"]),
+        ("lib/rigging/src/rigging/message.py", ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"]),
+        ("lib/iris/src/iris/client/client.py", ["iris-e2e-smoke", "taskforge-unit"]),
+        ("lib/taskforge/src/taskforge/llm/glm_client.py", ["taskforge-unit"]),
     ],
 )
 def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_path: str, suites: list[str]) -> None:
@@ -286,6 +301,15 @@ def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_p
 
     full_selection = select_changed_tests([], tmp_path, run_all_tests=True)
     assert set(suites) <= set(full_selection.suites)
+
+
+@pytest.mark.parametrize(
+    "path", ["experiments/post_training/capability_driven_envs/generate_tasks.py", "experiments/post_training/glm.py"]
+)
+def test_capability_environment_change_selects_the_taskforge_suite(tmp_path: Path, path: str) -> None:
+    selection = select_changed_tests([path], tmp_path)
+
+    assert "taskforge-unit" in selection.suites
 
 
 @pytest.mark.parametrize(
@@ -326,7 +350,7 @@ def test_verifier_change_selects_library_and_dependent_marin_tests(tmp_path: Pat
 
     assert leg_paths(matrix, "verifyit") == ["lib/verifyit/tests/test_grade.py"]
     assert leg_paths(matrix, "marin") == ["tests/test_verifier.py"]
-    verifier_leg = next(leg for leg in matrix if leg.package == "verifyit")
+    verifier_leg = next(leg for leg in matrix if leg.package == "marin-verifyit")
     assert verifier_leg.extras == "--extra all"
 
 
@@ -371,9 +395,9 @@ def _tpu_lock(
     name = "marin-root"
     version = "0.1.0"
     source = {{ editable = "." }}
-    dependencies = [{{ name = "verifyit" }}]
+    dependencies = [{{ name = "marin-verifyit" }}]
     [[package]]
-    name = "verifyit"
+    name = "marin-verifyit"
     version = "0.1.0"
     source = {{ {source} }}
     [[package]]
@@ -419,11 +443,11 @@ def _tpu_manifest(verifier_source: str = "workspace") -> str:
     [project]
     name = "marin-root"
     requires-python = ">=3.12"
-    dependencies = ["verifyit"]
+    dependencies = ["marin-verifyit"]
     [tool.uv.workspace]
     members = [{_verifier_members(verifier_source)}]
     [tool.uv.sources]
-    verifyit = {source}
+    marin-verifyit = {source}
     """
 
 

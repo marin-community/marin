@@ -43,7 +43,7 @@ dependencies = [
     "requests>=2.33.0",
     "resiliparse>=0.17.2",
     "s3fs>=2024",
-    "shellsim>=0.1.29",
+    "shellsim>=0.1.36",
     "tqdm",
     "tqdm-loggable",
     "wandb>0.24.0",
@@ -67,8 +67,9 @@ test = [
     "pytest-json-report>=1.5",
     "pytest-xdist",
     "pytest-timeout",
-    "verifyit[answer,reasoning-gym,schema]",
-    "taskcompendium[pipeline]",
+    "marin-verifyit[math,reasoning-gym,schema]",
+    "marin-taskcompendium[pipeline]",
+    "universal-pathlib",
     # for scaling law plotting tests
     "plotly",
 ]

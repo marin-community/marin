@@ -12,17 +12,8 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 from verifyit.modes.extract import extract_boxed
 
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
-
-MCQ_VERIFIER = SourceReference(
-    "mcq",
-    "0bc12f4e510cd99f34e12ac26599960d96d1ae0a24840eb3fdb9a4e80388e7fb",
-    (
-        "https://github.com/marin-community/MarinSkyRL/tree/"
-        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/mcq"
-    ),
-)
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 GPQA_CHOICES = ("Correct Answer", "Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3")
 OPTION_LABEL = re.compile(r"(?m)^([A-Z]):")
@@ -89,18 +80,18 @@ def convert_openscience(row: RawRow, _context: ConversionContext) -> TaskSpec | 
     )
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:gpqa",
                 title="Idavidrein/gpqa · gpqa_diamond",
                 origin="MarinSkyRL",
                 family="qa-multiple-choice",
                 tags=("rlvr", "single-turn", "benchmark", "license:cc-by-4.0", "gym/mcq"),
-                verifier=MCQ_VERIFIER,
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="gpqa",
                 source=HfSource(
                     "Idavidrein/gpqa",
@@ -110,21 +101,20 @@ def sources() -> list[RlDataSource]:
                 ),
                 convert=convert_gpqa,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.EVAL,
                 rubric=GPQA_RUBRIC,
             ),
         ),
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:openscience",
                 title="nvidia/OpenScience",
                 origin="MarinSkyRL",
                 family="qa-multiple-choice",
                 tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/mcq"),
-                verifier=MCQ_VERIFIER,
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="openscience",
                 source=HfSource(
                     "nvidia/OpenScience",
@@ -134,7 +124,6 @@ def sources() -> list[RlDataSource]:
                 ),
                 convert=convert_openscience,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=OPENSCIENCE_RUBRIC,
             ),

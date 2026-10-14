@@ -1,29 +1,32 @@
 # Rollout engine
 
-`marin-rolloutengine` executes one TaskCompendium task through Shellbox and returns
+`marin-rolloutengine` executes one TaskCompendium task and returns
 `RolloutData`: the conversation, exact tokens, loss mask, optional log probabilities, grade, and per-turn records.
 
 Callers supply a model callable, machine factories, and optional `TaskSession`
-factories for task actions and grading.
-The default session handles shell tools.
+factories. Each factory receives a `TaskSessionContext` for one attempt;
+a session class with that constructor signature can be registered directly.
+Each session prepares model requests, handles responses and tools, and grades the attempt.
+The built-in `shellbox` session uses the same execution
+loop as registered sessions and handles shell tools. `AgentTaskSession` adapts
+an agent that controls its own prompt and tool loop. Its factory can use the
+default grader supplied by the engine.
 For text, number, JSON, and native-action answers, it adds the task's answer-format instruction and tools to the model request.
 For workspace-state tasks, this session adds shell and final-response instructions to the model request.
 Importers retain the task problem without these interface instructions.
 The engine owns model calls, conversation and token accumulation, deadlines, and resource cleanup.
 
-`ShellboxRolloutEngine.run(lowered)` accepts a `LoweredTaskSpec` and asynchronously returns one rollout.
+`RolloutEngine.run(lowered)` accepts a `LoweredTaskSpec` and asynchronously returns one rollout.
 The lowered record preserves its `TaskSpec` and adds machine selections and session limits.
 The supported scope is single-stage tasks with prebuilt, digest-pinned images, local package-lock environments, or the built-in ShellSim filesystem.
 After the turn loop, the default session grades an in-process `VerifyitGrader` on the host.
 A `ScriptGrader`, or a `VerifyitGrader` with an environment, grades in a separate verifier machine using its digest-pinned image or a local environment built from its package lock.
 A `SessionGrader` requires a registered task session. A `NoGrader` task receives an `unavailable` grade.
-The Harbor importer accepts only separate verifier environments.
-An unset verifier mode without a separate environment selects shared mode and causes rejection.
 See the [task rollout reference](../../docs/references/task-rollouts.md)
 for the session lifecycle, exact-token contract, failure handling, and backend configuration.
 
 From the Marin repository root:
 
 ```bash
-uv run --project lib/rolloutengine --frozen --group test pytest lib/rolloutengine/tests -q
+uv run --package marin-rolloutengine --frozen --group test pytest lib/rolloutengine/tests -q
 ```

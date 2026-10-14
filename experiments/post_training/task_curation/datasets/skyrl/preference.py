@@ -27,17 +27,8 @@ from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, IntendedUse, RawRow
 
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
-
-PREFERENCE_VERIFIER = SourceReference(
-    "preference",
-    "91c7a60e85e31b6933ab0ee732125b3338e82b89",
-    (
-        "https://github.com/marin-community/MarinSkyRL/tree/"
-        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
-    ),
-)
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 HH_REPO = "Anthropic/hh-rlhf"
 HH_REVISION = "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa"
@@ -63,7 +54,6 @@ KTO_COMPONENTS = {
                 "Interaction describes supported conversation structure. Conversational collections "
                 "can include one-turn examples."
             ),
-            verifier=PREFERENCE_VERIFIER,
         ),
     ),
     "kto_component_intel_orca": (
@@ -78,7 +68,6 @@ KTO_COMPONENTS = {
                 "Interaction describes supported conversation structure. Conversational collections "
                 "can include one-turn examples."
             ),
-            verifier=PREFERENCE_VERIFIER,
         ),
     ),
     "kto_component_ultrafeedback": (
@@ -93,7 +82,6 @@ KTO_COMPONENTS = {
                 "Interaction describes supported conversation structure. Conversational collections "
                 "can include one-turn examples."
             ),
-            verifier=PREFERENCE_VERIFIER,
         ),
     ),
 }
@@ -170,7 +158,6 @@ HH_SUBSETS = (
                 "Interaction describes supported conversation structure. Conversational collections "
                 "can include one-turn examples."
             ),
-            verifier=PREFERENCE_VERIFIER,
         ),
     ),
     HhSubset(
@@ -187,7 +174,6 @@ HH_SUBSETS = (
                 "Interaction describes supported conversation structure. Conversational collections "
                 "can include one-turn examples."
             ),
-            verifier=PREFERENCE_VERIFIER,
         ),
     ),
     HhSubset(
@@ -204,7 +190,6 @@ HH_SUBSETS = (
                 "Interaction describes supported conversation structure. Conversational collections "
                 "can include one-turn examples."
             ),
-            verifier=PREFERENCE_VERIFIER,
         ),
     ),
     HhSubset(
@@ -221,7 +206,6 @@ HH_SUBSETS = (
                 "Interaction describes supported conversation structure. Conversational collections "
                 "can include one-turn examples."
             ),
-            verifier=PREFERENCE_VERIFIER,
         ),
     ),
 )
@@ -380,16 +364,16 @@ def convert_kto_component(row: RawRow, _context: ConversionContext) -> TaskSpec 
     )
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     hh = [
         RlDataSource(
+            pipeline=process_rows,
             info=subset.info,
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name=subset.name,
                 source=HfSource(HH_REPO, HH_REVISION, (f"{subset.config}/train.jsonl.gz",), SourceFormat.JSONL),
                 convert=convert_hh,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=subset.rubric,
             ),
@@ -398,8 +382,9 @@ def sources() -> list[RlDataSource]:
     ]
     kto = [
         RlDataSource(
+            pipeline=process_rows,
             info=info,
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name=name,
                 source=HfSource(
                     KTO_REPO,
@@ -411,7 +396,6 @@ def sources() -> list[RlDataSource]:
                 ),
                 convert=convert_kto_component,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=KTO_COMPONENT_RUBRIC,
                 inputs={PARENT_INPUT: HfSource(PARENT_REPO, PARENT_REVISION, (TRAIN_FILE,), SourceFormat.PARQUET)},
