@@ -162,11 +162,12 @@ grader requirements on each TaskSpec; execution selects suitable Shellbox machin
 | `apt` | Debian package names. |
 | `data` | Downloads; only `nltk:<package>` is supported. |
 | `image` | A digest-pinned image used as-is. It excludes every other field. |
+| `dockerfile` | A checked-in, self-contained Dockerfile fragment that installs a toolchain, such as Lean and Mathlib, using only `ARG`, `ENV` and `RUN`. The generated Dockerfile runs its lines after the apt step and before the lock sync; its bytes enter the identity. It excludes `image`. |
 
 | Declaration | Placement | Recorded `EnvironmentRequirements` |
 |---|---|---|
 | `image` set | A sandbox of that image | `command_semantics=LINUX_PROCESS`, `docker_image=image` |
-| `apt` names a package outside `WORKER_IMAGE_APT` | A sandbox of an image built for the environment | `command_semantics=LINUX_PROCESS`, `docker_image=<built digest>` |
+| `dockerfile` set, or `apt` names a package outside `WORKER_IMAGE_APT` | A sandbox of an image built for the environment | `command_semantics=LINUX_PROCESS`, `docker_image=<built digest>` |
 | Anything else | A bubblewrap sandbox on the Zephyr worker | `command_semantics=LINUX_PROCESS`, `packages_lock=<lock URL>` |
 
 `WORKER_IMAGE_APT` in `environment.py` lists the Debian packages the `task`
@@ -176,6 +177,8 @@ lock every grade script in the catalog imports with the NLTK `punkt_tab` and
 `wordnet` data, runs in the worker. The TaskTrove competitive-programming
 sources declare `COMPILER_GRADER_PACKAGES`, which adds `build-essential` for
 C++ submissions; the worker image provides it, so they also run in the worker.
+`LEAN_GRADER_PACKAGES` adds the Lean 4 and Mathlib fragment
+`datasets/nemotron_ultra/lean.Dockerfile`, so it runs in a built image.
 Converters declare agent requirements independently. A simulated shell requires
 explicit `SHELL_SIMULATOR` semantics; an absent image does not select simulation.
 Conversation-only tasks need no machine. Memory settings are advisory sizing hints.
@@ -365,13 +368,14 @@ uv run python -m experiments.post_training.task_curation.images --identity IDENT
 
 Each environment without an `image` becomes the artifact
 `images/env-<identity[:16]>`, which stores its hash lock as `requirements.lock`.
-The identity hashes the `pypi` pins or the lock's bytes, `apt`, `data`, Python
-3.12, the platform, the digest-pinned base image, the files of `verifyit`
-(which every built environment puts on the grader's import path) and the
-placement, so a rerun with an unchanged declaration does nothing. An
-environment placed in a built image also gets a generated Dockerfile: the
-pinned `iris-task` base, `apt-get install` of `apt`, `uv pip sync
---require-hashes` of the lock, the NLTK data and `verifyit`. The build pushes it
+The identity hashes the `pypi` pins or the lock's bytes, `apt`, `data`, the
+`dockerfile` fragment's bytes, Python 3.12, the platform, the digest-pinned
+base image, the files of `verifyit` (which every built environment puts on the
+grader's import path) and the placement, so a rerun with an unchanged
+declaration does nothing. An environment placed in a built image also gets a
+generated Dockerfile: the pinned `iris-task` base, `apt-get install` of `apt`,
+the `dockerfile` fragment's lines, `uv pip sync --require-hashes` of the lock,
+the NLTK data and `verifyit`. The build pushes it
 as `ghcr.io/marin-community/iris-task:task-curation-env-<identity[:16]>` and
 records the digest. An image build needs a `docker login` for ghcr.io; every
 build needs, for a CoreWeave `MARIN_PREFIX`, the `CW_KEY_ID` and
