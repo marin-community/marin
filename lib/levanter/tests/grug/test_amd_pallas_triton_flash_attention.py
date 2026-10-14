@@ -113,8 +113,10 @@ def test_flash_attention_gradients_match_reference(mask_name, dtype):
         np.testing.assert_allclose(got / scale, want / scale, atol=tol, rtol=tol, err_msg=f"d{name}")
 
 
-def test_flash_attention_batch_sharded_mesh_keeps_output_and_gradient_sharding():
-    mesh = AbstractMesh(axis_sizes=(2,), axis_names=("data",), axis_types=(AxisType.Explicit,))
+# A data axis of size 1 is the one-GPU mesh: the batch dimension names it, but nothing is partitioned.
+@pytest.mark.parametrize("data_axis_size", [1, 2])
+def test_flash_attention_batch_sharded_mesh_keeps_output_and_gradient_sharding(data_axis_size):
+    mesh = AbstractMesh(axis_sizes=(data_axis_size,), axis_names=("data",), axis_types=(AxisType.Explicit,))
     sharding = NamedSharding(mesh, P("data", None, None, None))
     q = jax.ShapeDtypeStruct((4, SEQ_LEN, 8, 64), jnp.bfloat16, sharding=sharding)
     kv = jax.ShapeDtypeStruct((4, SEQ_LEN, 2, 64), jnp.bfloat16, sharding=sharding)

@@ -440,7 +440,9 @@ def pallas_triton_flash_attention(
                 f"gpu_pallas_triton_flash needs {name} sharded like q, got q={partition_spec_of(q)} "
                 f"{name}={partition_spec_of(x)}"
             )
-    if not any(q_dims):
+    # pallas_call rejects inputs whose type names an Explicit mesh axis, even an axis of size 1 (a one-GPU mesh), so
+    # those go through shard_map too.
+    if not any(q_dims) and not any(jax.typeof(q).sharding.spec):
         return run(q, k, v, lower)
     q_spec = tuple(partition_spec_of(q))
     q_spec = P(*q_spec, *((None,) * (q.ndim - len(q_spec))))
