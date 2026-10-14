@@ -24,6 +24,7 @@ single-site change.
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 from pydantic import JsonValue
 from rolloutengine.lowering import SHELLBOX_SESSION, lower_task
@@ -71,6 +72,25 @@ a bare ``PackageSpec()`` has the built-in shell tools and no ``python3``. The ca
 """
 
 LOCAL_CPYTHON = PackageSpec(pypi_packages=())
+LOCAL_READ_ONLY_ROOTS = (
+    "/bin",
+    "/etc",
+    "/lib",
+    "/lib32",
+    "/lib64",
+    "/libx32",
+    "/opt",
+    "/run/systemd/resolve",
+    "/sbin",
+    "/sys",
+    "/usr",
+)
+"""The host directories the local backend mounts read-only, shellbox's ``SYSTEM_DIRECTORIES``.
+
+A machine that must write under one of them, a task shipping files to ``/opt`` for instance, cannot
+run on the local backend, and ``host_requirements`` keeps its image. ``tests/spec/test_draft.py``
+holds this tuple equal to shellbox's on hosts where the local backend imports.
+"""
 """``GRADER_BASE_IMAGE``'s software on the local backend: a uv-managed CPython 3.12 and no PyPI packages.
 
 shellbox's local factory resolves the empty requirement list into an empty hash lock, then installs the
@@ -492,27 +512,45 @@ def machine_backend(requirements: EnvironmentRequirements, host: MachineHost) ->
 
 
 def host_requirements(
-    requirements: EnvironmentRequirements, factories: Mapping[str, MachineFactory]
+    requirements: EnvironmentRequirements, factories: Mapping[str, MachineFactory], writes: Sequence[str] = ()
 ) -> EnvironmentRequirements:
     """``requirements`` as a host with ``factories`` runs them.
 
     With a local factory, a machine on ``GRADER_BASE_IMAGE`` runs ``LOCAL_CPYTHON`` on the local
-    backend; without one it keeps the image, on the host's container backend. A package machine
-    (``requirements(packages=...)``) runs on the local backend only, its packages installed into a
-    uv venv at machine start; on a host without a local factory, RolloutEngine's lowering rejects
-    it as an unknown factory. Every other requirement is unchanged.
+    backend, unless one of the absolute paths in ``writes`` (its files and its working directory)
+    falls under ``LOCAL_READ_ONLY_ROOTS``, in which case it keeps the image on the host's container
+    backend, as it does without a local factory. A package machine (``requirements(packages=...)``)
+    runs on the local backend only, its packages installed into a uv venv at machine start; on a
+    host without a local factory, RolloutEngine's lowering rejects it as an unknown factory. Every
+    other requirement is unchanged.
     """
-    if requirements.docker_image == GRADER_BASE_IMAGE and Backend.LOCAL.value in factories:
-        return requirements.model_copy(update={"docker_image": None, "package_spec": LOCAL_CPYTHON})
-    return requirements
+    if requirements.docker_image != GRADER_BASE_IMAGE or Backend.LOCAL.value not in factories:
+        return requirements
+    if any(_under(path, LOCAL_READ_ONLY_ROOTS) for path in writes):
+        return requirements
+    return requirements.model_copy(update={"docker_image": None, "package_spec": LOCAL_CPYTHON})
+
+
+def _under(path: str, roots: Sequence[str]) -> bool:
+    parts = PurePosixPath(path).parts
+    return any(parts[: len(PurePosixPath(root).parts)] == PurePosixPath(root).parts for root in roots)
 
 
 def _hosted_task(task: TaskSpec, factories: Mapping[str, MachineFactory]) -> TaskSpec:
     """``task`` with its task machine's and its grader's requirements as ``host_requirements`` gives them."""
-    update: dict[str, object] = {"environment_requirements": host_requirements(task.environment_requirements, factories)}
+    requirements = task.environment_requirements
+    task_writes = [f"/{resource.path}" for resource in (*task.resources.all, *task.resources.worker)]
+    if requirements.working_directory is not None:
+        task_writes.append(requirements.working_directory)
+    update: dict[str, object] = {"environment_requirements": host_requirements(requirements, factories, task_writes)}
     grading = grading_environment(task)
     if grading is not None:
-        update["grader"] = task.grader.model_copy(update={"environment": host_requirements(grading, factories)})
+        grader_writes = [f"/{resource.path}" for resource in task.resources.verifier]
+        if isinstance(task.grader, ScriptGrader):
+            grader_writes.append(task.grader.cwd)
+        update["grader"] = task.grader.model_copy(
+            update={"environment": host_requirements(grading, factories, grader_writes)}
+        )
     return task.model_copy(update=update)
 
 
