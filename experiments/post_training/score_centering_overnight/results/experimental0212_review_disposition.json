@@ -1,0 +1,114 @@
+{
+  "reviewed_training_source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "review_scope": "Wholeexperimentalbranch againstmainc96f6d25,6lanes; defaultClaudeproviderfailed earlier, CodexfallbackactualnativeCLIcompletion andread-onlyactionsverified.",
+  "native_ids": [
+    "01a13838-1336-7af0-b933-ccceaa3d83df",
+    "01a1383d-1d61-75d0-b369-f189d52a59f5",
+    "01a13841-c67f-7222-87c5-2176b2083878",
+    "01a1383f-14f0-7613-bf0f-7480f9b722e2",
+    "01a13844-9a3e-77d0-bcfb-3c0c68f3df68",
+    "01a1383a-f337-7743-8c33-b63c9adbb06f"
+  ],
+  "requested_model": "gpt-6.1-sol",
+  "requested_effort": "xhigh",
+  "observed_model_and_effort_basis": "Exactidentifiednative transcript turn_context fields; unknownfieldstaysnull.",
+  "read_only_tool_commands_inspected": 114,
+  "fix_head": "2c77ce20ed19f4936925ae5ca572d7ea1e20ef39",
+  "fix_branch": "experiments/score-centering-review-01a126ce",
+  "active_training_runtime_unchanged": true,
+  "findings": [
+    {
+      "finding": "Duplicatepublicationerrorhandling/defaultEOFescape",
+      "resolution": "Narrowdefaultprocesserrornormalization;real23exitregressionreproducedon0212;39retentiontests pass onreviewhead. Reusedpublicationtrainingpathunchanged."
+    },
+    {
+      "finding": "Samplerversionpublishdocstring",
+      "resolution": "Describelearnerprogressandlivefrozenservingversionseparately."
+    },
+    {
+      "finding": "RepeatedpaperTIScap2",
+      "resolution": "SinglePAPER_TIS_CAPconstant; all12FP32casevalues exactlyequal originalartifact."
+    },
+    {
+      "finding": "Trainerenginefake mirrorsworkerdispatch",
+      "resolution": "Protocolfakekept withnarrowedsimulatedweighttestname; fullGPUcapturesqualifyactualdispatch,CPUtestalone doesnot. NoCPUvLLMimportgraphrefactor."
+    }
+  ],
+  "validation_artifacts": [
+    "experimental-review-full-retention-tests.log",
+    "publication-worker-exit-regression.log",
+    "experimental-review-frozen-parity.json",
+    "experimental-review-fixes-final-lint.log"
+  ],
+  "raw_review_directory": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/reviews/lint-experimental0212-20261014T0223",
+  "native_records_registered": true,
+  "PR_eligibility_note": "Reviewscompleteandfindingsfixed/answered; exactGPUqualifiedtraininghead0212 distinguishedfromreviewfixhead. Fullscientificmainladderstillunfinished.",
+  "observed_native_metadata": [
+    {
+      "native_id": "01a13838-1336-7af0-b933-ccceaa3d83df",
+      "native_record": "/home/romain/.codex/sessions/2026/10/13/rollout-2026-10-13T19-22-41-01a13838-1336-7af0-b933-ccceaa3d83df.jsonl",
+      "observed_turn_metadata": [
+        {
+          "model": "gpt-6.1-sol",
+          "effort": "xhigh",
+          "reasoning_effort": null
+        }
+      ]
+    },
+    {
+      "native_id": "01a1383d-1d61-75d0-b369-f189d52a59f5",
+      "native_record": "/home/romain/.codex/sessions/2026/10/13/rollout-2026-10-13T19-28-12-01a1383d-1d61-75d0-b369-f189d52a59f5.jsonl",
+      "observed_turn_metadata": [
+        {
+          "model": "gpt-6.1-sol",
+          "effort": "xhigh",
+          "reasoning_effort": null
+        }
+      ]
+    },
+    {
+      "native_id": "01a13841-c67f-7222-87c5-2176b2083878",
+      "native_record": "/home/romain/.codex/sessions/2026/10/13/rollout-2026-10-13T19-33-17-01a13841-c67f-7222-87c5-2176b2083878.jsonl",
+      "observed_turn_metadata": [
+        {
+          "model": "gpt-6.1-sol",
+          "effort": "xhigh",
+          "reasoning_effort": null
+        }
+      ]
+    },
+    {
+      "native_id": "01a1383f-14f0-7613-bf0f-7480f9b722e2",
+      "native_record": "/home/romain/.codex/sessions/2026/10/13/rollout-2026-10-13T19-30-21-01a1383f-14f0-7613-bf0f-7480f9b722e2.jsonl",
+      "observed_turn_metadata": [
+        {
+          "model": "gpt-6.1-sol",
+          "effort": "xhigh",
+          "reasoning_effort": null
+        }
+      ]
+    },
+    {
+      "native_id": "01a13844-9a3e-77d0-bcfb-3c0c68f3df68",
+      "native_record": "/home/romain/.codex/sessions/2026/10/13/rollout-2026-10-13T19-36-22-01a13844-9a3e-77d0-bcfb-3c0c68f3df68.jsonl",
+      "observed_turn_metadata": [
+        {
+          "model": "gpt-6.1-sol",
+          "effort": "xhigh",
+          "reasoning_effort": null
+        }
+      ]
+    },
+    {
+      "native_id": "01a1383a-f337-7743-8c33-b63c9adbb06f",
+      "native_record": "/home/romain/.codex/sessions/2026/10/13/rollout-2026-10-13T19-25-50-01a1383a-f337-7743-8c33-b63c9adbb06f.jsonl",
+      "observed_turn_metadata": [
+        {
+          "model": "gpt-6.1-sol",
+          "effort": "xhigh",
+          "reasoning_effort": null
+        }
+      ]
+    }
+  ]
+}
