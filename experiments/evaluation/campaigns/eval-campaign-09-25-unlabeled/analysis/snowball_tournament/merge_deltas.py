@@ -29,18 +29,21 @@ MODEL_BASES = {
         "https://huggingface.co/open-athena/Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12/blob/271c4b3c6b38e8f645c88b8938a6ccf2b2195f2a/provenance/campaign3/CAMPAIGN3.md",
         "DARE-Linear-02",
         "dare-linear-02",
+        "DARE-TIES-02",
     ),
     "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10": (
         "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
         "https://huggingface.co/open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10/blob/153f5369f69a0c0a7203779099ec94e98c66748f/README.md",
         "DARE-TIES-02",
         "dare-ties-02",
+        "Antidoom Step12",
     ),
     "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09": (
         "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92",
         "https://huggingface.co/open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09/blob/462ad9af071055da39ef4bfea1d4ba2c9429a223/README.md",
         "Shared100",
         "shared100",
+        "Snowball",
     ),
 }
 SCORE = re.compile(r"^([01](?:\.\d+)?)\s+\((s3://[^)]+)\)$")
@@ -65,10 +68,10 @@ def source_links(path: Path, models: set[str]) -> dict[tuple[str, str], str]:
 
 def comparison_rows(tracker: Path) -> tuple[list[str], list[dict[str, object]]]:
     benchmarks, _, scores = tracker_scores(tracker)
-    models = set(MODEL_BASES) | {base for base, _, _, _ in MODEL_BASES.values()}
+    models = set(MODEL_BASES) | {base for base, _, _, _, _ in MODEL_BASES.values()}
     links = source_links(tracker, models)
     rows = []
-    for merge, (base, card, short_name, _) in MODEL_BASES.items():
+    for merge, (base, card, short_name, _, _) in MODEL_BASES.items():
         if set(scores[merge]) != set(benchmarks) or set(scores[base]) != set(benchmarks):
             raise ValueError(f"merge and base need complete 26-benchmark rows: {merge}, {base}")
         for benchmark in benchmarks:
@@ -127,17 +130,20 @@ def main() -> None:
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    benchmarks, rows = comparison_rows(args.tracker)
+    tracker_bytes = args.tracker.read_bytes()
+    snapshot = args.output_dir / "TRACKER.snapshot.md"
+    snapshot.write_bytes(tracker_bytes)
+    benchmarks, rows = comparison_rows(snapshot)
     limit = max(abs(float(row["delta_pp"])) for row in rows)
     with (args.output_dir / "merge_deltas.csv").open("w", newline="") as target:
         writer = csv.DictWriter(target, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
-    for merge, (base, _, short_name, stem) in MODEL_BASES.items():
+    for merge, (_, _, short_name, stem, base_label) in MODEL_BASES.items():
         model_rows = [row for row in rows if row["merge"] == merge]
-        plot_model(model_rows, limit, f"{short_name} - {base.rsplit('/', 1)[-1]}", args.output_dir / stem)
+        plot_model(model_rows, limit, f"{short_name} - {base_label}", args.output_dir / stem)
     metadata = {
-        "tracker_sha256": hashlib.sha256(args.tracker.read_bytes()).hexdigest(),
+        "tracker_sha256": hashlib.sha256(tracker_bytes).hexdigest(),
         "score_precision": (
             "Deltas use the three-significant-digit tracker point estimates, not unrounded trial aggregates."
         ),
@@ -145,8 +151,8 @@ def main() -> None:
         "benchmark_count": len(benchmarks),
         "global_color_limit_pp": limit,
         "models": {
-            merge: {"base": base, "model_card": card, "plot_stem": stem}
-            for merge, (base, card, _, stem) in MODEL_BASES.items()
+            merge: {"base": base, "base_label": base_label, "model_card": card, "plot_stem": stem}
+            for merge, (base, card, _, stem, base_label) in MODEL_BASES.items()
         },
         "excluded": {
             "open-athena/Grug-67B-A2B-BFCL-Recovery": "DPO continuation of Antidoom Step12, not a weight merge."
