@@ -58,7 +58,7 @@ trainer:
       type: null
     ftpo:
       boundary: mixed
-      auxiliary_weight: 0.1
+      auxiliary_weight: 0.02
       repair_sft_weight: 1.0
       margin: 2.0
       lambda_mse: 0.4
@@ -74,7 +74,7 @@ trainer:
   policy:
     optimizer_config:
       optimizer: AdamW
-      lr: 2.0e-06
+      lr: 4.0e-06
       weight_decay: 0.0
       max_grad_norm: 0.5
   rollout_buffer:
