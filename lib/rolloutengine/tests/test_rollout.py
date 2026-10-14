@@ -1006,8 +1006,9 @@ async def test_script_grader_reads_answer_and_conversation_files_without_a_task_
         resources=ResourceGroups(verifier=(inline_resource("grade.py", script),)),
     )
     factory = RecordingShellSimFactory()
+    # This input-contract test includes cold Wasmtime compilation of CPython.
     record = await engine(ReplayModel([{"role": "assistant", "content": answer}]), {"local": factory}).run(
-        lowered(task, verifier_machine=machine_runtime())
+        lowered(task, verifier_machine=machine_runtime(), verifier_timeout=30)
     )
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
     assert len(factory.machines) == 1
