@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import shutil
 import time
 from dataclasses import replace
 
@@ -222,3 +223,13 @@ def test_the_child_builds_images_only_with_an_image_cluster(make_request):
     assert image_builder(make_request(PROGRAM).services) is None
     with pytest.raises(ValueError, match="controller URL"):
         image_builder(replace(make_request(PROGRAM).services, image_cluster="cw-us-east-02a"))
+
+
+def test_the_child_builds_images_only_with_gcloud_on_its_path(make_request, monkeypatch):
+    config = on_iris(make_request(PLAIN_PROGRAM), "cw-us-east-02a").services
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    with pytest.raises(ValueError, match="gcloud"):
+        image_builder(config)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/gcloud")
+    assert image_builder(config) is not None
+    assert image_builder(replace(config, image_cluster=None)) is None

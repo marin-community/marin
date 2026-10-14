@@ -22,6 +22,7 @@ from dataclasses import replace
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from shellbox.machine import Backend
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import (
@@ -220,7 +221,8 @@ class FixturesDraft(BaseModel):
     solver_machine: Literal["shellsim", "cpython", "packages"] = Field(
         description="shellsim when reading, shell tools or a short Python script are enough; cpython when "
         "solving needs more computation than ShellSim's few seconds of Python, or a real clock; packages when "
-        "solving also needs PyPI packages (numpy, pandas, ...) and no system packages. Ignored for a container "
+        "solving also needs PyPI packages (numpy, pandas, ...) and no system packages; packages runs only on a host "
+        "with the local backend, and the fixtures check sends the draft back otherwise. Ignored for a container "
         "task, which runs in its own image."
     )
     packages: list[str] = Field(
@@ -360,6 +362,25 @@ async def structured[T: BaseModel](context: RLEnvBuildContext, messages: Sequenc
         context.model, messages, output_type, context.sampling, call_ledger(context), {"output": output_type.__name__}
     )
     return result.value
+
+
+def machine_available(context: RLEnvBuildContext) -> Callable[[FixturesDraft], Awaitable[str | None]]:
+    """The fixtures check that sends back a machine choice this host cannot run.
+
+    A package machine runs on the local backend only. On a host whose factories lack it, the draft
+    goes back to the model with the alternative named, before any file is written or built.
+    """
+
+    async def problem(submitted: FixturesDraft) -> str | None:
+        if submitted.solver_machine == "packages" and Backend.LOCAL.value not in context.services.factories:
+            return (
+                "solver_machine=packages needs the local backend, which this host does not have; choose "
+                "cpython (the grader base image, CPython 3.12 with the standard library) and keep the task "
+                "within it, or shellsim"
+            )
+        return None
+
+    return problem
 
 
 async def accept(value: BaseModel) -> str | None:
