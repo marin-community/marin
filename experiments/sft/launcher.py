@@ -71,6 +71,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Protocol, runtime_checkable
+from urllib.parse import urlparse
 
 import click
 import jax.numpy as jnp
@@ -93,6 +94,7 @@ from marin.experiment.checkpoints import HfToLevanterCheckpoint
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache
 from marin.processing.tokenize.tokenize import tokenize as run_tokenize
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
+from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.instruction import (
@@ -272,9 +274,17 @@ def _levanter_pod_config(
             gpu_allocator=gpu_allocator,
         ),
         resources=resources,
-        output_path=ctx.output_path,
+        output_path=(
+            ctx.output_path if spec.output_ttl_days is None else ttl_output_path(ctx.output_path, spec.output_ttl_days)
+        ),
         auto_build_caches=data_config.auto_build_caches,
     )
+
+
+def ttl_output_path(output_path: str, ttl_days: int) -> str:
+    """Where a run with ``output_ttl_days`` writes: its output key on region-local storage that expires."""
+    key = urlparse(output_path).path.lstrip("/")
+    return marin_temp_bucket(ttl_days=ttl_days, prefix=key, source_prefix=output_path)
 
 
 def _levanter_train_job(pod_config: TrainLmOnPodConfig) -> None:
@@ -552,6 +562,9 @@ class SFTSpec:
     # Sequences per device per microbatch; -1 takes the whole per-device batch at once. Long sequences
     # need a small value, with gradients accumulated across microbatches to the same update.
     per_device_parallelism: int = -1
+    # When set, the run writes its checkpoints, HF export, and metrics under the same key on storage
+    # that expires after this many days (see ttl_output_path); the artifact directory keeps its record.
+    output_ttl_days: int | None = None
 
     def __post_init__(self) -> None:
         if (self.num_train_steps is None) == (self.num_train_epochs is None):

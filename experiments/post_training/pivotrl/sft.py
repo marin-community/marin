@@ -76,6 +76,7 @@ ROWS_PER_BATCH = 64
 # Tokens an example adds beyond its prompt's served length and its action's bytes: the turn's
 # header and end markers.
 TURN_TOKENS = 32
+CHECKPOINT_TTL_DAYS = 7
 
 # Grug's K=16 pass rates: each full run's 8 samples per candidate pooled with 8 more from a seed-1
 # rerun. They were pooled outside this pipeline, so they are adopted from where they were written.
@@ -481,6 +482,8 @@ def pivot_sft_step(run: PivotSFTRun) -> ArtifactStep[LevanterCheckpoint]:
         ],
         steps_per_eval=budget.steps_per_eval,
         per_device_parallelism=budget.per_device_parallelism,
+        # A 67B run's final checkpoint holds fp32 weights and optimizer state; keep it a week.
+        output_ttl_days=CHECKPOINT_TTL_DAYS,
     )
     return sft_step(spec, run.policy.resources)
 
