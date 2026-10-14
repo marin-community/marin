@@ -745,6 +745,14 @@ class GrugModelConfig:
     qk_mult: float = 1.3
     # QK-norm: non-parametric RMS norm on per-head q/k of the softmax-attention layers.
     qk_norm: bool = True
+    rope_global_layers: bool = False
+    """Apply RoPE on the long/global softmax layers too (otherwise they use no position encoding)."""
+    rope_full_head: bool = False
+    """Rotate the whole head dim (otherwise only its first half)."""
+    attn_xsa: bool = True
+    """Exclusive Self Attention on the softmax layers: subtract each head output's component along its own value."""
+    attn_output_gate: bool = True
+    """Per-head sigmoid output gate on the softmax layers."""
     sconv: bool = True
     sconv_kernel: int = 4
     sconv_impl: str | None = None
@@ -1324,7 +1332,9 @@ class CausalSelfAttention(eqx.Module):
     w_k: Float[Array, "D MH"] | None
     w_v: Float[Array, "D MH"] | None
     w_o: Float[Array, "NH D"] | None  # None: factored (latent_o)
-    attn_gate: Float[Array, "D G"]  # G = N heads, N*H channels (attn_gate_elementwise) or the rank (attn_gate_rank)
+    attn_gate: (
+        Float[Array, "D G"] | None
+    )  # G = N heads, N*H channels (attn_gate_elementwise) or the rank (attn_gate_rank)
     sconv_k: "ShortConv | None"  # SConv after the K projection (cfg.sconv)
     sconv_q: "ShortConv | None"  # MLA only: SConv after the q projection ("q" in cfg.sconv_sites)
     rel_pos: "InklingRelPos | None"  # Inkling relative-position bias (replaces RoPE when set)
@@ -1343,7 +1353,7 @@ class CausalSelfAttention(eqx.Module):
         """``layer_index`` (0-indexed, may be traced under the stacked init) sets the DIFF ``lambda_init``."""
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.stored_kv_heads, cfg.inferred_head_dim
         std = cfg.initializer_std
-        attn_gate = reshard(jnp.zeros((d, n)), P(None, None))
+        attn_gate = reshard(jnp.zeros((d, n)), P(None, None)) if cfg.attn_output_gate else None
         if cfg.mla:
             k_q, k_dkv, k_uk, k_uv, k_o, k_rel, k_ve = random.split(key, 7)
             # A separate key stream, so turning mla_diff_attn on leaves every other initial weight unchanged.
@@ -1593,7 +1603,7 @@ class CausalSelfAttention(eqx.Module):
 
         # Half-RoPE: rotate only the first half of Q/K head_dim; disable_rope skips RoPE on long/global layers.
         def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
-            half = head_dim // 2
+            half = head_dim if self.cfg.rope_full_head else head_dim // 2
             q_rot, k_rot = apply_rotary_embedding(
                 qh[..., :half], kh[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
             )
@@ -1619,7 +1629,9 @@ class CausalSelfAttention(eqx.Module):
                 q = rms_norm(q)
             # The Inkling bias replaces RoPE (no rotation).
             if self.rel_pos is None:
-                if isinstance(disable_rope, bool):
+                if self.cfg.rope_global_layers:
+                    q, k = _rope(q, k)
+                elif isinstance(disable_rope, bool):
                     if not disable_rope:
                         q, k = _rope(q, k)
                 else:
@@ -1672,22 +1684,27 @@ class CausalSelfAttention(eqx.Module):
             attn_out = mla_sparse_attention(self, x, q, k, kernel_v, rel_bias, sconv_segment_ids, rms_norm, _proj)
         else:
             attn_out = _attend(q, k)[..., :head_dim]
-        # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
-        # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ.
-        aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-        # GPU XSA with GQA can give attn_out a backend-specific head sharding;
-        # match v to that dynamic sharding before the per-head projection math.
-        aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(_BATCH_AXES, None, None, "model"))
-        dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
-        v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-        xsa = (dot / (v_norm_sq + 1e-6)) * aligned_v
-        attn_out = attn_out - xsa
-        gate_logit = jnp.einsum("bsd,dn->bsn", x, self.attn_gate).astype(jnp.float32)
-        head_keep = _head_gate_keep(self.cfg, jax.nn.sigmoid(gate_logit), stats)
-        gate = (2 * jax.nn.sigmoid(gate_logit) * head_keep).astype(attn_out.dtype)
-        gate = gate[..., None]
-        attn_out = gate * attn_out
+        if self.cfg.attn_xsa:
+            # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
+            # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ.
+            aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
+            # GPU XSA with GQA can give attn_out a backend-specific head sharding;
+            # match v to that dynamic sharding before the per-head projection math.
+            aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(_BATCH_AXES, None, None, "model"))
+            dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
+            v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
+            xsa = (dot / (v_norm_sq + 1e-6)) * aligned_v
+            attn_out = attn_out - xsa
+        gate = None
+        if self.attn_gate is not None:
+            gate_logit = jnp.einsum("bsd,dn->bsn", x, self.attn_gate).astype(jnp.float32)
+            head_keep = _head_gate_keep(self.cfg, jax.nn.sigmoid(gate_logit), stats)
+            gate = (2 * jax.nn.sigmoid(gate_logit) * head_keep).astype(attn_out.dtype)
+            gate = gate[..., None]
+            attn_out = gate * attn_out
         if head_probe_attn is not None:
+            if gate is None:
+                raise ValueError("head_probe needs attn_output_gate")
             if self.w_o is None:
                 raise ValueError("head_probe does not support switchhead_experts or attn_latent_o")
             stats[HEAD_PROBE_STAT] = _head_output_stats(head_probe_attn, gate, attn_out, self.w_o)

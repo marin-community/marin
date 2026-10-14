@@ -33,6 +33,7 @@ from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.optim.config import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
 from marin.execution.artifact import Artifact
@@ -132,6 +133,24 @@ class XlaAutotune(StrEnum):
     """Load the shared autotune results seeded for this program (``--seed-xla-autotune-cache``)."""
     OFF = "off"
     """No autotuning (``--xla_gpu_autotune_level=0`` in the job's XLA_FLAGS): library heuristics pick the kernels."""
+
+
+class OptimizerKind(StrEnum):
+    """The optimizer family."""
+
+    MUONH = "muonh"
+    """MuonH on matrices + Adam on the rest, LR from ``MoeHeuristic``."""
+    ADAMW = "adamw"
+    """AdamW everywhere (Levanter ``AdamConfig`` defaults), LR from ``adamw_learning_rate``."""
+
+
+# DeepSeek LLM (arXiv 2401.02954) compute-optimal AdamW learning rate, eta = coeff * C^exp with C in training FLOPs.
+ADAMW_LR_COEFF = 0.3118
+ADAMW_LR_EXP = -0.125
+
+
+def adamw_learning_rate(train_flops: float) -> float:
+    return ADAMW_LR_COEFF * train_flops**ADAMW_LR_EXP
 
 
 class Recipe(StrEnum):
@@ -389,6 +408,7 @@ def build_h100_ladder_run(
     dense: bool = False,
     save_checkpoints: bool = False,
     recipe: Recipe = Recipe.BASELINE,
+    optimizer_kind: OptimizerKind = OptimizerKind.MUONH,
     attn_res_remat_attention: bool = False,
     seed: int = 0,
     profile_start_step: int | None = None,
@@ -498,12 +518,16 @@ def build_h100_ladder_run(
     # no_eval disables it entirely below (the forced final callback would otherwise still run a full eval, so
     # pushing the interval past the end is not enough).
     steps_per_eval = num_steps
-    optimizer = MoeHeuristic().build_optimizer_config(
-        num_train_steps=num_steps,
-        batch_size=batch_size,
-        hidden_dim=model.hidden_dim,
-        seq_len=SEQ_LEN,
-    )
+    if optimizer_kind is OptimizerKind.ADAMW:
+        train_flops = _compute_match_flops(model_config=model) * batch_size * num_steps
+        optimizer = AdamConfig(learning_rate=adamw_learning_rate(train_flops))
+    else:
+        optimizer = MoeHeuristic().build_optimizer_config(
+            num_train_steps=num_steps,
+            batch_size=batch_size,
+            hidden_dim=model.hidden_dim,
+            seq_len=SEQ_LEN,
+        )
     optimizer = _apply_settings(optimizer, optimizer_settings or {})
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
@@ -804,6 +828,14 @@ def _layer_skip_rule(
     help="Save a permanent final checkpoint to S3 (off by default; also enables recovery).",
 )
 @click.option(
+    "--optimizer",
+    "optimizer_kind",
+    type=click.Choice([o.value for o in OptimizerKind]),
+    default=OptimizerKind.MUONH.value,
+    show_default=True,
+    help="Optimizer family: MuonH (heuristic LR) or AdamW (DeepSeek-LLM compute-scaled LR).",
+)
+@click.option(
     "--recipe",
     type=click.Choice([r.value for r in Recipe]),
     default=Recipe.BASELINE.value,
@@ -1008,6 +1040,7 @@ def main(
     dense: bool,
     save_checkpoints: bool,
     recipe: str,
+    optimizer_kind: str,
     attn_res_remat_attention: bool,
     seed: int,
     profile_start_step: int | None,
@@ -1060,6 +1093,7 @@ def main(
         dense=dense,
         save_checkpoints=save_checkpoints,
         recipe=Recipe(recipe),
+        optimizer_kind=OptimizerKind(optimizer_kind),
         attn_res_remat_attention=attn_res_remat_attention,
         seed=seed,
         profile_start_step=profile_start_step,
