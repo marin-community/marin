@@ -105,14 +105,14 @@ class AcceptedItem:
 
 
 def ledger_rows(text: str) -> list[dict[str, Any]]:
-    """Parse a ledger; the mirror cuts at a newline, so only a final partial line is tolerated."""
+    """Parse a ledger; a mirror copy can end mid-record, so only an unterminated last line is tolerated."""
     lines = text.splitlines()
     rows = []
     for index, line in enumerate(lines):
         try:
             rows.append(json.loads(line))
         except json.JSONDecodeError:
-            if index != len(lines) - 1:
+            if index != len(lines) - 1 or text.endswith("\n"):
                 raise
     return rows
 

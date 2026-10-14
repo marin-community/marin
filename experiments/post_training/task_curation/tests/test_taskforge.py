@@ -144,6 +144,12 @@ def test_accepted_item_uses_the_last_build_of_the_accepted_round():
     assert (item.round, item.evidence_hash, item.band, item.group) == (1, "cccccccccccc", Band.TOO_EASY, "d03-too-easy")
 
 
+def test_malformed_complete_ledger_record_is_rejected():
+    rows = [_event("built", 0) | {"input_hash": "aaaaaaaaaaaa1111"}]
+    with pytest.raises(json.JSONDecodeError):
+        ledger_rows(json.dumps(rows[0]) + '\n{"kind": "ev\n')
+
+
 def test_item_whose_last_terminal_is_not_accepted_is_excluded():
     rows = [
         _event("built", 0) | {"input_hash": "aaaaaaaaaaaa1111"},
