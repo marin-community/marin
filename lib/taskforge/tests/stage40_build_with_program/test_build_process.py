@@ -132,7 +132,8 @@ async def test_a_build_in_a_child_process_writes_the_draft_and_ledger_of_the_bui
     ledger = JsonlLedger(tmp_path / "child" / "ledger")
     entries = list(read_entries(ledger.path_for(WORKPIECE)))
     steps = [entry.step for entry in entries if entry.kind == EntryKind.STEP]
-    assert steps == [outcome.memo.name for outcome in child.provenance.steps]
+    # The ledger records steps as they finish and the provenance keeps program order; independent steps overlap.
+    assert sorted(steps) == sorted(outcome.memo.name for outcome in child.provenance.steps)
     assert [entry.step for entry in entries if entry.kind == EntryKind.LLM_CALL] == ["question"]
 
 
