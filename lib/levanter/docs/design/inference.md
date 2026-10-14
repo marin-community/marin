@@ -81,6 +81,38 @@ with an `abort` finish reason. Other groups in the batch continue; the cancelled
 response does not wait for them to finish. Disconnecting a client cancels its group
 and releases the request ID. No separate remote cancellation endpoint is exposed.
 
+### Remote weight publication
+
+Set `InferenceServerConfig.weight_transfer` to `WeightTransferConfig(backend="gloo",
+max_staging_bytes=...)` to enable SkyRL weight control routes. Install PyTorch in the
+serving environment (`torch_test` supplies it for local validation). Use `nccl` for
+a single GPU; CPU/Gloo has numerical integration coverage, while GPU/NCCL still
+requires hardware validation. Multi-device and multi-process serving are rejected.
+The receiver uses Torch broadcast and DLPack on the serving device. It does not
+materialize a complete checkpoint on the host.
+
+The trainer initializes `/init_weight_update_communicator`, then brackets its
+ordered `/update_weights` broadcasts with `/begin_weight_reload` and
+`/finish_weight_reload`. Every tensor and finish request must echo the begin
+response's `publication_id` and `model_version`. A new begin invalidates an unfinished
+publication. Received names, shapes, and dtypes must match the model's HF state dict;
+expert banks may also arrive as individual expert projections. Missing, duplicate,
+mismatched, and stale publications fail without replacing the current model.
+
+The current model remains available while tensors arrive. Finish validates the
+complete candidate, rechecks its expected model version, aborts active requests at
+the pause barrier, resets KV and model-specific cache state, and installs the whole
+model with one version increment. An already paused server remains paused.
+`/reset_prefix_cache` also aborts active requests and clears cached state, without
+changing weights or version. It preserves an existing pause. `/destroy_weights_update_group`
+invalidates staged weights and closes the transport.
+
+`max_staging_bytes` bounds received parameter bytes. Provision additional memory
+for the current model, inference cache, and layout conversion temporaries. This
+single-device adapter does not implement distributed JAX shard placement or a
+production-sized memory budget. The paired SkyRL remote client must forward the
+reload bracket and publication receipt; the repository's SkyRL pin is unchanged.
+
 ## File/Code References
 - `src/levanter/main/sample_lm.py`: `SampleLmConfig`, `_load_model`, `GenState`, `run_generation_loop`, `_one_round`, `extract_outputs`.
 - `src/levanter/inference/jit_scheduler.py`: `JitScheduler`, `DecodeState`, `SeqDecodingParams`.
