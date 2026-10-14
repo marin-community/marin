@@ -8,6 +8,8 @@ import asyncio
 from dataclasses import dataclass
 
 import pytest
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from rolloutengine.contracts import (
     TOTAL_TURN_TIMEOUT_STOP_REASON,
     GenerationLimitReached,
@@ -15,19 +17,22 @@ from rolloutengine.contracts import (
     ModelTurn,
     RolloutContractError,
     RolloutData,
+    RolloutInterrupted,
+    RolloutOperation,
 )
 from rolloutengine.engine import RolloutEngine
 from shellbox.machine import Backend, UnsupportedMachineSpec
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.grading_result import Outcome as GradeStatus
 from taskcompendium.models import NoGrader
 from verifyit.spec import ExactSpec, PytestSpec
 
 from taskforge.llm.client import ModelRequestRejected, ModelUnavailable
 from taskforge.llm.rollout_model import TokenContractBreak
 from taskforge.spec.draft import answer_grader, grader_environment
-from taskforge.stage50_validate.classify import candidate_code_error, trial_outcome
-from taskforge.stage50_validate.outcome import Cause, ContractBreak, Graded, Ungraded
+from taskforge.stage50_validate.classify import candidate_code_error, classify, trial_outcome
+from taskforge.stage50_validate.outcome import RETRYABLE, Cause, ContractBreak, Graded, Ungraded
 from tests.sandbox.fixture_images import SHELL_GRADER_ARGV, FixtureImageFactory
 
 INVALID_REWARD_GRADER = """printf '%s' '{"reward": "nan?"}' > /logs/verifier/reward.json\n"""
@@ -289,3 +294,36 @@ async def test_model_failure_after_a_turn_is_ungraded_even_though_the_engine_gra
 
     assert isinstance(outcome, Ungraded) and outcome.cause is Cause.MODEL_UNAVAILABLE
     assert outcome.rollout is not None and outcome.rollout.grade.reward == 1.0
+
+
+@pytest.mark.parametrize(
+    ("error", "direct_cause", "wrapped_cause"),
+    [
+        (
+            ConnectError(Code.DEADLINE_EXCEEDED, "TerminateJob timed out"),
+            Cause.MACHINE_TERMINATED,
+            Cause.MACHINE_TERMINATED,
+        ),
+        (
+            ConnectError(Code.UNAVAILABLE, "controller connection refused"),
+            Cause.MACHINE_TERMINATED,
+            Cause.MACHINE_TERMINATED,
+        ),
+        (RuntimeError("Machine is closed"), Cause.MACHINE_TERMINATED, Cause.MACHINE_TERMINATED),
+        (RuntimeError("ShellSim terminated: cpu_exhausted"), Cause.MACHINE_TERMINATED, Cause.MACHINE_TERMINATED),
+        (ConnectError(Code.PERMISSION_DENIED, "token rejected"), Cause.UNCLASSIFIED, Cause.TOOL_EXECUTION),
+    ],
+    ids=["rpc-deadline", "rpc-unavailable", "machine-closed", "shellsim-terminated", "permission-denied"],
+)
+def test_a_machine_lost_under_a_trial_is_a_retryable_termination(math_task, error, direct_cause, wrapped_cause):
+    """A host lost mid-trial, by RPC or by shellbox's bare RuntimeError, is retryable; a refused credential is not.
+
+    Wrapped in an interruption, a refused credential falls to the interrupted operation's own cause.
+    """
+    ungraded = GradeResult(GradeStatus.UNAVAILABLE, None, "interrupted")
+    wrapped = RolloutInterrupted(RolloutData("t", (), (), (), (), None, ungraded, "stop"), RolloutOperation.ADVANCE)
+    wrapped.__cause__ = error
+
+    assert classify(error, math_task.task) == direct_cause
+    assert classify(wrapped, math_task.task) == wrapped_cause
+    assert (direct_cause in RETRYABLE) == (direct_cause is Cause.MACHINE_TERMINATED)
