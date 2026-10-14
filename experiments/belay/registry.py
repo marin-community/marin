@@ -230,8 +230,40 @@ def next_id(experiments: list[Experiment]) -> str:
     return f"X{max((int(e.id[1:]) for e in experiments), default=0) + 1:04d}"
 
 
-def page_data(experiments: list[Experiment], generated_from: str) -> dict:
-    """The Belay page's results JSON: its ``ideas`` keep the page's own field names, with ``xid`` added."""
+# A Paloma macro loss in the text of a trial or event (e.g. a baseline "df1-ctrl 2.9543"), or a signed delta.
+_LOSS_IN_TEXT = re.compile(r"(?<![\d.\w])([-+\u2212]?)(\d+\.\d{3,})(?![\d])")
+_PLACEHOLDER_TEXT_FIELDS = ("baseline", "note", "variant", "tuned", "step_time_change")
+
+
+def _placeholder_text(text: str, ratio: float) -> str:
+    def scale(m: re.Match) -> str:
+        sign, value = m.group(1), float(m.group(2))
+        is_loss = not sign and 1.8 <= value <= 4.5
+        is_delta = bool(sign) and value < 0.1
+        return f"{sign}{value * ratio:.4f}" if is_loss or is_delta else m.group(0)
+
+    return _LOSS_IN_TEXT.sub(scale, text)
+
+
+def _placeholder_bpb(idea: dict, ratio: float) -> None:
+    """Rescale an idea's macro-loss numbers to placeholder BPB in place: trial ``delta`` / ``loss`` and the losses and
+    signed deltas written in trial and event text."""
+    for trial in idea["trials"]:
+        for key in ("delta", "loss"):
+            if key in trial:
+                trial[key] = [round(v * ratio, 4) for v in trial[key]]
+        for key in _PLACEHOLDER_TEXT_FIELDS:
+            if key in trial:
+                trial[key] = _placeholder_text(trial[key], ratio)
+    for event in idea["events"]:
+        if "note" in event:
+            event["note"] = _placeholder_text(event["note"], ratio)
+
+
+def page_data(experiments: list[Experiment], generated_from: str, placeholder_bpb_ratio: float | None = None) -> dict:
+    """The Belay page's results JSON: its ``ideas`` keep the page's own field names, with ``xid`` added. The registry
+    records Paloma macro loss; with ``placeholder_bpb_ratio`` the page shows it as placeholder BPB (loss times the
+    ratio) until trials record measured BPB."""
     ideas = []
     for e in experiments:
         idea = _plain(e)
@@ -240,6 +272,8 @@ def page_data(experiments: list[Experiment], generated_from: str) -> dict:
         idea.setdefault("trials", [])
         idea.setdefault("events", [])
         idea.setdefault("tags", [])
+        if placeholder_bpb_ratio is not None:
+            _placeholder_bpb(idea, placeholder_bpb_ratio)
         ideas.append(idea)
     return {"generated_from": generated_from, "categories": list(CATEGORIES), "ideas": ideas}
 
@@ -250,6 +284,7 @@ def main(argv: list[str]) -> None:
     sub.add_parser("validate", help="load and check every entry")
     build = sub.add_parser("build", help="write the Belay page's results JSON to stdout")
     build.add_argument("--generated-from", default="experiments/belay/registry")
+    build.add_argument("--placeholder-bpb-ratio", type=float, help="show macro loss as placeholder BPB (loss x ratio)")
     new = sub.add_parser("new", help="allocate the next id and write an approved entry")
     new.add_argument("--slug", required=True)
     new.add_argument("--name", required=True)
@@ -266,7 +301,8 @@ def main(argv: list[str]) -> None:
     if args.command == "validate":
         print(f"{len(experiments)} experiments OK")
     elif args.command == "build":
-        json.dump(page_data(experiments, args.generated_from), sys.stdout, ensure_ascii=False, separators=(",", ":"))
+        data = page_data(experiments, args.generated_from, args.placeholder_bpb_ratio)
+        json.dump(data, sys.stdout, ensure_ascii=False, separators=(",", ":"))
     else:
         intake = None
         if args.intake_url:

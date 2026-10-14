@@ -93,3 +93,23 @@ def test_intake_bot_entries_are_valid_registry_files(tmp_path):
     assert experiment.status is R.Status.APPROVED and experiment.source is R.Source.INTAKE
     assert experiment.intake == R.Intake(url=comment.url, author="someone", approved_by="ClassicLarry")
     assert experiment.summary == "learn it"
+
+
+def test_placeholder_bpb_scales_losses_and_signed_deltas_only():
+    trial = R.Trial(
+        variant="beta (0.95, 0.999), sigma 0.005",
+        rung="d512",
+        protocol="equal_steps",
+        batch="1",
+        date="2026-10-14",
+        comment_url="u",
+        baseline="df1-ctrl 2.9544",
+        delta=(-0.0088,),
+        loss=(3.0,),
+        note="mean -0.0088, k 1.036x",
+    )
+    (idea,) = R.page_data([_experiment(trials=(trial,))], "test", placeholder_bpb_ratio=0.5)["ideas"]
+    (t,) = idea["trials"]
+    assert t["baseline"] == "df1-ctrl 1.4772" and t["delta"] == [-0.0044] and t["loss"] == [1.5]
+    assert t["note"] == "mean -0.0044, k 1.036x"
+    assert t["variant"] == "beta (0.95, 0.999), sigma 0.005"
