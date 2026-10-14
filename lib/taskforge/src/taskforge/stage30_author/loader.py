@@ -20,7 +20,9 @@ the GLM author also sends it back within its structured call.
    spent their model calls. The refusal names the closest name, if one is close, out of the
    program's bound names and the names ``sdk_exports`` finds defined in the allowed modules; for
    an SDK name it also gives the modules to import it from. The check ignores scope, so it misses
-   a name bound in one function and read in another.
+   a name bound in one function and read in another. An attribute the program reads from a module
+   it imports, such as ``draft.GRADER_TIMEOUT``, is checked against that module the same way,
+   with the suggestion naming the module that defines the attribute.
 2. It runs the module with imports limited to ``ALLOWED_IMPORTS`` and builtins to
    ``SAFE_BUILTINS``, which keeps a program to the SDK's functions; programs are trusted model
    output in the builder's process, so this is no security boundary. The build SDK belongs to a
@@ -224,14 +226,18 @@ def _name_suggestion(name: str, bound: Iterable[str]) -> str:
 def _import_suggestion(name: str, module: str) -> str:
     """The suggestion for ``from module import name``, looking first among the names ``module`` defines.
 
-    A close name from ``module`` comes before an exact one from another module: ``machine``
-    imported from ``taskforge.stage40_build_with_program.sandbox_effects`` gets ``build_machine`` there, although
-    ``taskforge.spec.draft`` defines a ``machine``. Without a close name in ``module``, or for a
-    former SDK name, the suggestion is ``_name_suggestion``'s.
+    A close name from ``module`` comes first, and an exact name another module defines follows it:
+    ``machine`` imported from ``taskforge.stage40_build_with_program.sandbox_effects`` gets ``build_machine``
+    there, or ``machine`` from ``taskforge.spec.draft``. Without a close name in ``module``, or for
+    a former SDK name, the suggestion is ``_name_suggestion``'s.
     """
     if name not in RENAMED_SDK_NAMES:
-        own = sorted(export for export, defining in sdk_exports().items() if module in defining)
+        exports = sdk_exports()
+        own = sorted(export for export, defining in exports.items() if module in defining)
         matches = difflib.get_close_matches(name, own, n=1)
+        elsewhere = [defining for defining in exports.get(name, ()) if defining != module]
+        if matches and elsewhere:
+            return f"; did you mean {matches[0]!r} from {module}, or {name!r} from {' or '.join(elsewhere)}?"
         if matches:
             return f"; did you mean {matches[0]!r} from {module}?"
     return _name_suggestion(name, ())
@@ -266,6 +272,7 @@ def load_program_source(source: str) -> RLEnvBuildProgram:
         raise ValueError(f"the program does not parse: {error}") from error
     _check_module_level(tree)
     _check_names(tree)
+    _check_module_attributes(tree)
     filename = f"<{name}>"
     linecache.cache[filename] = (len(source), None, source.splitlines(keepends=True), filename)
     module = types.ModuleType(name)
@@ -390,6 +397,45 @@ def _check_names(tree: ast.Module) -> None:
             f"the program reads names that no import, definition, assignment or builtin binds:\n{listed}\n"
             "Import each SDK name the program uses from its module."
         )
+
+
+def _imported_modules(tree: ast.Module) -> dict[str, str]:
+    """The allowed modules the program binds as names, by the name: ``{"draft": "taskforge.spec.draft"}``."""
+    modules: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            modules.update({alias.asname or alias.name: alias.name for alias in node.names})
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            for alias in node.names:
+                if f"{node.module}.{alias.name}" in ALLOWED_IMPORTS:
+                    modules[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    return {name: path for name, path in modules.items() if path in ALLOWED_IMPORTS}
+
+
+def _check_module_attributes(tree: ast.Module) -> None:
+    """Refuse an attribute the program reads from an imported module that does not define it."""
+    modules = _imported_modules(tree)
+    missing: dict[tuple[str, str], int] = {}
+    for node in ast.walk(tree):
+        if (
+            not isinstance(node, ast.Attribute)
+            or not isinstance(node.value, ast.Name)
+            or not isinstance(node.ctx, ast.Load)
+        ):
+            continue
+        path = modules.get(node.value.id)
+        if path is None or hasattr(importlib.import_module(path), node.attr):
+            continue
+        read = (node.value.id, node.attr)
+        missing[read] = min(node.lineno, missing.get(read, node.lineno))
+    if not missing:
+        return
+    problems = [
+        f"`{name}.{attr}` (line {line}): {modules[name]!r} has no name {attr!r}{_import_suggestion(attr, modules[name])}"
+        for (name, attr), line in sorted(missing.items(), key=lambda item: item[1])
+    ]
+    listed = "\n".join(f"- {_sentence(problem)}" for problem in problems)
+    raise ValueError(f"the program reads attributes that the modules it imports do not define:\n{listed}")
 
 
 def _checked_program(module: ModuleType) -> RLEnvBuildProgram:
