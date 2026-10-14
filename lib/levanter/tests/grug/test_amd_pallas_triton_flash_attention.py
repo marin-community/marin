@@ -113,6 +113,19 @@ def test_flash_attention_gradients_match_reference(mask_name, dtype):
         np.testing.assert_allclose(got / scale, want / scale, atol=tol, rtol=tol, err_msg=f"d{name}")
 
 
+def test_flash_attention_on_one_device_explicit_mesh_matches_reference():
+    """Concrete arrays whose batch names a size-1 Explicit mesh axis, as in a one-GPU training run."""
+    mesh = jax.make_mesh((1,), ("data",), axis_types=(AxisType.Explicit,), devices=jax.devices()[:1])
+    sharding = NamedSharding(mesh, P("data", None, None, None))
+    q, k, v = _qkv(jnp.bfloat16)
+    mask = MASKS["window_segments"]
+    expected = _reference(q, k, v, mask)
+    with jax.set_mesh(mesh):
+        actual = _flash(*(jax.device_put(x, sharding) for x in (q, k, v)), mask)
+    tol = TOLERANCE[jnp.bfloat16]
+    np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected), atol=tol, rtol=tol)
+
+
 # A data axis of size 1 is the one-GPU mesh: the batch dimension names it, but nothing is partitioned.
 @pytest.mark.parametrize("data_axis_size", [1, 2])
 def test_flash_attention_batch_sharded_mesh_keeps_output_and_gradient_sharding(data_axis_size):
