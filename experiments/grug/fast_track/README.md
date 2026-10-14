@@ -3,6 +3,19 @@
 Self-contained grug variant with 16k vocab size for fast iteration. Dense and MoE baselines shown
 below from 9.4e16 to 4.3e19 FLOPs.
 
+## Belay Ckpt 1
+
+[`belay_ckpt1.py`](belay_ckpt1.py) is the Marin Belay checkpoint-1 recipe (marin#9451): the exact flags of the
+H100 scaling ladder (d512–d1280 at 171 tokens per active parameter) and of the one-rack GB200 throughput run
+(`gb200-d6144`: 14.59 s/step, 28.9% MFU). Launch a rung with
+
+```bash
+uv run python -m experiments.grug.fast_track.belay_ckpt1 --size d1024 --submit --run-id belay-ckpt1-d1024 \
+    --target-cluster cw-us-east-02a --priority production
+```
+
+Extra launcher arguments go after the recipe's and override it.
+
 ## Files
 
 | file | contents |
