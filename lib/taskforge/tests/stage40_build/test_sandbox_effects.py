@@ -21,18 +21,18 @@ from taskforge.sandbox.images import DockerBuild
 from taskforge.spec import draft
 from taskforge.stage40_build.context import BuildFailure
 from taskforge.stage40_build.sandbox_effects import build_machine, grade_candidate, publish_image
+from tests.sandbox.fixture_images import shell_grader
 
 SHELLSIM = draft.requirements(image=None)
 MACHINE = draft.machine(startup_timeout=60)
 PLAIN = PlainText()
 IMAGE = f"registry.example/taskforge-tasks/d00-arithmetic-products-1@sha256:{'1' * 64}"
 
-READS_REPORT = """import json, pathlib
-report = pathlib.Path("/workspace/report.txt")
-passed = report.is_file() and report.read_text().strip() == "total=42"
-check = {"name": "total", "passed": passed, "weight": 1.0}
-verdict = {"reward": float(passed), "detail": {"checks": [check]}}
-pathlib.Path("/logs/verifier/reward.json").write_text(json.dumps(verdict))
+READS_REPORT = """passed=false
+if test -f /workspace/report.txt && test "$(cat /workspace/report.txt)" = total=42; then passed=true; fi
+jq -n -c --argjson passed "$passed" '{
+    reward: (if $passed then 1.0 else 0.0 end), detail: {checks: [{name: "total", passed: $passed, weight: 1.0}]}
+}' > /logs/verifier/reward.json
 """
 
 
@@ -85,7 +85,7 @@ async def test_grade_candidate_grades_answers_through_the_answer_format(
 
 
 async def test_grade_candidate_grades_the_workspace_a_candidate_leaves(context):
-    grader = draft.python_grader(
+    grader = shell_grader(
         READS_REPORT, {}, environment=draft.grader_environment(None), answer_path=draft.ANSWER_PATH, timeout=60
     )
 

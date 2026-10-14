@@ -4,7 +4,8 @@
 """Build fixtures: a small proposal, laptop build services, and a step context over the fake GLM.
 
 ``services`` builds ``RLEnvBuildServices`` on ShellSim, with the ShellSim-backed
-``FixtureImageFactory`` registered as Docker for verifier machines and grader-base task machines.
+``ShellGraderImageFactory`` registered as Docker for verifier machines and grader-base task machines,
+so a grader program the fake GLM writes is sh.
 ``context`` is a step context for calling SDK functions outside a program; its model is the
 ``glm_client`` on ``fake_glm``. ``web_tool`` is a ``web_search`` tool that records its queries.
 """
@@ -22,7 +23,7 @@ from taskforge.sandbox.factories import MachineHost
 from taskforge.stage10_proposal.model import TaskProposal, parse
 from taskforge.stage40_build.context import RLEnvBuildContext
 from taskforge.stage40_build.services import AgentLimits, RLEnvBuildServices
-from tests.sandbox.fixture_images import FixtureImageFactory
+from tests.sandbox.fixture_images import ShellGraderImageFactory
 
 PROPOSAL = """---
 id: "d00.arithmetic.products/1"
@@ -59,7 +60,7 @@ None.
 """
 ITEM = "d00.arithmetic.products--1"
 SAMPLING = LLMPolicy()
-FACTORIES = {Backend.SHELLSIM.value: ShellSimMachineFactory(), Backend.DOCKER.value: FixtureImageFactory()}
+FACTORIES = {Backend.SHELLSIM.value: ShellSimMachineFactory(), Backend.DOCKER.value: ShellGraderImageFactory()}
 LIMITS = AgentLimits(max_turns=8, max_tokens=4096)
 
 
