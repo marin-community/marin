@@ -186,8 +186,10 @@ class IrisMachine:
         )
         if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) for key in {**self.spec.env, **command.env}):
             raise ValueError("Environment variable names must be shell identifiers")
+        # An empty directory leaves the command in the image's own working directory, as Docker does.
+        directory = command.cwd or self.spec.workdir
         script = (
-            f"{exports}\ncd {shlex.quote(command.cwd or self.spec.workdir)} || exit 1\n"
+            f"{exports}\n{f'cd {shlex.quote(directory)} || exit 1' if directory else ''}\n"
             f"{shlex.join(command.argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
             f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
         )
@@ -347,6 +349,8 @@ class IrisMachineFactory:
                     status = tasks[0].status()
                     if status.state == TaskState.RUNNING:
                         machine = IrisMachine(endpoint, client, rpc, job, tasks[0], spec)
+                        if not spec.workdir:
+                            return machine
                         created = machine._exec_sync(["mkdir", "-p", spec.workdir])
                         if created.exit_code:
                             raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")

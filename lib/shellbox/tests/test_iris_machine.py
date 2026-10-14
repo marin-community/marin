@@ -286,12 +286,17 @@ def test_network_policy_selects_the_egress_policy(monkeypatch, network, egress):
     assert client.submitted["egress_policy"] == egress
 
 
-def test_factory_returns_a_running_machine(monkeypatch, tmp_path):
-    job = LocalJob(LocalTask(TaskState.RUNNING))
+def scripted_factory(monkeypatch, state: TaskState) -> tuple[IrisMachineFactory, LocalJob]:
+    """A factory whose controller holds one sandbox task in ``state`` and runs its commands locally."""
+    job = LocalJob(LocalTask(state))
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
-    factory = IrisMachineFactory(controller_url="http://controller")
+    return IrisMachineFactory(controller_url="http://controller"), job
+
+
+def test_factory_returns_a_running_machine(monkeypatch, tmp_path):
+    factory, _ = scripted_factory(monkeypatch, TaskState.RUNNING)
     workdir = tmp_path / "workspace"
     spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(workdir))
 
@@ -305,12 +310,30 @@ def test_factory_returns_a_running_machine(monkeypatch, tmp_path):
     asyncio.run(scenario())
 
 
+def test_empty_workdir_keeps_the_image_directory(monkeypatch, tmp_path):
+    """An image machine without a directory of its own runs commands where the image starts them.
+
+    The factory creates nothing on the machine, as the Docker backend does, and a command's own
+    ``cwd`` still applies.
+    """
+    factory, _ = scripted_factory(monkeypatch, TaskState.RUNNING)
+
+    async def scenario():
+        machine = await factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=""))
+        try:
+            inherited = await machine.run(Command(("pwd",)))
+            elsewhere = await machine.run(Command(("pwd",), cwd=str(tmp_path)))
+        finally:
+            await machine.close()
+        return inherited, elsewhere
+
+    inherited, elsewhere = asyncio.run(scenario())
+    assert (inherited.exit_code, inherited.stdout.strip()) == (0, os.getcwd().encode())
+    assert (elsewhere.exit_code, Path(os.fsdecode(elsewhere.stdout.strip())).resolve()) == (0, tmp_path.resolve())
+
+
 def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path):
-    job = LocalJob(LocalTask(TaskState.FAILED))
-    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
-    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
-    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
-    factory = IrisMachineFactory(controller_url="http://controller")
+    factory, job = scripted_factory(monkeypatch, TaskState.FAILED)
     spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path / "workspace"))
 
     with pytest.raises(RuntimeError, match="container exited"):
