@@ -14,6 +14,7 @@ the model and asks again, up to ``ATTEMPTS`` requests, then raises ``BuildFailur
 ``research`` runs a web-research agent for one research item of the proposal.
 """
 
+import inspect
 import json
 import re
 from collections.abc import Awaitable, Callable, Sequence
@@ -346,8 +347,9 @@ async def checked_structured[T: BaseModel](
     """Ask for ``output_type`` until ``problem`` returns ``None``, sending each problem back.
 
     Each failed submission joins the conversation as the assistant turn, followed by its problem as
-    the next user turn. ``structured_until`` calls this with a step's context; validation calls it
-    directly.
+    the next user turn. A check that hands back another check's coroutine, as ``return
+    accept(value)`` does, is awaited rather than read as a problem. ``structured_until`` calls this
+    with a step's context; validation calls it directly.
 
     Raises:
         BuildFailure: ``ATTEMPTS`` submissions all had a problem; the message ends with the last one.
@@ -358,6 +360,8 @@ async def checked_structured[T: BaseModel](
     for _ in range(ATTEMPTS):
         result = await recorded_structured(model, conversation, output_type, sampling, record, {"output": name})
         found = await problem(result.value)
+        if inspect.isawaitable(found):
+            found = await found
         if found is None:
             return result.value
         issue = found

@@ -9,7 +9,14 @@ from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.stage40_build_with_program.context import BuildFailure
 from taskforge.stage40_build_with_program.outputs import WebCall
-from taskforge.stage40_build_with_program.sdk import ATTEMPTS, DIAGNOSTICS_CHARS, grade_diagnostics, research, structured_until
+from taskforge.stage40_build_with_program.sdk import (
+    ATTEMPTS,
+    DIAGNOSTICS_CHARS,
+    accept,
+    grade_diagnostics,
+    research,
+    structured_until,
+)
 from tests.stage40_build_with_program.conftest import web_tool
 
 
@@ -31,6 +38,19 @@ async def test_structured_until_sends_each_problem_back_until_a_submission_passe
     retry = fake_glm.requests[1]["messages"]
     assert retry[-3] == {"role": "assistant", "content": '{"value":41}'}
     assert "41 is odd" in retry[-2]["content"]
+
+
+async def delegated(answer: Answer) -> str | None:
+    return accept(answer)  # type: ignore[return-value] - the coroutine a program hands back without awaiting it
+
+
+async def test_a_check_that_returns_another_checks_coroutine_is_awaited(context, fake_glm):
+    fake_glm.stream(content=json.dumps({"value": 41}))
+
+    answer = await structured_until(context(), [{"role": "user", "content": "Pick a number."}], Answer, delegated)
+
+    assert answer == Answer(value=41)
+    assert len(fake_glm.requests) == 1
 
 
 async def test_structured_until_fails_the_build_after_its_attempts(context, fake_glm):
