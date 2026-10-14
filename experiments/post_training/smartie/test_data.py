@@ -21,6 +21,48 @@ from experiments.post_training.smartie.data import (
 )
 from experiments.post_training.smartie.deployment import ImageDeployment, LockImage
 from experiments.post_training.smartie.filter_structural import filter_structural
+from experiments.post_training.smartie.mixture import build_mixture
+
+
+@pytest.mark.parametrize("overlap", [False, True])
+def test_mixture_preserves_payloads_and_rejects_cross_split_leakage(tmp_path, overlap):
+    real = tmp_path / "real"
+    structural = tmp_path / "structural"
+    real.mkdir()
+    structural.mkdir()
+    real_manifest = {"failures": []}
+    structural_manifest = {"outputs": {}}
+    expected = {}
+    for split in ("train", "validation"):
+        expected[split] = []
+        for route, root in (("real", real), ("structural", structural)):
+            identity = f"{route}-{split}"
+            if overlap and route == "structural" and split == "validation":
+                identity = "real-train"
+            payload = lowered(arithmetic_task(id=identity)).model_dump_json()
+            expected[split].append(payload)
+            path = root / f"{split}.parquet"
+            pq.write_table(pa.table({"lowered_task_spec": [payload]}), path)
+            if route == "real":
+                real_manifest[f"{split}_ids"] = [identity]
+            else:
+                structural_manifest["outputs"][split] = {
+                    "rows": 1,
+                    "native_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                }
+    (real / "manifest.json").write_text(json.dumps(real_manifest))
+    (structural / "manifest.json").write_text(json.dumps(structural_manifest))
+    output = tmp_path / "mixed"
+    if overlap:
+        with pytest.raises(ValueError, match="overlapping task identities"):
+            build_mixture(StoragePath(str(real)), structural, StoragePath(str(output)))
+        assert not output.exists()
+        return
+    build_mixture(StoragePath(str(real)), structural, StoragePath(str(output)))
+    for split in expected:
+        actual = pq.read_table(output / f"{split}.parquet").to_pydict()
+        assert actual == {"lowered_task_spec": expected[split], "teacher_route": ["real", "structural"]}
+    assert (output / "manifest.json").exists()
 
 
 @pytest.mark.parametrize("broken_native", [False, True])
