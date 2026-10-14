@@ -17,6 +17,7 @@ import jax
 import jax.numpy as jnp
 from jax._src import config as jax_config
 from jax.extend import core as jax_core
+from jax.extend.backend import get_backend
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
 from haliax.nn.ragged_dot import ragged_dot
 
@@ -96,15 +97,16 @@ def _make_ep_mesh_or_none() -> Mesh | None:
     )
 
 
-def _jit_with_sync_collectives_on_gpu(fun: Callable) -> Callable:
-    """``jax.jit`` that runs every collective synchronously on GPU.
+def _jit_with_sync_collectives_on_rocm(fun: Callable) -> Callable:
+    """``jax.jit`` that runs every collective synchronously on AMD GPUs.
 
     XLA launches some collectives asynchronously on a second stream, so a device can have collectives on two
     communicators in flight, such as the ring backend's psum-scatter over the expert axis and its drop-count psum over
     every device. The GPU does not guarantee that both kernels run at once, and on 8x MI300X the ranks sometimes
-    deadlock, each waiting for peers that are in the other collective.
+    deadlock, each waiting for peers that are in the other collective. Other backends keep XLA's default schedule, as
+    in training.
     """
-    if jax.default_backend() != "gpu":
+    if "rocm" not in get_backend().platform_version:
         return jax.jit(fun)
     return jax.jit(fun, compiler_options={"xla_gpu_disable_async_collectives": "ALLCOLLECTIVES"})
 
@@ -1985,8 +1987,8 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
         )
 
     with jax.set_mesh(mesh):
-        actual, overflow = _jit_with_sync_collectives_on_gpu(backend_output)(x, w_up_gate, w_down, combine_weights)
-        actual_gradients = _jit_with_sync_collectives_on_gpu(
+        actual, overflow = _jit_with_sync_collectives_on_rocm(backend_output)(x, w_up_gate, w_down, combine_weights)
+        actual_gradients = _jit_with_sync_collectives_on_rocm(
             jax.grad(
                 lambda x, w_up_gate, w_down, combine_weights: jnp.sum(
                     backend_output(x, w_up_gate, w_down, combine_weights)[0] * cotangent
