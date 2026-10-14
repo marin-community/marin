@@ -312,7 +312,10 @@ sources or the GenRM, abstention, MultiChallenge, jailbreak and instruction
 families. Those sources keep the default recipe version 3 in
 `datasets/nemotron_ultra/components.py` until repeated labelled cases for each
 source establish their expected reward contracts across repeated verdicts.
-The checked-in tool-call results apply only to toolcall-schema rows.
+Results for this challenge set apply only to toolcall-schema rows. Calibration,
+load and replay reports are not checked in; the PR that relies on one links it
+from an artifact prefix, and the repository keeps only the labelled cases,
+normalized task snapshots and provenance the script reads.
 
 For model-output validation, check the message that TaskSpec actually grades.
 A serving endpoint can remove thinking markers from chat content while retaining
