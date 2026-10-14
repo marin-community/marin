@@ -7,7 +7,7 @@ A container task names its image only as a digest-pinned registry reference
 (``EnvironmentRequirements.docker_image``); both the laptop Docker backend and the Iris gVisor
 backend pull it. A ``DockerBuild`` is Taskforge's own build input and never part of a
 TaskSpec: an ``ImageBuilder`` builds the context for linux/amd64, pushes it, and returns the
-reference pinned by manifest digest. ``scripts/build_image_job.py`` implements the builder as Iris jobs.
+reference pinned by manifest digest. ``image_builder.IrisImageBuilder`` implements the builder as Iris jobs.
 """
 
 import gzip

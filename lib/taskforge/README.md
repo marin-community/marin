@@ -43,8 +43,8 @@ renumbering. A stage imports from lower-numbered stages and from the shared modu
 (`content_hash`, `ledger`, `llm`, `sandbox`, `spec`), and the shared modules import no stage.
 `tests/test_imports.py` checks both directions. `scripts/ledger_summary.py` totals wall time and
 tokens per kind and step over JSONL ledgers. The cluster scripts run on Iris and document their
-submit commands in their docstrings: `scripts/build_image_job.py` builds a `DockerBuild` context
-and pushes it to a registry digest through `scripts/push_image_task.py`, and
+submit commands in their docstrings: `scripts/build_image_job.py` builds a directory's `DockerBuild`
+context with `taskforge.sandbox.image_builder` and prints the pinned registry digest, and
 `scripts/iris_machine_probe.py` probes the shellbox Iris backend, and
 `scripts/cluster_rollout_probe.py` runs validation trials inside an Iris task with GLM resolved
 from a relay job.

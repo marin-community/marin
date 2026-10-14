@@ -34,9 +34,10 @@ traceback. A child that exits without a result raises ``BuildInfrastructureFailu
 
 The child calls the model at the fixed ``BuildModelConfig.base_url``. A driver behind an Iris relay
 resolves the relay's endpoint for each request, so every build starts wherever the relay is now.
-The child has no image builder: ``IrisImageBuilder`` lives in ``scripts/build_image_job.py``,
-outside the package, so ``RLEnvBuildServices.images`` is ``None`` and a program that publishes an
-image fails with ``NO_IMAGE_BUILDER``.
+With ``BuildServiceConfig.image_cluster`` set, the child publishes images with an
+``IrisImageBuilder`` that submits its jobs to ``controller_url`` and reads the registry credential
+from Secret Manager itself, at each publish. Without it, as on a laptop, ``RLEnvBuildServices.images``
+is ``None`` and a program that publishes an image fails with ``NO_IMAGE_BUILDER``.
 """
 
 import asyncio
@@ -65,6 +66,7 @@ from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.llm.web import web_tools
 from taskforge.sandbox.factories import MachineHost, machine_factories
+from taskforge.sandbox.image_builder import IrisImageBuilder
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage40_build.context import BuildFailure, BuildInfrastructureFailure
@@ -112,6 +114,9 @@ class BuildServiceConfig:
         ledger_root: The ``JsonlLedger`` root, or ``None`` to record nothing.
         reasoning_replay: Whether every agent loop replays its assistant turns' reasoning.
         agent_limits: The bounds of every agent loop.
+        image_cluster: The Iris cluster the image builder's build and push jobs run on, submitted
+            through ``controller_url``, or ``None`` for a build without an image builder. The
+            registry is the credential's; ``sandbox_effects.image_repository`` names the repository.
     """
 
     host: MachineHost
@@ -120,6 +125,7 @@ class BuildServiceConfig:
     ledger_root: Path | None
     reasoning_replay: ReasoningReplay
     agent_limits: AgentLimits
+    image_cluster: str | None
 
 
 @dataclass(frozen=True)
@@ -266,6 +272,17 @@ def _secret(name: str) -> str:
     return value
 
 
+def image_builder(config: BuildServiceConfig) -> IrisImageBuilder | None:
+    """The child's image builder, or ``None`` when ``config`` names no image cluster.
+
+    Raises:
+        ValueError: ``config`` names an image cluster but no controller URL.
+    """
+    if config.image_cluster is None:
+        return None
+    return IrisImageBuilder(controller_url=config.controller_url, target_cluster=config.image_cluster)
+
+
 @asynccontextmanager
 async def _resources(request: BuildRequest) -> AsyncIterator[tuple[ModelClient, RLEnvBuildServices]]:
     """The model client and services of ``request``, open for the build."""
@@ -275,7 +292,7 @@ async def _resources(request: BuildRequest) -> AsyncIterator[tuple[ModelClient, 
         yield client, RLEnvBuildServices(
             host=config.host,
             factories=machine_factories(config.host, config.controller_url),
-            images=None,
+            images=image_builder(config),
             web_tools=() if config.parallel_key_env is None else web_tools(http, _secret(config.parallel_key_env)),
             ledger=None if config.ledger_root is None else JsonlLedger(config.ledger_root),
             reasoning_replay=config.reasoning_replay,

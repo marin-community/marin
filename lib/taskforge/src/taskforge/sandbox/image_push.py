@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The push job of ``build_image_job.py``: runs in a fresh, pinned Python 3.14 container on CoreWeave.
+"""The push job of ``image_builder.IrisImageBuilder``: runs in a fresh, pinned Python 3.14 container on CoreWeave.
+
+The builder ships this file alone to the job's working directory and runs ``python3 -m image_push``.
 
 Nothing the build produced runs here. The job downloads the build job's Iris output archive from
 the cluster object store, checks it against the sha256 Iris recorded, extracts ``image.tar``,
