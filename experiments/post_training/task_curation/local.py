@@ -34,9 +34,11 @@ from experiments.post_training.task_curation.campaign import (
 
 
 @contextmanager
-def _local_artifact_prefix(prefix: str) -> Iterator[None]:
-    # lazy.lower resolves dependency paths from MARIN_PREFIX at execution time.
-    # QUICK is sequential; reviewed campaigns never enter this scope.
+def local_artifact_prefix(prefix: str) -> Iterator[None]:
+    """Bind planning and execution to a local cache for the entire campaign.
+
+    MARIN_PREFIX is process global, so source threads share this enclosing scope.
+    """
     previous = os.environ.get("MARIN_PREFIX")
     os.environ["MARIN_PREFIX"] = prefix
     try:
@@ -54,11 +56,11 @@ def run_local_steps(
     *,
     runtime: CampaignRuntime,
     max_workers: int,
-    download_cache: Path,
+    cache_dir: Path,
     source_ids: Mapping[str, str],
 ) -> tuple[SourceOutcome, ...]:
     """Run each complete graph, retaining peer results when a source fails."""
-    output_root, download_cache = output_root.resolve(), download_cache.expanduser().resolve()
+    output_root, cache_dir = output_root.resolve(), cache_dir.expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     report_path = output_root / "campaign.json"
     outcomes = {name: SourceOutcome(name, str(output_root / name), OutcomeStatus.QUEUED) for name in steps}
@@ -98,7 +100,7 @@ def run_local_steps(
                     outcomes[name] = SourceOutcome(name, path, OutcomeStatus.RUNNING)
                     report(CampaignStatus.RUNNING)
                     try:
-                        with _local_artifact_prefix(str(download_cache)):
+                        with local_artifact_prefix(str(cache_dir)):
                             # Mutable terminal versions rerun through the ordinary executor;
                             # dependency versions and cache addresses remain unchanged.
                             terminal = replace(step, version="dev")
