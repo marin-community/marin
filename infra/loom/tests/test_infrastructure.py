@@ -196,6 +196,36 @@ def test_loom_pr_review_launcher_starts_one_bounded_review_session() -> None:
     assert 0 < review_profile["idleArchiveSeconds"] <= 900
 
 
+def test_loom_holistic_review_launcher_reviews_each_head_once_and_cancels_stale_runs() -> None:
+    workflow_path = ROOT.parent.parent / ".github/workflows/ops-loom-holistic-review.yaml"
+    workflow = yaml.safe_load(workflow_path.read_text())
+    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
+    trigger = workflow.get("on", workflow.get(True))
+    job = workflow["jobs"]["review"]
+
+    assert set(trigger) == {"pull_request_target"}
+    assert "synchronize" in trigger["pull_request_target"]["types"]
+    assert workflow["concurrency"]["cancel-in-progress"] is True
+    assert "head.repo.full_name == github.repository" in job["if"]
+    checkout, author, gate, launch = job["steps"]
+    assert checkout["with"]["ref"] == "main"
+    assert author["uses"] == "./.github/actions/check-write-access"
+    assert gate["if"] == "steps.author.outputs.allowed == 'true'"
+    assert launch["if"] == "steps.gate.outputs.run == 'true'"
+    assert launch["uses"] == "./.github/actions/launch-loom-run"
+    assert launch["with"]["idempotency-key"] == (
+        "pr-holistic:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}"
+    )
+
+    profile = stack["config"]["marin-loom:profiles"]["pr-holistic-review"]
+    assert 0 < profile["idleArchiveSeconds"] <= 900
+    federations = {entry["name"]: entry for entry in stack["config"]["marin-loom:githubFederations"]}
+    assert federations["pr-holistic-review"]["workflowRef"].endswith(
+        "/.github/workflows/ops-loom-holistic-review.yaml@refs/heads/main"
+    )
+    assert federations["pr-holistic-review"]["profile"] == "pr-holistic-review"
+
+
 def test_loom_launch_action_uses_registered_automation_endpoint() -> None:
     action_path = ROOT.parent.parent / ".github/actions/launch-loom-run/action.yaml"
     action = yaml.safe_load(action_path.read_text())
