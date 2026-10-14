@@ -7717,7 +7717,9 @@ name = "marin-taskforge"
 version = "0.1.0"
 source = { editable = "lib/taskforge" }
 dependencies = [
+    { name = "click" },
     { name = "httpx" },
+    { name = "marin-iris" },
     { name = "marin-rigging" },
     { name = "marin-taskcompendium" },
     { name = "openai" },
@@ -7726,8 +7728,6 @@ dependencies = [
 
 [package.dev-dependencies]
 test = [
-    { name = "click" },
-    { name = "marin-iris" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
@@ -7735,7 +7735,9 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click" },
     { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
     { name = "openai" },
@@ -7744,8 +7746,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 test = [
-    { name = "click" },
-    { name = "marin-iris", editable = "lib/iris" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
