@@ -1,0 +1,81 @@
+{
+  "scope": "Two final failed startups, incremental runtime beyond already retained partial cutoffs.",
+  "runs": [
+    {
+      "run_id": "sc-qwen-transfer-native-window-sc-s1-main-rno-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "selector": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/native-window-sc-s1-final-startup-a10-incremental-selector.yaml",
+      "after_ms": 1792014882223,
+      "before_ms": 1792018175624,
+      "controller_attempt": 10,
+      "attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s1-main-rno-a2-01a126ce/0",
+          "attempt_id": "10",
+          "attempt_uid": "4f1c8cfba2a116a6",
+          "state": "5",
+          "exit_code": "1",
+          "started_at_ms": "1792017319486",
+          "finished_at_ms": "1792018175624",
+          "node_name": "g4ead54",
+          "terminal_reason": "esult, _LEDGER_NAME)\n  File \"/app/marinskyrl/skyrl-train/skyrl_train/trajectory_runners/trajectory_retention.py\", line 1071, in _raise_publication_error\n    raise TrajectoryRetentionPublicationTimeout(message)\nskyrl_train.trajectory_runners.trajectory_retention.TrajectoryRetentionPublicationTimeout: trajectory retention publication failed for _retention_ledger.json: storage operation exceeded 600 seconds\n2026-10-14 22:48:41.917 | ERROR    | skyrl_train.entrypoints.main_base:run_ray_driver:747 - "
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s1-main-rno-a2-01a126ce/1",
+          "attempt_id": "10",
+          "attempt_uid": "9bd6c553bfdec30d",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1792017314526",
+          "finished_at_ms": "1792018175624",
+          "node_name": "g82d9f0",
+          "terminal_reason": ""
+        }
+      ],
+      "manifest": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/native-window-sc-s1-final-startup-a10-incremental-runtime.json",
+      "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/native-window-sc-s1-final-startup-a10-incremental-runtime.log",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s1-main-rno-a2-01a126ce/preserved-final-startup-attempt10-incremental-runtime/retained-runtime/promotion-manifest-01a126ce.json",
+      "scope": "Only surviving runtime objects modified after the previous retained partial cutoff and no later than this final startup failure. Earlier runtime already has its separate cumulative snapshot; no failed placeholder is a response.",
+      "objects": 2702,
+      "bytes": 29217628
+    },
+    {
+      "run_id": "sc-qwen-transfer-native-window-sc-s2-main-rno-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "selector": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/native-window-sc-s2-final-startup-a5-incremental-selector.yaml",
+      "after_ms": 1792014882223,
+      "before_ms": 1792016814867,
+      "controller_attempt": 5,
+      "attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s2-main-rno-a2-01a126ce/0",
+          "attempt_id": "5",
+          "attempt_uid": "c2c8c02fb78b009f",
+          "state": "5",
+          "exit_code": "1",
+          "started_at_ms": "1792015960700",
+          "finished_at_ms": "1792016814867",
+          "node_name": "gb95a50",
+          "terminal_reason": "result, _LEDGER_NAME)\n  File \"/app/marinskyrl/skyrl-train/skyrl_train/trajectory_runners/trajectory_retention.py\", line 1071, in _raise_publication_error\n    raise TrajectoryRetentionPublicationTimeout(message)\nskyrl_train.trajectory_runners.trajectory_retention.TrajectoryRetentionPublicationTimeout: trajectory retention publication failed for _retention_ledger.json: storage operation exceeded 600 seconds\n2026-10-14 22:26:00.050 | ERROR    | skyrl_train.entrypoints.main_base:run_ray_driver:747 -"
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s2-main-rno-a2-01a126ce/1",
+          "attempt_id": "5",
+          "attempt_uid": "14697f9263acaa8a",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1792015960700",
+          "finished_at_ms": "1792016814867",
+          "node_name": "gb95ef0",
+          "terminal_reason": ""
+        }
+      ],
+      "manifest": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/native-window-sc-s2-final-startup-a5-incremental-runtime.json",
+      "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/native-window-sc-s2-final-startup-a5-incremental-runtime.log",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s2-main-rno-a2-01a126ce/preserved-final-startup-attempt5-incremental-runtime/retained-runtime/promotion-manifest-01a126ce.json",
+      "scope": "Only surviving runtime objects modified after the previous retained partial cutoff and no later than this final startup failure. Earlier runtime already has its separate cumulative snapshot; no failed placeholder is a response.",
+      "objects": 2697,
+      "bytes": 28067569
+    }
+  ]
+}

@@ -2166,7 +2166,9 @@
       "status": "terminal",
       "priority_band": 3,
       "bundle_id": "6730f9080f823853c15371e93d37304275ece2cd6574c0b0dc85c7f701de5f13",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce.json.gz",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce",
@@ -2183,7 +2185,9 @@
       "status": "terminal",
       "priority_band": 3,
       "bundle_id": "93b231563168ca1d3fb07efbc138d27b38859a3408f92130f8d8f64dbac86ba5",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce.json.gz",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-qwen-transfer-advantages-tis-s1-main-rno-a1-01a126ce",
@@ -2217,7 +2221,9 @@
       "status": "terminal",
       "priority_band": 3,
       "bundle_id": "fe8ef542948b5fd2884814ffb117cf29ef5509544177529ef8bbe674a3237d84",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-tis-s2-main-rno-a1-01a126ce.json.gz",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
@@ -2247,8 +2253,8 @@
       "configuration_sha256": "b7d496aeb9d909a6f17c8fdfe23b2329144b71110fc1082352a3e70a884b92db",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s1-main-rno-a2-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 5,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "d0d179d313a38666bced19e534631024029c5b71fb8784b0aea64ae49973b1ac",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
@@ -2264,8 +2270,8 @@
       "configuration_sha256": "04af6e6f1042c8281ce39e4ae6e6edaeb45aea1118fb47764d7251ef760b2543",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s2-main-rno-a2-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 5,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "a8989358ee9961cd10669c8c1523599ce656634293cccaa84b81639d80c11145",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
@@ -2609,7 +2615,41 @@
       "priority_band": 3,
       "bundle_id": "bd07461c228816fb73f295fb7fdc953808c97c6ddf9e560fd3d16400e6baaa71",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-native-window-sc-s2-main-rno-a3-01a126ce",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "h100_nodes": 2,
+      "h100_per_node": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v1/native-window-sc-s2.yaml",
+      "configuration_sha256": "3119fb792c41ffce6b27a249ad252c187d815a1b0d4cd294861cca3750862608",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s2-main-rno-a3-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "85f146574f803e939bda85021ba6b3f8eb54620d84c0d6de23ab8c37860252a2",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-native-window-sc-s1-main-rno-a3-01a126ce",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "h100_nodes": 2,
+      "h100_per_node": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v1/native-window-sc-s1.yaml",
+      "configuration_sha256": "2c15438e1ca88ffe6d935ea7910439f3a8ffae4f691554f157c452020c30518b",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s1-main-rno-a3-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "58403cb4d02970589a4b91d6e42ec9b73b421b2e43854da7e65c67799dc94f17",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-14T22:23:15.000445+00:00"
+  "observed_at": "2026-10-14T23:45:55.232300+00:00"
 }
