@@ -59,6 +59,8 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join  # noqa: E4
 
 logger = logging.getLogger("levanter.data.image")
 
+DEFAULT_IMAGE_TILE_SIZE = 384
+
 
 class ImageTextUrlDataSource(UrlBackedShardedDataSource[dict]):
     """
@@ -251,7 +253,7 @@ ConversationDict = TypedDict(
 
 
 # Type definitions for processed image-text data
-# pixel_values and image_sizes are optional to support text-only examples
+# Pixel values are optional to support text-only examples.
 class ImageTextDict(TypedDict, total=False):
     """Processed arrays consumed by the cache and image dataset.
 
@@ -259,7 +261,7 @@ class ImageTextDict(TypedDict, total=False):
         pixel_values: Padded image tiles, shaped (tiles, channels, height, width).
         input_ids: Integer text tokens, shaped (sequence,).
         attention_mask: Valid text positions, shaped (sequence,).
-        image_sizes: Original (height, width) for each image, or None.
+        image_sizes: Original (height, width) for each image; empty for text-only examples.
         loss_mask: Positions contributing to the language loss, shaped (sequence,).
         grid_mask: Valid image tiles, shaped (tiles,), or None.
         unpad_indices: Feature indices in processor order, or None.
@@ -276,7 +278,7 @@ class ImageTextDict(TypedDict, total=False):
 
 # TreeCache uses this exemplar to infer array dtypes and field structure; it is not a training example.
 IMAGE_TEXT_CACHE_EXEMPLAR: ImageTextDict = {
-    "pixel_values": np.zeros((1, 3, 384, 384), dtype=np.float32),
+    "pixel_values": np.zeros((1, 3, DEFAULT_IMAGE_TILE_SIZE, DEFAULT_IMAGE_TILE_SIZE), dtype=np.float32),
     "input_ids": np.zeros((1,), dtype=np.int32),
     "attention_mask": np.zeros((1,), dtype=np.int32),
     "image_sizes": np.zeros((1, 2), dtype=np.int32),
@@ -359,11 +361,15 @@ def _extract_anyres_params(processor: ProcessorMixin) -> AnyResolutionParams:
     """Read tiling parameters from the processor's image configuration."""
     image_processor = getattr(processor, "image_processor", None)
     if image_processor is None:
-        return AnyResolutionParams(None, 384, None, None)
+        return AnyResolutionParams(None, DEFAULT_IMAGE_TILE_SIZE, None, None)
 
     grid_pinpoints = getattr(image_processor, "image_grid_pinpoints", None)
     size_dict = getattr(image_processor, "crop_size", None) or getattr(image_processor, "size", {})
-    patch_size = size_dict.get("height", size_dict.get("shortest_edge", 384)) if isinstance(size_dict, dict) else 384
+    patch_size = (
+        size_dict.get("height", size_dict.get("shortest_edge", DEFAULT_IMAGE_TILE_SIZE))
+        if isinstance(size_dict, dict)
+        else DEFAULT_IMAGE_TILE_SIZE
+    )
     assert isinstance(patch_size, int)
     vision_feature_height = patch_size // 14
     max_num_patches = None
@@ -418,10 +424,10 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             # Binary mask indicating valid tokens (1) vs padding tokens (0).
             # Used to prevent attention to padding positions.
 
-        "image_sizes": np.ndarray or None,
+        "image_sizes": np.ndarray,
             # Shape: (num_images, 2) dtype: int32
             # Original image dimensions as (height, width) for each image.
-            # Used by the model for spatial unpadding in anyres processing. None for text-only.
+            # Used by the model for spatial unpadding in anyres processing. Empty for text-only.
 
         "loss_mask": np.ndarray,
             # Shape: (seq_len,) dtype: float32
@@ -459,7 +465,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         max_num_patches: Optional[int] = 9,
         # Parameters for computing grid_mask for JIT-compatible VLM training
         grid_pinpoints: Optional[List[List[int]]] = None,
-        patch_size: int = 384,
+        patch_size: int = DEFAULT_IMAGE_TILE_SIZE,
         vision_feature_height: Optional[int] = None,
     ) -> None:
         """
@@ -525,45 +531,8 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         self._cached_num_assistant_tokens: int = len(assistant_ids)
         self._cached_assistant_token_ids_array: np.ndarray = np.array(assistant_ids, dtype=np.int32)
 
-    def get_token_ids(self) -> Dict[str, Optional[int]]:
-        """Get current token IDs from the processor.
-
-        Returns a dict with keys:
-        - image_token_id: Token ID for <image> placeholder
-        - video_token_id: Token ID for <video> placeholder
-        - vocab_size: Vocabulary size of the tokenizer
-
-        These values can be used to update model config (e.g., LlavaOnevisionConfig)
-        when the tokenizer has been replaced.
-
-        Example:
-            >>> bp = BatchImageProcessor(processor, tokenizer=qwen3_tokenizer)
-            >>> token_ids = bp.get_token_ids()
-            >>> # Update model config
-            >>> model_config = dataclasses.replace(
-            ...     model_config,
-            ...     image_token_index=token_ids["image_token_id"],
-            ...     video_token_index=token_ids["video_token_id"],
-            ... )
-        """
-        return {
-            "image_token_id": getattr(self.processor, "image_token_id", None),
-            "video_token_id": getattr(self.processor, "video_token_id", None),
-            "vocab_size": self.processor.tokenizer.vocab_size,
-        }
-
     def _compute_grid_shape(self, image_size: Tuple[int, int]) -> Tuple[int, int]:
-        """Compute (gh, gw) grid shape for an image using vectorized numpy operations.
-
-        This is used for pre-computing grid shapes during CPU preprocessing so they can be
-        passed as concrete Python ints to pack_image_features, enabling JIT compilation.
-
-        Args:
-            image_size: (height, width) of the original image
-
-        Returns:
-            (gh, gw) grid dimensions as Python ints
-        """
+        """Select the tile grid that preserves the most image area with least padding."""
         if self._grid_h is None or self.patch_size is None:
             return (1, 1)  # Default for no anyres
 
@@ -734,7 +703,6 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         if len(pattern_starts) == 0:
             return empty_mask
 
-        # Find all <|im_end|> positions
         im_end_positions = np.where(input_ids == self._cached_im_end_id)[0]
 
         # Content starts after: <|im_start|> + assistant_tokens
@@ -872,7 +840,6 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             # Compute unpad_indices only for single-image anyres case
             # Multi-image doesn't use anyres (each image is just 1 base patch)
             if num_images == 1 and has_image_sizes and self.grid_pinpoints and self.vision_feature_height:
-                assert image_sizes is not None  # Guarded by has_image_sizes
                 orig_height, orig_width = int(image_sizes[0, 0]), int(image_sizes[0, 1])
                 gh, gw = self._compute_grid_shape((orig_height, orig_width))
                 patches_height = patches_width = self.vision_feature_height
@@ -956,6 +923,12 @@ def image_caption_to_conversation(record: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _image_split_urls(split: str, split_urls: Mapping[str, Sequence[str]]) -> List[str]:
+    if split not in split_urls:
+        raise ValueError(f"Unknown split: {split}")
+    return image_source_urls(list(split_urls[split]))
+
+
 @dataclass
 class ImageDatasetSourceConfig:
     """Configuration for a simple image-text dataset source (single image + text pairs)."""
@@ -1017,23 +990,9 @@ class ImageDatasetSourceConfig:
             yield from ImageTextUrlDataSource(urls, image_key=self.image_key, text_key=self.text_key)
 
     def urls_for_split(self, split: str) -> List[str]:
-        """Get URLs for the specified split.
-
-        Supports:
-        - Single file paths: /path/to/file.parquet
-        - Glob patterns: /path/to/*.parquet
-        - Directories: /path/to/folder/ (will find all *.parquet files)
-        - file:// prefixed paths: file:///path/to/folder/
-        - Brace expansion: /path/to/{train,val}*.parquet
-        """
-        if split == "train":
-            urls = self.train_urls
-        elif split == "validation":
-            urls = self.validation_urls
-        else:
-            raise ValueError(f"Unknown split: {split}")
-
-        return image_source_urls(list(urls))
+        return _image_split_urls(
+            split, {self.train_split: self.train_urls, self.validation_split: self.validation_urls}
+        )
 
 
 @dataclass
@@ -1144,23 +1103,9 @@ class ConversationDatasetSourceConfig:
                 yield cast(ConversationDict, doc)
 
     def urls_for_split(self, split: str) -> List[str]:
-        """Get URLs for the specified split.
-
-        Supports:
-        - Single file paths: /path/to/file.parquet
-        - Glob patterns: /path/to/*.parquet
-        - Directories: /path/to/folder/ (will find all *.parquet files)
-        - file:// prefixed paths: file:///path/to/folder/
-        - Brace expansion: /path/to/{train,val}*.parquet
-        """
-        if split == "train":
-            urls = self.train_urls
-        elif split == "validation":
-            urls = self.validation_urls
-        else:
-            raise ValueError(f"Unknown split: {split}")
-
-        return image_source_urls(list(urls))
+        return _image_split_urls(
+            split, {self.train_split: self.train_urls, self.validation_split: self.validation_urls}
+        )
 
 
 @dataclass
@@ -1273,8 +1218,7 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
         # to run in parallel while ensuring thread-safety for each one
         self._processor_lock = self._get_processor_lock(processor)
 
-        # RAW data stored in memory (small - just text/paths, not images)
-        # This avoids slow re-reading of jsonl files
+        # Raw records may include decoded images as well as paths or encoded bytes.
         self._raw_data: Optional[List[Dict[str, Any]]] = None
         self._length: Optional[int] = None
         self._data_lock = threading.Lock()
@@ -1304,7 +1248,6 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
 
             raw_data: list[Dict[str, Any]] = []
             for shard_name in self.source.shard_names:
-                # Use list extend instead of individual appends
                 shard_data = list(self.source.open_shard(shard_name))
                 raw_data.extend(shard_data)
 
@@ -1313,7 +1256,6 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
             self._data_loaded.set()
             logger.info(f"Loaded {self._length} raw examples into memory")
 
-            # Start background prefetch thread
             self._start_prefetch_thread()
 
     def _start_prefetch_thread(self) -> None:
@@ -1623,7 +1565,7 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
         key: Optional[PRNGKeyArray] = None,
         pixel_dtype: Optional[np.dtype] = None,
         grid_pinpoints: Optional[List[List[int]]] = None,
-        patch_size: int = 384,
+        patch_size: int = DEFAULT_IMAGE_TILE_SIZE,
         NumImageTokens: Optional[Axis] = None,
     ) -> None:
         """
