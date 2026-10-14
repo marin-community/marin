@@ -94,5 +94,7 @@ generator:
     top_k: -1
     logprobs: 32
   engine_init_kwargs:
+    enable_auto_tools: true
+    tool_parser: hermes
     logprobs_mode: raw_logprobs
     enable_return_routed_experts: false
