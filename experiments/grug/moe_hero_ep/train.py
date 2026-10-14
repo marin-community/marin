@@ -7,6 +7,7 @@ import gc
 import importlib.metadata
 import itertools
 import logging
+import math
 import os
 import time
 from collections.abc import Callable
@@ -39,6 +40,7 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
 from levanter.grug._moe.ep_ragged_all_to_all import RAGGED_REQUIRED_XLA_FLAGS
+from levanter.grug.attention import AttentionMask, fa4_cute_segment_bounds
 from levanter.grug.grug_moe import (
     MOE_DROPPED_ASSIGNMENTS_METRIC,
     MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC,
@@ -811,7 +813,49 @@ def _drop_metrics(
     }
 
 
+def balance_attention_rows(batch: GrugLmExample) -> GrugLmExample:
+    """Permute the global batch's rows so every batch shard gets a similar share of attention work.
+
+    With packed documents a row's attention cost (query-key pairs inside a document) varies several-fold,
+    and every layer waits for the busiest shard at its next collective. At 16K context (four rows per
+    GPU) the busiest GPU of a real batch has ~2.1x the mean full-causal attention work. Rows are sorted by
+    cost and dealt to shards in snake order (0..n-1, n-1..0, ...). The loss is a mean over all tokens and
+    the router statistics are global sums, so the permutation leaves the training objective unchanged.
+    """
+    segment_ids = batch.attn_mask.segment_ids
+    if segment_ids is None:
+        return batch
+    mesh = jax.sharding.get_abstract_mesh()
+    shards = math.prod(mesh.shape[axis] for axis in _BATCH_AXES)
+    rows, seq_len = batch.tokens.shape
+    if rows % shards:
+        raise ValueError(f"{rows} batch rows do not divide over {shards} batch shards")
+    q_segment_ids = segment_ids[0]
+    document_start, valid = fa4_cute_segment_bounds(
+        AttentionMask(is_causal=True, segment_ids=(q_segment_ids, q_segment_ids)),
+        batch_size=rows,
+        seq_len=seq_len,
+        sliding_window=None,
+    )
+    pairs = jnp.where(valid, jnp.arange(seq_len) - document_start + 1, 0)
+    cost = jax.sharding.reshard(jnp.sum(pairs.astype(jnp.float32), axis=1), P())
+    order = jnp.argsort(-cost, stable=True)
+    deal_round, deal_index = np.divmod(np.arange(rows), shards)
+    shard = np.where(deal_round % 2 == 0, deal_index, shards - 1 - deal_index)
+    rows_by_shard = order[np.argsort(shard, stable=True)].reshape(shards, rows // shards)
+    source_row = jnp.sort(rows_by_shard, axis=1).reshape(rows)
+
+    def permute(x: jax.Array) -> jax.Array:
+        gathered = jax.sharding.reshard(x, P())[source_row]
+        return jax.sharding.reshard(gathered, jax.typeof(x).sharding.spec)
+
+    return jax.tree.map(permute, batch)
+
+
 def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None):
+    # Moves rows between batch shards; see `balance_attention_rows` for its effect on the loss.
+    batch = balance_attention_rows(batch)
+
     def loss_fn(model):
         compute_params = mp.cast_to_compute(model)
         return compute_params.next_token_loss(
