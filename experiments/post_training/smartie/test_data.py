@@ -22,6 +22,62 @@ from experiments.post_training.smartie.data import (
 from experiments.post_training.smartie.deployment import ImageDeployment, LockImage
 from experiments.post_training.smartie.filter_structural import filter_structural
 from experiments.post_training.smartie.mixture import build_mixture
+from experiments.post_training.smartie.session_deadlines import extend_dataset_deadlines
+
+
+def test_deadline_extension_preserves_cohort_and_enclosing_budget(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    originals = {}
+    hashes = {}
+    for split in ("train", "validation"):
+        payloads = [
+            lowered(
+                arithmetic_task(id=f"{split}-{route}"),
+                task_session=session,
+                max_turns=1,
+                model_turn_timeout=model,
+                total_turn_timeout=turn,
+                attempt_timeout=attempt,
+            ).model_dump_json()
+            for route, session, model, turn, attempt in (
+                ("real", "shellbox", 300, 360, 1200),
+                ("structural", "structure_closure", 180, 240, 300),
+            )
+        ]
+        table = pa.table({"lowered_task_spec": payloads, "teacher_route": ["calendar", "structural"]})
+        originals[split] = table
+        path = source / f"{split}.parquet"
+        pq.write_table(table, path)
+        hashes[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    manifest = source / "manifest.json"
+    manifest.write_text(json.dumps({"output_sha256": hashes}))
+    output = tmp_path / "extended"
+    report = extend_dataset_deadlines(
+        StoragePath(str(source)), StoragePath(str(manifest)), StoragePath(str(output)), 600
+    )
+    for split, original in originals.items():
+        result = pq.read_table(output / f"{split}.parquet")
+        assert result.schema == original.schema
+        assert result["teacher_route"] == original["teacher_route"]
+        for old, new in zip(
+            original["lowered_task_spec"].to_pylist(), result["lowered_task_spec"].to_pylist(), strict=True
+        ):
+            before, after = json.loads(old), json.loads(new)
+            assert after["session"]["model_turn_timeout"] == 600
+            for outer in ("total_turn_timeout", "attempt_timeout"):
+                assert after["session"][outer] - 600 == (
+                    before["session"][outer] - before["session"]["model_turn_timeout"]
+                )
+            for field in ("model_turn_timeout", "total_turn_timeout", "attempt_timeout"):
+                after["session"][field] = before["session"][field]
+            assert after == before
+        assert hashlib.sha256((source / f"{split}.parquet").read_bytes()).hexdigest() == hashes[f"{split}.parquet"]
+        assert hashlib.sha256((output / f"{split}.parquet").read_bytes()).hexdigest() == (
+            report["output_sha256"][f"{split}.parquet"]
+        )
+    with pytest.raises(FileExistsError):
+        extend_dataset_deadlines(StoragePath(str(source)), StoragePath(str(manifest)), StoragePath(str(output)), 900)
 
 
 @pytest.mark.parametrize("overlap", [False, True])
