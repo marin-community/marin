@@ -40,20 +40,21 @@ from taskforge.stage40_build_with_program.template import standard
 from taskforge.stage50_validate.lowering import lower
 from tests.stage40_build_with_program.conftest import FACTORIES, WORKPIECE, SAMPLING, web_tool
 
-GOOD_GRADER = """import json, pathlib
-final = pathlib.Path("/app/answer.txt").read_text().strip()
-expected = pathlib.Path("/tests/key.txt").read_text().strip()
-checks = [{"name": "answer line", "passed": final.endswith("ANSWER = " + expected), "weight": 1.0}]
-reward = sum(c["weight"] for c in checks if c["passed"]) / sum(c["weight"] for c in checks)
-pathlib.Path("/logs/verifier/reward.json").write_text(json.dumps({"reward": reward, "detail": {"checks": checks}}))
+# Grader programs in sh, which ShellGraderImageFactory runs for the template's python3 grader command.
+GOOD_GRADER = """last=$(printf '%s\\n' "$(cat /app/answer.txt)" | tail -n 1)
+expected=$(cat /tests/key.txt)
+passed=false
+case "$last" in *"ANSWER = $expected") passed=true ;; esac
+jq -n -c --argjson passed "$passed" '{
+    reward: (if $passed then 1.0 else 0.0 end), detail: {checks: [{name: "answer line", passed: $passed, weight: 1.0}]}
+}' > /logs/verifier/reward.json
 """
-WRONG_GRADER = GOOD_GRADER.replace('"ANSWER = "', '"RESULT = "')
-FAILED_CHECK_GRADER = """import json, pathlib
-detail = {"checks": [{"name": "reference query", "passed": False, "weight": 1.0}], "reason": "not authorized"}
-pathlib.Path("/logs/verifier/reward.json").write_text(json.dumps({"reward": 0.0, "detail": detail}))
+WRONG_GRADER = GOOD_GRADER.replace('"ANSWER = ', '"RESULT = ')
+FAILED_CHECK_GRADER = """jq -n -c '{reward: 0.0, detail: {
+    checks: [{name: "reference query", passed: false, weight: 1.0}], reason: "not authorized"
+}}' > /logs/verifier/reward.json
 """
-NO_CHECKS_GRADER = """import json, pathlib
-pathlib.Path("/logs/verifier/reward.json").write_text(json.dumps({"reward": 1.0}))
+NO_CHECKS_GRADER = """printf '%s' '{"reward": 1.0}' > /logs/verifier/reward.json
 """
 IMAGE = f"registry.example/taskforge-tasks/d00@sha256:{'2' * 64}"
 REFERENCE_REPLY = "6 * 7 = 42\nANSWER = 42"

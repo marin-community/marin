@@ -30,14 +30,15 @@ from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfr
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, run_build
 from taskforge.stage40_build_with_program.sandbox_effects import build_machine, grade_candidate, publish_image
+from tests.sandbox.fixture_images import shell_grader
 from tests.stage40_build_with_program.conftest import FACTORIES, WORKPIECE, SAMPLING
 
 SHELLSIM = draft.requirements(image=None)
 DOCKER = draft.requirements(image=f"registry.example/task@sha256:{'0' * 64}")
 MACHINE = draft.machine(startup_timeout=60)
 PLAIN = PlainText()
-FULL_CREDIT = 'import pathlib\npathlib.Path("/logs/verifier/reward.json").write_text(\'{"reward": 1.0}\')\n'
-GRADER = draft.python_grader(
+FULL_CREDIT = """printf '%s' '{"reward": 1.0}' > /logs/verifier/reward.json\n"""
+GRADER = shell_grader(
     FULL_CREDIT, {}, environment=draft.grader_environment(None), answer_path=draft.ANSWER_PATH, timeout=60
 )
 UNAVAILABLE = ConnectError(Code.UNAVAILABLE, "controller connection refused")
