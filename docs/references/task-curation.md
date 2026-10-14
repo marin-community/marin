@@ -83,7 +83,8 @@ directly. Atlas reads these facts without invoking or inspecting the callable.
 | `experiments/post_training/task_curation/images/` | `build.py`, which builds declared environments and records each as an artifact, and the build CLI |
 | `taskcompendium.runtime.local` | The uv environments that local graders run in on the Zephyr worker |
 | `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()` and `runnable_sources()` |
-| `experiments/post_training/task_curation/source.py`, `export_catalog.py` | Source metadata, authored reviews and generated Atlas JSON |
+| `experiments/post_training/task_curation/source.py`, `source_metadata.py` | Source declarations and inventory metadata |
+| `experiments/post_training/task_curation/catalog_snapshot.py` | Published curation inventory, grades and archived evidence |
 | `experiments/post_training/task_curation/config.py` | Invocation options and concrete recipe settings; service binding belongs to `process_rows` |
 | `experiments/post_training/task_curation/pipeline.py` | `CurationRecipe`, `process_rows` and its `data/rl/<name>-<hash>` artifact |
 | `experiments/post_training/task_curation/pipeline.py`, `local.py` | Source-level mode dispatch and local mechanical conversion |
@@ -99,26 +100,29 @@ ArtifactSteps.
 
 ## Declarations
 
-An `RlDataSource` has `info`, `review`, a typed `config` and an optional `pipeline`.
+An `RlDataSource` has `info`, a typed `config` and an optional `pipeline`.
 `SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
 search tags, notes and an optional input-row count. A `SourceReference` groups a
-name, revision and URL for the verifier or inventory dataset. Runnable sources
-expose their pinned input through `config.dataset`. `DataSourceReview` records an authored grade, evidence URL, date and
-the dataset/verifier revisions it covers. Its default is unrated. Executed
-reviews and difficulty measurements remain in the Atlas database.
+name, revision and URL for an inventory dataset. Runnable sources expose their
+pinned input through `config.dataset`. Current grades come from the executed
+assessment records in `finestore.rl.curation.CurationCatalog`.
 
-The applet build exports this registry to `dist/catalog.json`:
+```python
+from finestore.rl.curation import CurationCatalog
 
-```bash
-uv run --with-editable './lib/taskcompendium[pipeline]' python -m experiments.post_training.task_curation.export_catalog \
-  --output infra/marina/applets/rl_data_catalog/dist/catalog.json
+catalog = CurationCatalog("/path/to/cache/campaigns/catalog")
+for source in catalog.sources(catalog.current().snapshot_id):
+    if source.assessment_key:
+        assessment = catalog.assessment(source.assessment_key)
+        for item in catalog.items(source.assessment_key):
+            packet = catalog.packet(source.assessment_key, item.task_id)
 ```
 
-The exporter alone maps Python declarations to Atlas fields. Dataset links and
-**Input rows** describe the same pinned conversion input, before conversion or
-curation. Unknown counts remain unknown. A changed dataset or verifier revision
-makes reviews covering a different revision stale while preserving their history.
-See [RL Data Atlas](rl-data-atlas.md) for publishing and saved reviews, and the
+Dataset links and **Input rows** describe the same pinned conversion input,
+before curation. Unknown counts remain unknown. Assessment keys follow their
+pipeline dependencies, rubric and model configuration. A failed assessment under
+a changed key has no current grade. Earlier evidence remains archived.
+See [RL Data Atlas](rl-data-atlas.md) for publishing and historical reviews, and the
 [experiment README](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md)
 for offline count regeneration.
 
@@ -158,11 +162,12 @@ grader requirements on each TaskSpec; execution selects suitable Shellbox machin
 | `apt` | Debian package names. |
 | `data` | Downloads; only `nltk:<package>` is supported. |
 | `image` | A digest-pinned image used as-is. It excludes every other field. |
+| `dockerfile` | A checked-in, self-contained Dockerfile fragment that installs a toolchain, such as Lean and Mathlib, using only `ARG`, `ENV` and `RUN`. The generated Dockerfile runs its lines after the apt step and before the lock sync; its bytes enter the identity. It excludes `image`. |
 
 | Declaration | Placement | Recorded `EnvironmentRequirements` |
 |---|---|---|
 | `image` set | A sandbox of that image | `command_semantics=LINUX_PROCESS`, `docker_image=image` |
-| `apt` names a package outside `WORKER_IMAGE_APT` | A sandbox of an image built for the environment | `command_semantics=LINUX_PROCESS`, `docker_image=<built digest>` |
+| `dockerfile` set, or `apt` names a package outside `WORKER_IMAGE_APT` | A sandbox of an image built for the environment | `command_semantics=LINUX_PROCESS`, `docker_image=<built digest>` |
 | Anything else | A bubblewrap sandbox on the Zephyr worker | `command_semantics=LINUX_PROCESS`, `packages_lock=<lock URL>` |
 
 `WORKER_IMAGE_APT` in `environment.py` lists the Debian packages the `task`
@@ -172,6 +177,8 @@ lock every grade script in the catalog imports with the NLTK `punkt_tab` and
 `wordnet` data, runs in the worker. The TaskTrove competitive-programming
 sources declare `COMPILER_GRADER_PACKAGES`, which adds `build-essential` for
 C++ submissions; the worker image provides it, so they also run in the worker.
+`LEAN_GRADER_PACKAGES` adds the Lean 4 and Mathlib fragment
+`datasets/nemotron_ultra/lean.Dockerfile`, so it runs in a built image.
 Converters declare agent requirements independently. A simulated shell requires
 explicit `SHELL_SIMULATOR` semantics; an absent image does not select simulation.
 Conversation-only tasks need no machine. Memory settings are advisory sizing hints.
@@ -298,8 +305,11 @@ Sample and full modes run the reviewed procedure below.
 5. Filter rows into kept, rejected and deferred.
 6. With controls, verify a seeded sample of at most 20 kept rows
    (`--verification-sample-size`): each task's one control runs once in a fresh
-   machine, rerun up to twice more after an infrastructure error, and the source
-   passes at a 95% pass fraction. Judge-graded sources skip this step.
+   machine, rerun up to twice more after an infrastructure error. At a 95% pass
+   fraction, unsampled tasks can skip validation. Otherwise validate every kept
+   task, retaining passes, rejecting failures and deferring unavailable results.
+   Judge-graded sources skip this step. This threshold is independent of sampled
+   GLM quality grades.
 7. Admit rows and write the outputs.
 
 For a standalone task batch, call
@@ -358,13 +368,14 @@ uv run python -m experiments.post_training.task_curation.images --identity IDENT
 
 Each environment without an `image` becomes the artifact
 `images/env-<identity[:16]>`, which stores its hash lock as `requirements.lock`.
-The identity hashes the `pypi` pins or the lock's bytes, `apt`, `data`, Python
-3.12, the platform, the digest-pinned base image, the files of `verifyit`
-(which every built environment puts on the grader's import path) and the
-placement, so a rerun with an unchanged declaration does nothing. An
-environment placed in a built image also gets a generated Dockerfile: the
-pinned `iris-task` base, `apt-get install` of `apt`, `uv pip sync
---require-hashes` of the lock, the NLTK data and `verifyit`. The build pushes it
+The identity hashes the `pypi` pins or the lock's bytes, `apt`, `data`, the
+`dockerfile` fragment's bytes, Python 3.12, the platform, the digest-pinned
+base image, the files of `verifyit` (which every built environment puts on the
+grader's import path) and the placement, so a rerun with an unchanged
+declaration does nothing. An environment placed in a built image also gets a
+generated Dockerfile: the pinned `iris-task` base, `apt-get install` of `apt`,
+the `dockerfile` fragment's lines, `uv pip sync --require-hashes` of the lock,
+the NLTK data and `verifyit`. The build pushes it
 as `ghcr.io/marin-community/iris-task:task-curation-env-<identity[:16]>` and
 records the digest. An image build needs a `docker login` for ghcr.io; every
 build needs, for a CoreWeave `MARIN_PREFIX`, the `CW_KEY_ID` and
@@ -390,9 +401,33 @@ the review endpoint is resolved from the Iris GLM relay job (`--relay-job`) unle
 `--base-url` overrides it. `--mode sample` is a test run that
 converts and gates only each source's panel. `--mode full` runs each source on
 its own: it makes its own panel quality decision, converts every row of an
-accepted source, draws its control sample from all kept rows, and ends `gated`
-when its quality or verification gate rejects the source. Repeat
+accepted source, draws its control sample from all kept rows, and validates every
+kept task when the control sample does not permit skipping validation. A quality
+rejection ends the source `gated`; control failures reject individual tasks. Repeat
 `--source NAME` to run a subset.
+
+FULL runs append a post-curation assessment; SAMPLE can opt in with `--assess`.
+The shared stages prepare bounded evidence packets with Zephyr, request one GLM
+judgment per packet, and publish typed records in the catalog. Atlas loads these
+records into Postgres and computes cohort summaries with SQL. The default sample covers
+100 admitted tasks and up to 20 excluded diagnostic rows, grouped by primary
+reason. Their populations and verdict counts stay separate. These model
+opinions do not change curation admission or imply source-wide correctness.
+`--assessment-sample-size`, `--excluded-sample-size` and `--assessment-rubric`
+configure the pass; `--skip-assessment` records a curation-only run.
+
+Incomplete curation produces retained artifacts and downstream assessment, then
+the campaign reports failure. `--curation-attempt N` selects a new curation key
+when controls need a retry; successful exact review requests and pinned downloads
+remain cached. Rerun the same campaign to reuse completed dependencies.
+`--assessment-model-revision` changes the grading model revision separately from
+the curation review revision.
+
+Use `--cache-dir PATH` to run SAMPLE/FULL locally against small pinned sources
+and retain downloads, source artifacts, assessment artifacts and GLM query
+cache. Local workers need no Iris coordinator settings; package and image
+controls keep their environment prerequisites. See the
+[real-source local loop](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#reviewed-local-loop-on-real-sources).
 
 ## Outputs
 
@@ -442,12 +477,12 @@ telemetry, identity and filter-count snapshots are named FineStore objects with
 SHA-256 digests. Failed sources remain visible; missing statistics are null.
 QUICK does not imply review, verification or admission.
 
-```python
-from finestore.reader import ReadView
-
-view = ReadView("/path/to/campaign-output/catalog")
-sources = view.scan("sources", where=[("run_id", "==", "saved-run-id")])
-```
+The typed `CurationCatalog` reader exposes source declarations, assessment
+attempts, selected assessments, cohort populations, items and archived packets.
+The terminal judgment artifact's ordinary pipeline key identifies an assessment.
+An incomplete curation run can have a complete diagnostic assessment. Assessment
+attempts publish complete, failed or skipped; live progress stays in the executor.
+Atlas's explicit loader copies selected records to Postgres after publication.
 
 A cached artifact retains its original attempt timestamp and timing. The
 containing invocation has a different run ID and start time; summing those

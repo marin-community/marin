@@ -29,16 +29,114 @@ select sources in catalog order; omitting `--source` selects the full catalog.
 QUICK needs no review model, controller, worker image or coordinator settings.
 
 Repeat `--source` for a cohort and use a fresh output root each pass. Downloads
-are cached under `~/.cache/marin` (`--download-cache` overrides this).
+are cached under `~/.cache/marin` (`--cache-dir` overrides this).
 `--input-root PATH` uses already staged files from the declared revision;
-`--input NAME PATH` overrides an auxiliary input. These local input options,
-`--output-root` and `--download-cache` are accepted only in QUICK mode.
+`--input NAME PATH` overrides an auxiliary input. `--output-root` selects QUICK
+outputs; reviewed local runs use `--report-path` for their report location.
 
 For a local fixture, replace `--input-root` with
 `--input-file LOGICAL_PATH LOCAL_FILE`, repeated as needed. The logical path must
 match the source declaration. These files become the selected primary inputs;
 the manifest records their physical paths and SHA-256 while preserving logical
 row IDs. Auxiliary inputs still use overrides or the download cache.
+
+### Reviewed local loop on real sources
+
+Use `--cache-dir` with SAMPLE or FULL to run the same reviewed pipelines on a
+local Zephyr pool. Pinned downloads and source artifacts live in that directory;
+unchanged graphs are reused on the next invocation. SAMPLE processes each
+source's panel, while FULL expands sources accepted by its panel review.
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' python \
+  -m experiments.post_training.task_curation.driver \
+  --mode sample --cache-dir ~/.cache/marin/rl-curation \
+  --source aime24 --source svamp --quality-sample-size 5 \
+  --assess --assessment-sample-size 3 --excluded-sample-size 2 \
+  --max-workers 2 --concurrent-sources 1 --review-concurrency 1 \
+  --review-mode chat --model-revision YOUR_GLM_REVISION \
+  --base-url YOUR_GLM_ENDPOINT --run
+```
+
+Local reviewed runs need no worker image or controller for in-process graders.
+The default report is `CACHE_DIR/campaigns/campaign.json`, with its retained run
+catalog beside it. `--report-path` chooses another report
+location. Review requests are cached under `CACHE_DIR/review-cache` unless
+`--review-cache` selects another location. `GLM_BULK_TOKEN` supplies credentials.
+Package-backed and image graders retain their normal environment prerequisites.
+`--image-backend` and `--controller-url` can explicitly select a remote image
+grader while curation runs locally; worker-image and coordinator flags apply only
+to Iris execution.
+Use `--input-root`, `--input-file` or `--input` only when deliberately replacing
+the pinned inputs; the local rollout can use real sources without overrides.
+Keep the same `--quality-sample-size` and `--seed` when moving from SAMPLE to
+FULL to reuse identical panel review requests. Changing either selects a new
+panel; the plan prints both values before execution.
+
+FULL appends assessment automatically; SAMPLE uses `--assess`. Use
+`--skip-assessment` to record a curation-only run. The assessment scans admitted
+IDs, samples excluded rows by primary reason, and prepares bounded packets from
+the selected TaskSpecs and curation sidecars. GLM gives each packet one judgment.
+The report separates admitted-task opinions from excluded-row diagnostics and
+executed controls. Assessment never changes row admission.
+
+Incomplete quality or control outcomes are retained as curation artifacts so
+assessment can diagnose them. The campaign still fails after saving its reports.
+Use a new `--curation-attempt` to rerun incomplete controls under a new source key;
+pinned downloads and exact successful model requests remain cached. An assessment
+failure retries only the failed grading stage.
+
+The default assessment sample is 100 admitted tasks and up to 20 excluded rows.
+`--assessment-rubric FILE` adds criteria to the shared rubric. Changing rubric
+or model configuration reuses prepared packets; source changes use the ordinary
+upstream pipeline key. Implementation changes require explicit stage version
+bumps. Python source files do not enter assessment identity.
+
+The grading pass has two artifact stages: Zephyr prepares bounded packets from
+selected TaskSpecs and curation sidecars, then GLM emits one structured judgment
+per packet. Publication joins these outputs by task ID, checks coverage and
+archives packets and request/response traces in FineStore. Atlas loads the typed
+records and packets into Postgres; SQL computes cohort labels and counts.
+
+Malformed or unavailable responses use finite retries. Remaining failures retain
+partial grades and fail the stage. Repeated runs reuse successful exact requests.
+Changing the rubric or `--assessment-model-revision` reuses curation and prepared
+packets. Ordinary source changes invalidate their downstream artifacts; shared
+stage implementation changes require an explicit version bump.
+
+Chat transport allows up to 64 requests per worker process, selected with
+`--review-concurrency`. Eight concurrently grading sources at 64 requests each
+can issue up to 512 requests in flight. Local reviewers share one process limit;
+remote worker processes have separate limits. Byte groups do not impose a
+completion barrier. Each task still has its own request, judgment and trace;
+`--review-mode batch` selects the provider's separate asynchronous batch API.
+Tune concurrency from measured throughput and errors for the chosen endpoint.
+
+The cohort label is unknown for an empty sample, unavailable judgments or a
+missing TaskSpec. Otherwise bad takes precedence over some_issues, unknown,
+and good. Read the verdict counts alongside this conservative label. Missing
+prior reviews are optional context; executed control coverage is reported
+separately. Excluded counts cover processed non-admitted verification rows;
+unprocessed input rows stay in the curation summary.
+
+Each terminal campaign publishes the complete inventory through the typed
+`CurationCatalog` reader. Assessments, populations, items and packet references
+retain their executed pipeline key. A failed attempt under a changed key has no
+current grade; an exact-key retry can retain a previously completed grade.
+Sources without pipelines remain inventory entries with a skip reason.
+Publication archives selected evidence in the data's storage region. Atlas data
+updates use the [explicit loader](../../../docs/references/rl-data-atlas.md#updating-atlas).
+
+### Spiral rollout
+
+Start with AIME24 and SVAMP and a small SAMPLE panel in the local cache above.
+Inspect task packets, rejected rows, provider failures and runtime. Repeat the
+same command to check cache reuse; change only the grading rubric to check that
+curation stays cached. Fix failures before increasing either the source set or
+sample size. Move to FULL on these sources, then expand by source family and
+measure throughput, retries, packet sizes and publication time at each step.
+Run large remote campaigns in the data's storage region. Load Atlas after the
+campaign and catalog are complete.
 
 ### Harbor compatibility view
 
@@ -124,16 +222,9 @@ explicit truncation; binary files retain hashes. Full runs discard archive bytes
 ## Declaring a dataset
 
 Follow [Adding a dataset](datasets/README.md#adding-a-dataset). Edit declarations,
-not generated Atlas JSON; [Atlas publishing](../../../docs/references/rl-data-atlas.md)
-rebuilds and bundles the catalog. For an export-only check:
-
-```bash
-uv run --with-editable './lib/taskcompendium[pipeline]' python \
-  -m experiments.post_training.task_curation.export_catalog \
-  --output infra/marina/applets/rl_data_catalog/dist/catalog.json
-```
-
-Recount pinned whole-file inputs offline:
+and publish the catalog; [Atlas publishing](../../../docs/references/rl-data-atlas.md)
+reads the published curation catalog. Run the affected sources to publish their
+new declarations and assessments. Recount pinned whole-file inputs offline:
 
 ```bash
 uv run python -m experiments.post_training.task_curation.count_inputs \
