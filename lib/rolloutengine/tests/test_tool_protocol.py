@@ -3,7 +3,7 @@
 
 import pytest
 
-from rolloutengine.tool_protocol import ToolCallStatus, score_tool_call_continuation, tool_call_regions
+from rolloutengine.tool_protocol import ToolCallStatus, classify_tool_call_continuation, tool_call_regions
 
 
 @pytest.mark.parametrize(
@@ -26,7 +26,7 @@ from rolloutengine.tool_protocol import ToolCallStatus, score_tool_call_continua
     ],
 )
 def test_completed_continuation_distinguishes_protocol_failures(continuation, status):
-    assert score_tool_call_continuation(continuation) == status
+    assert classify_tool_call_continuation(continuation) == status
 
 
 def test_scan_ignores_thinking_and_quoted_markers_then_stops_at_first_failure():
