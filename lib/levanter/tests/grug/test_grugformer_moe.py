@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import textwrap
+from collections.abc import Callable
 
 import numpy as np
 import pytest
@@ -93,6 +94,19 @@ def _make_ep_mesh_or_none() -> Mesh | None:
         axis_names=("data", "expert", "model"),
         axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
     )
+
+
+def _jit_with_sync_collectives_on_gpu(fun: Callable) -> Callable:
+    """``jax.jit`` that runs every collective synchronously on GPU.
+
+    XLA launches some collectives asynchronously on a second stream, so a device can have collectives on two
+    communicators in flight, such as the ring backend's psum-scatter over the expert axis and its drop-count psum over
+    every device. The GPU does not guarantee that both kernels run at once, and on 8x MI300X the ranks sometimes
+    deadlock, each waiting for peers that are in the other collective.
+    """
+    if jax.default_backend() != "gpu":
+        return jax.jit(fun)
+    return jax.jit(fun, compiler_options={"xla_gpu_disable_async_collectives": "ALLCOLLECTIVES"})
 
 
 def _make_abstract_moe_mesh(*, data: int, expert: int, model: int) -> AbstractMesh:
@@ -1971,8 +1985,8 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
         )
 
     with jax.set_mesh(mesh):
-        actual, overflow = jax.jit(backend_output)(x, w_up_gate, w_down, combine_weights)
-        actual_gradients = jax.jit(
+        actual, overflow = _jit_with_sync_collectives_on_gpu(backend_output)(x, w_up_gate, w_down, combine_weights)
+        actual_gradients = _jit_with_sync_collectives_on_gpu(
             jax.grad(
                 lambda x, w_up_gate, w_down, combine_weights: jnp.sum(
                     backend_output(x, w_up_gate, w_down, combine_weights)[0] * cotangent
