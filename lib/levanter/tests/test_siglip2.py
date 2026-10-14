@@ -178,7 +178,7 @@ def test_siglip2_vision_roundtrip() -> None:
 @pytest.mark.slow
 @pytest.mark.timeout(600)
 @skip_if_no_torch
-def test_siglip2_vision_real_image() -> None:
+def test_siglip2_vision_pretrained_random_pixels() -> None:
     """Test Siglip2 vision model with generated pixels using the HF processor."""
     import torch  # noqa: PLC0415  # optional reference
     from transformers import (  # noqa: PLC0415  # optional reference

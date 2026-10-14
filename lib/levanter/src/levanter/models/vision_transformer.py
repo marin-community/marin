@@ -11,6 +11,7 @@ import haliax.nn as hnn
 import numpy as np
 from haliax import Axis, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call
+from haliax.nn.scan import Stacked
 from jaxtyping import PRNGKeyArray
 
 from levanter.layers.attention import AttentionBackend, AttentionMask, dot_product_attention
@@ -234,3 +235,35 @@ class VisionEncoderLayer(eqx.Module):
         x = residual + mlp_output
 
         return x
+
+
+def vision_activation(name: str) -> ActivationFunctionEnum:
+    aliases = {"gelu_pytorch_tanh": "gelu_new", "swish": "silu"}
+    return ActivationFunctionEnum(aliases.get(name, name))
+
+
+def vision_hidden_states(
+    layers: Stacked[VisionEncoderLayer],
+    hidden_states: NamedArray,
+    mask: Optional[AttentionMask],
+    output_hidden_states: bool,
+    *,
+    key: Optional[PRNGKeyArray],
+) -> tuple[NamedArray, tuple[NamedArray, ...]]:
+    """Return final encoder features and requested pre-normalization layer states."""
+    keys = maybe_rng_split(key, layers.Block.size) if key is not None else None
+    if not output_hidden_states:
+        final = layers.fold(hidden_states, mask, key=keys)
+        return final, (final,)
+
+    def apply_layer(
+        block: VisionEncoderLayer,
+        carry: NamedArray,
+        mask: Optional[AttentionMask],
+        key: Optional[PRNGKeyArray],
+    ) -> tuple[NamedArray, NamedArray]:
+        output = block(carry, mask, key=key)
+        return output, output
+
+    final, stacked = layers.scan_via(apply_layer)(hidden_states, mask, keys)
+    return final, (hidden_states, *hax.unbind(stacked, layers.Block))

@@ -14,7 +14,7 @@ from typing import Self, Dict, Optional, Tuple, Type
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 from levanter.models.vision_model import VisionEncoderConfig
-from levanter.models.vision_transformer import VisionEncoderLayer
+from levanter.models.vision_transformer import vision_activation, vision_hidden_states, VisionEncoderLayer
 
 
 silence_transformer_nag()
@@ -129,28 +129,7 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
             hf_config = vision_config
         assert isinstance(hf_config, HfSiglipVisionConfig)
 
-        # Extract activation function, handle both string and enum
-        hidden_act = hf_config.hidden_act
-        if isinstance(hidden_act, str):
-            # Map HF activation names to our enum
-            # Note: gelu_pytorch_tanh in HF maps to gelu_new in Levanter (approximate GELU)
-            if hidden_act == "gelu_pytorch_tanh":
-                activation_fn = ActivationFunctionEnum.gelu_new
-            elif hidden_act == "gelu":
-                activation_fn = ActivationFunctionEnum.gelu
-            elif hidden_act == "gelu_new":
-                activation_fn = ActivationFunctionEnum.gelu_new
-            elif hidden_act == "relu":
-                activation_fn = ActivationFunctionEnum.relu
-            elif hidden_act == "silu" or hidden_act == "swish":
-                activation_fn = ActivationFunctionEnum.silu
-            elif hidden_act == "quick_gelu":
-                activation_fn = ActivationFunctionEnum.quick_gelu
-            else:
-                # Default to gelu_new for unknown activations
-                activation_fn = ActivationFunctionEnum.gelu_new
-        else:
-            activation_fn = ActivationFunctionEnum.gelu_new
+        activation_fn = vision_activation(hf_config.hidden_act)
 
         return cls(
             hidden_size=hf_config.hidden_size,
@@ -439,36 +418,13 @@ class SiglipVisionTransformer(ModuleWithStateDictSerialization):
         # Get embeddings
         hidden_states = self.embeddings(pixel_values, key=k_embed)
 
-        # Pass through encoder layers
-        keys = maybe_rng_split(k_layers, self.config.num_hidden_layers) if k_layers is not None else None
-
-        if output_hidden_states:
-            # Use scan_via to collect hidden states from each layer
-            all_hidden_states = [hidden_states]  # Start with embeddings
-
-            def apply_layer(
-                block: VisionEncoderLayer,
-                carry: NamedArray,
-                mask_arg: AttentionMask | NamedArray | None,
-                key_arg: PRNGKeyArray | None,
-            ) -> tuple[NamedArray, NamedArray]:
-                """Apply a single layer and return (new_carry, output_to_collect)"""
-                new_carry = block(carry, mask_arg, key=key_arg)
-                return new_carry, new_carry
-
-            # Use scan_via to apply each layer and collect outputs
-            hidden_states, stacked_layer_outputs = self.layers.scan_via(apply_layer)(hidden_states, mask, keys)
-
-            # Unbind the stacked outputs to get a list of hidden states
-            layer_outputs_list = hax.unbind(stacked_layer_outputs, self.config.Layers)
-            all_hidden_states.extend(layer_outputs_list)
-            result_hidden_states: Optional[Tuple[NamedArray, ...]] = tuple(all_hidden_states)
-        else:
-            # Use fold for efficient processing when we don't need intermediate states
-            hidden_states = self.layers.fold(hidden_states, mask, key=keys)
-            # Still provide the last layer output (before post_layernorm) for vision_feature_layer=-1
-            # This allows callers to use hidden_states[-1] without requiring output_hidden_states=True
-            result_hidden_states = (hidden_states,)
+        hidden_states, result_hidden_states = vision_hidden_states(
+            self.layers,
+            hidden_states,
+            mask,
+            output_hidden_states,
+            key=k_layers,
+        )
 
         last_hidden_state = self.post_layernorm(hidden_states)
 

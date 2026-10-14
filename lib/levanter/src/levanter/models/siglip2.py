@@ -12,14 +12,13 @@ import dataclasses
 from haliax._src.state_dict import default_eqx_module_from_state_dict
 
 
-import logging
 from jaxtyping import PRNGKeyArray
 from dataclasses import dataclass
 from typing import Self, Dict, Optional, Tuple, Type
 
 import jax
 from levanter.models.vision_model import VisionEncoderConfig
-from levanter.models.vision_transformer import VisionEncoderLayer, VisionMLP
+from levanter.models.vision_transformer import vision_activation, vision_hidden_states, VisionEncoderLayer, VisionMLP
 import equinox as eqx
 import jax.numpy as jnp
 
@@ -34,8 +33,6 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter, ModelWithHfSer
 from levanter.layers.attention import AttentionBackend, AttentionMask, dot_product_attention
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
-
-logger = logging.getLogger(__name__)
 
 silence_transformer_nag()
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
@@ -133,38 +130,8 @@ class Siglip2VisionConfig(VisionEncoderConfig["Siglip2VisionModel"]):
             vision_config = hf_config.vision_config
             assert isinstance(vision_config, HfSiglip2VisionConfig)
             hf_config = vision_config
-        # Extract activation function, handle both string and enum
-        hidden_act = hf_config.hidden_act
-        if isinstance(hidden_act, str):
-            # Map HF activation names to our enum
-            # Note: gelu_pytorch_tanh in HF maps to gelu_new in Levanter (approximate GELU)
-            if hidden_act == "gelu_pytorch_tanh":
-                activation_fn = ActivationFunctionEnum.gelu_new
-            elif hidden_act == "gelu":
-                activation_fn = ActivationFunctionEnum.gelu
-            elif hidden_act == "gelu_new":
-                activation_fn = ActivationFunctionEnum.gelu_new
-            elif hidden_act == "relu":
-                activation_fn = ActivationFunctionEnum.relu
-            elif hidden_act == "silu" or hidden_act == "swish":
-                activation_fn = ActivationFunctionEnum.silu
-            elif hidden_act == "quick_gelu":
-                activation_fn = ActivationFunctionEnum.quick_gelu
-            else:
-                logger.warning(f"Unknown activation function '{hidden_act}', defaulting to gelu_new")
-                activation_fn = ActivationFunctionEnum.gelu_new
-        else:
-            logger.warning(f"Unexpected activation function type {type(hidden_act)}, defaulting to gelu_new")
-            activation_fn = ActivationFunctionEnum.gelu_new
-
-        # Calculate num_patches if not provided
-        # num_patches = (image_size / patch_size) ^ 2
-        if hasattr(hf_config, "num_patches"):
-            num_patches = hf_config.num_patches
-        else:
-            # Calculate from image_size and patch_size
-            grid_size = hf_config.image_size // hf_config.patch_size
-            num_patches = grid_size * grid_size
+        assert isinstance(hf_config, HfSiglip2VisionConfig)
+        activation_fn = vision_activation(hf_config.hidden_act)
 
         return cls(
             hidden_size=hf_config.hidden_size,
@@ -172,7 +139,7 @@ class Siglip2VisionConfig(VisionEncoderConfig["Siglip2VisionModel"]):
             num_hidden_layers=hf_config.num_hidden_layers,
             num_attention_heads=hf_config.num_attention_heads,
             num_channels=hf_config.num_channels,
-            num_patches=num_patches,
+            num_patches=hf_config.num_patches,
             patch_size=hf_config.patch_size,
             hidden_act=activation_fn,
             layer_norm_eps=hf_config.layer_norm_eps,
@@ -464,36 +431,13 @@ class Siglip2VisionTransformer(ModuleWithStateDictSerialization):
         # Get embeddings with spatial_shapes support
         hidden_states = self.embeddings(pixel_values, spatial_shapes=spatial_shapes, key=k_embed)
 
-        # Pass through encoder layers
-        keys = maybe_rng_split(k_layers, self.config.num_hidden_layers) if k_layers is not None else None
-
-        if output_hidden_states:
-            # Use scan_via to collect hidden states from each layer
-            all_hidden_states = [hidden_states]  # Start with embeddings
-
-            def apply_layer(
-                block: VisionEncoderLayer,
-                carry: NamedArray,
-                mask_arg: AttentionMask | NamedArray | None,
-                key_arg: PRNGKeyArray | None,
-            ) -> tuple[NamedArray, NamedArray]:
-                """Apply a single layer and return (new_carry, output_to_collect)"""
-                new_carry = block(carry, mask_arg, key=key_arg)
-                return new_carry, new_carry
-
-            # Use scan_via to apply each layer and collect outputs
-            hidden_states, stacked_layer_outputs = self.layers.scan_via(apply_layer)(hidden_states, mask, keys)
-
-            # Unbind the stacked outputs to get a list of hidden states
-            layer_outputs_list = hax.unbind(stacked_layer_outputs, self.config.Layers)
-            all_hidden_states.extend(layer_outputs_list)
-            result_hidden_states: Optional[Tuple[NamedArray, ...]] = tuple(all_hidden_states)
-        else:
-            # Use fold for efficient processing when we don't need intermediate states
-            hidden_states = self.layers.fold(hidden_states, mask, key=keys)
-            # Still provide the last layer output (before post_layernorm) for vision_feature_layer=-1
-            # This allows callers to use hidden_states[-1] without requiring output_hidden_states=True
-            result_hidden_states = (hidden_states,)
+        hidden_states, result_hidden_states = vision_hidden_states(
+            self.layers,
+            hidden_states,
+            mask,
+            output_hidden_states,
+            key=k_layers,
+        )
 
         last_hidden_state = self.post_layernorm(hidden_states)
 
@@ -571,10 +515,8 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
             out_first=True,
         )
 
-        # Layer norm
         layernorm = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_eps, use_bias=True)
 
-        # MLP
         mlp = VisionMLP.init(config.Embed, config.Mlp, config.hidden_act, key=k_mlp)
 
         return Siglip2MultiheadAttentionPoolingHead(
@@ -637,6 +579,7 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
             mask=mask,
             inference=self.inference,
             use_flash=self.config.use_flash_attention,
+            attn_backend=self.config.attn_backend,
             flash_block_size=self.config.flash_attention_block_size,
             dropout=self.config.attention_dropout,
             prng=k_drop,
@@ -704,11 +647,9 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
         out_dict = eqx_to_state_dict(self.out_proj, with_prefix(prefix, "attention.out_proj"))
         state_dict.update(out_dict)
 
-        # Layer norm
         ln_dict = eqx_to_state_dict(self.layernorm, with_prefix(prefix, "layernorm"))
         state_dict.update(ln_dict)
 
-        # MLP
         mlp_dict = eqx_to_state_dict(self.mlp, with_prefix(prefix, "mlp"))
         state_dict.update(mlp_dict)
 
