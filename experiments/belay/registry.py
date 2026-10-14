@@ -278,6 +278,25 @@ def page_data(experiments: list[Experiment], generated_from: str, placeholder_bp
     return {"generated_from": generated_from, "categories": list(CATEGORIES), "ideas": ideas}
 
 
+def week_summary(experiments: list[Experiment], since: str, until: str) -> str:
+    """Markdown list of the experiments with a trial or a decision dated in [since, until) (ISO dates)."""
+    lines = []
+    for e in experiments:
+        trials = [t for t in e.trials if since <= t.date < until]
+        events = [ev for ev in e.events if since <= ev.date < until]
+        if not trials and not events:
+            continue
+        parts = []
+        if trials:
+            rungs = ", ".join(sorted({t.rung for t in trials}))
+            parts.append(f"{len(trials)} trial{'s' if len(trials) > 1 else ''} ({rungs})")
+        parts += [ev.type.value + (f": {ev.note}" if ev.note else "") for ev in events]
+        lines.append(f"- **{e.id}** {e.name} — {'; '.join(parts)}")
+    if not lines:
+        return "No experiments were tried or decided this week."
+    return f"Experiments tried or decided ({len(lines)}):\n\n" + "\n".join(lines)
+
+
 def main(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -285,6 +304,9 @@ def main(argv: list[str]) -> None:
     build = sub.add_parser("build", help="write the Belay page's results JSON to stdout")
     build.add_argument("--generated-from", default="experiments/belay/registry")
     build.add_argument("--placeholder-bpb-ratio", type=float, help="show macro loss as placeholder BPB (loss x ratio)")
+    summary = sub.add_parser("summary", help="markdown summary of a week's experiments")
+    summary.add_argument("--since", required=True, help="ISO date, inclusive")
+    summary.add_argument("--until", required=True, help="ISO date, exclusive")
     new = sub.add_parser("new", help="allocate the next id and write an approved entry")
     new.add_argument("--slug", required=True)
     new.add_argument("--name", required=True)
@@ -300,6 +322,8 @@ def main(argv: list[str]) -> None:
     experiments = load_registry()
     if args.command == "validate":
         print(f"{len(experiments)} experiments OK")
+    elif args.command == "summary":
+        print(week_summary(experiments, args.since, args.until))
     elif args.command == "build":
         data = page_data(experiments, args.generated_from, args.placeholder_bpb_ratio)
         json.dump(data, sys.stdout, ensure_ascii=False, separators=(",", ":"))

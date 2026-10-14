@@ -113,3 +113,13 @@ def test_placeholder_bpb_scales_losses_and_signed_deltas_only():
     assert t["baseline"] == "df1-ctrl 1.4772" and t["delta"] == [-0.0044] and t["loss"] == [1.5]
     assert t["note"] == "mean -0.0044, k 1.036x"
     assert t["variant"] == "beta (0.95, 0.999), sigma 0.005"
+
+
+def test_week_summary_lists_trials_and_decisions_in_range():
+    decided = R.Event(type=R.EventType.ADOPTED, batch="330", date="2026-10-15", comment_url="u", note="in Ckpt 2")
+    tried = _experiment()
+    adopted = _experiment(id="X0002", slug="other", name="Other", trials=(), events=(decided,))
+    text = R.week_summary([tried, adopted], "2026-10-12", "2026-10-19")
+    assert "**X0001** Sqrt-softplus router — 1 trial (d512)" in text
+    assert "**X0002** Other — adopted: in Ckpt 2" in text
+    assert R.week_summary([tried], "2026-10-19", "2026-10-26").startswith("No experiments")
