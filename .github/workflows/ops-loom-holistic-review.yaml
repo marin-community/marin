@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  HOLISTIC_REVIEW_MIN_CHANGED_LINES: "300"
+  HOLISTIC_REVIEW_MIN_CHANGED_LINES: "250"
 
 jobs:
   review:

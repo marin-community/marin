@@ -80,7 +80,7 @@ uploads screenshots for inspection through the `Marin - Unit` run.
 non-draft pull request from this repository whose author has write access or
 is `marin-ops-agent[bot]` or `loom-oa-dev[bot]`. A gate step reads the pull
 request's size and file patches through the API: the review runs when the
-change has at least 300 changed lines or adds a class, dataclass, or
+change has at least 250 changed lines or adds a class, dataclass, or
 `Protocol` under `lib/*/src/` or `experiments/`. The session runs the
 `review-pr-holistic` skill with the `pr-holistic-review` profile (Claude
 Fable) and posts one packet ending in `<!-- marin-holistic-review:<sha> -->`.
