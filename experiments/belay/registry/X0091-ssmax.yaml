@@ -1,0 +1,44 @@
+id: X0091
+slug: ssmax
+name: SSMax on MLA
+category: Attention variants
+summary: Scale each MLA query by 1 + s_h*log(n keys) with zero-init per-head s.
+source: agent
+status: closed
+first_batch: 47
+tags:
+- ssmax
+- scalable softmax
+- nope
+- mla
+papers:
+- arxiv: '2501.19399'
+  title: SSMax
+knobs:
+- mla_ssmax
+trials:
+- variant: SSMax on MLA, zero-init per-head s
+  rung: d512
+  protocol: equal_steps
+  batch: '47'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853982326
+  baseline: soft-cap 10 3.0591 / seed 1 3.0675
+  steps: 2817
+  delta:
+  - 0.0043
+  - -0.0021
+  loss:
+  - 3.0634
+  - 3.0654
+  wandb:
+  - lc1-b47-ssmax
+  - lc1-b47-ssmax-s1
+  settings:
+    mla_ssmax: 'true'
+events:
+- type: closed
+  batch: '47'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853982326
+  note: neutral over 2 seeds; not stacked

@@ -1,0 +1,114 @@
+id: X0043
+slug: kda-beta-mlp
+name: Low-rank MLP for KDA write strength
+category: Linear attention / KDA
+summary: Compute KDA beta with a low-rank SiLU MLP instead of a linear projection.
+source: maintainer
+status: closed
+first_batch: 14
+tags:
+- kda
+- beta
+- low-rank
+knobs:
+- kda_beta_rank
+trials:
+- variant: rank-16 MLP, MuonH 2x, random init
+  rung: d512
+  protocol: equal_steps
+  batch: '14'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842419822
+  baseline: mean of two same-seed reference runs 3.0797
+  steps: 2817
+  delta:
+  - -0.0004
+  loss:
+  - 3.0793
+  wandb:
+  - lc1-b14-bmlp-mu
+  settings:
+    kda_beta_rank: '16'
+    optimizer: MuonH 2x
+    init: random
+  tuned: MuonH vs Adam, random vs zero init
+- variant: rank-16 MLP, Adam, random init
+  rung: d512
+  protocol: equal_steps
+  batch: '14'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842419822
+  baseline: mean of two same-seed reference runs 3.0797
+  steps: 2817
+  delta:
+  - 0.0006
+  loss:
+  - 3.0803
+  wandb:
+  - lc1-b14-bmlp-ad
+  settings:
+    kda_beta_rank: '16'
+    optimizer: Adam
+    init: random
+  tuned: MuonH vs Adam, random vs zero init
+- variant: rank-16 MLP, Adam, W_beta_up zero-init
+  rung: d512
+  protocol: equal_steps
+  batch: '14'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842419822
+  baseline: mean of two same-seed reference runs 3.0797
+  steps: 2817
+  delta:
+  - 0.0012
+  loss:
+  - 3.0809
+  wandb:
+  - lc1-b14-bmlp-adz
+  settings:
+    kda_beta_rank: '16'
+    optimizer: Adam
+    W_beta_up init: zero
+  tuned: MuonH vs Adam, random vs zero init
+- variant: rank 64, MuonH 2x
+  rung: d512
+  protocol: equal_steps
+  batch: '15'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842638290
+  baseline: current best (qk 2.5 + beta1 0.8 + z-loss 0) seed-0 mean 3.0797
+  steps: 2817
+  delta:
+  - 0.0023
+  loss:
+  - 3.082
+  wandb:
+  - lc1-b15-bmlp64
+  settings:
+    kda_beta_rank: '64'
+    optimizer: MuonH 2x
+  tuned: rank 16 / 64; MuonH 2x / 4x
+- variant: rank 16, MuonH 4x
+  rung: d512
+  protocol: equal_steps
+  batch: '15'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842638290
+  baseline: current best (qk 2.5 + beta1 0.8 + z-loss 0) seed-0 mean 3.0797
+  steps: 2817
+  delta:
+  - 0.0017
+  loss:
+  - 3.0814
+  wandb:
+  - lc1-b15-bmlp-mu4
+  settings:
+    kda_beta_rank: '16'
+    optimizer: MuonH 4x
+  tuned: rank 16 / 64; MuonH 2x / 4x
+events:
+- type: closed
+  batch: '15'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842638290
+  note: all 5 variants neutral; linear beta stays

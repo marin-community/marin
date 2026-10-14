@@ -1,0 +1,202 @@
+id: X0015
+slug: moe-combine-sum
+name: MoE combine renorm sum
+category: MoE and routing
+summary: Change the fixed sum the routed combine weights are renormalized to (default 2.5).
+source: agent
+status: closed
+first_batch: 2
+tags:
+- moe
+- combine
+- renorm
+- sum
+- routing sum
+- moe_out_gate
+details:
+- sum 2.5
+- 'current: sqrt-softplus renorm to 2.5'
+- 'csr: no renorm, total 2.5 at init'
+- moe_drop_renorm stays on
+knobs:
+- router_combine=sqrt_softplus_raw
+- router_combine=sigmoid_raw
+- moe_out_gate
+- routing_sum_learnable
+- routing_renorm_sum=3.5
+trials:
+- variant: combine renorm sum 4.0
+  rung: d512
+  protocol: equal_steps
+  batch: '2'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5839990993
+  baseline: batch-1 2-seed baseline mean 3.1223
+  steps: 2719
+  delta:
+  - -0.0149
+  loss:
+  - 3.1074
+  wandb:
+  - lc1-b02-rn4
+  settings:
+    combine renorm sum: 4.0 (vs 2.5)
+  tuned: renorm sum 2.5 vs 4.0
+  note: +0.003 vs new base mean
+- variant: renorm sum 2.0
+  rung: d512
+  protocol: equal_steps
+  batch: '105'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5871117880
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0009
+  - 0.0004
+  loss:
+  - 2.9759
+  - 2.9795
+  wandb:
+  - lc1-b105-rsum2
+  - lc1-b105-rsum2-s1
+  settings:
+    combine sum: '2.0'
+  tuned: sum 2.0 / 2.5 / 3.0
+- variant: renorm sum 3.0
+  rung: d512
+  protocol: equal_steps
+  batch: '105'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5871117880
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0025
+  - 0.003
+  loss:
+  - 2.9775
+  - 2.9821
+  wandb:
+  - lc1-b105-rsum3
+  - lc1-b105-rsum3-s1
+  settings:
+    combine sum: '3.0'
+  tuned: sum 2.0 / 2.5 / 3.0
+- variant: sqrt-softplus, no renorm (csr)
+  rung: d512
+  protocol: equal_steps
+  batch: '183'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986350451
+  baseline: batch 181 ctrl 2.9644
+  steps: 2817
+  delta:
+  - 0.0002
+  loss:
+  - 2.9646
+  settings:
+    router_combine: sqrt_softplus_raw
+  tuned: renorm vs raw; sum 2.5 / 3.5 / learnable
+  note: layer-5 latent outlier never forms
+- variant: sigmoid, no renorm (srw)
+  rung: d512
+  protocol: equal_steps
+  batch: '183'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986350451
+  baseline: batch 181 ctrl 2.9644
+  steps: 2817
+  delta:
+  - 0.0012
+  loss:
+  - 2.9656
+  settings:
+    router_combine: sigmoid_raw
+  tuned: renorm vs raw; sum 2.5 / 3.5 / learnable
+- variant: renorm + per-token MoE output gate (mog)
+  rung: d512
+  protocol: equal_steps
+  batch: '183'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986350451
+  baseline: batch 181 ctrl 2.9644
+  steps: 2817
+  delta:
+  - -0.0004
+  loss:
+  - 2.964
+  settings:
+    moe_out_gate: 'true'
+  tuned: renorm vs raw; sum 2.5 / 3.5 / learnable
+- variant: learnable per-layer sum (lsum)
+  rung: d512
+  protocol: equal_steps
+  batch: '183'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986350451
+  baseline: batch 181 ctrl 2.9644
+  steps: 2817
+  delta:
+  - 0.0
+  loss:
+  - 2.9644
+  settings:
+    routing_sum_learnable: true (init 2.5)
+  tuned: renorm vs raw; sum 2.5 / 3.5 / learnable
+  note: learned sums rise to 2.7-3.6
+- variant: csr, 2 seeds
+  rung: d512
+  protocol: equal_steps
+  batch: 185-187
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986874164
+  baseline: batch 181 ctrl, same seed (2.9644 / 2.9667)
+  steps: 2817
+  delta:
+  - 0.0002
+  - 0.0007
+  loss:
+  - 2.9646
+  - 2.9674
+  settings:
+    router_combine: sqrt_softplus_raw
+  tuned: renorm vs raw; sum 2.5 / 3.5 / learnable
+  note: loss-neutral, cleaner design
+- variant: no renorm, total 3.5
+  rung: d512
+  protocol: equal_steps
+  batch: 185-187
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986874164
+  baseline: batch 181 ctrl, same seed (2.9644 / 2.9667)
+  steps: 2817
+  delta:
+  - -0.001
+  loss:
+  - 2.9634
+  settings:
+    routing_renorm_sum: '3.5'
+  tuned: renorm vs raw; sum 2.5 / 3.5 / learnable
+- variant: no renorm + learnable sum
+  rung: d512
+  protocol: equal_steps
+  batch: 185-187
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986874164
+  baseline: batch 181 ctrl, same seed (2.9644 / 2.9667)
+  steps: 2817
+  delta:
+  - 0.0012
+  loss:
+  - 2.9656
+  settings:
+    router_combine: sqrt_softplus_raw
+    routing_sum_learnable: 'true'
+  tuned: renorm vs raw; sum 2.5 / 3.5 / learnable
+events:
+- type: closed
+  batch: 185-187
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986874164
+  note: gain/scale/combine family closed; no renorm is loss-neutral

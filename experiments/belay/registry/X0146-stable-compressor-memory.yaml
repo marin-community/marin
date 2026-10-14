@@ -1,0 +1,134 @@
+id: X0146
+slug: stable-compressor-memory
+name: Stable-compressor n-gram statistic memory
+category: Embeddings and inputs
+summary: Fixed-code hashed n-gram next-token statistic tables read by a learned reader.
+source: maintainer
+status: closed
+first_batch: 93
+tags:
+- memory
+- n-gram
+- compressor
+- prefill
+details:
+- orders 2,3,4; 2M rows each; 64-dim random codes
+- reader added into bigram source via zero-init projection
+knobs:
+- ngram_stat_mode=bigram
+trials:
+- variant: n-gram stat memory 2/3/4 as own AttnRes source, same data
+  rung: d512
+  protocol: equal_steps
+  batch: '93'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864576776
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.0077
+  - 0.016
+  loss:
+  - 3.0149
+  - 3.0269
+  wandb:
+  - lc1-b93-scm-s234
+  - lc1-b93-scm-s234-s1
+  settings:
+    orders: 2,3,4
+    rows per order: 2M
+    code dim: '64'
+    wiring: own AttnRes source
+  note: 'wiring cost: reader took gate share from init'
+- variant: bigram-only stat memory, own source, same data
+  rung: d512
+  protocol: equal_steps
+  batch: '93'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864576776
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.0118
+  - 0.0074
+  loss:
+  - 3.019
+  - 3.0183
+  wandb:
+  - lc1-b93-scm-s2
+  - lc1-b93-scm-s2-s1
+  settings:
+    orders: '2'
+    wiring: own AttnRes source
+- variant: 2/3/4 into bigram source (zero-init), same data
+  rung: d512
+  protocol: equal_steps
+  batch: '94'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864990387
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.0015
+  - 0.0031
+  loss:
+  - 3.0087
+  - 3.014
+  wandb:
+  - lc1-b94-scm-b234
+  - lc1-b94-scm-b234-s1
+  settings:
+    ngram_stat_mode: bigram
+    orders: 2,3,4
+    rows per order: 2M
+  tuned: same data / 2x / 8x prefill
+  note: neutral
+- variant: 2/3/4 into bigram source, pre-filled from 2x run tokens
+  rung: d512
+  protocol: equal_steps
+  batch: '94'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864990387
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.0051
+  - 0.001
+  loss:
+  - 3.0123
+  - 3.0119
+  wandb:
+  - lc1-b94-scm-b234-p2x
+  - lc1-b94-scm-b234-p2x-s1
+  settings:
+    ngram_stat_mode: bigram
+    orders: 2,3,4
+    prefill: 2x run tokens
+  tuned: same data / 2x / 8x prefill
+  note: prediction falsified
+- variant: 2/3/4 into bigram source, pre-filled from 8x
+  rung: d512
+  protocol: equal_steps
+  batch: '94'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864990387
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.0039
+  loss:
+  - 3.0111
+  wandb:
+  - lc1-b94-scm-b234-p8x
+  settings:
+    ngram_stat_mode: bigram
+    orders: 2,3,4
+    prefill: 8x run tokens
+  tuned: same data / 2x / 8x prefill
+  note: 8x no better than 2x; branch closed
+events:
+- type: closed
+  batch: '94'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864990387
+  note: 'closed at d512: same data +0.0023, 2x prefill +0.0030, 8x +0.0039'

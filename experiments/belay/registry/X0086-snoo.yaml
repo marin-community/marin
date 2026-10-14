@@ -1,0 +1,166 @@
+id: X0086
+slug: snoo
+name: SNOO outer Nesterov loop
+category: Optimizers
+summary: Every K steps take a Nesterov step on slow weights using the fast-slow difference.
+source: agent
+status: closed
+first_batch: 45
+tags:
+- snoo
+- lookahead
+- outer loop
+- nesterov
+papers:
+- arxiv: '2510.15830'
+  title: SNOO
+knobs:
+- snoo_period
+trials:
+- variant: K=20, eta 0.5, mu 0.5
+  rung: d512
+  protocol: equal_steps
+  batch: '45'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853933435
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0003
+  loss:
+  - 3.0594
+  wandb:
+  - lc1-b45-snoo20
+  settings:
+    snoo_period: '20'
+    eta: '0.5'
+    mu: '0.5'
+  tuned: K 10/20/50; eta 0.5/0.8; mu 0.5/0.25
+  note: mid-run -0.017
+- variant: K=10
+  rung: d512
+  protocol: equal_steps
+  batch: '45'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853933435
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0013
+  loss:
+  - 3.0604
+  wandb:
+  - lc1-b45-snoo10
+  settings:
+    snoo_period: '10'
+  tuned: K 10/20/50; eta 0.5/0.8; mu 0.5/0.25
+  note: mid-run -0.008
+- variant: K=50
+  rung: d512
+  protocol: equal_steps
+  batch: '45'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853933435
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0058
+  loss:
+  - 3.0649
+  wandb:
+  - lc1-b45-snoo50
+  settings:
+    snoo_period: '50'
+  tuned: K 10/20/50; eta 0.5/0.8; mu 0.5/0.25
+  note: mid-run -0.025
+- variant: K=20, eta 0.8
+  rung: d512
+  protocol: equal_steps
+  batch: '45'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853933435
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0255
+  loss:
+  - 3.0846
+  wandb:
+  - lc1-b45-snoo20-lr8
+  settings:
+    snoo_period: '20'
+    eta: '0.8'
+  tuned: K 10/20/50; eta 0.5/0.8; mu 0.5/0.25
+- variant: K=20, mu 0.25
+  rung: d512
+  protocol: equal_steps
+  batch: '45'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853933435
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0158
+  loss:
+  - 3.0749
+  wandb:
+  - lc1-b45-snoo20-m25
+  settings:
+    snoo_period: '20'
+    mu: '0.25'
+  tuned: K 10/20/50; eta 0.5/0.8; mu 0.5/0.25
+- variant: K=50, outer LR 0.3
+  rung: d512
+  protocol: equal_steps
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.0324
+  - 0.0351
+  loss:
+  - 3.0396
+  - 3.046
+  wandb:
+  - lc1-b87-snoo50
+  - lc1-b87-snoo50-s1
+  settings:
+    SNOO K: '50'
+    outer LR: '0.3'
+  tuned: K 50/20
+  note: closed
+- variant: K=20, outer LR 0.3
+  rung: d512
+  protocol: equal_steps
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.035
+  - 0.0377
+  loss:
+  - 3.0422
+  - 3.0486
+  wandb:
+  - lc1-b87-snoo20
+  - lc1-b87-snoo20-s1
+  settings:
+    SNOO K: '20'
+    outer LR: '0.3'
+  tuned: K 50/20
+  note: closed
+events:
+- type: closed
+  batch: '45'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853933435
+  note: SNOO is out at this scale; mid-run gain lost by end of decay
+- type: closed
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  note: +0.034/+0.038 on current recipe

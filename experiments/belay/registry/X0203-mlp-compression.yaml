@@ -1,0 +1,253 @@
+id: X0203
+slug: mlp-compression
+name: MLP compression into the shared expert
+category: MoE and routing
+summary: Aux losses that move what the shared expert can express out of the routed experts.
+source: maintainer
+status: closed
+first_batch: 178
+tags:
+- shared expert
+- routed experts
+- aux loss
+- compression
+- overtraining
+details:
+- 'transfer: lambda*|s - sg(s+r)|^2 / sg(|y|^2)'
+- 'gap: |s - sg(r)|^2'
+- 'routed penalty: lambda*|r|^2 / sg(|y|^2)'
+- 'normed transfer: |s/|s| - sg(y/|y|)|^2'
+- shared expert width 768
+knobs:
+- transfer_normed
+trials:
+- variant: transfer lambda 0.01
+  rung: d512
+  protocol: equal_steps
+  batch: '178'
+  date: '2026-10-03'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5965904376
+  baseline: shadow-only control 2.9632
+  steps: 2817
+  delta:
+  - 0.0002
+  loss:
+  - 2.9634
+  settings:
+    lambda: '0.01'
+  tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
+- variant: transfer lambda 0.04
+  rung: d512
+  protocol: equal_steps
+  batch: '178'
+  date: '2026-10-03'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5965904376
+  baseline: shadow-only control 2.9632
+  steps: 2817
+  delta:
+  - 0.0068
+  loss:
+  - 2.97
+  settings:
+    lambda: '0.04'
+  tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
+- variant: transfer lambda 0.16
+  rung: d512
+  protocol: equal_steps
+  batch: '178'
+  date: '2026-10-03'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5965904376
+  baseline: shadow-only control 2.9632
+  steps: 2817
+  delta:
+  - 0.0113
+  loss:
+  - 2.9745
+  settings:
+    lambda: '0.16'
+  tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
+- variant: gap loss lambda 0.04
+  rung: d512
+  protocol: equal_steps
+  batch: '178'
+  date: '2026-10-03'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5965904376
+  baseline: shadow-only control 2.9632
+  steps: 2817
+  delta:
+  - 0.0047
+  loss:
+  - 2.9679
+  settings:
+    lambda: '0.04'
+  tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
+  note: duplicates paths
+- variant: gap loss lambda 0.16
+  rung: d512
+  protocol: equal_steps
+  batch: '178'
+  date: '2026-10-03'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5965904376
+  baseline: shadow-only control 2.9632
+  steps: 2817
+  delta:
+  - 0.0079
+  loss:
+  - 2.9711
+  settings:
+    lambda: '0.16'
+  tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
+  note: duplicates paths
+- variant: routed penalty lambda 0.01
+  rung: d512
+  protocol: equal_steps
+  batch: '178'
+  date: '2026-10-03'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5965904376
+  baseline: shadow-only control 2.9632
+  steps: 2817
+  delta:
+  - 0.0446
+  loss:
+  - 3.0078
+  settings:
+    lambda: '0.01'
+  tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
+  note: destructive
+- variant: routed penalty lambda 0.04
+  rung: d512
+  protocol: equal_steps
+  batch: '178'
+  date: '2026-10-03'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5965904376
+  baseline: shadow-only control 2.9632
+  steps: 2817
+  delta:
+  - 0.0438
+  loss:
+  - 3.007
+  settings:
+    lambda: '0.04'
+  tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
+  note: destructive
+- variant: shadow probe only
+  rung: d512
+  protocol: equal_steps
+  batch: '178'
+  date: '2026-10-03'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5965904376
+  baseline: candidate 11 (2.9621 / 2.9625)
+  steps: 2817
+  loss:
+  - 2.9633
+  - 2.9631
+  tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
+  note: detached probe; no effect on training
+- variant: transfer lambda 0.04 at 100x overtraining
+  rung: d512
+  protocol: equal_steps
+  batch: '179'
+  date: '2026-10-03'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5966802076
+  baseline: ot100-base 2.5694
+  steps: 281700
+  delta:
+  - 0.0008
+  loss:
+  - 2.5702
+  settings:
+    lambda: '0.04'
+    steps: '281700'
+  tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
+  note: routed share 0.00 in 5 of 6 layers
+- variant: gap lambda 0.16 at 100x overtraining
+  rung: d512
+  protocol: equal_steps
+  batch: '179'
+  date: '2026-10-03'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5966802076
+  baseline: ot100-base 2.5694
+  steps: 281700
+  delta:
+  - 0.0123
+  loss:
+  - 2.5817
+  settings:
+    lambda: '0.16'
+    steps: '281700'
+  tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
+  note: cost grows with overtraining
+- variant: normalized transfer lambda 0.01
+  rung: d512
+  protocol: equal_steps
+  batch: '180'
+  date: '2026-10-04'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5984981491
+  baseline: shadow-only control 2.9632
+  steps: 2817
+  delta:
+  - 0.0016
+  loss:
+  - 2.9648
+  settings:
+    lambda: '0.01'
+  tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
+  note: intake fix for norm stretching
+- variant: normalized transfer lambda 0.04
+  rung: d512
+  protocol: equal_steps
+  batch: '180'
+  date: '2026-10-04'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5984981491
+  baseline: shadow-only control 2.9632
+  steps: 2817
+  delta:
+  - 0.0047
+  loss:
+  - 2.9679
+  settings:
+    lambda: '0.04'
+  tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
+  note: intake fix for norm stretching
+- variant: transfer 0.04 + counter force n=2
+  rung: d512
+  protocol: equal_steps
+  batch: '180'
+  date: '2026-10-04'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5984981491
+  baseline: shadow-only control 2.9632
+  steps: 2817
+  delta:
+  - 0.0056
+  loss:
+  - 2.9688
+  settings:
+    lambda: '0.04'
+    lambda_1: '0.01'
+    n: '2'
+  tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
+  note: intake fix for norm stretching
+- variant: transfer 0.04 + counter force n=4
+  rung: d512
+  protocol: equal_steps
+  batch: '180'
+  date: '2026-10-04'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5984981491
+  baseline: shadow-only control 2.9632
+  steps: 2817
+  delta:
+  - 0.0065
+  loss:
+  - 2.9697
+  settings:
+    lambda: '0.04'
+    lambda_1: '0.01'
+    n: '4'
+  tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
+  note: intake fix for norm stretching
+events:
+- type: closed
+  batch: '180'
+  date: '2026-10-04'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5984981491
+  note: closed at d512 at 1x and 100x

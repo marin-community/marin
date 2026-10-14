@@ -1,0 +1,68 @@
+id: X0151
+slug: gate-init-mult
+name: MuonH sigmoid-gate init multiplier
+category: Training dynamics and schedules
+summary: Scale the init std (and thus the pinned MuonH norm) of sigmoid-gate matrices.
+source: agent
+status: adopted
+first_batch: 98
+tags:
+- init
+- gates
+- muonh
+details:
+- gate init x2
+knobs:
+- init_std_mult_gates=2
+trials:
+- variant: gate init x0.5
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0013
+  settings:
+    init_std_mult_gates: '0.5'
+  tuned: x0.5/1/2/4
+  note: 2-seed mean
+- variant: gate init x2
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - -0.0022
+  settings:
+    init_std_mult_gates: '2'
+  tuned: x0.5/1/2/4
+  note: 2-seed mean
+- variant: gate init x4
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0002
+  settings:
+    init_std_mult_gates: '4'
+  tuned: x0.5/1/2/4
+  note: 2-seed mean
+events:
+- type: adopted
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5869939570
+  note: part of candidate 9 (stack4), holds at d768
+  candidate: candidate 9
+  as_adopted:
+  - init_std_mult_gates=2

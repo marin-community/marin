@@ -1,0 +1,81 @@
+id: X0177
+slug: latentmoe-semi-orthogonal-proj
+name: Semi-orthogonal LatentMoE projections
+category: MoE and routing
+summary: Init LatentMoE up/down projections semi-orthogonal and freeze them or update them on the Stiefel manifold.
+source: intake
+status: closed
+first_batch: 123
+tags:
+- latentmoe
+- orthogonal
+- stiefel
+- skewon
+- frozen
+papers:
+- arxiv: '2608.06218'
+  title: Skewon (Muon on the Stiefel manifold)
+details:
+- Haar-random semi-orthogonal init with same Frobenius norm
+- Skewon step at MuonH LR, polar retraction via cubic Newton-Schulz
+knobs:
+- latent_orthogonal_init
+- latent_proj_update=frozen|stiefel
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-5889072443
+  author: RavnaBergsndot
+  approved_by: ClassicLarry
+trials:
+- variant: semi-orthogonal init, trained by MuonH (ortho)
+  rung: d512
+  protocol: equal_steps
+  batch: '123'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5901033548
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - -0.0006
+  - 0.0023
+  settings:
+    latent_orthogonal_init: 'true'
+  step_time_change: ex/s 674 / 654
+  tuned: ortho init / frozen / Skewon
+- variant: 'option B: orthogonal init, projections frozen (orthofrz)'
+  rung: d512
+  protocol: equal_steps
+  batch: '123'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5901033548
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0116
+  - 0.0131
+  settings:
+    latent_orthogonal_init: 'true'
+    latent_proj_update: frozen
+  step_time_change: ex/s 672 / 664
+  tuned: ortho init / frozen / Skewon
+- variant: 'option A: orthogonal init, Skewon Stiefel updates'
+  rung: d512
+  protocol: equal_steps
+  batch: '123'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5901033548
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0052
+  - 0.0049
+  settings:
+    latent_orthogonal_init: 'true'
+    latent_proj_update: stiefel
+  step_time_change: ex/s 659 / 665
+  tuned: ortho init / frozen / Skewon
+events:
+- type: closed
+  batch: '123'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5901033548
+  note: 'Projections do real computation: frozen +0.012, Skewon +0.005'

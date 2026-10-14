@@ -1,0 +1,74 @@
+id: X0187
+slug: routed-expert-step-filter
+name: Routed-expert per-step update filtering
+category: Optimizers
+summary: Scale or mask each routed expert's MuonH update by gradient consistency or uphill-coordinate masking.
+source: maintainer
+status: closed
+first_batch: 140
+tags:
+- routed-experts
+- muonh
+- consistency-gate
+- cautious
+trials:
+- variant: cautious mask, per-layer sphere
+  rung: d512
+  protocol: equal_steps
+  batch: '140'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5918588189
+  baseline: candidate 9 + PGLE 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0046
+  - 0.0034
+  loss:
+  - 2.9796
+  - 2.9825
+  settings:
+    mask: zero uphill coords, rescale by kept fraction
+  tuned: per-layer vs per-expert sphere
+  note: closed
+- variant: cautious mask + per-expert sphere + reproject
+  rung: d512
+  protocol: equal_steps
+  batch: '140'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5918588189
+  baseline: candidate 9 + PGLE 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0034
+  - 0.0031
+  loss:
+  - 2.9784
+  - 2.9822
+  settings:
+    hyperball_per_expert: 'true'
+  tuned: per-layer vs per-expert sphere
+  note: 'closed: no gain over per-expert-sphere control'
+- variant: per-expert consistency gate
+  rung: d512
+  protocol: equal_steps
+  batch: '140'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5918588189
+  baseline: candidate 9 + PGLE 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.215
+  loss:
+  - 3.194
+  settings:
+    m EMA beta: '0.95'
+    v EMA beta2: '0.99'
+    multiplier: clip((r^2-r0^2)/(1-r0^2),0,1)
+  tuned: with/without per-expert sphere + reprojection
+  note: seed 1 only; gate switched ~89% of experts off
+events:
+- type: closed
+  batch: '140'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5918588189
+  note: consistency gate and cautious mask closed

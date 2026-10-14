@@ -1,0 +1,256 @@
+id: X0120
+slug: ademamix
+name: AdEMAMix on Adam groups
+category: Optimizers
+summary: Adds a slow gradient EMA to Adam's first moment for the Adam parameter groups.
+source: agent
+status: adopted
+first_batch: 77
+tags:
+- ademamix
+- adam
+- slow-ema
+- momentum
+papers:
+- arxiv: '2409.03152'
+  title: AdEMAMix
+details:
+- alpha 5
+- beta3 0.98
+- paper's joint alpha/beta3 warmup
+knobs:
+- adam_ademamix_alpha=5.0
+- adam_ademamix_beta3=0.98
+trials:
+- variant: alpha 5, beta3 0.999, paper warmup
+  rung: d512
+  protocol: equal_steps
+  batch: '77'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860969387
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.0023
+  - 0.0022
+  loss:
+  - 3.0122
+  - 3.0161
+  wandb:
+  - lc1-b77-ademamix
+  - lc1-b77-ademamix-s1
+  settings:
+    alpha: '5'
+    beta3: '0.999'
+    warmup: paper schedule
+  tuned: beta3 0.95-0.999, alpha 5/8, warmup
+  note: wins early (-0.036 at step 500), fades by end
+- variant: alpha 5 by 10%, cooldown over last 30%
+  rung: d512
+  protocol: equal_steps
+  batch: '78'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.4214
+  - 0.2059
+  loss:
+  - 3.4313
+  - 3.2198
+  wandb:
+  - lc1-b78-ademamix-cd
+  - lc1-b78-ademamix-cd-s1
+  settings:
+    alpha: '5'
+    warmup: 10%
+    cooldown: last 30% to 0
+  tuned: beta3 0.95-0.999, alpha 5/8, warmup
+  note: fast warmup diverges; paper's slow warmup is load-bearing
+- variant: alpha 5, beta3 0.99
+  rung: d512
+  protocol: equal_steps
+  batch: '78'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - -0.0024
+  - -0.0045
+  loss:
+  - 3.0075
+  - 3.0094
+  wandb:
+  - lc1-b78-ademamix-b99
+  - lc1-b78-ademamix-b99-s1
+  settings:
+    adam_ademamix_alpha: '5.0'
+    adam_ademamix_beta3: '0.99'
+    warmup: paper schedule
+  tuned: beta3 0.95 / 0.98 / 0.99 / 0.995 / 0.999
+- variant: alpha 5, beta3 0.98
+  rung: d512
+  protocol: equal_steps
+  batch: '78'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - -0.0051
+  - -0.0031
+  loss:
+  - 3.0048
+  - 3.0108
+  wandb:
+  - lc1-b78-ademamix-b98
+  - lc1-b78-ademamix-b98-s1
+  settings:
+    adam_ademamix_alpha: '5.0'
+    adam_ademamix_beta3: '0.98'
+    warmup: paper schedule
+  tuned: beta3 0.95 / 0.98 / 0.99 / 0.995 / 0.999
+  note: plateau 0.95-0.99; step time unchanged
+- variant: alpha 5, beta3 0.995
+  rung: d512
+  protocol: equal_steps
+  batch: '78'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - -0.0031
+  - -0.0027
+  loss:
+  - 3.0068
+  - 3.0112
+  wandb:
+  - lc1-b78-ademamix-b995
+  - lc1-b78-ademamix-b995-s1
+  settings:
+    adam_ademamix_alpha: '5.0'
+    adam_ademamix_beta3: '0.995'
+    warmup: paper schedule
+  tuned: beta3 0.95 / 0.98 / 0.99 / 0.995 / 0.999
+- variant: alpha 5, beta3 0.95
+  rung: d512
+  protocol: equal_steps
+  batch: '78'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - -0.0038
+  - -0.0036
+  loss:
+  - 3.0061
+  - 3.0103
+  wandb:
+  - lc1-b78-ademamix-b95
+  - lc1-b78-ademamix-b95-s1
+  settings:
+    adam_ademamix_alpha: '5.0'
+    adam_ademamix_beta3: '0.95'
+    warmup: paper schedule
+  tuned: beta3 0.95 / 0.98 / 0.99 / 0.995 / 0.999
+- variant: alpha 8, beta3 0.98
+  rung: d512
+  protocol: equal_steps
+  batch: '78'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - -0.0009
+  - -0.0011
+  loss:
+  - 3.009
+  - 3.0128
+  wandb:
+  - lc1-b78-ademamix-b98-a8
+  - lc1-b78-ademamix-b98-a8-s1
+  settings:
+    adam_ademamix_alpha: '8.0'
+    adam_ademamix_beta3: '0.98'
+  tuned: alpha 5 vs 8
+  note: alpha 5 stays
+- variant: d768 remove AdEMAMix
+  rung: d768
+  protocol: equal_steps
+  batch: '84'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862289448
+  baseline: d768 candidate 6 top-8 lc1-b80-d768-c6-top8 (2.7689)
+  steps: 7325
+  delta:
+  - 0.0011
+  loss:
+  - 2.7678
+  wandb:
+  - lc1-b84-d768-noadem
+  settings:
+    AdEMAMix: 'off'
+  tuned: leave-one-out over candidate 6 pieces
+  note: leave-one-out over candidate 6, sign flipped to 'adding the piece' (negative = piece helps)
+- variant: d768 beta3 scaled to steps (0.992)
+  rung: d768
+  protocol: equal_steps
+  batch: '84'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862289448
+  baseline: d768 candidate 6 top-8 lc1-b80-d768-c6-top8 (2.7689)
+  steps: 7325
+  delta:
+  - -0.0021
+  loss:
+  - 2.7668
+  wandb:
+  - lc1-b86-d768-adem-b992
+  settings:
+    adam_ademamix_beta3: '0.992'
+  tuned: beta3 0.98 vs 0.992 at d768
+  note: horizon scaled to step count
+- variant: AdEMAMix beta3 0.98 -> 0.992 at d768
+  rung: d768
+  protocol: data_matched
+  batch: '131'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5905408208
+  baseline: d768 candidate 9 data-matched 2.7277 / 2.7221
+  steps: 6929
+  delta:
+  - 0.0015
+  - 0.0012
+  settings:
+    adam_ademamix_beta3: '0.992'
+  note: slightly worse, keep 0.98
+- variant: AdEMAMix off at d768 (alpha 5 -> 0)
+  rung: d768
+  protocol: data_matched
+  batch: '131'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5905408208
+  baseline: d768 candidate 9 data-matched 2.7277 / 2.7221
+  steps: 6929
+  delta:
+  - 0.0048
+  - 0.0063
+  settings:
+    adam_ademamix_alpha: '0'
+  note: AdEMAMix pays at d768
+events:
+- type: adopted
+  batch: '78'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
+  note: AdEMAMix alpha 5, beta3 0.98 goes into candidate 6
+  candidate: candidate 6
+  as_adopted:
+  - adam_ademamix_alpha=5.0
+  - adam_ademamix_beta3=0.98
+  - paper warmup

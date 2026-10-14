@@ -1,0 +1,82 @@
+id: X0160
+slug: router-lr-mult
+name: Router Adam LR multiplier
+category: MoE and routing
+summary: Scale the router Adam learning rate relative to the Adam LR.
+source: agent
+status: adopted
+first_batch: 98
+tags:
+- router
+- lr
+details:
+- router Adam LR x0.5
+knobs:
+- router_lr_mult=0.5
+trials:
+- variant: router Adam LR x0.1
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.003
+  settings:
+    router_lr_mult: '0.1'
+  tuned: x0.1/0.25/0.5/1/2
+  note: 2-seed mean
+- variant: router Adam LR x0.25
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - -0.0011
+  settings:
+    router_lr_mult: '0.25'
+  tuned: x0.1/0.25/0.5/1/2
+  note: 2-seed mean
+- variant: router Adam LR x0.5
+  rung: d512
+  protocol: equal_steps
+  batch: '98'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867280167
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - -0.0014
+  - -0.0035
+  settings:
+    router_lr_mult: '0.5'
+  tuned: x0.5 / x2
+  note: lead; bracketing x0.25 / x0.1
+- variant: router Adam LR x2
+  rung: d512
+  protocol: equal_steps
+  batch: '98'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867280167
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0087
+  - 0.0091
+  settings:
+    router_lr_mult: '2'
+  tuned: x0.5 / x2
+events:
+- type: adopted
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5869939570
+  note: part of candidate 9 (stack4), holds at d768
+  candidate: candidate 9
+  as_adopted:
+  - router_lr_mult=0.5

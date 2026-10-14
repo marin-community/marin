@@ -1,0 +1,177 @@
+id: X0188
+slug: eigenbasis-snr-muon
+name: Eigenbasis SNR MuonH (ANVIL III)
+category: Optimizers
+summary: Weight Muon's update per direction by an SNR computed in a Kronecker eigenbasis.
+source: agent
+status: done
+first_batch: 141
+tags:
+- snr
+- anvil
+- soap
+- shampoo
+- muon-probe
+papers:
+- title: ANVIL III report (Hyperstition)
+details:
+- Shampoo factors L,R EMA beta 0.95
+- eigenbasis refresh every 10 steps
+- SNR direction then MuonH hyperball step
+knobs:
+- eig_families
+trials:
+- variant: one-step held-out probe (no training)
+  rung: d512
+  protocol: unknown
+  batch: '141'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5920413112
+  baseline: Muon direction
+  note: eig_snr overshoots far less mid-run (MLA +1.8 vs +26.2 e-4); Muon best early/late
+- variant: eig-muon control (no rails/Nesterov/MuonEq)
+  rung: d512
+  protocol: equal_steps
+  batch: '144'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5923259839
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0044
+  - 0.005
+  settings:
+    families: KDA, MLA, LatentMoE, shared
+    factor EMA beta: '0.95'
+    basis refresh: every 10 steps
+  step_time_change: 204 ms vs 184.3 ms
+  tuned: snr/soap/mw/pw directions, LR x1 vs x1.5
+  note: plumbing control
+- variant: eig-snr
+  rung: d512
+  protocol: equal_steps
+  batch: '144'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5923259839
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0009
+  - 0.0007
+  settings:
+    families: KDA, MLA, LatentMoE, shared
+    factor EMA beta: '0.95'
+    basis refresh: every 10 steps
+  step_time_change: 201 ms vs 184.3 ms
+  tuned: snr/soap/mw/pw directions, LR x1 vs x1.5
+  note: -0.0039 vs eig-muon
+- variant: eig-snr, LR x1.5
+  rung: d512
+  protocol: equal_steps
+  batch: '144'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5923259839
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0166
+  - 0.0163
+  settings:
+    families: KDA, MLA, LatentMoE, shared
+    factor EMA beta: '0.95'
+    basis refresh: every 10 steps
+    LR: x1.5
+  step_time_change: 203 ms vs 184.3 ms
+  tuned: snr/soap/mw/pw directions, LR x1 vs x1.5
+  note: +0.0118 vs eig-muon
+- variant: eig-soap (SOAP)
+  rung: d512
+  protocol: equal_steps
+  batch: '144'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5923259839
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0019
+  - 0.0001
+  settings:
+    families: KDA, MLA, LatentMoE, shared
+    factor EMA beta: '0.95'
+    basis refresh: every 10 steps
+  step_time_change: 198 ms vs 184.3 ms
+  tuned: snr/soap/mw/pw directions, LR x1 vs x1.5
+  note: -0.0037 vs eig-muon
+- variant: eig-soap, LR x1.5
+  rung: d512
+  protocol: equal_steps
+  batch: '144'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5923259839
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0155
+  - 0.0133
+  settings:
+    families: KDA, MLA, LatentMoE, shared
+    factor EMA beta: '0.95'
+    basis refresh: every 10 steps
+    LR: x1.5
+  step_time_change: 200 ms vs 184.3 ms
+  tuned: snr/soap/mw/pw directions, LR x1 vs x1.5
+  note: +0.0097 vs eig-muon
+- variant: eig-mw (Muon dir, |SNR| weighted)
+  rung: d512
+  protocol: equal_steps
+  batch: '144'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5923259839
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0046
+  - 0.0016
+  settings:
+    families: KDA, MLA, LatentMoE, shared
+    factor EMA beta: '0.95'
+    basis refresh: every 10 steps
+  step_time_change: 203 ms vs 184.3 ms
+  tuned: snr/soap/mw/pw directions, LR x1 vs x1.5
+  note: -0.0016 vs eig-muon
+- variant: eig-pw (NS of L^-1/4 M pre-whitening)
+  rung: d512
+  protocol: equal_steps
+  batch: '144'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5923259839
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0005
+  - 0.0026
+  settings:
+    families: KDA, MLA, LatentMoE, shared
+    factor EMA beta: '0.95'
+    basis refresh: every 10 steps
+  step_time_change: 203 ms vs 184.3 ms
+  tuned: snr/soap/mw/pw directions, LR x1 vs x1.5
+  note: -0.0031 vs eig-muon
+- variant: eig-snr incl. routed experts
+  rung: d512
+  protocol: equal_steps
+  batch: '144'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5923259839
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0011
+  - -0.0025
+  settings:
+    families: KDA, MLA, LatentMoE, shared + routed
+    factor EMA beta: '0.95'
+    basis refresh: every 10 steps
+  step_time_change: 198 ms vs 184.3 ms
+  tuned: snr/soap/mw/pw directions, LR x1 vs x1.5
+  note: best equal-step, within noise

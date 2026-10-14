@@ -1,0 +1,51 @@
+id: X0108
+slug: gc-sync
+name: Synchronized Python GC
+category: Systems and speed
+summary: Freeze and disable GC, collect on all ranks at the same step every 50 steps.
+source: agent
+status: adopted
+first_batch: 63
+tags:
+- gc
+- stalls
+- host
+details:
+- GC_EVERY_STEPS = 50
+trials:
+- variant: gc.freeze + disable + synchronized collect every 50 steps
+  rung: d512
+  protocol: unknown
+  batch: mfu-pass-2
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5851948948
+  baseline: before fix lc1-stall-diag (mean 213.8 ms)
+  steps: 400
+  wandb:
+  - lc1-stall-diag3
+  settings:
+    GC_EVERY_STEPS: '50'
+  step_time_change: -24% mean step
+  note: same math; mean step 213.8 -> 161.7 ms; median unchanged
+- variant: gc.freeze only
+  rung: d512
+  protocol: unknown
+  batch: mfu-pass-2
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5851948948
+  baseline: before fix lc1-stall-diag
+  steps: 400
+  wandb:
+  - lc1-stall-diag2
+  step_time_change: -14% mean step
+  note: mean 213.8 -> 183.0 ms; 16.8% steps >1.5x median
+events:
+- type: adopted
+  batch: mfu-pass-2
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5851948948
+  note: fixed in e4c47ad1b0; mean step -24% at d512
+  candidate: runtime (row 3)
+  as_adopted:
+  - gc.collect; gc.freeze; gc.disable before loop
+  - synchronized collect+freeze every 50 steps

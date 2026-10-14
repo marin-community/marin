@@ -1,0 +1,71 @@
+id: X0041
+slug: attnres-block-count
+name: AttnRes block count cap
+category: Depth connections
+summary: Cap the number of AttnRes blocks (default 8).
+source: agent
+status: closed
+first_batch: 13
+tags:
+- attnres
+- blocks
+details:
+- 'base: 8 blocks'
+trials:
+- variant: AttnRes block cap 4 (vs 8)
+  rung: d512
+  protocol: equal_steps
+  batch: '13'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842373760
+  baseline: batch-12 bundle seed 0 3.0836
+  steps: 2817
+  delta:
+  - -0.001
+  loss:
+  - 3.0826
+  wandb:
+  - lc1-b13-arb4
+  settings:
+    AttnRes max blocks: '4'
+  note: no measurable speedup; dropped
+- variant: 4 blocks
+  rung: d512
+  protocol: equal_steps
+  batch: '67'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858925941
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - 0.0005
+  loss:
+  - 3.0202
+  wandb:
+  - lc1-b67-arblk4
+  settings:
+    attnres blocks: '4'
+  tuned: 4/8/12
+- variant: 12 blocks
+  rung: d512
+  protocol: equal_steps
+  batch: '67'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858925941
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - -0.0008
+  loss:
+  - 3.0189
+  wandb:
+  - lc1-b67-arblk12
+  settings:
+    attnres blocks: '12'
+  tuned: 4/8/12
+events:
+- type: closed
+  batch: '13'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842373760
+  note: neutral, no speed gain at d512

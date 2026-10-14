@@ -1,0 +1,262 @@
+id: X0035
+slug: shared-expert-config
+name: Shared expert count and width
+category: MoE and routing
+summary: Change the number or width of shared experts, trading compute with routed experts.
+source: maintainer
+status: adopted
+first_batch: 8
+tags:
+- shared-expert
+- moe
+- routed
+- shared expert
+- width
+details:
+- 'adopted: 1 shared expert x 768 instead of 2 x 384'
+knobs:
+- num_shared_experts
+- shared_expert_intermediate_dim
+trials:
+- variant: 1 shared + top-10 routed (FLOP-neutral)
+  rung: d512
+  protocol: fixed_time
+  batch: '8'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841135411
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2591
+  delta:
+  - 0.0148
+  loss:
+  - 3.1006
+  wandb:
+  - lc1-b08-sh1k10
+  settings:
+    num_shared_experts: '1'
+    top-k: '10'
+  step_time_change: -8% ex/s
+  note: more EP assignments make it slower
+- variant: remove shared expert
+  rung: d512
+  protocol: equal_steps
+  batch: '103'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868747426
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0107
+  - 0.0121
+  loss:
+  - 2.9899
+  - 2.9982
+  wandb:
+  - lc1-b103-ns-base
+  - lc1-b103-ns-base-s1
+  settings:
+    shared_expert_intermediate_dim: '0'
+  note: mean +0.011 (deltas from reported losses)
+- variant: top-4, shared expert 768 wide
+  rung: d512
+  protocol: fixed_time
+  batch: '81'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861853267
+  baseline: candidate 6 top-4 rerun lc1-b81-base6 (3.0060 / 3.0053)
+  steps: 3170
+  delta:
+  - -0.0062
+  - -0.0058
+  loss:
+  - 2.9998
+  - 2.9995
+  wandb:
+  - lc1-b81-top4-sh768
+  - lc1-b81-top4-sh768-s1
+  settings:
+    shared_expert_intermediate_dim: '768'
+  step_time_change: +4% (155 ms)
+  note: mean -0.0060; ~0 at fixed time
+- variant: routed 448 x 8, shared 0
+  rung: d512
+  protocol: equal_steps
+  batch: '83'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862195574
+  baseline: candidate 6 top-8 rerun lc1-b83-base7 (3.0072 / 3.0109)
+  steps: 2817
+  delta:
+  - 0.0029
+  - 0.0078
+  loss:
+  - 3.0101
+  - 3.0187
+  wandb:
+  - lc1-b83-r448s0
+  - lc1-b83-r448s0-s1
+  settings:
+    intermediate_dim: '448'
+    shared_expert_intermediate_dim: '0'
+  step_time_change: 174 vs 177 ms
+  tuned: routed 384-768 x shared 0/384
+  note: delta computed per seed; shared expert worth more than its FLOPs at d512
+- variant: routed 512 x 8, shared 0
+  rung: d512
+  protocol: equal_steps
+  batch: '83'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862195574
+  baseline: candidate 6 top-8 rerun lc1-b83-base7 (3.0072 / 3.0109)
+  steps: 2817
+  delta:
+  - 0.0003
+  - 0.0022
+  loss:
+  - 3.0075
+  - 3.0131
+  wandb:
+  - lc1-b83-r512s0
+  - lc1-b83-r512s0-s1
+  settings:
+    intermediate_dim: '512'
+    shared_expert_intermediate_dim: '0'
+  step_time_change: 175 ms
+  tuned: routed 384-768 x shared 0/384
+- variant: routed 640 x 8, shared 0
+  rung: d512
+  protocol: equal_steps
+  batch: '83'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862195574
+  baseline: candidate 6 top-8 rerun lc1-b83-base7 (3.0072 / 3.0109)
+  steps: 2817
+  delta:
+  - -0.0109
+  - -0.0094
+  loss:
+  - 2.9963
+  - 3.0015
+  wandb:
+  - lc1-b83-r640s0
+  - lc1-b83-r640s0-s1
+  settings:
+    intermediate_dim: '640'
+    shared_expert_intermediate_dim: '0'
+  step_time_change: 180 ms
+  tuned: routed 384-768 x shared 0/384
+- variant: routed 768 x 8, shared 0
+  rung: d512
+  protocol: equal_steps
+  batch: '83'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862195574
+  baseline: candidate 6 top-8 rerun lc1-b83-base7 (3.0072 / 3.0109)
+  steps: 2817
+  delta:
+  - -0.0155
+  - -0.0139
+  loss:
+  - 2.9917
+  - 2.997
+  wandb:
+  - lc1-b83-r768s0
+  - lc1-b83-r768s0-s1
+  settings:
+    intermediate_dim: '768'
+    shared_expert_intermediate_dim: '0'
+  step_time_change: 184 ms
+  tuned: routed 384-768 x shared 0/384
+- variant: routed 1024, shared 96
+  rung: d512
+  protocol: equal_steps
+  batch: '85'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862382151
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  loss:
+  - 2.9753
+  - 2.9812
+  wandb:
+  - lc1-b85-r1024s96
+  - lc1-b85-r1024s96-s1
+  settings:
+    routed width: '1024'
+    shared width: '96'
+  step_time_change: 198 vs 177 ms
+  tuned: shared 192/96/0 at routed 1024
+  note: mean -0.0308; +0.002 vs shared 192
+- variant: routed 1024, no shared
+  rung: d512
+  protocol: equal_steps
+  batch: '85'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862382151
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  loss:
+  - 2.9771
+  - 2.9861
+  wandb:
+  - lc1-b85-r1024s0
+  - lc1-b85-r1024s0-s1
+  settings:
+    routed width: '1024'
+    shared width: '0'
+  step_time_change: 193 vs 177 ms
+  tuned: shared 192/96/0 at routed 1024
+  note: mean -0.0275; removing shared costs +0.0055
+- variant: 1 shared x 768 (same total width), 512 experts
+  rung: d512
+  protocol: equal_steps
+  batch: '88'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
+  baseline: 512 experts lc1-b86-e512 2.9959 / 3.0017
+  steps: 2817
+  delta:
+  - -0.0009
+  - 0.001
+  loss:
+  - 2.995
+  - 3.0027
+  wandb:
+  - lc1-b88-e512-sh1x768
+  - lc1-b88-e512-sh1x768-s1
+  settings:
+    num_shared_experts: '1'
+    shared_expert_intermediate_dim: '768'
+  tuned: 2x384 vs 1x768 vs 1x384
+  note: matches 2 x 384 exactly
+- variant: 1 shared x 384 (half shared compute), 512 experts
+  rung: d512
+  protocol: equal_steps
+  batch: '88'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
+  baseline: 512 experts lc1-b86-e512 2.9959 / 3.0017
+  steps: 2817
+  delta:
+  - 0.0071
+  - 0.0092
+  loss:
+  - 3.003
+  - 3.0109
+  wandb:
+  - lc1-b88-e512-sh1x384
+  - lc1-b88-e512-sh1x384-s1
+  settings:
+    num_shared_experts: '1'
+    shared_expert_intermediate_dim: '384'
+  tuned: 2x384 vs 1x768 vs 1x384
+events:
+- type: adopted
+  batch: '90'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864219716
+  note: part of candidate 8
+  candidate: candidate 8
+  as_adopted:
+  - num_shared_experts=1
+  - shared width 768 (1 x 1.5d)

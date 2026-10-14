@@ -1,0 +1,76 @@
+id: X0110
+slug: leaky-relu2-experts
+name: LeakyReLU^2 experts
+category: MoE and routing
+summary: Use leaky_relu(u, a)^2 in routed and shared experts.
+source: maintainer
+status: closed
+first_batch: 64
+tags:
+- leaky-relu
+- activation
+- parameter-golf
+knobs:
+- expert_leaky_slope
+trials:
+- variant: slope 0.5
+  rung: d512
+  protocol: equal_steps
+  batch: '64'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858739832
+  baseline: candidate 2 3.0197 (s0) / 3.0266 (s1)
+  steps: 2817
+  delta:
+  - -0.0019
+  - 0.0006
+  loss:
+  - 3.0178
+  - 3.0272
+  wandb:
+  - lc1-b64-leaky05
+  - lc1-b64-leaky05-s1
+  settings:
+    expert_leaky_slope: '0.5'
+  tuned: slope 0.5 vs 0.3
+  note: seed-0 gain was noise
+- variant: slope 0.3
+  rung: d512
+  protocol: equal_steps
+  batch: '64'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858739832
+  baseline: candidate 2 3.0197 (s0) / 3.0266 (s1)
+  steps: 2817
+  delta:
+  - 0.0001
+  loss:
+  - 3.0198
+  wandb:
+  - lc1-b64-leaky03
+  settings:
+    expert_leaky_slope: '0.3'
+  tuned: slope 0.5 vs 0.3
+- variant: slope 0.5 + LR floor 10%
+  rung: d512
+  protocol: equal_steps
+  batch: '64'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858739832
+  baseline: candidate 2 3.0197 (s0) / 3.0266 (s1)
+  steps: 2817
+  delta:
+  - -0.0014
+  loss:
+  - 3.0183
+  wandb:
+  - lc1-b64-leaky05-minlr10
+  settings:
+    expert_leaky_slope: '0.5'
+    min_lr_ratio: '0.1'
+events:
+- type: closed
+  batch: '64'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858739832
+  note: Parameter Golf batch closed with no adoptions

@@ -1,0 +1,40 @@
+id: X0162
+slug: router-weight-decay
+name: Router weight decay
+category: MoE and routing
+summary: Change the router decoupled weight decay from 0.02.
+source: agent
+status: done
+first_batch: 98
+tags:
+- router
+- weight-decay
+trials:
+- variant: router WD 0
+  rung: d512
+  protocol: equal_steps
+  batch: '98'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867280167
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0002
+  settings:
+    router WD: '0'
+  tuned: 0 / 0.02 / 0.1
+  note: seed mean
+- variant: router WD 0.1
+  rung: d512
+  protocol: equal_steps
+  batch: '98'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867280167
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - -0.0015
+  settings:
+    router WD: '0.1'
+  tuned: 0 / 0.02 / 0.1
+  note: seed mean

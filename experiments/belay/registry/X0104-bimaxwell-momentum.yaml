@@ -1,0 +1,299 @@
+id: X0104
+slug: bimaxwell-momentum
+name: Bi-Maxwell momentum on MuonH
+category: Optimizers
+summary: Switch MuonH to a Bi-Maxwell twin-rail momentum from a fraction of training on.
+source: agent
+status: removed
+first_batch: 60
+tags:
+- bimaxwell
+- momentum
+- twin-rail
+- modded-nanogpt
+- muon
+- anvil
+- muonh
+details:
+- starts at 1/3 of training
+- regime switch via lax.cond
+- fast rail rate 0.15 (beta 0.85), slow 0.02 (beta 0.98)
+- slow weight 0.5615
+- engage at 1/3 of run (step 939)
+knobs:
+- muon_bimaxwell=true
+- bimaxwell_start_frac
+- bimaxwell_slow_from_start
+trials:
+- variant: from 1/3 of training (jnp.where)
+  rung: d512
+  protocol: equal_steps
+  batch: '60'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5857738032
+  baseline: candidate 1 3.0325 (s0) / 3.0395 (s1)
+  steps: 2817
+  delta:
+  - -0.0048
+  - -0.0056
+  loss:
+  - 3.0277
+  - 3.0339
+  wandb:
+  - lc1-b60-bimax
+  - lc1-b60-bimax-s1
+  settings:
+    muon_bimaxwell: 'true'
+    start: 1/3 of training
+  step_time_change: +1.4%
+  note: net about -0.003 at fixed time
+- variant: lax.cond regime switch
+  rung: d512
+  protocol: equal_steps
+  batch: '60'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5857738032
+  baseline: candidate 1 3.0325 (s0) / 3.0395 (s1)
+  steps: 2817
+  delta:
+  - -0.004
+  loss:
+  - 3.0285
+  wandb:
+  - lc1-b60-bimax-cond
+  settings:
+    muon_bimaxwell: 'true'
+    switch: lax.cond
+  step_time_change: +1.4% to +2%
+  note: median step 175.8 ms, different host
+- variant: leave-out from candidate 2 (no Bi-Maxwell)
+  rung: d512
+  protocol: equal_steps
+  batch: '63'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858603412
+  baseline: candidate 1 3.0325 (s0) / 3.0395 (s1)
+  steps: 2817
+  delta:
+  - -0.0105
+  loss:
+  - 3.022
+  wandb:
+  - lc1-b63-cand2-nobimax
+  settings:
+    relu2 width: 1.5x
+    muon_bimaxwell: 'false'
+    muonh_decay_power: '0.7'
+  note: Bi-Maxwell adds -0.0023 on top for about +0.5% step
+- variant: start at 1/4 of training
+  rung: d512
+  protocol: equal_steps
+  batch: '67'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858925941
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - 0.0002
+  loss:
+  - 3.0199
+  wandb:
+  - lc1-b67-bimax025
+  settings:
+    bimaxwell_start_frac: '0.25'
+  tuned: 1/4, 1/3, 1/2
+- variant: start at 1/2 of training
+  rung: d512
+  protocol: equal_steps
+  batch: '67'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858925941
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - -0.0005
+  loss:
+  - 3.0192
+  wandb:
+  - lc1-b67-bimax05
+  settings:
+    bimaxwell_start_frac: '0.5'
+  tuned: 1/4, 1/3, 1/2
+- variant: d768 remove Bi-Maxwell and decay power 0.7
+  rung: d768
+  protocol: equal_steps
+  batch: '84'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862289448
+  baseline: d768 candidate 6 top-8 lc1-b80-d768-c6-top8 (2.7689)
+  steps: 7325
+  delta:
+  - -0.0054
+  loss:
+  - 2.7743
+  wandb:
+  - lc1-b84-d768-nobimax
+  settings:
+    muon_bimaxwell: 'false'
+    muonh_decay_power: 'off'
+  tuned: leave-one-out over candidate 6 pieces
+  note: leave-one-out over candidate 6, sign flipped to 'adding the piece' (negative = piece helps)
+- variant: routed slow rail beta 0.995
+  rung: d512
+  protocol: equal_steps
+  batch: '142'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5920734918
+  baseline: candidate 9 rerun on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.006
+  - 0.0032
+  loss:
+  - 2.9828
+  - 2.9854
+  settings:
+    routed slow rail rate: '0.005'
+    slow weight: '0.5615'
+    engage step: '939'
+  tuned: slow rail rate 0.005/0.01, weight, engage step
+- variant: routed slow rail beta 0.995, slow weight 0.8
+  rung: d512
+  protocol: equal_steps
+  batch: '142'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5920734918
+  baseline: candidate 9 rerun on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0153
+  - 0.0159
+  loss:
+  - 2.992
+  - 2.9981
+  settings:
+    routed slow rail rate: '0.005'
+    slow weight: '0.8'
+    engage step: '939'
+  tuned: slow rail rate 0.005/0.01, weight, engage step
+- variant: routed slow rail beta 0.99, engage step 300
+  rung: d512
+  protocol: equal_steps
+  batch: '142'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5920734918
+  baseline: candidate 9 rerun on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0038
+  - 0.002
+  loss:
+  - 2.9806
+  - 2.9842
+  settings:
+    routed slow rail rate: '0.01'
+    slow weight: '0.5615'
+    engage step: '300'
+  tuned: slow rail rate 0.005/0.01, weight, engage step
+- variant: rails engage at step 1
+  rung: d512
+  protocol: equal_steps
+  batch: '151'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5925991410
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0005
+  - 0.001
+  loss:
+  - 2.9773
+  - 2.9832
+  settings:
+    engage: step 1
+  tuned: engage step 1/10%/20%/33%, slow rail from start
+- variant: rails engage at 10%
+  rung: d512
+  protocol: equal_steps
+  batch: '151'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5925991410
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0002
+  - 0.0023
+  loss:
+  - 2.9766
+  - 2.9845
+  settings:
+    engage: 10% (step 282)
+  tuned: engage step 1/10%/20%/33%, slow rail from start
+- variant: rails engage at 20%
+  rung: d512
+  protocol: equal_steps
+  batch: '151'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5925991410
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0017
+  - -0.0009
+  loss:
+  - 2.9785
+  - 2.9813
+  settings:
+    engage: 20% (step 563)
+  tuned: engage step 1/10%/20%/33%, slow rail from start
+- variant: slow rail accumulates from step 0
+  rung: d512
+  protocol: equal_steps
+  batch: '151'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5925991410
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0009
+  loss:
+  - 2.9813
+  settings:
+    engage: 1/3
+    bimaxwell_slow_from_start: 'true'
+  tuned: engage step 1/10%/20%/33%, slow rail from start
+  note: 'slow0: seed 1 only (seed 0 crashed)'
+- variant: slow rail from step 0, engage 10%
+  rung: d512
+  protocol: equal_steps
+  batch: '151'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5925991410
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0008
+  - 0.0024
+  loss:
+  - 2.9776
+  - 2.9846
+  settings:
+    engage: 10%
+    bimaxwell_slow_from_start: 'true'
+  tuned: engage step 1/10%/20%/33%, slow rail from start
+events:
+- type: adopted
+  batch: '63'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858603412
+  note: part of candidate 2, new d512 base
+  candidate: candidate 2
+  as_adopted:
+  - muon_bimaxwell=true
+  - start at 1/3 of training
+  - lax.cond regime switch
+- type: removed
+  batch: ckpt1
+  date: '2026-10-14'
+  comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
+  note: no Bi-Maxwell momentum in Belay Ckpt 1

@@ -1,0 +1,130 @@
+id: X0066
+slug: qk-no-hyperball
+name: q/k projections without hyperball
+category: Optimizers
+summary: Drop MuonH's norm re-projection on q/k and add decoupled weight decay.
+source: maintainer
+status: closed
+first_batch: 28
+tags:
+- hyperball
+- muonh
+- weight-decay
+- qk
+knobs:
+- muon_free group
+trials:
+- variant: all q,k free, wd 0
+  rung: d512
+  protocol: equal_steps
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.0082
+  loss:
+  - 3.0915
+  wandb:
+  - lc1-b28-qkfree-wd0
+  settings:
+    group: muon_free on attn_q, attn_k (KDA+MLA)
+    wd: '0'
+  tuned: wd 0/0.001/0.003/0.01
+- variant: all q,k free, wd 0.001
+  rung: d512
+  protocol: equal_steps
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.0102
+  loss:
+  - 3.0935
+  wandb:
+  - lc1-b28-qkfree-wd001
+  settings:
+    group: muon_free on attn_q, attn_k (KDA+MLA)
+    wd: '0.001'
+  tuned: wd 0/0.001/0.003/0.01
+- variant: all q,k free, wd 0.003
+  rung: d512
+  protocol: equal_steps
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.0089
+  loss:
+  - 3.0922
+  wandb:
+  - lc1-b28-qkfree-wd003
+  settings:
+    group: muon_free on attn_q, attn_k (KDA+MLA)
+    wd: '0.003'
+  tuned: wd 0/0.001/0.003/0.01
+- variant: all q,k free, wd 0.01
+  rung: d512
+  protocol: equal_steps
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.0075
+  loss:
+  - 3.0908
+  wandb:
+  - lc1-b28-qkfree-wd01
+  settings:
+    group: muon_free on attn_q, attn_k (KDA+MLA)
+    wd: '0.01'
+  tuned: wd 0/0.001/0.003/0.01
+- variant: MLA q,k only, wd 0
+  rung: d512
+  protocol: equal_steps
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.0019
+  loss:
+  - 3.0852
+  wandb:
+  - lc1-b28-mlaqk-wd0
+  settings:
+    group: muon_free on MLA w_q, w_uk
+    wd: '0'
+  note: qk_mult stays ~2.4; equivalent sharpening
+- variant: MLA q,k only, wd 0.01
+  rung: d512
+  protocol: equal_steps
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.002
+  loss:
+  - 3.0853
+  wandb:
+  - lc1-b28-mlaqk-wd01
+  settings:
+    group: muon_free on MLA w_q, w_uk
+    wd: '0.01'
+  note: qk_mult stays ~2.4; equivalent sharpening
+events:
+- type: closed
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  note: buys nothing at d512; no d768 run

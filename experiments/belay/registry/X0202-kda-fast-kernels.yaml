@@ -1,0 +1,94 @@
+id: X0202
+slug: kda-fast-kernels
+name: Faster KDA kernels
+category: Systems and speed
+summary: Exact chunk-32 KDA kernels with on-chip gates and fused state-pass backward; same math, faster.
+source: agent
+status: adopted
+first_batch: 174
+tags:
+- kda
+- pallas
+- chunk 32
+- kernel
+- state_block_v
+details:
+- exact chunk-32 kernels
+- on-chip decay and erase gates
+- fused pallas state-pass backward
+- state_block_v 64 halves state-pass programs
+knobs:
+- kda_chunk_size=32
+- kda_onchip_decay_gate=true
+- kda_onchip_erase_gate=true
+- kda_state_grads=pallas
+- kda_state_block_v=64
+trials:
+- variant: chunk 32 + on-chip gates + pallas state grads
+  rung: d512
+  protocol: equal_steps
+  batch: '174'
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5945519263
+  baseline: candidate 10 (2.9616 / 2.9664)
+  steps: 2817
+  delta:
+  - 0.0005
+  - 0.0005
+  loss:
+  - 2.9621
+  - 2.9669
+  wandb:
+  - lc1-b174-kda
+  - lc1-b174-kda-s1
+  settings:
+    kda_chunk_size: '32'
+    kda_onchip_decay_gate: 'true'
+    kda_onchip_erase_gate: 'true'
+    kda_state_grads: pallas
+  step_time_change: -3.5% (184.4 -> 177.9 ms)
+- variant: candidate 11 at own 480 s budget
+  rung: d512
+  protocol: fixed_time
+  batch: '174'
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5945519263
+  baseline: candidate 10 at 2607 steps (2.9773 / 2.9797)
+  steps: 2698
+  delta:
+  - -0.0058
+  - -0.0047
+  loss:
+  - 2.9715
+  - 2.975
+  settings:
+    kda_chunk_size: '32'
+    kda_onchip_decay_gate: 'true'
+    kda_onchip_erase_gate: 'true'
+    kda_state_grads: pallas
+  note: adopted as candidate 11
+- variant: kda_state_block_v=64
+  rung: d512
+  protocol: unknown
+  batch: df
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 block_v 32 (190.9 ms)
+  steps: 400
+  settings:
+    kda_state_block_v: '64'
+  step_time_change: 190.7 ms; 4x(64x256) 190.1 ms
+  tuned: block_v 32 vs 64
+  note: exact tiling change; makes 64x256 free
+events:
+- type: adopted
+  batch: '174'
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5945519263
+  note: candidate 11 = candidate 10 + faster KDA kernels
+  candidate: candidate 11
+  as_adopted:
+  - kda_chunk_size=32
+  - kda_onchip_decay_gate=true
+  - kda_onchip_erase_gate=true
+  - kda_state_grads=pallas

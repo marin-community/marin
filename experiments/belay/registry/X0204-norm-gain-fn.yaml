@@ -1,0 +1,177 @@
+id: X0204
+slug: norm-gain-fn
+name: RMSNorm gain parameterization
+category: Normalization
+summary: Parameterize RMSNorm gains as e^w, softplus(w) or sigmoid forms instead of linear.
+source: maintainer
+status: closed
+first_batch: 181
+tags:
+- rmsnorm
+- gain
+- exp
+- softplus
+- sigmoid
+details:
+- e^w init 0
+- softplus init log(e-1), gain LR x1.6
+- 2*sigmoid init 0, gain LR x2
+- sigmoid on embed norms init 0 (gain 0.5)
+knobs:
+- norm_gain_fn
+- norm_gain_lr_mult
+- norm_gain_overrides=final:exp
+- sigmoid_gain_norms=embed,embed2
+trials:
+- variant: e^w gains
+  rung: d512
+  protocol: equal_steps
+  batch: '181'
+  date: '2026-10-04'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5985074958
+  baseline: batch 181 ctrl 2.9644
+  steps: 2817
+  delta:
+  - -0.0026
+  loss:
+  - 2.9618
+  settings:
+    norm_gain_fn: exp
+  tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
+  note: final_norm climbs to 15
+- variant: softplus gains, LR x1.6
+  rung: d512
+  protocol: equal_steps
+  batch: '181'
+  date: '2026-10-04'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5985074958
+  baseline: batch 181 ctrl 2.9644
+  steps: 2817
+  delta:
+  - -0.0008
+  loss:
+  - 2.9636
+  settings:
+    norm_gain_fn: softplus
+    norm_gain_lr_mult: '1.6'
+  tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
+- variant: 2*sigmoid gains, LR x2
+  rung: d512
+  protocol: equal_steps
+  batch: '181'
+  date: '2026-10-04'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5985074958
+  baseline: batch 181 ctrl 2.9644
+  steps: 2817
+  delta:
+  - 0.1149
+  loss:
+  - 3.0793
+  settings:
+    norm_gain_fn: 2*sigmoid
+    norm_gain_lr_mult: '2'
+  tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
+  note: pins final_norm at cap 2
+- variant: sigmoid gains on embed and embed2 norms
+  rung: d512
+  protocol: equal_steps
+  batch: '182'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986245656
+  baseline: batch 181 ctrl 2.9644
+  steps: 2817
+  delta:
+  - -0.001
+  loss:
+  - 2.9634
+  settings:
+    sigmoid_gain_norms: embed,embed2
+  tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
+  note: neutral
+- variant: e^w gains, 2 seeds
+  rung: d512
+  protocol: equal_steps
+  batch: 185-187
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986874164
+  baseline: batch 181 ctrl, same seed (2.9644 / 2.9667)
+  steps: 2817
+  delta:
+  - -0.0026
+  - -0.0002
+  loss:
+  - 2.9618
+  - 2.9665
+  settings:
+    norm_gain_fn: exp
+  tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
+  note: does not replicate
+- variant: e^w gains, gain LR x0.5
+  rung: d512
+  protocol: equal_steps
+  batch: 185-187
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986874164
+  baseline: batch 181 ctrl, same seed (2.9644 / 2.9667)
+  steps: 2817
+  delta:
+  - -0.0002
+  loss:
+  - 2.9642
+  settings:
+    norm_gain_fn: exp
+    norm_gain_lr_mult: '0.5'
+  tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
+- variant: e^w gains, gain LR x2
+  rung: d512
+  protocol: equal_steps
+  batch: 185-187
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986874164
+  baseline: batch 181 ctrl, same seed (2.9644 / 2.9667)
+  steps: 2817
+  delta:
+  - -0.0006
+  loss:
+  - 2.9638
+  settings:
+    norm_gain_fn: exp
+    norm_gain_lr_mult: '2'
+  tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
+- variant: e^w on final_norm only
+  rung: d512
+  protocol: equal_steps
+  batch: 185-187
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986874164
+  baseline: batch 181 ctrl, same seed (2.9644 / 2.9667)
+  steps: 2817
+  delta:
+  - -0.0024
+  loss:
+  - 2.962
+  settings:
+    norm_gain_overrides: final:exp
+  tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
+- variant: e^w gains + no combine renorm
+  rung: d512
+  protocol: equal_steps
+  batch: 185-187
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986874164
+  baseline: batch 181 ctrl, same seed (2.9644 / 2.9667)
+  steps: 2817
+  delta:
+  - -0.0009
+  loss:
+  - 2.9635
+  settings:
+    norm_gain_fn: exp
+    router_combine: sqrt_softplus_raw
+  tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
+events:
+- type: closed
+  batch: 185-187
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986874164
+  note: gain/scale/combine family closed at d512 1x

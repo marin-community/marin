@@ -1,0 +1,36 @@
+id: X0053
+slug: kda-decay-shortconv
+name: KDA decay-input ShortConv
+category: Linear attention / KDA
+summary: Pass the KDA rank-128 decay input through a 4-tap causal ShortConv.
+source: maintainer
+status: done
+first_batch: 19
+tags:
+- kda
+- decay
+- shortconv
+knobs:
+- kda_decay_conv=true
+trials:
+- variant: 4-tap causal ShortConv on KDA decay input
+  rung: d512
+  protocol: equal_steps
+  batch: '19'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843937025
+  baseline: z-loss-kept bundle s0 3.0854 / s1 3.0902
+  steps: 2817
+  delta:
+  - -0.0043
+  - 0.0005
+  loss:
+  - 3.0811
+  - 3.0907
+  wandb:
+  - lc1-b19-kdadconv
+  - lc1-b19-kdadconv-s1
+  settings:
+    kda_decay_conv: 'true'
+  step_time_change: -1.6% ex/s
+  note: within noise

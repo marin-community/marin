@@ -1,0 +1,46 @@
+id: X0207
+slug: sublayer-dropout
+name: Sublayer output dropout
+category: Training dynamics and schedules
+summary: Dropout on each sublayer output, MAI-Thinking-1 style.
+source: agent
+status: done
+first_batch: 187
+tags:
+- dropout
+- mai-thinking-1
+details:
+- dropout on each sublayer output
+knobs:
+- sublayer_dropout
+trials:
+- variant: dropout 0.05
+  rung: d512
+  protocol: equal_steps
+  batch: 185-187
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986874164
+  baseline: batch 181 ctrl, same seed (2.9644 / 2.9667)
+  steps: 2817
+  delta:
+  - 0.0145
+  loss:
+  - 2.9789
+  settings:
+    sublayer_dropout: '0.05'
+  tuned: 0.05 / 0.15
+- variant: dropout 0.15
+  rung: d512
+  protocol: equal_steps
+  batch: 185-187
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986874164
+  baseline: batch 181 ctrl, same seed (2.9644 / 2.9667)
+  steps: 2817
+  delta:
+  - 0.0369
+  loss:
+  - 3.0013
+  settings:
+    sublayer_dropout: '0.15'
+  tuned: 0.05 / 0.15

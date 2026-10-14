@@ -1,0 +1,73 @@
+id: X0048
+slug: per-expert-hyperball
+name: Per-expert hyperball projection
+category: Optimizers
+summary: Project each routed expert matrix to its own Frobenius sphere instead of one sphere per layer.
+source: maintainer
+status: closed
+first_batch: 15
+tags:
+- hyperball
+- muonh
+- experts
+- routed-experts
+knobs:
+- hyperball_per_expert=true
+trials:
+- variant: per-expert MuonH hyperball
+  rung: d512
+  protocol: equal_steps
+  batch: '15'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842638290
+  baseline: current best (qk 2.5 + beta1 0.8 + z-loss 0) seed-0 mean 3.0797
+  steps: 2817
+  delta:
+  - 0.0017
+  loss:
+  - 3.0814
+  wandb:
+  - lc1-b15-hbexp
+  settings:
+    hyperball_per_expert: 'true'
+  step_time_change: -1% ex/s
+- variant: retest on candidate 2
+  rung: d512
+  protocol: equal_steps
+  batch: '65'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858772158
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - -0.0008
+  loss:
+  - 3.0189
+  wandb:
+  - lc1-b65-hbexp
+  settings:
+    hyperball_per_expert: 'true'
+  note: neutral; stays off (was +0.0017 on old base in batch 15)
+- variant: per-expert hyperball
+  rung: d512
+  protocol: equal_steps
+  batch: '140'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5918588189
+  baseline: candidate 9 + PGLE 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0034
+  - 0.0018
+  loss:
+  - 2.9784
+  - 2.9809
+  settings:
+    hyperball_per_expert: 'true'
+  note: 'closed: within noise, shared per-layer sphere stays'
+events:
+- type: closed
+  batch: '140'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5918588189
+  note: shared per-layer sphere stays

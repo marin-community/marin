@@ -1,0 +1,65 @@
+id: X0124
+slug: grokfast
+name: Grokfast-EMA gradient amplification
+category: Optimizers
+summary: Adds lambda times the gradient EMA to every gradient before the optimizer.
+source: agent
+status: closed
+first_batch: 77
+tags:
+- grokfast
+- gradient-ema
+papers:
+- arxiv: '2405.20233'
+  title: Grokfast
+trials:
+- variant: lambda 2, every group
+  rung: d512
+  protocol: equal_steps
+  batch: '77'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860969387
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.0416
+  - 0.0385
+  loss:
+  - 3.0515
+  - 3.0524
+  wandb:
+  - lc1-b77-grokfast
+  - lc1-b77-grokfast-s1
+  settings:
+    lambda: '2'
+    alpha: '0.98'
+  tuned: lambda 2 all groups vs 1 Adam only
+  note: delta computed from losses vs base; acts like higher Muon momentum
+  derived: true
+- variant: lambda 1, Adam groups only
+  rung: d512
+  protocol: equal_steps
+  batch: '78'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.0071
+  - 0.0071
+  loss:
+  - 3.017
+  - 3.021
+  wandb:
+  - lc1-b78-grokadam-r2
+  - lc1-b78-grokadam-s1
+  settings:
+    lambda: '1'
+    groups: Adam only
+  tuned: lambda 2 all groups vs 1 Adam only
+events:
+- type: closed
+  batch: '78'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
+  note: Adam-only lambda 1 still +0.0071

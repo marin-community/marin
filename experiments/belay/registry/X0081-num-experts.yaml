@@ -1,0 +1,114 @@
+id: X0081
+slug: num-experts
+name: Number of routed experts
+category: MoE and routing
+summary: Change the routed expert count (and top-k).
+source: agent
+status: removed
+first_batch: 41
+tags:
+- experts
+- sparsity
+- top-8
+details:
+- 512 experts, top-8 (sparsity 64)
+- d1024 needs attention remat to fit
+knobs:
+- num_experts=512
+trials:
+- variant: 'control: SwiGLU 576/top-12 (1.5x params and FLOPs)'
+  rung: d512
+  protocol: equal_steps
+  batch: '41'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853295544
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0233
+  loss:
+  - 3.0358
+  wandb:
+  - lc1-b41-swiglu-576k12
+  settings:
+    num_experts: '576'
+    top-k: '12'
+  step_time_change: 652 ex/s (-17%)
+  tuned: 576/top-12 vs 384/top-8 vs 1.5x wider; expert LR x1.25; shared ReLU2; SwiGLU 576 control
+  note: more experts and compute; would lose at fixed time
+- variant: 512 experts (sparsity 64), candidate 6 widths
+  rung: d512
+  protocol: equal_steps
+  batch: '86'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863117839
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0113
+  - -0.0092
+  loss:
+  - 2.9959
+  - 3.0017
+  wandb:
+  - lc1-b86-e512
+  - lc1-b86-e512-s1
+  settings:
+    num_experts: '512'
+    top-k: '8'
+  step_time_change: +1.5%
+  tuned: 384 vs 512 experts
+  note: 35.8 GiB peak, same as 384 experts
+- variant: 512 experts at routed 2d / shared 0.375d
+  rung: d512
+  protocol: equal_steps
+  batch: '86'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863117839
+  baseline: 384 experts same widths lc1-b85-r1024s192 2.9730 / 2.9791
+  steps: 2817
+  delta:
+  - -0.0071
+  - -0.0071
+  loss:
+  - 2.9659
+  - 2.972
+  wandb:
+  - lc1-b86-e512-r1024s192
+  - lc1-b86-e512-r1024s192-s1
+  settings:
+    num_experts: '512'
+    routed width: 1024 (2d)
+    shared width: 192 (0.375d)
+  tuned: 384 vs 512 experts
+  note: -0.040 vs candidate 6; does not fit at d1024
+- variant: 512 experts at 0.75d, d1024 memory probe
+  rung: d1024
+  protocol: unknown
+  batch: '88'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
+  steps: 40
+  wandb:
+  - lc1-b88-mem-d1024-e512-w075
+  - lc1-b88-mem-d1024-e512-w075-rematt
+  settings:
+    num_experts: '512'
+    expert width: 0.75d
+    attn_res_remat_attention: false / true
+  note: '60.7 GiB plain, 55.6 GiB with attention remat (+3% step): fits'
+events:
+- type: adopted
+  batch: '89'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863894129
+  note: 512 experts, top-8 (sparsity 64)
+  candidate: candidate 7
+  as_adopted:
+  - num_experts=512
+  - top-8
+- type: removed
+  batch: ckpt1
+  date: '2026-10-14'
+  comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
+  note: Belay Ckpt 1 uses 384 experts

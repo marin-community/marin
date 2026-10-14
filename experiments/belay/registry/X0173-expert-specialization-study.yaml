@@ -1,0 +1,259 @@
+id: X0173
+slug: expert-specialization-study
+name: Expert specialization study and seeding
+category: MoE and routing
+summary: Study models and router ties (to a token or class-centroid embedding) that characterize and seed what experts specialize
+  in.
+source: maintainer
+status: done
+first_batch: 110
+tags:
+- specialization
+- routing-dump
+- router-embed-tie
+- top-1
+- analysis
+- router
+- expert-tie
+- centroid
+- routing-dumps
+- mutual-information
+details:
+- layer-0-only or every layer
+- class centroid = mean embedding of the class
+- optional release after 250 or 1000 steps
+knobs:
+- router_embed_tie=L:E:V
+- router_bias_seed=L:E:V:b
+- --routing-dump-steps
+trials:
+- variant: 'analysis model: top-1 of 8 x 3072 wide, sigmoid_raw'
+  rung: d512
+  protocol: equal_steps
+  batch: '110'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5876471510
+  baseline: none (analysis model)
+  steps: 2817
+  loss:
+  - 3.0825
+  - 3.0894
+  wandb:
+  - lc1-b110-t1e8-r
+  - lc1-b110-t1e8-r-s1
+  settings:
+    top-k: 1 of 8
+    expert width: '3072'
+    router_combine: sigmoid_raw
+  note: I(tok;e)/H(e) 0.51-0.73, ~2.5x prev-token; specialization set by ~10% of training
+- variant: tie expert 3 to token "1" in every layer
+  rung: d512
+  protocol: equal_steps
+  batch: '111'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5879651138
+  baseline: untied top-1-of-8 study model 3.0825 / 3.0894
+  steps: 2817
+  delta:
+  - 0.0285
+  - 0.0222
+  settings:
+    router_embed_tie: '*:3:1 (id 24)'
+  tuned: tied token digit / newline / LaTeX / control; tie vs bias
+  note: tie seeds token at L0 (P=1.00) and spreads to embedding neighbors
+- variant: tie expert 3 to newline in every layer
+  rung: d512
+  protocol: equal_steps
+  batch: '111'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5879651138
+  baseline: untied top-1-of-8 study model 3.0825 / 3.0894
+  steps: 2817
+  delta:
+  - -0.0013
+  - 0.0218
+  settings:
+    router_embed_tie: '*:3:\n (id 206)'
+  tuned: tied token digit / newline / LaTeX / control; tie vs bias
+  note: tie seeds token at L0 (P=1.00) and spreads to embedding neighbors
+- variant: tie expert 3 to "mathbf" in every layer
+  rung: d512
+  protocol: equal_steps
+  batch: '111'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5879651138
+  baseline: untied top-1-of-8 study model 3.0825 / 3.0894
+  steps: 2817
+  delta:
+  - 0.005
+  - 0.0106
+  settings:
+    router_embed_tie: '*:3:mathbf (id 3169)'
+  tuned: tied token digit / newline / LaTeX / control; tie vs bias
+  note: tie seeds token at L0 (P=1.00) and spreads to embedding neighbors
+- variant: tie expert 3 to " table" in every layer (control)
+  rung: d512
+  protocol: equal_steps
+  batch: '111'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5879651138
+  baseline: untied top-1-of-8 study model 3.0825 / 3.0894
+  steps: 2817
+  delta:
+  - 0.01
+  - 0.0131
+  settings:
+    router_embed_tie: '*:3: table (id 3708)'
+  tuned: tied token digit / newline / LaTeX / control; tie vs bias
+  note: tie seeds token at L0 (P=1.00) and spreads to embedding neighbors
+- variant: fixed +4 logit bias on expert 3 for token "1"
+  rung: d512
+  protocol: equal_steps
+  batch: '111'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5879651138
+  baseline: untied top-1-of-8 study model 3.0825 / 3.0894
+  steps: 2817
+  delta:
+  - -0.0012
+  - -0.0003
+  settings:
+    router_bias_seed: expert 3, token 1, +4
+  tuned: tie vs bias
+  note: weak seed; QB and router override it
+- variant: digit '1' tie, layer 0 only
+  rung: d512
+  protocol: equal_steps
+  batch: '113'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5883291512
+  baseline: untied top-1-of-8 study baseline
+  steps: 2817
+  delta:
+  - -0.0003
+  - 0.0003
+  note: P(e3|class) L0 0.97/0.80; deeper layers free
+- variant: newline tie, layer 0 only
+  rung: d512
+  protocol: equal_steps
+  batch: '113'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5883291512
+  baseline: untied top-1-of-8 study baseline
+  steps: 2817
+  delta:
+  - -0.0014
+  - -0.0016
+  note: P(e3|class) L0 1.00/1.00
+- variant: two ties (digit, newline), every layer
+  rung: d512
+  protocol: equal_steps
+  batch: '113'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5883291512
+  baseline: untied top-1-of-8 study baseline
+  steps: 2817
+  delta:
+  - 0.032
+  - 0.042
+  note: fixing a quarter of experts in every layer costs loss
+- variant: top-1 of 8 study model
+  rung: d512
+  protocol: equal_steps
+  batch: '113'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5883291512
+  baseline: candidate 9
+  steps: 2817
+  delta:
+  - 0.107
+  - 0.11
+  note: I(token;expert)/H(expert) 0.51-0.73 by layer
+- variant: top-1 of 32 study model
+  rung: d512
+  protocol: equal_steps
+  batch: '113'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5883291512
+  baseline: candidate 9
+  steps: 2817
+  delta:
+  - 0.067
+  - 0.068
+  note: I/H 0.54-0.73
+- variant: top-2 of 64 study model
+  rung: d512
+  protocol: equal_steps
+  batch: '113'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5883291512
+  baseline: candidate 9
+  steps: 2817
+  delta:
+  - 0.047
+  - 0.048
+  note: I/H 0.43-0.55
+- variant: LaTeX class-centroid tie, every layer
+  rung: d512
+  protocol: equal_steps
+  batch: '116'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5883797649
+  baseline: untied top-1 study baseline 3.0825 / 3.0894
+  steps: 2817
+  delta:
+  - 0.0015
+  - 0.0007
+  tuned: token vs class-centroid tie, every layer vs layer 0, release step 250 / 1000
+  note: P(e3|class) L0 0.80/0.96
+- variant: LaTeX class-centroid tie, layer 0 only
+  rung: d512
+  protocol: equal_steps
+  batch: '116'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5883797649
+  baseline: untied top-1 study baseline 3.0825 / 3.0894
+  steps: 2817
+  delta:
+  - -0.0018
+  - -0.0029
+  tuned: token vs class-centroid tie, every layer vs layer 0, release step 250 / 1000
+  note: P(e3|class) L0 0.98/0.97; seed 1 from follow-up comment
+- variant: digit class-centroid tie, every layer
+  rung: d512
+  protocol: equal_steps
+  batch: '116'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5883797649
+  baseline: untied top-1 study baseline 3.0825 / 3.0894
+  steps: 2817
+  delta:
+  - 0.0032
+  - -0.0024
+  tuned: token vs class-centroid tie, every layer vs layer 0, release step 250 / 1000
+  note: holds digit class in every layer, no loss cost
+- variant: digit '1' tie every layer, released at step 250
+  rung: d512
+  protocol: equal_steps
+  batch: '116'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5883797649
+  baseline: untied top-1 study baseline 3.0825 / 3.0894
+  steps: 2817
+  delta:
+  - -0.0007
+  - 0.0
+  tuned: token vs class-centroid tie, every layer vs layer 0, release step 250 / 1000
+  note: seeded partition persists after release
+- variant: digit '1' tie every layer, released at step 1000
+  rung: d512
+  protocol: equal_steps
+  batch: '116'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5883797649
+  baseline: untied top-1 study baseline 3.0825 / 3.0894
+  steps: 2817
+  delta:
+  - -0.0007
+  - 0.0011
+  tuned: token vs class-centroid tie, every layer vs layer 0, release step 250 / 1000

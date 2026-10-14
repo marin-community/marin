@@ -1,0 +1,321 @@
+id: X0129
+slug: active-experts-topk
+name: Number of active routed experts (top-k)
+category: MoE and routing
+summary: Routes each token to fewer (or more) experts than top-8.
+source: agent
+status: adopted
+first_batch: 78
+tags:
+- top-k
+- active-experts
+- sparsity
+- fixed-time
+- routing
+details:
+- top-4 briefly in candidate 6; reverted to top-8
+knobs:
+- topk_layers
+- topk_layer_k
+trials:
+- variant: top-6 routed (MoE++ control)
+  rung: d512
+  protocol: equal_steps
+  batch: '78'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.0042
+  - 0.0039
+  loss:
+  - 3.0141
+  - 3.0178
+  wandb:
+  - lc1-b78-top6
+  - lc1-b78-top6-s1
+  settings:
+    top-k: '6'
+  step_time_change: -8.0% (162.2 / 160.7 ms)
+  tuned: top-k 8/6/5/4
+- variant: top-5, equal steps
+  rung: d512
+  protocol: equal_steps
+  batch: '79'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861318730
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.0079
+  - 0.0094
+  loss:
+  - 3.0178
+  - 3.0233
+  wandb:
+  - lc1-b79-top5
+  - lc1-b79-top5-s1
+  settings:
+    top-k: '5'
+  step_time_change: -11.3% (155.8 ms)
+  tuned: top-k 8/6/5/4
+- variant: top-4, equal steps
+  rung: d512
+  protocol: equal_steps
+  batch: '79'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861318730
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.0152
+  - 0.0142
+  loss:
+  - 3.0251
+  - 3.0281
+  wandb:
+  - lc1-b79-top4
+  - lc1-b79-top4-s1
+  settings:
+    top-k: '4'
+  step_time_change: -14.6% (149.9 ms)
+  tuned: top-k 8/6/5/4
+- variant: top-6, in-budget (2972 steps)
+  rung: d512
+  protocol: fixed_time
+  batch: '79'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861318730
+  baseline: in-budget top-8 lc1-b79-base-ft (3.0169 / 3.0190)
+  steps: 2972
+  delta:
+  - -0.011
+  - -0.0081
+  loss:
+  - 3.0059
+  - 3.0109
+  wandb:
+  - lc1-b79-top6-ft
+  - lc1-b79-top6-ft-s1
+  settings:
+    top-k: '6'
+  step_time_change: -7.8% (162.0 ms)
+  tuned: top-k 8/6/5/4
+  note: 'vs over-budget 2817-step base: -0.0040 / -0.0030'
+- variant: top-5, in-budget (3080 steps)
+  rung: d512
+  protocol: fixed_time
+  batch: '79'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861318730
+  baseline: in-budget top-8 lc1-b79-base-ft (3.0169 / 3.0190)
+  steps: 3080
+  delta:
+  - -0.0123
+  - -0.0105
+  loss:
+  - 3.0046
+  - 3.0085
+  wandb:
+  - lc1-b79-top5-ft
+  - lc1-b79-top5-ft-s1
+  settings:
+    top-k: '5'
+  tuned: top-k 8/6/5/4
+- variant: top-4, in-budget (3200 steps)
+  rung: d512
+  protocol: fixed_time
+  batch: '79'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861318730
+  baseline: in-budget top-8 lc1-b79-base-ft (3.0169 / 3.0190)
+  steps: 3200
+  delta:
+  - -0.0107
+  - -0.0154
+  loss:
+  - 3.0062
+  - 3.0036
+  wandb:
+  - lc1-b79-top4-ft
+  - lc1-b79-top4-ft-s1
+  settings:
+    top-k: '4'
+  tuned: top-k 8/6/5/4
+  note: fixed-time plateau -0.010 to -0.013 for top-6..4
+- variant: candidate 6 with top-6, in budget
+  rung: d512
+  protocol: fixed_time
+  batch: '80'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861572106
+  baseline: in-budget top-8 lc1-b79-base-ft (3.0169 / 3.0190)
+  steps: 2950
+  delta:
+  - -0.0143
+  - -0.0127
+  loss:
+  - 3.0026
+  - 3.0063
+  wandb:
+  - lc1-b80-c6-top6
+  - lc1-b80-c6-top6-s1
+  settings:
+    top-k: '6'
+    adam_ademamix_alpha: '5.0'
+    adam_ademamix_beta3: '0.98'
+  tuned: top-k 6/5/4 at fixed time
+  note: candidate 6 = cand 5 (no PGLE) + AdEMAMix + fewer routed experts
+- variant: candidate 6 with top-5, in budget
+  rung: d512
+  protocol: fixed_time
+  batch: '80'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861572106
+  baseline: in-budget top-8 lc1-b79-base-ft (3.0169 / 3.0190)
+  steps: 3050
+  delta:
+  - -0.0133
+  - -0.01
+  loss:
+  - 3.0036
+  - 3.009
+  wandb:
+  - lc1-b80-c6-top5
+  - lc1-b80-c6-top5-s1
+  settings:
+    top-k: '5'
+    adam_ademamix_alpha: '5.0'
+    adam_ademamix_beta3: '0.98'
+  tuned: top-k 6/5/4 at fixed time
+  note: candidate 6 = cand 5 (no PGLE) + AdEMAMix + fewer routed experts
+- variant: candidate 6 with top-4, in budget
+  rung: d512
+  protocol: fixed_time
+  batch: '80'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861572106
+  baseline: in-budget top-8 lc1-b79-base-ft (3.0169 / 3.0190)
+  steps: 3170
+  delta:
+  - -0.014
+  - -0.0144
+  loss:
+  - 3.0029
+  - 3.0046
+  wandb:
+  - lc1-b80-c6-top4
+  - lc1-b80-c6-top4-s1
+  settings:
+    top-k: '4'
+    adam_ademamix_alpha: '5.0'
+    adam_ademamix_beta3: '0.98'
+  tuned: top-k 6/5/4 at fixed time
+  note: candidate 6 = cand 5 (no PGLE) + AdEMAMix + fewer routed experts
+- variant: d768 candidate 6 recipe, top-4 vs top-8
+  rung: d768
+  protocol: equal_steps
+  batch: '80'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861572106
+  baseline: d768 candidate 6 top-8 lc1-b80-d768-c6-top8 (2.7689)
+  steps: 7325
+  delta:
+  - 0.0127
+  loss:
+  - 2.7816
+  wandb:
+  - lc1-b80-d768-c6-top4
+  settings:
+    top-k: '4'
+  step_time_change: -17.6% (324 -> 393 ex/s)
+  note: delta from issue body scale table; top-8 is 2.7689 vs clean KMA 2.8234
+- variant: top-3, 3380 steps
+  rung: d512
+  protocol: fixed_time
+  batch: '81'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861853267
+  baseline: candidate 6 top-4 rerun lc1-b81-base6 (3.0060 / 3.0053)
+  steps: 3380
+  delta:
+  - -0.0021
+  - -0.0045
+  loss:
+  - 3.0039
+  - 3.0008
+  wandb:
+  - lc1-b81-top3
+  - lc1-b81-top3-s1
+  settings:
+    top-k: '3'
+  step_time_change: 142-145 ms vs 148.6-149.9
+  tuned: top-k 6/5/4/3
+  note: mean -0.0033; seed 1 2% over budget
+- variant: layer 5 top-12
+  rung: d512
+  protocol: equal_steps
+  batch: '150'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5925950908
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0011
+  - -0.0008
+  loss:
+  - 2.9757
+  - 2.9814
+  settings:
+    topk_layers: '5'
+    topk_layer_k: '12'
+  step_time_change: +5% (about 193 ms)
+  tuned: layer-5 top-12 vs top-16
+  note: within noise
+- variant: layer 5 top-16
+  rung: d512
+  protocol: equal_steps
+  batch: '150'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5925950908
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0006
+  - -0.0021
+  loss:
+  - 2.9762
+  - 2.9801
+  settings:
+    topk_layers: '5'
+    topk_layer_k: '16'
+  step_time_change: +8% (about 198 ms)
+  tuned: layer-5 top-12 vs top-16
+  note: within noise
+events:
+- type: adopted
+  batch: '80'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861572106
+  note: top-4 routing listed as current best (later reverted to keep 8 active)
+  candidate: candidate 6
+  as_adopted:
+  - top-k 4 at 3170 steps
+- type: removed
+  batch: '83'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862195574
+  note: 'maintainer: stay at 8 active; candidate 6 relisted as top-8 (3.0048 / 3.0108)'
+  candidate: candidate 6
+- type: closed
+  batch: '83'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862195574
+  note: fewer active experts densifies the model; ruled out
+- type: adopted
+  batch: ckpt1
+  date: '2026-10-14'
+  comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
+  note: Belay Ckpt 1 routes top-10 of 384 (maintainer, 2026-10-12)
+  candidate: Belay Ckpt 1

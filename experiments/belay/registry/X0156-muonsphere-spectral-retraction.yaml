@@ -1,0 +1,91 @@
+id: X0156
+slug: muonsphere-spectral-retraction
+name: MuonSphere spectral retraction
+category: Optimizers
+summary: Retract matrices onto a spectral-norm sphere instead of the Frobenius sphere.
+source: agent
+status: closed
+first_batch: 98
+tags:
+- muon
+- spectral
+- retraction
+- hyperball
+papers:
+- arxiv: '2601.08393'
+trials:
+- variant: MuonH LR x1
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.027
+  settings:
+    muonh LR: x1
+  tuned: LR x1/0.5/0.25
+  note: 2-seed mean
+- variant: MuonH LR x0.5
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.013
+  settings:
+    muonh LR: x0.5
+  tuned: LR x1/0.5/0.25
+  note: 2-seed mean
+- variant: MuonH LR x0.25
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.06
+  settings:
+    muonh LR: x0.25
+  tuned: LR x1/0.5/0.25
+  note: 2-seed mean
+- variant: radius = init sigma1
+  rung: d512
+  protocol: equal_steps
+  batch: '98'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867280167
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0271
+  - 0.0262
+  settings:
+    radius: init sigma1
+  tuned: radius init sigma1 / c 2
+- variant: c = 2
+  rung: d512
+  protocol: equal_steps
+  batch: '98'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867280167
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0269
+  settings:
+    c: '2'
+  tuned: radius init sigma1 / c 2
+events:
+- type: closed
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  note: closed in batch 102 round

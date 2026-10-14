@@ -1,0 +1,328 @@
+id: X0144
+slug: moe-latent-selection
+name: MoE latent as channel selection
+category: MoE and routing
+summary: Feed the routed experts a fixed subset of hidden channels instead of a learned down-projection.
+source: maintainer
+status: done
+first_batch: 91
+tags:
+- latent
+- selection
+- projection
+- moe
+- read-write
+details:
+- first 256 channels, learnable RMSNorm kept
+- experts still write via w_latent_up
+knobs:
+- latent_select=true
+- latent_select_pattern
+- latent_select_layers
+- latent_select_plus_proj
+trials:
+- variant: first-half read selection at d768
+  rung: d768
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 d768 2.7197 / 2.7156
+  steps: 7325
+  delta:
+  - -0.0008
+  loss:
+  - 2.7199
+  - 2.7138
+  settings:
+    read: first half channels
+  note: mean delta; neutral at d768
+- variant: first 256 hidden channels, routed width 1x (384)
+  rung: d512
+  protocol: equal_steps
+  batch: '91'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864281697
+  baseline: width scan on candidate 7 base, seed 0 (no paired delta)
+  steps: 2817
+  loss:
+  - 2.9898
+  wandb:
+  - lc1-b91-sel-w1x
+  settings:
+    routed width: '384'
+    latent_select: 'true'
+    attn_res_layer_backward: recompute
+    attn_res_remat_attention: 'true'
+  tuned: routed width 1x-32x
+- variant: first 256 hidden channels, routed width 2x (768)
+  rung: d512
+  protocol: equal_steps
+  batch: '91'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864281697
+  baseline: width scan on candidate 7 base, seed 0 (no paired delta)
+  steps: 2817
+  loss:
+  - 2.9642
+  wandb:
+  - lc1-b91-sel-w2x
+  settings:
+    routed width: '768'
+    latent_select: 'true'
+    attn_res_layer_backward: recompute
+    attn_res_remat_attention: 'true'
+  tuned: routed width 1x-32x
+- variant: first 256 hidden channels, routed width 4x (1536)
+  rung: d512
+  protocol: equal_steps
+  batch: '91'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864281697
+  baseline: width scan on candidate 7 base, seed 0 (no paired delta)
+  steps: 2817
+  loss:
+  - 2.9457
+  wandb:
+  - lc1-b91-sel-w4x
+  settings:
+    routed width: '1536'
+    latent_select: 'true'
+    attn_res_layer_backward: recompute
+    attn_res_remat_attention: 'true'
+  tuned: routed width 1x-32x
+- variant: first 256 hidden channels, routed width 8x (3072)
+  rung: d512
+  protocol: equal_steps
+  batch: '91'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864281697
+  baseline: width scan on candidate 7 base, seed 0 (no paired delta)
+  steps: 2817
+  loss:
+  - 2.9323
+  wandb:
+  - lc1-b91-sel-w8x
+  settings:
+    routed width: '3072'
+    latent_select: 'true'
+    attn_res_layer_backward: recompute
+    attn_res_remat_attention: 'true'
+  tuned: routed width 1x-32x
+- variant: first 256 hidden channels, routed width 16x (6144)
+  rung: d512
+  protocol: equal_steps
+  batch: '91'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864281697
+  baseline: width scan on candidate 7 base, seed 0 (no paired delta)
+  steps: 2817
+  loss:
+  - 2.9242
+  wandb:
+  - lc1-b91-sel-w16x-r
+  settings:
+    routed width: '6144'
+    latent_select: 'true'
+    attn_res_layer_backward: recompute
+    attn_res_remat_attention: 'true'
+  tuned: routed width 1x-32x
+  note: 'vs projection: within 0.002 to 8x, +0.0038 at 16x'
+- variant: select first half, all layers
+  rung: d512
+  protocol: equal_steps
+  batch: '95'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5865472443
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - -0.0016
+  - -0.0017
+  loss:
+  - 2.9776
+  - 2.9844
+  wandb:
+  - lc1-b95-sel-first
+  - lc1-b95-sel-first-s1
+  settings:
+    latent_select: 'true'
+    latent_select_pattern: first
+  tuned: first/random/rotating, layers, +proj
+  note: removes w_latent_down (~2% FLOPs)
+- variant: random half per layer
+  rung: d512
+  protocol: equal_steps
+  batch: '95'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5865472443
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0018
+  - 0.0038
+  loss:
+  - 2.981
+  - 2.9899
+  wandb:
+  - lc1-b95-sel-rand-r
+  - lc1-b95-sel-rand-r-s1
+  settings:
+    latent_select: 'true'
+    latent_select_pattern: random
+  step_time_change: 1-4% slower
+  tuned: first/random/rotating, layers, +proj
+  note: same half every layer is better
+- variant: rotating window per layer
+  rung: d512
+  protocol: equal_steps
+  batch: '95'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5865472443
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0044
+  - 0.0033
+  loss:
+  - 2.9836
+  - 2.9894
+  wandb:
+  - lc1-b95-sel-rot-r
+  - lc1-b95-sel-rot-r-s1
+  settings:
+    latent_select: 'true'
+    latent_select_pattern: rotating
+  step_time_change: 1-4% slower
+  tuned: first/random/rotating, layers, +proj
+- variant: select in KDA layers only
+  rung: d512
+  protocol: equal_steps
+  batch: '95'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5865472443
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - -0.0006
+  - -0.0003
+  loss:
+  - 2.9786
+  - 2.9858
+  wandb:
+  - lc1-b95-sel-kda
+  - lc1-b95-sel-kda-s1
+  settings:
+    latent_select: 'true'
+    latent_select_layers: kda
+  tuned: first/random/rotating, layers, +proj
+- variant: select in global layers only
+  rung: d512
+  protocol: equal_steps
+  batch: '95'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5865472443
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0024
+  - -0.0007
+  loss:
+  - 2.9816
+  - 2.9854
+  wandb:
+  - lc1-b95-sel-glob
+  - lc1-b95-sel-glob-s1
+  settings:
+    latent_select: 'true'
+    latent_select_layers: global
+  tuned: first/random/rotating, layers, +proj
+- variant: select first half + learned projection
+  rung: d512
+  protocol: equal_steps
+  batch: '95'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5865472443
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - -0.0029
+  - -0.0029
+  loss:
+  - 2.9763
+  - 2.9832
+  wandb:
+  - lc1-b95-selproj
+  - lc1-b95-selproj-s1
+  settings:
+    latent_select: 'true'
+    latent_select_plus_proj: 'true'
+  tuned: first/random/rotating, layers, +proj
+  note: most consistent but same FLOPs as candidate 8
+- variant: d768 select first half (widths scaled to hidden)
+  rung: d768
+  protocol: equal_steps
+  batch: '95'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5865472443
+  baseline: d768 candidate 8 projection arm lc1-b95-d768-proj 2.7197 / 2.7156
+  steps: 7325
+  loss:
+  - 2.7199
+  - 2.7138
+  wandb:
+  - lc1-b95-d768-sel
+  - lc1-b95-d768-sel-s1
+  settings:
+    latent_select: 'true'
+    latent_select_pattern: first
+    expert width: '576'
+    shared: 1x1152
+    latent: '384'
+    embed2_rows: 2M
+    --ema-beta: '0.998'
+    --ema-last-steps: '2600'
+  tuned: selection vs projection at d768
+  note: no delta column given; reference arm is the projection run
+- variant: write selection (first 256 channels, no w_latent_up)
+  rung: d512
+  protocol: equal_steps
+  batch: '96'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5865851862
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0076
+  - 0.008
+  loss:
+  - 2.9868
+  - 2.9941
+  wandb:
+  - lc1-b96-wsel
+  - lc1-b96-wsel-s1
+  settings:
+    latent_write_select: 'true'
+    routed output scale: '0.32'
+  tuned: write vs read+write selection
+- variant: read + write selection
+  rung: d512
+  protocol: equal_steps
+  batch: '96'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5865851862
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0089
+  - 0.0062
+  loss:
+  - 2.9881
+  - 2.9923
+  wandb:
+  - lc1-b96-rwsel
+  - lc1-b96-rwsel-s1
+  settings:
+    read: channels [0,256)
+    write: channels [0,256)
+  tuned: write vs read+write selection

@@ -1,0 +1,340 @@
+id: X0121
+slug: differential-attention
+name: Differential attention (DIFF, GDLA)
+category: Attention variants
+summary: MLA output is softmax(q1k1) - lambda softmax(q2k2).
+source: agent
+status: closed
+first_batch: 77
+tags:
+- diff-attn
+- mla
+- softmax
+- differential-attention
+- gdla
+- motif
+- diff
+- noise heads
+papers:
+- arxiv: '2410.05258'
+  title: Differential Transformer
+- arxiv: '2608.09119'
+  title: Motif 3 technical report
+details:
+- lambda = sigmoid(x W_lambda), W_lambda zero-init (Adam)
+- GDLA noise heads inside head budget
+- lambda = sigmoid(x W_lambda), zero-init (0.5)
+- lambda init 0.1 variant
+knobs:
+- mla_grouped_diff
+- mla_gdla_noise_heads
+- mla_diff_lambda_init=0.1
+trials:
+- variant: MLA layers, softmax(q1k1) - lambda softmax(q2k2)
+  rung: d512
+  protocol: equal_steps
+  batch: '77'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860969387
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.0004
+  - -0.0035
+  loss:
+  - 3.0103
+  - 3.0104
+  wandb:
+  - lc1-b77-diffattnk
+  - lc1-b77-diffattnk-s1
+  step_time_change: +6% (186 vs 175 ms)
+  note: mean -0.0016; learned lambda mostly negative (sums maps); ~+0.011 at fixed time
+- variant: g=4 + elementwise gate
+  rung: d512
+  protocol: equal_steps
+  batch: '163'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5935139189
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0029
+  - -0.0037
+  loss:
+  - 2.9739
+  - 2.9785
+  settings:
+    mla_grouped_diff: '4'
+    attn_gate_elementwise: 'true'
+  step_time_change: +6.6% (183.0 ms)
+  tuned: g 2/4, elementwise vs per-head gate
+  note: loses at fixed time
+- variant: g=2 + elementwise gate
+  rung: d512
+  protocol: equal_steps
+  batch: '163'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5935139189
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0022
+  - -0.0037
+  loss:
+  - 2.9746
+  - 2.9785
+  settings:
+    mla_grouped_diff: '2'
+    attn_gate_elementwise: 'true'
+  step_time_change: 183.1 / 185.9 ms vs 171.6
+  tuned: g 2/4, elementwise vs per-head gate
+- variant: g=4, per-head gate
+  rung: d512
+  protocol: equal_steps
+  batch: '163'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5935139189
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0008
+  loss:
+  - 2.976
+  settings:
+    mla_grouped_diff: '4'
+  step_time_change: 181.3 vs 171.6 ms
+  tuned: g 2/4, elementwise vs per-head gate
+  note: isolates the gate
+- variant: GDLA 5+1, 1 value head
+  rung: d512
+  protocol: equal_steps
+  batch: '203'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 rno2a controls mean 2.9534
+  steps: 2817
+  delta:
+  - 0.0163
+  loss:
+  - 2.9697
+  settings:
+    gdla groups: 5+1
+    output gate: elementwise
+  step_time_change: 190.6 ms
+  tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
+- variant: GDLA 2x(2+1)
+  rung: d512
+  protocol: equal_steps
+  batch: '203'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 rno2a controls mean 2.9534
+  steps: 2817
+  delta:
+  - 0.0091
+  loss:
+  - 2.9625
+  settings:
+    gdla groups: 2x(2+1)
+    output gate: elementwise
+  step_time_change: 189.1 ms
+  tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
+- variant: GDLA 2x(3+1)
+  rung: d512
+  protocol: equal_steps
+  batch: '203'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 rno2a controls mean 2.9534
+  steps: 2817
+  delta:
+  - 0.0043
+  loss:
+  - 2.9577
+  settings:
+    gdla groups: 2x(3+1)
+    output gate: elementwise
+  step_time_change: 196.9 ms
+  tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
+- variant: GDLA 2x(3+1), per-head gate
+  rung: d512
+  protocol: equal_steps
+  batch: '203'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 rno2a controls mean 2.9534
+  steps: 2817
+  delta:
+  - 0.0056
+  loss:
+  - 2.959
+  settings:
+    gdla groups: 2x(3+1)
+    output gate: per head
+  step_time_change: 193.0 ms
+  tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
+- variant: GDLA 3x(2+1)
+  rung: d512
+  protocol: equal_steps
+  batch: '203'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 rno2a controls mean 2.9534
+  steps: 2817
+  delta:
+  - 0.0019
+  loss:
+  - 2.9553
+  settings:
+    gdla groups: 3x(2+1)
+    output gate: elementwise
+  step_time_change: 199.3 ms
+  tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
+- variant: GDLA 6x(1+1) DIFF pairs
+  rung: d512
+  protocol: equal_steps
+  batch: '203'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 rno2a controls mean 2.9534
+  steps: 2817
+  delta:
+  - -0.0007
+  loss:
+  - 2.9527
+  settings:
+    gdla groups: 6x(1+1) DIFF pairs
+    output gate: elementwise
+  step_time_change: 207.1 (+7%) ms
+  tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
+- variant: 'mean noise: uniform prefix mean'
+  rung: d512
+  protocol: equal_steps
+  batch: df1
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: df1-ctrl 2.9543
+  steps: 2817
+  delta:
+  - 0.0011
+  loss:
+  - 2.9554
+  settings:
+    noise map: uniform prefix mean
+  step_time_change: 194.3 ms vs 189.8
+  tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
+- variant: 'mean noise: decayed, half-life 16'
+  rung: d512
+  protocol: equal_steps
+  batch: df1
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: df1-ctrl 2.9543
+  steps: 2817
+  delta:
+  - 0.0022
+  loss:
+  - 2.9565
+  settings:
+    noise map: decayed, half-life 16
+  step_time_change: 195.3 ms vs 189.8
+  tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
+- variant: 'mean noise: half-life 64'
+  rung: d512
+  protocol: equal_steps
+  batch: df1
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: df1-ctrl 2.9543
+  steps: 2817
+  delta:
+  - 0.0021
+  loss:
+  - 2.9564
+  settings:
+    noise map: half-life 64
+  step_time_change: 194.7 ms vs 189.8
+  tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
+- variant: 'mean noise: half-life 256'
+  rung: d512
+  protocol: equal_steps
+  batch: df1
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: df1-ctrl 2.9543
+  steps: 2817
+  delta:
+  - 0.0011
+  loss:
+  - 2.9554
+  settings:
+    noise map: half-life 256
+  step_time_change: 195.0 ms vs 189.8
+  tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
+- variant: GDLA 6x(1+1), lambda init 0.1
+  rung: d512
+  protocol: equal_steps
+  batch: df2
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: df2-ctrl 2.9542
+  steps: 2817
+  delta:
+  - 0.0001
+  loss:
+  - 2.9543
+  settings:
+    gdla groups: 6x(1+1)
+    mla_diff_lambda_init: '0.1'
+  step_time_change: 207.1 ms
+  tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
+- variant: GDLA 3x(2+1), lambda init 0.1
+  rung: d512
+  protocol: equal_steps
+  batch: df2
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: df2-ctrl 2.9542
+  steps: 2817
+  delta:
+  - -0.0003
+  loss:
+  - 2.9539
+  settings:
+    gdla groups: 3x(2+1)
+    mla_diff_lambda_init: '0.1'
+  step_time_change: 199.1 ms
+  tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
+- variant: GDLA 2x(3+1), lambda init 0.1
+  rung: d512
+  protocol: equal_steps
+  batch: df2
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: df2-ctrl 2.9542
+  steps: 2817
+  delta:
+  - 0.0061
+  loss:
+  - 2.9603
+  settings:
+    gdla groups: 2x(3+1)
+    mla_diff_lambda_init: '0.1'
+  step_time_change: 194.9 ms
+  tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
+events:
+- type: closed
+  batch: '78'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
+  note: model sums the two maps; +6% step, ~+0.011 at fixed time
+- type: closed
+  batch: '163'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5935139189
+  note: loses at fixed time (+6-7% step)
+- type: closed
+  batch: df2
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  note: differential attention closed on this model

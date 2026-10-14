@@ -1,0 +1,120 @@
+id: X0191
+slug: latent-free-layer
+name: Latent-free MoE layer at half expert width
+category: MoE and routing
+summary: Routed experts in one layer read and write the full stream with no latent, at half hidden width.
+source: maintainer
+status: done
+first_batch: 148
+tags:
+- latent-moe
+- routed-experts
+- parameter-matched
+details:
+- expert hidden 384 -> 192 in that layer
+- no w_latent_down / w_latent_up
+knobs:
+- latent_free_layers
+trials:
+- variant: layer 0
+  rung: d512
+  protocol: equal_steps
+  batch: '148'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5925057549
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0042
+  - -0.0007
+  settings:
+    latent_free_layers: '0'
+    expert hidden: '192'
+  step_time_change: 194 ms vs 184.3 ms
+  tuned: layer 0..5
+  note: step cost from tail stack, not FLOPs
+- variant: layer 1
+  rung: d512
+  protocol: equal_steps
+  batch: '148'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5925057549
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0009
+  - -0.003
+  settings:
+    latent_free_layers: '1'
+    expert hidden: '192'
+  step_time_change: 193 ms vs 184.3 ms
+  tuned: layer 0..5
+  note: step cost from tail stack, not FLOPs
+- variant: layer 2
+  rung: d512
+  protocol: equal_steps
+  batch: '148'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5925057549
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0009
+  - 0.0006
+  settings:
+    latent_free_layers: '2'
+    expert hidden: '192'
+  step_time_change: 192 ms vs 184.3 ms
+  tuned: layer 0..5
+  note: step cost from tail stack, not FLOPs
+- variant: layer 3
+  rung: d512
+  protocol: equal_steps
+  batch: '148'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5925057549
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0009
+  - -0.0011
+  settings:
+    latent_free_layers: '3'
+    expert hidden: '192'
+  step_time_change: 192 ms vs 184.3 ms
+  tuned: layer 0..5
+  note: step cost from tail stack, not FLOPs
+- variant: layer 4
+  rung: d512
+  protocol: equal_steps
+  batch: '148'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5925057549
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0002
+  - -0.0028
+  settings:
+    latent_free_layers: '4'
+    expert hidden: '192'
+  step_time_change: 194 ms vs 184.3 ms
+  tuned: layer 0..5
+  note: step cost from tail stack, not FLOPs
+- variant: layer 5
+  rung: d512
+  protocol: equal_steps
+  batch: '148'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5925057549
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0022
+  - -0.0042
+  settings:
+    latent_free_layers: '5'
+    expert hidden: '192'
+  step_time_change: 194 ms vs 184.3 ms
+  tuned: layer 0..5
+  note: step cost from tail stack, not FLOPs

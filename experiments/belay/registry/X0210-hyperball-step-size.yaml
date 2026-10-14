@@ -1,0 +1,110 @@
+id: X0210
+slug: hyperball-step-size
+name: Free hyperball step size
+category: Optimizers
+summary: Keep MuonH's fixed norms but scale each matrix's step by a spectral or gradient-norm rule.
+source: agent
+status: closed
+first_batch: 202
+tags:
+- muonh
+- hyperball
+- step size
+- spectral
+details:
+- 'spectral: lr*alpha*sqrt(max(1,fan_out/fan_in))*d'
+- 'grad: step proportional to smoothed grad norm over early mean'
+knobs:
+- muonh_step
+trials:
+- variant: spectral alpha 0.25
+  rung: d512
+  protocol: equal_steps
+  batch: 202/204
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base14 ctrl 2.9539
+  steps: 2817
+  delta:
+  - 0.017
+  loss:
+  - 2.9705
+  settings:
+    muonh_step: spectral
+    alpha: '0.25'
+  tuned: spectral alpha 0.25/0.5/1; grad ref 100/500
+  note: closed
+- variant: spectral alpha 0.5
+  rung: d512
+  protocol: equal_steps
+  batch: 202/204
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base14 ctrl 2.9539
+  steps: 2817
+  delta:
+  - 0.015
+  loss:
+  - 2.9684
+  settings:
+    muonh_step: spectral
+    alpha: '0.5'
+  tuned: spectral alpha 0.25/0.5/1; grad ref 100/500
+  note: closed
+- variant: spectral alpha 1
+  rung: d512
+  protocol: equal_steps
+  batch: 202/204
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base14 ctrl 2.9539
+  steps: 2817
+  delta:
+  - 0.054
+  loss:
+  - 3.008
+  settings:
+    muonh_step: spectral
+    alpha: '1'
+  tuned: spectral alpha 0.25/0.5/1; grad ref 100/500
+  note: closed
+- variant: grad-norm reference first 100 steps
+  rung: d512
+  protocol: equal_steps
+  batch: 202/204
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base14 ctrl 2.9539
+  steps: 2817
+  delta:
+  - 0.037
+  loss:
+  - 2.9913
+  settings:
+    muonh_step: grad
+    reference steps: '100'
+  tuned: spectral alpha 0.25/0.5/1; grad ref 100/500
+  note: closed
+- variant: grad-norm reference first 500 steps
+  rung: d512
+  protocol: equal_steps
+  batch: 202/204
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base14 ctrl 2.9539
+  steps: 2817
+  delta:
+  - 0.0068
+  loss:
+  - 2.9607
+  settings:
+    muonh_step: grad
+    reference steps: '500'
+  tuned: spectral alpha 0.25/0.5/1; grad ref 100/500
+  note: closed
+events:
+- type: closed
+  batch: 202/204
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  note: MuonH equal relative step beats both alternatives

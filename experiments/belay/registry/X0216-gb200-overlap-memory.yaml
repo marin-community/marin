@@ -1,0 +1,21 @@
+id: X0216
+slug: gb200-overlap-memory
+name: GB200 memory and overlap schedule
+category: Systems and speed
+summary: Shared expert overlapped with the dispatch all-to-all, saved routed output, scanned layers with offloaded partials,
+  FSDP value embeddings, and the XLA scheduler slop at 90 so NCCL keeps its buffers.
+source: agent
+status: adopted
+knobs:
+- moe_shared_placement=overlap
+- scan_save_routed_output=true
+- scan_layers=true
+- scan_offload_partials=true
+- value_embed_fsdp=true
+events:
+- type: adopted
+  batch: ckpt1
+  date: '2026-10-14'
+  comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
+  note: fits the no-bigram recipe on one rack (166.6 GiB peak at slop 90 vs 183.6 at 105)
+  candidate: Belay Ckpt 1

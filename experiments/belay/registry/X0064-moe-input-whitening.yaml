@@ -1,0 +1,50 @@
+id: X0064
+slug: moe-input-whitening
+name: MoE input centering / whitening
+category: MoE and routing
+summary: Center or whiten the MoE input with batch statistics.
+source: maintainer
+status: closed
+first_batch: 25
+tags:
+- whitening
+- centering
+- moe-input
+- batch-stats
+trials:
+- variant: batch centering
+  rung: d512
+  protocol: equal_steps
+  batch: '25'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844763941
+  baseline: gate-2 recipe 3.0834
+  steps: 2817
+  delta:
+  - 0.3511
+  loss:
+  - 3.4345
+  wandb:
+  - lc1-b25-center
+  settings:
+    MoE input: subtract batch mean
+  note: train/eval batch-stat mismatch; train loss also +0.06
+- variant: half-whitening p=0.5 (cancelled)
+  rung: d512
+  protocol: equal_steps
+  batch: '25'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844763941
+  baseline: gate-2 recipe 3.0834
+  steps: 2817
+  wandb:
+  - lc1-b25-wh05
+  settings:
+    whiten p: '0.5'
+  note: cancelled; mid eval 3.73 vs 3.37, 18% slower
+events:
+- type: closed
+  batch: '25'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844763941
+  note: batch statistics a clear negative; not pursued

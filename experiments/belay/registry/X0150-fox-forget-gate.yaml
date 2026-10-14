@@ -1,0 +1,37 @@
+id: X0150
+slug: fox-forget-gate
+name: Forgetting-Transformer gate on MLA
+category: Attention variants
+summary: Add a per-head data-dependent decay as a per-key logit bias on the MLA layers.
+source: agent
+status: closed
+first_batch: 98
+tags:
+- fox
+- forget-gate
+- mla
+- decay
+papers:
+- arxiv: '2503.02130'
+  title: Forgetting Transformer
+trials:
+- variant: FoX bias 4
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0008
+  settings:
+    forget bias init: '4'
+  step_time_change: +43% (head-dim padding)
+  note: gate learns f~0.999; 43% slower; bias 0 NaNs
+events:
+- type: closed
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  note: closed in batch 102 round

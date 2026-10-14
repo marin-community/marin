@@ -1,0 +1,54 @@
+id: X0155
+slug: muon-momentum-warmup
+name: Muon momentum warmup
+category: Optimizers
+summary: Warm up the Muon momentum coefficient early in training.
+source: agent
+status: closed
+first_batch: 98
+tags:
+- momentum
+- warmup
+- modded-nanogpt
+- muon
+papers:
+- title: modded-nanogpt
+trials:
+- variant: momentum warmup
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0012
+  note: 2-seed mean
+- variant: Muon momentum 0.85 -> 0.95 over 300 steps
+  rung: d512
+  protocol: equal_steps
+  batch: '127'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5902307136
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0004
+  - 0.0019
+  settings:
+    momentum start: '0.85'
+    momentum end: '0.95'
+    warmup steps: '300'
+  note: does not change overshoot
+events:
+- type: closed
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  note: closed in batch 102 round
+- type: closed
+  batch: '127'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5902307136
+  note: Momentum warmup closed; overshoot unchanged

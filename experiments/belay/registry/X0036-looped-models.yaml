@@ -1,0 +1,83 @@
+id: X0036
+slug: looped-models
+name: Looped (weight-tied) depth
+category: Depth connections
+summary: Run the whole layer stack twice with tied weights and input injection, optionally growing from 1 to 2 passes mid-run.
+source: community
+status: closed
+first_batch: 9
+tags:
+- looping
+- recurrence
+- growth
+- input-injection
+papers:
+- arxiv: '2609.19107'
+details:
+- whole 6-layer stack looped
+- input injection alpha*e, alpha init 1
+knobs:
+- loop_passes
+- loop_grow_step
+trials:
+- variant: loop x2 throughout (tied, input injection)
+  rung: d512
+  protocol: fixed_time
+  batch: '9'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841244126
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 1426
+  delta:
+  - 0.0908
+  loss:
+  - 3.1766
+  wandb:
+  - lc1-b09-loop2
+  settings:
+    loop_passes: '2'
+    injection: alpha*e, alpha init 1 (Adam)
+  step_time_change: 0.506x throughput
+  tuned: 2x throughout / grow at 50% / grow at 70%
+- variant: grow 1->2 passes at 70% (step 1525)
+  rung: d512
+  protocol: fixed_time
+  batch: '9'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841244126
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2179
+  delta:
+  - 0.0207
+  loss:
+  - 3.1065
+  wandb:
+  - lc1-b09-grow70b
+  settings:
+    loop_passes: '2'
+    loop_grow_step: '1525'
+  tuned: 2x throughout / grow at 50% / grow at 70%
+- variant: grow 1->2 passes at 50% (step 946)
+  rung: d512
+  protocol: fixed_time
+  batch: '9'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841244126
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 1892
+  delta:
+  - 0.0337
+  loss:
+  - 3.1195
+  wandb:
+  - lc1-b09-grow50b
+  settings:
+    loop_passes: '2'
+    loop_grow_step: '946'
+  tuned: 2x throughout / grow at 50% / grow at 70%
+events:
+- type: closed
+  batch: '9'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841244126
+  note: loses in every variant at d512 fixed time; untied growth not built

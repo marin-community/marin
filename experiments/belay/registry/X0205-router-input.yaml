@@ -1,0 +1,48 @@
+id: X0205
+slug: router-input
+name: Router input source
+category: MoE and routing
+summary: Feed the router the MoE latent or the token embedding instead of the full MLP input.
+source: maintainer
+status: done
+first_batch: 182
+tags:
+- router
+- latent
+- embedding
+details:
+- router on RMS-normed 256-wide latent, weight [256, E]
+knobs:
+- router_on_latent
+- router_on_embed
+trials:
+- variant: router on RMS-normed MoE latent (256)
+  rung: d512
+  protocol: equal_steps
+  batch: '182'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986245656
+  baseline: batch 181 ctrl 2.9644
+  steps: 2817
+  delta:
+  - 0.0007
+  loss:
+  - 2.9651
+  settings:
+    router_on_latent: 'true'
+  step_time_change: ~0 (179.2 vs 178.1 ms)
+- variant: router on token embedding only
+  rung: d512
+  protocol: equal_steps
+  batch: '182'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986245656
+  baseline: batch 181 ctrl 2.9644
+  steps: 2817
+  delta:
+  - 0.0419
+  loss:
+  - 3.0063
+  settings:
+    router_on_embed: 'true'
+  note: context-free routing

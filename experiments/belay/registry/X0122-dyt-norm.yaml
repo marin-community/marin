@@ -1,0 +1,67 @@
+id: X0122
+slug: dyt-norm
+name: DyT (Dynamic Tanh) replacing pre-norms
+category: Normalization
+summary: Replaces block pre-RMSNorms with gamma*tanh(alpha x)+beta.
+source: agent
+status: closed
+first_batch: 77
+tags:
+- dyt
+- tanh
+- norm
+papers:
+- arxiv: '2503.10622'
+  title: DyT
+trials:
+- variant: DyT pre-norms (alpha init 0.8 attn / 0.2 MLP)
+  rung: d512
+  protocol: equal_steps
+  batch: '77'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860969387
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.0154
+  - 0.0154
+  loss:
+  - 3.0253
+  - 3.0293
+  wandb:
+  - lc1-b77-dytk-r
+  - lc1-b77-dytk-r-s1
+  settings:
+    alpha init attention: '0.8'
+    alpha init MLP: '0.2'
+  step_time_change: ~+1%
+  note: delta reported in batch 80; MLP alpha grows 0.2 -> 1.9-3.0
+  derived: true
+- variant: DyT alpha init 1.2 attn / 2.2 MLP
+  rung: d512
+  protocol: equal_steps
+  batch: '80'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861572106
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.0147
+  - 0.0167
+  loss:
+  - 3.0246
+  - 3.0306
+  wandb:
+  - lc1-b80-dyt-a
+  - lc1-b80-dyt-a-s1
+  settings:
+    alpha init attention: '1.2'
+    alpha init MLP: '2.2'
+  tuned: alpha init paper vs learned values
+  note: alpha keeps climbing; cost is losing per-token RMS norm
+events:
+- type: closed
+  batch: '80'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861572106
+  note: steady ~+0.015

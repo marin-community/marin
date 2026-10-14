@@ -1,0 +1,49 @@
+id: X0033
+slug: optimizer-group-swap
+name: Swap optimizer for embedding / lm_head
+category: Optimizers
+summary: Move the lm_head to MuonH or the token embedding to AdamH.
+source: maintainer
+status: done
+first_batch: 7
+tags:
+- lm-head
+- embedding
+- adamh
+- muonh
+knobs:
+- lm_head_group
+- embed_group
+trials:
+- variant: lm_head on MuonH (vs AdamH)
+  rung: d512
+  protocol: equal_steps
+  batch: '7'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840955062
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2817
+  delta:
+  - 0.0186
+  loss:
+  - 3.1044
+  wandb:
+  - lc1-b07-headmu
+  settings:
+    lm_head_group: muonh
+- variant: token embedding on AdamH (vs Adam)
+  rung: d512
+  protocol: equal_steps
+  batch: '7'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840955062
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2817
+  delta:
+  - 0.0098
+  loss:
+  - 3.0956
+  wandb:
+  - lc1-b07-embah
+  settings:
+    embed_group: adamh

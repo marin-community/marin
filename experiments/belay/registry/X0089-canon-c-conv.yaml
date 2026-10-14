@@ -1,0 +1,44 @@
+id: X0089
+slug: canon-c-conv
+name: Canon-C conv on MoE input
+category: Attention variants
+summary: Add an identity-init causal depthwise conv on the normed MoE input.
+source: agent
+status: closed
+first_batch: 47
+tags:
+- canon
+- short conv
+- moe input
+papers:
+- arxiv: '2512.17351'
+  title: Physics of LMs 4.1 (Canon layers)
+knobs:
+- sconv_sites=attn,mlp,mlp_in
+trials:
+- variant: conv on normed MoE input
+  rung: d512
+  protocol: equal_steps
+  batch: '47'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853982326
+  baseline: soft-cap 10 3.0591 / seed 1 3.0675
+  steps: 2817
+  delta:
+  - 0.0008
+  - -0.003
+  loss:
+  - 3.0599
+  - 3.0645
+  wandb:
+  - lc1-b47-canonc
+  - lc1-b47-canonc-s1
+  settings:
+    sconv_sites: attn,mlp,mlp_in
+  step_time_change: ~-1% ex/s
+events:
+- type: closed
+  batch: '47'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853982326
+  note: neutral over 2 seeds; not stacked

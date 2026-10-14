@@ -1,0 +1,394 @@
+id: X0021
+slug: mla-qk-mult
+name: MLA logit scale (qk_mult)
+category: Attention variants
+summary: Multiply MLA attention logits by a fixed or learnable per-layer scalar.
+source: maintainer
+status: adopted
+first_batch: 3
+tags:
+- mla
+- qk-mult
+- logit-scale
+- learnable
+- qk_mult
+- logit scale
+- temperature
+details:
+- learnable per-layer scalar on MLA logits, on Adam
+- init 2.5 in the gate-2 recipe
+- init 4 once q and k are RMS-normed (candidate 5)
+- per-head scalar variant closed
+knobs:
+- qk_mult=2.5
+- learnable_qk_mult=true
+- qk_mult=4.0
+trials:
+- variant: learnable, init 1
+  rung: d512
+  protocol: equal_steps
+  batch: '3'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840199301
+  baseline: fp32 base mean 3.0990
+  steps: 2817
+  delta:
+  - -0.0034
+  loss:
+  - 3.0956
+  wandb:
+  - lc1-b03-qkl
+  settings:
+    learnable_qk_mult: 'true'
+    init: '1'
+    optimizer: Adam at Adam LR
+  tuned: init 1 vs 2.5
+  note: scalars climb to 2.64 / 2.36
+- variant: learnable, init 2.5
+  rung: d512
+  protocol: equal_steps
+  batch: '4'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840372599
+  baseline: fp32 base mean 3.0990
+  steps: 2817
+  delta:
+  - -0.0104
+  - -0.0087
+  loss:
+  - 3.0886
+  - 3.0903
+  wandb:
+  - lc1-b04-qkl25
+  - lc1-b04-qkl25-s1
+  settings:
+    learnable_qk_mult: 'true'
+    init: '2.5'
+  tuned: learnable init 1 / 2.5, fixed 2.5
+- variant: fixed 2.5
+  rung: d512
+  protocol: equal_steps
+  batch: '4'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840372599
+  baseline: fp32 base mean 3.0990
+  steps: 2817
+  delta:
+  - -0.0132
+  loss:
+  - 3.0858
+  wandb:
+  - lc1-b04-qk25
+  settings:
+    qk_mult: '2.5'
+    learnable: 'false'
+  tuned: learnable vs fixed
+- variant: fixed 2.5, seed 1
+  rung: d512
+  protocol: equal_steps
+  batch: '6'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840809930
+  baseline: fp32 base mean 3.0990
+  steps: 2817
+  delta:
+  - -0.0095
+  loss:
+  - 3.0895
+  wandb:
+  - lc1-b06-qk25-s1
+  settings:
+    qk_mult: '2.5'
+  tuned: qk_mult 2.0 / 2.5 / 3.0 / 3.5
+  note: 2-seed mean 3.0877, -0.0113
+- variant: fixed 2.0
+  rung: d512
+  protocol: equal_steps
+  batch: '6'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840809930
+  baseline: fp32 base mean 3.0990
+  steps: 2817
+  delta:
+  - -0.0117
+  loss:
+  - 3.0873
+  wandb:
+  - lc1-b06-qk20
+  settings:
+    qk_mult: '2.0'
+  tuned: qk_mult 2.0 / 2.5 / 3.0 / 3.5
+- variant: fixed 3.0
+  rung: d512
+  protocol: equal_steps
+  batch: '6'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840809930
+  baseline: fp32 base mean 3.0990
+  steps: 2817
+  delta:
+  - -0.0124
+  loss:
+  - 3.0866
+  wandb:
+  - lc1-b06-qk30
+  settings:
+    qk_mult: '3.0'
+  tuned: qk_mult 2.0 / 2.5 / 3.0 / 3.5
+- variant: fixed 3.5
+  rung: d512
+  protocol: equal_steps
+  batch: '6'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840809930
+  baseline: fp32 base mean 3.0990
+  steps: 2817
+  delta:
+  - -0.0102
+  loss:
+  - 3.0888
+  wandb:
+  - lc1-b06-qk35
+  settings:
+    qk_mult: '3.5'
+  tuned: qk_mult 2.0 / 2.5 / 3.0 / 3.5
+- variant: fixed 2.5, d768 check
+  rung: d768
+  protocol: equal_steps
+  batch: '6'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840809930
+  baseline: d768 fp32 base 2.8163
+  steps: 7325
+  delta:
+  - -0.0014
+  loss:
+  - 2.8149
+  wandb:
+  - lc1-b06-d768-qk25
+  settings:
+    qk_mult: '2.5'
+- variant: fixed 2.5, 4-seed paired
+  rung: d512
+  protocol: equal_steps
+  batch: '8'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841135411
+  baseline: same-seed fp32 bases
+  steps: 2817
+  delta:
+  - -0.0129
+  - -0.0097
+  - -0.0024
+  - -0.0101
+  loss:
+  - 3.0858
+  - 3.0895
+  - 3.1033
+  - 3.0917
+  wandb:
+  - lc1-b04-qk25
+  - lc1-b06-qk25-s1
+  - lc1-b07-qk25-s2
+  - lc1-b08-qk25-s3
+  settings:
+    qk_mult: '2.5'
+  note: mean -0.0088 +- 0.0022 SE
+- variant: fixed 2.5 at d768 vs d768 baseline
+  rung: d768
+  protocol: equal_steps
+  batch: '12'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842270903
+  baseline: d768 clean KMA 2.8234
+  steps: 7325
+  delta:
+  - -0.0085
+  loss:
+  - 2.8149
+  wandb:
+  - lc1-b06-d768-qk25
+  settings:
+    qk_mult: '2.5'
+  note: only -0.0014 vs d768 fp32 run; gain mostly does not carry
+- variant: learnable, init 2.5, d768
+  rung: d768
+  protocol: equal_steps
+  batch: '15'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842638290
+  baseline: d768 fixed qk_mult 2.5 2.8149
+  steps: 7325
+  delta:
+  - -0.0033
+  loss:
+  - 2.8116
+  wandb:
+  - lc1-b15-d768-qkl25
+  settings:
+    learnable_qk_mult: 'true'
+    init: '2.5'
+  note: -0.0118 vs d768 baseline
+- variant: d768 learnable off (fixed 2.5)
+  rung: d768
+  protocol: data_matched
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  baseline: d768 recipe base lc1-b28-d768-base-r 2.8114
+  steps: 6928
+  delta:
+  - 0.0024
+  loss:
+  - 2.8138
+  wandb:
+  - lc1-b28-d768-fixqk-r
+  settings:
+    qk_mult: '2.5'
+    learnable_qk_mult: 'false'
+  note: most of the benefit is the fixed 2.5 multiplier
+- variant: learnable qk_mult init 2.0, cap 10
+  rung: d512
+  protocol: equal_steps
+  batch: '43'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853836517
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0019
+  loss:
+  - 3.0572
+  wandb:
+  - lc1-b43-cap10-qk20
+  settings:
+    qk_mult: '2.0'
+    learnable_qk_mult: 'true'
+  tuned: init 2.0/2.5/3.0
+- variant: learnable qk_mult init 3.0, cap 10
+  rung: d512
+  protocol: equal_steps
+  batch: '43'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853836517
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0012
+  loss:
+  - 3.0603
+  wandb:
+  - lc1-b43-cap10-qk30
+  settings:
+    qk_mult: '3.0'
+    learnable_qk_mult: 'true'
+  tuned: init 2.0/2.5/3.0
+- variant: init 4.0 (with per-head k norm)
+  rung: d512
+  protocol: equal_steps
+  batch: '75'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860492314
+  baseline: candidate 4 consolidated (3.0129 / 3.0161)
+  steps: 2817
+  delta:
+  - -0.0037
+  - 0.0008
+  loss:
+  - 3.0092
+  - 3.0169
+  wandb:
+  - lc1-b75-knorm-qm4
+  - lc1-b75-knorm-qm4-s1
+  settings:
+    qk_mult: '4.0'
+    learnable_qk_mult: 'true'
+  tuned: qk_mult init 2.5 / 4 / 6
+  note: seeds split; learned value 4.8 / 4.6, still rising
+- variant: init 6 with q norm
+  rung: d512
+  protocol: equal_steps
+  batch: '76'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860679041
+  baseline: q norm qk_mult init 4 (3.0103 / 3.0135)
+  steps: 2817
+  delta:
+  - 0.0027
+  - 0.0034
+  loss:
+  - 3.013
+  - 3.0169
+  wandb:
+  - lc1-b76-qknorm-qm6
+  - lc1-b76-qknorm-qm6-s1
+  settings:
+    mla_q_norm: 'true'
+    qk_mult: '6.0'
+  tuned: qk_mult init 4 vs 6
+  note: settles ~4.8; init 4 stays
+- variant: init 6, key norm only
+  rung: d512
+  protocol: equal_steps
+  batch: '76'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860679041
+  baseline: key norm qk_mult init 4 (3.0092 / 3.0169)
+  steps: 2817
+  delta:
+  - 0.0016
+  - -0.0002
+  loss:
+  - 3.0108
+  - 3.0167
+  wandb:
+  - lc1-b76-knorm-qm6
+  - lc1-b76-knorm-qm6-s1
+  settings:
+    qk_mult: '6.0'
+  tuned: qk_mult init 4 vs 6
+  note: climbs past 6.4; level with init 4
+- variant: per-head learnable qk_mult init 4
+  rung: d512
+  protocol: equal_steps
+  batch: '77'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860969387
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - -0.0001
+  - 0.0011
+  loss:
+  - 3.0098
+  - 3.015
+  wandb:
+  - lc1-b77-qkhead
+  - lc1-b77-qkhead-s1
+  settings:
+    per-head qk_mult: 'true'
+    init: '4'
+  note: heads end close together; per-layer scalar enough
+events:
+- type: adopted
+  batch: '17'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  candidate: gate-2 recipe
+  as_adopted:
+  - qk_mult=2.5
+  - learnable_qk_mult=true
+- type: adopted
+  batch: '76'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860679041
+  note: learnable qk_mult init raised 2.5 -> 4
+  candidate: candidate 5
+  as_adopted:
+  - qk_mult=4.0
+  - learnable_qk_mult=true
+- type: closed
+  batch: '78'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
+  note: per-head qk_mult variant closed; per-layer scalar is enough

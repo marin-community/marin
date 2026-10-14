@@ -1,0 +1,41 @@
+id: X0175
+slug: bigram-sign-trick
+name: Count-sketch sign trick on the bigram table
+category: Embeddings and inputs
+summary: Multiply each n-gram's row by an independently hashed +-1 sign vector so colliding n-grams cancel.
+source: maintainer
+status: closed
+first_batch: 118
+tags:
+- bigram
+- count-sketch
+- hashing
+- modded-nanogpt
+- anvil2
+details:
+- pool of 8192 sign rows
+- record's multiply-xor hash
+knobs:
+- embed2_sign_trick
+trials:
+- variant: count-sketch +-1 per n-gram, pool 8192
+  rung: d512
+  protocol: equal_steps
+  batch: '118'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5884208355
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0006
+  - 0.0065
+  settings:
+    embed2_sign_trick: 'true'
+    sign pool: '8192'
+  note: from modded-nanogpt ANVIL2 record; closed at this table size
+events:
+- type: closed
+  batch: '118'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5884208355
+  note: No gain at our 524k-row table size; retry only with a much larger table

@@ -1,0 +1,85 @@
+id: X0012
+slug: second-embedding-table
+name: Second embedding table as AttnRes source
+category: Embeddings and inputs
+summary: Add a second randomly initialized token embedding table as an extra AttnRes source.
+source: maintainer
+status: done
+first_batch: 1
+tags:
+- emb2
+- embedding
+- attnres
+- second table
+details:
+- random init + learnable RMSNorm
+- prepended as extra AttnRes block
+knobs:
+- second_embed=true
+- second_embed_mode=input
+trials:
+- variant: random 2nd table as AttnRes source (emb2)
+  rung: d512
+  protocol: equal_steps
+  batch: '1'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5839709085
+  baseline: clean KMA seed 0 3.1251
+  steps: 2475
+  delta:
+  - -0.0078
+  loss:
+  - 3.1173
+  wandb:
+  - lc1-b01-emb2
+  settings:
+    second table: random init + learnable RMSNorm
+    placement: extra AttnRes block
+  step_time_change: -7% ex/s
+- variant: emb2 on fp32 base
+  rung: d512
+  protocol: equal_steps
+  batch: '2'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5839990993
+  baseline: batch-1 2-seed baseline mean 3.1223
+  steps: 2651
+  delta:
+  - -0.0221
+  loss:
+  - 3.1002
+  wandb:
+  - lc1-b02-emb2
+  note: -0.004 vs new base mean
+- variant: emb2
+  rung: d512
+  protocol: equal_steps
+  batch: '3'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840199301
+  baseline: fp32 base mean 3.0990
+  steps: 2746
+  delta:
+  - -0.0036
+  loss:
+  - 3.0954
+  wandb:
+  - lc1-b03-emb2
+- variant: second token table, per-layer input
+  rung: d512
+  protocol: equal_steps
+  batch: '36'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853033816
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0013
+  loss:
+  - 3.0578
+  wandb:
+  - lc1-b36-tok2-in
+  settings:
+    second_embed_mode: input
+    bigram: 'no'
+  tuned: vs bigram variants

@@ -1,0 +1,397 @@
+id: X0135
+slug: routed-expert-width
+name: Routed expert width
+category: MoE and routing
+summary: Changes the hidden width of each routed expert.
+source: maintainer
+status: done
+first_batch: 81
+tags:
+- expert-width
+- routed
+- moe
+- experts
+- width
+- mfu
+details:
+- wider routed does not fit at d1024 under the fit rule
+knobs:
+- intermediate_dim
+trials:
+- variant: top-4, routed experts 512 wide
+  rung: d512
+  protocol: fixed_time
+  batch: '81'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861853267
+  baseline: candidate 6 top-4 rerun lc1-b81-base6 (3.0060 / 3.0053)
+  steps: 3170
+  delta:
+  - -0.0126
+  - -0.0114
+  loss:
+  - 2.9934
+  - 2.9939
+  wandb:
+  - lc1-b81-top4-w512
+  - lc1-b81-top4-w512-s1
+  settings:
+    top-k: '4'
+    intermediate_dim: '512'
+  step_time_change: +3.4% (154 ms)
+  tuned: routed width 384 vs 512
+  note: mean -0.0120; ~-0.006 at true fixed time (over budget)
+- variant: top-4 x 512, in budget
+  rung: d512
+  protocol: fixed_time
+  batch: '82'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861993840
+  baseline: candidate 6 top-4 rerun lc1-b81-base6 (3.0060 / 3.0053)
+  steps: 3100
+  delta:
+  - -0.0092
+  - -0.0077
+  loss:
+  - 2.9968
+  - 2.9976
+  wandb:
+  - lc1-b82-t4w512-ft
+  - lc1-b82-t4w512-ft-s1
+  settings:
+    top-k: '4'
+    intermediate_dim: '512'
+  tuned: top-k 3/4 x width 384/512/640
+  note: delta computed per seed; round 2 cancelled when top-k<8 ruled out
+- variant: top-4 x 640, in budget
+  rung: d512
+  protocol: fixed_time
+  batch: '82'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861993840
+  baseline: candidate 6 top-4 rerun lc1-b81-base6 (3.0060 / 3.0053)
+  steps: 2980
+  delta:
+  - -0.012
+  - -0.0096
+  loss:
+  - 2.994
+  - 2.9957
+  wandb:
+  - lc1-b82-t4w640-ft
+  - lc1-b82-t4w640-ft-s1
+  settings:
+    top-k: '4'
+    intermediate_dim: '640'
+  tuned: top-k 3/4 x width 384/512/640
+  note: delta computed per seed; round 2 cancelled when top-k<8 ruled out
+- variant: top-3 x 512, in budget
+  rung: d512
+  protocol: fixed_time
+  batch: '82'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861993840
+  baseline: candidate 6 top-4 rerun lc1-b81-base6 (3.0060 / 3.0053)
+  steps: 3280
+  delta:
+  - -0.0129
+  - -0.0093
+  loss:
+  - 2.9931
+  - 2.996
+  wandb:
+  - lc1-b82-t3w512-ft
+  - lc1-b82-t3w512-ft-s1
+  settings:
+    top-k: '3'
+    intermediate_dim: '512'
+  tuned: top-k 3/4 x width 384/512/640
+  note: delta computed per seed; round 2 cancelled when top-k<8 ruled out
+- variant: top-3 x 640, in budget
+  rung: d512
+  protocol: fixed_time
+  batch: '82'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861993840
+  baseline: candidate 6 top-4 rerun lc1-b81-base6 (3.0060 / 3.0053)
+  steps: 3170
+  delta:
+  - -0.0117
+  - -0.0102
+  loss:
+  - 2.9943
+  - 2.9951
+  wandb:
+  - lc1-b82-t3w640-ft
+  - lc1-b82-t3w640-ft-s1
+  settings:
+    top-k: '3'
+    intermediate_dim: '640'
+  tuned: top-k 3/4 x width 384/512/640
+  note: delta computed per seed; round 2 cancelled when top-k<8 ruled out
+- variant: routed 512 x 8, shared 384
+  rung: d512
+  protocol: equal_steps
+  batch: '83'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862195574
+  baseline: candidate 6 top-8 rerun lc1-b83-base7 (3.0072 / 3.0109)
+  steps: 2817
+  delta:
+  - -0.0145
+  - -0.011
+  loss:
+  - 2.9927
+  - 2.9999
+  wandb:
+  - lc1-b83-r512s384
+  - lc1-b83-r512s384-s1
+  settings:
+    intermediate_dim: '512'
+    shared_expert_intermediate_dim: '384'
+  step_time_change: +2.6% (181 ms)
+  tuned: routed 384-768 x shared 0/384
+- variant: routed 640, shared 384
+  rung: d512
+  protocol: equal_steps
+  batch: '85'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862382151
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  loss:
+  - 2.986
+  - 2.9877
+  wandb:
+  - lc1-b85-r640s384
+  - lc1-b85-r640s384-s1
+  settings:
+    routed width: '640'
+    shared width: '384'
+  step_time_change: 186 vs 177 ms
+  tuned: routed 384-1280 x shared 0-384
+  note: mean -0.0222
+- variant: routed 768, shared 384
+  rung: d512
+  protocol: equal_steps
+  batch: '85'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862382151
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  loss:
+  - 2.9817
+  - 2.9845
+  wandb:
+  - lc1-b85-r768s384
+  - lc1-b85-r768s384-s1
+  settings:
+    routed width: '768'
+    shared width: '384'
+  step_time_change: 191 vs 177 ms
+  tuned: routed 384-1280 x shared 0-384
+  note: mean -0.0260
+- variant: routed 768, shared 192
+  rung: d512
+  protocol: equal_steps
+  batch: '85'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862382151
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  loss:
+  - 2.9832
+  - 2.9901
+  wandb:
+  - lc1-b85-r768s192
+  - lc1-b85-r768s192-r-s1
+  settings:
+    routed width: '768'
+    shared width: '192'
+  step_time_change: 189 vs 177 ms
+  tuned: routed 384-1280 x shared 0-384
+  note: about -0.024 (seed 0); halving shared costs ~+0.0015
+- variant: routed 1024, shared 192
+  rung: d512
+  protocol: equal_steps
+  batch: '85'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862382151
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  loss:
+  - 2.973
+  - 2.9791
+  wandb:
+  - lc1-b85-r1024s192
+  - lc1-b85-r1024s192-s1
+  settings:
+    routed width: '1024'
+    shared width: '192'
+  step_time_change: +11%
+  tuned: routed 384-1280 x shared 0-384
+  note: mean -0.0330; does not fit at d1024
+- variant: routed 1280, shared 192
+  rung: d512
+  protocol: equal_steps
+  batch: '85'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862382151
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  loss:
+  - 2.971
+  - 2.9719
+  wandb:
+  - lc1-b85-r1280s192
+  - lc1-b85-r1280s192-s1
+  settings:
+    routed width: '1280'
+    shared width: '192'
+  step_time_change: +19%
+  tuned: routed 384-1280 x shared 0-384
+  note: mean -0.0376; 51.3 GiB
+- variant: routed 1024, shared 192
+  rung: d768
+  protocol: equal_steps
+  batch: '85'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862382151
+  baseline: d768 candidate 6 2.7689
+  steps: 7325
+  delta:
+  - -0.0376
+  loss:
+  - 2.7313
+  wandb:
+  - lc1-b86-d768-r1024s192
+  settings:
+    routed width: '1024'
+    shared width: '192'
+  tuned: fixed 1024 vs 2x hidden
+- variant: routed 1536, shared 288 (2x hidden)
+  rung: d768
+  protocol: equal_steps
+  batch: '85'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862382151
+  baseline: d768 candidate 6 2.7689
+  steps: 7325
+  delta:
+  - -0.0502
+  loss:
+  - 2.7187
+  wandb:
+  - lc1-b86-d768-r1536s288
+  settings:
+    routed width: '1536'
+    shared width: '288'
+  tuned: fixed 1024 vs 2x hidden
+- variant: latent 256 projection, routed width 1x (384)
+  rung: d512
+  protocol: equal_steps
+  batch: '91'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864281697
+  baseline: width scan on candidate 7 base, seed 0 (no paired delta)
+  steps: 2817
+  loss:
+  - 2.9893
+  wandb:
+  - lc1-b91-lat-w1x
+  settings:
+    routed width: '384'
+    MoE latent: 256 projection
+    attn_res_layer_backward: recompute
+    attn_res_remat_attention: 'true'
+  tuned: routed width 1x-32x
+- variant: latent 256 projection, routed width 2x (768)
+  rung: d512
+  protocol: equal_steps
+  batch: '91'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864281697
+  baseline: width scan on candidate 7 base, seed 0 (no paired delta)
+  steps: 2817
+  loss:
+  - 2.9645
+  wandb:
+  - lc1-b91-lat-w2x
+  settings:
+    routed width: '768'
+    MoE latent: 256 projection
+    attn_res_layer_backward: recompute
+    attn_res_remat_attention: 'true'
+  tuned: routed width 1x-32x
+- variant: latent 256 projection, routed width 4x (1536)
+  rung: d512
+  protocol: equal_steps
+  batch: '91'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864281697
+  baseline: width scan on candidate 7 base, seed 0 (no paired delta)
+  steps: 2817
+  loss:
+  - 2.9444
+  wandb:
+  - lc1-b91-lat-w4x
+  settings:
+    routed width: '1536'
+    MoE latent: 256 projection
+    attn_res_layer_backward: recompute
+    attn_res_remat_attention: 'true'
+  tuned: routed width 1x-32x
+- variant: latent 256 projection, routed width 8x (3072)
+  rung: d512
+  protocol: equal_steps
+  batch: '91'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864281697
+  baseline: width scan on candidate 7 base, seed 0 (no paired delta)
+  steps: 2817
+  loss:
+  - 2.9306
+  wandb:
+  - lc1-b91-lat-w8x
+  settings:
+    routed width: '3072'
+    MoE latent: 256 projection
+    attn_res_layer_backward: recompute
+    attn_res_remat_attention: 'true'
+  tuned: routed width 1x-32x
+- variant: latent 256 projection, routed width 16x (6144)
+  rung: d512
+  protocol: equal_steps
+  batch: '91'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864281697
+  baseline: width scan on candidate 7 base, seed 0 (no paired delta)
+  steps: 2817
+  loss:
+  - 2.9204
+  wandb:
+  - lc1-b91-lat-w16x
+  settings:
+    routed width: '6144'
+    MoE latent: 256 projection
+    attn_res_layer_backward: recompute
+    attn_res_remat_attention: 'true'
+  tuned: routed width 1x-32x
+- variant: latent 256, routed width 32x (12288) and no latent 32x
+  rung: d512
+  protocol: equal_steps
+  batch: '91'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864281697
+  baseline: width scan on candidate 7 base, seed 0 (no paired delta)
+  steps: 2817
+  wandb:
+  - lc1-b91-lat-w32x
+  - lc1-b91-nolat-w32x
+  settings:
+    routed width: 12288) and no latent 32x
+    MoE latent: none
+    attn_res_layer_backward: recompute
+    attn_res_remat_attention: 'true'
+  tuned: routed width 1x-32x
+  note: OOM

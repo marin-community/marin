@@ -1,0 +1,46 @@
+id: X0139
+slug: kda-data-dependent-rotation
+name: KDA data-dependent rotation
+category: Linear attention / KDA
+summary: Input-dependent q/k rotation in KDA with decay tied per rotated pair.
+source: agent
+status: closed
+first_batch: 88
+tags:
+- kda
+- rotation
+- mamba-3
+- selective rope
+papers:
+- arxiv: '2603.15569'
+  title: Mamba-3
+- arxiv: '2511.17388'
+  title: Selective RoPE
+trials:
+- variant: rank 16
+  rung: d512
+  protocol: equal_steps
+  batch: '88'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.0005
+  - -0.0002
+  loss:
+  - 3.0077
+  - 3.0107
+  wandb:
+  - lc1-b88-ddrope
+  - lc1-b88-ddrope-s1
+  settings:
+    rotation rank: '16'
+  step_time_change: +3%
+  note: model uses rotations but no loss gain
+events:
+- type: closed
+  batch: '88'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
+  note: neutral for loss

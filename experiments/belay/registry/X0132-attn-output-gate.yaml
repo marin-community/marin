@@ -1,0 +1,127 @@
+id: X0132
+slug: attn-output-gate
+name: Elementwise attention output gate
+category: Attention variants
+summary: Makes the MLA output gate per channel instead of per head.
+source: agent
+status: closed
+first_batch: 81
+tags:
+- gated-attention
+- output-gate
+- mla
+- gating
+- output gate
+- per-channel
+- elementwise
+- gatednorm
+papers:
+- arxiv: '2505.06708'
+  title: Gated Attention
+details:
+- 'current: per-head 2*sigmoid(x w), zero-init'
+- 'gel: full-rank W_g [D, N*H] zero-init'
+- 'glr: rank 16 GatedNorm form, W_up zero-init'
+knobs:
+- attn_gate_elementwise
+- attn_gate_rank=16
+trials:
+- variant: elementwise (per-channel) MLA output gate
+  rung: d512
+  protocol: fixed_time
+  batch: '81'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861853267
+  baseline: candidate 6 top-4 rerun lc1-b81-base6 (3.0060 / 3.0053)
+  steps: 3170
+  delta:
+  - -0.0009
+  - 0.0031
+  loss:
+  - 3.0051
+  - 3.0084
+  wandb:
+  - lc1-b81-gate-elem
+  - lc1-b81-gate-elem-s1
+  settings:
+    attn_gate_elementwise: 'true'
+  note: mean +0.0011; neutral
+- variant: elementwise gate alone
+  rung: d512
+  protocol: equal_steps
+  batch: '163'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5935139189
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.001
+  loss:
+  - 2.9758
+  settings:
+    attn_gate_elementwise: 'true'
+  step_time_change: 174.7 ms (no PGLE)
+  note: neutral
+- variant: per-channel full rank (gel)
+  rung: d512
+  protocol: equal_steps
+  batch: '176'
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5960243376
+  baseline: candidate 11 (2.9621 / 2.9669)
+  steps: 2817
+  delta:
+  - 0.003
+  - -0.0015
+  loss:
+  - 2.9654
+  - 2.9654
+  settings:
+    attn_gate_elementwise: 'true'
+  step_time_change: +0.8%
+  note: mean +0.0008; closed
+- variant: per-channel rank-16 GatedNorm form (glr)
+  rung: d512
+  protocol: equal_steps
+  batch: '176'
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5960243376
+  baseline: candidate 11 (2.9621 / 2.9669)
+  steps: 2817
+  delta:
+  - 0.0035
+  - -0.0002
+  loss:
+  - 2.9658
+  - 2.9667
+  settings:
+    attn_gate_rank: '16'
+  step_time_change: +0.5%
+  note: mean +0.0017; closed
+- variant: elementwise gate, no differential (eg)
+  rung: d512
+  protocol: equal_steps
+  batch: '203'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 rno2a controls mean 2.9534
+  steps: 2817
+  delta:
+  - 0.0011
+  loss:
+  - 2.9545
+  settings:
+    gate: elementwise, no differential
+  step_time_change: 192.0 ms
+  note: neutral, as in batch 163
+events:
+- type: closed
+  batch: '81'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861853267
+  note: headwise gate already enough
+- type: closed
+  batch: '176'
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5960243376
+  note: per-channel attention gates neutral

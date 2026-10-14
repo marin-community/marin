@@ -1,0 +1,28 @@
+id: X0034
+slug: warmup-length
+name: Warmup length
+category: Training dynamics and schedules
+summary: Change the LR warmup fraction (default 1%).
+source: agent
+status: done
+first_batch: 7
+tags:
+- warmup
+- schedule
+trials:
+- variant: warmup 5% (vs 1%)
+  rung: d512
+  protocol: equal_steps
+  batch: '7'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840955062
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2817
+  delta:
+  - 0.0044
+  loss:
+  - 3.0902
+  wandb:
+  - lc1-b07-wu5
+  settings:
+    warmup: 5%

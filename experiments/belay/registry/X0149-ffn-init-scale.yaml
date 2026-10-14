@@ -1,0 +1,52 @@
+id: X0149
+slug: ffn-init-scale
+name: Per-family init-scale multipliers
+category: Training dynamics and schedules
+summary: Scale the init std of a matrix family, which MuonH then pins as its norm for the run.
+source: agent
+status: closed
+first_batch: 98
+tags:
+- init
+- muonh
+- hyperball
+- gates
+- experts
+papers:
+- arxiv: '2606.16899'
+  title: Hyperball II
+knobs:
+- init_std_mult_gates
+trials:
+- variant: expert init x0.5
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0028
+  settings:
+    expert init: x0.5
+  tuned: x0.5 / x2
+- variant: expert init x2
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0015
+  settings:
+    expert init: x2
+  tuned: x0.5 / x2
+events:
+- type: closed
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  note: closed in batch 102 round

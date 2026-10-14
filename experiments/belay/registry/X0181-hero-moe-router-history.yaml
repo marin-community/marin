@@ -1,0 +1,38 @@
+id: X0181
+slug: hero-moe-router-history
+name: HERO-MoE router history
+category: MoE and routing
+summary: Each router adds a learned projection of earlier layers' detached routing distributions to its logits.
+source: agent
+status: closed
+first_batch: 132
+tags:
+- router
+- hero-moe
+- cross-layer
+papers:
+- arxiv: '2609.32581'
+  title: HERO-MoE
+trials:
+- variant: residual router logits from earlier layers' detached routing
+  rung: d512
+  protocol: equal_steps
+  batch: '132'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5905920449
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0119
+  - 0.0132
+  settings:
+    W_R init: uniform +-1/sqrt(d+(L-1)E)
+    optimizer: Adam
+  step_time_change: 189 ms
+  note: paper's -0.021 at 8B-A0.5B does not transfer
+events:
+- type: closed
+  batch: '132'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5905920449
+  note: Loses +0.0126; closed

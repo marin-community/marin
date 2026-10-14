@@ -1,0 +1,53 @@
+id: X0185
+slug: routed-expert-lr
+name: Routed-expert MuonH LR multiplier
+category: Optimizers
+summary: Scale the MuonH LR of routed experts only.
+source: maintainer
+status: closed
+first_batch: 139
+tags:
+- muon
+- lr
+- routed-experts
+trials:
+- variant: routed-expert MuonH LR x0.7 (rlr07)
+  rung: d512
+  protocol: equal_steps
+  batch: '139'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5917952812
+  baseline: candidate 9 + PGLE 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.008
+  - 0.0107
+  loss:
+  - 2.983
+  - 2.9898
+  settings:
+    routed MuonH LR mult: '0.7'
+  tuned: x0.7 / x0.5
+- variant: routed-expert MuonH LR x0.5 (rlr05)
+  rung: d512
+  protocol: equal_steps
+  batch: '139'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5917952812
+  baseline: candidate 9 + PGLE 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0239
+  - 0.0237
+  loss:
+  - 2.9989
+  - 3.0028
+  settings:
+    routed MuonH LR mult: '0.5'
+  tuned: x0.7 / x0.5
+events:
+- type: closed
+  batch: '139'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5917952812
+  note: Smaller routed-expert step clearly hurts

@@ -1,0 +1,141 @@
+id: X0042
+slug: newton-schulz-schedule
+name: Newton-Schulz iteration count and coefficients
+category: Optimizers
+summary: Change how many Newton-Schulz steps Muon uses (3/4/5/10) or schedule their coefficients.
+source: agent
+status: closed
+first_batch: 13
+tags:
+- muon
+- newton-schulz
+- ns-iterations
+- coefficients
+knobs:
+- coefficient_type
+trials:
+- variant: Newton-Schulz 4 steps (vs 5)
+  rung: d512
+  protocol: equal_steps
+  batch: '13'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842373760
+  baseline: batch-12 bundle seed 0 3.0836
+  steps: 2817
+  delta:
+  - -0.0011
+  loss:
+  - 3.0825
+  wandb:
+  - lc1-b13-ns4
+  settings:
+    NS steps: '4'
+  note: no measurable speedup; dropped
+- variant: 10 Newton-Schulz iterations (vs 5)
+  rung: d512
+  protocol: equal_steps
+  batch: '138'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5917800907
+  baseline: candidate 9 same-cluster (2.9768 cw-rno2a s0; 2.9791 s1)
+  steps: 2817
+  delta:
+  - 0.0001
+  - 0.0013
+  loss:
+  - 2.9769
+  - 2.9804
+  wandb:
+  - lc1-b138-ns10-s1
+  settings:
+    NS iterations: '10'
+  step_time_change: +1.5% (per Studies table)
+  note: flattens every family's NS output; loss neutral
+- variant: 3 quintic steps
+  rung: d512
+  protocol: equal_steps
+  batch: '153'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927322746
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0057
+  - 0.0062
+  loss:
+  - 2.9825
+  - 2.9884
+  settings:
+    NS steps: '3'
+  step_time_change: 170.3 vs 171.6 ms
+  tuned: NS steps 3/4/5, coefficient schedules
+- variant: 4 quintic steps
+  rung: d512
+  protocol: equal_steps
+  batch: '153'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927322746
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0028
+  - -0.0007
+  loss:
+  - 2.974
+  - 2.9815
+  settings:
+    NS steps: '4'
+  step_time_change: 170.4 vs 171.6 ms
+  tuned: NS steps 3/4/5, coefficient schedules
+- variant: tight_top (3 quintic + 2 cubic)
+  rung: d512
+  protocol: equal_steps
+  batch: '153'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927322746
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0002
+  - -0.0007
+  loss:
+  - 2.9766
+  - 2.9815
+  settings:
+    coefficient_type: tight_top
+  step_time_change: 171.8 vs 171.6 ms
+  tuned: NS steps 3/4/5, coefficient schedules
+- variant: boost_low
+  rung: d512
+  protocol: equal_steps
+  batch: '153'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927322746
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0009
+  - -0.0024
+  loss:
+  - 2.9777
+  - 2.9798
+  settings:
+    coefficient_type: boost_low
+  step_time_change: 171.4 vs 171.6 ms
+  tuned: NS steps 3/4/5, coefficient schedules
+events:
+- type: closed
+  batch: '13'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842373760
+  note: neutral, no speed gain at d512
+- type: closed
+  batch: '138'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5917800907
+  note: Fully flattening the spectrum (10 NS iterations) changes alignment, not loss
+- type: closed
+  batch: '153'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927322746
+  note: 3 steps lose; 4 steps and coefficient schedules within noise

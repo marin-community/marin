@@ -1,0 +1,59 @@
+id: X0197
+slug: expert-visit-bias
+name: Expert visit bias rows
+category: MoE and routing
+summary: Add a learned residual row for each routed expert a token visited.
+source: maintainer
+status: closed
+first_batch: 158
+tags:
+- routed-experts
+- bias
+- expert-memory
+details:
+- '[E, D] table per MoE layer, zero-init, Adam'
+knobs:
+- expert_visit_bias
+trials:
+- variant: unweighted sum
+  rung: d512
+  protocol: equal_steps
+  batch: '158'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927887848
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0067
+  - 0.0032
+  loss:
+  - 2.9835
+  - 2.9854
+  settings:
+    c_e: '1'
+  step_time_change: 170.4 vs 171.6 ms
+  tuned: unweighted vs combine-weighted
+- variant: combine-weighted
+  rung: d512
+  protocol: equal_steps
+  batch: '158'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927887848
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.002
+  - -0.0016
+  loss:
+  - 2.9788
+  - 2.9806
+  settings:
+    c_e: combine weight
+  step_time_change: 171.5 vs 171.6 ms
+  tuned: unweighted vs combine-weighted
+events:
+- type: closed
+  batch: '158'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927887848
+  note: neither variant helps

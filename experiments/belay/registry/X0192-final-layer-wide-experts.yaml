@@ -1,0 +1,54 @@
+id: X0192
+slug: final-layer-wide-experts
+name: Wider routed experts in final layers
+category: MoE and routing
+summary: Give the final layers' routed experts a wider hidden dim, latent unchanged.
+source: agent
+status: done
+first_batch: 150
+tags:
+- routed-experts
+- expert-width
+- final-layers
+knobs:
+- wide_expert_layers
+- wide_expert_intermediate_dim
+trials:
+- variant: layer 5 experts 576
+  rung: d512
+  protocol: equal_steps
+  batch: '150'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5925950908
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0053
+  loss:
+  - 2.9715
+  settings:
+    wide_expert_layers: '5'
+    wide_expert_intermediate_dim: '576'
+  step_time_change: +3% (190.2 ms)
+  tuned: layer 5 vs layers 4+5
+  note: seed 1 crashed
+- variant: layers 4,5 experts 576
+  rung: d512
+  protocol: equal_steps
+  batch: '150'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5925950908
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.007
+  - -0.0089
+  loss:
+  - 2.9698
+  - 2.9733
+  settings:
+    wide_expert_layers: 4,5
+    wide_expert_intermediate_dim: '576'
+  step_time_change: +8% (about 198 ms)
+  tuned: layer 5 vs layers 4+5
+  note: fixed-time cost cancels most

@@ -1,0 +1,27 @@
+id: X0023
+slug: per-head-muon
+name: Per-head Muon (K3)
+category: Optimizers
+summary: Orthogonalize attention projections per head instead of per full matrix.
+source: agent
+status: done
+first_batch: 3
+tags:
+- muon
+- per-head
+- kimi-k3
+trials:
+- variant: per-head Muon on attention projections (K3)
+  rung: d512
+  protocol: equal_steps
+  batch: '3'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840199301
+  baseline: fp32 base mean 3.0990
+  steps: 2817
+  delta:
+  - 0.0018
+  loss:
+  - 3.1008
+  wandb:
+  - lc1-b03-phm

@@ -1,0 +1,339 @@
+id: X0014
+slug: value-embeddings
+name: Value embeddings on MLA layers
+category: Embeddings and inputs
+summary: Add a per-token embedding table to the MLA values, via a lambda or a sigmoid gate.
+source: maintainer
+status: adopted
+first_batch: 1
+tags:
+- value-embeds
+- mla
+- embedding
+- value embeddings
+- lr
+- value embeds
+- kda
+- gated
+details:
+- 'gated form: v = v + sigmoid(x W) * VE[token], one gate per head, W zero-init (gate 0.5 at init)'
+- MLA layers only (KDA layers tested worse)
+- tables on Adam at 1x Adam LR (0.3x did not carry to candidate 9)
+- 'lambda form: v = l1*v + l2*VE[token], l1 init 1, l2 init 0'
+knobs:
+- value_embeds=gated
+- value_embed_lr_mult
+- kda_value_embeds=gated
+- value_embeds=gated_lambda
+trials:
+- variant: lambda form (ve)
+  rung: d512
+  protocol: equal_steps
+  batch: '1'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5839709085
+  baseline: clean KMA seed 0 3.1251
+  steps: 2475
+  delta:
+  - -0.0048
+  loss:
+  - 3.1203
+  wandb:
+  - lc1-b01-ve
+  settings:
+    value_embeds: lambda
+    lambda1 init: '1'
+    lambda2 init: '0'
+    optimizer: Adam at Adam LR
+  step_time_change: -11% ex/s
+  tuned: lambda vs gated
+- variant: gated (veg)
+  rung: d512
+  protocol: equal_steps
+  batch: '1'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5839709085
+  baseline: clean KMA seed 0 3.1251
+  steps: 2475
+  delta:
+  - -0.0065
+  loss:
+  - 3.1186
+  wandb:
+  - lc1-b01-veg
+  settings:
+    value_embeds: gated
+    gate: sigmoid(x W) per head, W zero-init
+  step_time_change: -13% ex/s
+  tuned: lambda vs gated
+- variant: lambda form (ve), on fp32 base
+  rung: d512
+  protocol: equal_steps
+  batch: '2'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5839990993
+  baseline: batch-1 2-seed baseline mean 3.1223
+  steps: 2702
+  delta:
+  - -0.0193
+  loss:
+  - 3.103
+  wandb:
+  - lc1-b02-ve
+  note: -0.001 vs new base mean
+- variant: gated (veg), on fp32 base
+  rung: d512
+  protocol: equal_steps
+  batch: '2'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5839990993
+  baseline: batch-1 2-seed baseline mean 3.1223
+  steps: 2682
+  delta:
+  - -0.0207
+  loss:
+  - 3.1016
+  wandb:
+  - lc1-b02-veg
+  note: -0.0025 vs new base mean
+- variant: gated, 1x LR (retry)
+  rung: d512
+  protocol: equal_steps
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0086
+  - -0.0123
+  loss:
+  - 2.9986
+  - 2.9986
+  wandb:
+  - lc1-b87-veg
+  - lc1-b87-veg-s1
+  settings:
+    value_embeds: gated
+    value_embed_lr_mult: '1'
+  step_time_change: +0.5%
+  tuned: LR 1x vs 10x
+  note: clearest missed chance; nearly free
+- variant: gated, table LR x10
+  rung: d512
+  protocol: equal_steps
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0059
+  - 0.0014
+  loss:
+  - 3.0013
+  - 3.0123
+  wandb:
+  - lc1-b87-veg10
+  - lc1-b87-veg10-s1
+  settings:
+    value_embeds: gated
+    value_embed_lr_mult: '10'
+  tuned: LR 1x vs 10x
+  note: value tables want plain Adam LR
+- variant: gated, table LR 0.3x
+  rung: d512
+  protocol: equal_steps
+  batch: '92'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864373996
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0169
+  - -0.0146
+  loss:
+  - 2.9903
+  - 2.9963
+  wandb:
+  - lc1-b92-veg-lr03
+  - lc1-b92-veg-lr03-s1
+  settings:
+    value_embeds: gated
+    value_embed_lr_mult: '0.3'
+  tuned: 0.03x/0.1x/0.3x/1x/2x/3x/5x/10x
+  note: peak at 0.3x; goes into next candidate
+- variant: gated, table LR 2x
+  rung: d512
+  protocol: equal_steps
+  batch: '92'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864373996
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0105
+  - -0.0092
+  loss:
+  - 2.9967
+  - 3.0017
+  wandb:
+  - lc1-b92-veg-lr2
+  - lc1-b92-veg-lr2-s1
+  settings:
+    value_embeds: gated
+    value_embed_lr_mult: '2'
+  tuned: 0.03x/0.1x/0.3x/1x/2x/3x/5x/10x
+- variant: gated, table LR 3x
+  rung: d512
+  protocol: equal_steps
+  batch: '92'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864373996
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0066
+  - -0.0085
+  loss:
+  - 3.0006
+  - 3.0024
+  wandb:
+  - lc1-b92-veg-lr3
+  - lc1-b92-veg-lr3-s1
+  settings:
+    value_embeds: gated
+    value_embed_lr_mult: '3'
+  tuned: 0.03x/0.1x/0.3x/1x/2x/3x/5x/10x
+- variant: gated, table LR 5x
+  rung: d512
+  protocol: equal_steps
+  batch: '92'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864373996
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0067
+  - -0.0047
+  loss:
+  - 3.0005
+  - 3.0062
+  wandb:
+  - lc1-b92-veg-lr5
+  - lc1-b92-veg-lr5-s1
+  settings:
+    value_embeds: gated
+    value_embed_lr_mult: '5'
+  tuned: 0.03x/0.1x/0.3x/1x/2x/3x/5x/10x
+- variant: gated, table LR 0.1x
+  rung: d512
+  protocol: equal_steps
+  batch: '92'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864373996
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0106
+  - -0.0128
+  loss:
+  - 2.9966
+  - 2.9981
+  wandb:
+  - lc1-b92-veg-lr01
+  - lc1-b92-veg-lr01-s1
+  settings:
+    value_embeds: gated
+    value_embed_lr_mult: '0.1'
+  tuned: 0.03x/0.1x/0.3x/1x/2x/3x/5x/10x
+- variant: gated, table LR 0.03x
+  rung: d512
+  protocol: equal_steps
+  batch: '92'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864373996
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.004
+  - -0.0018
+  loss:
+  - 3.0032
+  - 3.0091
+  wandb:
+  - lc1-b92-veg-lr003
+  - lc1-b92-veg-lr003-s1
+  settings:
+    value_embeds: gated
+    value_embed_lr_mult: '0.03'
+  tuned: 0.03x/0.1x/0.3x/1x/2x/3x/5x/10x
+- variant: value-embedding LR 0.3x on candidate 9
+  rung: d512
+  protocol: equal_steps
+  batch: '124'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5900919922
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - -0.0006
+  - 0.0
+  loss:
+  - 2.9744
+  - 2.9791
+  settings:
+    value_embed_lr_mult: '0.3'
+  note: b92's -0.0158 on candidate 6 gone on candidate 9; closed
+- variant: gated, on the 4 KDA layers
+  rung: d512
+  protocol: equal_steps
+  batch: 169-173
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5943888764
+  baseline: candidate 10
+  steps: 2817
+  delta:
+  - 0.0037
+  - 0.0014
+  settings:
+    kda_value_embeds: gated
+  step_time_change: +1%
+  note: closed; value embeddings stay on MLA only
+- variant: gate x learned scalar (gated_lambda)
+  rung: d512
+  protocol: equal_steps
+  batch: 190-201
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: ragp105
+  steps: 2817
+  delta:
+  - 0.0002
+  loss:
+  - 2.9603
+  - 2.9656
+  settings:
+    value_embeds: gated_lambda
+  step_time_change: +1.5% (185.4 ms)
+  note: neutral
+events:
+- type: adopted
+  batch: '89'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863894129
+  note: gated value embeddings on MLA layers
+  candidate: candidate 7
+  as_adopted:
+  - value_embeds=gated
+  - table LR 1x Adam
+- type: closed
+  batch: '124'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5900919922
+  note: LR 0.3x does not carry to candidate 9; value-embed LR stays 1x
+- type: closed
+  batch: 169-173
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5943888764
+  note: value embeddings on KDA layers closed; stay on MLA only

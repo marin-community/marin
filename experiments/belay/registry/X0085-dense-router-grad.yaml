@@ -1,0 +1,65 @@
+id: X0085
+slug: dense-router-grad
+name: Default-MoE dense router gradient
+category: MoE and routing
+summary: Give the router gradient for non-selected experts via a stand-in expert output.
+source: agent
+status: closed
+first_batch: 45
+tags:
+- router
+- default moe
+- dense gradient
+- gradient
+papers:
+- arxiv: '2504.12463'
+  title: Default MoE
+knobs:
+- moe_dense_router_grad
+trials:
+- variant: Default-MoE dense router gradient (stateless)
+  rung: d512
+  protocol: equal_steps
+  batch: '45'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853933435
+  baseline: soft-cap 10 3.0591 / seed 1 3.0675
+  steps: 2817
+  delta:
+  - -0.0005
+  - -0.0058
+  loss:
+  - 3.0586
+  - 3.0617
+  wandb:
+  - lc1-b45-dense
+  - lc1-b45-dense-s1
+  settings:
+    moe_dense_router_grad: 'true'
+  note: within seed noise; not added
+- variant: Default-MoE dense router gradient (stateless)
+  rung: d512
+  protocol: equal_steps
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.0649
+  - 0.0344
+  loss:
+  - 3.0721
+  - 3.0453
+  wandb:
+  - lc1-b87-densegrad
+  - lc1-b87-densegrad-s1
+  settings:
+    dense router gradient: stateless default-expert term
+  note: closed unless EMA version built
+events:
+- type: closed
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  note: +0.065/+0.034

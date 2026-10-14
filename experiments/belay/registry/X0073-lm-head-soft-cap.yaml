@@ -1,0 +1,435 @@
+id: X0073
+slug: lm-head-soft-cap
+name: lm_head tanh soft-cap
+category: Output head and loss
+summary: Cap output logits with c*tanh(z/c) before the loss; eval scores capped logits.
+source: agent
+status: adopted
+first_batch: 32
+tags:
+- soft-cap
+- logits
+- tanh
+- gemma
+- lm_head
+papers:
+- title: Gemma 2
+details:
+- 'form: c*tanh(z/c) on lm_head logits'
+- cap 10 (caps 10-12 flat on candidate 11)
+- lm_head z-loss 1e-4 kept
+- asymmetric A*sigma((z+B)/C) is a tanh cap A/2 with gain A/(4C)
+knobs:
+- logit_soft_cap=10
+trials:
+- variant: tanh cap 15
+  rung: d512
+  protocol: equal_steps
+  batch: '32'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852265563
+  baseline: lc1-mfu1 3.0833 / seed 1 3.0951
+  steps: 2817
+  delta:
+  - -0.0184
+  - -0.0249
+  loss:
+  - 3.0649
+  - 3.0702
+  wandb:
+  - lc1-b32-cap15
+  - lc1-b32-cap15-s1
+  settings:
+    logit_soft_cap: '15'
+  tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
+- variant: tanh cap 30
+  rung: d512
+  protocol: equal_steps
+  batch: '32'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852265563
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - -0.0033
+  loss:
+  - 3.08
+  wandb:
+  - lc1-b32-cap30
+  settings:
+    logit_soft_cap: '30'
+  tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
+- variant: tanh cap 15, d768
+  rung: d768
+  protocol: data_matched
+  batch: '32'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852265563
+  baseline: gate-2 recipe d768 2.8114
+  steps: 6928
+  delta:
+  - -0.0157
+  loss:
+  - 2.7957
+  wandb:
+  - lc1-b32-d768-cap15
+  settings:
+    logit_soft_cap: '15'
+  tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
+- variant: tanh cap 10
+  rung: d512
+  protocol: equal_steps
+  batch: '32'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852265563
+  baseline: lc1-mfu1 3.0833 / seed 1 3.0951
+  steps: 2817
+  delta:
+  - -0.0242
+  - -0.0276
+  loss:
+  - 3.0591
+  - 3.0675
+  wandb:
+  - lc1-b32-cap10
+  - lc1-b32-cap10-s1
+  settings:
+    logit_soft_cap: '10'
+  tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
+- variant: tanh cap 7
+  rung: d512
+  protocol: equal_steps
+  batch: '32'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852265563
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - -0.0074
+  loss:
+  - 3.0759
+  wandb:
+  - lc1-b32-cap7
+  settings:
+    logit_soft_cap: '7'
+  tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
+- variant: tanh cap 5
+  rung: d512
+  protocol: equal_steps
+  batch: '32'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852265563
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.2456
+  loss:
+  - 3.3289
+  wandb:
+  - lc1-b32-cap5
+  settings:
+    logit_soft_cap: '5'
+  tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
+  note: cap this tight breaks training
+- variant: tanh cap 10, d768
+  rung: d768
+  protocol: data_matched
+  batch: '32'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852265563
+  baseline: gate-2 recipe d768 2.8114
+  steps: 6928
+  delta:
+  - -0.019
+  loss:
+  - 2.7924
+  wandb:
+  - lc1-b32-d768-cap10
+  settings:
+    logit_soft_cap: '10'
+  tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
+- variant: tanh cap 12
+  rung: d512
+  protocol: equal_steps
+  batch: '32'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852265563
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - -0.0213
+  loss:
+  - 3.062
+  wandb:
+  - lc1-b32-cap12
+  settings:
+    logit_soft_cap: '12'
+  tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
+- variant: tanh cap 20
+  rung: d512
+  protocol: equal_steps
+  batch: '32'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852265563
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - -0.0103
+  loss:
+  - 3.073
+  wandb:
+  - lc1-b32-cap20
+  settings:
+    logit_soft_cap: '20'
+  tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
+- variant: asymmetric 23*sigmoid((z+5)/7.5)
+  rung: d512
+  protocol: equal_steps
+  batch: '32'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852265563
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - -0.0111
+  loss:
+  - 3.0722
+  wandb:
+  - lc1-b32-asym23
+  settings:
+    form: 23*sigmoid((z+5)/7.5)
+  tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
+- variant: asymmetric 15*sigmoid((z+5)/7.5)
+  rung: d512
+  protocol: equal_steps
+  batch: '32'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852265563
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.0552
+  loss:
+  - 3.1385
+  wandb:
+  - lc1-b32-asym15
+  settings:
+    form: 15*sigmoid((z+5)/7.5)
+  tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
+- variant: tanh cap 9
+  rung: d512
+  protocol: equal_steps
+  batch: '43'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853836517
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0024
+  loss:
+  - 3.0615
+  wandb:
+  - lc1-b43-cap9
+  settings:
+    logit_soft_cap: '9'
+  tuned: cap 9/10/11
+- variant: tanh cap 11
+  rung: d512
+  protocol: equal_steps
+  batch: '43'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853836517
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0017
+  loss:
+  - 3.0608
+  wandb:
+  - lc1-b43-cap11
+  settings:
+    logit_soft_cap: '11'
+  tuned: cap 9/10/11
+- variant: cap 8
+  rung: d512
+  protocol: equal_steps
+  batch: '67'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858925941
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - 0.0058
+  loss:
+  - 3.0255
+  wandb:
+  - lc1-b67-cap8
+  settings:
+    logit_soft_cap: '8'
+  tuned: cap 8/10/12
+- variant: cap 12
+  rung: d512
+  protocol: equal_steps
+  batch: '67'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858925941
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - 0.0006
+  loss:
+  - 3.0203
+  wandb:
+  - lc1-b67-cap12
+  settings:
+    logit_soft_cap: '12'
+  tuned: cap 8/10/12
+- variant: tanh cap 10, d1024 gate 2
+  rung: d1024
+  protocol: data_matched
+  batch: gate-2-softcap
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853105980
+  baseline: gate-2 recipe without cap d1024 2.5818
+  steps: 9268
+  delta:
+  - -0.0079
+  loss:
+  - 2.5739
+  wandb:
+  - lc1-g2c-d1024
+  settings:
+    logit_soft_cap: '10'
+  note: -0.0195 vs clean KMA 2.5934 (k ~1.18x); cap gain shrinks with scale
+- variant: tanh 10 fresh control
+  rung: d512
+  protocol: equal_steps
+  batch: '175'
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5945519263
+  baseline: earlier candidate 10 controls 2.9616 / 2.9664
+  steps: 2817
+  loss:
+  - 2.9647
+  settings:
+    logit_soft_cap: '10'
+  tuned: tanh 10/11; asym shift +-4, gain 0.8/1.25 at cap 11
+  note: fresh control run
+- variant: tanh 11
+  rung: d512
+  protocol: equal_steps
+  batch: '175'
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5945519263
+  baseline: candidate 10 (2.9616 / 2.9664)
+  steps: 2817
+  delta:
+  - 0.0004
+  - 0.0004
+  loss:
+  - 2.962
+  - 2.9668
+  settings:
+    logit_soft_cap: '11'
+  tuned: tanh 10/11; asym shift +-4, gain 0.8/1.25 at cap 11
+- variant: sigma(22,0,5.5) = tanh 11 via asym path
+  rung: d512
+  protocol: equal_steps
+  batch: '175'
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5945519263
+  baseline: tanh 11
+  steps: 2817
+  delta:
+  - 0.0026
+  loss:
+  - 2.9646
+  settings:
+    form: sigma(22,0,5.5)
+  tuned: tanh 10/11; asym shift +-4, gain 0.8/1.25 at cap 11
+  note: same math; run-to-run noise
+- variant: asym shift -4
+  rung: d512
+  protocol: equal_steps
+  batch: '175'
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5945519263
+  baseline: tanh 11 (mean)
+  steps: 2817
+  delta:
+  - 0.0033
+  loss:
+  - 2.9661
+  - 2.9692
+  settings:
+    form: sigma(22,-4,5.5)
+  tuned: tanh 10/11; asym shift +-4, gain 0.8/1.25 at cap 11
+  note: mean delta
+- variant: asym shift +4
+  rung: d512
+  protocol: equal_steps
+  batch: '175'
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5945519263
+  baseline: tanh 11 (mean)
+  steps: 2817
+  delta:
+  - 0.0019
+  loss:
+  - 2.964
+  - 2.9686
+  settings:
+    form: sigma(22,+4,5.5)
+  tuned: tanh 10/11; asym shift +-4, gain 0.8/1.25 at cap 11
+  note: mean delta
+- variant: asym gain 0.8
+  rung: d512
+  protocol: equal_steps
+  batch: '175'
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5945519263
+  baseline: tanh 11 (mean)
+  steps: 2817
+  delta:
+  - 0.004
+  loss:
+  - 2.9653
+  - 2.9714
+  settings:
+    form: sigma(22,0,6.875)
+  tuned: tanh 10/11; asym shift +-4, gain 0.8/1.25 at cap 11
+  note: mean delta
+- variant: asym gain 1.25
+  rung: d512
+  protocol: equal_steps
+  batch: '175'
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5945519263
+  baseline: tanh 11 (mean)
+  steps: 2817
+  delta:
+  - 0.0008
+  loss:
+  - 2.9643
+  - 2.9661
+  settings:
+    form: sigma(22,0,4.4)
+  step_time_change: +1% asym kernel
+  tuned: tanh 10/11; asym shift +-4, gain 0.8/1.25 at cap 11
+  note: mean delta; ties
+events:
+- type: adopted
+  batch: '35'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852955448
+  note: new base = recipe + soft-cap 10 (lc1-b32-cap10, 3.0591)
+  candidate: soft-cap 10 base
+  as_adopted:
+  - logit_soft_cap=10
+  - tanh form
+  - z-loss 1e-4 kept
+- type: closed
+  batch: '175'
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5945519263
+  note: cap 11 and asymmetric forms flat; keep tanh 10

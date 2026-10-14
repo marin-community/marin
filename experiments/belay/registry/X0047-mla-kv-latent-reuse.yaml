@@ -1,0 +1,38 @@
+id: X0047
+slug: mla-kv-latent-reuse
+name: Cross-layer MLA KV latent reuse
+category: Attention variants
+summary: The last MLA layer reuses an earlier MLA layer's KV latent.
+source: maintainer
+status: closed
+first_batch: 15
+tags:
+- mla
+- kv-cache
+- reuse
+knobs:
+- mla_share_kv_latent=true
+trials:
+- variant: L5 reuses L3 KV latent
+  rung: d512
+  protocol: equal_steps
+  batch: '15'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842638290
+  baseline: current best (qk 2.5 + beta1 0.8 + z-loss 0) seed-0 mean 3.0797
+  steps: 2817
+  delta:
+  - 0.0056
+  loss:
+  - 3.0853
+  wandb:
+  - lc1-b15-kvshare
+  settings:
+    mla_share_kv_latent: 'true'
+  note: halves MLA KV cache
+events:
+- type: closed
+  batch: '15'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842638290
+  note: +0.0056, stays out of recipe

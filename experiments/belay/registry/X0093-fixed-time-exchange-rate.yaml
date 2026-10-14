@@ -1,0 +1,30 @@
+id: X0093
+slug: fixed-time-exchange-rate
+name: Fixed-time step exchange rate calibration
+category: Training dynamics and schedules
+summary: Run the base at fewer steps to measure loss per 1% of steps.
+source: agent
+status: done
+first_batch: 51
+tags:
+- fixed time
+- calibration
+- steps
+details:
+- 1% of steps ~ 0.0017 loss at d512
+trials:
+- variant: base at 90% of steps
+  rung: d512
+  protocol: unknown
+  batch: '51'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854280637
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2535
+  delta:
+  - 0.0172
+  loss:
+  - 3.0763
+  wandb:
+  - lc1-b51-base-90pct
+  note: 'calibration: 1% of steps ~ 0.0017 loss at d512'

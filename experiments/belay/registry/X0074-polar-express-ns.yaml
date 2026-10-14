@@ -1,0 +1,55 @@
+id: X0074
+slug: polar-express-ns
+name: Polar Express Newton-Schulz coefficients
+category: Optimizers
+summary: Per-iteration minimax Newton-Schulz coefficients in MuonH, same 5 steps.
+source: agent
+status: done
+first_batch: 32
+tags:
+- muon
+- newton-schulz
+- polar express
+- polar-express
+papers:
+- arxiv: '2505.16932'
+  title: Polar Express
+knobs:
+- coefficient_type=polar_express
+trials:
+- variant: Polar Express NS coefficients
+  rung: d512
+  protocol: equal_steps
+  batch: '32'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852265563
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.0007
+  loss:
+  - 3.084
+  wandb:
+  - lc1-b32-polar-r
+  settings:
+    variant: Polar Express NS coefficients
+- variant: Polar Express NS coefficients
+  rung: d512
+  protocol: equal_steps
+  batch: '77'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860969387
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.0003
+  - 0.0021
+  loss:
+  - 3.0102
+  - 3.0157
+  wandb:
+  - lc1-b77-polar
+  - lc1-b77-polar-s1
+  settings:
+    coefficient_type: polar_express
+  note: neutral; 5 steps far from converged

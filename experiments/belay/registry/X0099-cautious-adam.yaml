@@ -1,0 +1,38 @@
+id: X0099
+slug: cautious-adam
+name: Cautious Adam
+category: Optimizers
+summary: Keep only Adam update coordinates whose sign agrees with the current gradient.
+source: agent
+status: done
+first_batch: 58
+tags:
+- cautious
+- adam
+- masking
+papers:
+- arxiv: '2411.16085'
+  title: Cautious Optimizers
+knobs:
+- adam_cautious
+trials:
+- variant: all plain-Adam groups
+  rung: d512
+  protocol: equal_steps
+  batch: '58'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5857674348
+  baseline: candidate 1 3.0325 (s0) / 3.0395 (s1)
+  steps: 2817
+  delta:
+  - 0.0031
+  - 0.0023
+  loss:
+  - 3.0356
+  - 3.0418
+  wandb:
+  - lc1-b58-cautious
+  - lc1-b58-cautious-s1
+  settings:
+    adam_cautious: 'true'
+  note: slows bigram table's rare rows

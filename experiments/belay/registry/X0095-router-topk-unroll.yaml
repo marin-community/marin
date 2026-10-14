@@ -1,0 +1,42 @@
+id: X0095
+slug: router-topk-unroll
+name: Unrolled router top-k
+category: Systems and speed
+summary: Replace lax.top_k with 9 unrolled max/argmax passes.
+source: agent
+status: adopted
+first_batch: 51
+tags:
+- router
+- top-k
+- kernel
+- mfu
+trials:
+- variant: unrolled router top-k + gate/up split view (lc1-mfu1)
+  rung: d512
+  protocol: equal_steps
+  batch: mfu-pass-1
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5845498130
+  baseline: gate-2 recipe 3.0834
+  steps: 2817
+  delta:
+  - -0.0001
+  loss:
+  - 3.0833
+  wandb:
+  - lc1-mfu1
+  settings:
+    router top-k: 9 unrolled max/argmax passes
+    gate/up split: '[...,2,I] view'
+  step_time_change: -4.7% step (+4.9% ex/s); 781 ex/s
+  note: same math; router top-k 1.118 -> 0.354 ms; GPU step 164 -> 154.5 ms
+events:
+- type: adopted
+  batch: mfu-pass-1
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5845498130
+  note: same math; +5.5% ex/s with gate/up split
+  candidate: runtime (row 3)
+  as_adopted:
+  - 9 unrolled max/argmax passes instead of lax.top_k

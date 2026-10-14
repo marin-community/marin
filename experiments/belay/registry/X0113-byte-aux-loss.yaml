@@ -1,0 +1,115 @@
+id: X0113
+slug: byte-aux-loss
+name: Byte-level auxiliary loss
+category: Output head and loss
+summary: A separate head predicts the next token's first 8 UTF-8 bytes, weight decayed to 0 mid-run.
+source: maintainer
+status: closed
+first_batch: 66
+tags:
+- aux-loss
+- bytes
+- tokenizer
+knobs:
+- byte_aux_bytes
+- byte_aux_weight
+- byte_aux_mid_layer
+trials:
+- variant: 8 bytes, final hidden, weight 0.1 to 0 at 50%
+  rung: d512
+  protocol: equal_steps
+  batch: '66'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858849982
+  baseline: candidate 2 3.0197 (s0) / 3.0266 (s1) / 3.0274 (s2)
+  steps: 2817
+  delta:
+  - 0.0012
+  loss:
+  - 3.0209
+  wandb:
+  - lc1-b66-byte01
+  settings:
+    byte_aux_bytes: '8'
+    byte_aux_weight: '0.1'
+    off at: 50%
+  tuned: weight 0.1 vs 0.3; final vs mid; off at 50% vs 20%
+- variant: 8 bytes, final hidden, weight 0.3 to 0 at 50%
+  rung: d512
+  protocol: equal_steps
+  batch: '66'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858849982
+  baseline: candidate 2 3.0197 (s0) / 3.0266 (s1) / 3.0274 (s2)
+  steps: 2817
+  delta:
+  - 0.0077
+  loss:
+  - 3.0274
+  wandb:
+  - lc1-b66-byte03
+  settings:
+    byte_aux_bytes: '8'
+    byte_aux_weight: '0.3'
+    off at: 50%
+  tuned: weight 0.1 vs 0.3; final vs mid; off at 50% vs 20%
+- variant: mid-network stream, weight 0.1
+  rung: d512
+  protocol: equal_steps
+  batch: '66'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858849982
+  baseline: candidate 2 3.0197 (s0) / 3.0266 (s1) / 3.0274 (s2)
+  steps: 2817
+  delta:
+  - 0.008
+  loss:
+  - 3.0277
+  wandb:
+  - lc1-b66-bytemid01
+  settings:
+    byte_aux_mid_layer: 'true'
+    byte_aux_weight: '0.1'
+  tuned: weight 0.1 vs 0.3; final vs mid; off at 50% vs 20%
+- variant: mid-network stream, weight 0.3
+  rung: d512
+  protocol: equal_steps
+  batch: '66'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858849982
+  baseline: candidate 2 3.0197 (s0) / 3.0266 (s1) / 3.0274 (s2)
+  steps: 2817
+  delta:
+  - 0.0175
+  loss:
+  - 3.0372
+  wandb:
+  - lc1-b66-bytemid03
+  settings:
+    byte_aux_mid_layer: 'true'
+    byte_aux_weight: '0.3'
+  tuned: weight 0.1 vs 0.3; final vs mid; off at 50% vs 20%
+- variant: final hidden, weight 0.1 to 0 by 20%
+  rung: d512
+  protocol: equal_steps
+  batch: '66'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858849982
+  baseline: candidate 2 3.0197 (s0) / 3.0266 (s1) / 3.0274 (s2)
+  steps: 2817
+  delta:
+  - 0.0025
+  loss:
+  - 3.0222
+  wandb:
+  - lc1-b66-byte-early
+  settings:
+    byte_aux_weight: '0.1'
+    off at: 20%
+  tuned: weight 0.1 vs 0.3; final vs mid; off at 50% vs 20%
+events:
+- type: closed
+  batch: '66'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858849982
+  note: branch closes at d512

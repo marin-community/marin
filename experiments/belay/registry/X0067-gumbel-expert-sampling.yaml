@@ -1,0 +1,66 @@
+id: X0067
+slug: gumbel-expert-sampling
+name: Gumbel expert sampling
+category: MoE and routing
+summary: Sample K experts via Gumbel noise on router logits during training.
+source: maintainer
+status: done
+first_batch: 30
+tags:
+- router
+- gumbel
+- sampling
+knobs:
+- moe_gumbel_tau
+trials:
+- variant: tau 0.1
+  rung: d512
+  protocol: equal_steps
+  batch: '30'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852213638
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.0031
+  loss:
+  - 3.0864
+  wandb:
+  - lc1-b30-gum01
+  settings:
+    moe_gumbel_tau: '0.1'
+  tuned: tau 0.1/0.3/1.0
+- variant: tau 0.3
+  rung: d512
+  protocol: equal_steps
+  batch: '30'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852213638
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.0011
+  loss:
+  - 3.0844
+  wandb:
+  - lc1-b30-gum03
+  settings:
+    moe_gumbel_tau: '0.3'
+  tuned: tau 0.1/0.3/1.0
+- variant: tau 1.0
+  rung: d512
+  protocol: equal_steps
+  batch: '30'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852213638
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.0259
+  loss:
+  - 3.1092
+  wandb:
+  - lc1-b30-gum1
+  settings:
+    moe_gumbel_tau: '1.0'
+  tuned: tau 0.1/0.3/1.0

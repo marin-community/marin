@@ -1,0 +1,36 @@
+id: X0078
+slug: mla-head-mix
+name: MLA dynamic cross-head output mix (DC attention stand-in)
+category: Attention variants
+summary: Per-token rank-1 mix of MLA head outputs after FA4, as a cheap DCMHA stand-in.
+source: maintainer
+status: done
+first_batch: 39
+tags:
+- dcmha
+- dc attention
+- head mix
+- mla
+papers:
+- arxiv: '2405.08553'
+  title: DCMHA
+knobs:
+- mla_head_mix
+trials:
+- variant: post-FA4 dynamic cross-head output mix (DC stand-in)
+  rung: d512
+  protocol: equal_steps
+  batch: '39'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853163866
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0018
+  loss:
+  - 3.0609
+  wandb:
+  - lc1-b39-headmix
+  settings:
+    mla_head_mix: 'on'
+    W2 init: '0'

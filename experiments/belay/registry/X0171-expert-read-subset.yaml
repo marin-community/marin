@@ -1,0 +1,327 @@
+id: X0171
+slug: expert-read-subset
+name: Per-expert fixed read slices
+category: MoE and routing
+summary: Each routed expert reads only a fixed slice (block or random subset) of the full stream, no shared down-projection.
+source: maintainer
+status: closed
+first_batch: 104
+tags:
+- expert_read_subset
+- slices
+- dispatch
+- latent
+knobs:
+- expert_read_subset
+- expert_read_groups
+trials:
+- variant: 2 blocks of 256
+  rung: d512
+  protocol: equal_steps
+  batch: '104'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5869911069
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0342
+  - 0.0364
+  loss:
+  - 3.0134
+  - 3.0225
+  wandb:
+  - lc1-b104-sub256
+  - lc1-b104-sub256-s1
+  settings:
+    expert_read_subset: 2 blocks of 256
+  step_time_change: ~8-10% slower (masked full read)
+  tuned: slice 256/128/64, blocks vs random, with/without shared
+  derived: true
+- variant: 4 blocks of 128
+  rung: d512
+  protocol: equal_steps
+  batch: '104'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5869911069
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0756
+  - 0.0744
+  loss:
+  - 3.0548
+  - 3.0605
+  wandb:
+  - lc1-b104-sub128
+  - lc1-b104-sub128-s1
+  settings:
+    expert_read_subset: 4 blocks of 128
+  step_time_change: ~8-10% slower (masked full read)
+  tuned: slice 256/128/64, blocks vs random, with/without shared
+  derived: true
+- variant: random 128-subsets
+  rung: d512
+  protocol: equal_steps
+  batch: '104'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5869911069
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0783
+  - 0.0778
+  loss:
+  - 3.0575
+  - 3.0639
+  wandb:
+  - lc1-b104-sub128r
+  - lc1-b104-sub128r-s1
+  settings:
+    expert_read_subset: random 128-subsets
+  step_time_change: ~8-10% slower (masked full read)
+  tuned: slice 256/128/64, blocks vs random, with/without shared
+  derived: true
+- variant: 8 blocks of 64
+  rung: d512
+  protocol: equal_steps
+  batch: '104'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5869911069
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.1178
+  - 0.1178
+  loss:
+  - 3.097
+  - 3.1039
+  wandb:
+  - lc1-b104-sub64
+  - lc1-b104-sub64-s1
+  settings:
+    expert_read_subset: 8 blocks of 64
+  step_time_change: ~8-10% slower (masked full read)
+  tuned: slice 256/128/64, blocks vs random, with/without shared
+  derived: true
+- variant: no shared, 2 blocks of 256
+  rung: d512
+  protocol: equal_steps
+  batch: '104'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5869911069
+  baseline: no-shared candidate 8 2.9899 / 2.9982
+  steps: 2817
+  delta:
+  - 0.0224
+  - 0.0277
+  loss:
+  - 3.0123
+  - 3.0259
+  wandb:
+  - lc1-b104-ns-sub256
+  - lc1-b104-ns-sub256-s1
+  settings:
+    shared_expert_intermediate_dim: '0'
+    expert_read_subset: 2 blocks of 256
+  step_time_change: ~8-10% slower (masked full read)
+  tuned: slice 256/128/64, blocks vs random, with/without shared
+  derived: true
+- variant: no shared, 4 blocks of 128
+  rung: d512
+  protocol: equal_steps
+  batch: '104'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5869911069
+  baseline: no-shared candidate 8 2.9899 / 2.9982
+  steps: 2817
+  delta:
+  - 0.0601
+  - 0.0614
+  loss:
+  - 3.05
+  - 3.0596
+  wandb:
+  - lc1-b104-ns-sub128
+  - lc1-b104-ns-sub128-s1
+  settings:
+    shared_expert_intermediate_dim: '0'
+    expert_read_subset: 4 blocks of 128
+  step_time_change: ~8-10% slower (masked full read)
+  tuned: slice 256/128/64, blocks vs random, with/without shared
+  derived: true
+- variant: no shared, random 128-subsets
+  rung: d512
+  protocol: equal_steps
+  batch: '104'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5869911069
+  baseline: no-shared candidate 8 2.9899 / 2.9982
+  steps: 2817
+  delta:
+  - 0.0637
+  - 0.0646
+  loss:
+  - 3.0536
+  - 3.0628
+  wandb:
+  - lc1-b104-ns-sub128r
+  - lc1-b104-ns-sub128r-s1
+  settings:
+    shared_expert_intermediate_dim: '0'
+    expert_read_subset: random 128-subsets
+  step_time_change: ~8-10% slower (masked full read)
+  tuned: slice 256/128/64, blocks vs random, with/without shared
+  derived: true
+- variant: no shared, 8 blocks of 64
+  rung: d512
+  protocol: equal_steps
+  batch: '104'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5869911069
+  baseline: no-shared candidate 8 2.9899 / 2.9982
+  steps: 2817
+  delta:
+  - 0.1027
+  - 0.1047
+  loss:
+  - 3.0926
+  - 3.1029
+  wandb:
+  - lc1-b104-ns-sub64
+  - lc1-b104-ns-sub64-s1
+  settings:
+    shared_expert_intermediate_dim: '0'
+    expert_read_subset: 8 blocks of 64
+  step_time_change: ~8-10% slower (masked full read)
+  tuned: slice 256/128/64, blocks vs random, with/without shared
+  derived: true
+- variant: 'mask control: every expert reads same first 256'
+  rung: d512
+  protocol: equal_steps
+  batch: '104'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5874548892
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0162
+  - 0.0158
+  wandb:
+  - lc1-b104-subshared256
+  - lc1-b104-subshared256-s1
+  settings:
+    expert_read_subset_pattern: shared
+  note: masking artifact ~+0.016; real per-expert split cost ~+0.019
+- variant: 'no shared, mask control: same first 256'
+  rung: d512
+  protocol: equal_steps
+  batch: '104'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5874548892
+  baseline: no-shared candidate 8 2.9899 / 2.9982
+  steps: 2817
+  delta:
+  - 0.0092
+  - 0.0109
+  wandb:
+  - lc1-b104-ns-subshared256
+  - lc1-b104-ns-subshared256-s1
+  settings:
+    expert_read_subset_pattern: shared
+    shared_expert_intermediate_dim: '0'
+  note: real split cost ~+0.015 after artifact
+- variant: gather, 2 groups of 256
+  rung: d512
+  protocol: equal_steps
+  batch: '109'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5875304252
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0039
+  - 0.006
+  loss:
+  - 2.9831
+  - 2.9921
+  wandb:
+  - lc1-b109-grp2
+  - lc1-b109-grp2-s1
+  settings:
+    expert_read_groups: '2'
+  step_time_change: ~+10% (201-203 vs 183.5 ms)
+  tuned: G 2 / 4, with/without shared
+- variant: gather, 4 groups of 128
+  rung: d512
+  protocol: equal_steps
+  batch: '109'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5875304252
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0334
+  - 0.0333
+  loss:
+  - 3.0126
+  - 3.0194
+  wandb:
+  - lc1-b109-grp4
+  - lc1-b109-grp4-s1
+  settings:
+    expert_read_groups: '4'
+  step_time_change: ~0 (182-185 ms)
+  tuned: G 2 / 4, with/without shared
+- variant: no shared, gather, 2 groups of 256
+  rung: d512
+  protocol: equal_steps
+  batch: '109'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5875304252
+  baseline: no-shared candidate 8 2.9899 / 2.9982
+  steps: 2817
+  delta:
+  - 0.0077
+  - 0.0086
+  loss:
+  - 2.9976
+  - 3.0068
+  wandb:
+  - lc1-b109-ns-grp2
+  - lc1-b109-ns-grp2-s1
+  settings:
+    expert_read_groups: '2'
+    shared_expert_intermediate_dim: '0'
+  tuned: G 2 / 4, with/without shared
+- variant: no shared, gather, 4 groups of 128
+  rung: d512
+  protocol: equal_steps
+  batch: '109'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5875304252
+  baseline: no-shared candidate 8 2.9899 / 2.9982
+  steps: 2817
+  delta:
+  - 0.0356
+  - 0.0377
+  loss:
+  - 3.0255
+  - 3.0359
+  wandb:
+  - lc1-b109-ns-grp4
+  - lc1-b109-ns-grp4-s1
+  settings:
+    expert_read_groups: '4'
+    shared_expert_intermediate_dim: '0'
+  tuned: G 2 / 4, with/without shared
+events:
+- type: closed
+  batch: '104'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5869911069
+  note: per-expert read subsets lose badly; closed
+- type: closed
+  batch: '109'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5875304252
+  note: 'fair gather version: +0.005 at 2 groups, +0.033 at 4; closed with clean numbers'

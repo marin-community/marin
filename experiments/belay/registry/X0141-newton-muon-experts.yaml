@@ -1,0 +1,46 @@
+id: X0141
+slug: newton-muon-experts
+name: Newton-Muon on experts
+category: Optimizers
+summary: Right-precondition the expert Muon update by the expert-input covariance.
+source: agent
+status: closed
+first_batch: 88
+tags:
+- newton-muon
+- muon
+- preconditioner
+- experts
+papers:
+- arxiv: '2604.01472'
+  title: Newton-Muon
+trials:
+- variant: expert up weights, beta 0.95, gamma 0.2, every 32
+  rung: d512
+  protocol: equal_steps
+  batch: '88'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0005
+  - -0.0006
+  loss:
+  - 3.0067
+  - 3.0103
+  wandb:
+  - lc1-b88-newtonmuon
+  - lc1-b88-newtonmuon-s1
+  settings:
+    target: expert up weights
+    beta: '0.95'
+    gamma: '0.2'
+    precond every: 32 steps
+  note: neutral; closed
+events:
+- type: closed
+  batch: '88'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
+  note: neutral on both seeds

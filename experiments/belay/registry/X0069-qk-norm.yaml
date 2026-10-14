@@ -1,0 +1,136 @@
+id: X0069
+slug: qk-norm
+name: MLA QK-norm
+category: Normalization
+summary: Per-head RMSNorm on MLA q and k with learnable qk_mult as temperature.
+source: agent
+status: removed
+first_batch: 30
+tags:
+- qk-norm
+- mla
+- rmsnorm
+- temperature
+- normalization
+papers:
+- title: OLMo 2
+- title: Gemma 3
+details:
+- 'dropped: breaks absorbed W_uk at inference under MLA'
+trials:
+- variant: MLA QK-norm, learnable qk_mult init 1.0
+  rung: d512
+  protocol: equal_steps
+  batch: '30'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852213638
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - -0.0023
+  loss:
+  - 3.081
+  wandb:
+  - lc1-b30-qkn1
+  settings:
+    q,k norm: per-head RMSNorm
+    qk_mult init: '1.0'
+  tuned: qk_mult init 1.0/2.5
+- variant: MLA QK-norm, learnable qk_mult init 2.5
+  rung: d512
+  protocol: equal_steps
+  batch: '30'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852213638
+  baseline: lc1-mfu1 3.0833 (s0) / lc1-b30-base-s1 3.0951 (s1)
+  steps: 2817
+  delta:
+  - -0.0057
+  - -0.0167
+  loss:
+  - 3.0776
+  - 3.0784
+  wandb:
+  - lc1-b30-qkn25
+  - lc1-b30-qkn25-s1
+  settings:
+    q,k norm: per-head RMSNorm
+    qk_mult init: '2.5'
+  tuned: qk_mult init 1.0/2.5
+  note: mean paired -0.0112; learned qk_mult barely moves
+- variant: d768 MLA QK-norm, qk_mult init 2.5
+  rung: d768
+  protocol: data_matched
+  batch: '30'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852213638
+  baseline: d768 recipe base 2.8114
+  steps: 6928
+  delta:
+  - -0.0035
+  loss:
+  - 2.8079
+  wandb:
+  - lc1-b30-d768-qkn25
+  settings:
+    qk_mult init: '2.5'
+- variant: QK-norm on MLA + soft-cap 10
+  rung: d512
+  protocol: equal_steps
+  batch: '32'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852265563
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - -0.028
+  loss:
+  - 3.0553
+  wandb:
+  - lc1-b32-cap10-qkn
+  settings:
+    qk-norm: MLA
+    logit_soft_cap: '10'
+  note: vs cap 10 alone -0.0242
+- variant: QK-norm on MLA + soft-cap 15
+  rung: d512
+  protocol: equal_steps
+  batch: '32'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852265563
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - -0.0226
+  loss:
+  - 3.0607
+  wandb:
+  - lc1-b32-cap15-qkn
+  settings:
+    qk-norm: MLA
+    logit_soft_cap: '15'
+  note: vs cap 15 alone -0.0184; QK-norm alone at d768 -0.0035
+- variant: soft-cap 10 + QK-norm + EMA blend
+  rung: d512
+  protocol: equal_steps
+  batch: '34'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852749626
+  steps: 2817
+  delta:
+  - -0.0329
+  loss:
+  - 3.0504
+  wandb:
+  - lc1-b34-cap10-qkn-ema
+  settings:
+    qk-norm: MLA
+    logit_soft_cap: '10'
+  note: 0.75 blend 3.0486 (-0.0347); QK-norm dropped, breaks MLA absorption
+events:
+- type: removed
+  batch: '34'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852902992
+  note: QK-norm out of the candidate; breaks absorbed W_uk under MLA (maintainer)
+  candidate: soft-cap 10 + EMA candidate

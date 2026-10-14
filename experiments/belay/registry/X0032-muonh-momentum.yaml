@@ -1,0 +1,46 @@
+id: X0032
+slug: muonh-momentum
+name: MuonH momentum coefficient
+category: Optimizers
+summary: Change the MuonH Nesterov momentum (default 0.95).
+source: agent
+status: done
+first_batch: 7
+tags:
+- muon
+- momentum
+trials:
+- variant: MuonH momentum 0.9
+  rung: d512
+  protocol: equal_steps
+  batch: '7'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840955062
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2817
+  delta:
+  - 0.0028
+  loss:
+  - 3.0886
+  wandb:
+  - lc1-b07-mom90
+  settings:
+    MuonH momentum: 0.9 (vs 0.95)
+  tuned: 0.9 / 0.95 / 0.98
+- variant: MuonH momentum 0.98
+  rung: d512
+  protocol: equal_steps
+  batch: '7'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840955062
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2817
+  delta:
+  - 0.0337
+  loss:
+  - 3.1195
+  wandb:
+  - lc1-b07-mom98
+  settings:
+    MuonH momentum: '0.98'
+  tuned: 0.9 / 0.95 / 0.98

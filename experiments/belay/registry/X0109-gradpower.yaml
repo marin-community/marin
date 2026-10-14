@@ -1,0 +1,39 @@
+id: X0109
+slug: gradpower
+name: GradPower on MuonH gradients
+category: Optimizers
+summary: Apply g <- sign(g)|g|^p to MuonH-group gradients before momentum.
+source: maintainer
+status: closed
+first_batch: 64
+tags:
+- gradpower
+- parameter-golf
+papers:
+- arxiv: '2505.24275'
+  title: GradPower
+knobs:
+- muon_grad_power
+trials:
+- variant: GradPower 0.9 on MuonH grads
+  rung: d512
+  protocol: equal_steps
+  batch: '64'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858739832
+  baseline: candidate 2 3.0197 (s0) / 3.0266 (s1)
+  steps: 2817
+  delta:
+  - 0.0003
+  loss:
+  - 3.02
+  wandb:
+  - lc1-b64-gradpow09
+  settings:
+    muon_grad_power: '0.9'
+events:
+- type: closed
+  batch: '64'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858739832
+  note: Parameter Golf batch closed with no adoptions

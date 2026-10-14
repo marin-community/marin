@@ -1,0 +1,71 @@
+id: X0174
+slug: bigram-row-sparse-adam
+name: Row-sparse Adam on the bigram table
+category: Optimizers
+summary: Adam with beta1 0, no AdEMAMix and one second moment per row on the bigram table, enabling sparse updates.
+source: maintainer
+status: done
+first_batch: 118
+tags:
+- bigram
+- adam
+- row-sparse
+- memory
+- anvil2
+details:
+- beta1 0, per-row fp32 v, record's bias correction, run densely
+knobs:
+- embed2_row_sparse_adam
+trials:
+- variant: beta1 0, per-row v, no AdEMAMix, table LR x10
+  rung: d512
+  protocol: equal_steps
+  batch: '118'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5884208355
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0031
+  - 0.0026
+  settings:
+    embed2_row_sparse_adam: 'true'
+    beta1: '0'
+    AdEMAMix: 'off'
+    table LR mult: '10'
+  tuned: table LR x10 / x20 / x70
+- variant: table LR x20
+  rung: d512
+  protocol: equal_steps
+  batch: '118'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5884208355
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0028
+  - 0.0036
+  settings:
+    embed2_row_sparse_adam: 'true'
+    beta1: '0'
+    AdEMAMix: 'off'
+    table LR mult: '20'
+  tuned: table LR x10 / x20 / x70
+- variant: table LR x70 (record's value)
+  rung: d512
+  protocol: equal_steps
+  batch: '118'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5884208355
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0033
+  - 0.0038
+  settings:
+    embed2_row_sparse_adam: 'true'
+    beta1: '0'
+    AdEMAMix: 'off'
+    table LR mult: '70'
+  tuned: table LR x10 / x20 / x70
+  note: LR-insensitive cost about +0.003

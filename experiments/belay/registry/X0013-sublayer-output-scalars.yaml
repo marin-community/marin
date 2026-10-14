@@ -1,0 +1,92 @@
+id: X0013
+slug: sublayer-output-scalars
+name: Learnable sublayer output scalars
+category: Depth connections
+summary: Scale each attention and MoE sublayer output by a learnable scalar before it enters the AttnRes history.
+source: maintainer
+status: closed
+first_batch: 1
+tags:
+- attnres
+- scalar
+- osc
+- output scalar
+- sublayer
+details:
+- scalar init 1
+- Adam
+- scalar on every attention and MLP output, init 1
+- or 2*sigmoid(w), init w=0
+knobs:
+- sublayer_scales
+- sublayer_scale_fn
+trials:
+- variant: learnable scalar per sublayer output
+  rung: d512
+  protocol: equal_steps
+  batch: '1'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5839709085
+  baseline: clean KMA seed 0 3.1251
+  steps: 2475
+  delta:
+  - -0.0051
+  loss:
+  - 3.12
+  wandb:
+  - lc1-b01-osc
+  settings:
+    scalar init: '1'
+    optimizer: Adam
+  note: vs 2-seed mean 3.1223 only -0.002; MoE output scalars grow to 1.2-2.1x
+- variant: osc on fp32 base
+  rung: d512
+  protocol: equal_steps
+  batch: '2'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5839990993
+  baseline: batch-1 2-seed baseline mean 3.1223
+  steps: 2719
+  delta:
+  - -0.0141
+  loss:
+  - 3.1082
+  wandb:
+  - lc1-b02-osc
+  note: +0.004 vs new base mean
+- variant: linear, init 1
+  rung: d512
+  protocol: equal_steps
+  batch: '181'
+  date: '2026-10-04'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5985074958
+  baseline: batch 181 ctrl 2.9644
+  steps: 2817
+  delta:
+  - -0.0003
+  loss:
+  - 2.9641
+  settings:
+    sublayer_scales: linear init 1
+  tuned: linear vs 2*sigmoid
+- variant: 2*sigmoid(w)
+  rung: d512
+  protocol: equal_steps
+  batch: '181'
+  date: '2026-10-04'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5985074958
+  baseline: batch 181 ctrl 2.9644
+  steps: 2817
+  delta:
+  - -0.0015
+  loss:
+  - 2.9629
+  settings:
+    sublayer_scales: 2*sigmoid(w), w=0
+  tuned: linear vs 2*sigmoid
+events:
+- type: closed
+  batch: 185-187
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986874164
+  note: gain/scale/combine family closed at d512 1x

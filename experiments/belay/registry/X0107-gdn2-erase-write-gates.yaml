@@ -1,0 +1,103 @@
+id: X0107
+slug: gdn2-erase-write-gates
+name: Gated DeltaNet-2 erase/write gates on KDA
+category: Linear attention / KDA
+summary: Channel-wise erase and write gates replacing KDA's scalar write strength.
+source: agent
+status: removed
+first_batch: 62
+tags:
+- kda
+- gated-deltanet-2
+- write-gate
+- erase-gate
+- gdn-2
+- delta rule
+papers:
+- arxiv: '2605.22791'
+  title: Gated DeltaNet-2
+details:
+- 'write gate: v <- 2 sigmoid(x W_w) * v'
+- W_w on MuonH, std 0.02
+- erase + write gates (full GDN-2 update)
+knobs:
+- kda_erase_gate=true
+- kda_write_gate=true
+trials:
+- variant: write gate only
+  rung: d512
+  protocol: equal_steps
+  batch: '62'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858182192
+  baseline: candidate 1 3.0325
+  steps: 2817
+  delta:
+  - -0.0001
+  loss:
+  - 3.0324
+  wandb:
+  - lc1-b62-kdawrite
+  settings:
+    kda_write_gate: 'true'
+  step_time_change: -2.5% ex/s
+  note: neutral at -2.5% ex/s; not adopted
+- variant: erase gate only
+  rung: d512
+  protocol: equal_steps
+  batch: '88'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0021
+  - -0.0013
+  loss:
+  - 3.0051
+  - 3.0096
+  wandb:
+  - lc1-b88-erase
+  - lc1-b88-erase-r-s1
+  settings:
+    kda_erase_gate: 'true'
+  tuned: erase vs erase+write
+  note: erase entropy 0.69 -> 0.13-0.15
+- variant: erase + write gates (full GDN-2)
+  rung: d512
+  protocol: equal_steps
+  batch: '88'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0015
+  - -0.0032
+  loss:
+  - 3.0057
+  - 3.0077
+  wandb:
+  - lc1-b88-erase-write
+  - lc1-b88-erase-write-s1
+  settings:
+    kda_erase_gate: 'true'
+    kda_write_gate: 'true'
+  step_time_change: +1%
+  tuned: erase vs erase+write
+  note: version to carry to consolidation
+events:
+- type: adopted
+  batch: '90'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864219716
+  note: part of candidate 8
+  candidate: candidate 8
+  as_adopted:
+  - kda_erase_gate=true
+  - kda_write_gate=true
+- type: removed
+  batch: ckpt1
+  date: '2026-10-14'
+  comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
+  note: KDA write and erase gates dropped (2026-10-11)

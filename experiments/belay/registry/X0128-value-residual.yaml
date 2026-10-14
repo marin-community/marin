@@ -1,0 +1,64 @@
+id: X0128
+slug: value-residual
+name: Value residual (ResFormer)
+category: Depth connections
+summary: Later layers mix layer 0's values in with learnable lambdas.
+source: agent
+status: closed
+first_batch: 77
+tags:
+- value-residual
+- resformer
+- values
+papers:
+- arxiv: '2410.17897'
+  title: ResFormer
+trials:
+- variant: all layers 1-5, lambda init 0.5/0.5
+  rung: d512
+  protocol: equal_steps
+  batch: '77'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860969387
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - -0.0017
+  - 0.0
+  loss:
+  - 3.0082
+  - 3.0139
+  wandb:
+  - lc1-b77-vresk
+  - lc1-b77-vresk-s1
+  settings:
+    layers: 1-5
+    lambda1/lambda2 init: 0.5/0.5
+  tuned: all layers vs MLA only
+  note: KDA layers switch it off; MLA L5 uses mostly layer-0 values
+- variant: MLA layers only
+  rung: d512
+  protocol: equal_steps
+  batch: '77'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860969387
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.0002
+  - 0.0001
+  loss:
+  - 3.0101
+  - 3.014
+  wandb:
+  - lc1-b77-vresk-mla
+  - lc1-b77-vresk-mla-s1
+  settings:
+    layers: MLA only
+  tuned: all layers vs MLA only
+events:
+- type: closed
+  batch: '78'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
+  note: no loss gain; AttnRes already gives the path to early values

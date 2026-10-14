@@ -1,0 +1,35 @@
+id: X0028
+slug: projection-biases
+name: Projection biases
+category: Attention variants
+summary: Add zero-init biases to q/k/v and sublayer output projections.
+source: maintainer
+status: done
+first_batch: 5
+tags:
+- bias
+- qkv
+- qwen
+details:
+- 'sites: KDA q/k/v, MLA q, KV latent, attn out, MoE out'
+- zero init, Adam
+trials:
+- variant: q/k/v + attn out + MoE out biases
+  rung: d512
+  protocol: equal_steps
+  batch: '5'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840665852
+  baseline: fp32 base mean 3.0990
+  steps: 2817
+  delta:
+  - 0.0003
+  loss:
+  - 3.0993
+  wandb:
+  - lc1-b05-bias
+  settings:
+    bias sites: KDA q/k/v, MLA q + KV latent, attn out, MoE out
+    init: zero
+    optimizer: Adam
+  step_time_change: -1% ex/s

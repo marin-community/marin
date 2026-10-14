@@ -1,0 +1,63 @@
+id: X0127
+slug: turbo-muon-aol
+name: Turbo-Muon (AOL-preconditioned NS)
+category: Optimizers
+summary: AOL column-rescaled preconditioning plus 4 Newton-Schulz steps.
+source: agent
+status: closed
+first_batch: 77
+tags:
+- muon
+- newton-schulz
+- aol
+- turbo-muon
+papers:
+- arxiv: '2512.04632'
+  title: Turbo-Muon
+knobs:
+- coefficient_type=aol
+trials:
+- variant: AOL NS (buggy first version)
+  rung: d512
+  protocol: equal_steps
+  batch: '77'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860969387
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  loss:
+  - 5.2212
+  - 5.1808
+  wandb:
+  - lc1-b77-aol
+  - lc1-b77-aol-s1
+  settings:
+    coefficient_type: aol
+  note: 'diverged: implementation bug flipped singular values'
+- variant: Turbo-Muon AOL preconditioning + 4 NS steps (fixed)
+  rung: d512
+  protocol: equal_steps
+  batch: '78'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.0029
+  - 0.0022
+  loss:
+  - 3.0128
+  - 3.0161
+  wandb:
+  - lc1-b78-aol4
+  - lc1-b78-aol4-s1
+  settings:
+    NS steps: '4'
+    preconditioner: AOL
+  step_time_change: 176.4 / 171.8 ms vs 175.0 / 176.2
+events:
+- type: closed
+  batch: '79'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861318730
+  note: loses to quintic

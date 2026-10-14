@@ -1,0 +1,103 @@
+id: X0087
+slug: muoneq
+name: MuonEq pre-NS normalization
+category: Optimizers
+summary: Normalize momentum rows or columns before Newton-Schulz.
+source: agent
+status: adopted
+first_batch: 46
+tags:
+- muon
+- muoneq
+- normalization
+- row-normalization
+papers:
+- arxiv: '2603.28254'
+  title: MuonEq
+details:
+- per-input-unit normalization
+knobs:
+- muon_pre_norm=in
+trials:
+- variant: per-output-unit normalization
+  rung: d512
+  protocol: equal_steps
+  batch: '46'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853950746
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0018
+  loss:
+  - 3.0573
+  wandb:
+  - lc1-b46-muoneq-out
+  settings:
+    muon_pre_norm: out
+  tuned: in vs out
+- variant: per-input-unit normalization
+  rung: d512
+  protocol: equal_steps
+  batch: '46'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853950746
+  baseline: soft-cap 10 3.0591 / seed 1 3.0675
+  steps: 2817
+  delta:
+  - -0.002
+  - -0.0039
+  loss:
+  - 3.0571
+  - 3.0636
+  wandb:
+  - lc1-b46-muoneq-in
+  - lc1-b46-muoneq-in-s1
+  settings:
+    muon_pre_norm: in
+  tuned: in vs out
+  note: free; carried into stack runs
+- variant: per-input, d768
+  rung: d768
+  protocol: data_matched
+  batch: '56'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5857228683
+  baseline: soft-cap 10 d768 2.7924
+  steps: 6928
+  delta:
+  - -0.0017
+  loss:
+  - 2.7907
+  wandb:
+  - lc1-b56-d768-muoneq
+  settings:
+    muon_pre_norm: in
+  note: 66% log-k retention
+- variant: MuonEq off (ablation)
+  rung: d512
+  protocol: equal_steps
+  batch: '153'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927322746
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0059
+  - 0.006
+  loss:
+  - 2.9827
+  - 2.9882
+  settings:
+    muon_pre_norm: none
+  step_time_change: 171.5 vs 171.6 ms
+  note: MuonEq worth about -0.006
+events:
+- type: adopted
+  batch: '51'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854280637
+  note: part of the new d512 candidate (candidate 1)
+  candidate: candidate 1
+  as_adopted:
+  - muon_pre_norm=in

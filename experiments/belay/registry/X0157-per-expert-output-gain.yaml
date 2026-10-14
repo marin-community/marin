@@ -1,0 +1,24 @@
+id: X0157
+slug: per-expert-output-gain
+name: Per-expert learnable output gain
+category: MoE and routing
+summary: Add a learnable output gain per routed expert.
+source: agent
+status: done
+first_batch: 98
+tags:
+- expert
+- gain
+- muonh
+trials:
+- variant: per-expert learnable output gain
+  rung: d512
+  protocol: equal_steps
+  batch: '98'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867280167
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - -0.0022
+  - -0.0007

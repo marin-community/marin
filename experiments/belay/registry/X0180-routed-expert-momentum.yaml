@@ -1,0 +1,52 @@
+id: X0180
+slug: routed-expert-momentum
+name: Routed-expert MuonH momentum
+category: Optimizers
+summary: Use a different MuonH momentum for routed experts only.
+source: agent
+status: closed
+first_batch: 129
+tags:
+- muon
+- momentum
+- routed-experts
+trials:
+- variant: routed-expert MuonH momentum 0.98 (rmom98)
+  rung: d512
+  protocol: equal_steps
+  batch: '129'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5903520846
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0043
+  - 0.0035
+  settings:
+    routed momentum: '0.98'
+    dense momentum: '0.95'
+  step_time_change: 186 ms
+  tuned: routed momentum 0.90 / 0.95 (base) / 0.98
+- variant: routed-expert MuonH momentum 0.90
+  rung: d512
+  protocol: equal_steps
+  batch: '130'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5903775777
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0047
+  - 0.0059
+  wandb:
+  - lc1-b130-rmom90
+  settings:
+    routed momentum: '0.90'
+  step_time_change: 186 ms
+  tuned: routed momentum 0.90 / 0.95 (base) / 0.98
+events:
+- type: closed
+  batch: '130'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5903775777
+  note: Shared 0.95 already optimal for routed experts

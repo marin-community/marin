@@ -1,0 +1,71 @@
+id: X0076
+slug: learnable-xsa
+name: Learnable XSA
+category: Attention variants
+summary: Make the XSA self-value subtraction learnable per head or per token.
+source: maintainer
+status: done
+first_batch: 37
+tags:
+- xsa
+- exclusive self-attention
+- modded-nanogpt
+- mla
+papers:
+- arxiv: '2603.09078'
+  title: XSA
+knobs:
+- xsa_mode=learned|gated|tanh
+trials:
+- variant: learned per-head scale, init 1
+  rung: d512
+  protocol: equal_steps
+  batch: '37'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853163866
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0002
+  loss:
+  - 3.0589
+  wandb:
+  - lc1-b37-xsa-learned
+  settings:
+    xsa_mode: learned
+  tuned: xsa_mode learned/gated/tanh
+- variant: gated per token, init 1
+  rung: d512
+  protocol: equal_steps
+  batch: '37'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853163866
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0012
+  loss:
+  - 3.0603
+  wandb:
+  - lc1-b37-xsa-gated
+  settings:
+    xsa_mode: gated
+  tuned: xsa_mode learned/gated/tanh
+- variant: 'tanh(alpha), alpha zero-init (modded #82)'
+  rung: d512
+  protocol: equal_steps
+  batch: '39'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853163866
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0078
+  loss:
+  - 3.0669
+  wandb:
+  - lc1-b39-xsa-tanh
+  settings:
+    xsa_mode: tanh
+    alpha init: '0'
+  tuned: xsa_mode learned/gated/tanh

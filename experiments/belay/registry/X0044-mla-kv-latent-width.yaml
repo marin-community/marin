@@ -1,0 +1,90 @@
+id: X0044
+slug: mla-kv-latent-width
+name: MLA KV latent width
+category: Attention variants
+summary: Shrink the MLA KV latent below 512.
+source: maintainer
+status: closed
+first_batch: 14
+tags:
+- mla
+- kv-cache
+- latent
+- kv-latent
+details:
+- kept 512 at d512
+trials:
+- variant: KV latent 256 (vs 512)
+  rung: d512
+  protocol: equal_steps
+  batch: '14'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842419822
+  baseline: mean of two same-seed reference runs 3.0797
+  steps: 2817
+  delta:
+  - 0.0158
+  loss:
+  - 3.0955
+  wandb:
+  - lc1-b14-kv256
+  settings:
+    KV latent: '256'
+  tuned: 512 / 256 / 128
+- variant: KV latent 128
+  rung: d512
+  protocol: equal_steps
+  batch: '14'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842419822
+  baseline: mean of two same-seed reference runs 3.0797
+  steps: 2817
+  delta:
+  - 0.0187
+  loss:
+  - 3.0984
+  wandb:
+  - lc1-b14-kv128
+  settings:
+    KV latent: '128'
+  tuned: 512 / 256 / 128
+- variant: MLA KV latent 512 -> 384 (kv384)
+  rung: d512
+  protocol: equal_steps
+  batch: '139'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5917952812
+  baseline: candidate 9 + PGLE 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0013
+  - 0.0061
+  loss:
+  - 2.9763
+  - 2.9852
+  settings:
+    kv latent: '384'
+  tuned: 512 / 384 / 256
+- variant: MLA KV latent 512 -> 256 (kv256)
+  rung: d512
+  protocol: equal_steps
+  batch: '139'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5917952812
+  baseline: candidate 9 + PGLE 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0088
+  - 0.005
+  loss:
+  - 2.9838
+  - 2.9841
+  settings:
+    kv latent: '256'
+  tuned: 512 / 384 / 256
+events:
+- type: closed
+  batch: '139'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5917952812
+  note: Narrower KV latent loses; full 512 kept

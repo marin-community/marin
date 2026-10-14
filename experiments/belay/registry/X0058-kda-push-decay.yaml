@@ -1,0 +1,115 @@
+id: X0058
+slug: kda-push-decay
+name: KDA push decay (writer-chosen half-life)
+category: Linear attention / KDA
+summary: Multiple KDA states with static learned decay rates; each write splits across them.
+source: maintainer
+status: closed
+first_batch: 22
+tags:
+- kda
+- decay
+- push
+- multi-state
+details:
+- M buckets, per-channel static decay logits
+- W_push zero-init split
+knobs:
+- push_decay
+trials:
+- variant: 2 buckets pure
+  rung: d512
+  protocol: equal_steps
+  batch: '22'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844468762
+  baseline: gate-2 recipe lc1-b17-bzl 3.0834
+  steps: 2817
+  delta:
+  - 0.0191
+  loss:
+  - 3.1025
+  wandb:
+  - lc1-b22-push2
+  settings:
+    push buckets: '2'
+  step_time_change: 602 ex/s vs 740
+  tuned: buckets 2/4, hybrid, sigmoid split, wider init
+- variant: 2 buckets hybrid (reader g + bucket)
+  rung: d512
+  protocol: equal_steps
+  batch: '22'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844468762
+  baseline: gate-2 recipe lc1-b17-bzl 3.0834
+  steps: 2817
+  delta:
+  - 0.0124
+  loss:
+  - 3.0958
+  wandb:
+  - lc1-b22-push2-hyb
+  settings:
+    push buckets: '2'
+  step_time_change: 589 ex/s
+  tuned: buckets 2/4, hybrid, sigmoid split, wider init
+- variant: 4 buckets pure
+  rung: d512
+  protocol: equal_steps
+  batch: '22'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844468762
+  baseline: gate-2 recipe lc1-b17-bzl 3.0834
+  steps: 2817
+  delta:
+  - 0.013
+  loss:
+  - 3.0964
+  wandb:
+  - lc1-b22-push4
+  settings:
+    push buckets: '4'
+  step_time_change: 459 ex/s
+  tuned: buckets 2/4, hybrid, sigmoid split, wider init
+- variant: 2 buckets sigmoid split
+  rung: d512
+  protocol: equal_steps
+  batch: '22'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844468762
+  baseline: gate-2 recipe lc1-b17-bzl 3.0834
+  steps: 2817
+  delta:
+  - 0.0173
+  loss:
+  - 3.1007
+  wandb:
+  - lc1-b22-push2-sig
+  settings:
+    push buckets: '2'
+  step_time_change: 602 ex/s
+  tuned: buckets 2/4, hybrid, sigmoid split, wider init
+- variant: 2 buckets wider init
+  rung: d512
+  protocol: equal_steps
+  batch: '22'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844468762
+  baseline: gate-2 recipe lc1-b17-bzl 3.0834
+  steps: 2817
+  delta:
+  - 0.0231
+  loss:
+  - 3.1065
+  wandb:
+  - lc1-b22-push2-wide
+  settings:
+    push buckets: '2'
+  step_time_change: 600 ex/s
+  tuned: buckets 2/4, hybrid, sigmoid split, wider init
+events:
+- type: closed
+  batch: '22'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844468762
+  note: negative result; no more push variants

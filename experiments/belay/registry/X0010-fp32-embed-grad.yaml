@@ -1,0 +1,104 @@
+id: X0010
+slug: fp32-embed-grad
+name: fp32 embedding-gather backward
+category: Systems and speed
+summary: Scatter-add embedding gradients in fp32 per shard then psum, instead of bf16 atomics into a bf16 table.
+source: agent
+status: adopted
+first_batch: 1
+tags:
+- embedding
+- precision
+- scatter-add
+- speed
+- fp32
+details:
+- fp32 scatter-add inside each shard, then psum
+knobs:
+- always on
+- embed_grad_fp32
+trials:
+- variant: fp32 scatter-add embedding backward
+  rung: d512
+  protocol: fixed_time
+  batch: '2'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5839990993
+  baseline: batch-1 2-seed baseline mean 3.1223
+  steps: 2719
+  delta:
+  - -0.0186
+  - -0.0178
+  loss:
+  - 3.1037
+  - 3.1045
+  wandb:
+  - lc1-b02-f32
+  - lc1-b02-f32-s1
+  settings:
+    embedding backward: fp32 scatter-add per shard + psum
+  step_time_change: +9.9% ex/s
+- variant: new base at 2817 fixed-time steps
+  rung: d512
+  protocol: fixed_time
+  batch: '3'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840199301
+  baseline: clean KMA 2-seed mean 3.1223
+  steps: 2817
+  delta:
+  - -0.0236
+  - -0.0231
+  loss:
+  - 3.0987
+  - 3.0992
+  wandb:
+  - lc1-b03-base
+  - lc1-b03-base-s1
+  settings:
+    steps: 2817 (751 ex/s x 480 s / 128)
+  note: -0.023 vs original baseline mean from speed alone
+- variant: d768 validation
+  rung: d768
+  protocol: equal_steps
+  batch: '3'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840199301
+  baseline: d768 clean KMA mean 2.8234
+  steps: 7325
+  delta:
+  - -0.0071
+  loss:
+  - 2.8163
+  wandb:
+  - lc1-b03-d768-f32
+  settings:
+    steps: 7325 = 6929 x 305.4 / 288.9
+  step_time_change: +5.7% ex/s
+  note: passes gate 1
+- variant: fp32 on vs off, clean KMA config
+  rung: d512
+  protocol: equal_steps
+  batch: ml-only-check
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852073986
+  baseline: fp32 off (bf16 scatter-add) 3.1236 / 3.1205
+  steps: 2475
+  delta:
+  - 0.0
+  - -0.0011
+  loss:
+  - 3.1236
+  - 3.1194
+  settings:
+    embed_grad_fp32: 'true'
+  step_time_change: 177 -> 161 ms
+  note: loss effect none; pure step-time win
+events:
+- type: adopted
+  batch: '17'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  candidate: gate-2 recipe
+  as_adopted:
+  - fp32 scatter-add embedding backward

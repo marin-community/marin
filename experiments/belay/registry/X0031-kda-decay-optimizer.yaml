@@ -1,0 +1,50 @@
+id: X0031
+slug: kda-decay-optimizer
+name: KDA decay-parameter optimizer settings
+category: Linear attention / KDA
+summary: Give KDA decay parameters (dt_bias, A_log, W_a) their own Adam LR or betas.
+source: maintainer
+status: done
+first_batch: 7
+tags:
+- kda
+- dt-bias
+- adam
+- lr
+trials:
+- variant: KDA decay params at 0.3x Adam LR
+  rung: d512
+  protocol: equal_steps
+  batch: '7'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840955062
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2817
+  delta:
+  - 0.0015
+  loss:
+  - 3.0873
+  wandb:
+  - lc1-b07-kdlr03
+  settings:
+    params: dt_bias, A_log, W_a
+    LR: 0.3x Adam
+  tuned: 0.3x LR vs beta (0.95, 0.999)
+- variant: KDA decay params Adam beta (0.95, 0.999)
+  rung: d512
+  protocol: equal_steps
+  batch: '7'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840955062
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2817
+  delta:
+  - -0.0003
+  loss:
+  - 3.0855
+  wandb:
+  - lc1-b07-kdbeta
+  settings:
+    params: dt_bias, A_log, W_a
+    Adam betas: (0.95, 0.999)
+  tuned: 0.3x LR vs beta (0.95, 0.999)

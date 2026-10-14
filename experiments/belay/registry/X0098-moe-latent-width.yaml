@@ -1,0 +1,157 @@
+id: X0098
+slug: moe-latent-width
+name: Remove the LatentMoE projection
+category: MoE and routing
+summary: Run experts at full width without the latent down/up projection.
+source: maintainer
+status: closed
+first_batch: 57
+tags:
+- latent-moe
+- latent_dim
+- experts
+- latent
+- latentmoe
+details:
+- 'owner rule: latent stays 0.5d'
+knobs:
+- latent_dim=None
+trials:
+- variant: no MoE latent, SwiGLU, d768
+  rung: d768
+  protocol: data_matched
+  batch: '57'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5857526771
+  baseline: soft-cap 10 d768 2.7924
+  steps: 6928
+  delta:
+  - -0.0319
+  loss:
+  - 2.7605
+  wandb:
+  - lc1-b57-d768-nolat
+  settings:
+    latent_dim: None
+    activation: SwiGLU
+  step_time_change: -23% ex/s
+  tuned: latent vs no latent
+  note: 246 vs 318 ex/s (23% slower); roughly compute-neutral, latent stays
+- variant: latent 384 (0.75d)
+  rung: d512
+  protocol: equal_steps
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0206
+  loss:
+  - 2.9903
+  wandb:
+  - lc1-b87-lat384-s1
+  settings:
+    MoE latent: '384'
+  step_time_change: +14%
+  tuned: 256 vs 384
+  note: seed 1 only; not adopted, latent stays 0.5d
+- variant: no latent, routed width 1x (384)
+  rung: d512
+  protocol: equal_steps
+  batch: '91'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864281697
+  baseline: width scan on candidate 7 base, seed 0 (no paired delta)
+  steps: 2817
+  loss:
+  - 2.9591
+  wandb:
+  - lc1-b91-nolat-w1x
+  settings:
+    routed width: '384'
+    MoE latent: none
+    attn_res_layer_backward: recompute
+    attn_res_remat_attention: 'true'
+  tuned: routed width 1x-32x
+  note: about 0.03 below latent; 2x expert input cost
+- variant: no latent, routed width 2x (768)
+  rung: d512
+  protocol: equal_steps
+  batch: '91'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864281697
+  baseline: width scan on candidate 7 base, seed 0 (no paired delta)
+  steps: 2817
+  loss:
+  - 2.9344
+  wandb:
+  - lc1-b91-nolat-w2x
+  settings:
+    routed width: '768'
+    MoE latent: none
+    attn_res_layer_backward: recompute
+    attn_res_remat_attention: 'true'
+  tuned: routed width 1x-32x
+  note: about 0.03 below latent; 2x expert input cost
+- variant: no latent, routed width 4x (1536)
+  rung: d512
+  protocol: equal_steps
+  batch: '91'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864281697
+  baseline: width scan on candidate 7 base, seed 0 (no paired delta)
+  steps: 2817
+  loss:
+  - 2.9112
+  wandb:
+  - lc1-b91-nolat-w4x
+  settings:
+    routed width: '1536'
+    MoE latent: none
+    attn_res_layer_backward: recompute
+    attn_res_remat_attention: 'true'
+  tuned: routed width 1x-32x
+  note: about 0.03 below latent; 2x expert input cost
+- variant: no latent, routed width 8x (3072)
+  rung: d512
+  protocol: equal_steps
+  batch: '91'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864281697
+  baseline: width scan on candidate 7 base, seed 0 (no paired delta)
+  steps: 2817
+  loss:
+  - 2.8994
+  wandb:
+  - lc1-b91-nolat-w8x
+  settings:
+    routed width: '3072'
+    MoE latent: none
+    attn_res_layer_backward: recompute
+    attn_res_remat_attention: 'true'
+  tuned: routed width 1x-32x
+  note: about 0.03 below latent; 2x expert input cost
+- variant: no latent, routed width 16x (6144)
+  rung: d512
+  protocol: equal_steps
+  batch: '91'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864281697
+  baseline: width scan on candidate 7 base, seed 0 (no paired delta)
+  steps: 2817
+  wandb:
+  - lc1-b91-nolat-w16x
+  settings:
+    routed width: '6144'
+    MoE latent: none
+    attn_res_layer_backward: recompute
+    attn_res_remat_attention: 'true'
+  tuned: routed width 1x-32x
+  note: OOM even with recompute + attention remat
+events:
+- type: closed
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  note: latent stays 0.5d (owner rule)

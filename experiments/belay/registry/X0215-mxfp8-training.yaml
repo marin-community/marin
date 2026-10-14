@@ -1,0 +1,19 @@
+id: X0215
+slug: mxfp8-training
+name: MXFP8 training
+category: Systems and speed
+summary: MXFP8 (e4m3 values, one e8m0 scale per 32) on routed experts, dense projections and the expert dispatch, with Pallas
+  quantizers and a fused row+column gradient quantizer; weights, optimizer state and Muon momentum stay fp32.
+source: agent
+status: adopted
+knobs:
+- fp8_recipe=mxfp8
+- moe_mxfp8_dispatch=true
+- mxfp8_fused_grad_quant=true
+events:
+- type: adopted
+  batch: ckpt1
+  date: '2026-10-14'
+  comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
+  note: 'GB200 one rack: 16.83 → 14.59 s/step (−13%), 28.9% MFU'
+  candidate: Belay Ckpt 1

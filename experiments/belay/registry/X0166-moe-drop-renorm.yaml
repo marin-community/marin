@@ -1,0 +1,43 @@
+id: X0166
+slug: moe-drop-renorm
+name: Drop-aware combine renorm
+category: MoE and routing
+summary: Renormalize surviving combine weights when an assignment is dropped at capacity.
+source: agent
+status: removed
+first_batch: 99
+tags:
+- capacity
+- drops
+- combine
+- renorm
+knobs:
+- moe_drop_renorm=true
+trials:
+- variant: drop-aware combine renorm
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - -0.0014
+  settings:
+    moe_drop_renorm: 'true'
+  note: 2-seed mean; recovers ~40% of dropless gain
+events:
+- type: adopted
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5869939570
+  note: part of candidate 9 (stack4), holds at d768
+  candidate: candidate 9
+  as_adopted:
+  - moe_drop_renorm=true
+- type: removed
+  batch: ckpt1
+  date: '2026-10-14'
+  comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
+  note: Belay Ckpt 1 runs moe_drop_renorm=false

@@ -1,0 +1,51 @@
+id: X0183
+slug: router-orthogonal-expert-reads
+name: Router-orthogonal expert reads
+category: MoE and routing
+summary: Project each expert's up-projection off the latent image of its own router column.
+source: maintainer
+status: closed
+first_batch: 133
+tags:
+- router
+- latentmoe
+- projection
+details:
+- weight transform (I - u u^T) W_up per expert, stop-gradient on u
+- 'variant: learned per-expert fraction alpha, zero-init'
+trials:
+- variant: project each expert's up-proj off its router direction (rortho)
+  rung: d512
+  protocol: equal_steps
+  batch: '133'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5910006702
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.002
+  - 0.0022
+  settings:
+    stop-gradient on u_e: 'yes'
+  note: router alignment is itself a useful input feature
+- variant: learned per-expert removal fraction alpha (zero-init)
+  rung: d512
+  protocol: equal_steps
+  batch: '134'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5917013133
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0014
+  - 0.0019
+  wandb:
+  - lc1-b134-rortho-lrn
+  settings:
+    alpha_e init: '0'
+events:
+- type: closed
+  batch: '134'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5917013133
+  note: Router-aligned component carries information experts use; closed

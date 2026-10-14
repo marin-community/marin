@@ -1,0 +1,33 @@
+id: X0080
+slug: smear-embedding
+name: Smear on the embedding
+category: Embeddings and inputs
+summary: Mix a gated fraction of the previous token's embedding into the current one.
+source: maintainer
+status: done
+first_batch: 39
+tags:
+- smear
+- modded-nanogpt
+- previous token
+details:
+- lambda init 0
+- gate reads first 12 dims
+trials:
+- variant: smear on embedding, lambda init 0
+  rung: d512
+  protocol: equal_steps
+  batch: '39'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853163866
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0012
+  loss:
+  - 3.0579
+  wandb:
+  - lc1-b39-smear
+  settings:
+    lambda init: '0'
+    gate width: 12 dims

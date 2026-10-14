@@ -1,0 +1,65 @@
+id: X0172
+slug: kv-side-stream
+name: KV side stream
+category: Attention variants
+summary: A narrow per-token side residual stream (own embedding, mini attention + MLP) is the only source of K/V for the main
+  layers.
+source: maintainer
+status: closed
+first_batch: 108
+tags:
+- kv
+- side-stream
+- identity
+- residual-stream
+trials:
+- variant: w=128 (1 head)
+  rung: d512
+  protocol: equal_steps
+  batch: '108'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5874871612
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0788
+  - 0.0749
+  loss:
+  - 3.0538
+  - 3.054
+  wandb:
+  - lc1-b108-kvs128
+  - lc1-b108-kvs128-s1
+  settings:
+    side width: '128'
+    side MLP: ReLU2 4w
+  step_time_change: +8% median step
+  tuned: w 128 / 256
+- variant: w=256 (2 heads)
+  rung: d512
+  protocol: equal_steps
+  batch: '108'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5874871612
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0649
+  - 0.0653
+  loss:
+  - 3.0399
+  - 3.0444
+  wandb:
+  - lc1-b108-kvs256
+  - lc1-b108-kvs256-s1
+  settings:
+    side width: '256'
+    side MLP: ReLU2 4w
+  step_time_change: +12% median step
+  tuned: w 128 / 256
+events:
+- type: closed
+  batch: '108'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5874871612
+  note: no signs of life; transport bottleneck

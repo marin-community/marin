@@ -1,0 +1,78 @@
+id: X0037
+slug: drop-gated-norm
+name: Remove GatedNorm on embedding / lm_head input
+category: Normalization
+summary: Use plain RMSNorm instead of RMSNorm+GatedNorm on the embedding and before the lm_head.
+source: maintainer
+status: adopted
+first_batch: 10
+tags:
+- gatednorm
+- simplification
+- embedding
+- lm-head
+knobs:
+- embed_gated_norm=false
+- final_gated_norm=false
+trials:
+- variant: no GatedNorm on embedding
+  rung: d512
+  protocol: equal_steps
+  batch: '10'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841602060
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2817
+  delta:
+  - 0.0005
+  loss:
+  - 3.0863
+  wandb:
+  - lc1-b10-noembgn
+  settings:
+    embed_gated_norm: 'false'
+  tuned: embed / final / both
+- variant: no GatedNorm before lm_head
+  rung: d512
+  protocol: equal_steps
+  batch: '10'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841602060
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2817
+  delta:
+  - 0.0006
+  loss:
+  - 3.0864
+  wandb:
+  - lc1-b10-nofingn
+  settings:
+    final_gated_norm: 'false'
+  tuned: embed / final / both
+- variant: both removed (embed + lm_head input)
+  rung: d512
+  protocol: equal_steps
+  batch: '10'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841602060
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2817
+  delta:
+  - -0.0037
+  loss:
+  - 3.0821
+  wandb:
+  - lc1-b10-nogn2
+  settings:
+    embed_gated_norm: 'false'
+    final_gated_norm: 'false'
+  tuned: embed / final / both
+events:
+- type: adopted
+  batch: '17'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  candidate: gate-2 recipe
+  as_adopted:
+  - embed_gated_norm=false
+  - final_gated_norm=false

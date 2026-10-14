@@ -1,0 +1,90 @@
+id: X0060
+slug: attnres-v-gate
+name: Separate AttnRes gate for V input
+category: Depth connections
+summary: Give value projections their own AttnRes pseudo-query.
+source: agent
+status: closed
+first_batch: 24
+tags:
+- attnres
+- value
+- gate
+- pseudo-query
+knobs:
+- attn_res_v_gate
+trials:
+- variant: separate V-input gate
+  rung: d512
+  protocol: equal_steps
+  batch: 23-24
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844656167
+  baseline: gate-2 recipe lc1-b17-bzl 3.0834
+  steps: 2817
+  delta:
+  - 0.0006
+  loss:
+  - 3.084
+  wandb:
+  - lc1-b24-vgate
+  settings:
+    attn_res_v_gate: 'true'
+- variant: V gate on KDA layers, full AttnRes
+  rung: d512
+  protocol: equal_steps
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  baseline: full AttnRes lc1-b18-full-fair 3.0774
+  steps: 2712
+  delta:
+  - -0.002
+  loss:
+  - 3.0754
+  wandb:
+  - lc1-b28-fullv
+  settings:
+    attn_res_v_gate: true (KDA only)
+  note: V reads embedding heavily at L4 (0.32 vs 0.02)
+- variant: V gate alone
+  rung: d512
+  protocol: equal_steps
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0045
+  - -0.005
+  loss:
+  - 3.0027
+  - 3.0059
+  wandb:
+  - lc1-b87-arvg
+  - lc1-b87-arvg-s1
+  settings:
+    AttnRes V gate: 'on'
+  step_time_change: +6%
+- variant: separate AttnRes value pseudo-query on candidate 9 (vgate)
+  rung: d512
+  protocol: equal_steps
+  batch: '129'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5903520846
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0019
+  - 0.0029
+  settings:
+    attn_res_v_gate: 'true'
+  step_time_change: +6% (197.6 / 198.2 ms)
+  note: b87's -0.0045 / -0.0050 on candidate 6 does not survive
+events:
+- type: closed
+  batch: '129'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5903520846
+  note: Lost on candidate 9 and costs 6% step time

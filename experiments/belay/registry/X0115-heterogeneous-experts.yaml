@@ -1,0 +1,142 @@
+id: X0115
+slug: heterogeneous-experts
+name: Heterogeneous expert banks
+category: MoE and routing
+summary: Two expert banks per layer with different widths or activations under one router, fixed per-bank top-k.
+source: maintainer
+status: closed
+first_batch: 68
+tags:
+- experts
+- banks
+- heterogeneous
+- widths
+details:
+- per-bank QB thresholds
+- combine renormalized across both banks
+knobs:
+- moe_bank2_*
+- moe_bank2_experts
+- moe_bank2_topk
+- moe_bank2_scale
+trials:
+- variant: 'widths: 256x256 top-6 + 128x768 top-2'
+  rung: d512
+  protocol: equal_steps
+  batch: '68'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859115401
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - 0.001
+  loss:
+  - 3.0207
+  wandb:
+  - lc1-b68-het-widths-r
+  settings:
+    bank1: 256 x width 256 top-6
+    bank2: 128 x width 768 top-2
+  step_time_change: +1.5% ex/s
+  tuned: bank mixes; per-bank scale on/off
+  note: neutral; 739 vs 728 ex/s (within host noise)
+- variant: 'activations: 192 ReLU2x384 top-4 + 192 SwiGLUx256 top-4'
+  rung: d512
+  protocol: equal_steps
+  batch: '68'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859115401
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - 0.009
+  loss:
+  - 3.0287
+  wandb:
+  - lc1-b68-het-act
+  settings:
+    bank1: 192 ReLU2 x 384 top-4
+    bank2: 192 SwiGLU x 256 top-4
+  tuned: bank mixes; per-bank scale on/off
+  note: SwiGLU bank gets about half the gradient
+- variant: 'one wide: 384x192 top-8 + 64x1536 top-1'
+  rung: d512
+  protocol: equal_steps
+  batch: '68'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859115401
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - 0.0056
+  loss:
+  - 3.0253
+  wandb:
+  - lc1-b68-het-onewide-r
+  settings:
+    bank1: 384 x 192 top-8
+    bank2: 64 x 1536 top-1
+  tuned: bank mixes; per-bank scale on/off
+  note: 700 ex/s
+- variant: 'split control: 2 identical ReLU2 banks, top-4 each'
+  rung: d512
+  protocol: equal_steps
+  batch: '68'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859115401
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - 0.0
+  loss:
+  - 3.0197
+  wandb:
+  - lc1-b68-het-splitctl
+  settings:
+    bank1: 192 ReLU2 x 384 top-4
+    bank2: 192 ReLU2 x 384 top-4
+  tuned: bank mixes; per-bank scale on/off
+  note: forced per-bank split is free
+- variant: activations mix + per-bank output scale
+  rung: d512
+  protocol: equal_steps
+  batch: '68'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859115401
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - 0.0074
+  loss:
+  - 3.0271
+  wandb:
+  - lc1-b68-het-act-scale
+  settings:
+    moe_bank2_scale: 'true'
+    mix: activations
+  tuned: bank mixes; per-bank scale on/off
+  note: both bank scales grow to about 2.3x
+- variant: widths mix + per-bank output scale
+  rung: d512
+  protocol: equal_steps
+  batch: '68'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859115401
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - 0.0015
+  loss:
+  - 3.0212
+  wandb:
+  - lc1-b68-het-widths-scale
+  settings:
+    moe_bank2_scale: 'true'
+    mix: widths
+  tuned: bank mixes; per-bank scale on/off
+events:
+- type: closed
+  batch: '68'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859115401
+  note: no bank mix beats uniform ReLU2 1.5x; code stays for hero scale

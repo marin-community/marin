@@ -1,0 +1,55 @@
+id: X0179
+slug: autotune-cache-sync
+name: XLA autotune-cache sync interval fix
+category: Systems and speed
+summary: Sync the node's XLA autotune cache every 30 min instead of every 2 min to remove process-0 stalls.
+source: agent
+status: adopted
+first_batch: 128
+tags:
+- autotune-cache
+- finestore
+- host-stall
+- runtime
+details:
+- sync every 30 min, exit sync publishes new files
+trials:
+- variant: 'fix 1: upload only new autotune files'
+  rung: d512
+  protocol: equal_steps
+  batch: '128'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5902797047
+  baseline: batch 124 ve03 run 2.9744 / 2.9791
+  steps: 2817
+  loss:
+  - 2.9773
+  - 2.9813
+  settings:
+    FineStoreDirectory: count files present at open as known
+  step_time_change: mean vs median +15.7% / +11.5% (worse)
+  note: removed uploads but not directory walks
+- variant: 'fix 2: sync the autotune cache every 30 min'
+  rung: d512
+  protocol: equal_steps
+  batch: '128'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5902797047
+  baseline: batch 124 ve03 run 2.9744 / 2.9791
+  steps: 2817
+  loss:
+  - 2.9773
+  - 2.9806
+  settings:
+    autotune cache sync interval: 30 min (was 120 s)
+  step_time_change: mean vs median +5.3/+5.6% -> +1.4/+1.0%; about 4-5% of step time back
+  note: worth about -0.007 to -0.009 at fixed time
+events:
+- type: adopted
+  batch: '132'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5904242085
+  note: Autotune cache synced every 30 min; adopted with PGLE 2026-09-30
+  candidate: candidate 9 runtime
+  as_adopted:
+  - sync every 30 min (b25ed70f4a)

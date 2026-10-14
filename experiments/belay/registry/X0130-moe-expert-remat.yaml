@@ -1,0 +1,42 @@
+id: X0130
+slug: moe-expert-remat
+name: Skip expert recompute
+category: Systems and speed
+summary: Saves expert MLP and combine activations instead of recomputing them.
+source: agent
+status: closed
+first_batch: 79
+tags:
+- remat
+- checkpoint
+- moe
+knobs:
+- moe_expert_remat=false
+trials:
+- variant: no expert recompute
+  rung: d512
+  protocol: equal_steps
+  batch: '79'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861318730
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - -0.0004
+  - 0.0006
+  loss:
+  - 3.0095
+  - 3.0145
+  wandb:
+  - lc1-b79-noremat
+  - lc1-b79-noremat-s1
+  settings:
+    moe_expert_remat: 'false'
+  step_time_change: 0 (176.6 / 177.1 ms)
+  note: no-op; inner checkpoint not operative
+events:
+- type: closed
+  batch: '79'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861318730
+  note: no-op

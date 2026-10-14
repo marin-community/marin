@@ -1,0 +1,53 @@
+id: X0198
+slug: kda-paired-heads
+name: Paired-head KDA
+category: Linear attention / KDA
+summary: Adjacent KDA heads run as one head over an interleaved 2T sequence, sharing one delta-rule state.
+source: maintainer
+status: done
+first_batch: 159
+tags:
+- kda
+- paired-head
+- cross-head
+- modded-nanogpt
+knobs:
+- kda_head_pairing
+trials:
+- variant: half log-decay per sub-step
+  rung: d512
+  protocol: equal_steps
+  batch: '159'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927974531
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0051
+  - 0.0083
+  loss:
+  - 2.9819
+  - 2.9905
+  settings:
+    decay per sub-step: half log-decay
+  step_time_change: 173.3 vs 171.6 ms
+  tuned: half vs full decay
+  note: pair shares one state, halving memory
+- variant: full log-decay per sub-step
+  rung: d512
+  protocol: equal_steps
+  batch: '159'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927974531
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0092
+  - 0.0113
+  loss:
+  - 2.986
+  - 2.9935
+  settings:
+    decay per sub-step: full log-decay
+  step_time_change: 172.7 vs 171.6 ms
+  tuned: half vs full decay

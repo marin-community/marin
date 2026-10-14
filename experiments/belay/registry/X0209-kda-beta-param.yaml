@@ -1,0 +1,212 @@
+id: X0209
+slug: kda-beta-param
+name: KDA write-strength (w_beta) parameterization
+category: Linear attention / KDA
+summary: Change w_beta's init scale, LR multiplier, scale or optimizer group.
+source: agent
+status: adopted
+first_batch: 201
+tags:
+- kda
+- w_beta
+- init
+- hyperball
+- adam
+details:
+- 'base14: w_beta init x1 (w_g stays x2)'
+- 'base15: w_beta on plain Adam at 1x Adam LR'
+knobs:
+- init_std_mult_beta=1
+- kda_beta_group=adam
+- kda_beta_scale
+trials:
+- variant: init x1
+  rung: d512
+  protocol: equal_steps
+  batch: '201'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: candidate 12 ctrl 2.9539
+  steps: 2817
+  delta:
+  - -0.001
+  loss:
+  - 2.9529
+  settings:
+    init_std_mult_beta: '1'
+  tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
+- variant: init x4
+  rung: d512
+  protocol: equal_steps
+  batch: '201'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: candidate 12 ctrl 2.9539
+  steps: 2817
+  delta:
+  - 0.0012
+  loss:
+  - 2.9551
+  settings:
+    init_std_mult_beta: '4'
+  tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
+- variant: init x8
+  rung: d512
+  protocol: equal_steps
+  batch: '201'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: candidate 12 ctrl 2.9539
+  steps: 2817
+  delta:
+  - 0.0032
+  loss:
+  - 2.9571
+  settings:
+    init_std_mult_beta: '8'
+  tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
+- variant: MuonH LR mult 1
+  rung: d512
+  protocol: equal_steps
+  batch: '201'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: candidate 12 ctrl 2.9539
+  steps: 2817
+  delta:
+  - 0.0008
+  loss:
+  - 2.9547
+  settings:
+    w_beta MuonH LR mult: '1'
+  tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
+- variant: MuonH LR mult 4
+  rung: d512
+  protocol: equal_steps
+  batch: '201'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: candidate 12 ctrl 2.9539
+  steps: 2817
+  delta:
+  - -0.0005
+  loss:
+  - 2.9534
+  settings:
+    w_beta MuonH LR mult: '4'
+  tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
+- variant: learned per-head beta scale
+  rung: d512
+  protocol: equal_steps
+  batch: '201'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: candidate 12 ctrl 2.9539
+  steps: 2817
+  delta:
+  - 0.0004
+  loss:
+  - 2.9543
+  settings:
+    kda_beta_scale: learned per head
+  tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
+- variant: AdamH
+  rung: d512
+  protocol: equal_steps
+  batch: '201'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: candidate 12 ctrl 2.9539
+  steps: 2817
+  delta:
+  - 0.0035
+  loss:
+  - 2.9574
+  settings:
+    kda_beta_group: adamh
+  tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
+- variant: Adam (norm free)
+  rung: d512
+  protocol: equal_steps
+  batch: '201'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: candidate 12 ctrl 2.9539
+  steps: 2817
+  delta:
+  - 0.0021
+  loss:
+  - 2.956
+  settings:
+    kda_beta_group: adam
+  tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
+- variant: w_beta on Adam at 1x Adam LR (base15)
+  rung: d512
+  protocol: equal_steps
+  batch: 202-205
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base14 (2.9529 / 2.9539)
+  steps: 2817
+  loss:
+  - 2.954
+  settings:
+    kda_beta_group: adam
+    Adam LR mult: (base15)
+  tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
+  note: adopted into base15
+- variant: w_beta Adam LR 0.1x
+  rung: d512
+  protocol: equal_steps
+  batch: 202-205
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: w_beta Adam 1x 2.9540
+  steps: 2817
+  loss:
+  - 2.9538
+  settings:
+    kda_beta_group: adam
+    Adam LR mult: 0.1x
+  tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
+  note: insensitive to LR
+- variant: w_beta Adam LR 0.3x
+  rung: d512
+  protocol: equal_steps
+  batch: 202-205
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: w_beta Adam 1x 2.9540
+  steps: 2817
+  loss:
+  - 2.9538
+  settings:
+    kda_beta_group: adam
+    Adam LR mult: 0.3x
+  tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
+  note: insensitive to LR
+- variant: w_beta Adam LR 3x
+  rung: d512
+  protocol: equal_steps
+  batch: 202-205
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: w_beta Adam 1x 2.9540
+  steps: 2817
+  loss:
+  - 2.9526
+  settings:
+    kda_beta_group: adam
+    Adam LR mult: 3x
+  tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
+  note: insensitive to LR
+events:
+- type: adopted
+  batch: 202-205
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  note: 'base14: w_beta init x1; base15: w_beta on Adam 1x'
+  candidate: candidate 12 (base14/base15)
+  as_adopted:
+  - init_std_mult_beta=1 (base14)
+  - kda_beta_group=adam at 1x Adam LR (base15)

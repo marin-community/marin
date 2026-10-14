@@ -1,0 +1,37 @@
+id: X0051
+slug: kda-per-head-decay
+name: Per-head (GDN-style) KDA decay
+category: Linear attention / KDA
+summary: Use one log-decay per head instead of per channel in KDA.
+source: maintainer
+status: closed
+first_batch: 18
+tags:
+- kda
+- gated-deltanet
+- decay
+knobs:
+- kda_decay_per_head=true
+trials:
+- variant: GDN-style per-head decay in KDA
+  rung: d512
+  protocol: equal_steps
+  batch: '18'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843750617
+  baseline: z-loss-kept bundle seed 0 3.0854
+  steps: 2817
+  delta:
+  - 0.0129
+  loss:
+  - 3.0983
+  wandb:
+  - lc1-b18-gdn
+  settings:
+    kda_decay_per_head: 'true'
+events:
+- type: closed
+  batch: '18'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843750617
+  note: per-channel forget gate matters

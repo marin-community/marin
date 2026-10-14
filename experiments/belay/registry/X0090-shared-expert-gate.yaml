@@ -1,0 +1,42 @@
+id: X0090
+slug: shared-expert-gate
+name: Shared-expert sigmoid gate
+category: MoE and routing
+summary: Scale shared-expert output per token by 2*sigmoid(x.w), zero-init.
+source: agent
+status: closed
+first_batch: 47
+tags:
+- shared expert
+- gate
+- qwen
+papers:
+- title: Qwen2-MoE / Qwen3-Next
+knobs:
+- shared_expert_gate
+trials:
+- variant: 2*sigmoid(x.w) per token, zero-init
+  rung: d512
+  protocol: equal_steps
+  batch: '47'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853982326
+  baseline: soft-cap 10 3.0591 / seed 1 3.0675
+  steps: 2817
+  delta:
+  - 0.0006
+  - -0.0013
+  loss:
+  - 3.0597
+  - 3.0662
+  wandb:
+  - lc1-b47-sgate
+  - lc1-b47-sgate-s1
+  settings:
+    shared_expert_gate: 'true'
+events:
+- type: closed
+  batch: '47'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853982326
+  note: neutral over 2 seeds; not stacked

@@ -1,0 +1,34 @@
+id: X0182
+slug: mlp-router
+name: Tiny-MLP residual router
+category: MoE and routing
+summary: Add a small zero-init MLP residual to the linear router logits.
+source: maintainer
+status: closed
+first_batch: 133
+tags:
+- router
+- mlp
+details:
+- 32 hidden neurons, SiLU, W_b zero-init
+trials:
+- variant: residual 32-neuron MLP router, zero-init output (rmlp32)
+  rung: d512
+  protocol: equal_steps
+  batch: '133'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5910006702
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0028
+  - 0.003
+  settings:
+    hidden neurons: '32'
+    W_b init: zero
+events:
+- type: closed
+  batch: '133'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5910006702
+  note: Nonlinear residual router slightly worse; linear router hard to beat

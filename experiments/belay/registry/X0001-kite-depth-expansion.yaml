@@ -1,0 +1,21 @@
+id: X0001
+slug: kite-depth-expansion
+name: KITE KV-invariant depth expansion
+category: Depth connections
+summary: Mid-training depth expansion where a decoder tower reuses the prefiller tower's K/V.
+source: maintainer
+status: closed
+tags:
+- kite
+- depth-growth
+- kv-reuse
+- stepfun
+papers:
+- arxiv: '2609.27294'
+  title: KITE
+events:
+- type: closed
+  batch: kite-read
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5874512320
+  note: 'read but skipped at d512: gain is inference cost at fixed KV; pieces already lost here'

@@ -1,0 +1,76 @@
+id: X0045
+slug: full-attnres
+name: Full (non-block) AttnRes
+category: Depth connections
+summary: Make every sublayer output its own AttnRes source instead of block sums.
+source: maintainer
+status: closed
+first_batch: 15
+tags:
+- attnres
+- full
+knobs:
+- attn_res_full=true
+trials:
+- variant: full AttnRes, every sublayer a source
+  rung: d512
+  protocol: equal_steps
+  batch: '15'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842638290
+  baseline: current best (qk 2.5 + beta1 0.8 + z-loss 0) seed-0 mean 3.0797
+  steps: 2817
+  delta:
+  - -0.0013
+  loss:
+  - 3.0784
+  wandb:
+  - lc1-b15-arfull
+  settings:
+    attn_res_full: 'true'
+  step_time_change: -3% ex/s
+  note: block AttnRes stays
+- variant: full AttnRes on z-loss-kept bundle, equal steps
+  rung: d512
+  protocol: equal_steps
+  batch: '18'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843750617
+  baseline: z-loss-kept bundle seed 0 3.0854
+  steps: 2817
+  delta:
+  - -0.0149
+  loss:
+  - 3.0705
+  wandb:
+  - lc1-b18-full
+  settings:
+    attn_res_full: 'true'
+  step_time_change: -3% ex/s
+  note: luck; fair-step reruns show no win
+- variant: full AttnRes at fair fixed-time steps
+  rung: d512
+  protocol: fixed_time
+  batch: '18'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843750617
+  baseline: z-loss-kept bundle seed 0 3.0854 (seed 1 vs 3.0902)
+  steps: 2712
+  delta:
+  - -0.008
+  - 0.0106
+  loss:
+  - 3.0774
+  - 3.1008
+  wandb:
+  - lc1-b18-full-fair
+  - lc1-b18-full-fair-s1
+  settings:
+    attn_res_full: 'true'
+  note: mean +0.001; block AttnRes stays
+events:
+- type: closed
+  batch: '15'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842638290
+  note: neutral and 3% slower; block AttnRes stays

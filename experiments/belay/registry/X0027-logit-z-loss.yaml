@@ -1,0 +1,144 @@
+id: X0027
+slug: logit-z-loss
+name: lm_head logit z-loss weight
+category: Output head and loss
+summary: Change the weight of the final-logit z-loss (default 1e-4).
+source: maintainer
+status: removed
+first_batch: 5
+tags:
+- z-loss
+- lm-head
+- logits
+- stability
+details:
+- kept at 1e-4 (maintainer rule)
+- kept at 1e-4
+knobs:
+- --z-loss-weight
+trials:
+- variant: z-loss weight 0 (vs 1e-4)
+  rung: d512
+  protocol: equal_steps
+  batch: '5'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840665852
+  baseline: fp32 base mean 3.0990
+  steps: 2817
+  delta:
+  - -0.0024
+  loss:
+  - 3.0966
+  wandb:
+  - lc1-b05-z0
+  settings:
+    z_loss_weight: '0'
+  tuned: 0 / 1e-4 / 1e-3
+- variant: z-loss weight 1e-3
+  rung: d512
+  protocol: equal_steps
+  batch: '5'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840665852
+  baseline: fp32 base mean 3.0990
+  steps: 2817
+  delta:
+  - 0.0056
+  loss:
+  - 3.1046
+  wandb:
+  - lc1-b05-z1e3
+  settings:
+    z_loss_weight: 1e-3
+  tuned: 0 / 1e-4 / 1e-3
+- variant: z-loss 0 on qk 2.5 base
+  rung: d512
+  protocol: equal_steps
+  batch: '7'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840955062
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2817
+  delta:
+  - -0.0024
+  loss:
+  - 3.0834
+  wandb:
+  - lc1-b07-z0
+  settings:
+    z_loss_weight: '0'
+- variant: z-loss 3e-4 with cap 10
+  rung: d512
+  protocol: equal_steps
+  batch: '43'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853836517
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0046
+  loss:
+  - 3.0637
+  wandb:
+  - lc1-b43-cap10-zl3e4
+  settings:
+    z-loss: 3e-4
+  tuned: z-loss 3e-5/1e-4/3e-4
+- variant: z-loss 3e-5 with cap 10
+  rung: d512
+  protocol: equal_steps
+  batch: '43'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853836517
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0011
+  loss:
+  - 3.0602
+  wandb:
+  - lc1-b43-cap10-zl3e5
+  settings:
+    z-loss: 3e-5
+  tuned: z-loss 3e-5/1e-4/3e-4
+- variant: z-loss 0 with soft-cap (zl0)
+  rung: d512
+  protocol: equal_steps
+  batch: '137'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5916810072
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0008
+  - 0.0009
+  loss:
+  - 2.9758
+  - 2.98
+  settings:
+    z-loss: '0'
+  tuned: z-loss 1e-4 vs 0, at 1x and 4x steps
+- variant: z-loss 0 at 4x overtrain (ot4-zl0)
+  rung: d512
+  protocol: unknown
+  batch: '137'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5916810072
+  baseline: ot4-z (z-loss 1e-4, 4x steps) 2.7968
+  steps: 11268
+  delta:
+  - -0.0019
+  loss:
+  - 2.7949
+  settings:
+    z-loss: '0'
+    steps: 4x
+    EMA beta: 0.99875 over last 4000 steps
+  tuned: z-loss 1e-4 vs 0, at 1x and 4x steps
+  note: 'stable: same two small spikes as reference; agent recommends keeping z-loss (no gain)'
+events:
+- type: removed
+  batch: '17'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  note: z-loss 0 taken out of the bundle; lm_head z-loss 1e-4 must stay (maintainer)

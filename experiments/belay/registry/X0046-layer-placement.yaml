@@ -1,0 +1,58 @@
+id: X0046
+slug: layer-placement
+name: Global/local layer placement
+category: Attention variants
+summary: Move the global MLA layers to different depths.
+source: maintainer
+status: closed
+first_batch: 15
+tags:
+- mla
+- layout
+- kda
+- hybrid
+knobs:
+- global_layers
+trials:
+- variant: MLA at layers 3 and 6 (0-idx 2, 5)
+  rung: d512
+  protocol: equal_steps
+  batch: '15'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842638290
+  baseline: current best (qk 2.5 + beta1 0.8 + z-loss 0) seed-0 mean 3.0797 (seed 1 vs 3.0872)
+  steps: 2817
+  delta:
+  - 0.0005
+  - 0.0006
+  loss:
+  - 3.0802
+  - 3.0878
+  wandb:
+  - lc1-b15-mla25
+  - lc1-b15-mla25-s1
+  settings:
+    global_layers: 2,5
+- variant: layer 0 as MLA (global 0,3,5)
+  rung: d512
+  protocol: equal_steps
+  batch: '19'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843937025
+  baseline: z-loss-kept bundle s0 3.0854 / s1 3.0902
+  steps: 2817
+  delta:
+  - -0.0006
+  loss:
+  - 3.0848
+  wandb:
+  - lc1-b19-l0mla
+  settings:
+    global layers: 0,3,5
+  note: neutral; same speed
+events:
+- type: closed
+  batch: '15'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842638290
+  note: neutral; placement at 4 and 6 stays

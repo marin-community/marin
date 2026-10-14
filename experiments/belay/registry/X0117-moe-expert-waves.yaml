@@ -1,0 +1,60 @@
+id: X0117
+slug: moe-expert-waves
+name: EP dispatch waves
+category: Systems and speed
+summary: Splits MoE dispatch into static waves so all-to-all can overlap expert GEMMs.
+source: agent
+status: done
+first_batch: 74
+tags:
+- ep
+- all-to-all
+- overlap
+- moe
+knobs:
+- moe_expert_waves
+trials:
+- variant: 2 dispatch waves (profile)
+  rung: d512
+  protocol: unknown
+  batch: '74'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860271828
+  baseline: candidate 4 172.8 ms
+  steps: 100
+  wandb:
+  - lc1-b74-prof-waves2
+  settings:
+    moe_expert_waves: '2'
+  step_time_change: -1% (171.0 ms)
+  tuned: waves 1/2/4
+  note: little all-to-all overlap
+- variant: 4 dispatch waves (profile)
+  rung: d512
+  protocol: unknown
+  batch: '74'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860271828
+  baseline: candidate 4 172.8 ms
+  steps: 100
+  wandb:
+  - lc1-b74-prof-waves4
+  settings:
+    moe_expert_waves: '4'
+  step_time_change: +4% (179.1 ms)
+  tuned: waves 1/2/4
+- variant: PGLE + 2 waves
+  rung: d512
+  protocol: equal_steps
+  batch: '74'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860271828
+  baseline: candidate 4 175.4 ms
+  steps: 2817
+  wandb:
+  - lc1-b74-pgle-waves2
+  settings:
+    --pgle-runs: '5'
+    moe_expert_waves: '2'
+  step_time_change: -2.6% (170.9 ms)
+  note: waves don't help once latencies are measured; crashed at eval

@@ -1,0 +1,249 @@
+id: X0052
+slug: mtp
+name: Multi-token prediction
+category: Output head and loss
+summary: Predict token t+2 with an extra head on the shared lm_head.
+source: maintainer
+status: closed
+first_batch: 18
+tags:
+- mtp
+- aux-loss
+- auxiliary-loss
+- deepseek
+- future_aux
+- hash
+- aux loss
+details:
+- future_aux heads, weight 0.05
+knobs:
+- mtp_mode=deepseek
+- future_aux
+trials:
+- variant: MTP depth 1, weight 0.3, linear head
+  rung: d512
+  protocol: fixed_time
+  batch: '18'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843750617
+  baseline: z-loss-kept bundle seed 0 3.0854
+  steps: 2576
+  delta:
+  - 0.1418
+  loss:
+  - 3.2272
+  wandb:
+  - lc1-b18-mtp2
+  settings:
+    MTP depth: '1'
+    weight: '0.3'
+    head: shared lm_head + W norm(embed(t+1))
+  step_time_change: -8.6% ex/s
+- variant: DeepSeek-style MTP lambda 0.3, half positions
+  rung: d512
+  protocol: equal_steps
+  batch: '99'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867280167
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0229
+  settings:
+    lambda: '0.3'
+    positions: half
+  step_time_change: -8 to -10% ex/s
+  tuned: lambda 0.3 / 0.1
+- variant: DeepSeek-style MTP lambda 0.1, half positions
+  rung: d512
+  protocol: equal_steps
+  batch: '99'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867280167
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0034
+  - 0.0029
+  settings:
+    lambda: '0.1'
+    positions: half
+  step_time_change: -8 to -10% ex/s
+  tuned: lambda 0.3 / 0.1
+- variant: DeepSeek MTP weight 0.2
+  rung: d512
+  protocol: equal_steps
+  batch: '163'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5935139189
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0092
+  - 0.0117
+  loss:
+  - 2.986
+  - 2.9939
+  settings:
+    mtp_mode: deepseek
+    weight: '0.2'
+  step_time_change: +10% (188.4 ms)
+  tuned: all positions vs 25%
+- variant: MTP weight 0.2 on 25% of positions
+  rung: d512
+  protocol: equal_steps
+  batch: '163'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5935139189
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0221
+  loss:
+  - 2.9989
+  settings:
+    mtp_mode: deepseek
+    weight: '0.2'
+    positions: random 25%
+  step_time_change: 179.1 ms (no PGLE)
+  tuned: all positions vs 25%
+- variant: hash of t+2, w 0.05
+  rung: d512
+  protocol: equal_steps
+  batch: '205'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base15 ctrl 2.9521 (lc1-b205-ctrl)
+  steps: 2817
+  delta:
+  - 0.0036
+  loss:
+  - 2.9557
+  settings:
+    future_aux: hash of t+2, w 0.05
+    weight: '0.05'
+  step_time_change: 205.9 ms vs 190.9
+  tuned: target (t+2 hash, bigram, trigram, bottleneck, embed regression); weight decay
+- variant: hash of (t+1,t+2) bigram, w 0.05
+  rung: d512
+  protocol: equal_steps
+  batch: '205'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base15 ctrl 2.9521 (lc1-b205-ctrl)
+  steps: 2817
+  delta:
+  - 0.0074
+  loss:
+  - 2.9595
+  settings:
+    future_aux: hash of (t+1,t+2) bigram, w 0.05
+    weight: '0.05'
+  step_time_change: 204.6 ms vs 190.9
+  tuned: target (t+2 hash, bigram, trigram, bottleneck, embed regression); weight decay
+- variant: hash of t+1..t+3 trigram, w 0.05
+  rung: d512
+  protocol: equal_steps
+  batch: '205'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base15 ctrl 2.9521 (lc1-b205-ctrl)
+  steps: 2817
+  delta:
+  - 0.004
+  loss:
+  - 2.9561
+  settings:
+    future_aux: hash of t+1..t+3 trigram, w 0.05
+    weight: '0.05'
+  step_time_change: 203.2 ms vs 190.9
+  tuned: target (t+2 hash, bigram, trigram, bottleneck, embed regression); weight decay
+- variant: t+2 hash via 128 bottleneck
+  rung: d512
+  protocol: equal_steps
+  batch: '205'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base15 ctrl 2.9521 (lc1-b205-ctrl)
+  steps: 2817
+  delta:
+  - 0.0018
+  loss:
+  - 2.9539
+  settings:
+    future_aux: t+2 hash via 128 bottleneck
+    weight: '0.05'
+  step_time_change: 198.0 ms vs 190.9
+  tuned: target (t+2 hash, bigram, trigram, bottleneck, embed regression); weight decay
+- variant: cosine regression on mean embed t+2,t+3
+  rung: d512
+  protocol: equal_steps
+  batch: '205'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base15 ctrl 2.9521 (lc1-b205-ctrl)
+  steps: 2817
+  delta:
+  - 0.0011
+  loss:
+  - 2.9532
+  settings:
+    future_aux: cosine regression on mean embed t+2,t+3
+    weight: '0.05'
+  step_time_change: 190.2 ms vs 190.9
+  tuned: target (t+2 hash, bigram, trigram, bottleneck, embed regression); weight decay
+- variant: bigram hash, w 0.1 decay to 0 mid-run
+  rung: d512
+  protocol: equal_steps
+  batch: '205'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base15 ctrl 2.9521 (lc1-b205-ctrl)
+  steps: 2817
+  delta:
+  - 0.0025
+  loss:
+  - 2.9546
+  settings:
+    future_aux: bigram hash, w 0.1 decay to 0 mid-run
+    weight: '0.1'
+  step_time_change: 203.7 ms vs 190.9
+  tuned: target (t+2 hash, bigram, trigram, bottleneck, embed regression); weight decay
+- variant: bigram hash, w 0.05 decay to 0 at end
+  rung: d512
+  protocol: equal_steps
+  batch: '205'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base15 ctrl 2.9521 (lc1-b205-ctrl)
+  steps: 2817
+  delta:
+  - 0.0007
+  loss:
+  - 2.9528
+  settings:
+    future_aux: bigram hash, w 0.05 decay to 0 at end
+    weight: '0.05'
+  step_time_change: 203.6 ms vs 190.9
+  tuned: target (t+2 hash, bigram, trigram, bottleneck, embed regression); weight decay
+events:
+- type: closed
+  batch: '18'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843750617
+  note: long shot tried once and dropped at d512
+- type: closed
+  batch: '99'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867280167
+  note: MTP closed at d512; proper DeepSeek-V3 design still loses
+- type: closed
+  batch: '163'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5935139189
+  note: loses at weight 0.2
+- type: closed
+  batch: '205'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  note: cheap MTP closed at d512

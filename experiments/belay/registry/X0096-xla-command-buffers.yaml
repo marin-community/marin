@@ -1,0 +1,42 @@
+id: X0096
+slug: xla-command-buffers
+name: XLA command buffers
+category: Systems and speed
+summary: Enable XLA's default command-buffer set with collectives eager.
+source: agent
+status: adopted
+first_batch: 51
+tags:
+- xla
+- cuda-graphs
+- command-buffer
+knobs:
+- XLA_FLAGS=--xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUBLASLT,CUSTOM_CALL,CUDNN
+trials:
+- variant: XLA default command-buffer set, collectives eager
+  rung: d512
+  protocol: equal_steps
+  batch: mfu-pass-1
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5845498130
+  baseline: gate-2 recipe 3.0834
+  steps: 2817
+  delta:
+  - 0.0013
+  loss:
+  - 3.0847
+  wandb:
+  - lc1-cmdbuf-full
+  settings:
+    XLA_FLAGS: --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUBLASLT,CUSTOM_CALL,CUDNN
+  step_time_change: -3.0% step (165.0 -> 160.0 ms)
+  note: same math; 795 ex/s; one 577 ms stall in profile
+events:
+- type: adopted
+  batch: mfu-pass-1
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5845498130
+  note: 'Issue history row 3: router top-k + gate/up split + command buffers + GC fix, same math, +5.5% ex/s.'
+  candidate: runtime (row 3)
+  as_adopted:
+  - XLA command buffers on

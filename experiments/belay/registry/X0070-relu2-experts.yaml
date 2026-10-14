@@ -1,0 +1,372 @@
+id: X0070
+slug: relu2-experts
+name: ReLU2 experts
+category: MoE and routing
+summary: Use ReLU2 activations in the experts (GLU or ungated).
+source: agent
+status: adopted
+first_batch: 30
+tags:
+- relu2
+- activation
+- experts
+- swiglu
+- ungated kernel
+- latent-moe
+papers:
+- title: Primer
+- title: ReMoE
+details:
+- ungated ReLU2 experts, routed and shared
+- 1.5x width (intermediate 384 at d512) instead of more experts
+- unfused ungated XLA path (fused Pallas kernel slower end to end)
+knobs:
+- expert_activation=relu2
+- moe_ungated_relu2=true
+- moe_ungated_kernel=true
+- shared_ungated_relu2=true
+- intermediate_dim=384
+- moe_fused_relu2 (off)
+trials:
+- variant: ReLU2 GLU (gated), routed + shared
+  rung: d512
+  protocol: equal_steps
+  batch: '30'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852213638
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.0171
+  loss:
+  - 3.1004
+  wandb:
+  - lc1-b30-relu2
+  settings:
+    expert_activation: relu2
+- variant: ungated ReLU2, 576/top-12 (param and FLOP matched, tied-gate emulation)
+  rung: d512
+  protocol: equal_steps
+  batch: '41'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853295544
+  baseline: soft-cap 10 3.0591 / seed 1 3.0675
+  steps: 2817
+  delta:
+  - -0.0087
+  - -0.0106
+  loss:
+  - 3.0504
+  - 3.0569
+  wandb:
+  - lc1-b41-relu2-576k12
+  - lc1-b41-relu2-576k12-s1
+  settings:
+    moe_ungated_relu2: 'true'
+    num_experts: '576'
+    top-k: '12'
+  step_time_change: 660 ex/s (tied gate GEMM paid)
+  tuned: 576/top-12 vs 384/top-8 vs 1.5x wider; expert LR x1.25; shared ReLU2; SwiGLU 576 control
+- variant: ungated ReLU2, 384/top-8 (2/3 expert params)
+  rung: d512
+  protocol: equal_steps
+  batch: '41'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853295544
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0153
+  loss:
+  - 3.0744
+  wandb:
+  - lc1-b41-relu2-384k8
+  settings:
+    moe_ungated_relu2: 'true'
+    num_experts: '384'
+    top-k: '8'
+  tuned: 576/top-12 vs 384/top-8 vs 1.5x wider; expert LR x1.25; shared ReLU2; SwiGLU 576 control
+- variant: ungated ReLU2 576/top-12, routed LR x1.25
+  rung: d512
+  protocol: equal_steps
+  batch: '41'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853295544
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0078
+  loss:
+  - 3.0513
+  wandb:
+  - lc1-b41-relu2-576k12-lr
+  settings:
+    moe_ungated_relu2: 'true'
+    num_experts: '576'
+    top-k: '12'
+    routed LR mult: '1.25'
+  tuned: 576/top-12 vs 384/top-8 vs 1.5x wider; expert LR x1.25; shared ReLU2; SwiGLU 576 control
+- variant: ungated ReLU2 384/top-8, 1.5x wider experts
+  rung: d512
+  protocol: equal_steps
+  batch: '41'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853295544
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0051
+  loss:
+  - 3.054
+  wandb:
+  - lc1-b41-relu2-384k8-w384
+  settings:
+    moe_ungated_relu2: 'true'
+    intermediate_dim: '384'
+  step_time_change: 759 ex/s
+  tuned: 576/top-12 vs 384/top-8 vs 1.5x wider; expert LR x1.25; shared ReLU2; SwiGLU 576 control
+  note: ReLU2 alone beats SwiGLU by about -0.005
+- variant: shared experts ungated ReLU2, 1.5x wider
+  rung: d512
+  protocol: equal_steps
+  batch: '41'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853295544
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0001
+  loss:
+  - 3.059
+  wandb:
+  - lc1-b41-shared-relu2
+  settings:
+    shared_ungated_relu2: 'true'
+    shared width: '384'
+  step_time_change: 787 ex/s
+  tuned: 576/top-12 vs 384/top-8 vs 1.5x wider; expert LR x1.25; shared ReLU2; SwiGLU 576 control
+- variant: routed ReLU2 576/top-12 + shared ReLU2
+  rung: d512
+  protocol: equal_steps
+  batch: '41'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853295544
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0107
+  loss:
+  - 3.0484
+  wandb:
+  - lc1-b41-relu2-both
+  settings:
+    moe_ungated_relu2: 'true'
+    shared_ungated_relu2: 'true'
+    num_experts: '576'
+    top-k: '12'
+  step_time_change: 648 ex/s
+  tuned: 576/top-12 vs 384/top-8 vs 1.5x wider; expert LR x1.25; shared ReLU2; SwiGLU 576 control
+- variant: routed 576/12 + shared ReLU2, d768
+  rung: d768
+  protocol: data_matched
+  batch: '43'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853836517
+  baseline: soft-cap 10 d768 2.7924
+  steps: 6928
+  delta:
+  - -0.0072
+  loss:
+  - 2.7852
+  wandb:
+  - lc1-b43-d768-relu2
+  settings:
+    moe_ungated_relu2: 'true'
+    shared_ungated_relu2: 'true'
+    num_experts: '576'
+    top-k: '12'
+  step_time_change: 264 ex/s
+  note: about 80% of d512 size
+- variant: routed 576/12 + shared, ungated kernel
+  rung: d512
+  protocol: equal_steps
+  batch: '48'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854009925
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0093
+  loss:
+  - 3.0498
+  wandb:
+  - lc1-b48-relu2k
+  settings:
+    moe_ungated_relu2: 'true'
+    moe_ungated_kernel: 'true'
+    shared_ungated_relu2: 'true'
+    num_experts: '576'
+    top-k: '12'
+  step_time_change: 678 vs 795 ex/s (-15%)
+  tuned: ungated kernel (moe_ungated_kernel=true) vs tied gate
+- variant: 384/top-8, 1.5x wide experts + ungated shared, ungated kernel
+  rung: d512
+  protocol: equal_steps
+  batch: '48'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854009925
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0018
+  loss:
+  - 3.0573
+  wandb:
+  - lc1-b48-relu2k-w384
+  settings:
+    moe_ungated_relu2: 'true'
+    moe_ungated_kernel: 'true'
+    shared_ungated_relu2: 'true'
+    intermediate_dim: '384'
+  step_time_change: 791 ex/s (full speed)
+  tuned: ungated kernel (moe_ungated_kernel=true) vs tied gate
+  note: most gain comes from more, finer experts, not activation
+- variant: latent ReLU2 384/8, 1.5x width, d768
+  rung: d768
+  protocol: data_matched
+  batch: '57'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5857526771
+  baseline: soft-cap 10 d768 2.7924
+  steps: 6928
+  delta:
+  - -0.0038
+  loss:
+  - 2.7886
+  wandb:
+  - lc1-b57-d768-r384w
+  settings:
+    experts: 384 top-8
+    width: 1.5x
+    latent: 'on'
+  step_time_change: +2% ex/s
+  tuned: latent vs no latent
+  note: 325 vs 318 ex/s; k 1.028x
+- variant: no latent, ReLU2 384/8 1.5x width, d768
+  rung: d768
+  protocol: data_matched
+  batch: '57'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5857526771
+  baseline: no-latent SwiGLU d768 2.7605
+  steps: 6928
+  delta:
+  - -0.0034
+  loss:
+  - 2.7571
+  wandb:
+  - lc1-b57-d768-nolat-r384w
+  settings:
+    latent_dim: None
+    activation: ReLU2
+    width: 1.5x
+  tuned: latent vs no latent
+  note: no LatentMoE x ReLU2 interaction
+- variant: 384/8, 1.5x wide, fused Pallas kernel
+  rung: d512
+  protocol: equal_steps
+  batch: '61'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858038094
+  baseline: SwiGLU candidate 1 3.0325 (s0) / 3.0395 (s1)
+  steps: 2817
+  delta:
+  - -0.0044
+  loss:
+  - 3.0281
+  wandb:
+  - lc1-b61-r384w-fused
+  settings:
+    moe_fused_relu2: 'true'
+    experts: 384 top-8
+    width: 1.5x
+  step_time_change: +2.3% (176.0 vs 172.0 ms)
+  tuned: fused vs unfused
+  note: fused kernel +4.1 ms/step end to end; stays off
+- variant: 384/8, 1.5x wide, unfused
+  rung: d512
+  protocol: equal_steps
+  batch: '61'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858038094
+  baseline: SwiGLU candidate 1 3.0325 (s0) / 3.0395 (s1)
+  steps: 2817
+  delta:
+  - -0.005
+  - -0.006
+  loss:
+  - 3.0275
+  - 3.0335
+  wandb:
+  - lc1-b61-r384w-unfused
+  - lc1-b61-r384w-s1
+  settings:
+    moe_fused_relu2: 'false'
+    experts: 384 top-8
+    width: 1.5x
+  step_time_change: 0 (171.9 vs 172.0 ms)
+  tuned: fused vs unfused
+  note: free -0.005; same step time as SwiGLU
+- variant: ReLU2 1.5x + Bi-Maxwell
+  rung: d512
+  protocol: equal_steps
+  batch: '61'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858038094
+  baseline: SwiGLU candidate 1 3.0325 (s0) / 3.0395 (s1)
+  steps: 2817
+  delta:
+  - -0.011
+  loss:
+  - 3.0215
+  wandb:
+  - lc1-b61-r384w-bimax
+  settings:
+    relu2 width: 1.5x
+    muon_bimaxwell: 'true'
+  note: stack additively; 719 ex/s with first Bi-Maxwell version
+- variant: d768 remove ReLU2 experts (SwiGLU 256)
+  rung: d768
+  protocol: equal_steps
+  batch: '84'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862289448
+  baseline: d768 candidate 6 top-8 lc1-b80-d768-c6-top8 (2.7689)
+  steps: 7325
+  delta:
+  - -0.004
+  loss:
+  - 2.7729
+  wandb:
+  - lc1-b84-d768-norelu2
+  settings:
+    experts: SwiGLU 256 routed and shared
+  tuned: leave-one-out over candidate 6 pieces
+  note: leave-one-out over candidate 6, sign flipped to 'adding the piece' (negative = piece helps)
+events:
+- type: adopted
+  batch: '63'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858603412
+  note: part of candidate 2, new d512 base
+  candidate: candidate 2
+  as_adopted:
+  - moe_ungated_relu2=true
+  - experts 384 top-8 at 1.5x width (routed and shared)
+  - unfused ungated path
+- type: closed
+  batch: '51'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854280637
+  note: 576/top-12 ReLU2 out of fixed-time recipe until dispatch cost drops (19% slower)
+  candidate: candidate 1

@@ -1,0 +1,61 @@
+id: X0199
+slug: polynorm-experts
+name: PolyNorm expert activation
+category: MoE and routing
+summary: Replace ReLU^2 in experts with an RMS-normalized cubic polynomial activation.
+source: maintainer
+status: closed
+first_batch: 163
+tags:
+- activation
+- polynorm
+- motif
+- experts
+papers:
+- arxiv: '2608.09119'
+  title: Motif 3 technical report
+knobs:
+- moe_ungated_activation=polynorm
+trials:
+- variant: routed experts, fixed equal coefficients
+  rung: d512
+  protocol: equal_steps
+  batch: '163'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5935139189
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0117
+  - 0.012
+  loss:
+  - 2.9885
+  - 2.9942
+  settings:
+    moe_ungated_activation: polynorm
+    coefficients: fixed 1/3 each
+  step_time_change: 183.1 / 179.1 ms
+  tuned: routed vs routed+shared
+- variant: routed + shared
+  rung: d512
+  protocol: equal_steps
+  batch: '163'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5935139189
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.014
+  loss:
+  - 2.9908
+  settings:
+    moe_ungated_activation: polynorm
+    shared: polynorm
+  step_time_change: 185.0 ms (no PGLE)
+  tuned: routed vs routed+shared
+events:
+- type: closed
+  batch: '163'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5935139189
+  note: clearly worse

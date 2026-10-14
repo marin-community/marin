@@ -1,0 +1,36 @@
+id: X0186
+slug: routed-expert-adam
+name: Adam for routed experts
+category: Optimizers
+summary: Move routed expert matrices from MuonH to the Adam group.
+source: agent
+status: closed
+first_batch: 140
+tags:
+- routed-experts
+- adam
+- muonh
+trials:
+- variant: Adam for routed experts
+  rung: d512
+  protocol: equal_steps
+  batch: '140'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5918588189
+  baseline: candidate 9 + PGLE 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0374
+  - 0.0368
+  loss:
+  - 3.0124
+  - 3.0159
+  settings:
+    routed experts optimizer: Adam (adam_lr, AdEMAMix)
+  note: 'closed: clearly worse'
+events:
+- type: closed
+  batch: '140'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5918588189
+  note: Adam for routed experts closed

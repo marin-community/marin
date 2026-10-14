@@ -1,0 +1,35 @@
+id: X0007
+slug: muonh-optimizer
+name: MuonH / AdamH hyperball optimizer routing
+category: Optimizers
+summary: Matrices use Muon steps projected back onto their init Frobenius sphere; lm_head uses AdamH; the rest use Adam.
+source: baseline
+status: adopted
+first_batch: 0
+tags:
+- muon
+- muonh
+- adamh
+- hyperball
+- baseline
+details:
+- 'MuonH: Nesterov 0.95, 5 quintic Newton-Schulz steps, Frobenius-sphere re-projection'
+- AdamH on lm_head at MuonH LR
+- Adam beta1 0.9; WD 0.02 only on router and attention output gate; no grad clipping
+- 'schedule: 1% warmup, linear decay to 0.05x peak'
+- Adam LR = 0.0876 * tokens^-0.346 * D^-0.345 * sqrt(tokens per batch); MuonH LR = 13/3 x Adam LR
+- 'd512, 2384 steps: MuonH 0.0227, Adam 0.0052, beta2 0.996, eps 4.7e-16'
+events:
+- type: adopted
+  batch: '0'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451
+  note: Part of the clean KMA baseline (branch fasttrack-moe-kma @ 4eba59cafa).
+  candidate: clean KMA
+  as_adopted:
+  - 'MuonH: Nesterov 0.95, 5 quintic Newton-Schulz steps, Frobenius-sphere re-projection'
+  - AdamH on lm_head at MuonH LR
+  - Adam beta1 0.9; WD 0.02 only on router and attention output gate; no grad clipping
+  - 'schedule: 1% warmup, linear decay to 0.05x peak'
+  - Adam LR = 0.0876 * tokens^-0.346 * D^-0.345 * sqrt(tokens per batch); MuonH LR = 13/3 x Adam LR
+  - 'd512, 2384 steps: MuonH 0.0227, Adam 0.0052, beta2 0.996, eps 4.7e-16'

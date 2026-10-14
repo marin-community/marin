@@ -1,0 +1,30 @@
+id: X0164
+slug: simbal-router-loss
+name: SimBal router orthogonality loss
+category: MoE and routing
+summary: Add an orthogonality loss on router weights to balance experts.
+source: agent
+status: done
+first_batch: 98
+tags:
+- router
+- aux-loss
+- simbal
+papers:
+- arxiv: '2506.14038'
+trials:
+- variant: SimBal weight 0.1 and 0.01
+  rung: d512
+  protocol: equal_steps
+  batch: '98'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867280167
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.221
+  - 0.224
+  settings:
+    weight: 0.1 and 0.01
+  tuned: weight 0.1 / 0.01
+  note: broken as specified; raw loss never falls

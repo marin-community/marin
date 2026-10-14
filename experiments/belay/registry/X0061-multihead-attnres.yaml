@@ -1,0 +1,223 @@
+id: X0061
+slug: multihead-attnres
+name: Multi-head AttnRes
+category: Depth connections
+summary: Split each AttnRes pseudo-query into heads that each mix their own channel slice.
+source: agent
+status: closed
+first_batch: 24
+tags:
+- attnres
+- multi-head
+- rmt
+papers:
+- arxiv: '2506.22696'
+  title: Residual Matrix Transformers
+knobs:
+- attn_res_heads
+- attn_res_head_sub
+trials:
+- variant: 4 heads
+  rung: d512
+  protocol: equal_steps
+  batch: 23-24
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844656167
+  baseline: gate-2 recipe lc1-b17-bzl 3.0834
+  steps: 2817
+  delta:
+  - -0.0027
+  loss:
+  - 3.0807
+  wandb:
+  - lc1-b24-arh4
+  settings:
+    attn_res_heads: '4'
+  tuned: heads 4/8
+- variant: 8 heads
+  rung: d512
+  protocol: equal_steps
+  batch: 23-24
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844656167
+  baseline: gate-2 recipe lc1-b17-bzl 3.0834
+  steps: 2817
+  delta:
+  - 0.0038
+  loss:
+  - 3.0872
+  wandb:
+  - lc1-b24-arh8
+  settings:
+    attn_res_heads: '8'
+  tuned: heads 4/8
+- variant: 4 heads + V gate
+  rung: d512
+  protocol: equal_steps
+  batch: 23-24
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844656167
+  baseline: gate-2 recipe lc1-b17-bzl 3.0834
+  steps: 2817
+  delta:
+  - -0.0115
+  loss:
+  - 3.0719
+  wandb:
+  - lc1-b24-arh4-vgate
+  settings:
+    attn_res_heads: '4'
+    attn_res_v_gate: 'true'
+- variant: d768 4 heads
+  rung: d768
+  protocol: data_matched
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  baseline: d768 recipe base lc1-b28-d768-base-r 2.8114
+  steps: 6928
+  delta:
+  - 0.0005
+  loss:
+  - 2.8119
+  wandb:
+  - lc1-b28-d768-arh4-r
+  settings:
+    attn_res_heads: '4'
+  tuned: query LR x3/x1/3, temperature, per-head norm
+- variant: d768 4 heads, query LR x3
+  rung: d768
+  protocol: data_matched
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  baseline: d768 recipe base lc1-b28-d768-base-r 2.8114
+  steps: 6928
+  delta:
+  - 0.0001
+  loss:
+  - 2.8115
+  wandb:
+  - lc1-b28-d768-arh4-qlr03-r
+  settings:
+    attn_res_heads: '4'
+    attn_res_query_lr_scale: '0.3'
+  tuned: query LR x3/x1/3, temperature, per-head norm
+- variant: d768 4 heads, query LR x1/3
+  rung: d768
+  protocol: data_matched
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  baseline: d768 recipe base lc1-b28-d768-base-r 2.8114
+  steps: 6928
+  delta:
+  - 0.0009
+  loss:
+  - 2.8123
+  wandb:
+  - lc1-b28-d768-arh4-qlr003-r
+  settings:
+    attn_res_heads: '4'
+    attn_res_query_lr_scale: '0.03'
+  tuned: query LR x3/x1/3, temperature, per-head norm
+- variant: d768 4 heads + learnable temperature
+  rung: d768
+  protocol: data_matched
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  baseline: d768 recipe base lc1-b28-d768-base-r 2.8114
+  steps: 6928
+  delta:
+  - -0.0011
+  loss:
+  - 2.8103
+  wandb:
+  - lc1-b28-d768-arh4-temp-r
+  settings:
+    attn_res_heads: '4'
+    temperature: learnable, init 1
+  tuned: query LR x3/x1/3, temperature, per-head norm
+- variant: d768 4 heads + per-head RMSNorm
+  rung: d768
+  protocol: data_matched
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  baseline: d768 recipe base lc1-b28-d768-base-r 2.8114
+  steps: 6928
+  delta:
+  - -0.0002
+  loss:
+  - 2.8112
+  wandb:
+  - lc1-b28-d768-arh4-hnorm-r
+  settings:
+    attn_res_heads: '4'
+    key norm: per-head RMSNorm
+  tuned: query LR x3/x1/3, temperature, per-head norm
+- variant: hierarchical 4-head, slice sub-queries (128 wide)
+  rung: d512
+  protocol: equal_steps
+  batch: '29'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5850337517
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.0017
+  loss:
+  - 3.085
+  wandb:
+  - lc1-b29-arh4-sub-slice
+  settings:
+    attn_res_head_sub: slice
+    heads: '4'
+  tuned: slice vs full sub-queries
+- variant: hierarchical 4-head, full-width sub-queries
+  rung: d512
+  protocol: equal_steps
+  batch: '29'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5850337517
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - -0.0007
+  loss:
+  - 3.0826
+  wandb:
+  - lc1-b29-arh4-sub-full
+  settings:
+    attn_res_head_sub: full
+    heads: '4'
+  tuned: slice vs full sub-queries
+- variant: 4 heads + V gate
+  rung: d512
+  protocol: equal_steps
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0034
+  - -0.0026
+  loss:
+  - 3.0038
+  - 3.0083
+  wandb:
+  - lc1-b87-arh4vg
+  - lc1-b87-arh4vg-s1
+  settings:
+    AttnRes heads: '4'
+    V gate: 'on'
+  step_time_change: 183 vs 177 ms
+  note: b24's -0.0115 does not replicate
+events:
+- type: closed
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  note: does not carry to d768; not added to recipe

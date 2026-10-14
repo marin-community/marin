@@ -1,0 +1,38 @@
+id: X0100
+slug: laurel-lr
+name: LAuReL-LR low-rank residual
+category: Depth connections
+summary: Each sublayer's AttnRes input becomes h + (hA)B with rank-16 A, B.
+source: agent
+status: done
+first_batch: 58
+tags:
+- laurel
+- low-rank
+- residual
+papers:
+- arxiv: '2411.07501'
+  title: LAuReL
+details:
+- rank 16
+- A random init, B zero init, both Adam
+knobs:
+- laurel_rank=16
+trials:
+- variant: rank 16
+  rung: d512
+  protocol: equal_steps
+  batch: '58'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5857674348
+  baseline: candidate 1 3.0325 (s0) / 3.0395 (s1)
+  steps: 2817
+  delta:
+  - -0.0001
+  loss:
+  - 3.0324
+  wandb:
+  - lc1-b58-laurel16
+  settings:
+    laurel_rank: '16'
+  note: neutral; not adopted

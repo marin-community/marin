@@ -1,0 +1,38 @@
+id: X0006
+slug: mla-inkling
+name: MLA + Inkling relative-position bias (global layers)
+category: Attention variants
+summary: Global layers use MLA with a shared 512-wide KV latent, an Inkling learned relative-position bias instead of RoPE,
+  XSA and a per-head output gate.
+source: baseline
+status: adopted
+first_batch: 0
+tags:
+- mla
+- inkling
+- relative-position
+- xsa
+- baseline
+details:
+- q full rank D -> N*128; k,v from one 512-wide RMSNormed KV latent
+- no RoPE, no QK-norm, qk_mult 1 at baseline
+- Inkling bias[h,i,j] = R[i,h,:] . P[:, i-j], R = x W_r (16/head), P 16 x 1024 shared, rel extent 1024
+- 'XSA: subtract each head''s component along its own v'
+- output gate 2*sigmoid(x W_gate) per head, zero-init
+- ShortConv on branch output
+- every 4th layer and the last are global
+events:
+- type: adopted
+  batch: '0'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451
+  note: Part of the clean KMA baseline (branch fasttrack-moe-kma @ 4eba59cafa).
+  candidate: clean KMA
+  as_adopted:
+  - q full rank D -> N*128; k,v from one 512-wide RMSNormed KV latent
+  - no RoPE, no QK-norm, qk_mult 1 at baseline
+  - Inkling bias[h,i,j] = R[i,h,:] . P[:, i-j], R = x W_r (16/head), P 16 x 1024 shared, rel extent 1024
+  - 'XSA: subtract each head''s component along its own v'
+  - output gate 2*sigmoid(x W_gate) per head, zero-init
+  - ShortConv on branch output
+  - every 4th layer and the last are global

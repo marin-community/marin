@@ -1,0 +1,330 @@
+id: X0167
+slug: moe-latent-read-write-widths
+name: MoE latent read/write widths
+category: MoE and routing
+summary: Size the routed experts' read (down) and write (up) latents separately, including narrower reads and shifts at a
+  fixed total.
+source: maintainer
+status: closed
+first_batch: 99
+tags:
+- latent
+- moe
+- latent_out_dim
+- read-write
+- read
+- latent_dim
+- dispatch
+- latentmoe
+details:
+- kept 384/384 at d768 (0.5d / 0.5d)
+knobs:
+- latent_out_dim
+- latent_dim
+trials:
+- variant: read 128 / write 256
+  rung: d512
+  protocol: equal_steps
+  batch: '103'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868747426
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0198
+  - 0.0185
+  loss:
+  - 2.999
+  - 3.0046
+  wandb:
+  - lc1-b103-read128
+  - lc1-b103-read128-s1
+  settings:
+    latent_dim: '128'
+    write: '256'
+  tuned: read 32/64/128/256/512
+- variant: read 64 / write 256
+  rung: d512
+  protocol: equal_steps
+  batch: '103'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868747426
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.048
+  - 0.0466
+  loss:
+  - 3.0272
+  - 3.0327
+  wandb:
+  - lc1-b103-read64
+  - lc1-b103-read64-s1
+  settings:
+    latent_dim: '64'
+    write: '256'
+  tuned: read 32/64/128/256/512
+- variant: read 32 / write 256
+  rung: d512
+  protocol: equal_steps
+  batch: '103'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868747426
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0804
+  - 0.0794
+  loss:
+  - 3.0596
+  - 3.0655
+  wandb:
+  - lc1-b103-read32
+  - lc1-b103-read32-s1
+  settings:
+    latent_dim: '32'
+    write: '256'
+  tuned: read 32/64/128/256/512
+- variant: no shared, read 256 / write 512
+  rung: d512
+  protocol: equal_steps
+  batch: '103'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868747426
+  baseline: no-shared candidate 8 2.9899 / 2.9982
+  steps: 2817
+  delta:
+  - -0.0197
+  - -0.0228
+  loss:
+  - 2.9702
+  - 2.9754
+  wandb:
+  - lc1-b103-ns-r256w512
+  - lc1-b103-ns-r256w512-s1
+  settings:
+    latent_in: '256'
+    latent_out: '512'
+    shared_expert_intermediate_dim: '0'
+- variant: no shared, read 512 / write 256
+  rung: d512
+  protocol: equal_steps
+  batch: '103'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868747426
+  baseline: no-shared candidate 8 2.9899 / 2.9982
+  steps: 2817
+  delta:
+  - -0.0083
+  - -0.0067
+  loss:
+  - 2.9816
+  - 2.9915
+  wandb:
+  - lc1-b103-ns-r512w256
+  - lc1-b103-ns-r512w256-s1
+  settings:
+    latent_in: '512'
+    latent_out: '256'
+    shared_expert_intermediate_dim: '0'
+- variant: no shared, read 128 / write 256
+  rung: d512
+  protocol: equal_steps
+  batch: '103'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868747426
+  baseline: no-shared candidate 8 2.9899 / 2.9982
+  steps: 2817
+  delta:
+  - 0.019
+  loss:
+  - 3.0089
+  - 3.019
+  wandb:
+  - lc1-b103-ns-r128w256
+  - lc1-b103-ns-r128w256-s1
+  settings:
+    latent_dim: '128'
+    shared_expert_intermediate_dim: '0'
+  tuned: read 64/128
+- variant: no shared, read 64 / write 256
+  rung: d512
+  protocol: equal_steps
+  batch: '103'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868747426
+  baseline: no-shared candidate 8 2.9899 / 2.9982
+  steps: 2817
+  delta:
+  - 0.0536
+  - 0.0527
+  loss:
+  - 3.0436
+  - 3.051
+  wandb:
+  - lc1-b103-ns-r64w256
+  - lc1-b103-ns-r64w256-s1
+  settings:
+    latent_dim: '64'
+    shared_expert_intermediate_dim: '0'
+  tuned: read 64/128
+  derived: true
+- variant: read 192 / write 320 (fixed total 512)
+  rung: d512
+  protocol: equal_steps
+  batch: '107'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5874418903
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - -0.0002
+  - 0.0015
+  loss:
+  - 2.9748
+  - 2.9806
+  wandb:
+  - lc1-b107-r192w320
+  - lc1-b107-r192w320-s1
+  settings:
+    latent_in: '192'
+    latent_out: '320'
+  tuned: read/write split at total 512
+- variant: read 128 / write 384 (fixed total 512)
+  rung: d512
+  protocol: equal_steps
+  batch: '107'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5874418903
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0054
+  - 0.0071
+  loss:
+  - 2.9804
+  - 2.9862
+  wandb:
+  - lc1-b107-r128w384
+  - lc1-b107-r128w384-s1
+  settings:
+    latent_in: '128'
+    latent_out: '384'
+  tuned: read/write split at total 512
+- variant: read 320 / write 192 (fixed total 512)
+  rung: d512
+  protocol: equal_steps
+  batch: '107'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5874418903
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0046
+  - 0.0043
+  loss:
+  - 2.9796
+  - 2.9834
+  wandb:
+  - lc1-b107-r320w192
+  - lc1-b107-r320w192-s1
+  settings:
+    latent_in: '320'
+    latent_out: '192'
+  tuned: read/write split at total 512
+- variant: read 256 / write 512 (no w_latent_up)
+  rung: d512
+  protocol: equal_steps
+  batch: '99'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867547653
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - -0.0185
+  - -0.0215
+  settings:
+    latent_in: '256'
+    latent_out: '512'
+  step_time_change: -11% ex/s
+  tuned: 256/512 vs 512/256 at equal expert FLOPs
+  note: break-even at fixed time; doubles combine bytes
+- variant: read 512 / write 256 (no w_latent_down)
+  rung: d512
+  protocol: equal_steps
+  batch: '99'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867547653
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0016
+  - 0.0003
+  settings:
+    latent_in: '512'
+    latent_out: '256'
+  step_time_change: -9% ex/s
+  tuned: 256/512 vs 512/256 at equal expert FLOPs
+- variant: read 320 / write 448 at d768
+  rung: d768
+  protocol: equal_steps
+  batch: '124'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5900919922
+  baseline: d768 candidate 9 rule A 2.7214 / 2.7187
+  steps: 7325
+  delta:
+  - -0.0022
+  - -0.0029
+  loss:
+  - 2.7192
+  - 2.7158
+  settings:
+    read latent: '320'
+    write latent: '448'
+    bigram table: rule A
+  step_time_change: same ex/s
+  note: same-sign small gain at d768; flat at d512 (b107)
+- variant: read 320 / write 448 at d768, data-matched
+  rung: d768
+  protocol: data_matched
+  batch: '126'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5902307136
+  baseline: d768 candidate 9 data-matched 2.7277 / 2.7221
+  steps: 6929
+  delta:
+  - -0.0015
+  - 0.0017
+  loss:
+  - 2.7262
+  - 2.7238
+  settings:
+    read latent: '320'
+    write latent: '448'
+  tuned: 320/448, 256/512 vs 384/384
+  note: batch 124's -0.0026 at 7325 steps did not replicate
+- variant: read 256 / write 512 at d768, data-matched
+  rung: d768
+  protocol: data_matched
+  batch: '126'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5902307136
+  baseline: d768 candidate 9 data-matched 2.7277 / 2.7221
+  steps: 6929
+  delta:
+  - 0.001
+  - 0.0024
+  loss:
+  - 2.7287
+  - 2.7245
+  settings:
+    read latent: '256'
+    write latent: '512'
+  tuned: 320/448, 256/512 vs 384/384
+events:
+- type: closed
+  batch: '126'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5902307136
+  note: Read/write split flat at d512 and d768; 384/384 (0.5d/0.5d) kept

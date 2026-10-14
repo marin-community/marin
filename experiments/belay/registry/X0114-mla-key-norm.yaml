@@ -1,0 +1,117 @@
+id: X0114
+slug: mla-key-norm
+name: MLA per-head key RMSNorm
+category: Attention variants
+summary: RMS-normalize each head's up-projected MLA key (no query norm).
+source: agent
+status: adopted
+first_batch: 66
+tags:
+- mla
+- k-norm
+- rmsnorm
+- deepseek-v4.1
+- key-norm
+- qk-norm
+- kv-cache
+details:
+- per-head RMSNorm on up-projected key
+- caches one inverse key norm per head per token (+0.8% KV cache)
+- per-head; shared 1-RMS variant loses most of the gain
+knobs:
+- mla_k_norm=true
+- mla_k_norm_split (split variant)
+- mla_k_norm_shared
+trials:
+- variant: per-head key-only RMSNorm
+  rung: d512
+  protocol: equal_steps
+  batch: '66'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858849982
+  baseline: candidate 2 3.0197 (s0) / 3.0266 (s1) / 3.0274 (s2)
+  steps: 2817
+  delta:
+  - -0.0058
+  - -0.0063
+  - -0.0046
+  loss:
+  - 3.0139
+  - 3.0203
+  - 3.0228
+  wandb:
+  - lc1-b66-knorm
+  - lc1-b66-knorm-s1
+  - lc1-b66-knorm-s2
+  settings:
+    mla_k_norm: 'true'
+  tuned: whole-key vs split norm
+  note: mean -0.0056, k 1.036x, no ex/s cost
+- variant: split norm over offset halves
+  rung: d512
+  protocol: equal_steps
+  batch: '66'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858849982
+  baseline: candidate 2 3.0197 (s0) / 3.0266 (s1) / 3.0274 (s2)
+  steps: 2817
+  delta:
+  - -0.0047
+  loss:
+  - 3.015
+  wandb:
+  - lc1-b66-knorm-split
+  settings:
+    mla_k_norm_split: 'true'
+  tuned: whole-key vs split norm
+  note: no better than one norm
+- variant: shared key norm (1 RMS per token)
+  rung: d512
+  protocol: equal_steps
+  batch: '75'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860492314
+  baseline: candidate 4 consolidated (3.0129 / 3.0161)
+  steps: 2817
+  delta:
+  - 0.0022
+  - 0.0052
+  loss:
+  - 3.0151
+  - 3.0213
+  wandb:
+  - lc1-b75-knorm-shared
+  - lc1-b75-knorm-shared-s1
+  settings:
+    mla_k_norm_shared: 'true'
+  tuned: per-head vs shared key norm
+  note: keeps ~1/3 of per-head gain; cache-cheap variant
+- variant: d768 remove key and query norm (qk_mult 2.5)
+  rung: d768
+  protocol: equal_steps
+  batch: '84'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862289448
+  baseline: d768 candidate 6 top-8 lc1-b80-d768-c6-top8 (2.7689)
+  steps: 7325
+  delta:
+  - -0.0034
+  loss:
+  - 2.7723
+  wandb:
+  - lc1-b84-d768-noknorm
+  settings:
+    mla_k_norm: 'false'
+    mla_q_norm: 'false'
+    qk_mult: '2.5'
+  tuned: leave-one-out over candidate 6 pieces
+  note: leave-one-out over candidate 6, sign flipped to 'adding the piece' (negative = piece helps)
+events:
+- type: adopted
+  batch: '66'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858849982
+  note: candidate 3 = candidate 2 + mla_k_norm
+  candidate: candidate 3
+  as_adopted:
+  - mla_k_norm=true

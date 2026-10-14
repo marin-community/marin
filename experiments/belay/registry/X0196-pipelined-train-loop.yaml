@@ -1,0 +1,37 @@
+id: X0196
+slug: pipelined-train-loop
+name: Pipelined train loop
+category: Systems and speed
+summary: Dispatch step n+1 before waiting on step n so logging overlaps GPU work.
+source: agent
+status: closed
+first_batch: 157
+tags:
+- host-dispatch
+- pipelining
+- runtime
+knobs:
+- --pipeline-depth
+trials:
+- variant: pipeline depth 1
+  rung: d512
+  protocol: equal_steps
+  batch: 157-160
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5934720837
+  baseline: candidate 9
+  steps: 2817
+  loss:
+  - 2.9777
+  wandb:
+  - lc1-b157-pipe
+  settings:
+    --pipeline-depth: '1'
+  step_time_change: wall-clock 195.8 -> 171.2 ms (300-step timing)
+  note: same math; full runs crash ~step 515 (memory); default depth 0
+events:
+- type: closed
+  batch: 157-160
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5934720837
+  note: crashes from memory pressure; --pipeline-depth defaults to 0

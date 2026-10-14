@@ -1,0 +1,26 @@
+id: X0201
+slug: momentum-gradient-agreement
+name: Momentum/gradient agreement boost for Muon
+category: Optimizers
+summary: Add alpha*P*sym(P^T g) to Muon's direction to boost momentum directions the current gradient confirms.
+source: agent
+status: done
+first_batch: 172
+tags:
+- muon
+- snr
+- probe
+- momentum
+details:
+- P = NS(M) + alpha*P*sym(P^T g), rescaled to alpha*|P|
+trials:
+- variant: alpha 0.25 (held-out probe)
+  rung: d512
+  protocol: unknown
+  batch: '172'
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5943888764
+  baseline: Muon direction
+  settings:
+    alpha: '0.25'
+  note: 'probe at step 1408: +57 KDA, +240 MLA, +102 shared (1e-4 nats held-out); within noise at 2600'

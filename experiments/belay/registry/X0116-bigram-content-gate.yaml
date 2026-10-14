@@ -1,0 +1,214 @@
+id: X0116
+slug: bigram-content-gate
+name: Bigram content gate
+category: Embeddings and inputs
+summary: Gate each token's bigram row by an interaction between the token embedding and the bigram row.
+source: maintainer
+status: removed
+first_batch: 69
+tags:
+- bigram
+- gate
+- engram
+- attnres
+details:
+- g = sigmoid((e*b) A B + c), per channel, rank 16
+- B zero-init, c init +2 (gate starts at 0.88)
+- parameters on Adam
+- bf16 interaction (candidate 4)
+knobs:
+- bigram_gate=true
+- bigram_gate_rank=16
+trials:
+- variant: scalar Engram-style gate on candidate 2
+  rung: d512
+  protocol: equal_steps
+  batch: '69'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859182603
+  baseline: candidate 2 3.0197 (s0) / 3.0266 (s1)
+  steps: 2817
+  delta:
+  - -0.0038
+  - -0.0025
+  loss:
+  - 3.0159
+  - 3.0241
+  wandb:
+  - lc1-b69-bggate
+  - lc1-b69-bggate-s1
+  settings:
+    bigram_gate: 'true'
+    w init: '0'
+    c init: '+2'
+  note: gate nearly bimodal per token (std 0.34)
+- variant: scalar gate on candidate 3
+  rung: d512
+  protocol: equal_steps
+  batch: '70'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859335063
+  baseline: candidate 3 3.0139 (s0) / 3.0203 (s1)
+  steps: 2817
+  delta:
+  - -0.0014
+  - -0.004
+  loss:
+  - 3.0125
+  - 3.0163
+  wandb:
+  - lc1-b70-c3-bggate
+  - lc1-b70-c3-bggate-s1
+  settings:
+    bigram_gate: 'true'
+  tuned: scalar vs rank 16
+  note: median step 178.5 vs 176.1 ms, likely host variance
+- variant: rank-16 per-channel gate on candidate 3
+  rung: d512
+  protocol: equal_steps
+  batch: '70'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859335063
+  baseline: candidate 3 3.0139 (s0) / 3.0203 (s1)
+  steps: 2817
+  delta:
+  - -0.003
+  - -0.0041
+  loss:
+  - 3.0109
+  - 3.0162
+  wandb:
+  - lc1-b70-c3-bggate-r16
+  - lc1-b70-c3-bggate-r16-s1
+  settings:
+    bigram_gate: 'true'
+    bigram_gate_rank: '16'
+  tuned: scalar vs rank 16
+  note: mean -0.0036; adopted as candidate 4
+- variant: bf16 gate (cheaper, no renorms)
+  rung: d512
+  protocol: equal_steps
+  batch: '71'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859486453
+  baseline: candidate 3 (3.0139 / 3.0203)
+  steps: 2817
+  delta:
+  - -0.0021
+  - -0.0037
+  loss:
+  - 3.0118
+  - 3.0166
+  wandb:
+  - lc1-b71-c4-bf16gate
+  - lc1-b71-c4-bf16gate-s1
+  settings:
+    bigram_gate: 'true'
+    bigram_gate_rank: '16'
+    gate dtype: bf16
+  step_time_change: -0.7% (175.0 vs 176.2 ms)
+  tuned: fp32 vs bf16 gate
+  note: fp32 gate was -0.0036 mean at +1.7% step; bf16 gate becomes candidate 4
+- variant: d768 remove bigram content gate
+  rung: d768
+  protocol: equal_steps
+  batch: '84'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862289448
+  baseline: d768 candidate 6 top-8 lc1-b80-d768-c6-top8 (2.7689)
+  steps: 7325
+  delta:
+  - 0.0003
+  loss:
+  - 2.7686
+  wandb:
+  - lc1-b84-d768-nogate
+  settings:
+    bigram_gate: 'false'
+  tuned: leave-one-out over candidate 6 pieces
+  note: leave-one-out over candidate 6, sign flipped to 'adding the piece' (negative = piece helps)
+- variant: bigram content gate off at d768
+  rung: d768
+  protocol: data_matched
+  batch: '131'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5905408208
+  baseline: d768 candidate 9 data-matched 2.7277 / 2.7221
+  steps: 6929
+  delta:
+  - 0.0015
+  - 0.0029
+  settings:
+    bigram_gate: 'false'
+  note: gate still helps a little with the rule-A table
+- variant: SiLU in gate
+  rung: d512
+  protocol: equal_steps
+  batch: '167'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5937867929
+  baseline: candidate 9 same cluster (rno2a 2.9768 / 2.9822; 02a lc1-b169-c9-ue 2.9791 / 2.9831)
+  steps: 2817
+  delta:
+  - -0.0016
+  - -0.0017
+  loss:
+  - 2.9775
+  - 2.9814
+  settings:
+    gate: sigmoid(SiLU((e*b)A)B + c)
+  step_time_change: 0% (174.1 ms)
+  tuned: SiLU / GELU / 0.1 logit scale
+  note: most consistent, not a win alone
+- variant: GELU in gate
+  rung: d512
+  protocol: equal_steps
+  batch: '167'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5937867929
+  baseline: candidate 9 same cluster (rno2a 2.9768 / 2.9822; 02a lc1-b169-c9-ue 2.9791 / 2.9831)
+  steps: 2817
+  delta:
+  - -0.0023
+  - 0.0008
+  loss:
+  - 2.9768
+  - 2.983
+  settings:
+    gate: sigmoid(GELU((e*b)A)B + c)
+  step_time_change: 0%
+  tuned: SiLU / GELU / 0.1 logit scale
+- variant: 0.1 logit scale
+  rung: d512
+  protocol: equal_steps
+  batch: '167'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5937867929
+  baseline: candidate 9 same cluster (rno2a 2.9768 / 2.9822; 02a lc1-b169-c9-ue 2.9791 / 2.9831)
+  steps: 2817
+  delta:
+  - 0.0009
+  - -0.0017
+  loss:
+  - 2.9777
+  - 2.9814
+  settings:
+    gate: sigmoid(0.1 (e*b)AB + c)
+  step_time_change: 0%
+  tuned: SiLU / GELU / 0.1 logit scale
+events:
+- type: adopted
+  batch: '71'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859486453
+  note: bf16 rank-16 content gate becomes the d512 recipe
+  candidate: candidate 4
+  as_adopted:
+  - bigram_gate=true
+  - bigram_gate_rank=16
+  - bf16 gate
+- type: removed
+  batch: ckpt1
+  date: '2026-10-14'
+  comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
+  note: no bigram table in Belay Ckpt 1

@@ -1,0 +1,103 @@
+id: X0211
+slug: hyga-content-gate
+name: Content-conditioned output gate (HyGA H-gate)
+category: Attention variants
+summary: Add a low-rank term from the head's own attention output to the output gate logits.
+source: agent
+status: done
+first_batch: 203
+tags:
+- hyga
+- output gate
+- mla
+- kda
+papers:
+- arxiv: '2608.11805'
+  title: HyGA
+details:
+- 'H-gate: SiLU(H_i W_d) W_u rank 32 added to output gate logits'
+trials:
+- variant: MLA H-gate (df12)
+  rung: d512
+  protocol: equal_steps
+  batch: df12
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: df1-ctrl 2.9543
+  steps: 2817
+  delta:
+  - -0.0032
+  loss:
+  - 2.9511
+  settings:
+    gate: H-gate rank 32
+  step_time_change: 191.8 ms
+  tuned: H-gate / C-gate / both; MLA vs KDA
+- variant: MLA C-gate
+  rung: d512
+  protocol: equal_steps
+  batch: df12
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: df1-ctrl 2.9543
+  steps: 2817
+  delta:
+  - -0.0003
+  loss:
+  - 2.954
+  settings:
+    gate: MLA C-gate
+  step_time_change: 192.5 ms
+  tuned: H-gate / C-gate / both; MLA vs KDA
+- variant: H-gate + C-gate
+  rung: d512
+  protocol: equal_steps
+  batch: df12
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: df1-ctrl 2.9543
+  steps: 2817
+  delta:
+  - -0.0009
+  loss:
+  - 2.9534
+  settings:
+    gate: H-gate + C-gate
+  step_time_change: 191.6 ms
+  tuned: H-gate / C-gate / both; MLA vs KDA
+- variant: MLA H-gate rank 32 (2 seeds)
+  rung: d512
+  protocol: equal_steps
+  batch: df14-df17
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 df1-ctrl / df4-ctrl-s1 (2.9543 / 2.9584)
+  steps: 2817
+  delta:
+  - -0.0027
+  loss:
+  - 2.9511
+  - 2.9563
+  settings:
+    gate: H-gate rank 32
+  step_time_change: +0.9% (191.5 ms)
+  tuned: H-gate / C-gate / both; MLA vs KDA
+  note: mean; nets ~-0.001 fixed time
+- variant: KDA output content gate
+  rung: d512
+  protocol: equal_steps
+  batch: df14-df17
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 df1-ctrl / df4-ctrl-s1 (2.9543 / 2.9584)
+  steps: 2817
+  delta:
+  - -0.0031
+  loss:
+  - 2.9515
+  - 2.9551
+  settings:
+    gate: H-gate on KDA output gate
+  step_time_change: 192.2 ms
+  tuned: H-gate / C-gate / both; MLA vs KDA
+  note: mean delta

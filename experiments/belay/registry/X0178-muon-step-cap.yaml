@@ -1,0 +1,18 @@
+id: X0178
+slug: muon-step-cap
+name: Per-matrix step cap against early overshoot
+category: Optimizers
+summary: Proposed per-matrix step cap for early training to reduce line overshoot.
+source: agent
+status: closed
+first_batch: 127
+tags:
+- muon
+- overshoot
+- edge-of-stability
+events:
+- type: closed
+  batch: '127'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5902307136
+  note: Per-matrix step cap follow-up from the OKLS deep dive closed without a run after warmup tests

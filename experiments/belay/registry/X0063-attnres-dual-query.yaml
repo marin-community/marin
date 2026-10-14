@@ -1,0 +1,50 @@
+id: X0063
+slug: attnres-dual-query
+name: Two-query AttnRes
+category: Depth connections
+summary: Two pseudo-queries per gate merged by a per-token sigmoid.
+source: maintainer
+status: done
+first_batch: 25
+tags:
+- attnres
+- query
+knobs:
+- attn_res_dual_query
+trials:
+- variant: two queries, sigma 0.005
+  rung: d512
+  protocol: equal_steps
+  batch: '25'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844763941
+  baseline: gate-2 recipe 3.0834
+  steps: 2817
+  delta:
+  - 0.0042
+  loss:
+  - 3.0876
+  wandb:
+  - lc1-b25-dq005
+  settings:
+    attn_res_dual_query: 'true'
+    q_b init sigma: '0.005'
+  tuned: sigma 0.005/0.02
+- variant: two queries, sigma 0.02
+  rung: d512
+  protocol: equal_steps
+  batch: '25'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844763941
+  baseline: gate-2 recipe 3.0834
+  steps: 2817
+  delta:
+  - 0.0067
+  loss:
+  - 3.0901
+  wandb:
+  - lc1-b25-dq02
+  settings:
+    attn_res_dual_query: 'true'
+    q_b init sigma: '0.02'
+  tuned: sigma 0.005/0.02

@@ -1,0 +1,159 @@
+id: X0040
+slug: nope-mla
+name: NoPE MLA (drop Inkling)
+category: Attention variants
+summary: Remove the Inkling relative-position bias so MLA layers use no positional signal.
+source: community
+status: closed
+first_batch: 11
+tags:
+- nope
+- inkling
+- position
+- mla
+- kimi-k3
+papers:
+- title: Kimi K3 tech report
+knobs:
+- inkling_relpos=false
+trials:
+- variant: NoPE, qk_mult 2.5
+  rung: d512
+  protocol: fixed_time
+  batch: '11'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841861148
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2886
+  delta:
+  - 0.0033
+  loss:
+  - 3.0891
+  wandb:
+  - lc1-b11-nope
+  settings:
+    inkling_relpos: 'false'
+    qk_mult: '2.5'
+  step_time_change: +2.4% ex/s
+  tuned: qk_mult 2.0 / 2.5 / 3.5
+- variant: NoPE, qk_mult 2.0
+  rung: d512
+  protocol: fixed_time
+  batch: '11'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841861148
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2886
+  delta:
+  - 0.0101
+  loss:
+  - 3.0959
+  wandb:
+  - lc1-b11-nope-qk20
+  settings:
+    inkling_relpos: 'false'
+    qk_mult: '2.0'
+  tuned: qk_mult 2.0 / 2.5 / 3.5
+- variant: NoPE, qk_mult 3.5
+  rung: d512
+  protocol: fixed_time
+  batch: '11'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841861148
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2886
+  delta:
+  - 0.0026
+  loss:
+  - 3.0884
+  wandb:
+  - lc1-b11-nope-qk35
+  settings:
+    inkling_relpos: 'false'
+    qk_mult: '3.5'
+  tuned: qk_mult 2.0 / 2.5 / 3.5
+- variant: NoPE, token-matched
+  rung: d512
+  protocol: equal_steps
+  batch: '11'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841861148
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2817
+  delta:
+  - 0.009
+  loss:
+  - 3.0948
+  wandb:
+  - lc1-b11-nope-tm
+  settings:
+    inkling_relpos: 'false'
+  note: Inkling worth about 0.009 per step
+- variant: NoPE + ShortConv on MLA q, qk_mult 2.5
+  rung: d512
+  protocol: fixed_time
+  batch: '11'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841861148
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2880
+  delta:
+  - 0.0022
+  loss:
+  - 3.088
+  wandb:
+  - lc1-b11-nopeqc
+  settings:
+    inkling_relpos: 'false'
+    MLA q ShortConv: 'on'
+    qk_mult: '2.5'
+- variant: NoPE + ShortConv on MLA q, qk_mult 3.0
+  rung: d512
+  protocol: fixed_time
+  batch: '11'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841861148
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2880
+  delta:
+  - 0.0018
+  loss:
+  - 3.0876
+  wandb:
+  - lc1-b11-nopeqc-qk30
+  settings:
+    inkling_relpos: 'false'
+    MLA q ShortConv: 'on'
+    qk_mult: '3.0'
+- variant: no Inkling (retry)
+  rung: d512
+  protocol: equal_steps
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.0015
+  - 0.0019
+  loss:
+  - 3.0087
+  - 3.0128
+  wandb:
+  - lc1-b87-nope
+  - lc1-b87-nope-s1
+  settings:
+    MLA position: none (no Inkling)
+  step_time_change: -2%
+  note: about neutral at fixed time; closed
+events:
+- type: closed
+  batch: '11'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841861148
+  note: keep Inkling; NoPE on par at d512, maybe revisit at d1280
+- type: closed
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  note: +0.0017 at equal steps

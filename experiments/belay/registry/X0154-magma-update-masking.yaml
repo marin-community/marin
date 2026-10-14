@@ -1,0 +1,46 @@
+id: X0154
+slug: magma-update-masking
+name: Magma alignment-scaled update masking
+category: Optimizers
+summary: Randomly mask updates scaled by gradient-momentum alignment.
+source: agent
+status: closed
+first_batch: 98
+tags:
+- magma
+- masking
+- muon
+papers:
+- arxiv: '2602.15322'
+  title: Magma
+trials:
+- variant: Magma + MuonH LR x3
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0097
+  settings:
+    muonh LR: x3
+  tuned: compensated vs uncompensated
+- variant: Magma uncompensated
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.098
+  tuned: compensated vs uncompensated
+events:
+- type: closed
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  note: closed in batch 102 round

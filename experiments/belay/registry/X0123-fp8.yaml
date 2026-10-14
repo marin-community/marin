@@ -1,0 +1,50 @@
+id: X0123
+slug: fp8
+name: FP8 MoE dispatch
+category: Systems and speed
+summary: Sends MoE dispatch all-to-all as e4m3 with per-token per-128-channel scales.
+source: agent
+status: closed
+first_batch: 77
+tags:
+- fp8
+- e4m3
+- all-to-all
+- dispatch
+- mxfp8
+- numerics
+papers:
+- arxiv: '2412.19437'
+  title: DeepSeek-V3
+details:
+- 'chosen protocol: MXFP8, 1x32 blocks, e8m0 scales, e4m3 everywhere'
+- router, embeddings, lm head, norms, attention core stay high precision
+knobs:
+- fp8_recipe=mxfp8_sim
+trials:
+- variant: FP8 (e4m3) MoE dispatch all-to-all
+  rung: d512
+  protocol: equal_steps
+  batch: '77'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860969387
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  wandb:
+  - lc1-b77-fp8d-r
+  - lc1-b77-fp8d-r-s1
+  settings:
+    dispatch dtype: e4m3, scale per token per 128 channels
+  step_time_change: 0 (175.1 / 178.2 ms)
+  note: train loss identical for 1400 steps then eval crash; no speedup; closed in batch 79
+events:
+- type: closed
+  batch: '79'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861318730
+  note: FP8 dispatch saves no time
+- type: closed
+  batch: '189'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  note: FP8 dropped (batch 189 stopped)

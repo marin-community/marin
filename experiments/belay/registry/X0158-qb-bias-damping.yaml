@@ -1,0 +1,43 @@
+id: X0158
+slug: qb-bias-damping
+name: Damped QB bias update
+category: MoE and routing
+summary: Give the quantile-balancing router bias memory via a damped update.
+source: agent
+status: done
+first_batch: 98
+tags:
+- quantile-balancing
+- router-bias
+- stablemoe
+papers:
+- title: StableMoE
+trials:
+- variant: damped QB bias gamma 0.5
+  rung: d512
+  protocol: equal_steps
+  batch: '98'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867280167
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0007
+  settings:
+    gamma: '0.5'
+  tuned: gamma 0.5 / 0.3
+  note: seed mean
+- variant: damped QB bias gamma 0.3
+  rung: d512
+  protocol: equal_steps
+  batch: '98'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867280167
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0017
+  settings:
+    gamma: '0.3'
+  tuned: gamma 0.5 / 0.3
+  note: seed mean

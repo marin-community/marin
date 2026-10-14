@@ -1,0 +1,46 @@
+id: X0161
+slug: router-on-muonh
+name: Router on MuonH with learnable temperature
+category: MoE and routing
+summary: Move the router matrix from Adam to MuonH and add a learnable per-layer router temperature.
+source: agent
+status: done
+first_batch: 98
+tags:
+- router
+- muonh
+- temperature
+papers:
+- title: DeepSeek-V4
+- title: Kimi K3
+trials:
+- variant: router on MuonH + learnable temperature
+  rung: d512
+  protocol: equal_steps
+  batch: '98'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867280167
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0005
+  - -0.0005
+  settings:
+    router optimizer: MuonH
+    router temperature: learnable per layer
+  tuned: router LR x1 / x0.5
+- variant: router on MuonH + temperature, router LR x0.5
+  rung: d512
+  protocol: equal_steps
+  batch: '98'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867280167
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0033
+  - 0.0019
+  settings:
+    router optimizer: MuonH
+    router LR: x0.5
+  tuned: router LR x1 / x0.5

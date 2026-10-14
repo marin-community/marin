@@ -1,0 +1,47 @@
+id: X0159
+slug: qk-slow-early-lr
+name: Slower early LR on upper-layer q/k
+category: Optimizers
+summary: Lower the q/k projection LR in upper layers for the early part of training.
+source: agent
+status: closed
+first_batch: 98
+tags:
+- qk
+- lr
+- upper-layers
+papers:
+- arxiv: '2605.10504'
+trials:
+- variant: slow phase 25% of training
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0
+  settings:
+    slow phase: 25%
+  tuned: 25% / 4%
+- variant: slow phase 4% of training
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - -0.001
+  settings:
+    slow phase: 4%
+  tuned: 25% / 4%
+events:
+- type: closed
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  note: closed in batch 102 round

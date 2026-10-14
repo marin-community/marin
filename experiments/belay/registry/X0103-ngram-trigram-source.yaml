@@ -1,0 +1,130 @@
+id: X0103
+slug: ngram-trigram-source
+name: Separate hashed trigram AttnRes source
+category: Embeddings and inputs
+summary: A second hashed trigram table as its own AttnRes source next to the bigram.
+source: maintainer
+status: closed
+first_batch: 59
+tags:
+- trigram
+- ngram
+- hash
+- attnres-source
+- gate
+details:
+- own RMS norm
+- shares bigram Adam LR x10 group
+- hash resets per document
+knobs:
+- embed3_rows=262144
+- trigram_gate
+- embed2_head_orders
+trials:
+- variant: separate trigram source, 524k rows
+  rung: d512
+  protocol: equal_steps
+  batch: '59'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5857696618
+  baseline: candidate 1 3.0325
+  steps: 2817
+  delta:
+  - 0.0008
+  loss:
+  - 3.0333
+  wandb:
+  - lc1-b59-tri524k
+  settings:
+    embed3_rows: '524288'
+  step_time_change: -7% ex/s
+  tuned: 524k vs 262k
+  note: 694 vs 744 ex/s, about +0.012 at fixed time
+- variant: separate trigram source, 262k rows
+  rung: d512
+  protocol: equal_steps
+  batch: '59'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5857696618
+  baseline: candidate 1 3.0325
+  steps: 2817
+  delta:
+  - 0.005
+  loss:
+  - 3.0375
+  wandb:
+  - lc1-b59-tri262k
+  settings:
+    embed3_rows: '262144'
+  tuned: 524k vs 262k
+  note: 710 ex/s
+- variant: content-gated trigram 262k
+  rung: d512
+  protocol: equal_steps
+  batch: '72'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859782677
+  baseline: candidate 4 (3.0118 / 3.0166)
+  steps: 2817
+  delta:
+  - -0.0023
+  - -0.0008
+  loss:
+  - 3.0095
+  - 3.0158
+  wandb:
+  - lc1-b72-trigate
+  - lc1-b72-trigate-s1
+  settings:
+    embed3_rows: '262144'
+    trigram_gate: 'true'
+  step_time_change: -4% ex/s
+  note: gate makes it positive but second table costs ~+0.007 at fixed time
+- variant: mixed orders (2,2,3,3) in one table
+  rung: d512
+  protocol: equal_steps
+  batch: '72'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859782677
+  baseline: candidate 4 (3.0118 / 3.0166)
+  steps: 2817
+  delta:
+  - 0.0004
+  - 0.0021
+  loss:
+  - 3.0122
+  - 3.0187
+  wandb:
+  - lc1-b72-ord2233
+  - lc1-b72-ord2233-s1
+  settings:
+    embed2_head_orders: 2,2,3,3
+  tuned: head orders 2233 / 2223
+- variant: mixed orders (2,2,2,3) in one table
+  rung: d512
+  protocol: equal_steps
+  batch: '72'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859782677
+  baseline: candidate 4 (3.0118)
+  steps: 2817
+  delta:
+  - 0.0007
+  loss:
+  - 3.0125
+  wandb:
+  - lc1-b72-ord2223
+  settings:
+    embed2_head_orders: 2,2,2,3
+  tuned: head orders 2233 / 2223
+events:
+- type: closed
+  batch: '59'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5857696618
+  note: trigram rows too sparse; not adopted
+- type: closed
+  batch: '72'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859782677
+  note: n-gram memory branch saturated at candidate 4 at d512 fixed time

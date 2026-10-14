@@ -1,0 +1,58 @@
+id: X0072
+slug: kda-negative-eigenvalue
+name: KDA negative-eigenvalue beta
+category: Linear attention / KDA
+summary: Let KDA write strength beta range over (0,2) so the transition can reflect.
+source: agent
+status: closed
+first_batch: 32
+tags:
+- kda
+- delta rule
+- beta
+- eigenvalue
+- delta-rule
+papers:
+- title: Grazzi et al., ICLR 2025 (negative eigenvalues)
+- arxiv: '2411.12537'
+  title: Grazzi et al., ICLR 2025 (negative eigenvalues)
+- arxiv: '2609.24797'
+  title: Complex KDA
+details:
+- beta = 2*sigmoid(logit - log 3)
+knobs:
+- kda_beta_negative
+trials:
+- variant: beta in (0,2)
+  rung: d512
+  protocol: equal_steps
+  batch: '32'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852265563
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.0024
+  loss:
+  - 3.0857
+  wandb:
+  - lc1-b32-negbeta
+  settings:
+    variant: beta in (0,2)
+- variant: KDA beta in [0, 2] (kdaneg)
+  rung: d512
+  protocol: equal_steps
+  batch: '132'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5905408208
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  settings:
+    kda_beta_negative: 'true'
+  note: 'diverged: NaN loss at step 107 (s0) and 76 (s1)'
+events:
+- type: closed
+  batch: '132'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5905408208
+  note: Diverges with GDN-2 gates; would need Complex-KDA kernel handling

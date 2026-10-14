@@ -1,0 +1,128 @@
+id: X0059
+slug: low-rank-router
+name: Low-rank router
+category: MoE and routing
+summary: Router logits through a rank-32/128 bottleneck with identity, RMSNorm or SiLU.
+source: maintainer
+status: closed
+first_batch: 23
+tags:
+- router
+- low-rank
+- silu
+- rmsnorm
+trials:
+- variant: rank 32, identity
+  rung: d512
+  protocol: equal_steps
+  batch: 23-24
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844656167
+  baseline: gate-2 recipe lc1-b17-bzl 3.0834
+  steps: 2817
+  delta:
+  - 0.0153
+  loss:
+  - 3.0987
+  wandb:
+  - lc1-b23-rt32
+  settings:
+    router rank: '32'
+    f: identity
+  tuned: rank 32/128 x identity/RMSNorm/SiLU
+- variant: rank 128, identity
+  rung: d512
+  protocol: equal_steps
+  batch: 23-24
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844656167
+  baseline: gate-2 recipe lc1-b17-bzl 3.0834
+  steps: 2817
+  delta:
+  - 0.0058
+  loss:
+  - 3.0892
+  wandb:
+  - lc1-b23-rt128
+  settings:
+    router rank: '128'
+    f: identity
+  tuned: rank 32/128 x identity/RMSNorm/SiLU
+- variant: rank 32, RMSNorm
+  rung: d512
+  protocol: equal_steps
+  batch: 23-24
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844656167
+  baseline: gate-2 recipe lc1-b17-bzl 3.0834
+  steps: 2817
+  delta:
+  - 0.012
+  loss:
+  - 3.0954
+  wandb:
+  - lc1-b23-rt32n
+  settings:
+    router rank: '32'
+    f: RMSNorm
+  tuned: rank 32/128 x identity/RMSNorm/SiLU
+- variant: rank 128, RMSNorm
+  rung: d512
+  protocol: equal_steps
+  batch: 23-24
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844656167
+  baseline: gate-2 recipe lc1-b17-bzl 3.0834
+  steps: 2817
+  delta:
+  - 0.0061
+  loss:
+  - 3.0895
+  wandb:
+  - lc1-b23-rt128n
+  settings:
+    router rank: '128'
+    f: RMSNorm
+  tuned: rank 32/128 x identity/RMSNorm/SiLU
+- variant: rank 32, SiLU
+  rung: d512
+  protocol: equal_steps
+  batch: 23-24
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844656167
+  baseline: gate-2 recipe lc1-b17-bzl 3.0834
+  steps: 2817
+  delta:
+  - 0.0141
+  loss:
+  - 3.0975
+  wandb:
+  - lc1-b23-rt32s
+  settings:
+    router rank: '32'
+    f: SiLU
+  tuned: rank 32/128 x identity/RMSNorm/SiLU
+- variant: rank 128, SiLU
+  rung: d512
+  protocol: equal_steps
+  batch: 23-24
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844656167
+  baseline: gate-2 recipe lc1-b17-bzl 3.0834
+  steps: 2817
+  delta:
+  - 0.0105
+  loss:
+  - 3.0939
+  wandb:
+  - lc1-b23-rt128s
+  settings:
+    router rank: '128'
+    f: SiLU
+  tuned: rank 32/128 x identity/RMSNorm/SiLU
+events:
+- type: closed
+  batch: 23-24
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5848208753
+  note: closed as negative in pause summary

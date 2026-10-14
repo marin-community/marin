@@ -1,0 +1,37 @@
+id: X0212
+slug: kda-kalman-beta
+name: Kalman write strength for KDA
+category: Linear attention / KDA
+summary: Replace sigmoid write strength with a Kalman-style uncertainty-driven beta per head.
+source: agent
+status: closed
+first_batch: 203
+tags:
+- kda
+- kalman
+- beta
+papers:
+- arxiv: '2609.07816'
+details:
+- b_hat = a*b_prev + omega; beta = b_hat/(r + b_hat)
+- omega, r per-token softplus projections
+knobs:
+- kda_kalman_beta
+trials:
+- variant: Kalman beta
+  rung: d512
+  protocol: equal_steps
+  batch: df9
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 df1-ctrl / df4-ctrl-s1 (2.9543 / 2.9584)
+  steps: 2817
+  settings:
+    kda_kalman_beta: 'true'
+  note: NaN loss at steps 4-31 on both seeds; parked
+events:
+- type: closed
+  batch: df9
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  note: 'parked: NaN from beta cotangent'

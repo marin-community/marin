@@ -1,0 +1,333 @@
+id: X0054
+slug: online-kl-shampoo
+name: Online KL-Shampoo (OKLS)
+category: Optimizers
+summary: Replace Newton-Schulz direction with OKLS Kronecker whitening on selected matrix families.
+source: maintainer
+status: closed
+first_batch: 19
+tags:
+- okls
+- shampoo
+- preconditioning
+- whitening
+- preconditioner
+papers:
+- title: Online KL-Shampoo (Tilde Research blog)
+details:
+- 'direction: S_a^-1/2 N S_b^-1/2'
+- beta1 0.9684 / beta2 0.9482
+- 'roots: Scaled-CANS coupled Newton-Schulz'
+- 'hybrid mode: MuonH hyperball step at MuonH LR'
+- applied to attention projections
+knobs:
+- okls_targets
+- okls_root_every
+- okls_hyperball
+- okls_lr_mult
+trials:
+- variant: attn only, token-matched (hybrid MuonH step)
+  rung: d512
+  protocol: equal_steps
+  batch: '19'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843937025
+  baseline: z-loss-kept bundle s0 3.0854 / s1 3.0902
+  steps: 2817
+  delta:
+  - -0.0055
+  - -0.0058
+  loss:
+  - 3.0799
+  - 3.0844
+  wandb:
+  - lc1-b19-okls-attn
+  - lc1-b19-okls-attn-s1
+  settings:
+    okls_targets: attn
+    step: MuonH hyperball at MuonH LR
+  step_time_change: -18% ex/s
+  tuned: targets attn/routed/shared+latent/all
+  note: per-step gain on attention projections
+- variant: routed experts only, fp16 CANS
+  rung: d512
+  protocol: equal_steps
+  batch: '19'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843937025
+  baseline: z-loss-kept bundle s0 3.0854 / s1 3.0902
+  steps: 2817
+  delta:
+  - 0.0033
+  loss:
+  - 3.0887
+  wandb:
+  - lc1-b19-okls-routed
+  settings:
+    okls_targets: routed
+    CANS: fp16
+  step_time_change: -21% ex/s
+  tuned: targets attn/routed/shared+latent/all
+- variant: shared + latent
+  rung: d512
+  protocol: equal_steps
+  batch: '19'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843937025
+  baseline: z-loss-kept bundle s0 3.0854 / s1 3.0902
+  steps: 2817
+  delta:
+  - 0.0042
+  loss:
+  - 3.0896
+  wandb:
+  - lc1-b19-okls-shared
+  settings:
+    okls_targets: shared,latent
+  step_time_change: -20% ex/s
+  tuned: targets attn/routed/shared+latent/all
+- variant: all families, fp16 CANS
+  rung: d512
+  protocol: equal_steps
+  batch: '19'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843937025
+  baseline: z-loss-kept bundle s0 3.0854 / s1 3.0902
+  steps: 2817
+  delta:
+  - 0.0001
+  loss:
+  - 3.0855
+  wandb:
+  - lc1-b19-okls-all
+  settings:
+    okls_targets: all
+    CANS: fp16
+  step_time_change: -33% ex/s
+  tuned: targets attn/routed/shared+latent/all
+- variant: attn only, roots every 10 steps, fp16 CANS
+  rung: d512
+  protocol: fixed_time
+  batch: '19'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843937025
+  baseline: z-loss-kept bundle s0 3.0854 / s1 3.0902
+  steps: 2693
+  delta:
+  - 0.0025
+  - 0.0006
+  loss:
+  - 3.0879
+  - 3.0908
+  wandb:
+  - lc1-b19-oklsattn-ft
+  - lc1-b19-oklsattn-ft-s1
+  settings:
+    okls_targets: attn
+    okls_root_every: '10'
+    CANS: fp16
+  step_time_change: -4.4% ex/s
+  tuned: root refresh every step vs 10
+  note: gain does not survive fixed time; not added
+- variant: hybrid, q projections only
+  rung: d512
+  protocol: equal_steps
+  batch: '21'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844286760
+  baseline: bundle seed 0 3.0854
+  steps: 2817
+  delta:
+  - -0.0003
+  loss:
+  - 3.0851
+  wandb:
+  - lc1-b21-okls-q
+  settings:
+    okls_targets: q
+    CANS: fp16
+    roots: fresh every step
+- variant: hybrid, k projections only
+  rung: d512
+  protocol: equal_steps
+  batch: '21'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844286760
+  baseline: bundle seed 0 3.0854
+  steps: 2817
+  delta:
+  - 0.0002
+  loss:
+  - 3.0856
+  wandb:
+  - lc1-b21-okls-k
+  settings:
+    okls_targets: k
+    CANS: fp16
+    roots: fresh every step
+- variant: paper mode, attention
+  rung: d512
+  protocol: equal_steps
+  batch: '21'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844286760
+  baseline: bundle seed 0 3.0854
+  steps: 2817
+  delta:
+  - 0.0148
+  loss:
+  - 3.1002
+  wandb:
+  - lc1-b21-paper-attn
+  settings:
+    okls_hyperball: 'false'
+    okls_targets: attn
+    peak LR: '0.09434'
+  tuned: peak LR x0.5/x1
+- variant: paper mode, all hidden matrices
+  rung: d512
+  protocol: equal_steps
+  batch: '21'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844286760
+  baseline: bundle seed 0 3.0854
+  steps: 2817
+  delta:
+  - -0.0038
+  loss:
+  - 3.0816
+  wandb:
+  - lc1-b21-paper-all
+  settings:
+    okls_hyperball: 'false'
+    okls_targets: all hidden
+  note: paper-all ran at 599 ex/s
+- variant: paper mode, attention, peak LR x0.5
+  rung: d512
+  protocol: equal_steps
+  batch: '21'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844286760
+  baseline: bundle seed 0 3.0854
+  steps: 2817
+  delta:
+  - 0.0087
+  loss:
+  - 3.0941
+  wandb:
+  - lc1-b21-paper-attn-lr05
+  settings:
+    okls_hyperball: 'false'
+    okls_targets: attn
+    okls peak LR: x0.5
+  tuned: peak LR x0.5/x1
+- variant: on attention V
+  rung: d512
+  protocol: equal_steps
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.0021
+  - -0.0009
+  loss:
+  - 3.0093
+  - 3.01
+  wandb:
+  - lc1-b87-oklsv
+  - lc1-b87-oklsv-s1
+  settings:
+    OKLS scope: attention V
+  step_time_change: 180 vs 177 ms
+  tuned: V only vs all attention
+  note: neutral
+- variant: on all attention
+  rung: d512
+  protocol: equal_steps
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.0005
+  - 0.0003
+  loss:
+  - 3.0077
+  - 3.0112
+  wandb:
+  - lc1-b87-oklsattn
+  - lc1-b87-oklsattn-r-s1
+  settings:
+    OKLS scope: all attention, fresh roots
+  step_time_change: 198 vs 177 ms
+  tuned: V only vs all attention
+  note: neutral; closed
+- variant: OKLS on attention, candidate 9 (gradient-capture run)
+  rung: d512
+  protocol: equal_steps
+  batch: '120'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5901143448
+  baseline: candidate 9 MuonH capture run 2.9777
+  steps: 2817
+  delta:
+  - 0.0003
+  loss:
+  - 2.978
+  settings:
+    OKLS: attention projections
+  step_time_change: +7%
+  note: 'no gain on candidate 9, down from -0.0057 on the old base; deep dive: input-side factors very anisotropic, every
+    dense step overshoots early'
+- variant: OKLS on attention, input-side damping lambda 1
+  rung: d512
+  protocol: equal_steps
+  batch: '130'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5903775777
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0053
+  - 0.0083
+  settings:
+    OKLS: attention
+    input damping lambda: '1'
+  step_time_change: 209 ms (vs 186)
+  tuned: damping lambda 1 / 1000 (output-only)
+- variant: OKLS on attention, output-side only (lambda 1000)
+  rung: d512
+  protocol: equal_steps
+  batch: '130'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5903775777
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0355
+  - 0.0372
+  settings:
+    OKLS: attention
+    input damping lambda: '1000'
+  step_time_change: 207 ms
+  tuned: damping lambda 1 / 1000 (output-only)
+  note: removing input-side whitening costs 0.036; input whitening is what makes OKLS match Muon
+events:
+- type: closed
+  batch: '19'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843937025
+  note: not added to gate-2 recipe; fixed-time gain gone; revisit at larger rung
+- type: closed
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  note: OKLS on attention neutral
+- type: closed
+  batch: '130'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5903775777
+  note: 'OKLS closed at d512 on candidate 9: plain neutral and 12% slower, damped worse, output-only much worse'

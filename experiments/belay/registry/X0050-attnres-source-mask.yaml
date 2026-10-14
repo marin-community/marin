@@ -1,0 +1,33 @@
+id: X0050
+slug: attnres-source-mask
+name: AttnRes source masking
+category: Depth connections
+summary: Block a gate from reading certain sources (e.g. L4 KDA from earlier attention outputs).
+source: maintainer
+status: done
+first_batch: 18
+tags:
+- attnres
+- mask
+- kda
+knobs:
+- attn_res_mask_attn_for
+trials:
+- variant: full AttnRes, L4 KDA gate blocked from earlier attn outputs
+  rung: d512
+  protocol: equal_steps
+  batch: '18'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843750617
+  baseline: full AttnRes lc1-b18-full 3.0705
+  steps: 2817
+  delta:
+  - 0.0138
+  loss:
+  - 3.0843
+  wandb:
+  - lc1-b18-fullmask4
+  settings:
+    attn_res_full: 'true'
+    attn_res_mask_attn_for: '4'
+  note: -0.0011 vs base

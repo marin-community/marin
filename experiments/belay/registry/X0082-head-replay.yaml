@@ -1,0 +1,91 @@
+id: X0082
+slug: head-replay
+name: Head replay of stored hidden states
+category: Training dynamics and schedules
+summary: Store final hidden states and labels and replay a CE loss on the lm_head later at a small weight.
+source: maintainer
+status: closed
+first_batch: 42
+tags:
+- replay
+- lunchbox
+- stale gradient
+- lm_head
+knobs:
+- --head-replay SLOTS PERIOD SCALE
+trials:
+- variant: 2 slots x 100 (lag 100-200), scale 0.1
+  rung: d512
+  protocol: equal_steps
+  batch: '42'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853625572
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0073
+  loss:
+  - 3.0664
+  wandb:
+  - lc1-b42-rp-2x100-s01
+  settings:
+    head-replay: 2 100 0.1
+  step_time_change: 738 ex/s
+  tuned: slots x period 2x20/2x100/4x250; scale 0.1/0.3
+- variant: 2 x 100, scale 0.3
+  rung: d512
+  protocol: equal_steps
+  batch: '42'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853625572
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.032
+  loss:
+  - 3.0911
+  wandb:
+  - lc1-b42-rp-2x100-s03
+  settings:
+    head-replay: 2 100 0.3
+  tuned: slots x period 2x20/2x100/4x250; scale 0.1/0.3
+- variant: 2 x 20 (lag 20-40), scale 0.1
+  rung: d512
+  protocol: equal_steps
+  batch: '42'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853625572
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0051
+  loss:
+  - 3.0642
+  wandb:
+  - lc1-b42-rp-2x20-s01
+  settings:
+    head-replay: 2 20 0.1
+  tuned: slots x period 2x20/2x100/4x250; scale 0.1/0.3
+- variant: 4 x 250 (lag 750-1000), scale 0.1
+  rung: d512
+  protocol: equal_steps
+  batch: '42'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853625572
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0115
+  loss:
+  - 3.0706
+  wandb:
+  - lc1-b42-rp-4x250-s01
+  settings:
+    head-replay: 4 250 0.1
+  tuned: slots x period 2x20/2x100/4x250; scale 0.1/0.3
+events:
+- type: closed
+  batch: '42'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853625572
+  note: hurts at every setting; replay line not pursued further

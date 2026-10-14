@@ -1,0 +1,59 @@
+id: X0106
+slug: router-sharing
+name: PathMoE router sharing across layers
+category: MoE and routing
+summary: Consecutive MoE layers share one router matrix; per-layer QB biases stay separate.
+source: agent
+status: closed
+first_batch: 60
+tags:
+- router
+- pathmoe
+- sharing
+papers:
+- arxiv: '2603.18297'
+  title: PathMoE
+knobs:
+- router_share_block
+trials:
+- variant: PathMoE shared router, B=2
+  rung: d512
+  protocol: equal_steps
+  batch: '60'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5857738032
+  baseline: candidate 1 3.0325 (s0) / 3.0395 (s1)
+  steps: 2817
+  delta:
+  - 0.0027
+  loss:
+  - 3.0352
+  wandb:
+  - lc1-b60-rshare2
+  settings:
+    router_share_block: '2'
+  tuned: B=2 vs 3
+- variant: PathMoE shared router, B=3
+  rung: d512
+  protocol: equal_steps
+  batch: '60'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5857738032
+  baseline: candidate 1 3.0325 (s0) / 3.0395 (s1)
+  steps: 2817
+  delta:
+  - 0.003
+  loss:
+  - 3.0355
+  wandb:
+  - lc1-b60-rshare3
+  settings:
+    router_share_block: '3'
+  tuned: B=2 vs 3
+  note: per-layer routers carry layer-specific info; not adopted
+events:
+- type: closed
+  batch: '60'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5857738032
+  note: not adopted

@@ -1,0 +1,43 @@
+id: X0143
+slug: zero-centered-norm-gains
+name: Zero-centered norm gains with decay
+category: Normalization
+summary: Parameterize norm gains as 1+gamma with weight decay on gamma.
+source: agent
+status: closed
+first_batch: 88
+tags:
+- norm gains
+- weight decay
+- qwen
+papers:
+- arxiv: '2608.30320'
+  title: Qwen3.8-Next
+trials:
+- variant: gains 1+gamma, gain decay 0.1
+  rung: d512
+  protocol: equal_steps
+  batch: '88'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.0001
+  - 0.0014
+  loss:
+  - 3.0073
+  - 3.0123
+  wandb:
+  - lc1-b88-zcgain
+  - lc1-b88-zcgain-s1
+  settings:
+    gain param: 1+gamma
+    gain decay: '0.1'
+  note: neutral; closed for d512
+events:
+- type: closed
+  batch: '88'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
+  note: neutral

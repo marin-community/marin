@@ -1,0 +1,38 @@
+id: X0102
+slug: peri-ln
+name: Peri-LN sublayer output norm
+category: Normalization
+summary: RMSNorm with a learned gain on every sublayer output before it becomes an AttnRes source.
+source: agent
+status: done
+first_batch: 58
+tags:
+- peri-ln
+- rmsnorm
+- attnres
+papers:
+- arxiv: '2502.02732'
+  title: Peri-LN
+knobs:
+- sublayer_out_norm
+trials:
+- variant: sublayer output RMSNorm with gain
+  rung: d512
+  protocol: equal_steps
+  batch: '58'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5857674348
+  baseline: candidate 1 3.0325 (s0) / 3.0395 (s1)
+  steps: 2817
+  delta:
+  - 0.0073
+  - 0.0124
+  loss:
+  - 3.0398
+  - 3.0519
+  wandb:
+  - lc1-b58-periln
+  - lc1-b58-periln-s1
+  settings:
+    sublayer_out_norm: 'true'
+  note: throws away magnitude signal AttnRes uses

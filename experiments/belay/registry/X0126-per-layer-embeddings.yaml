@@ -1,0 +1,88 @@
+id: X0126
+slug: per-layer-embeddings
+name: Per-layer token embeddings (Gemma 3n PLE)
+category: Embeddings and inputs
+summary: A small per-layer token table, gated by the hidden state, added to each attention input.
+source: agent
+status: closed
+first_batch: 77
+tags:
+- ple
+- embedding
+- gemma
+papers:
+- title: Gemma 3n PLE
+knobs:
+- ple_lr_mult
+trials:
+- variant: PLE 64-dim, table at 10x Adam LR
+  rung: d512
+  protocol: equal_steps
+  batch: '77'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860969387
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.0014
+  - 0.0587
+  loss:
+  - 3.0113
+  - 3.0726
+  wandb:
+  - lc1-b77-ple64k
+  - lc1-b77-ple64k-s1
+  settings:
+    dim: '64'
+    table LR: 10x Adam (inherited embed2_lr_mult)
+  tuned: table LR 1x / 3x / 10x
+  note: bimodal runs; delta computed vs base
+  derived: true
+- variant: PLE 64, table at 1x Adam LR
+  rung: d512
+  protocol: equal_steps
+  batch: '78'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.0001
+  - 0.0591
+  loss:
+  - 3.01
+  - 3.073
+  wandb:
+  - lc1-b78-ple64-lr1
+  - lc1-b78-ple64-lr1-s1
+  settings:
+    ple_lr_mult: '1'
+  tuned: table LR 1x / 3x / 10x
+  note: 'bimodal: base mode ~3.010 or bad mode ~3.073'
+- variant: PLE 64, table at 3x Adam LR
+  rung: d512
+  protocol: equal_steps
+  batch: '78'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.0649
+  - 0.0589
+  loss:
+  - 3.0748
+  - 3.0728
+  wandb:
+  - lc1-b78-ple64-lr3
+  - lc1-b78-ple64-lr3-s1
+  settings:
+    ple_lr_mult: '3'
+  tuned: table LR 1x / 3x / 10x
+  note: 'bimodal: base mode ~3.010 or bad mode ~3.073'
+events:
+- type: closed
+  batch: '78'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
+  note: bimodal; good mode only matches base

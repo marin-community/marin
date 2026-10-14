@@ -1,0 +1,770 @@
+id: X0024
+slug: recipe-stacks
+name: Recipe stacks and candidate bundles
+category: Recipe stacks
+summary: Runs of several wins combined, or of a whole candidate recipe, to measure the bundle and check it at larger rungs.
+source: agent
+status: done
+first_batch: 4
+tags:
+- stack
+- bundle
+- candidate
+- scale-check
+knobs:
+- qk_mult=2.5
+- learnable_qk_mult=true
+- beta1=0.8
+- embed_gated_norm=false
+- final_gated_norm=false
+trials:
+- variant: emb2 + learnable qk_mult (init 1) + min LR 0
+  rung: d512
+  protocol: equal_steps
+  batch: '4'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840372599
+  baseline: fp32 base mean 3.0990
+  steps: 2746
+  delta:
+  - -0.0119
+  - 0.0022
+  - -0.0103
+  loss:
+  - 3.0871
+  - 3.1012
+  - 3.0887
+  wandb:
+  - lc1-b04-combo
+  - lc1-b04-combo-s1
+  - lc1-b04-combo-s2
+  settings:
+    second_embed: 'true'
+    learnable_qk_mult: init 1
+    min LR ratio: '0'
+  note: seed 2 at 2719 steps; superseded by qk_mult 2.5
+- variant: qk_mult 2.5 + emb2 + min LR 0
+  rung: d512
+  protocol: equal_steps
+  batch: '6'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840809930
+  baseline: fp32 base mean 3.0990
+  steps: 2727
+  delta:
+  - -0.0141
+  - -0.0076
+  loss:
+  - 3.0849
+  - 3.0914
+  wandb:
+  - lc1-b06-c2
+  - lc1-b06-c2-s1
+  settings:
+    qk_mult: '2.5'
+    second_embed: 'true'
+    min LR ratio: '0'
+  note: adds nothing over qk_mult 2.5 alone
+- variant: 'bundle: fp32 + qk 2.5 + beta1 0.8 + z-loss 0 + no GatedNorms'
+  rung: d512
+  protocol: equal_steps
+  batch: '12'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842270903
+  baseline: same-seed qk_mult 2.5 runs 3.0858 / 3.0895
+  steps: 2817
+  delta:
+  - -0.0022
+  - 0.0031
+  loss:
+  - 3.0836
+  - 3.0926
+  wandb:
+  - lc1-b12-bundle
+  - lc1-b12-bundle-s1
+  settings:
+    qk_mult: '2.5'
+    beta1: '0.8'
+    z_loss_weight: '0'
+    embed_gated_norm: 'false'
+    final_gated_norm: 'false'
+  note: does not stack at d512
+- variant: bundle at d768
+  rung: d768
+  protocol: equal_steps
+  batch: '12'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842270903
+  baseline: d768 clean KMA 2.8234
+  steps: 7325
+  delta:
+  - -0.0211
+  loss:
+  - 2.8023
+  wandb:
+  - lc1-b12-d768-bundle
+  settings:
+    qk_mult: '2.5'
+    beta1: '0.8'
+    z_loss_weight: '0'
+    embed_gated_norm: 'false'
+    final_gated_norm: 'false'
+  note: passes gate 1; z-loss later restored
+- variant: qk 2.5 + beta1 0.8 + z-loss 0, GatedNorms kept, d768
+  rung: d768
+  protocol: equal_steps
+  batch: '12'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842270903
+  baseline: d768 clean KMA 2.8234
+  steps: 7325
+  delta:
+  - -0.0148
+  loss:
+  - 2.8086
+  wandb:
+  - lc1-b12-d768-qkab
+  settings:
+    qk_mult: '2.5'
+    beta1: '0.8'
+    z_loss_weight: '0'
+- variant: bundle with z-loss kept, fixed qk 2.5
+  rung: d512
+  protocol: equal_steps
+  batch: '17'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  baseline: same-seed qk_mult 2.5 runs 3.0858 / 3.0895
+  steps: 2817
+  delta:
+  - -0.0004
+  - 0.0007
+  loss:
+  - 3.0854
+  - 3.0902
+  wandb:
+  - lc1-b17-bz
+  - lc1-b17-bz-s1
+  settings:
+    qk_mult: '2.5'
+    beta1: '0.8'
+    embed_gated_norm: 'false'
+    final_gated_norm: 'false'
+    z_loss_weight: 1e-4 (kept)
+  note: flat vs qk_mult 2.5 alone at d512
+- variant: bundle with z-loss kept, fixed qk 2.5, d768
+  rung: d768
+  protocol: equal_steps
+  batch: '17'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  baseline: d768 clean KMA 2.8234
+  steps: 7325
+  delta:
+  - -0.0188
+  loss:
+  - 2.8046
+  wandb:
+  - lc1-b17-d768-bz
+  settings:
+    qk_mult: '2.5'
+    beta1: '0.8'
+    embed_gated_norm: 'false'
+    final_gated_norm: 'false'
+    z_loss_weight: 1e-4 (kept)
+  note: passes gate 1; z-loss costs 0.0023 vs z-loss-0 bundle
+- variant: gate-2 recipe (learnable qk init 2.5), d768
+  rung: d768
+  protocol: equal_steps
+  batch: '17'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  baseline: d768 clean KMA 2.8234
+  steps: 7325
+  delta:
+  - -0.0218
+  loss:
+  - 2.8016
+  wandb:
+  - lc1-b17-d768-bzl
+  settings:
+    qk_mult: '2.5'
+    beta1: '0.8'
+    embed_gated_norm: 'false'
+    final_gated_norm: 'false'
+    z_loss_weight: 1e-4 (kept)
+    learnable_qk_mult: 'true'
+  note: -0.0030 vs fixed qk; learned qk_mult ends 4.72 / 4.81
+- variant: gate-2 recipe (learnable qk), d512
+  rung: d512
+  protocol: equal_steps
+  batch: '17'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  baseline: fixed-qk bundle seed 0 3.0854
+  steps: 2817
+  delta:
+  - -0.002
+  loss:
+  - 3.0834
+  wandb:
+  - lc1-b17-bzl
+  settings:
+    qk_mult: '2.5'
+    beta1: '0.8'
+    embed_gated_norm: 'false'
+    final_gated_norm: 'false'
+    z_loss_weight: 1e-4 (kept)
+    learnable_qk_mult: 'true'
+  note: -0.039 vs original baseline
+- variant: gate-2 recipe, d1024 baseline steps
+  rung: d1024
+  protocol: data_matched
+  batch: '17'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  baseline: clean KMA d1024 2.5934
+  steps: 9268
+  delta:
+  - -0.0116
+  loss:
+  - 2.5818
+  wandb:
+  - lc1-g2-d1024-bs
+  settings:
+    qk_mult: '2.5'
+    beta1: '0.8'
+    embed_gated_norm: 'false'
+    final_gated_norm: 'false'
+    z_loss_weight: 1e-4 (kept)
+    learnable_qk_mult: 'true'
+  note: gate 2 d1024 passes
+- variant: gate-2 recipe, d1280 baseline steps
+  rung: d1280
+  protocol: data_matched
+  batch: '17'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  baseline: clean KMA d1280 2.4710
+  steps: 16667
+  delta:
+  - -0.0073
+  loss:
+  - 2.4637
+  wandb:
+  - lc1-g2-d1280-bs
+  settings:
+    qk_mult: '2.5'
+    beta1: '0.8'
+    embed_gated_norm: 'false'
+    final_gated_norm: 'false'
+    z_loss_weight: 1e-4 (kept)
+    learnable_qk_mult: 'true'
+- variant: gate-2 recipe at d768
+  rung: d768
+  protocol: data_matched
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  baseline: clean KMA d768 2.8234
+  steps: 6928
+  delta:
+  - -0.012
+  loss:
+  - 2.8114
+  wandb:
+  - lc1-b28-d768-base-r
+  note: ML changes alone at baseline step count
+- variant: bg + ema
+  rung: d512
+  protocol: equal_steps
+  batch: '43'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853836517
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0136
+  loss:
+  - 3.0455
+  wandb:
+  - lc1-b43-bg-ema
+  settings:
+    embed2_rows: '524288'
+    ema: b0.995 last 1000
+  tuned: stacks of bg (524k bigram source), relu2, ema, skm90
+- variant: bg + relu2 + ema
+  rung: d512
+  protocol: equal_steps
+  batch: '43'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853836517
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0268
+  loss:
+  - 3.0323
+  wandb:
+  - lc1-b43-bg-relu2-ema
+  step_time_change: 619 ex/s (tied-gate relu2)
+  tuned: stacks of bg (524k bigram source), relu2, ema, skm90
+- variant: relu2 + ema
+  rung: d512
+  protocol: equal_steps
+  batch: '43'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853836517
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0153
+  loss:
+  - 3.0438
+  wandb:
+  - lc1-b43-relu2-ema
+  step_time_change: 651 ex/s
+  tuned: stacks of bg (524k bigram source), relu2, ema, skm90
+- variant: bg + Sinkhorn m0.9 embed
+  rung: d512
+  protocol: equal_steps
+  batch: '43'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853836517
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0078
+  loss:
+  - 3.0513
+  wandb:
+  - lc1-b43-bg-skm90
+  tuned: stacks of bg (524k bigram source), relu2, ema, skm90
+- variant: bg + relu2 + ema, d768
+  rung: d768
+  protocol: data_matched
+  batch: '43'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853836517
+  baseline: soft-cap 10 d768 2.7924
+  steps: 6928
+  delta:
+  - -0.0214
+  loss:
+  - 2.771
+  wandb:
+  - lc1-b43-d768-bg-relu2-ema
+  step_time_change: 255 ex/s
+  tuned: stacks of bg (524k bigram source), relu2, ema, skm90
+- variant: relu2 + ema, ungated kernel
+  rung: d512
+  protocol: equal_steps
+  batch: '48'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854009925
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0167
+  loss:
+  - 3.0424
+  wandb:
+  - lc1-b48-relu2k-ema
+  step_time_change: 676 ex/s
+  tuned: ungated kernel (moe_ungated_kernel=true) vs tied gate
+- variant: bg + relu2 + ema, ungated kernel
+  rung: d512
+  protocol: equal_steps
+  batch: '48'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854009925
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0265
+  loss:
+  - 3.0326
+  wandb:
+  - lc1-b48-bg-relu2k-ema
+  step_time_change: 641 ex/s
+  tuned: ungated kernel (moe_ungated_kernel=true) vs tied gate
+- variant: bg + relu2 + ema + key offset, ungated kernel
+  rung: d512
+  protocol: equal_steps
+  batch: '48'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854009925
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.031
+  loss:
+  - 3.0281
+  wandb:
+  - lc1-b48-bg-relu2k-ema-keyoff
+  step_time_change: 638 ex/s
+  tuned: ungated kernel (moe_ungated_kernel=true) vs tied gate
+- variant: 'stack: bg 1M x10 + relu2 (ungated) + ema + key offset'
+  rung: d512
+  protocol: equal_steps
+  batch: '50'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854182230
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0351
+  loss:
+  - 3.024
+  wandb:
+  - lc1-b50-stack
+  step_time_change: 620 ex/s (-21%)
+- variant: full stack (bg 524k x10 + relu2 + ema + key offset + MuonEq), fixed time
+  rung: d512
+  protocol: fixed_time
+  batch: '51'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854280637
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2289
+  delta:
+  - 0.0052
+  loss:
+  - 3.0643
+  wandb:
+  - lc1-b51-ft-full
+  step_time_change: 635 ex/s
+  note: best blend 3.0604 (+0.0013); relu2 576/12 does not pay at fixed time
+- variant: candidate 1 stack (no relu2), fixed time
+  rung: d512
+  protocol: fixed_time
+  batch: '51'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854280637
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2673
+  delta:
+  - -0.0177
+  loss:
+  - 3.0414
+  wandb:
+  - lc1-b51-ft-norelu
+  step_time_change: 731 ex/s
+  note: 'blend 0.75: 3.0395 (-0.0196); k ~1.13x over soft-cap-10 base'
+- variant: candidate 1 stack (no relu2), equal steps
+  rung: d512
+  protocol: equal_steps
+  batch: '51'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854280637
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0266
+  loss:
+  - 3.0325
+  wandb:
+  - lc1-b51-eq-norelu
+  step_time_change: 744 ex/s
+- variant: candidate 1 at d768
+  rung: d768
+  protocol: data_matched
+  batch: '53'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854647010
+  baseline: soft-cap 10 d768 2.7924
+  steps: 6928
+  delta:
+  - -0.0178
+  loss:
+  - 2.7746
+  wandb:
+  - lc1-b53-d768-cand
+  settings:
+    recipe: candidate 1
+  note: ex/s 309 vs 318 (-3%, bigram table); best EMA blend 2.7741
+- variant: candidate 1 at d1024
+  rung: d1024
+  protocol: data_matched
+  batch: '53'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854647010
+  baseline: lc1-g2c-d1024 (soft-cap gate 2) 2.5739
+  steps: 9268
+  delta:
+  - -0.0129
+  loss:
+  - 2.561
+  wandb:
+  - lc1-b53-d1024-cand
+  settings:
+    recipe: candidate 1
+  note: best blend 2.5602; k 1.31x vs clean KMA
+- variant: candidate 1 at d1280
+  rung: d1280
+  protocol: data_matched
+  batch: '53'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854647010
+  baseline: lc1-g2c-d1280 (pending)
+  steps: 16667
+  loss:
+  - 2.4408
+  wandb:
+  - lc1-b53-d1280-cand-r
+  settings:
+    recipe: candidate 1
+    embed2_fsdp: 'true'
+  note: rerun after OOM; needed embed2_fsdp row-sharding
+- variant: candidate 2 (ReLU2 1.5x + Bi-Maxwell + decay power 0.7)
+  rung: d512
+  protocol: equal_steps
+  batch: '63'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858603412
+  baseline: candidate 1 3.0325 (s0) / 3.0395 (s1)
+  steps: 2817
+  delta:
+  - -0.0128
+  - -0.0129
+  loss:
+  - 3.0197
+  - 3.0266
+  wandb:
+  - lc1-b63-cand2
+  - lc1-b63-cand2-s1
+  settings:
+    relu2 width: 1.5x
+    muon_bimaxwell: 'true'
+    muonh_decay_power: '0.7'
+  step_time_change: +2.2% (728 vs 744 ex/s)
+  note: best EMA blend 3.0178 / 3.0252; about -0.009 at fixed time
+- variant: gate-2 recipe at d1024
+  rung: d1024
+  protocol: data_matched
+  batch: gate-2
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5851552725
+  baseline: clean KMA d1024 2.5934
+  steps: 9268
+  delta:
+  - -0.0116
+  loss:
+  - 2.5818
+  wandb:
+  - lc1-g2-d1024-bs
+  note: passes; ~1.10x effective compute; -6.9% step from MFU work
+- variant: gate-2 recipe
+  rung: d512
+  protocol: equal_steps
+  batch: gate-2
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854642421
+  baseline: clean KMA 3.1215
+  steps: 2817
+  delta:
+  - -0.0116
+  loss:
+  - 3.1099
+  settings:
+    qk_mult: '2.5'
+    learnable_qk_mult: 'true'
+    beta1: '0.8'
+    embed_gated_norm: 'false'
+    final_gated_norm: 'false'
+  note: ML-only, baseline step counts; projected k ~1.09x at 1e24
+- variant: gate-2 recipe
+  rung: d768
+  protocol: data_matched
+  batch: gate-2
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854642421
+  baseline: clean KMA 2.8234
+  steps: 6928
+  delta:
+  - -0.012
+  loss:
+  - 2.8114
+  settings:
+    qk_mult: '2.5'
+    learnable_qk_mult: 'true'
+    beta1: '0.8'
+    embed_gated_norm: 'false'
+    final_gated_norm: 'false'
+  note: ML-only, baseline step counts; projected k ~1.09x at 1e24
+- variant: gate-2 recipe
+  rung: d1024
+  protocol: data_matched
+  batch: gate-2
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854642421
+  baseline: clean KMA 2.5934
+  steps: 9268
+  delta:
+  - -0.0116
+  loss:
+  - 2.5818
+  settings:
+    qk_mult: '2.5'
+    learnable_qk_mult: 'true'
+    beta1: '0.8'
+    embed_gated_norm: 'false'
+    final_gated_norm: 'false'
+  note: ML-only, baseline step counts; projected k ~1.09x at 1e24
+- variant: gate-2 recipe
+  rung: d1280
+  protocol: data_matched
+  batch: gate-2
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854642421
+  baseline: clean KMA 2.471
+  steps: 16667
+  delta:
+  - -0.0073
+  loss:
+  - 2.4637
+  wandb:
+  - lc1-g2-d1280-bs
+  settings:
+    qk_mult: '2.5'
+    learnable_qk_mult: 'true'
+    beta1: '0.8'
+    embed_gated_norm: 'false'
+    final_gated_norm: 'false'
+  note: ML-only, baseline step counts; projected k ~1.09x at 1e24
+- variant: gate-2 recipe at d512, equal steps
+  rung: d512
+  protocol: equal_steps
+  batch: ml-only-check
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852073986
+  baseline: clean KMA fp32-on 3.1215 (2-seed mean)
+  steps: 2475
+  delta:
+  - -0.0116
+  loss:
+  - 3.1056
+  - 3.1142
+  wandb:
+  - lc1-eq-d512-s0
+  note: Δ on seed mean; ~1.07x effective compute
+- variant: stack4 on candidate 8
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - -0.0042
+  - -0.007
+  wandb:
+  - lc1-b102-stack4
+  settings:
+    router_lr_mult: '0.5'
+    init_std_mult_gates: '2'
+    router_combine: sqrt_softplus_renorm
+    moe_drop_renorm: 'true'
+  step_time_change: +1.0% median step
+- variant: candidate 9 at d768 (widths scaled)
+  rung: d768
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5869939570
+  baseline: candidate 8 d768 2.7197 / 2.7156
+  steps: 7325
+  delta:
+  - -0.0051
+  loss:
+  - 2.7153
+  - 2.7098
+  wandb:
+  - lc1-b102-d768-stack4
+  settings:
+    widths: scaled to hidden
+  note: mean delta; 107% log-k retention
+- variant: candidate 7 (512 experts + gated value embeddings)
+  rung: d512
+  protocol: equal_steps
+  batch: '89'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863894129
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0207
+  - -0.0212
+  loss:
+  - 2.9865
+  - 2.9897
+  wandb:
+  - lc1-b89-cand7
+  - lc1-b89-cand7-s1
+  settings:
+    num_experts: '512'
+    value_embeds: gated
+  step_time_change: +4%
+  note: pieces stack additively; k 2.35x vs clean KMA
+- variant: d768 candidate 7
+  rung: d768
+  protocol: equal_steps
+  batch: '89'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863894129
+  baseline: d768 candidate 6 2.7689
+  steps: 7325
+  delta:
+  - -0.0155
+  loss:
+  - 2.7534
+  wandb:
+  - lc1-b89-d768-cand7
+  note: k 1.66x vs clean KMA; ~90% log-k retention
+- variant: d768 candidate 7 + scaled EMA + bigram 2M
+  rung: d768
+  protocol: equal_steps
+  batch: '89'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863894129
+  baseline: d768 candidate 6 2.7689
+  steps: 7325
+  delta:
+  - -0.0277
+  loss:
+  - 2.7412
+  wandb:
+  - lc1-b89-d768-cand7-scaled
+  settings:
+    --ema-last-steps: '2600'
+    --ema-beta: '0.998'
+    embed2_rows: 2M
+  tuned: plain vs scaled settings
+  note: k 1.82x; -0.0122 vs plain d768 candidate 7
+- variant: candidate 8 (beta2 0.98, GDN-2 gates, cosine Adam, 1x768 shared)
+  rung: d512
+  protocol: equal_steps
+  batch: '90'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864219716
+  baseline: candidate 7 lc1-b89-cand7 2.9865 / 2.9897
+  steps: 2817
+  delta:
+  - -0.0073
+  - -0.0036
+  loss:
+  - 2.9792
+  - 2.9861
+  wandb:
+  - lc1-b90-cand8
+  - lc1-b90-cand8-s1
+  settings:
+    beta2: '0.98'
+    kda_erase_gate: 'true'
+    kda_write_gate: 'true'
+    lr_schedule: cosine
+    num_shared_experts: '1'
+    shared_expert_intermediate_dim: '768'
+  step_time_change: same as cand 7
+  note: stacks at ~half the standalone sum; k 2.43x vs clean KMA

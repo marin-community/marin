@@ -1,0 +1,41 @@
+id: X0140
+slug: mla-value-noise-filter
+name: MLA value noise filter
+category: Attention variants
+summary: Per-head key-side sigmoid gate on MLA values.
+source: agent
+status: closed
+first_batch: 88
+tags:
+- mla
+- values
+- gate
+papers:
+- arxiv: '2609.22005'
+trials:
+- variant: bias init 4
+  rung: d512
+  protocol: equal_steps
+  batch: '88'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.0004
+  - 0.001
+  loss:
+  - 3.0076
+  - 3.0119
+  wandb:
+  - lc1-b88-vfilter
+  - lc1-b88-vfilter-s1
+  settings:
+    filter bias init: '4'
+  note: neutral; closed
+events:
+- type: closed
+  batch: '88'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
+  note: neutral

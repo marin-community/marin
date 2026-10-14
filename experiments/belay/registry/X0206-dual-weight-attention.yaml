@@ -1,0 +1,35 @@
+id: X0206
+slug: dual-weight-attention
+name: Previous-step + current weight sets for MLA
+category: Training dynamics and schedules
+summary: Run half of each batch's MLA attention on the previous step's weights so updates average both ends of the step.
+source: maintainer
+status: done
+first_batch: 184
+tags:
+- mla
+- period-2 bounce
+- dual weights
+details:
+- frozen copy of previous-step MLA weights
+- odd batch rows use old weights
+- evals use current weights
+knobs:
+- dual_attn_prev
+trials:
+- variant: dual_attn_prev
+  rung: d512
+  protocol: equal_steps
+  batch: '184'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986738347
+  baseline: batch 181 ctrl 2.9644
+  steps: 2817
+  delta:
+  - -0.0014
+  loss:
+  - 2.963
+  settings:
+    dual_attn_prev: 'true'
+  step_time_change: +8% (193.0 vs 178.1 ms)
+  note: neutral; loss at fixed time

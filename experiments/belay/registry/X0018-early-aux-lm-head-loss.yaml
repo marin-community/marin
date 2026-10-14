@@ -1,0 +1,57 @@
+id: X0018
+slug: early-aux-lm-head-loss
+name: Early auxiliary lm_head loss
+category: Output head and loss
+summary: Add an lm_head loss on an early layer output for the first few hundred steps, decayed to zero.
+source: maintainer
+status: closed
+first_batch: 3
+tags:
+- aux-loss
+- lm-head
+- early-training
+details:
+- tap after layer 0
+- weight 1->0 over 500 steps or 0.3 over 200
+trials:
+- variant: weight 1->0 over 500 steps, after layer 0
+  rung: d512
+  protocol: equal_steps
+  batch: '3'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840199301
+  baseline: fp32 base mean 3.0990
+  steps: 2757
+  delta:
+  - 0.0159
+  loss:
+  - 3.1149
+  wandb:
+  - lc1-b03-aux
+  settings:
+    aux weight: 1 -> 0 over 500 steps
+    tap: after layer 0
+  tuned: weight 1/500 steps vs 0.3/200 steps
+- variant: weight 0.3 over 200 steps
+  rung: d512
+  protocol: equal_steps
+  batch: '4'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840372599
+  baseline: fp32 base mean 3.0990
+  steps: 2800
+  delta:
+  - 0.014
+  loss:
+  - 3.113
+  wandb:
+  - lc1-b04-aux03
+  settings:
+    aux weight: 0.3 over 200 steps
+  tuned: weight 1/500 vs 0.3/200
+events:
+- type: closed
+  batch: '4'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840372599
+  note: both aux-loss variants worse; dropped

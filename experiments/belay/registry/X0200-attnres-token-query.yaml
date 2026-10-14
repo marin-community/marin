@@ -1,0 +1,124 @@
+id: X0200
+slug: attnres-token-query
+name: Token-embedding AttnRes queries
+category: Depth connections
+summary: Add a per-token zero-init embedding row to each AttnRes gate's static pseudo-query.
+source: intake
+status: closed
+first_batch: 164
+tags:
+- attnres
+- query
+- token-embedding
+papers:
+- arxiv: '2603.15031'
+  title: Attention Residuals
+details:
+- 'q_e: zero-init [vocab, d] table, AttnRes query group (Adam)'
+knobs:
+- attn_res_token_query
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-5928744772
+  author: RavnaBergsndot
+  approved_by: ClassicLarry
+trials:
+- variant: shared table
+  rung: d512
+  protocol: equal_steps
+  batch: '164'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5935144206
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0075
+  loss:
+  - 2.9843
+  settings:
+    attn_res_token_query: shared
+    params: 8.4M
+  step_time_change: +2.5% (175.9 ms)
+  tuned: shared vs per-gate tables
+  note: seed 1 still running
+- variant: per-gate tables
+  rung: d512
+  protocol: equal_steps
+  batch: '164'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5935144206
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0215
+  - 0.0201
+  loss:
+  - 2.9983
+  - 3.0023
+  settings:
+    attn_res_token_query: per gate
+    params: 109M
+  step_time_change: +8.6% (186.3 ms)
+  tuned: shared vs per-gate tables
+- variant: shared table, LR x0.1
+  rung: d512
+  protocol: equal_steps
+  batch: '168'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5938044710
+  baseline: candidate 9 same cluster (rno2a 2.9768 / 2.9822; 02a lc1-b169-c9-ue 2.9791 / 2.9831)
+  steps: 2817
+  delta:
+  - -0.0028
+  - -0.0012
+  loss:
+  - 2.9763
+  - 2.9819
+  settings:
+    attn_res_token_query: shared
+    attn_res_token_query_lr_mult: '0.1'
+  step_time_change: +3.6% (180.5 ms)
+  tuned: LR x0.1 / x0.01, shared vs per-gate
+  note: token term ~25% of static query
+- variant: shared table, LR x0.01
+  rung: d512
+  protocol: equal_steps
+  batch: '168'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5938044710
+  baseline: candidate 9 same cluster (rno2a 2.9768 / 2.9822; 02a lc1-b169-c9-ue 2.9791 / 2.9831)
+  steps: 2817
+  delta:
+  - -0.001
+  - -0.0017
+  loss:
+  - 2.9758
+  - 2.9814
+  settings:
+    attn_res_token_query: shared
+    attn_res_token_query_lr_mult: '0.01'
+  step_time_change: +3%
+  tuned: LR x0.1 / x0.01, shared vs per-gate
+  note: near no-op
+- variant: per-gate tables, LR x0.01
+  rung: d512
+  protocol: equal_steps
+  batch: '168'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5938044710
+  baseline: candidate 9 same cluster (rno2a 2.9768 / 2.9822; 02a lc1-b169-c9-ue 2.9791 / 2.9831)
+  steps: 2817
+  delta:
+  - -0.0005
+  loss:
+  - 2.9763
+  settings:
+    attn_res_token_query: per gate
+    attn_res_token_query_lr_mult: '0.01'
+  step_time_change: +6.5%
+  tuned: LR x0.1 / x0.01, shared vs per-gate
+events:
+- type: closed
+  batch: '168'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5938044710
+  note: neutral at every LR where it doesn't hurt, 3-9% slower

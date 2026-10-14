@@ -1,0 +1,38 @@
+id: X0005
+slug: latent-moe-qb
+name: LatentMoE with quantile-balanced routing
+category: MoE and routing
+summary: Routed experts work in a D/2 latent and are balanced by setting each expert's router bias from a global logit quantile
+  each step.
+source: baseline
+status: adopted
+first_batch: 0
+tags:
+- moe
+- latent
+- quantile-balancing
+- router
+- baseline
+details:
+- 384 routed SwiGLU experts, top-8, hidden D/2 (baseline)
+- 'latent: W_latent_down -> RMSNorm, D/2 wide; W_latent_up back'
+- router fp32, top-(8+1), 9th logit is threshold alpha
+- 'QB: beta_e = global (1 - K/E) quantile of logit - alpha, 10k-bin histogram; bias = -beta, not trained'
+- 'combine: sigmoid of unbiased logits renormalized to sum 2.5'
+- capacity factor 1.15, pooled-wave EP dispatch
+- 2 shared SwiGLU experts D -> D/2 -> D
+events:
+- type: adopted
+  batch: '0'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451
+  note: Part of the clean KMA baseline (branch fasttrack-moe-kma @ 4eba59cafa).
+  candidate: clean KMA
+  as_adopted:
+  - 384 routed SwiGLU experts, top-8, hidden D/2 (baseline)
+  - 'latent: W_latent_down -> RMSNorm, D/2 wide; W_latent_up back'
+  - router fp32, top-(8+1), 9th logit is threshold alpha
+  - 'QB: beta_e = global (1 - K/E) quantile of logit - alpha, 10k-bin histogram; bias = -beta, not trained'
+  - 'combine: sigmoid of unbiased logits renormalized to sum 2.5'
+  - capacity factor 1.15, pooled-wave EP dispatch
+  - 2 shared SwiGLU experts D -> D/2 -> D

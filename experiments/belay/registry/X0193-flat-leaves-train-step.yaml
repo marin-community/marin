@@ -1,0 +1,40 @@
+id: X0193
+slug: flat-leaves-train-step
+name: Flat-leaves jitted train step
+category: Systems and speed
+summary: Jit the train step over the state's flat list of arrays to cut Python host dispatch.
+source: agent
+status: adopted
+first_batch: 152
+tags:
+- host-dispatch
+- jit
+- runtime
+details:
+- same math; 184.3 -> 171.6 ms at d512
+trials:
+- variant: flat leaves
+  rung: d512
+  protocol: equal_steps
+  batch: '152'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5934720837
+  baseline: candidate 9 2.9768
+  steps: 2817
+  delta:
+  - 0.0005
+  loss:
+  - 2.9773
+  wandb:
+  - lc1-b152-flat
+  step_time_change: -6.9% (184.3 -> 171.6 ms)
+  note: same math; worth about -0.012 at fixed time
+events:
+- type: adopted
+  batch: '152'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5934720837
+  note: flat-leaves step adopted as runtime, -6.9% step
+  candidate: runtime (candidate 9/10)
+  as_adopted:
+  - train step jitted over flat leaves (a99a1ef88b)

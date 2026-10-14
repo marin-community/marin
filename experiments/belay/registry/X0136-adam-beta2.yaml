@@ -1,0 +1,127 @@
+id: X0136
+slug: adam-beta2
+name: Adam beta2
+category: Optimizers
+summary: Change Adam's second-moment decay.
+source: agent
+status: removed
+first_batch: 87
+tags:
+- adam
+- beta2
+- horizon
+details:
+- adopted 0.98 (heuristic was 0.996)
+knobs:
+- beta2=0.98
+trials:
+- variant: '0.99'
+  rung: d512
+  protocol: equal_steps
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0032
+  - -0.0031
+  loss:
+  - 3.004
+  - 3.0078
+  wandb:
+  - lc1-b87-b2-099-r
+  - lc1-b87-b2-099-s1
+  settings:
+    beta2: '0.99'
+  tuned: beta2 0.95/0.98/0.99/0.996/0.999
+  note: free; to next consolidation
+- variant: '0.999'
+  rung: d512
+  protocol: equal_steps
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.0049
+  - 0.0049
+  loss:
+  - 3.0121
+  - 3.0158
+  wandb:
+  - lc1-b87-b2-0999
+  - lc1-b87-b2-0999-s1
+  settings:
+    beta2: '0.999'
+  tuned: beta2 0.95/0.98/0.99/0.996/0.999
+- variant: '0.98'
+  rung: d512
+  protocol: equal_steps
+  batch: '89'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863894129
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0064
+  - -0.0039
+  loss:
+  - 3.0008
+  - 3.007
+  wandb:
+  - lc1-b89-b2-098
+  - lc1-b89-b2-098-s1
+  settings:
+    beta2: '0.98'
+  tuned: beta2 0.95/0.98/0.99/0.996/0.999
+  note: optimum near 0.98; goes into next consolidation
+- variant: '0.95'
+  rung: d512
+  protocol: equal_steps
+  batch: '89'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863894129
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0035
+  - -0.0039
+  loss:
+  - 3.0037
+  - 3.007
+  wandb:
+  - lc1-b89-b2-095
+  - lc1-b89-b2-095-s1
+  settings:
+    beta2: '0.95'
+  tuned: beta2 0.95/0.98/0.99/0.996/0.999
+- variant: beta2 0.98 -> 0.992 at d768 (horizon scaled)
+  rung: d768
+  protocol: data_matched
+  batch: '131'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5905408208
+  baseline: d768 candidate 9 data-matched 2.7277 / 2.7221
+  steps: 6929
+  delta:
+  - 0.0002
+  - 0.0005
+  settings:
+    beta2: '0.992'
+  note: 'neutral: 0.98 transfers'
+events:
+- type: adopted
+  batch: '90'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864219716
+  note: part of candidate 8
+  candidate: candidate 8
+  as_adopted:
+  - beta2=0.98
+- type: removed
+  batch: ckpt1
+  date: '2026-10-14'
+  comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
+  note: Belay Ckpt 1 uses the starter-kit beta2

@@ -1,0 +1,109 @@
+id: X0119
+slug: mla-query-norm
+name: MLA per-head query RMSNorm
+category: Attention variants
+summary: Weightless per-head RMSNorm on MLA queries; free under MLA absorption.
+source: maintainer
+status: adopted
+first_batch: 75
+tags:
+- mla
+- query-norm
+- qk-norm
+details:
+- needs qk_mult init 4 to help
+knobs:
+- mla_q_norm=true
+trials:
+- variant: q norm + per-head k norm, qk_mult init 2.5
+  rung: d512
+  protocol: equal_steps
+  batch: '75'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860492314
+  baseline: candidate 4 consolidated (3.0129 / 3.0161)
+  steps: 2817
+  delta:
+  - -0.0021
+  - 0.0002
+  loss:
+  - 3.0108
+  - 3.0163
+  wandb:
+  - lc1-b75-qknorm
+  - lc1-b75-qknorm-s1
+  settings:
+    mla_q_norm: 'true'
+    mla_k_norm: 'true'
+    qk_mult: '2.5'
+  tuned: qk_mult init 2.5 / 4 / 6
+  note: learned qk_mult drifts down to ~2
+- variant: q norm + shared k norm
+  rung: d512
+  protocol: equal_steps
+  batch: '75'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860492314
+  baseline: candidate 4 consolidated (3.0129 / 3.0161)
+  steps: 2817
+  delta:
+  - -0.0002
+  - 0.0047
+  loss:
+  - 3.0127
+  - 3.0208
+  wandb:
+  - lc1-b75-qknorm-shared
+  - lc1-b75-qknorm-shared-s1
+  settings:
+    mla_q_norm: 'true'
+    mla_k_norm_shared: 'true'
+- variant: q norm + qk_mult init 4.0
+  rung: d512
+  protocol: equal_steps
+  batch: '75'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860492314
+  baseline: candidate 4 consolidated (3.0129 / 3.0161)
+  steps: 2817
+  delta:
+  - -0.0026
+  - -0.0026
+  loss:
+  - 3.0103
+  - 3.0135
+  wandb:
+  - lc1-b75-qknorm-qm4
+  - lc1-b75-qknorm-qm4-s1
+  settings:
+    mla_q_norm: 'true'
+    qk_mult: '4.0'
+  tuned: qk_mult init 2.5 / 4 / 6
+  note: qk_mult settles near 3; becomes candidate 5
+- variant: d768 remove query norm (qk_mult 2.5)
+  rung: d768
+  protocol: equal_steps
+  batch: '84'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5862289448
+  baseline: d768 candidate 6 top-8 lc1-b80-d768-c6-top8 (2.7689)
+  steps: 7325
+  delta:
+  - -0.0011
+  loss:
+  - 2.77
+  wandb:
+  - lc1-b84-d768-noqnorm
+  settings:
+    mla_q_norm: 'false'
+    qk_mult: '2.5'
+  tuned: leave-one-out over candidate 6 pieces
+  note: leave-one-out over candidate 6, sign flipped to 'adding the piece' (negative = piece helps)
+events:
+- type: adopted
+  batch: '76'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860679041
+  candidate: candidate 5
+  as_adopted:
+  - mla_q_norm=true

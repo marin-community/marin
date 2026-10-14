@@ -1,0 +1,527 @@
+id: X0020
+slug: lr-schedule-shape
+name: LR schedule shape
+category: Training dynamics and schedules
+summary: Change the LR decay shape (linear, cosine, WSD) or the final LR ratio.
+source: maintainer
+status: adopted
+first_batch: 3
+tags:
+- schedule
+- wsd
+- cosine
+- min-lr
+- lr schedule
+- min_lr_ratio
+- decay
+- lr-floor
+- warmup
+- lr-schedule
+- cooldown
+- powercool
+- final lr
+- min lr ratio
+details:
+- 'baseline: 1% warmup, linear decay to 0.05x peak'
+- 'adopted (candidate 8): cosine decay for the Adam groups'
+- MuonH keeps its own 1 - p^0.7 decay
+- WSD and longer warmups lost
+knobs:
+- --opt-set min_lr_ratio
+- min_lr_ratio
+- lr_schedule=cosine
+trials:
+- variant: min LR ratio 0 (vs 0.05)
+  rung: d512
+  protocol: equal_steps
+  batch: '3'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840199301
+  baseline: fp32 base mean 3.0990
+  steps: 2817
+  delta:
+  - -0.003
+  loss:
+  - 3.096
+  wandb:
+  - lc1-b03-min0
+  settings:
+    min LR ratio: 0 (vs 0.05)
+- variant: cosine decay to 0
+  rung: d512
+  protocol: equal_steps
+  batch: '4'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840372599
+  baseline: fp32 base mean 3.0990
+  steps: 2817
+  delta:
+  - 0.0055
+  loss:
+  - 3.1045
+  wandb:
+  - lc1-b04-cos0b
+  settings:
+    schedule: cosine decay to 0
+- variant: WSD 20% cooldown, peak x1.0
+  rung: d512
+  protocol: equal_steps
+  batch: 16-17
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  baseline: bundle (z-loss kept) seed 0 3.0854
+  steps: 2817
+  delta:
+  - 0.0938
+  loss:
+  - 3.1792
+  wandb:
+  - lc1-b16z-wsd-x10
+  settings:
+    schedule: WSD
+    decay: '0.2'
+    peak LR: x1.0
+  tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
+- variant: WSD 20% cooldown, peak x0.7
+  rung: d512
+  protocol: equal_steps
+  batch: 16-17
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  baseline: bundle (z-loss kept) seed 0 3.0854
+  steps: 2817
+  delta:
+  - 0.057
+  loss:
+  - 3.1424
+  wandb:
+  - lc1-b16z-wsd-x07
+  settings:
+    schedule: WSD
+    decay: '0.2'
+    peak LR: x0.7
+  tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
+- variant: WSD 20% cooldown, peak x1.4
+  rung: d512
+  protocol: equal_steps
+  batch: 16-17
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  baseline: bundle (z-loss kept) seed 0 3.0854
+  steps: 2817
+  delta:
+  - 0.1415
+  loss:
+  - 3.2269
+  wandb:
+  - lc1-b16z-wsd-x14
+  settings:
+    schedule: WSD
+    decay: '0.2'
+    peak LR: x1.4
+  tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
+- variant: WSD 20% cooldown, peak x0.5
+  rung: d512
+  protocol: equal_steps
+  batch: 16-17
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  baseline: bundle (z-loss kept) seed 0 3.0854
+  steps: 2817
+  delta:
+  - 0.0433
+  loss:
+  - 3.1287
+  wandb:
+  - lc1-b16z-wsd-x05
+  settings:
+    schedule: WSD
+    decay: '0.2'
+    peak LR: x0.5
+  tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
+- variant: WSD 20% cooldown, peak x0.35
+  rung: d512
+  protocol: equal_steps
+  batch: 16-17
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  baseline: bundle (z-loss kept) seed 0 3.0854
+  steps: 2817
+  delta:
+  - 0.0499
+  loss:
+  - 3.1353
+  wandb:
+  - lc1-b16z-wsd-x035
+  settings:
+    schedule: WSD
+    decay: '0.2'
+    peak LR: x0.35
+  tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
+- variant: WSD 50% cooldown, peak x0.7
+  rung: d512
+  protocol: equal_steps
+  batch: 16-17
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  baseline: bundle (z-loss kept) seed 0 3.0854
+  steps: 2817
+  delta:
+  - 0.0085
+  loss:
+  - 3.0939
+  wandb:
+  - lc1-b16z-wsd50-x07
+  settings:
+    schedule: WSD
+    decay: '0.5'
+    peak LR: x0.7
+  tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
+- variant: WSD 50% cooldown, peak x1.0
+  rung: d512
+  protocol: equal_steps
+  batch: 16-17
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  baseline: bundle (z-loss kept) seed 0 3.0854
+  steps: 2817
+  delta:
+  - 0.0284
+  loss:
+  - 3.1138
+  wandb:
+  - lc1-b16z-wsd50-x10
+  settings:
+    schedule: WSD
+    decay: '0.5'
+    peak LR: x1.0
+  tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
+- variant: cosine to 0.05x, peak x0.8
+  rung: d512
+  protocol: equal_steps
+  batch: 16-17
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  baseline: bundle (z-loss kept) seed 0 3.0854
+  steps: 2817
+  delta:
+  - -0.0021
+  loss:
+  - 3.0833
+  wandb:
+  - lc1-b16z-cos-x08
+  settings:
+    schedule: cosine
+    min LR: 0.05x
+    peak LR: x0.8
+  tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
+- variant: cosine to 0.05x, peak x1.25
+  rung: d512
+  protocol: equal_steps
+  batch: 16-17
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  baseline: bundle (z-loss kept) seed 0 3.0854
+  steps: 2817
+  delta:
+  - -0.0027
+  loss:
+  - 3.0827
+  wandb:
+  - lc1-b16z-cos-x125
+  settings:
+    schedule: cosine
+    min LR: 0.05x
+    peak LR: x1.25
+  tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
+- variant: cosine to 0.05x, peak x1.0
+  rung: d512
+  protocol: equal_steps
+  batch: 16-17
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  baseline: bundle (z-loss kept) seed 0 3.0854 (seed 1 vs 3.0902)
+  steps: 2817
+  delta:
+  - -0.0032
+  - -0.0008
+  loss:
+  - 3.0822
+  - 3.0894
+  wandb:
+  - lc1-b16z-cos-x10
+  - lc1-b16z-cos-x10-s1
+  settings:
+    schedule: cosine
+    min LR: 0.05x
+    peak LR: x1.0
+  tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
+  note: mean -0.002, within noise; linear stays
+- variant: final LR ratio 0.3, no EMA
+  rung: d512
+  protocol: equal_steps
+  batch: '31'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852227735
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.103
+  loss:
+  - 3.1863
+  wandb:
+  - lc1-b31-lr30
+  settings:
+    min_lr_ratio: '0.3'
+  tuned: floor 0.05/0.1/0.15/0.3
+- variant: LR floor 0 (min_lr_ratio 0)
+  rung: d512
+  protocol: equal_steps
+  batch: '32'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5852265563
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.0003
+  loss:
+  - 3.0836
+  wandb:
+  - lc1-b32-lr0
+  settings:
+    min_lr_ratio: '0'
+  tuned: floor 0 vs 0.05
+- variant: LR floor 10% of peak (min_lr_ratio 0.1)
+  rung: d512
+  protocol: equal_steps
+  batch: '64'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858739832
+  baseline: candidate 2 3.0197 (s0) / 3.0266 (s1)
+  steps: 2817
+  delta:
+  - -0.0023
+  - 0.0001
+  loss:
+  - 3.0174
+  - 3.0267
+  wandb:
+  - lc1-b64-minlr10
+  - lc1-b64-minlr10-s1
+  settings:
+    min_lr_ratio: '0.1'
+  tuned: 0.1 vs base 0.05
+  note: does not replicate
+- variant: cosine Adam schedule
+  rung: d512
+  protocol: equal_steps
+  batch: '87'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - -0.0028
+  - -0.002
+  loss:
+  - 3.0044
+  - 3.0089
+  wandb:
+  - lc1-b87-cosine
+  - lc1-b87-cosine-s1
+  settings:
+    lr_schedule: cosine
+  note: free; to next consolidation
+- variant: warmup 5% (about 141 steps)
+  rung: d512
+  protocol: equal_steps
+  batch: '127'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5902307136
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0018
+  - 0.0004
+  settings:
+    warmup: 5%
+  tuned: warmup 1% (base) / 5% / 15%
+  note: tests whether early MuonH overshoot costs loss
+- variant: warmup 15% (about 423 steps)
+  rung: d512
+  protocol: equal_steps
+  batch: '127'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5902307136
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0105
+  - 0.0056
+  settings:
+    warmup: 15%
+  tuned: warmup 1% (base) / 5% / 15%
+  note: removes overshoot during warmup, returns to same regime by step 700, ends worse
+- variant: PowerCool MuonH LR, flat to 18%
+  rung: d512
+  protocol: equal_steps
+  batch: '154'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927409237
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.005
+  - 0.002
+  loss:
+  - 2.9818
+  - 2.9842
+  settings:
+    MuonH LR: flat to 18%, then ((1-p)/0.82)^1.2 cooldown
+  step_time_change: 171.9 vs 171.6 ms
+  tuned: flat to 18% vs 35%
+  note: from modded-nanogpt track 3
+- variant: PowerCool MuonH LR, flat to 35%
+  rung: d512
+  protocol: equal_steps
+  batch: '154'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927409237
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0156
+  - 0.013
+  loss:
+  - 2.9924
+  - 2.9952
+  settings:
+    MuonH LR: flat to 35%, then power-1.2 cooldown
+  step_time_change: 172.1 vs 171.6 ms
+  tuned: flat to 18% vs 35%
+- variant: min LR ratio 0.1, EMA 0.995/1000
+  rung: d512
+  protocol: equal_steps
+  batch: '199'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: candidate 12 ctrl 2.9535 (EMA)
+  steps: 2817
+  delta:
+  - 0.0008
+  loss:
+  - 2.9543
+  settings:
+    min LR ratio: '0.1'
+  tuned: floor 0.05 vs 0.1
+  note: raw final 2.9694, blend 2.9542
+- variant: Adam warmup 3.5%, peak x1
+  rung: d512
+  protocol: equal_steps
+  batch: '203'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base14 (1% warmup) mean 2.9534
+  steps: 2817
+  loss:
+  - 2.9568
+  settings:
+    Adam warmup: 3.5%
+    Adam peak: x1
+  tuned: warmup 3.5%/10% x peak x1/x1.5/x2
+  note: nothing to adopt
+- variant: Adam warmup 3.5%, peak x1.5
+  rung: d512
+  protocol: equal_steps
+  batch: '203'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base14 (1% warmup) mean 2.9534
+  steps: 2817
+  loss:
+  - 2.9527
+  settings:
+    Adam warmup: 3.5%
+    Adam peak: x1.5
+  tuned: warmup 3.5%/10% x peak x1/x1.5/x2
+  note: nothing to adopt
+- variant: Adam warmup 3.5%, peak x2
+  rung: d512
+  protocol: equal_steps
+  batch: '203'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base14 (1% warmup) mean 2.9534
+  steps: 2817
+  loss:
+  - 2.9569
+  settings:
+    Adam warmup: 3.5%
+    Adam peak: x2
+  tuned: warmup 3.5%/10% x peak x1/x1.5/x2
+  note: nothing to adopt
+- variant: Adam warmup 10%, peak x1
+  rung: d512
+  protocol: equal_steps
+  batch: '203'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base14 (1% warmup) mean 2.9534
+  steps: 2817
+  loss:
+  - 2.9586
+  settings:
+    Adam warmup: 10%
+    Adam peak: x1
+  tuned: warmup 3.5%/10% x peak x1/x1.5/x2
+  note: nothing to adopt
+- variant: Adam warmup 10%, peak x1.5
+  rung: d512
+  protocol: equal_steps
+  batch: '203'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base14 (1% warmup) mean 2.9534
+  steps: 2817
+  loss:
+  - 2.9575
+  settings:
+    Adam warmup: 10%
+    Adam peak: x1.5
+  tuned: warmup 3.5%/10% x peak x1/x1.5/x2
+  note: nothing to adopt
+- variant: Adam warmup 10%, peak x2
+  rung: d512
+  protocol: equal_steps
+  batch: '203'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5991272233
+  baseline: base14 (1% warmup) mean 2.9534
+  steps: 2817
+  loss:
+  - 2.9613
+  settings:
+    Adam warmup: 10%
+    Adam peak: x2
+  tuned: warmup 3.5%/10% x peak x1/x1.5/x2
+  note: nothing to adopt
+events:
+- type: closed
+  batch: '17'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  note: WSD loses at every peak LR; cosine marginal, linear decay stays
+- type: adopted
+  batch: '90'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864219716
+  note: part of candidate 8
+  candidate: candidate 8
+  as_adopted:
+  - lr_schedule=cosine (Adam groups)
+  - MuonH keeps power-0.7 decay
+- type: closed
+  batch: '127'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5902307136
+  note: 'Longer warmup closed: early overshoot is a productive edge-of-stability equilibrium'

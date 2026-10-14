@@ -1,0 +1,32 @@
+id: X0016
+slug: normalized-latent-moe
+name: Normalized LatentMoE (K3)
+category: MoE and routing
+summary: Add a learnable RMSNorm before the LatentMoE up-projection, as in Kimi K3.
+source: agent
+status: done
+first_batch: 2
+tags:
+- latent-moe
+- rmsnorm
+- kimi-k3
+details:
+- learnable RMSNorm before W_latent_up
+trials:
+- variant: RMSNorm before W_latent_up (K3)
+  rung: d512
+  protocol: equal_steps
+  batch: '2'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5839990993
+  baseline: batch-1 2-seed baseline mean 3.1223
+  steps: 2719
+  delta:
+  - -0.0189
+  loss:
+  - 3.1034
+  wandb:
+  - lc1-b02-latn
+  settings:
+    norm: learnable RMSNorm before W_latent_up
+  note: -0.0007 vs new base mean

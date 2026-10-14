@@ -1,0 +1,92 @@
+id: X0065
+slug: delta-attnres
+name: Delta AttnRes (additive routing / delta sources)
+category: Depth connections
+summary: Additive AttnRes routing h + sum a_i v_i, or sources as output differences.
+source: maintainer
+status: closed
+first_batch: 28
+tags:
+- attnres
+- delta
+- additive
+papers:
+- arxiv: '2605.18855'
+  title: Delta Attention Residuals
+knobs:
+- attn_res_additive
+- attn_res_source_delta
+trials:
+- variant: Delta AttnRes as specified (full + additive, no final gate)
+  rung: d512
+  protocol: equal_steps
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  baseline: full AttnRes lc1-b18-full-fair 3.0774
+  steps: 2712
+  delta:
+  - 0.0289
+  loss:
+  - 3.1063
+  wandb:
+  - lc1-b28-delta
+  settings:
+    attn_res_additive: 'true'
+    attn_res_final_mode: sum
+  note: additive routing cannot suppress sources
+- variant: Delta Block (block AttnRes + additive)
+  rung: d512
+  protocol: equal_steps
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  baseline: lc1-mfu1 3.0833
+  steps: 2817
+  delta:
+  - 0.0158
+  loss:
+  - 3.0991
+  wandb:
+  - lc1-b28-deltablock
+  settings:
+    attn_res_additive: 'true'
+    attn_res_final_mode: sum
+- variant: full AttnRes + plain residual as extra source
+  rung: d512
+  protocol: equal_steps
+  batch: '28'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5849824675
+  baseline: full AttnRes lc1-b18-full-fair 3.0774
+  steps: 2712
+  delta:
+  - 0.0015
+  loss:
+  - 3.0789
+  wandb:
+  - lc1-b28-fullstream-r
+- variant: output-delta sources (consecutive differences)
+  rung: d512
+  protocol: equal_steps
+  batch: '29'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5850337517
+  baseline: full AttnRes lc1-b18-full-fair 3.0774
+  steps: 2712
+  delta:
+  - 0.0699
+  loss:
+  - 3.1473
+  wandb:
+  - lc1-b29-outdelta
+  settings:
+    attn_res_source_delta: 'true'
+    attn_res_final_mode: sum
+  note: fails as expected
+events:
+- type: closed
+  batch: '29'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5850337517
+  note: additive routing and output deltas both lose

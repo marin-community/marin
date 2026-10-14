@@ -1,0 +1,41 @@
+id: X0111
+slug: moe-output-gate
+name: Per-token MoE output gate
+category: MoE and routing
+summary: A per-token sigmoid gate from the first 12 channels scales each block's whole MoE output.
+source: maintainer
+status: closed
+first_batch: 64
+tags:
+- gate
+- moe-output
+- parameter-golf
+details:
+- w=0, b=+5 init (0.993)
+- 13 Adam params per block
+knobs:
+- moe_out_gate
+trials:
+- variant: per-token sigmoid gate on whole MoE output
+  rung: d512
+  protocol: equal_steps
+  batch: '64'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858739832
+  baseline: candidate 2 3.0197 (s0) / 3.0266 (s1)
+  steps: 2817
+  delta:
+  - 0.0005
+  loss:
+  - 3.0202
+  wandb:
+  - lc1-b64-moegate
+  settings:
+    moe_out_gate: 'true'
+    init: w=0, b=+5
+events:
+- type: closed
+  batch: '64'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858739832
+  note: Parameter Golf batch closed with no adoptions

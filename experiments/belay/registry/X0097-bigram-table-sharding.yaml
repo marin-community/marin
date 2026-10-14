@@ -1,0 +1,79 @@
+id: X0097
+slug: bigram-table-sharding
+name: Row-sharded bigram table (embed2_fsdp)
+category: Systems and speed
+summary: Row-shards the bigram table and its Adam state over GPUs; same math, faster step.
+source: agent
+status: removed
+first_batch: 53
+tags:
+- bigram
+- fsdp
+- sharding
+- speed
+- row-sharded
+- memory
+details:
+- table + Adam state row-sharded over 8 GPUs
+- psum becomes reduce-scatter
+- 'row-sharded lookup: all-gather ids, local lookup, reduce-scatter rows; fp32 scatter-add backward'
+- 'lookup opt-in: off at d512, on at d1024+'
+knobs:
+- embed2_fsdp=true
+- embed2_row_sharded_gather
+trials:
+- variant: row-shard table + Adam state (embed2_fsdp)
+  rung: d512
+  protocol: equal_steps
+  batch: '73'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860062452
+  baseline: candidate 4 (3.0118 / 3.0166)
+  steps: 2817
+  delta:
+  - 0.0012
+  - 0.0001
+  loss:
+  - 3.013
+  - 3.0167
+  wandb:
+  - lc1-b73-fsdptable
+  - lc1-b73-fsdptable-s1
+  settings:
+    embed2_fsdp: 'true'
+  step_time_change: -1.7% (175.0 -> 172.8 ms)
+  note: same math; about -0.003 at fixed time
+- variant: row-sharded lookup (embed2_row_sharded_gather)
+  rung: d512
+  protocol: equal_steps
+  batch: '117'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5883914557
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0013
+  - 0.0002
+  loss:
+  - 2.9763
+  - 2.9793
+  wandb:
+  - lc1-b117-cand9-rsg
+  settings:
+    embed2_row_sharded_gather: 'true'
+  step_time_change: +6.5% (185.0 -> 197.0 ms)
+  note: loss-equivalent but slower at d512; made opt-in, on at d1024+ for memory
+events:
+- type: adopted
+  batch: '73'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860062452
+  note: embed2_fsdp=true made part of candidate 4
+  candidate: candidate 4
+  as_adopted:
+  - embed2_fsdp=true
+- type: removed
+  batch: ckpt1
+  date: '2026-10-14'
+  comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
+  note: no bigram table in Belay Ckpt 1

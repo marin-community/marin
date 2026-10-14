@@ -1,0 +1,144 @@
+id: X0208
+slug: mla-num-heads
+name: MLA head count / head shape
+category: Attention variants
+summary: Change the number or width of MLA heads in the global layers.
+source: maintainer
+status: removed
+first_batch: 192
+tags:
+- mla
+- heads
+- head dim
+details:
+- 6 MLA heads x 128 on the two MLA layers
+- KV latent stays 512
+knobs:
+- mla_num_heads=6
+- mla_head_dim
+trials:
+- variant: 6 MLA heads on ragged
+  rung: d512
+  protocol: equal_steps
+  batch: 190-201
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: ragp105 (2.9610 / 2.9645)
+  steps: 2817
+  delta:
+  - -0.007
+  loss:
+  - 2.9538
+  - 2.9578
+  settings:
+    mla_num_heads: '6'
+  step_time_change: +4.2% (190.6 ms)
+  tuned: 4 vs 6 heads; 12x64 / 8x96 at equal FLOPs
+  note: mean delta, both seeds
+- variant: 6 MLA heads on ragged, 2705 steps
+  rung: d512
+  protocol: fixed_time
+  batch: 190-201
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: ragp105 equal time
+  steps: 2705
+  delta:
+  - 0.0
+  loss:
+  - 2.9619
+  - 2.9636
+  settings:
+    mla_num_heads: '6'
+    steps: '2705'
+  tuned: 4 vs 6 heads; 12x64 / 8x96 at equal FLOPs
+  note: break-even at equal time
+- variant: candidate 12 (ragged + 6 heads) at candidate 11 budget
+  rung: d512
+  protocol: fixed_time
+  batch: 190-201
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: candidate 11 fixed time (2.9715 / 2.9750)
+  steps: 2526
+  loss:
+  - 2.9714
+  - 2.975
+  settings:
+    mla_num_heads: '6'
+  tuned: 4 vs 6 heads; 12x64 / 8x96 at equal FLOPs
+  note: wash at fixed time; different clusters
+- variant: MLA 12 heads x 64
+  rung: d512
+  protocol: equal_steps
+  batch: df3
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: df2-ctrl 2.9542
+  steps: 2817
+  delta:
+  - 0.0015
+  loss:
+  - 2.9557
+  settings:
+    heads: '12'
+    mla_head_dim: '64'
+  step_time_change: 302.1 ms
+  tuned: 4 vs 6 heads; 12x64 / 8x96 at equal FLOPs
+  note: equal attention FLOPs; closed
+- variant: MLA 12 x 64, qk_mult x sqrt2
+  rung: d512
+  protocol: equal_steps
+  batch: df3
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: df2-ctrl 2.9542
+  steps: 2817
+  delta:
+  - 0.0005
+  loss:
+  - 2.9547
+  settings:
+    heads: '12'
+    mla_head_dim: '64'
+    qk_mult: x sqrt2
+  step_time_change: 302.8 ms
+  tuned: 4 vs 6 heads; 12x64 / 8x96 at equal FLOPs
+  note: equal attention FLOPs; closed
+- variant: MLA 8 x 96
+  rung: d512
+  protocol: equal_steps
+  batch: df3
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: df2-ctrl 2.9542
+  steps: 2817
+  delta:
+  - -0.0002
+  loss:
+  - 2.954
+  settings:
+    heads: '8'
+    mla_head_dim: '96'
+  step_time_change: 257.6 ms
+  tuned: 4 vs 6 heads; 12x64 / 8x96 at equal FLOPs
+  note: equal attention FLOPs; closed
+events:
+- type: adopted
+  batch: 190-201
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  note: 6 MLA heads in candidate 12
+  candidate: candidate 12
+  as_adopted:
+  - mla_num_heads=6
+- type: closed
+  batch: df3
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  note: more, narrower MLA heads at equal FLOPs closed
+- type: removed
+  batch: ckpt1
+  date: '2026-10-14'
+  comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
+  note: Belay Ckpt 1 sets MLA heads equal to attention heads

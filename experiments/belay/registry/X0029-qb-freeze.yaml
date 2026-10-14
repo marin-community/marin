@@ -1,0 +1,31 @@
+id: X0029
+slug: qb-freeze
+name: Freeze quantile-balancing router bias
+category: MoE and routing
+summary: Stop updating the QB router bias halfway through training.
+source: maintainer
+status: done
+first_batch: 5
+tags:
+- router
+- quantile-balancing
+- load-balance
+knobs:
+- qb_freeze_step
+trials:
+- variant: freeze QB router bias at step 1408
+  rung: d512
+  protocol: equal_steps
+  batch: '5'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840665852
+  baseline: fp32 base mean 3.0990
+  steps: 2817
+  delta:
+  - 0.0069
+  loss:
+  - 3.1059
+  wandb:
+  - lc1-b05-qbfrz
+  settings:
+    qb_freeze_step: '1408'

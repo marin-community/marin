@@ -1,0 +1,51 @@
+id: X0194
+slug: soap-muon
+name: SOAP-Muon (modded-nanogpt track 3)
+category: Optimizers
+summary: Newton-Schulz of SOAP's eigenbasis-Adam direction, then the hyperball step.
+source: maintainer
+status: done
+first_batch: 154
+tags:
+- soap
+- muon
+- modded-nanogpt
+- eigenbasis
+trials:
+- variant: non-routed matrices
+  rung: d512
+  protocol: equal_steps
+  batch: '154'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927409237
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0025
+  loss:
+  - 2.9743
+  settings:
+    families: KDA, MLA, LatentMoE, shared
+    beta2: '0.99'
+    basis refresh: 10 steps
+  step_time_change: 190.3 vs 171.6 ms (+11%)
+  tuned: with/without routed experts
+  note: one seed; loses about 0.02 at fixed time
+- variant: incl. routed experts
+  rung: d512
+  protocol: equal_steps
+  batch: '154'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927409237
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0001
+  - 0.0027
+  loss:
+  - 2.9769
+  - 2.9849
+  settings:
+    families: all MuonH incl. routed
+  step_time_change: 194.8 vs 171.6 ms (+13%)
+  tuned: with/without routed experts

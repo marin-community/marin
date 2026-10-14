@@ -1,0 +1,38 @@
+id: X0038
+slug: kda-output-gate-per-head
+name: Per-head KDA output gate
+category: Linear attention / KDA
+summary: Make the KDA output gate one value per head instead of per channel.
+source: maintainer
+status: closed
+first_batch: 10
+tags:
+- kda
+- output-gate
+- slimming
+knobs:
+- kda_gate_per_head=true
+trials:
+- variant: KDA output gate per head
+  rung: d512
+  protocol: equal_steps
+  batch: '10'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841602060
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2817
+  delta:
+  - 0.0054
+  loss:
+  - 3.0912
+  wandb:
+  - lc1-b10-kdagh
+  settings:
+    kda_gate_per_head: 'true'
+  step_time_change: -6% ex/s (unfused repeat)
+events:
+- type: closed
+  batch: '10'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841602060
+  note: per-channel gate carries information; not pursuing

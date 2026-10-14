@@ -1,0 +1,36 @@
+id: X0079
+slug: mudd-dynamic-attnres
+name: MUDD-style dynamic AttnRes logits
+category: Depth connections
+summary: Add a per-token dynamic term GELU(rms(x)W1)W2 to each AttnRes gate's logits.
+source: maintainer
+status: done
+first_batch: 39
+tags:
+- mudd
+- attnres
+- dynamic
+papers:
+- arxiv: '2502.12170'
+  title: MUDD
+knobs:
+- attn_res_dynamic_rank=64
+trials:
+- variant: dynamic AttnRes logits, width 64
+  rung: d512
+  protocol: equal_steps
+  batch: '39'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853163866
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0007
+  loss:
+  - 3.0584
+  wandb:
+  - lc1-b39-dynres64
+  settings:
+    attn_res_dynamic_rank: '64'
+    W2 init: '0'
+  step_time_change: -7% ex/s (741)

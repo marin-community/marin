@@ -1,0 +1,74 @@
+id: X0147
+slug: cautious-weight-decay
+name: Cautious weight decay
+category: Optimizers
+summary: Apply weight decay only to coordinates whose update agrees in sign with the weight.
+source: agent
+status: closed
+first_batch: 98
+tags:
+- weight-decay
+- cautious
+- muonh
+- weight decay
+- hyperball
+papers:
+- arxiv: '2510.12402'
+details:
+- shrink sign-agreeing coords, then re-pin norm
+knobs:
+- muonh_cautious_wd
+trials:
+- variant: cautious WD
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0007
+  note: 2-seed mean
+- variant: lambda 1
+  rung: d512
+  protocol: equal_steps
+  batch: 169-173
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5943888764
+  baseline: candidate 10
+  steps: 2817
+  delta:
+  - 0.0038
+  settings:
+    muonh_cautious_wd lambda: '1'
+  step_time_change: '0'
+  tuned: lambda 1 / 0.25
+  note: closed, worse
+- variant: lambda 0.25
+  rung: d512
+  protocol: equal_steps
+  batch: 169-173
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5943888764
+  baseline: candidate 10
+  steps: 2817
+  delta:
+  - 0.0024
+  - 0.0012
+  settings:
+    muonh_cautious_wd lambda: '0.25'
+  step_time_change: '0'
+  tuned: lambda 1 / 0.25
+  note: closed, slightly worse
+events:
+- type: closed
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  note: closed in batch 102 round
+- type: closed
+  batch: 169-173
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5943888764
+  note: worse at lambda 1 and 0.25

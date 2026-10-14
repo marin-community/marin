@@ -1,0 +1,26 @@
+id: X0163
+slug: shared-expert-a2a-overlap
+name: Overlap shared-expert GEMM with EP all-to-all
+category: Systems and speed
+summary: Schedule the shared-expert GEMM under the expert-parallel all-to-all.
+source: agent
+status: done
+first_batch: 98
+tags:
+- overlap
+- all-to-all
+- shared-expert
+trials:
+- variant: shared GEMM pinned under EP all-to-all
+  rung: d512
+  protocol: equal_steps
+  batch: '98'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867280167
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0
+  - -0.0006
+  step_time_change: +0.3% ex/s
+  note: same math

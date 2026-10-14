@@ -1,0 +1,270 @@
+id: X0011
+slug: global-lr-scale
+name: Global peak LR multiplier
+category: Training dynamics and schedules
+summary: Scale the MoeHeuristic peak LRs of all groups together.
+source: agent
+status: done
+first_batch: 1
+tags:
+- lr
+- heuristic
+- muonh
+- adam
+- sweep
+- bracket
+trials:
+- variant: LR x1.5
+  rung: d512
+  protocol: equal_steps
+  batch: '1'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5839709085
+  baseline: clean KMA seed 0 3.1251
+  steps: 2475
+  delta:
+  - 0.0095
+  loss:
+  - 3.1346
+  wandb:
+  - lc1-b01-lr15
+  settings:
+    MuonH LR: '0.0336'
+    Adam LR: '0.0078'
+  tuned: LR x1.5 / x0.67
+- variant: LR x0.67
+  rung: d512
+  protocol: equal_steps
+  batch: '1'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5839709085
+  baseline: clean KMA seed 0 3.1251
+  steps: 2475
+  delta:
+  - 0.0218
+  loss:
+  - 3.1469
+  wandb:
+  - lc1-b01-lr067
+  settings:
+    MuonH LR: '0.0150'
+    Adam LR: '0.0035'
+  tuned: LR x1.5 / x0.67
+- variant: LR x1.25 on bundle
+  rung: d512
+  protocol: equal_steps
+  batch: '13'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842373760
+  baseline: batch-12 bundle seed 0 3.0836
+  steps: 2817
+  delta:
+  - 0.0073
+  loss:
+  - 3.0909
+  wandb:
+  - lc1-b13-lr125
+  settings:
+    MuonH LR: '0.0268'
+    Adam LR: '0.0062'
+  tuned: x1.25 / x0.8
+- variant: LR x0.8 on bundle
+  rung: d512
+  protocol: equal_steps
+  batch: '13'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842373760
+  baseline: batch-12 bundle seed 0 3.0836
+  steps: 2817
+  delta:
+  - 0.0021
+  loss:
+  - 3.0857
+  wandb:
+  - lc1-b13-lr080
+  settings:
+    MuonH LR: '0.0172'
+    Adam LR: '0.0040'
+  tuned: x1.25 / x0.8
+- variant: MuonH LR x0.8
+  rung: d512
+  protocol: equal_steps
+  batch: '54'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854659282
+  baseline: candidate 1 (batch-51 candidate) 3.0325
+  steps: 2817
+  delta:
+  - 0.0021
+  loss:
+  - 3.0346
+  wandb:
+  - lc1-b54-lr08
+  settings:
+    MuonH LR: x0.8 (0.0214 base)
+  tuned: MuonH x0.8/x1.25, Adam x0.7/x1.4
+- variant: MuonH LR x1.25
+  rung: d512
+  protocol: equal_steps
+  batch: '54'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854659282
+  baseline: candidate 1 (batch-51 candidate) 3.0325
+  steps: 2817
+  delta:
+  - 0.0096
+  loss:
+  - 3.0421
+  wandb:
+  - lc1-b54-lr125
+  settings:
+    MuonH LR: x1.25
+  tuned: MuonH x0.8/x1.25, Adam x0.7/x1.4
+- variant: Adam LR x0.7
+  rung: d512
+  protocol: equal_steps
+  batch: '54'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854659282
+  baseline: candidate 1 (batch-51 candidate) 3.0325
+  steps: 2817
+  delta:
+  - 0.0111
+  loss:
+  - 3.0436
+  wandb:
+  - lc1-b54-alr07
+  settings:
+    Adam LR: x0.7 (0.00495 base)
+  tuned: MuonH x0.8/x1.25, Adam x0.7/x1.4
+- variant: Adam LR x1.4
+  rung: d512
+  protocol: equal_steps
+  batch: '54'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854659282
+  baseline: candidate 1 (batch-51 candidate) 3.0325
+  steps: 2817
+  delta:
+  - 0.0017
+  loss:
+  - 3.0342
+  wandb:
+  - lc1-b54-alr14
+  settings:
+    Adam LR: x1.4
+  tuned: MuonH x0.8/x1.25, Adam x0.7/x1.4
+- variant: MuonH LR x0.9
+  rung: d512
+  protocol: equal_steps
+  batch: '67'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858925941
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - 0.0011
+  loss:
+  - 3.0208
+  wandb:
+  - lc1-b67-lr09
+  settings:
+    MuonH LR: x0.9
+  tuned: x0.9 vs x1.1
+- variant: MuonH LR x1.1
+  rung: d512
+  protocol: equal_steps
+  batch: '67'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858925941
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - 0.0
+  loss:
+  - 3.0197
+  wandb:
+  - lc1-b67-lr11
+  settings:
+    MuonH LR: x1.1
+  tuned: x0.9 vs x1.1
+- variant: MuonH LR x0.8
+  rung: d512
+  protocol: equal_steps
+  batch: '106'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5872350709
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0057
+  - 0.0104
+  loss:
+  - 2.9807
+  - 2.9895
+  wandb:
+  - lc1-b106-mlr08
+  - lc1-b106-mlr08-s1
+  settings:
+    muonh LR: x0.8
+  tuned: MuonH and Adam LR x0.8 / x1.25
+- variant: MuonH LR x1.25
+  rung: d512
+  protocol: equal_steps
+  batch: '106'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5872350709
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0024
+  - 0.0025
+  loss:
+  - 2.9774
+  - 2.9816
+  wandb:
+  - lc1-b106-mlr125
+  - lc1-b106-mlr125-s1
+  settings:
+    muonh LR: x1.25
+  tuned: MuonH and Adam LR x0.8 / x1.25
+- variant: Adam LR x0.8
+  rung: d512
+  protocol: equal_steps
+  batch: '106'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5872350709
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.002
+  - 0.003
+  loss:
+  - 2.977
+  - 2.9821
+  wandb:
+  - lc1-b106-alr08
+  - lc1-b106-alr08-s1
+  settings:
+    adam LR: x0.8
+  tuned: MuonH and Adam LR x0.8 / x1.25
+- variant: Adam LR x1.25
+  rung: d512
+  protocol: equal_steps
+  batch: '106'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5872350709
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0002
+  - 0.0052
+  loss:
+  - 2.9752
+  - 2.9843
+  wandb:
+  - lc1-b106-alr125
+  - lc1-b106-alr125-s1
+  settings:
+    adam LR: x1.25
+  tuned: MuonH and Adam LR x0.8 / x1.25

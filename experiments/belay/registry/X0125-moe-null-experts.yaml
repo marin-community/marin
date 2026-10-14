@@ -1,0 +1,67 @@
+id: X0125
+slug: moe-null-experts
+name: MoE++ zero-computation experts
+category: MoE and routing
+summary: Router can pick zero, copy or constant experts so tokens use fewer real experts.
+source: agent
+status: closed
+first_batch: 77
+tags:
+- moe++
+- null-experts
+- router
+papers:
+- arxiv: '2410.07348'
+  title: MoE++
+trials:
+- variant: MoE++ 4 zero, 2 copy, 2 constant, free split
+  rung: d512
+  protocol: equal_steps
+  batch: '77'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860969387
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.0025
+  - 0.0013
+  loss:
+  - 3.0124
+  - 3.0152
+  wandb:
+  - lc1-b77-nullx
+  - lc1-b77-nullx-s1
+  settings:
+    zero experts: '4'
+    copy experts: '2'
+    constant experts: '2'
+  tuned: free split vs QB-forced 25% null
+  note: router sends only 0.9-1.7% of slots to nulls
+- variant: MoE++ QB targets 25% null share
+  rung: d512
+  protocol: equal_steps
+  batch: '77'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5860969387
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.007
+  - 0.0155
+  loss:
+  - 3.0169
+  - 3.0294
+  wandb:
+  - lc1-b77-nullx-t25
+  - lc1-b77-nullx-t25-s1
+  settings:
+    null share target: 25%
+  tuned: free split vs QB-forced 25% null
+  note: worse than plain top-6 (+0.004); no compute saved yet
+  derived: true
+events:
+- type: closed
+  batch: '79'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861318730
+  note: uniform top-6 beats learned null routing

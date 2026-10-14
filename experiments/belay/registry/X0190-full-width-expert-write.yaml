@@ -1,0 +1,261 @@
+id: X0190
+slug: full-width-expert-write
+name: Full-width routed-expert write in final layers
+category: MoE and routing
+summary: In chosen layers the routed experts write the full residual width instead of a latent projected up.
+source: maintainer
+status: removed
+first_batch: 145
+tags:
+- latent-moe
+- latent-out
+- routed-experts
+- final-layers
+- latent_out_full_layers
+- moe
+- latent
+- routed experts
+details:
+- 'd512: layers 4,5 write 512 wide (d768: layers 6,7)'
+- routed w_down writes hidden_dim; w_latent_up dropped
+- experts still read the 256 latent
+- routed experts write full 512-wide stream in final two layers
+- other layers keep 0.5d latent
+- 'd768: layers 6,7'
+knobs:
+- latent_out_full_layers=4,5
+trials:
+- variant: layer 5 only
+  rung: d512
+  protocol: equal_steps
+  batch: '145'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5923385781
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0103
+  - -0.0123
+  loss:
+  - 2.9665
+  - 2.9699
+  settings:
+    latent_out_full_layers: '5'
+  step_time_change: +5.2% (194 vs 184.3 ms)
+  tuned: which layers (0..5, 4+5)
+  note: est. fixed time about -0.002; +50M params
+- variant: layers 4,5
+  rung: d512
+  protocol: equal_steps
+  batch: '145'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5923385781
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0125
+  - -0.0161
+  loss:
+  - 2.9643
+  - 2.9661
+  settings:
+    latent_out_full_layers: 4,5
+  step_time_change: +11% (205 vs 184.3 ms)
+  tuned: which layers (0..5, 4+5)
+  note: est. fixed time about +0.005
+- variant: layer 0 only
+  rung: d512
+  protocol: equal_steps
+  batch: '146'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5924287655
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0031
+  - -0.003
+  settings:
+    latent_out_full_layers: '0'
+  step_time_change: 192 ms vs 184.3 ms
+  tuned: which layers (0..5, 4+5)
+  note: gain grows toward output
+- variant: layer 1 only
+  rung: d512
+  protocol: equal_steps
+  batch: '146'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5924287655
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.002
+  - -0.0026
+  settings:
+    latent_out_full_layers: '1'
+  step_time_change: 193 ms vs 184.3 ms
+  tuned: which layers (0..5, 4+5)
+  note: gain grows toward output
+- variant: layer 2 only
+  rung: d512
+  protocol: equal_steps
+  batch: '146'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5924287655
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0002
+  - -0.0017
+  settings:
+    latent_out_full_layers: '2'
+  step_time_change: 192 ms vs 184.3 ms
+  tuned: which layers (0..5, 4+5)
+  note: gain grows toward output
+- variant: layer 3 only
+  rung: d512
+  protocol: equal_steps
+  batch: '146'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5924287655
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0049
+  - -0.0038
+  settings:
+    latent_out_full_layers: '3'
+  step_time_change: 192 ms vs 184.3 ms
+  tuned: which layers (0..5, 4+5)
+  note: gain grows toward output
+- variant: layer 4 only
+  rung: d512
+  protocol: equal_steps
+  batch: '146'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5924287655
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0067
+  - -0.0083
+  settings:
+    latent_out_full_layers: '4'
+  step_time_change: 192 ms vs 184.3 ms
+  tuned: which layers (0..5, 4+5)
+  note: gain grows toward output
+- variant: layer 5, flat step
+  rung: d512
+  protocol: equal_steps
+  batch: '152'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5934720837
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0092
+  loss:
+  - 2.9676
+  wandb:
+  - lc1-b152-flat-lof5
+  settings:
+    latent_out_full_layers: '5'
+  step_time_change: +2.6% vs flat candidate 9 (176.1 ms)
+  tuned: layer 5 vs 4+5
+- variant: layers 4,5, flat step, no PGLE
+  rung: d512
+  protocol: equal_steps
+  batch: 161-162
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5934720837
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - -0.0141
+  - -0.0139
+  loss:
+  - 2.9627
+  - 2.9683
+  settings:
+    latent_out_full_layers: 4,5
+  step_time_change: +4.9% (184.0 ms no PGLE, 180.4 with)
+  tuned: layer 5 vs 4+5
+  note: largest equal-step gain since candidate 9; net about -0.006 at fixed time
+- variant: layers 4,5 (candidate 10)
+  rung: d512
+  protocol: equal_steps
+  batch: 169-173
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5943888764
+  baseline: candidate 9 (02a, 2.9791 / 2.9831)
+  steps: 2817
+  delta:
+  - -0.0175
+  - -0.0167
+  loss:
+  - 2.9616
+  - 2.9664
+  settings:
+    latent_out_full_layers: 4,5
+- variant: layers 6,7 (candidate 10)
+  rung: d768
+  protocol: data_matched
+  batch: 169-173
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5943888764
+  baseline: candidate 9 (2.7318 / 2.7268)
+  steps: 6929
+  delta:
+  - -0.0095
+  - -0.0091
+  loss:
+  - 2.7223
+  - 2.7177
+  settings:
+    latent_out_full_layers: 6,7
+- variant: last layer only (lof7)
+  rung: d768
+  protocol: data_matched
+  batch: 169-173
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5943888764
+  baseline: candidate 9 (2.7318)
+  steps: 6929
+  delta:
+  - -0.0049
+  loss:
+  - 2.7269
+  settings:
+    latent_out_full_layers: '7'
+- variant: candidate 10 at own 480 s budget
+  rung: d512
+  protocol: fixed_time
+  batch: '171'
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5943888764
+  baseline: candidate 9 at 2757 steps (2.9795 / 2.9862)
+  steps: 2607
+  delta:
+  - -0.0022
+  - -0.0065
+  loss:
+  - 2.9773
+  - 2.9797
+  settings:
+    latent_out_full_layers: 4,5
+  step_time_change: +5.7% (174.1 -> 184.1 ms)
+  note: mean -0.0044, just under noise threshold
+events:
+- type: adopted
+  batch: 169-173
+  date: '2026-10-02'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5943888764
+  note: candidate 10 = candidate 9 + full-width routed write, layers 4,5
+  candidate: candidate 10
+  as_adopted:
+  - latent_out_full_layers=4,5 (d512)
+  - latent_out_full_layers=6,7 (d768)
+- type: removed
+  batch: ckpt1
+  date: '2026-10-14'
+  comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
+  note: no full-width expert write in Belay Ckpt 1

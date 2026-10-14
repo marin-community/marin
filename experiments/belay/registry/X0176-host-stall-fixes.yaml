@@ -1,0 +1,49 @@
+id: X0176
+slug: host-stall-fixes
+name: Host-stall fixes (numpy loader, per-task autotune dir)
+category: Systems and speed
+summary: Build batches in numpy and give single-process tasks their own autotune cache directory to remove host stalls.
+source: agent
+status: done
+first_batch: 119
+tags:
+- host-stall
+- data-loader
+- gil
+- autotune-cache
+trials:
+- variant: numpy batch loader + per-task autotune cache dir (single-process)
+  rung: d512
+  protocol: equal_steps
+  batch: '119'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5896387409
+  baseline: single-process old loader (b97) 2.9786
+  steps: 2817
+  loss:
+  - 2.9781
+  - 2.981
+  settings:
+    loader: numpy
+    autotune cache: single-process/ subdir
+  step_time_change: mean 204.3 -> 199.8 ms; time >1.3x median 3.70% -> 0.16%
+  note: loss unchanged; 8-process default runs still lose about 8% mean step to stalls
+- variant: numpy batch loader, one process per GPU
+  rung: d512
+  protocol: equal_steps
+  batch: '119'
+  date: '2026-09-29'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5896387409
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - -0.001
+  - 0.0034
+  loss:
+  - 2.974
+  - 2.9825
+  settings:
+    loader: numpy
+  step_time_change: median 184.9 ms, mean 201.7 ms
+  note: delta computed from reported losses; stalls remain
+  derived: true

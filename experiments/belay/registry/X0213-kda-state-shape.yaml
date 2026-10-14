@@ -1,0 +1,336 @@
+id: X0213
+slug: kda-state-shape
+name: KDA state shape (key x value, heads)
+category: Linear attention / KDA
+summary: Reshape each KDA head's delta-rule state (narrower keys, wider values, more heads) at fixed total state.
+source: agent
+status: done
+first_batch: 203
+tags:
+- kda
+- key dim
+- value dim
+- heads
+- expand_v
+details:
+- 4 heads x (64 key x 256 value)
+- state size per head unchanged (16384)
+- q/k halve, v/o double
+knobs:
+- kda_key_dim=64
+- kda_value_dim=256
+- kda_state_block_v=64
+trials:
+- variant: 8 x (64x128), chunk 64
+  rung: d512
+  protocol: equal_steps
+  batch: df
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 df1-ctrl / df4-ctrl-s1 (2.9543 / 2.9584)
+  steps: 2817
+  delta:
+  - -0.0099
+  loss:
+  - 2.9453
+  - 2.9476
+  settings:
+    kda heads: '8'
+    kda_key_dim: '64'
+    kda_value_dim: '128'
+    kda_chunk_size: '64'
+  tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
+  note: mean delta
+- variant: 16 x (64x64)
+  rung: d512
+  protocol: equal_steps
+  batch: df
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 df1-ctrl / df4-ctrl-s1 (2.9543 / 2.9584)
+  steps: 2817
+  delta:
+  - -0.0146
+  loss:
+  - 2.9397
+  settings:
+    kda heads: '16'
+    kda_key_dim: '64'
+    kda_value_dim: '64'
+  step_time_change: +8.6% (207.4 ms)
+  tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
+  note: needs packed prep kernel
+- variant: 4 x (64x256) + MLA and KDA content gates
+  rung: d512
+  protocol: equal_steps
+  batch: df
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 df1-ctrl / df4-ctrl-s1 (2.9543 / 2.9584)
+  steps: 2817
+  delta:
+  - -0.0096
+  loss:
+  - 2.946
+  - 2.9476
+  settings:
+    kda heads: '4'
+    kda_key_dim: '64'
+    kda_value_dim: '256'
+    content gates: MLA H-gate + KDA
+  tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
+  note: KDA content gate not additive
+- variant: 4 x (64x256)
+  rung: d768
+  protocol: data_matched
+  batch: df-d768
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 (2.7207)
+  steps: 6929
+  delta:
+  - -0.0064
+  loss:
+  - 2.7143
+  settings:
+    kda heads: '4'
+    kda_key_dim: '64'
+    kda_value_dim: '256'
+  step_time_change: +1.9% before block_v fix
+  tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
+- variant: 8 x (64x128)
+  rung: d512
+  protocol: equal_steps
+  batch: df14-df17
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 df1-ctrl / df4-ctrl-s1 (2.9543 / 2.9584)
+  steps: 2817
+  delta:
+  - -0.0102
+  loss:
+  - 2.9439
+  - 2.9485
+  settings:
+    kda heads: '8'
+    kda_key_dim: '64'
+    kda_value_dim: '128'
+  step_time_change: +4.4% (198.0 ms)
+  tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
+  note: mean delta; best per step
+- variant: 8 x (64x128), fixed time
+  rung: d512
+  protocol: fixed_time
+  batch: df14-df17
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 df1-ctrl / df4-ctrl-s1 (2.9543 / 2.9584)
+  steps: 2704
+  delta:
+  - -0.003
+  loss:
+  - 2.9527
+  - 2.954
+  settings:
+    kda heads: '8'
+    kda_key_dim: '64'
+    kda_value_dim: '128'
+  step_time_change: 198.8 ms
+  tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
+  note: mean delta
+- variant: 4 x (64x256) + MLA H-gate (kv-hg)
+  rung: d512
+  protocol: equal_steps
+  batch: df14-df17
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 df1-ctrl / df4-ctrl-s1 (2.9543 / 2.9584)
+  steps: 2817
+  delta:
+  - -0.009
+  loss:
+  - 2.9466
+  - 2.948
+  settings:
+    kda heads: '4'
+    kda_key_dim: '64'
+    kda_value_dim: '256'
+    content gates: MLA H-gate
+  step_time_change: 195.9 ms
+  tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
+  note: mean delta
+- variant: 4 x (64x256), block_v 64 (df21)
+  rung: d512
+  protocol: fixed_time
+  batch: df21
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 block_v 64 (2.9532 / 2.9584)
+  steps: 2817
+  delta:
+  - -0.0056
+  - -0.0095
+  loss:
+  - 2.9482
+  - 2.9489
+  settings:
+    kda heads: '4'
+    kda_key_dim: '64'
+    kda_value_dim: '256'
+    kda_state_block_v: '64'
+  step_time_change: ~0 (191.0-191.7 vs 191.3 ms)
+  tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
+  note: equal steps is equal time; candidate 13 proposal
+- variant: 8 x (64x128), fixed time (df21)
+  rung: d512
+  protocol: fixed_time
+  batch: df21
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 block_v 64
+  steps: 2754
+  delta:
+  - -0.0062
+  loss:
+  - 2.9485
+  - 2.9512
+  settings:
+    kda heads: '8'
+    kda_key_dim: '64'
+    kda_value_dim: '128'
+  step_time_change: +2%
+  tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
+  note: mean delta
+- variant: 256 x 64 (wider keys)
+  rung: d512
+  protocol: equal_steps
+  batch: df5
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 df1-ctrl / df4-ctrl-s1 (2.9543 / 2.9584)
+  steps: 2817
+  delta:
+  - 0.0102
+  loss:
+  - 2.9645
+  settings:
+    kda heads: '4'
+    kda_key_dim: '256'
+    kda_value_dim: '64'
+  step_time_change: +20% (227.9 ms)
+  tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
+- variant: 4 x (64x256)
+  rung: d512
+  protocol: equal_steps
+  batch: df5-df10
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 df1-ctrl / df4-ctrl-s1 (2.9543 / 2.9584)
+  steps: 2817
+  delta:
+  - -0.0043
+  - -0.0091
+  loss:
+  - 2.95
+  - 2.9493
+  settings:
+    kda heads: '4'
+    kda_key_dim: '64'
+    kda_value_dim: '256'
+  step_time_change: +1.7% (193.3 ms)
+  tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
+  note: mean -0.0067
+- variant: 32 x 512
+  rung: d512
+  protocol: equal_steps
+  batch: df7-df10
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 df1-ctrl / df4-ctrl-s1 (2.9543 / 2.9584)
+  steps: 2817
+  delta:
+  - -0.0107
+  loss:
+  - 2.9446
+  - 2.9467
+  settings:
+    kda heads: '4'
+    kda_key_dim: '32'
+    kda_value_dim: '512'
+  step_time_change: +42% (270 ms)
+  tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
+  note: mean; kernel-bound
+- variant: 2 heads x (128x256), same total state
+  rung: d512
+  protocol: equal_steps
+  batch: df8
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 df1-ctrl / df4-ctrl-s1 (2.9543 / 2.9584)
+  steps: 2817
+  delta:
+  - 0.0097
+  loss:
+  - 2.964
+  settings:
+    kda heads: '2'
+    kda_key_dim: '128'
+    kda_value_dim: '256'
+  step_time_change: 187.7 ms
+  tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
+- variant: 2 heads x (64x512), half state
+  rung: d512
+  protocol: equal_steps
+  batch: df8
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 df1-ctrl / df4-ctrl-s1 (2.9543 / 2.9584)
+  steps: 2817
+  delta:
+  - 0.005
+  loss:
+  - 2.9593
+  settings:
+    kda heads: '2'
+    kda_key_dim: '64'
+    kda_value_dim: '512'
+  step_time_change: 194.3 ms
+  tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
+- variant: 4 x (64x256), fixed time
+  rung: d512
+  protocol: fixed_time
+  batch: df9
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 df1-ctrl / df4-ctrl-s1 (2.9543 / 2.9584)
+  steps: 2766
+  delta:
+  - -0.0024
+  - -0.0052
+  loss:
+  - 2.9519
+  - 2.9532
+  settings:
+    kda heads: '4'
+    kda_key_dim: '64'
+    kda_value_dim: '256'
+  step_time_change: 194.4 ms
+  tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
+- variant: 128 x 256 (2x state, diagnostic)
+  rung: d512
+  protocol: equal_steps
+  batch: df9
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
+  baseline: candidate 12 df1-ctrl / df4-ctrl-s1 (2.9543 / 2.9584)
+  steps: 2817
+  delta:
+  - -0.007
+  loss:
+  - 2.9473
+  settings:
+    kda heads: '4'
+    kda_key_dim: '128'
+    kda_value_dim: '256'
+  step_time_change: +8.7% (206.4 ms)
+  tuned: key x value 32x512 .. 256x64; heads 2/4/8/16

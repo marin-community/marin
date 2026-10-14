@@ -1,0 +1,46 @@
+id: X0094
+slug: gate-up-split
+name: Expert gate/up split view
+category: Systems and speed
+summary: Index a [...,2,I] view instead of jnp.split to avoid a backward concatenate.
+source: agent
+status: removed
+first_batch: 51
+tags:
+- moe
+- split
+- mfu
+trials:
+- variant: gate/up split as [...,2,I] view (with router top-k unroll)
+  rung: d512
+  protocol: equal_steps
+  batch: mfu-pass-1
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5845498130
+  baseline: gate-2 recipe 3.0834
+  steps: 2817
+  delta:
+  - -0.0001
+  loss:
+  - 3.0833
+  wandb:
+  - lc1-mfu1
+  settings:
+    router top-k: 9 unrolled max/argmax passes
+    gate/up split: '[...,2,I] view'
+  step_time_change: -4.7% step (+4.9% ex/s); 781 ex/s
+  note: same math; router top-k 1.118 -> 0.354 ms; GPU step 164 -> 154.5 ms
+events:
+- type: adopted
+  batch: mfu-pass-1
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5845498130
+  note: same math; split backward concat removed
+  candidate: runtime (row 3)
+  as_adopted:
+  - index [...,2,I] view instead of jnp.split
+- type: removed
+  batch: ckpt1
+  date: '2026-10-14'
+  comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
+  note: Belay Ckpt 1 experts are ungated ReLU² (no gate/up pair)

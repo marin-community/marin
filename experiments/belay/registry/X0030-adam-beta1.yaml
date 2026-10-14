@@ -1,0 +1,192 @@
+id: X0030
+slug: adam-beta1
+name: Adam beta1
+category: Optimizers
+summary: Change beta1 of the Adam/AdamH groups (default 0.9).
+source: agent
+status: removed
+first_batch: 7
+tags:
+- adam
+- beta1
+- momentum
+details:
+- beta1 0.8
+knobs:
+- beta1=0.8
+trials:
+- variant: Adam/AdamH beta1 0.8
+  rung: d512
+  protocol: equal_steps
+  batch: '7'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840955062
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2817
+  delta:
+  - -0.0022
+  loss:
+  - 3.0836
+  wandb:
+  - lc1-b07-ab08
+  settings:
+    beta1: '0.8'
+  tuned: beta1 0.8 / 0.9 / 0.95
+- variant: Adam/AdamH beta1 0.95
+  rung: d512
+  protocol: equal_steps
+  batch: '7'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5840955062
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2817
+  delta:
+  - 0.004
+  loss:
+  - 3.0898
+  wandb:
+  - lc1-b07-ab95
+  settings:
+    beta1: '0.95'
+  tuned: beta1 0.8 / 0.9 / 0.95
+- variant: beta1 0.8 + lm_head z-loss 0, 4 seeds
+  rung: d512
+  protocol: equal_steps
+  batch: '8'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841135411
+  baseline: same-seed qk_mult 2.5 bases
+  steps: 2817
+  delta:
+  - -0.0053
+  - -0.0023
+  - -0.006
+  - -0.005
+  loss:
+  - 3.0805
+  - 3.0872
+  - 3.0973
+  - 3.0867
+  wandb:
+  - lc1-b08-ab08z0
+  - lc1-b08-ab08z0-s1
+  - lc1-b08-ab08z0-s2
+  - lc1-b08-ab08z0-s3
+  settings:
+    beta1: '0.8'
+    z_loss_weight: '0'
+    qk_mult: '2.5'
+  note: mean -0.0047 +- 0.0008; bundled with z-loss 0; included in gate-2 bundle
+- variant: beta1 0.9 on norm gains / 1-D leaves
+  rung: d512
+  protocol: equal_steps
+  batch: '155'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927445988
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0011
+  - -0.0009
+  loss:
+  - 2.9779
+  - 2.9813
+  settings:
+    beta1 (that category): '0.9'
+    beta1 (others): '0.8'
+  step_time_change: 170.6 vs 171.6 ms
+  tuned: per-category beta1 0.9
+  note: per-category Adam group
+- variant: beta1 0.9 on token embedding
+  rung: d512
+  protocol: equal_steps
+  batch: '155'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927445988
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0016
+  - -0.0007
+  loss:
+  - 2.9784
+  - 2.9815
+  settings:
+    beta1 (that category): '0.9'
+    beta1 (others): '0.8'
+  step_time_change: 171.8 vs 171.6 ms
+  tuned: per-category beta1 0.9
+  note: per-category Adam group
+- variant: beta1 0.9 on router
+  rung: d512
+  protocol: equal_steps
+  batch: '155'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927445988
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0001
+  - -0.0016
+  loss:
+  - 2.9769
+  - 2.9806
+  settings:
+    beta1 (that category): '0.9'
+    beta1 (others): '0.8'
+  step_time_change: 171.6 vs 171.6 ms
+  tuned: per-category beta1 0.9
+  note: per-category Adam group
+- variant: beta1 0.9 on norms+embed+router
+  rung: d512
+  protocol: equal_steps
+  batch: '155'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927445988
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0002
+  - 0.0002
+  loss:
+  - 2.977
+  - 2.9824
+  settings:
+    beta1 (that category): '0.9'
+    beta1 (others): '0.8'
+  step_time_change: 172.1 vs 171.6 ms
+  tuned: per-category beta1 0.9
+  note: per-category Adam group
+- variant: beta1 0.9 on lm_head (AdamH) only
+  rung: d512
+  protocol: equal_steps
+  batch: '155'
+  date: '2026-10-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927445988
+  baseline: candidate 9 on cw-rno2a 2.9768 / 2.9822
+  steps: 2817
+  delta:
+  - 0.0033
+  - -0.0007
+  loss:
+  - 2.9801
+  - 2.9815
+  settings:
+    beta1 (that category): '0.9'
+    beta1 (others): '0.8'
+  step_time_change: 170.9 vs 171.6 ms
+  tuned: per-category beta1 0.9
+  note: per-category Adam group
+events:
+- type: adopted
+  batch: '17'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843218586
+  candidate: gate-2 recipe
+  as_adopted:
+  - beta1=0.8
+- type: removed
+  batch: ckpt1
+  date: '2026-10-14'
+  comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
+  note: Belay Ckpt 1 uses beta1 0.9

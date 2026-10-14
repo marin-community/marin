@@ -1,0 +1,45 @@
+id: X0131
+slug: scmoe-shortcut
+name: Shortcut-connected MoE (ScMoE)
+category: MoE and routing
+summary: MoE gate reads the same sources as the layer's attention, so dispatch can overlap attention.
+source: agent
+status: closed
+first_batch: 79
+tags:
+- scmoe
+- shortcut
+- overlap
+- attnres
+papers:
+- arxiv: '2404.05019'
+  title: ScMoE
+- arxiv: '2509.01322'
+  title: LongCat-Flash
+knobs:
+- moe_shortcut=true
+trials:
+- variant: ScMoE shortcut (MoE reads pre-attention sources)
+  rung: d512
+  protocol: equal_steps
+  batch: '79'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861318730
+  baseline: lc1-b77-base5 (3.0099 / 3.0139)
+  steps: 2817
+  delta:
+  - 0.038
+  loss:
+  - 3.0519
+  wandb:
+  - lc1-b79-scmoe-s1
+  settings:
+    moe_shortcut: 'true'
+  step_time_change: -1.7% (173.2 vs 176.2 ms)
+  note: seed 1 only; other runs hung in compile
+events:
+- type: closed
+  batch: '79'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861318730
+  note: +0.038 for 1.7% faster step

@@ -1,0 +1,37 @@
+id: X0002
+slug: block-attnres
+name: Block Attention Residuals (AttnRes)
+category: Depth connections
+summary: Every sublayer reads its input as a per-token softmax mix over the embedding and earlier block sums instead of a
+  plain residual sum.
+source: baseline
+status: adopted
+first_batch: 0
+tags:
+- attnres
+- residual
+- depth
+- baseline
+details:
+- 'blocks: 8 (at d512/d768 every layer closes a block)'
+- one learned pseudo-query per sublayer gate plus a final gate
+- 'pseudo-query init: zeros (uniform mix at init)'
+- 'keys: parameter-free (frozen) RMSNorm of each source'
+- 'mix: softmax over sources, weighted sum of raw sources'
+- 'query LR: 0.1x Adam LR (own Adam group attn_res_query)'
+- block sums use raw sublayer outputs
+events:
+- type: adopted
+  batch: '0'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451
+  note: Part of the clean KMA baseline (branch fasttrack-moe-kma @ 4eba59cafa).
+  candidate: clean KMA
+  as_adopted:
+  - 'blocks: 8 (at d512/d768 every layer closes a block)'
+  - one learned pseudo-query per sublayer gate plus a final gate
+  - 'pseudo-query init: zeros (uniform mix at init)'
+  - 'keys: parameter-free (frozen) RMSNorm of each source'
+  - 'mix: softmax over sources, weighted sum of raw sources'
+  - 'query LR: 0.1x Adam LR (own Adam group attn_res_query)'
+  - block sums use raw sublayer outputs

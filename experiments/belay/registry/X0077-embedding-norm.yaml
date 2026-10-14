@@ -1,0 +1,88 @@
+id: X0077
+slug: embedding-norm
+name: Embedding norm and scale under AttnRes
+category: Normalization
+summary: Vary the RMSNorm/gain/scale on the token embedding source.
+source: maintainer
+status: done
+first_batch: 38
+tags:
+- embedding
+- rmsnorm
+- embed scale
+details:
+- RMS norm with gain stays
+knobs:
+- embed_norm_mode
+- embed_scale
+trials:
+- variant: raw table row, no norm
+  rung: d512
+  protocol: equal_steps
+  batch: '38'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853114813
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0267
+  loss:
+  - 3.0858
+  wandb:
+  - lc1-b38-embnorm-raw
+  settings:
+    embed_norm_mode: none
+    init std: '0.02'
+  tuned: embed norm raw/rms_nogain; embed_scale 0.5/2
+  note: RMS norm on embedding stays
+- variant: RMS without gain
+  rung: d512
+  protocol: equal_steps
+  batch: '38'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853114813
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0025
+  loss:
+  - 3.0616
+  wandb:
+  - lc1-b38-embnorm-nogain
+  settings:
+    embed_norm_mode: rms_nogain
+  tuned: embed norm raw/rms_nogain; embed_scale 0.5/2
+- variant: embed scale 0.5
+  rung: d512
+  protocol: equal_steps
+  batch: '38'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853114813
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.002
+  loss:
+  - 3.0571
+  wandb:
+  - lc1-b38-embscale05
+  settings:
+    embed_scale: '0.5'
+  tuned: embed norm raw/rms_nogain; embed_scale 0.5/2
+- variant: embed scale 2
+  rung: d512
+  protocol: equal_steps
+  batch: '38'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853114813
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0023
+  loss:
+  - 3.0568
+  wandb:
+  - lc1-b38-embscale2
+  settings:
+    embed_scale: '2'
+  tuned: embed norm raw/rms_nogain; embed_scale 0.5/2

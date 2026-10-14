@@ -1,0 +1,30 @@
+id: X0148
+slug: ema-nesterov-lookahead
+name: EMA-Nesterov lookahead
+category: Optimizers
+summary: Add an EMA-based Nesterov lookahead to the optimizer.
+source: agent
+status: done
+first_batch: 98
+tags:
+- lookahead
+- nesterov
+- modded-nanogpt
+papers:
+- title: modded-nanogpt track 3
+trials:
+- variant: scale 0.3 / 0.6
+  rung: d512
+  protocol: equal_steps
+  batch: '98'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5867280167
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0016
+  - -0.0007
+  settings:
+    scale: 0.3 / 0.6
+  tuned: scale 0.3 / 0.6
+  note: per-scale values; mean +0.0004

@@ -1,0 +1,59 @@
+id: X0184
+slug: qk-muonh-lr
+name: Separate MuonH LR for q/k projections
+category: Optimizers
+summary: Give KDA w_q/w_k and MLA w_q/w_uk their own MuonH LR and momentum group.
+source: intake
+status: closed
+first_batch: 135
+tags:
+- muon
+- qk
+- per-family-lr
+- falcon-h1
+papers:
+- arxiv: '2507.22448'
+  title: Falcon H1
+details:
+- 'muonh_qk group: KDA w_q/w_k, MLA w_q/w_uk; w_dkv stays shared'
+knobs:
+- muonh_qk_momentum
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-5910532511
+  author: RavnaBergsndot
+  approved_by: ClassicLarry
+trials:
+- variant: q/k MuonH LR x0.5 (KDA w_q/w_k, MLA w_q/w_uk)
+  rung: d512
+  protocol: equal_steps
+  batch: '135'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5917013133
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0021
+  - 0.0074
+  settings:
+    muonh_qk LR mult: '0.5'
+  tuned: q/k LR x0.5 / x2
+- variant: q/k MuonH LR x2
+  rung: d512
+  protocol: equal_steps
+  batch: '135'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5917013133
+  baseline: candidate 9 2.9750 / 2.9791
+  steps: 2817
+  delta:
+  - 0.0034
+  - 0.0006
+  settings:
+    muonh_qk LR mult: '2'
+  tuned: q/k LR x0.5 / x2
+events:
+- type: closed
+  batch: '135'
+  date: '2026-09-30'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5917013133
+  note: Both directions lose; q/k want the shared MuonH step; muonh_qk group kept

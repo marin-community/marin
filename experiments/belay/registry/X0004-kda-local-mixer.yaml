@@ -1,0 +1,36 @@
+id: X0004
+slug: kda-local-mixer
+name: Kimi Delta Attention local layers
+category: Linear attention / KDA
+summary: Local layers use a gated delta-rule linear attention (KDA) with per-channel decay and per-head write strength.
+source: baseline
+status: adopted
+first_batch: 0
+tags:
+- kda
+- delta-rule
+- linear-attention
+- baseline
+details:
+- 'q/k/v: D -> N*128, ShortConv + SiLU, L2-normed q/k, q x 1/sqrt(128)'
+- decay g = -5*sigmoid(exp(A_log)*(x Wa_down Wa_up + dt_bias)), gate rank 128
+- A_log per head init 0; dt_bias per channel spans 0.02-0.5
+- write strength beta = sigmoid(x W_beta) per head, W_beta at 2x MuonH LR
+- chunked Pallas kernels, chunk 16; state resets at document starts
+- 'output: per-head RMSNorm (shared 128 scale) -> sigmoid(x W_g) gate -> W_o'
+- no positional encoding, no window
+events:
+- type: adopted
+  batch: '0'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451
+  note: Part of the clean KMA baseline (branch fasttrack-moe-kma @ 4eba59cafa).
+  candidate: clean KMA
+  as_adopted:
+  - 'q/k/v: D -> N*128, ShortConv + SiLU, L2-normed q/k, q x 1/sqrt(128)'
+  - decay g = -5*sigmoid(exp(A_log)*(x Wa_down Wa_up + dt_bias)), gate rank 128
+  - A_log per head init 0; dt_bias per channel spans 0.02-0.5
+  - write strength beta = sigmoid(x W_beta) per head, W_beta at 2x MuonH LR
+  - chunked Pallas kernels, chunk 16; state resets at document starts
+  - 'output: per-head RMSNorm (shared 128 scale) -> sigmoid(x W_g) gate -> W_o'
+  - no positional encoding, no window

@@ -1,0 +1,72 @@
+id: X0169
+slug: routing-logit-soft-cap
+name: Soft-caps on router and AttnRes logits
+category: MoE and routing
+summary: Apply a tanh soft-cap to router logits or AttnRes routing logits.
+source: agent
+status: closed
+first_batch: 99
+tags:
+- soft-cap
+- router
+- attnres
+- tanh
+trials:
+- variant: router soft-cap 5
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0016
+  settings:
+    router cap: '5'
+  tuned: router cap 5/10, AttnRes cap 5/10
+- variant: router soft-cap 10
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - 0.0002
+  settings:
+    router cap: '10'
+  tuned: router cap 5/10, AttnRes cap 5/10
+- variant: AttnRes logit soft-cap 5
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - -0.0012
+  settings:
+    attnres cap: '5'
+  tuned: router cap 5/10, AttnRes cap 5/10
+- variant: AttnRes logit soft-cap 10
+  rung: d512
+  protocol: equal_steps
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - -0.0007
+  settings:
+    attnres cap: '10'
+  tuned: router cap 5/10, AttnRes cap 5/10
+events:
+- type: closed
+  batch: '102'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
+  note: closed in batch 102 round

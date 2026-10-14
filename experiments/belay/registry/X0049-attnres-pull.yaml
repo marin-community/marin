@@ -1,0 +1,58 @@
+id: X0049
+slug: attnres-pull
+name: Pull-style AttnRes
+category: Depth connections
+summary: Use static learned keys per source and the current residual stream as query (or pull only the embedding logit).
+source: maintainer
+status: closed
+first_batch: 18
+tags:
+- attnres
+- pull
+- keys
+knobs:
+- attn_res_pull
+- attn_res_pull_embed
+trials:
+- variant: 'pull AttnRes: static keys, residual-stream query'
+  rung: d512
+  protocol: equal_steps
+  batch: '18'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843750617
+  baseline: z-loss-kept bundle seed 0 3.0854
+  steps: 2817
+  delta:
+  - 0.0093
+  loss:
+  - 3.0947
+  wandb:
+  - lc1-b18-pull
+  settings:
+    attn_res_pull: 'true'
+    key init: zero
+    key LR: Adam 0.1x
+  step_time_change: -4% ex/s
+- variant: push AttnRes + pulled embedding logit
+  rung: d512
+  protocol: equal_steps
+  batch: '18'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843750617
+  baseline: z-loss-kept bundle seed 0 3.0854
+  steps: 2817
+  delta:
+  - 0.0071
+  loss:
+  - 3.0925
+  wandb:
+  - lc1-b18-pullemb
+  settings:
+    attn_res_pull_embed: 'true'
+  step_time_change: -4% ex/s
+events:
+- type: closed
+  batch: '18'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843750617
+  note: push AttnRes stays

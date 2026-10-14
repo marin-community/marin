@@ -1,0 +1,170 @@
+id: X0056
+slug: attnres-component-ablation
+name: AttnRes component ablation (straight-sum inputs)
+category: Depth connections
+summary: Make one reader (Q/K/V/MoE/router/shared/final gate) use the plain residual sum instead of its AttnRes mix.
+source: maintainer
+status: done
+first_batch: 21
+tags:
+- attnres
+- ablation
+- residual
+knobs:
+- attn_res_final_mode
+- attn_res_sum_inputs
+trials:
+- variant: final gate query fixed at 0 (uniform)
+  rung: d512
+  protocol: equal_steps
+  batch: '21'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844286760
+  baseline: full AttnRes lc1-b18-full-fair 3.0774
+  steps: 2712
+  delta:
+  - 0.0053
+  loss:
+  - 3.0827
+  wandb:
+  - lc1-b21-fin-uniform
+  settings:
+    attn_res_final_mode: uniform
+  note: token-matched at full AttnRes fair steps
+- variant: final gate straight sum
+  rung: d512
+  protocol: equal_steps
+  batch: '21'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844286760
+  baseline: full AttnRes lc1-b18-full-fair 3.0774
+  steps: 2712
+  delta:
+  - 0.0059
+  loss:
+  - 3.0833
+  wandb:
+  - lc1-b21-fin-sum
+  settings:
+    attn_res_final_mode: sum
+  note: token-matched at full AttnRes fair steps
+- variant: Q reads straight sum
+  rung: d512
+  protocol: equal_steps
+  batch: '21'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844286760
+  baseline: full AttnRes lc1-b18-full-fair 3.0774
+  steps: 2712
+  delta:
+  - 0.0012
+  loss:
+  - 3.0786
+  wandb:
+  - lc1-b21-sum-q
+  settings:
+    attn_res_sum_inputs: q
+  tuned: q/k/v/mlp
+  note: token-matched at full AttnRes fair steps
+- variant: K reads straight sum
+  rung: d512
+  protocol: equal_steps
+  batch: '21'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844286760
+  baseline: full AttnRes lc1-b18-full-fair 3.0774
+  steps: 2712
+  delta:
+  - 0.0018
+  loss:
+  - 3.0792
+  wandb:
+  - lc1-b21-sum-k
+  settings:
+    attn_res_sum_inputs: k
+  tuned: q/k/v/mlp
+  note: token-matched at full AttnRes fair steps
+- variant: V reads straight sum
+  rung: d512
+  protocol: equal_steps
+  batch: '21'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844286760
+  baseline: full AttnRes lc1-b18-full-fair 3.0774
+  steps: 2712
+  delta:
+  - 0.0115
+  loss:
+  - 3.0889
+  wandb:
+  - lc1-b21-sum-v
+  settings:
+    attn_res_sum_inputs: v
+  tuned: q/k/v/mlp
+  note: token-matched at full AttnRes fair steps
+- variant: MoE input reads straight sum
+  rung: d512
+  protocol: equal_steps
+  batch: '21'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844286760
+  baseline: full AttnRes lc1-b18-full-fair 3.0774
+  steps: 2712
+  delta:
+  - 0.0275
+  loss:
+  - 3.1049
+  wandb:
+  - lc1-b21-sum-mlp
+  settings:
+    attn_res_sum_inputs: mlp
+  tuned: q/k/v/mlp
+  note: token-matched at full AttnRes fair steps
+- variant: shared experts read straight sum
+  rung: d512
+  protocol: equal_steps
+  batch: 23-24
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844656167
+  baseline: full AttnRes lc1-b18-full-fair 3.0774
+  steps: 2712
+  delta:
+  - 0.0075
+  loss:
+  - 3.0849
+  wandb:
+  - lc1-b23-sum-shared
+  settings:
+    straight-sum input: shared
+- variant: routed path (router+latent) reads straight sum
+  rung: d512
+  protocol: equal_steps
+  batch: 23-24
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844656167
+  baseline: full AttnRes lc1-b18-full-fair 3.0774
+  steps: 2712
+  delta:
+  - 0.0152
+  loss:
+  - 3.0926
+  wandb:
+  - lc1-b23-sum-routed
+  settings:
+    straight-sum input: routed
+- variant: router alone reads straight sum
+  rung: d512
+  protocol: equal_steps
+  batch: 23-24
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844656167
+  baseline: full AttnRes lc1-b18-full-fair 3.0774
+  steps: 2712
+  delta:
+  - 0.0078
+  loss:
+  - 3.0852
+  wandb:
+  - lc1-b23-sum-router
+  settings:
+    straight-sum input: router

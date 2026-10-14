@@ -1,0 +1,25 @@
+id: X0003
+slug: gated-norm
+name: GatedNorm after RMSNorm
+category: Normalization
+summary: Every RMSNorm is followed by x * sigmoid(W_up SiLU(W_down x)) with a rank-128 bottleneck.
+source: baseline
+status: adopted
+first_batch: 0
+tags:
+- gatednorm
+- rmsnorm
+- baseline
+details:
+- rank-128 bottleneck
+- W_down/W_up on MuonH
+events:
+- type: adopted
+  batch: '0'
+  date: '2026-09-25'
+  comment_url: https://github.com/marin-community/marin/issues/9451
+  note: Part of the clean KMA baseline (branch fasttrack-moe-kma @ 4eba59cafa).
+  candidate: clean KMA
+  as_adopted:
+  - rank-128 bottleneck
+  - W_down/W_up on MuonH

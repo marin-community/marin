@@ -1,0 +1,90 @@
+id: X0084
+slug: mla-partial-key-offset
+name: MLA partial key offset
+category: Attention variants
+summary: Take the first half of each MLA head's key channels from the previous token.
+source: agent
+status: adopted
+first_batch: 44
+tags:
+- key offset
+- induction
+- modded-nanogpt
+- mla
+details:
+- first half of key channels from previous token
+- zeroed at document starts
+- absorption-compatible
+- first 64 key channels from previous token
+- 'tie variant: shifted query half = own key half'
+knobs:
+- mla_key_offset=true
+- mla_tie_prev_qk
+trials:
+- variant: half of key channels from previous token
+  rung: d512
+  protocol: equal_steps
+  batch: '44'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853872303
+  baseline: soft-cap 10 3.0591 / seed 1 3.0675
+  steps: 2817
+  delta:
+  - -0.0061
+  - -0.0116
+  loss:
+  - 3.053
+  - 3.0559
+  wandb:
+  - lc1-b44-keyoff
+  - lc1-b44-keyoff-s1
+  settings:
+    mla_key_offset: 'true'
+  step_time_change: 779 / 795 ex/s (no cost)
+- variant: key offset, d768
+  rung: d768
+  protocol: data_matched
+  batch: '44'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853872303
+  baseline: soft-cap 10 d768 2.7924
+  steps: 6928
+  delta:
+  - -0.0039
+  loss:
+  - 2.7885
+  wandb:
+  - lc1-b44-d768-keyoff
+  settings:
+    mla_key_offset: 'true'
+  note: about 45% of d512 mean
+- variant: tie shifted query half to key (mla_tie_prev_qk)
+  rung: d512
+  protocol: equal_steps
+  batch: '236'
+  date: '2026-10-07'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6030629166
+  baseline: current best lc1-b217-ctrl 2.9521
+  steps: 2817
+  delta:
+  - -0.0004
+  loss:
+  - 2.9517
+  wandb:
+  - lc1-b236-tie-prev-qk
+  - lc1-b217-ctrl
+  settings:
+    mla_key_offset: 'true'
+    mla_tie_prev_qk: 'true'
+  step_time_change: ~0 (190.3 vs 190.2 ms)
+  note: free simplification
+  derived: true
+events:
+- type: adopted
+  batch: '51'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5854280637
+  note: part of the new d512 candidate (candidate 1)
+  candidate: candidate 1
+  as_adopted:
+  - mla_key_offset=true

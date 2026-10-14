@@ -1,0 +1,30 @@
+id: X0039
+slug: mla-q-shortconv
+name: ShortConv on MLA queries
+category: Attention variants
+summary: Apply a ShortConv to the MLA query projection (K3 layout).
+source: community
+status: done
+first_batch: 11
+tags:
+- mla
+- shortconv
+- query
+trials:
+- variant: ShortConv on MLA q, Inkling kept
+  rung: d512
+  protocol: equal_steps
+  batch: '11'
+  date: '2026-09-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5841861148
+  baseline: qk_mult 2.5 base seed 0 3.0858
+  steps: 2817
+  delta:
+  - 0.0023
+  loss:
+  - 3.0881
+  wandb:
+  - lc1-b11-inkqc
+  settings:
+    MLA q ShortConv: 'on'
+  step_time_change: -1.5% ex/s

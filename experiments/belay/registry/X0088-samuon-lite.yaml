@@ -1,0 +1,76 @@
+id: X0088
+slug: samuon-lite
+name: SAMuon-lite top-direction shrink
+category: Optimizers
+summary: Remove a fraction of the momentum's top singular direction from the Muon update.
+source: agent
+status: closed
+first_batch: 46
+tags:
+- muon
+- samuon
+- spectral
+papers:
+- arxiv: '2608.25990'
+  title: SAMuon
+knobs:
+- muon_top_shrink
+trials:
+- variant: gamma 2 (shrink 0.5)
+  rung: d512
+  protocol: equal_steps
+  batch: '46'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853950746
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0001
+  loss:
+  - 3.0592
+  wandb:
+  - lc1-b46-samuon-g2-r
+  settings:
+    muon_top_shrink: '0.5'
+  step_time_change: -4.5% ex/s
+  tuned: gamma 2/3.54/7.07
+- variant: gamma 3.54 (shrink 0.72)
+  rung: d512
+  protocol: equal_steps
+  batch: '46'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853950746
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - -0.0016
+  loss:
+  - 3.0575
+  wandb:
+  - lc1-b46-samuon-g354-r
+  settings:
+    muon_top_shrink: '0.72'
+  tuned: gamma 2/3.54/7.07
+- variant: gamma 7.07 (shrink 0.86)
+  rung: d512
+  protocol: equal_steps
+  batch: '46'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853950746
+  baseline: soft-cap 10 base lc1-b32-cap10 3.0591
+  steps: 2817
+  delta:
+  - 0.0055
+  loss:
+  - 3.0646
+  wandb:
+  - lc1-b46-samuon-g707-r
+  settings:
+    muon_top_shrink: '0.86'
+  tuned: gamma 2/3.54/7.07
+events:
+- type: closed
+  batch: '46'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853950746
+  note: neutral to worse, -4.5% ex/s; not adopted

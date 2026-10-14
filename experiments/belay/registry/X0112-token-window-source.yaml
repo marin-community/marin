@@ -1,0 +1,98 @@
+id: X0112
+slug: token-window-source
+name: Explicit token-window AttnRes source
+category: Embeddings and inputs
+summary: Concatenate small per-token embeddings of the last k tokens, project and norm, as an AttnRes source.
+source: maintainer
+status: closed
+first_batch: 65
+tags:
+- window
+- local-context
+- chunk-embedding
+- attnres-source
+knobs:
+- window_embed_dim
+- window_embed_mode=add_embed
+trials:
+- variant: own AttnRes source, n=16 (32 tokens)
+  rung: d512
+  protocol: equal_steps
+  batch: '65'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858772158
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - 0.0045
+  loss:
+  - 3.0242
+  wandb:
+  - lc1-b65-win16
+  settings:
+    window_embed_dim: '16'
+  step_time_change: -3% ex/s
+  tuned: n=16 vs 32
+  note: gates starved it; 704 vs 728 ex/s
+- variant: own AttnRes source, n=32 (16 tokens)
+  rung: d512
+  protocol: equal_steps
+  batch: '65'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858772158
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - 0.0077
+  loss:
+  - 3.0274
+  wandb:
+  - lc1-b65-win32
+  settings:
+    window_embed_dim: '32'
+  step_time_change: -3% ex/s
+  tuned: n=16 vs 32
+  note: 706 ex/s
+- variant: added into embedding source, n=16
+  rung: d512
+  protocol: equal_steps
+  batch: '65'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858772158
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - 0.0
+  loss:
+  - 3.0197
+  wandb:
+  - lc1-b65-win16-add
+  settings:
+    window_embed_dim: '16'
+    window_embed_mode: add_embed
+  tuned: n=16 vs 32
+  note: neutral
+- variant: added into embedding source, n=32
+  rung: d512
+  protocol: equal_steps
+  batch: '65'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858772158
+  baseline: candidate 2 3.0197
+  steps: 2817
+  delta:
+  - 0.0019
+  loss:
+  - 3.0216
+  wandb:
+  - lc1-b65-win32-add
+  settings:
+    window_embed_dim: '32'
+    window_embed_mode: add_embed
+  tuned: n=16 vs 32
+events:
+- type: closed
+  batch: '65'
+  date: '2026-09-27'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858772158
+  note: branch closes at d512

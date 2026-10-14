@@ -1,0 +1,248 @@
+id: X0145
+slug: ragged-a2a
+name: Ragged (near-dropless) all-to-all
+category: Systems and speed
+summary: Replace pooled-wave EP dispatch with a ragged all-to-all and fused ReLU2 kernel.
+source: maintainer
+status: adopted
+first_batch: 91
+tags:
+- ragged
+- all-to-all
+- ep
+- dropless
+- pr 9708
+- capacity
+details:
+- near-dropless ragged expert all-to-all (ragp105)
+- one-shot transport, single process (--single-process)
+- capacity factor 1.05
+- drop-aware renorm off
+- 2 expert chunks (moe_ragged_chunks)
+knobs:
+- moe_ragged_chunks
+trials:
+- variant: ragged all-to-all transport, one MoE layer microbenchmark
+  rung: d512
+  protocol: unknown
+  batch: '91'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864281697
+  baseline: pooled-wave 8.68 ms fwd+bwd
+  settings:
+    MoE latent: 256 projection
+    attn_res_layer_backward: recompute
+    attn_res_remat_attention: 'true'
+  step_time_change: +34% (MoE layer)
+  tuned: routed width 1x-32x
+  note: device kernel 11.64 ms (+34%); backward uses generic Triton ragged_dot
+- variant: ragged one-shot + fused ReLU2 kernel on candidate 8
+  rung: d512
+  protocol: equal_steps
+  batch: '94'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864990387
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - -0.0015
+  - 0.0025
+  loss:
+  - 2.9777
+  - 2.9886
+  wandb:
+  - lc1-b94-cand8-ragged
+  - lc1-b94-cand8-ragged-s1
+  settings:
+    transport: ragged one-shot
+    fused ReLU2 kernel: 'on'
+    --single-process: 'on'
+    shared width: 512 (confound)
+  step_time_change: -6.5% ex/s
+  note: '0 drops vs 1.75-2.44%; confound: shared at 512 not 768'
+- variant: fused ragged ReLU2 kernel, swept tiles (microbenchmark)
+  rung: d512
+  protocol: unknown
+  batch: '94'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864990387
+  baseline: haliax ragged_dot + ReLU2 2.690 ms
+  note: 1.592 ms fwd+bwd (-41%); full layer 8.81 vs 8.61 ms pooled-wave
+- variant: ragged one-shot + fused ReLU2, capacity 1.15 (true candidate 8)
+  rung: d512
+  protocol: equal_steps
+  batch: '95'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5865472443
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - -0.0038
+  - -0.0035
+  loss:
+  - 2.9754
+  - 2.9826
+  wandb:
+  - lc1-b95-ragged
+  - lc1-b95-ragged-s1
+  settings:
+    transport: ragged one-shot
+    fused ReLU2 kernel: 'on'
+    capacity_factor: '1.15'
+  step_time_change: -10.3% throughput
+  tuned: capacity 1.15 vs 1.05
+  note: dropless worth ~-0.0035/step; net loss at fixed time
+- variant: ragged one-shot + fused ReLU2, capacity 1.05
+  rung: d512
+  protocol: equal_steps
+  batch: '95'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5865472443
+  baseline: candidate 8 2.9792 / 2.9861
+  steps: 2817
+  delta:
+  - -0.0022
+  - -0.0044
+  loss:
+  - 2.977
+  - 2.9817
+  wandb:
+  - lc1-b95-ragged-c105
+  - lc1-b95-ragged-c105-s1
+  settings:
+    transport: ragged one-shot
+    fused ReLU2 kernel: 'on'
+    capacity_factor: '1.05'
+  step_time_change: -5.6% throughput
+  tuned: capacity 1.15 vs 1.05
+  note: drops 0.04-0.05%; net ~+0.006 at fixed time, no win yet
+- variant: ragged one-shot cap 1.05, single process (profile)
+  rung: d512
+  protocol: unknown
+  batch: '97'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5866289501
+  baseline: pooled-wave 8 processes 186.4 ms
+  settings:
+    capacity: '1.05'
+    driver: single-process
+  step_time_change: +4.2% median (194.3 vs 186.4 ms)
+  note: +5.6 ms/step ragged GPU time; most slowdown from single-process host bursts
+- variant: ragged capacity 1.05 (pre-port)
+  rung: d512
+  protocol: equal_steps
+  batch: '188'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5987815375
+  baseline: batch 181 ctrl 2.9644
+  steps: 2817
+  delta:
+  - -0.0011
+  loss:
+  - 2.9633
+  settings:
+    capacity: '1.05'
+    transport: one-shot
+    drop renorm: 'off'
+  step_time_change: +9.7% (193.6 vs 176.5 ms)
+  tuned: capacity 1.05/1.15; transport; chunks 1/2/4
+- variant: ragged capacity 1.15 (pre-port)
+  rung: d512
+  protocol: equal_steps
+  batch: '188'
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5987815375
+  baseline: batch 181 ctrl 2.9644
+  steps: 2817
+  delta:
+  - -0.0024
+  loss:
+  - 2.962
+  settings:
+    capacity: '1.15'
+    transport: one-shot
+    drop renorm: 'off'
+  step_time_change: +15% (203.1 ms)
+  tuned: capacity 1.05/1.15; transport; chunks 1/2/4
+- variant: 'ragged with #9708 port (ragp105)'
+  rung: d512
+  protocol: equal_steps
+  batch: 190-201
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: candidate 11 ctrl (2.9644 / 2.9667)
+  steps: 2817
+  loss:
+  - 2.961
+  - 2.9645
+  settings:
+    capacity: '1.05'
+    transport: one-shot, single process
+    drop renorm: 'off'
+    port: '#9708'
+  step_time_change: +2.6% (182.7 vs 178.1 ms)
+  tuned: capacity 1.05/1.15; transport; chunks 1/2/4
+  note: mean 2.9628; gains 0.003 per step
+- variant: 'speed probe: collective overlap limit 4'
+  rung: d512
+  protocol: unknown
+  batch: 190-201
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: candidate 12 base (2 chunks, 189.1 ms)
+  steps: 400
+  settings:
+    collective overlap limit: '4'
+  step_time_change: 184.1 vs 184.9 ms
+  tuned: capacity 1.05/1.15; transport; chunks 1/2/4
+  note: none of the cheap ragged settings help
+- variant: 'speed probe: device transport'
+  rung: d512
+  protocol: unknown
+  batch: 190-201
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: candidate 12 base (2 chunks, 189.1 ms)
+  steps: 400
+  settings:
+    transport: device
+  step_time_change: 200.7 vs 189.1 ms
+  tuned: capacity 1.05/1.15; transport; chunks 1/2/4
+  note: none of the cheap ragged settings help
+- variant: 'speed probe: 1 expert chunk'
+  rung: d512
+  protocol: unknown
+  batch: 190-201
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: candidate 12 base (2 chunks, 189.1 ms)
+  steps: 400
+  settings:
+    moe_ragged_chunks: '1'
+  step_time_change: 194.6 vs 189.1 ms
+  tuned: capacity 1.05/1.15; transport; chunks 1/2/4
+  note: none of the cheap ragged settings help
+- variant: 'speed probe: 4 expert chunks'
+  rung: d512
+  protocol: unknown
+  batch: 190-201
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  baseline: candidate 12 base (2 chunks, 189.1 ms)
+  steps: 400
+  settings:
+    moe_ragged_chunks: '4'
+  step_time_change: 190.8 vs 189.1 ms
+  tuned: capacity 1.05/1.15; transport; chunks 1/2/4
+  note: none of the cheap ragged settings help
+events:
+- type: adopted
+  batch: 190-201
+  date: '2026-10-05'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
+  note: candidate 12 = candidate 11 + ragged a2a (ragp105) + 6 MLA heads
+  candidate: candidate 12
+  as_adopted:
+  - 'ragp105: one-shot transport, single process'
+  - capacity 1.05
+  - drop renorm off

@@ -1,0 +1,85 @@
+id: X0138
+slug: expert-router-coupling-loss
+name: Expert-router coupling loss (ERC)
+category: MoE and routing
+summary: Aux loss tying router rows to their expert's function.
+source: agent
+status: closed
+first_batch: 88
+tags:
+- erc
+- router
+- aux loss
+papers:
+- arxiv: '2512.23447'
+  title: ERC
+trials:
+- variant: ERC weight 1, alpha 1
+  rung: d512
+  protocol: equal_steps
+  batch: '88'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.0131
+  - 0.0111
+  loss:
+  - 3.0203
+  - 3.022
+  wandb:
+  - lc1-b88-erc-a1
+  - lc1-b88-erc-a1-s1
+  settings:
+    ERC weight: '1'
+    alpha: '1'
+  tuned: weight 1/0.1, alpha 1/0.5
+  note: coupling ~1.27
+- variant: ERC weight 1, alpha 0.5
+  rung: d512
+  protocol: equal_steps
+  batch: '88'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.0224
+  - 0.0272
+  loss:
+  - 3.0296
+  - 3.0381
+  wandb:
+  - lc1-b88-erc-a05
+  - lc1-b88-erc-a05-s1
+  settings:
+    ERC weight: '1'
+    alpha: '0.5'
+  tuned: weight 1/0.1, alpha 1/0.5
+  note: coupling ~2.4
+- variant: ERC weight 0.1, alpha 1
+  rung: d512
+  protocol: equal_steps
+  batch: '88'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
+  baseline: candidate 6 top-8 lc1-b83-base7 3.0072 / 3.0109
+  steps: 2817
+  delta:
+  - 0.0036
+  loss:
+  - 3.0108
+  wandb:
+  - lc1-b88-erc-w01
+  settings:
+    ERC weight: '0.1'
+    alpha: '1'
+  tuned: weight 1/0.1, alpha 1/0.5
+  note: even weak coupling hurts; closed
+events:
+- type: closed
+  batch: '88'
+  date: '2026-09-28'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
+  note: hurts at every weight
