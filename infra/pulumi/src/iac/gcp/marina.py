@@ -101,7 +101,7 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                             title="snowball-probes-applet",
                             expression=(
                                 'request.host == "applets.marina.oa.dev" && '
-                                'request.path.startsWith("/a/25f504c6-c6fb-4e14-8401-07dd8e6fbfba/")'
+                                'request.path.startsWith("/a/25f504c6-c6fb-4e14-8401-07dd8e6fbfba/api/")'
                             ),
                             description="Run the Snowball conversation lab independently of a user machine",
                         ),
