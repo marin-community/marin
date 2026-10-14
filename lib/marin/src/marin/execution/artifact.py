@@ -145,7 +145,8 @@ class Artifact(BaseModel):
                 f"{source}: recorded result_type is {rec.result_type}, but loading as "
                 f"{result_type_name(cls)}. The value type changed under a reused version — bump the version."
             )
-        return cls(path=source, **((rec.result if rec is not None else None) or {}))
+        values = {**((rec.result if rec is not None else None) or {}), "path": source}
+        return cls.model_validate(values, context={ARTIFACT_LOAD_CONTEXT_KEY: True})
 
 
 class ArtifactRecord(BaseModel):
