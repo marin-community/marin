@@ -21,13 +21,12 @@ from shellbox.machine import (
     Result,
     UnsupportedMachineSpec,
 )
-from verifyit.spec import JudgeSpec, SchemaFormat
+from verifyit.spec import SchemaFormat
 
 from taskcompendium.convert.answers import (
     json_schema_task,
     numeric_answer_task,
 )
-from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -45,7 +44,6 @@ from taskcompendium.runtime.local import LocalGraderMachines
 from taskcompendium.runtime.resources import inline_resource
 
 from .pipeline_stages import (
-    GRADER_ENVIRONMENT,
     GRADER_IMAGE,
     FixtureGradingMachines,
     ShellSimImages,
@@ -162,16 +160,6 @@ def test_graders_without_offline_grading_have_unsupported_controls(grader):
     task = in_process_task("numeric").model_copy(update={"grader": grader})
     report = control_suite(REFERENCE_CONTROLS, FixtureGradingMachines()).run(task)
     assert [check.status for check in report.checks] == [CheckStatus.UNSUPPORTED]
-
-
-def test_judge_controls_require_an_explicit_remote_connection():
-    package = verifyit_package(JudgeSpec(references=("7",)), environment=GRADER_ENVIRONMENT)
-    task = in_process_task("numeric").model_copy(
-        update={"grader": package.grader, "resources": ResourceGroups(verifier=package.resources)}
-    )
-    suite = control_suite(Controls(negative=wrong_reply), None)
-    with pytest.raises(ValueError, match="Judge controls require an explicit remote connection"):
-        suite.run(task)
 
 
 @pytest.mark.parametrize("role", ["actor", "grader"])

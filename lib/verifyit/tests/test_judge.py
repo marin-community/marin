@@ -249,16 +249,16 @@ def test_reference_exhausted_truncation_is_unscored_with_attempts(tmp_path, fake
     ]
 
 
-def test_missing_endpoint_configuration_is_an_infra_error(tmp_path, unconfigured_judge):
+def test_missing_endpoint_configuration_is_an_invalid_task(tmp_path, unconfigured_judge):
     spec = JudgeSpec(references=(REFERENCE,), exact_gate=False)
-    with pytest.raises(RuntimeError, match="VERIFYIT_JUDGE_BASE_URL"):
+    with pytest.raises(InvalidTask, match="VERIFYIT_JUDGE_BASE_URL"):
         grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "a paraphrase"))
 
 
-def test_missing_model_configuration_is_an_infra_error(tmp_path, fake_judge, monkeypatch):
+def test_missing_model_configuration_is_an_invalid_task(tmp_path, fake_judge, monkeypatch):
     monkeypatch.delenv("VERIFYIT_JUDGE_MODEL")
     spec = JudgeSpec(references=(REFERENCE,), exact_gate=False)
-    with pytest.raises(RuntimeError, match="VERIFYIT_JUDGE_MODEL"):
+    with pytest.raises(InvalidTask, match="VERIFYIT_JUDGE_MODEL"):
         grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "a paraphrase"))
 
 

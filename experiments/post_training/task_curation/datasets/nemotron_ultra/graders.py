@@ -57,7 +57,7 @@ from taskcompendium.pipeline.models import (
     RawRow,
     Reply,
 )
-from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.candidate import grade_candidate
 from verifyit.grade import InvalidTask, Status, positive_candidate
 from verifyit.modes.extract import extract_boxed
@@ -80,6 +80,7 @@ PLACEHOLDER_SOURCE_FIELD = "placeholder_source"
 AGENT_CAPABILITY_PREFIX = "nemotron-agent:"
 SCORER_TIMEOUT = 60.0
 CODE_SCORER_TIMEOUT = 330.0
+LEAN_GRADER_MEMORY_MB = 8192
 
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
@@ -111,7 +112,7 @@ MCQA_GRADE = ultra_grade_script("mcqa_grade.py", "mcqa")
 CODE_GRADE = (*ultra_grade_script("code_grade.py", "code_gen"), *CONVERSATION, LIVECODEBENCH)
 STRUCTURED_OUTPUT_GRADE = (*ultra_grade_script("structured_output_grade.py", "structured_outputs"), *CONVERSATION)
 RDKIT_GRADE = ultra_grade_script("rdkit_chemistry_grade.py", "rdkit_chemistry")
-REASONING_GYM_GRADE = (*ultra_grade_script("reasoning_gym_grade.py"), *shipped_files(HERE, "reasoning_gym_answer.py"))
+REASONING_GYM_GRADE = ultra_grade_script("reasoning_gym_grade.py")
 LEAN_GRADE = (
     *ultra_grade_script("lean_grade.py", "lean", "lean_feedback", "lean_proof_utils", "sandbox"),
     *shipped_files(SCORERS, "skyrl_gym/verification.py", "local_lean_sandbox.py"),
@@ -451,7 +452,7 @@ def convert_multichallenge(row: RawRow, context: ConversionContext) -> Normalize
     resource = inline_resource(
         MULTICHALLENGE_CONTEXT,
         json.dumps(
-            {"source_context": source_context, "public_conversation": public_conversation},
+            {"source_context": source_context, "public_conversation": public_conversation, "rubric": rubric},
             ensure_ascii=False,
             sort_keys=True,
         ).encode(),
@@ -1006,6 +1007,13 @@ def semantic_empty_negative(task: TaskSpec) -> Reply:
     return answer_reply(task, "")
 
 
+def multichallenge_empty_reward(task: TaskSpec) -> float:
+    rubric = json.loads(
+        resource_bytes(next(resource for resource in task.resources.verifier if resource.path == MULTICHALLENGE_CONTEXT))
+    )["rubric"]
+    return sum(item.get("pass_criteria", "YES").upper() == "NO" for item in rubric) / len(rubric)
+
+
 # Components whose rows carry no known answer check only that an empty reply scores zero.
 REPLY_CONTROLS = Controls()
 MATH_CONTROLS = Controls(golden=reference_reply)
@@ -1018,10 +1026,10 @@ RDKIT_CONTROLS = Controls(golden=rdkit_golden)
 TOOL_ACTION_CONTROLS = Controls(
     negative=tool_action_negative,
 )
-LEAN_CONTROLS = Controls(negative=lean_negative)
+LEAN_CONTROLS = Controls(negative=lean_negative, memory_mb=LEAN_GRADER_MEMORY_MB)
 GENRM_CONTROLS = Controls(negative=genrm_negative)
 ABSTENTION_CONTROLS = Controls(negative=abstention_negative)
-MULTICHALLENGE_CONTROLS = Controls(negative=semantic_empty_negative)
+MULTICHALLENGE_CONTROLS = Controls(negative=semantic_empty_negative, negative_reward=multichallenge_empty_reward)
 JAILBREAK_CONTROLS = Controls(negative=jailbreak_negative)
 INSTRUCTION_CONTROLS = Controls(negative=semantic_empty_negative)
 REASONING_GYM_CONTROLS = Controls(golden=reasoning_gym_golden)

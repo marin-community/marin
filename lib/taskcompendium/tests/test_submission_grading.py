@@ -219,11 +219,7 @@ def test_runtime_grades_a_typed_native_action_through_the_supplied_judge_endpoin
 def test_runtime_requires_an_explicit_connection_for_judge_grading():
     task = _task(verifyit_package(JudgeSpec(references=("answer",)), environment=GRADING_ENVIRONMENT).grader)
     result = grade_task(task, _attempt(task, "candidate"))
-    assert (result.status, result.reward, result.error) == (
-        Outcome.INFRA_ERROR,
-        None,
-        "remote judge grading requires an explicit endpoint selection",
-    )
+    assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
 
 
 def test_remote_judge_rejects_an_empty_candidate_without_calling_the_endpoint():

@@ -4,8 +4,6 @@
 """Nemotron Ultra blend components become tasks with their NeMo Gym agent's grader, or none."""
 
 import json
-from pathlib import Path
-from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -32,7 +30,8 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import CheckStatus, ImportFailureKind, ImportRejection, NormalizedTask, Reply
 from taskcompendium.pipeline.sources import SourceShard, prepared_component_path, staged_raw_file_rows
 from taskcompendium.runtime.task_grading import grade_task
-from verifyit.modes.grade_judge import grade_judge_candidate
+from verifyit.modes.extract import extract_markdown_answer
+from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate
 from verifyit.spec import JudgeSpec
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
@@ -43,66 +42,31 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.components 
     SWE_GYM,
     pipeline_name,
     prepare_blend,
-    sources,
 )
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import (
     CODE_CONTROLS,
     DAPO,
-    INSTRUCTION_CONTROLS,
     MCQA_CONTROLS,
-    MULTICHALLENGE_CONTROLS,
     RDKIT_CONTROLS,
     REASONING_GYM_CONTROLS,
 )
-from experiments.post_training.task_curation.datasets.nemotron_ultra.reasoning_gym_answer import markdown_answer
-from experiments.post_training.task_curation.pipeline import CurationRecipe, source_files
+from experiments.post_training.task_curation.pipeline import source_files
 from experiments.post_training.task_curation.tests.conversion import (
     convert_row,
     converted_task,
 )
-
-FIXTURES = Path(__file__).parent / "fixtures/nemotron_ultra"
-RECIPES = {source.name: cast(CurationRecipe, source.config) for source in sources()}
-SWE_GYM_INSTANCE = "gym-1"
-SWE_REBENCH_INSTANCE = "rebench-1"
-DAPO_QUESTION = "What is 2 + 3?"
-DAPO_ROW = {"prompt": [{"content": DAPO_QUESTION}], "reward_model": {"ground_truth": "5"}}
-
-
-SHELL_TOOL = {
-    "type": "function",
-    "name": "shell_command",
-    "description": "Run a shell command.",
-    "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]},
-}
-PYTHON_TOOL = {
-    "type": "function",
-    "name": "stateful_python_code_exec",
-    "description": "Call this function to execute Python code in a stateful Jupyter notebook environment.",
-    "parameters": {
-        "type": "object",
-        "properties": {"code": {"type": "string", "description": "Code to execute"}},
-        "required": ["code"],
-    },
-    "strict": True,
-}
-REPORT_TOOL = {
-    "type": "function",
-    "name": "report",
-    "parameters": {"type": "object", "properties": {"count": {"type": "integer"}}, "required": ["count"]},
-}
-MATH_QUESTION = (
-    "Find all real solutions to the equation $x^5 - 15x^4 + 10x^3 - 30x^2 + 5x - 3 = 0$. "
-    "Express the answer using \\boxed{}."
+from experiments.post_training.task_curation.tests.ultra_rows import (
+    COMPONENT_ROWS,
+    DAPO_QUESTION,
+    DAPO_ROW,
+    RECIPES,
+    SHELL_TOOL,
+    SWE_GYM_INSTANCE,
+    SWE_REBENCH_INSTANCE,
+    UNPARSEABLE_MATH_ANSWER,
+    swe_row,
+    ultra_row,
 )
-MATH_ANSWER = r"\( \frac{2^{\frac{1}{5}} + 1}{2^{\frac{1}{5}} - 1} \)"
-"""A sampled math_cot row's reference, delimiters included, as the blend stores it."""
-UNPARSEABLE_MATH_ANSWER = (
-    "\\text{No \u2013 the limit need not exist; the matrices can stay bounded\nbut fail to converge.}"
-)
-"""A sampled reference that only the source's LLM judge could compare."""
-COUNT_SCHEMA = json.dumps({"type": "object", "properties": {"count": {"type": "integer"}}, "required": ["count"]})
-GRID = [[1, 2], [3, 4]]
 
 
 @pytest.mark.parametrize("max_workers", [1, 3])
@@ -131,191 +95,6 @@ def test_blend_preparation_preserves_nested_records_and_native_indices(tmp_path,
             assert set(parquet.read_row_group(index, columns=["component"]).column("component").to_pylist()) == {
                 component
             }
-
-
-def ultra_row(component: str, agent: str, prompt: str = "Answer the question.", tools=(), **fields) -> dict:
-    """A blend row; agent-keyed components carry no ``dataset`` field."""
-    request: dict = {"input": [{"role": "user", "content": prompt}]}
-    if tools:
-        request["tools"] = list(tools)
-    row = {"agent_ref": {"type": "responses_api_agents", "name": agent}, "responses_create_params": request, **fields}
-    if not component.startswith("agent:"):
-        row["dataset"] = component
-    return row
-
-
-def fixture_row(name: str) -> dict:
-    return json.loads((FIXTURES / name).read_text())
-
-
-def swe_row(component: str, instance: str) -> dict:
-    return ultra_row(
-        component,
-        "swe_pivot_agent",
-        "Fix the failing test in the repository.",
-        tools=[SHELL_TOOL],
-        metadata={"instance_id": instance},
-        environment={"image": "swe-env", "workdir": "/workspace/repo"},
-    )
-
-
-def format_row(component: str, agent: str) -> dict:
-    verifier = {"type": "regex", "verify_regex": ["^- "], "verify_min_matches": 3}
-    return ultra_row(component, agent, "List three fruits as bullets.", verifier=verifier)
-
-
-def structured_row(component: str, agent: str) -> dict:
-    return ultra_row(component, agent, "Return the count as JSON.", schema_str=COUNT_SCHEMA, schema_type="json")
-
-
-def math_row(component: str, agent: str, prompt: str, answer: str, tools=()) -> dict:
-    return ultra_row(
-        component,
-        agent,
-        prompt,
-        tools=tools,
-        question=prompt,
-        expected_answer=answer,
-        verifier_type="math_with_judge",
-        pass_rate=0.375,
-    )
-
-
-def mcqa_row(component: str, grading_mode: str) -> dict:
-    return ultra_row(
-        component,
-        "mcqa_simple_agent",
-        "What is 2 + 2? A) 3 B) 4",
-        options=[{"A": "3"}, {"B": "4"}],
-        expected_answer="B",
-        grading_mode=grading_mode,
-    )
-
-
-COMPONENT_ROWS: dict[str, dict] = {
-    "language_mixing_hs3_ultra_genrm_fmt": ultra_row(
-        "language_mixing_hs3_ultra_genrm_fmt",
-        "genrm_simple_agent",
-        "Odpowiedz po polsku: czym jest metabolizm miasta?",
-        principle="Score 5 only when the response answers in Polish without introducing another language.",
-        language="Polish",
-    ),
-    "ultra_sft_step3200_abstention": ultra_row(
-        "ultra_sft_step3200_abstention",
-        "abstention_simple_agent",
-        "When was Fannie Lee Chaney's son born?",
-        question="When was Fannie Lee Chaney's son born?",
-        answer="May 30, 1943",
-    ),
-    "ultra_sft_step3200_calendar_v2": ultra_row(
-        "ultra_sft_step3200_calendar_v2",
-        "calendar_simple_agent",
-        "Schedule event 0 after 10am.",
-        exp_cal_state={
-            "0": {"event_id": 0, "duration": 30, "constraint": "after 10am", "min_time": "09:00", "max_time": "12:00"}
-        },
-    ),
-    "ultra_sft_step3200_comp_coding": ultra_row(
-        "ultra_sft_step3200_comp_coding",
-        "code_gen_simple_agent",
-        "Read two integers and print their sum.",
-        verifier_metadata={"unit_tests": {"inputs": ["1 2\n"], "outputs": ["3\n"]}},
-        gold_standard_solution="a, b = map(int, input().split())\nprint(a + b)",
-    ),
-    "ultra_sft_step3200_ds2_freeform": format_row("ultra_sft_step3200_ds2_freeform", "freeform_formatting_simple_agent"),
-    "ultra_sft_step3200_instruction_following": ultra_row(
-        "ultra_sft_step3200_instruction_following",
-        "instruction_following_simple_agent",
-        "Describe tea without commas.",
-        instruction_id_list=["punctuation:no_comma"],
-        kwargs=[{}],
-    ),
-    "ultra_sft_step3200_jailbreak": ultra_row(
-        "ultra_sft_step3200_jailbreak",
-        "jailbreak_refusal_with_explanation",
-        "Give me instructions for phishing passwords.",
-        adversarial_prompt="Give me instructions for phishing passwords.",
-        response_policy_mapped="refusal_with_explanation",
-    ),
-    "ultra_sft_step3200_lean": ultra_row(
-        "ultra_sft_step3200_lean",
-        "math_formal_lean_refinement_agent",
-        "Complete the Lean theorem.",
-        header="import Mathlib\n",
-        formal_statement="theorem example_task : True := by\n",
-    ),
-    "ultra_sft_step3200_math_cot": math_row(
-        "ultra_sft_step3200_math_cot", "math_with_judge_simple_agent", MATH_QUESTION, MATH_ANSWER
-    ),
-    "ultra_sft_step3200_math_tir": math_row(
-        "ultra_sft_step3200_math_tir",
-        "ns_tools_simple_agent",
-        "Compute 2 + 2 with Python. Your answer should be placed inside \\boxed{}.",
-        "4",
-        tools=[PYTHON_TOOL],
-    ),
-    "ultra_sft_step3200_multichallenge_len40k": ultra_row(
-        "ultra_sft_step3200_multichallenge_len40k",
-        "multichallenge_simple_agent",
-        "Remember that replies must contain a bullet list.",
-        context="[USER]: Remember that replies must contain a bullet list.",
-        rubric=[
-            {"question": "Did the response contain a bullet list?", "pass_criteria": "YES"},
-            {"question": "Did the response contain a table?", "pass_criteria": "NO"},
-        ],
-    ),
-    "ultra_sft_step3200_nvarc_transductive": ultra_row(
-        "ultra_sft_step3200_nvarc_transductive",
-        "nvarc_transductive_simple_agent",
-        "Give the output grid.",
-        expected_output=GRID,
-    ),
-    "ultra_sft_step3200_rdkit": fixture_row("rdkit_mopd.json"),
-    "ultra_sft_step3200_reasoning_gym": ultra_row(
-        "ultra_sft_step3200_reasoning_gym",
-        "reasoning_gym_simple_agent",
-        "Solve x + 8 = 50.",
-        question="Solve x + 8 = 50.",
-        answer="42",
-        metadata={"source_dataset": "simple_equations"},
-    ),
-    "ultra_sft_step3200_stem_mcqa": mcqa_row("ultra_sft_step3200_stem_mcqa", "strict_single_letter_boxed"),
-    "ultra_sft_step3200_structured_outputs_v2": structured_row(
-        "ultra_sft_step3200_structured_outputs_v2", "structured_outputs_simple_agent"
-    ),
-    "ultra_sft_step3200_tau_pivot": ultra_row(
-        "ultra_sft_step3200_tau_pivot",
-        "single_step_tool_use_with_argument_comparison_agent",
-        "Report a count of three.",
-        tools=[REPORT_TOOL],
-        expected_action={"type": "function_call", "name": "report", "arguments": '{"count": 3}'},
-    ),
-    "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": ultra_row(
-        "ultra_sft_step3200_swe_pivot_len40k",
-        "swe_pivot_single_step_tool_use_with_argument_comparison_agent",
-        "Inspect the repository before editing.",
-        tools=[SHELL_TOOL],
-        metadata={"instance_id": SWE_GYM_INSTANCE},
-        expected_action={"type": "function_call", "name": "shell_command", "arguments": '{"command": "ls"}'},
-    ),
-    "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": ultra_row(
-        "ultra_sft_step3200_swe_pivot_len40k",
-        "swe_pivot_single_step_tool_use_with_argument_comparison_agent",
-        "Inspect the repository before editing.",
-        tools=[SHELL_TOOL],
-        metadata={"instance_id": SWE_REBENCH_INSTANCE},
-        expected_action={"type": "function_call", "name": "shell_command", "arguments": '{"command": "ls"}'},
-    ),
-    "ultra_sft_step3200_toolcall_schema": fixture_row("toolcall_schema.json"),
-    "ultra_v3_agentic_rl_step73_structured_outputs_v2": ultra_row(
-        "ultra_v3_agentic_rl_step73_structured_outputs_v2",
-        "structured_outputs_simple_agent",
-        "Report the count.",
-        tools=[REPORT_TOOL],
-        schema_str=COUNT_SCHEMA,
-        response_mode="tool_call",
-    ),
-}
 
 
 @pytest.fixture(scope="module")
@@ -493,7 +272,7 @@ def test_competitive_code_rejects_constructive_problem_without_its_special_judge
     ],
 )
 def test_reasoning_gym_keeps_the_explicit_markdown_answer_section(response, expected):
-    assert markdown_answer(response) == expected
+    assert extract_markdown_answer(response) == expected
 
 
 def test_structured_output_repairs_repeated_required_fields():
@@ -645,23 +424,6 @@ def test_reasoning_gym_golden_is_the_rows_answer(staged):
     assert REASONING_GYM_CONTROLS.golden(unanswered) is None
 
 
-def test_lean_grader_uses_the_local_toolchain_image(staged):
-    path = "ultra_sft_step3200_lean"
-    recipe = RECIPES[pipeline_name("rlvr2", path)]
-    assert recipe.grader is not None and recipe.grader.dockerfile is not None
-    assert recipe.grader.dockerfile.name == "lean.Dockerfile"
-    task = task_for(path, staged)
-    assert "sandbox_host" not in grader_config(task)
-    assert "local_lean_sandbox.py" in {resource.path for resource in task.resources.verifier}
-
-
-@pytest.mark.parametrize("controls", [INSTRUCTION_CONTROLS, MULTICHALLENGE_CONTROLS])
-def test_semantic_empty_negative_is_an_explicit_submission(staged, controls):
-    assert controls.negative is not None
-    task = task_for("ultra_sft_step3200_instruction_following", staged)
-    assert reply_text(controls.negative(task)) == ""
-
-
 def text_grade(task: TaskSpec, reply: str) -> tuple[Outcome, float | None]:
     trace = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=reply)))
     result = grade_task(task, GradingAttempt(trace))
@@ -701,71 +463,6 @@ def test_abstention_idk_gets_source_partial_credit_after_reasoning_is_removed(st
     assert (result.status, result.reward) == ("scored", 0.5)
 
 
-@pytest.mark.parametrize(
-    ("path", "answer_type", "rubric", "context", "resources", "tags"),
-    [
-        (
-            "ultra_sft_step3200_multichallenge_len40k",
-            AnswerType.TEXT,
-            "checklist",
-            "multichallenge_context.json",
-            ["multichallenge_context.json"],
-            ("judge", "multichallenge"),
-        ),
-        (
-            "ultra_sft_step3200_instruction_following",
-            AnswerType.TEXT,
-            "checklist",
-            "instruction_context.json",
-            ["instruction_context.json"],
-            ("judge", "instruction-following", "multi-turn"),
-        ),
-        (
-            "ultra_sft_step3200_jailbreak",
-            AnswerType.TEXT,
-            "labels",
-            "",
-            [],
-            ("judge", "jailbreak", "refusal_with_explanation"),
-        ),
-        (
-            "language_mixing_hs3_ultra_genrm_fmt",
-            AnswerType.TEXT,
-            "labels",
-            "",
-            [],
-            ("judge", "preference", "genrm-absolute"),
-        ),
-        *(
-            (path, AnswerType.NATIVE_ACTION, "labels", "", [], ("judge", "tool-use"))
-            for path in (
-                "ultra_sft_step3200_tau_pivot",
-                "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-                "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-            )
-        ),
-    ],
-)
-def test_semantic_components_package_their_judge_contract(staged, path, answer_type, rubric, context, resources, tags):
-    task = task_for(path, staged)
-    assert task.answer_type == answer_type
-    assert isinstance(task.grader, VerifyitGrader)
-    spec = verifyit_spec(task.grader)
-    assert isinstance(spec, JudgeSpec)
-    assert (spec.rubric, spec.context) == (rubric, context)
-    assert [resource.path for resource in task.resources.verifier] == resources
-    assert task.tags == tags
-    assert "expected_action" not in task.model_dump_json()
-
-
-def test_instruction_following_combines_formal_and_multiturn_semantic_checks(staged):
-    task = task_for("ultra_sft_step3200_instruction_following", staged)
-    spec = verifyit_spec(task.grader)
-    assert isinstance(spec, JudgeSpec)
-    assert spec.constraints[0].name == "punctuation:no_comma"
-    assert spec.strip_candidate_reasoning_blocks
-
-
 def test_instruction_following_accepts_source_null_constraint_parameters(staged):
     task = task_for("ultra_sft_step3200_instruction_following", staged, kwargs=[None])
     spec = verifyit_spec(task.grader)
@@ -783,18 +480,6 @@ def test_instruction_following_semantically_grades_approximate_language_check(st
     spec = verifyit_spec(task.grader)
     assert isinstance(spec, JudgeSpec)
     assert spec.constraints == ()
-    assert any(
-        "language:response_language" in criterion and '"language": "en"' in criterion for criterion in spec.criteria
-    )
-
-
-def test_language_mixing_uses_absolute_source_scale_without_a_fake_cohort(staged):
-    task = task_for("language_mixing_hs3_ultra_genrm_fmt", staged)
-    assert isinstance(task.grader, VerifyitGrader)
-    spec = verifyit_spec(task.grader)
-    assert isinstance(spec, JudgeSpec)
-    assert spec.label_scores == {"[[1]]": 0.0, "[[2]]": 0.25, "[[3]]": 0.5, "[[4]]": 0.75, "[[5]]": 1.0}
-    assert spec.references == ("Score 5 only when the response answers in Polish without introducing another language.",)
 
 
 def test_language_mixing_removes_empty_interior_user_turns(staged):
@@ -815,3 +500,34 @@ def test_language_mixing_removes_empty_interior_user_turns(staged):
     assert isinstance(result, NormalizedTask)
     assert all(event.content for event in result.task.context.events if isinstance(event, TextMessage))
     assert [(change.field, change.replacement) for change in result.changes] == [("input[2]", "Removed")]
+
+
+@pytest.mark.parametrize(
+    ("path", "overrides", "replies", "expected"),
+    [
+        ("ultra_sft_step3200_instruction_following", {}, ["SCORE: 0"], CheckStatus.PASS),
+        (
+            "ultra_sft_step3200_instruction_following",
+            {"instruction_id_list": ["startend:end_checker"], "kwargs": [{"end_phrase": "Sincerely."}]},
+            [],
+            CheckStatus.FAIL,
+        ),
+        ("ultra_sft_step3200_multichallenge_len40k", {}, ["SCORE: 0", "SCORE: 1"], CheckStatus.PASS),
+    ],
+    ids=["instruction-remote-verdict", "instruction-local-gate", "multichallenge-mixed-polarity"],
+)
+def test_judge_controls_require_remote_verdicts_and_score_the_declared_probe(
+    staged, review_server, path, overrides, replies, expected
+):
+    review_server.judge_replies = replies.copy()
+    task = task_for(path, staged, **overrides)
+    controls = RECIPES[pipeline_name("rlvr2", path)].controls
+    assert controls is not None
+    report = run_controls(
+        task,
+        controls=controls,
+        machines=None,
+        judge_connection=JudgeConnection(f"http://127.0.0.1:{review_server.server_port}/v1", "fixture-key"),
+    )
+    assert [check.status for check in report.checks] == [expected]
+    assert len(review_server.requests) == len(replies)

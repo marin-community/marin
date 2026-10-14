@@ -455,9 +455,9 @@ def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai
     base_url = connection.base_url.strip() if connection else os.environ.get(BASE_URL_ENV, "").strip()
     model = spec.model.strip() or os.environ.get(MODEL_ENV, "").strip()
     if not base_url:
-        raise RuntimeError(f"no judge endpoint: set {BASE_URL_ENV}")
+        raise InvalidTask(f"no judge endpoint: set {BASE_URL_ENV}")
     if not model:
-        raise RuntimeError(f"no judge model: set {MODEL_ENV} or the spec's model field")
+        raise InvalidTask(f"no judge model: set {MODEL_ENV} or the spec's model field")
     # Local OpenAI-compatible servers ignore the key, but the client insists on a non-empty one.
     options: dict[str, Any] = {"max_retries": 0} if spec.rubric == RUBRIC_LABELS else {}
     return (

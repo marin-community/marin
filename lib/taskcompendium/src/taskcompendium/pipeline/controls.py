@@ -14,6 +14,7 @@ from verifyit.grade import positive_candidate
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import ExactSpec, JudgeSpec, MathSpec, McqSpec, NumericSpec
 
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
     ConversationTrace,
@@ -47,7 +48,7 @@ from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from taskcompendium.runtime.shell import ShellEnvironment, upload_resources
 from taskcompendium.runtime.task_grading import grade_task, sandbox_grade
 
-CONTROLS_REVISION = "16"
+CONTROLS_REVISION = "17"
 ORACLE_TIMEOUT = 600.0
 ORACLE_OUTPUT_LIMIT_BYTES = 1_048_576
 FILE_SUBMISSION_MESSAGE = TextMessage(role="assistant", content="The submission is in the workspace.")
@@ -97,6 +98,7 @@ def controls_identity(controls: Controls) -> dict[str, Any]:
         "revision": CONTROLS_REVISION,
         "golden": callable_identity(controls.golden) if controls.golden is not None else None,
         "negative": callable_identity(controls.negative) if controls.negative is not None else None,
+        "negative_reward": callable_identity(controls.negative_reward) if controls.negative_reward is not None else None,
         "memory_mb": controls.memory_mb,
     }
 
@@ -175,7 +177,8 @@ async def _control_checks(
     if golden is not None:
         check = await _control(task, "golden", golden, 1.0, sandbox, judge_connection)
     elif controls.negative is not None and (negative := controls.negative(task)) is not None:
-        check = await _control(task, "negative", negative, 0.0, sandbox, judge_connection)
+        expected = controls.negative_reward(task) if controls.negative_reward is not None else 0.0
+        check = await _control(task, "negative", negative, expected, sandbox, judge_connection)
     elif sandbox is not None:
         check = await _empty_sandbox_control(task, sandbox)
     else:
@@ -242,6 +245,16 @@ async def _control(
         if sandbox is None
         else await sandbox_grade(task, attempt, *sandbox.grader)
     )
+    if (
+        _is_judge_task(task)
+        and grade.status in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE}
+        and "model" not in (grade.detail or {})
+    ):
+        return CheckResult(
+            check=name,
+            status=CheckStatus.FAIL,
+            detail=f"Judge control was decided by a local gate without a remote verdict: {grade.detail}",
+        )
     return control_result(grade, name, expected)
 
 

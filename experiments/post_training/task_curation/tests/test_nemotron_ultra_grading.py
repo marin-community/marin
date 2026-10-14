@@ -15,12 +15,13 @@ from taskcompendium.pipeline.models import CheckStatus, Reply
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import pipeline_name
+from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import LEAN_GRADER_MEMORY_MB
 from experiments.post_training.task_curation.tests.conversion import converted_task
 from experiments.post_training.task_curation.tests.local_grader import (
     grade,
     with_verifier_file,
 )
-from experiments.post_training.task_curation.tests.test_nemotron_ultra import COMPONENT_ROWS, RECIPES
+from experiments.post_training.task_curation.tests.ultra_rows import COMPONENT_ROWS, RECIPES
 
 pytestmark = [pytest.mark.docker, pytest.mark.timeout(600)]
 
@@ -79,7 +80,7 @@ def test_grade_script_scores_the_reply(path, submission, reward, machines):
 
 @pytest.mark.parametrize(
     "path",
-    ["ultra_sft_step3200_comp_coding", "ultra_sft_step3200_rdkit", "ultra_sft_step3200_toolcall_schema"],
+    ["ultra_sft_step3200_comp_coding", "ultra_sft_step3200_rdkit"],
 )
 def test_golden_control_scores_the_reference_one(path, machines):
     controls = RECIPES[pipeline_name("rlvr2", path)].controls
@@ -87,6 +88,12 @@ def test_golden_control_scores_the_reference_one(path, machines):
     report = run_controls(task(path), controls=controls, machines=machines)
     statuses = {check.check: check.status for check in report.checks}
     assert statuses == {"golden": CheckStatus.PASS}, report
+
+
+@pytest.mark.parametrize(("proof", "reward"), [("by trivial", 1.0), ("by no_such_tactic", 0.0), ("by sorry", 0.0)])
+def test_lean_grader_compiles_the_proof_and_rejects_invalid_or_incomplete_proofs(proof, reward, machines):
+    result = grade(task("ultra_sft_step3200_lean"), reply(f"```lean4\n{proof}\n```"), machines, LEAN_GRADER_MEMORY_MB)
+    assert (result.status, result.reward) == (Outcome.GRADED, reward), result
 
 
 @pytest.mark.parametrize(

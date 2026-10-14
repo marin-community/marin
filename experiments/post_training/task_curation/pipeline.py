@@ -377,7 +377,7 @@ def _execution_config(
     settings: RecipeSettings, config: SourcePipelineConfig, rubric: str | None, controls: Controls | None
 ) -> SourcePipelineConfig:
     needs_reviewer = rubric is not None and config.execution.reviewer is None
-    needs_judge = controls is not None and config.review is not None and config.judge_connection is None
+    needs_judge = controls is not None and settings.api_key is not None and config.judge_connection is None
     if not needs_reviewer and not needs_judge:
         return config
     if settings.api_key is None:

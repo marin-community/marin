@@ -480,14 +480,9 @@ RECIPE_VERSIONS = {
     "ultra_sft_step3200_structured_outputs_v3": REPAIRED_RECIPE_VERSION,
     "ultra_v3_agentic_rl_step73_structured_outputs_v2": REPAIRED_RECIPE_VERSION,
     "ultra_sft_step3200_toolcall_schema": TOOLCALL_SCHEMA_RECIPE_VERSION,
-    f"{NEXT_ACTION_COMPONENT}/{SweSplit.SWE_GYM}": RLVR1_REMEDIATION_RECIPE_VERSION,
-    f"{NEXT_ACTION_COMPONENT}/{SweSplit.SWE_REBENCH}": RLVR1_REMEDIATION_RECIPE_VERSION,
     "ultra_sft_step3200_comp_coding": RLVR1_REMEDIATION_RECIPE_VERSION,
     "ultra_sft_step3200_lean": RLVR1_REMEDIATION_RECIPE_VERSION,
     "ultra_sft_step3200_reasoning_gym": RLVR1_REMEDIATION_RECIPE_VERSION,
-    f"ultra_sft_step3200_swe_pivot_len40k/{SweSplit.SWE_GYM}": RLVR1_REMEDIATION_RECIPE_VERSION,
-    f"ultra_sft_step3200_swe_pivot_len40k/{SweSplit.SWE_REBENCH}": RLVR1_REMEDIATION_RECIPE_VERSION,
-    "ultra_sft_step3200_tau_pivot": RLVR1_REMEDIATION_RECIPE_VERSION,
 }
 """Calibrated or deterministic grader revisions; new judge families stay on version 3 until calibrated."""
 

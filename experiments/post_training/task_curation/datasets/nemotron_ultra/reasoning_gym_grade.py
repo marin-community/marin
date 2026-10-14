@@ -14,10 +14,10 @@ import sys
 from pathlib import Path
 
 import reasoning_gym
+from verifyit.modes.extract import extract_markdown_answer
 
 sys.path.insert(0, "/tests")
 
-from reasoning_gym_answer import markdown_answer
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text, last_boxed_answer
 
 
@@ -30,7 +30,7 @@ def candidate(reply: str) -> str:
     boxed = last_boxed_answer(text)
     if boxed is not None:
         return boxed
-    section = markdown_answer(text)
+    section = extract_markdown_answer(text)
     if section is not None:
         return section
     return text.strip()
