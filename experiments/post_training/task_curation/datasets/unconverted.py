@@ -23,9 +23,9 @@ def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
             info=SourceInfo(
-                id="Registered releases:skill2env",
+                id="Harbor Hub:skill2env",
                 title="skill2env/skill2env",
-                origin="Registered releases",
+                origin="Harbor Hub",
                 family="terminal-agent",
                 tags=("agentic", "multi-turn"),
                 count=7496,
