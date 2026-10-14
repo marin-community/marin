@@ -8,6 +8,7 @@ is meta-llama/Llama-3.1-8B, which requires HF authentication (tests skip if
 auth is missing).
 """
 
+import dataclasses
 import json
 import os
 import pathlib
@@ -34,10 +35,19 @@ from levanter.tokenizers import (
     _stage_tokenizer,
     _try_load_tokenizer_from_dir,
     load_tokenizer,
+    tokenizer_content_hash,
 )
 
 
 MODEL_NAME = "meta-llama/Llama-3.1-8B"
+
+
+def _clone_tokenizer(tokenizer: HfMarinTokenizer, *, bos_id: int | None = None) -> HfMarinTokenizer:
+    return dataclasses.replace(
+        tokenizer,
+        _tokenizer=HfBaseTokenizer.from_str(tokenizer._tokenizer.to_str()),
+        _bos_id=bos_id,
+    )
 
 
 def _can_load_model() -> bool:
@@ -781,14 +791,12 @@ def test_safe_split_caps_runs_and_roundtrips(monkeypatch):
         run = _longest_homogeneous_run(p)
         assert run <= tk._MAX_HOMOGENEOUS_RUN_CHARS, f"run {run} exceeds cap {tk._MAX_HOMOGENEOUS_RUN_CHARS}"
 
-    # Also confirm the outer 400k chunking is respected when the input has no
-    # long homogeneous runs (so only the outer cap fires).
-    no_runs = "abcde" * 200_000  # 1M chars, longest run = 1
-    parts2 = tk._safe_split_for_tokenizer(no_runs)
-    assert "".join(parts2) == no_runs
-    assert len(parts2) > 1
+    # Long unbroken text is split at the homogeneous-run cap.
+    unbroken = "abcde" * 200_000
+    parts2 = tk._safe_split_for_tokenizer(unbroken)
+    assert "".join(parts2) == unbroken
     for p in parts2:
-        assert len(p) <= tk._MAX_ENCODE_CHARS
+        assert _longest_homogeneous_run(p) <= tk._MAX_HOMOGENEOUS_RUN_CHARS
 
 
 @requires_model
@@ -1285,6 +1293,88 @@ def test_encode_batch_correctness_many_strings(backend_tokenizer):
     assert batch == individual
 
 
+@pytest.mark.parametrize(
+    ("split_size", "texts"),
+    [
+        (
+            32,
+            [
+                "",
+                "Short text with a BPE merge.",
+                "Unicode: café 日本語 🌍 " + (" " * 96) + "end",
+                "The special token <|endoftext|> appears here.",
+            ],
+        ),
+        (16, ["before", "x" * (16 * 70), "after"]),
+    ],
+)
+@pytest.mark.parametrize("add_special_tokens", [False, True])
+def test_local_encode_batch_matches_individual_ids(
+    local_gpt2_tokenizer, monkeypatch, add_special_tokens, split_size, texts
+):
+    tokenizer = _clone_tokenizer(
+        local_gpt2_tokenizer,
+        bos_id=local_gpt2_tokenizer.eos_token_id if add_special_tokens else None,
+    )
+    monkeypatch.setattr(tk, "_MAX_HOMOGENEOUS_RUN_CHARS", split_size)
+    monkeypatch.setattr(tk, "_OVERLONG_RUN_RE", re.compile(rf"\s{{{split_size},}}|\S{{{split_size},}}"))
+
+    expected = []
+    for text in texts:
+        row = []
+        for part in tk._safe_split_for_tokenizer(text):
+            row.extend(tokenizer._tokenizer.encode(part, add_special_tokens=False).ids)
+        expected.append(row)
+    if add_special_tokens:
+        expected = [[tokenizer.eos_token_id, *row] for row in expected]
+
+    assert tokenizer.encode_batch(texts, add_special_tokens=add_special_tokens) == expected
+    assert tokenizer.encode_batch([]) == []
+
+    multi_part_text, multi_part_expected = next(
+        (text, row) for text, row in zip(texts, expected, strict=True) if len(tk._safe_split_for_tokenizer(text)) > 1
+    )
+    assert tokenizer.encode(multi_part_text, add_special_tokens=add_special_tokens) == multi_part_expected
+
+
+def test_local_encode_batch_preserves_native_padding(local_gpt2_marin_tokenizer):
+    tokenizer = _clone_tokenizer(local_gpt2_marin_tokenizer)
+    tokenizer._tokenizer.enable_padding(direction="right", pad_id=0, pad_token="<pad>")
+    texts = ["x"] * 64 + ["the longest sequence in this batch"]
+    expected = [encoding.ids for encoding in tokenizer._tokenizer.encode_batch(texts, add_special_tokens=False)]
+
+    assert tokenizer.encode_batch(texts, add_special_tokens=False) == expected
+
+
+def test_local_encode_batch_with_truncation_matches_individual_ids(local_gpt2_marin_tokenizer, monkeypatch):
+    tokenizer = _clone_tokenizer(local_gpt2_marin_tokenizer)
+    tokenizer._tokenizer.enable_truncation(max_length=4)
+    monkeypatch.setattr(tk, "_MAX_HOMOGENEOUS_RUN_CHARS", 16)
+    monkeypatch.setattr(tk, "_OVERLONG_RUN_RE", re.compile(r"\s{16,}|\S{16,}"))
+    texts = ["short", "x" * (16 * 70), "最後の文書"]
+
+    expected = []
+    for text in texts:
+        encodings = tokenizer._tokenizer.encode_batch(tk._safe_split_for_tokenizer(text), add_special_tokens=False)
+        expected.append([token_id for encoding in encodings for token_id in encoding.ids])
+
+    assert tokenizer.encode_batch(texts) == expected
+
+
+def test_local_encode_batch_preserves_ids_with_small_character_budget(local_gpt2_marin_tokenizer, monkeypatch):
+    tokenizer = _clone_tokenizer(local_gpt2_marin_tokenizer)
+    monkeypatch.setattr(tk, "_MAX_ENCODE_BATCH_CHARS", 10)
+    texts = ["hello", " world", "x" * 12, " done"]
+
+    expected = [
+        [71, 68, 75, 75, 78],
+        [220, 86, 78, 81, 75, 67],
+        [87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87],
+        [220, 67, 78, 77, 68],
+    ]
+    assert tokenizer.encode_batch(texts) == expected
+
+
 # ---------------------------------------------------------------------------
 # 15. Staging / mirror fallback tests
 # ---------------------------------------------------------------------------
@@ -1534,3 +1624,16 @@ def test_stage_from_mirror_tolerates_broken_fs(tmp_path):
 
     assert result is False
     assert not list(local_dir.iterdir())
+
+
+def test_tokenizer_content_hash_tracks_staged_files(tmp_path):
+    tokenizer_dir = tmp_path / "tokenizer"
+    tokenizer_dir.mkdir()
+    (tokenizer_dir / "tokenizer.json").write_text('{"version":"1.0"}')
+    first = tokenizer_content_hash(str(tokenizer_dir))
+
+    (tokenizer_dir / "tokenizer_config.json").write_text('{"bos_token":"<s>"}')
+    second = tokenizer_content_hash(str(tokenizer_dir))
+
+    assert first.startswith("sha256:")
+    assert second != first

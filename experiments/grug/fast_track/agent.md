@@ -15,13 +15,19 @@ and retry or report the failure — do not block waiting for input.
 
 ## Objective
 
+The ladder and gates below are for model and optimizer changes.
+For data selection, use the [quality-classifier track](README.md#improve-a-quality-classifier).
+[Run a data-track command](README.md#run-a-data-track-command) gives its Iris command, and
+[Compare data-track runs](README.md#compare-data-track-runs) gives its gate. The two tracks use the same metric.
+
 Determine whether a proposed change outperforms the baseline. The baselines are
 the dense and MoE runs recorded in `experiments/grug/fast_track/README.md` —
-compare against the table there (the `fasttrack-baseline`-tagged W&B runs).
+compare against the table there (the W&B runs linked below the table).
 
 **Metrics (from wandb, project `marin-community/marin_moe`):**
-- `eval/paloma/macro_loss` (final value) — **the** quality metric (lower is better). Report and compare
-  in Paloma macro loss, not bpb or uncheatable.
+- `eval/paloma/macro_loss` (final value) — **the** primary quality metric for all tracks (lower is better).
+  Report and compare in Paloma macro loss, not bpb. Uncheatable macro loss
+  (`eval/uncheatable_eval/macro_loss`) and per-dataset Paloma loss are guardrails.
 - `throughput/tokens_per_second` (averaged over the last 100 steps)
 - `run.state` must be `finished` before pulling final metrics
 
@@ -69,7 +75,9 @@ For **`--match compute`** (or any architecture change that alters FLOPs/token), 
 wrong denominator: `budget`/`C` are FLOPs but the two runs process *different* token counts, so
 dividing FLOPs by tokens/sec drops the `flops_per_token` ratio — a +18% FLOPs/token variant that is
 genuinely equal gets reported as ~0.85. Keep `budget`/`C` in FLOPs but pass throughput as **FLOP/s**
-(`flops_per_second = tokens_per_second * flops_per_token`, with `flops_per_token` from `_compute_flops`)
+(`flops_per_second = tokens_per_second * flops_per_token`, with training
+`flops_per_token = _compute_flops(model_config=cfg)[0] / SEQ_LEN`, which is three times the forward-only
+summary value `throughput/flops_per_token_analytic`)
 for `*_tps`; then `FLOPs / (FLOPs/sec)` is seconds and the FLOPs/token difference cancels correctly.
 
 ## Implementation
@@ -101,32 +109,21 @@ a shell variable. No `gcloud` / TPU auth is needed; this variant runs on H100.
 
 ## Job Submission
 
-Jobs run on **Iris**, one 8×H100 node per run. `fast-track` is the single entry point: run it locally
-to print the lowered plan, or add `--submit` to launch it as a cluster job.
+Training jobs run on **Iris**, with one 8×H100 node per run. `fast-track` trains on the frozen
+Hero cache in `s3://marin-us-east-02a`. Without `--submit`, it prints the plan.
 
 ```bash
 uv run fast-track --submit --run-id <name> --size <size> [--dense] --version <v>
 ```
 
-`--submit` wraps the launcher in `iris job run … -- python -m experiments.grug.fast_track.launch …
---run` and forwards `$WANDB_API_KEY` to the job. By default, it uses `--reserve H100` to select
-an eligible H100 cluster. The CPU coordinator requests no GPU capacity. Its child jobs request
-the training GPUs on the selected cluster. This placement does not balance jobs by free GPU
-capacity. Add `--target-cluster cw-us-east-02a` or `--target-cluster cw-rno2a` to pin the job to that
-cluster. Omit `--submit` to print the plan without a job submission.
-
-`--size` (d512/d768/d1024/d1280) and `--run-id` are required; `--dense` selects
-the dense baseline. The step budget derives from the variant baseline (`--match`,
-default `data`) unless `--num-steps` is given; `--batch-size` defaults to the
-rung's baseline batch. `--version` sets the checkpoint version (use `dev` for
-scratch, a calendar `YYYY.MM.DD` for coordinated runs); `--submit` launches it as an Iris job (without
-it the lowered plan is printed and nothing runs). Pass `--save-checkpoints` (off by
-default) for runs whose final model you want to keep.
+`--size` and `--run-id` are required. Use `--version dev` for scratch runs and `--version YYYY.MM.DD`
+for coordinated runs. Pass `--save-checkpoints` to keep the final model.
+[Launch commands](README.md#launch-commands) gives the other flags and defaults.
 
 ## Monitoring
 
 Runs take a few minutes to schedule and compile, then run from minutes (small
-dense) to ~12 hr (d1280 MoE). Sleep at reasonable intervals (e.g. 15 minutes)
+dense) to about 10 hr (d1280 MoE). Sleep at reasonable intervals (e.g. 15 minutes)
 before checking status — do not poll in a tight loop.
 
 List your jobs:
@@ -169,7 +166,8 @@ issue; for baselines, also the README table). Capture:
   a large share at small hidden_dim / 16k vocab)
 
 **Results** (from wandb — final value, or last-100-step average for throughput)
-- Paloma macro loss (`eval/paloma/macro_loss`) — the quality metric (not bpb or uncheatable)
+- Paloma macro loss (`eval/paloma/macro_loss`) — the primary metric. Also record Uncheatable macro loss
+  (`eval/uncheatable_eval/macro_loss`) as a guardrail.
 - MFU, throughput (`throughput/tokens_per_second`), wall-clock runtime
 
 **Provenance**
