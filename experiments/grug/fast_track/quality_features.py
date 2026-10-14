@@ -229,14 +229,24 @@ def _join_source_shard(
                     row_groups=[row_group],
                     columns=["id", "embedding"],
                 ):
-                    for document_id, embedding in zip(
-                        batch.column("id").to_pylist(), batch.column("embedding").to_pylist(), strict=True
-                    ):
-                        if selected_index < len(selected) and current_row == selected[selected_index].normalized_row:
-                            locator = selected[selected_index]
+                    batch_end = current_row + batch.num_rows
+                    batch_locators = []
+                    while selected_index < len(selected) and selected[selected_index].normalized_row < batch_end:
+                        batch_locators.append(selected[selected_index])
+                        selected_index += 1
+                    if batch_locators:
+                        # A pool selects few rows of each row group, so convert only those rows to Python.
+                        rows = batch.take(pa.array([locator.normalized_row - current_row for locator in batch_locators]))
+                        for locator, document_id, embedding in zip(
+                            batch_locators,
+                            rows.column("id").to_pylist(),
+                            rows.column("embedding").to_pylist(),
+                            strict=True,
+                        ):
                             if document_id != locator.document_id:
                                 raise ValueError(
-                                    f"Harrier ID differs from normalized ID in {normalized_shard} at row {current_row}"
+                                    f"Harrier ID differs from normalized ID in {normalized_shard} "
+                                    f"at row {locator.normalized_row}"
                                 )
                             if len(embedding) != HARRIER_DIM:
                                 raise ValueError(f"Harrier embedding has the wrong dimension in {embedding_path}")
@@ -246,8 +256,9 @@ def _join_source_shard(
                                 "id": document_id,
                                 "embedding": embedding,
                             }
-                            selected_index += 1
-                        current_row += 1
+                    current_row = batch_end
+                    if selected_index == len(selected):
+                        break
                 if selected_index != len(selected):
                     raise ValueError(f"Harrier rows do not cover normalized locators in {normalized_shard}")
             row_start = row_end
