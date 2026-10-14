@@ -46,7 +46,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.models import RuntimeEvidence, grading_attempt
 from taskcompendium.runtime.task_grading import grade_task
-from taskcompendium.submission import native_action_text, submission_compatibility
+from taskcompendium.submission import submission_compatibility
 
 GRADING_ENVIRONMENT = EnvironmentRequirements(
     docker_image="private/grader@sha256:" + "a" * 64, command_semantics=CommandSemantics.LINUX_PROCESS
@@ -171,7 +171,6 @@ def test_runtime_grades_a_typed_native_action_through_the_supplied_judge_endpoin
     response = AssistantToolCalls(
         calls=(ConversationToolCall(call_id="transport-id", name="lookup", arguments={"query": "weather"}),)
     )
-    candidate = native_action_text(response)
     package = verifyit_package(
         JudgeSpec(
             references=("Public conversation and tool schema",),
@@ -213,7 +212,12 @@ def test_runtime_grades_a_typed_native_action_through_the_supplied_judge_endpoin
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
     assert result.detail["verdict"] == "PASS"
     assert len(judge_server.requests) == 1
-    assert candidate in judge_server.requests[0]["messages"][-1]["content"]
+    prompt = judge_server.requests[0]["messages"][-1]["content"]
+    assert json.loads(prompt.split("\nCandidate: ", 1)[1]) == {
+        "type": "function_call",
+        "name": "lookup",
+        "arguments": {"query": "weather"},
+    }
 
 
 def test_runtime_requires_an_explicit_connection_for_judge_grading():

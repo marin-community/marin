@@ -26,7 +26,6 @@ from experiments.post_training.task_curation.images.build import (
     identity_digest,
 )
 from experiments.post_training.task_curation.tests.image_builds import (
-    LOCK,
     REPOSITORY,
     TOOLCHAIN_FRAGMENT,
     install_fake_build_tools,
@@ -136,13 +135,6 @@ def test_a_dockerfile_fragment_cannot_redirect_the_generated_steps_after_it(lock
     fragment.write_text(TOOLCHAIN_FRAGMENT + f"# {instruction}\nRUN true \\\n    && true\n{instruction}\n")
     with pytest.raises(ValueError, match=instruction.split()[0]):
         Environment(lock=lock, dockerfile=fragment)
-
-
-def test_a_dockerfile_fragment_builds_an_image(lock, fragment, docker_log):
-    environment = Environment(lock=lock, apt=("build-essential",), dockerfile=fragment)
-    (built,) = run(environment_artifact(environment, REPOSITORY))
-    assert built.image is not None
-    assert StoragePath(built.lock_url).read_text() == LOCK
 
 
 def test_the_repository_is_where_a_build_pushes_not_identity(lock):

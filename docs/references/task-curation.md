@@ -289,13 +289,12 @@ The tool-judge challenge set and its source provenance live under
 `experiments/post_training/task_curation/scripts/fixtures`. Cases pin the hashes
 of the normalized tasks they were labelled against. With `GLM_BULK_TOKEN` set,
 first enter an Iris job that can reach the relay, then run the command below.
-`/muchanem/glm53-relay-rno2a` identifies the current relay deployment; replace it
-when using another deployment:
+Replace `/OWNER/RELAY_JOB` with the Iris job ID of your relay deployment:
 
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   experiments.post_training.task_curation.scripts.calibrate_tool_judge \
-  --relay-job /muchanem/glm53-relay-rno2a --repeats 3 --output calibration.json
+  --relay-job /OWNER/RELAY_JOB --repeats 3 --output calibration.json
 ```
 
 The report records each trial, per-category agreement, transport failures and
@@ -303,7 +302,8 @@ prompt hashes. This tool-call challenge set does not calibrate other tool-use
 sources or the GenRM, abstention, MultiChallenge, jailbreak and instruction
 families. Those sources keep the default recipe version 3 in
 `datasets/nemotron_ultra/components.py` until repeated labelled cases for each
-source establish their expected reward contracts across repeated verdicts. The checked-in tool-call results apply only to toolcall-schema rows.
+source establish their expected reward contracts across repeated verdicts.
+The checked-in tool-call results apply only to toolcall-schema rows.
 
 Lock-backed bubblewrap graders share content-addressed Python environments on
 each host. On Iris, they use the executable `/cache/task-curation` mount because

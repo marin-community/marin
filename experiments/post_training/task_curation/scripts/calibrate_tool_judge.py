@@ -40,7 +40,7 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
 
 @dataclass(frozen=True)
 class CalibrationCase:
-    """One human judgment of an assistant's next action."""
+    """One labelled expected reward for an assistant's next action."""
 
     name: str
     category: str

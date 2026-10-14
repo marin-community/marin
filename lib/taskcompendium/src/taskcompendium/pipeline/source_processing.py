@@ -421,10 +421,9 @@ class _SourceRun:
 
 @dataclass(frozen=True)
 class _Panel:
-    """The bounded raw panel, its normalized rows, and whether it covers the whole population."""
+    """The bounded raw panel, its converted rows, and whether it covers the whole population."""
 
     sample: RawSample
-    normalized: list[dict[str, Any]]
     converted: list[ConvertedRow]
     coverage: QualitySampleCoverage
 
@@ -527,7 +526,6 @@ def _sample_panel(run: _SourceRun) -> _Panel:
     census = sample.population_count <= policy.sample_size
     return _Panel(
         sample,
-        [row.normalized for row in checked],
         [converted for converted, _ in converted_and_checked],
         QualitySampleCoverage.CENSUS if census else QualitySampleCoverage.RAW_SAMPLE,
     )
