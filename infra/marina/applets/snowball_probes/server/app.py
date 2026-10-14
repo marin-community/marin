@@ -13,8 +13,11 @@ from fastapi import FastAPI, HTTPException, Query
 from marina.applets import AppletServices
 from pydantic import BaseModel, Field
 from rigging.server_auth import get_verified_identity
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
+
+from .records import case_record, searchable_metadata
+from .worker_sql import install_worker_functions
 
 
 class RunState(StrEnum):
@@ -86,61 +89,83 @@ class WorkerGrant(BaseModel):
     identity: str | None = Field(pattern=r"^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.gserviceaccount\.com$")
 
 
-def searchable_metadata(value: object) -> object:
-    """Escape NUL characters for PostgreSQL JSONB's searchable copy."""
-    if isinstance(value, str):
-        return value.replace("\x00", "\\u0000")
-    if isinstance(value, dict):
-        return {searchable_metadata(key): searchable_metadata(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [searchable_metadata(item) for item in value]
-    return value
-
-
-def case_record(row: dict) -> dict:
-    payload = row.pop("metadata_payload")
-    if payload is not None:
-        row.update(json.loads(zlib.decompress(bytes(payload))))
-    return row
+class DatabaseWorkerGrant(BaseModel):
+    role: str | None = Field(pattern=r"^[A-Za-z0-9_@.\-]+$", max_length=63)
 
 
 def migrate(connection: Connection) -> None:
-    for statement in (
-        """CREATE TABLE IF NOT EXISTS runs (
+    catalog = inspect(connection)
+    schema = connection.execute(text("SELECT current_schema()")).scalar_one()
+    tables = set(catalog.get_table_names(schema=schema))
+    for name, definition in (
+        (
+            "runs",
+            """(
             run_id TEXT PRIMARY KEY, owner TEXT NOT NULL, config JSONB NOT NULL,
             token_cap BIGINT NOT NULL, concurrency INTEGER NOT NULL, generated_tokens BIGINT NOT NULL DEFAULT 0,
             reserved_tokens BIGINT NOT NULL DEFAULT 0, state TEXT NOT NULL,
             desired_state TEXT NOT NULL DEFAULT 'running',
             active_chats INTEGER NOT NULL DEFAULT 0, error TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
-        """CREATE TABLE IF NOT EXISTS cases (
+        ),
+        (
+            "cases",
+            """(
             case_id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(run_id),
             title TEXT NOT NULL, category TEXT NOT NULL, mode TEXT NOT NULL, state TEXT NOT NULL,
             slot INTEGER NOT NULL, round INTEGER NOT NULL, seed JSONB NOT NULL, review JSONB NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
-        "CREATE INDEX IF NOT EXISTS cases_run_updated ON cases(run_id, updated_at DESC)",
-        "CREATE INDEX IF NOT EXISTS cases_review ON cases USING GIN(review)",
-        "CREATE INDEX IF NOT EXISTS cases_seed ON cases USING GIN(seed)",
-        """CREATE TABLE IF NOT EXISTS case_metadata (
+        ),
+        (
+            "case_metadata",
+            """(
             case_id TEXT PRIMARY KEY REFERENCES cases(case_id), payload BYTEA NOT NULL)""",
-        """CREATE TABLE IF NOT EXISTS traces (
+        ),
+        (
+            "traces",
+            """(
             message_id TEXT PRIMARY KEY, case_id TEXT NOT NULL REFERENCES cases(case_id), model TEXT NOT NULL,
             role TEXT NOT NULL, round INTEGER NOT NULL, sequence INTEGER NOT NULL, state TEXT NOT NULL,
             payload BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
-        "CREATE INDEX IF NOT EXISTS traces_case ON traces(case_id, sequence)",
-        """CREATE TABLE IF NOT EXISTS ideas (
+        ),
+        (
+            "ideas",
+            """(
             idea_id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(run_id),
             text TEXT NOT NULL, kind TEXT NOT NULL, chats INTEGER NOT NULL, mode TEXT NOT NULL,
             assigned INTEGER NOT NULL DEFAULT 0, cancelled BOOLEAN NOT NULL DEFAULT false,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
-        "CREATE INDEX IF NOT EXISTS ideas_run_created ON ideas(run_id, created_at)",
-        """CREATE TABLE IF NOT EXISTS idea_claims (
+        ),
+        (
+            "idea_claims",
+            """(
             case_id TEXT PRIMARY KEY, idea_id TEXT NOT NULL REFERENCES ideas(idea_id),
             created_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
-        "CREATE INDEX IF NOT EXISTS idea_claims_idea ON idea_claims(idea_id)",
-        "ALTER TABLE runs ADD COLUMN IF NOT EXISTS worker_identity TEXT",
+        ),
     ):
-        connection.execute(text(statement))
+        if name not in tables:
+            connection.execute(text(f"CREATE TABLE {name} {definition}"))
+    # Avoid taking index/column DDL locks on every publish while workers upload.
+    indexes = {
+        index["name"]
+        for table in ("cases", "traces", "ideas", "idea_claims")
+        for index in catalog.get_indexes(table, schema=schema)
+    }
+    for name, definition in (
+        ("cases_run_updated", "ON cases(run_id, updated_at DESC)"),
+        ("cases_review", "ON cases USING GIN(review)"),
+        ("cases_seed", "ON cases USING GIN(seed)"),
+        ("traces_case", "ON traces(case_id, sequence)"),
+        ("ideas_run_created", "ON ideas(run_id, created_at)"),
+        ("idea_claims_idea", "ON idea_claims(idea_id)"),
+    ):
+        if name not in indexes:
+            connection.execute(text(f"CREATE INDEX {name} {definition}"))
+    columns = {column["name"] for column in catalog.get_columns("runs", schema=schema)}
+    for name in ("worker_identity", "database_worker"):
+        if name not in columns:
+            connection.execute(text(f"ALTER TABLE runs ADD COLUMN {name} TEXT"))
+    install_worker_functions(connection)
 
 
 def identity() -> str:
@@ -256,6 +281,26 @@ def create_api(services: AppletServices) -> FastAPI:
                 {"run_id": run_id, "state": update.state},
             )
         return {"desired_state": update.state}
+
+    @api.post("/runs/{run_id}/database-worker")
+    def assign_database_worker(run_id: str, grant: DatabaseWorkerGrant) -> dict:
+        with engine.begin() as connection:
+            owned_run(connection, run_id)
+            if grant.role is not None:
+                login = connection.execute(
+                    text(
+                        "SELECT rolcanlogin AND NOT (rolsuper OR rolcreaterole OR rolcreatedb OR rolbypassrls) "
+                        "FROM pg_roles WHERE rolname=:role"
+                    ),
+                    {"role": grant.role},
+                ).scalar()
+                if login is not True:
+                    raise HTTPException(422, "Provision a restricted SQL login before assigning it")
+            connection.execute(
+                text("UPDATE runs SET database_worker=:role WHERE run_id=:run_id"),
+                {"run_id": run_id, "role": grant.role},
+            )
+        return {"assigned": grant.role is not None}
 
     @api.post("/cases")
     def update_case(update: CaseUpdate) -> dict:

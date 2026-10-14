@@ -118,13 +118,64 @@ uv run marina publish infra/marina/applets/snowball_probes --mode private --buil
 ```
 
 Run the driver on an Iris CPU worker so it can continue when a developer's
-machine sleeps or disconnects. The cluster service account needs IAP access to
-this applet. Its IAM grant is restricted to the applet's hostname and UUID path.
-The approved grant is declared in [Marina IAM](https://github.com/marin-community/marin/pull/10050);
-changes follow the repository’s `add-grant` and `review-grant` workflows.
-The launch command creates the run under your login and assigns the service
-account permission to save that run's results and claim queued work. Your login
-retains the queue, pause, stop, and worker-assignment controls.
+machine sleeps or disconnects. New drivers connect directly to the existing
+`marina` Postgres database through Cloud SQL's authenticated connector. They
+call restricted database functions to save results, read recovery state, and
+claim queued work. They do not call Marina's HTTP API. The launch command uses
+your Marina login to create the run and assign its database worker; your login
+retains ownership, queue, pause, stop, and assignment controls.
+
+Before launching, register `iris-worker@hai-gcp-models.iam` as an IAM database
+user on `marin-metadata`. Its Google service account needs `roles/cloudsql.client`
+and `roles/cloudsql.instanceUser`, restricted to that instance. These are
+connection/login permissions; SQL grants determine which data it can access.
+IAM changes follow the repository's `add-grant` and `review-grant` workflows.
+The October 13, 2026 drivers listed below still use the UUID-specific IAP grant in
+[#10050](https://github.com/marin-community/marin/pull/10050); switch them only
+after the direct-database permissions and live smoke test pass.
+
+Publish the updated applet to install its worker functions, then use the existing
+Cloud SQL administrator credential to grant that login only schema usage and
+execution of the seven worker functions:
+
+```bash
+uv run python -m experiments.evaluation.snowball_probes.configure_database \
+  --connection hai-gcp-models:us-central1:marin-metadata --database marina \
+  --applet 25f504c6-c6fb-4e14-8401-07dd8e6fbfba \
+  --worker-user iris-worker@hai-gcp-models.iam
+```
+
+This operator command reads `cloudsql-pulumi-admin-password` through your
+existing `gcloud` Secret Manager access. The administrator credential stays in
+the provisioning process and is never sent to the driver.
+
+The provisioning command rejects logins with administrative privileges or
+membership in an applet owner or shared reader role. Worker functions check the
+authenticated database login against the requested run's assignment on every
+call. The login receives no direct table-write, ownership, schema-creation, or
+other applet privileges. SQL statements have a 60-second deadline. Clearing a
+run's database-worker assignment blocks subsequent requests, including on
+already-open connections.
+
+The run owner can revoke an assignment through the applet API:
+
+```python
+from marina.client import marina_request
+
+marina_request(
+    "https://applets.marina.oa.dev",
+    "POST",
+    "/a/25f504c6-c6fb-4e14-8401-07dd8e6fbfba/api/runs/<run-id>/database-worker",
+    json_body={"role": None},
+)
+```
+
+Before replacing a live driver, test the connection from an Iris worker using
+its machine identity: read an assigned diagnostic run, save a trace, and claim
+a queued idea. Check that the trace is visible in the viewer and that revoking
+the assignment denies the next request. Use new run IDs for this transport
+change; the driver records configuration version 20 and preserves each older
+run's immutable configuration.
 
 Replace the example user namespace, job IDs, and run ID with your launch values:
 
@@ -135,18 +186,23 @@ uv run python -m experiments.evaluation.snowball_probes.submit_worker \
   --glm-gateway /your-user/snowball-lab-glm/ortet \
   --applet 25f504c6-c6fb-4e14-8401-07dd8e6fbfba \
   --run-id dr-doom-vs-qwen36-new-run \
-  --worker-identity iris-worker@hai-gcp-models.iam.gserviceaccount.com \
+  --database-connection hai-gcp-models:us-central1:marin-metadata \
+  --database-name marina --database-user iris-worker@hai-gcp-models.iam \
   --glm-env /tmp/glm.env --concurrency 16 --token-cap 10000000000
 ```
 
 The launcher submits to the `marin` controller. Its scheduler selects a
-non-preemptible worker; `--worker-identity` must match that worker’s Google
-service account. Inspect the configured worker pool service accounts in
+non-preemptible worker; `--database-user` must match that worker's Google
+service account with the `.gserviceaccount.com` suffix removed. Inspect the configured worker pool service accounts in
 `lib/iris/config/marin.yaml` before submission; the supplied Marin pools use
-`iris-worker@hai-gcp-models.iam.gserviceaccount.com`, matching the existing
-applet grant. The driver requests 4 CPUs, 4 GB memory, and 8 GB disk. Iris retries up to ten failed attempts. It uses the job's Iris
+`iris-worker@hai-gcp-models.iam.gserviceaccount.com`. The driver requests 4 CPUs,
+4 GB memory, and 8 GB disk. Iris retries up to ten failed attempts. It uses the job's Iris
 credentials to renew scoped inference links and the machine's renewable
-service-account credentials for Marina uploads. The GLM token travels through
+service-account credentials for Cloud SQL admission and IAM database login. The
+connector refreshes those credentials; no database password is supplied. All
+jobs using this shared service account share its SQL identity and can use its
+assigned lab runs. This application-level scope does not isolate individual Iris
+jobs on the same account. The GLM token travels through
 an explicit Iris environment parameter and is written to a mode-`0600` temporary
 file in the task. No user login refresh credential is copied into the job.
 
@@ -253,7 +309,8 @@ requests from spending the same remaining budget.
 
 The worker journals compressed raw stream chunks in `chunks/<message-id>.jsonl.gz`, stores compressed current traces
 and the token ledger in `state.sqlite`, and queues uploads in a durable outbox.
-Marina stores compressed trace payloads in the applet's Postgres schema. An
+The direct database transport stores compressed trace payloads in the existing
+applet Postgres schema; the viewer reads those same tables. An
 upload failure retains the local data and pauses new conversations until
 uploads recover. A fresh heartbeat with zero active chats and **Trace upload failed**
 can therefore mean an upload backlog. Inspect the worker's exception before
@@ -262,10 +319,10 @@ Evidence quotes preserve NUL characters through storage and export. Once
 uploads recover, the same worker resumes automatically.
 A worker restart charges abandoned reservations conservatively
 and marks unfinished conversations as interrupted. If a cluster retry loses
-its disk, it restores the token total and unfinished chats from Marina, charging
+its disk, it restores the token total and unfinished chats from Postgres, charging
 the last saved reservations conservatively. Recovery fetches only streaming
-messages using the case endpoint's `trace_state=streaming` filter; completed
-messages remain stored in Marina. This bounds recovery responses even when a
+messages through the restricted case-read function; completed
+messages remain in Postgres. This bounds recovery responses even when a
 conversation has a large saved history. It starts fresh conversations using
 the remaining budget. See the [large-history recovery incident](https://marina.oa.dev/echo/wiki/707)
 for the observed failure and response. Raw chunk journals survive only while that task disk

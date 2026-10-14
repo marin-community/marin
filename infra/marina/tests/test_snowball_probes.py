@@ -2,14 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
+from uuid import uuid4
 
+import pytest
+from google.cloud.sql.connector import Connector
 from marina.applets import AppletServices
+from marina.db import UrlDatabase, engine_for
+from pg8000.dbapi import connect
 from rigging.server_auth import VerifiedIdentity, identity_scope
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, make_url, text
+from sqlalchemy.exc import DBAPIError
 from starlette.testclient import TestClient
 
+from experiments.evaluation.snowball_probes.database import DatabaseConfig, WorkerDatabase, cloud_database
 from infra.marina.applets.snowball_probes.server.app import create_api, migrate
+from infra.marina.applets.snowball_probes.server.worker_sql import grant_worker_functions
 
 
 def test_case_metadata_preserves_nul_evidence_and_searchable_review(database_url):
@@ -79,6 +87,149 @@ def test_case_metadata_preserves_nul_evidence_and_searchable_review(database_url
             assert client.post("/cases", json=case).status_code == 200
             assert client.get("/cases/nul-case").json()["review"] == case["review"]
     finally:
+        engine.dispose()
+
+
+def test_database_worker_round_trip_queue_permissions_and_revocation(database_url, monkeypatch):
+    applet = uuid4()
+    schema = "applet_" + applet.hex
+    login = "lab_driver_" + applet.hex[:12]
+    other_login = "other_driver_" + applet.hex[:12]
+    password = "disposable-postgres-test-password"
+    engine = engine_for(UrlDatabase(database_url), schema)
+    worker_engine = create_engine(make_url(database_url).set(username=login, password=password))
+    other_engine = create_engine(make_url(database_url).set(username=other_login, password=password))
+    database = WorkerDatabase(worker_engine, str(applet))
+    other_database = WorkerDatabase(other_engine, str(applet))
+    services = Mock(spec=AppletServices)
+    services.engine.return_value = engine
+    owner = VerifiedIdentity(user_id="database-test-owner", role="user")
+    run = {
+        "run_id": "database-owned",
+        "config": {"candidates": [{"key": "small", "revision": "fixed"}]},
+        "token_cap": 1000,
+        "concurrency": 2,
+        "generated_tokens": 0,
+        "reserved_tokens": 0,
+        "state": "running",
+        "active_chats": 0,
+    }
+    case = {
+        "case_id": "database-case",
+        "run_id": run["run_id"],
+        "title": "Escape handling",
+        "category": "formatting",
+        "mode": "chat",
+        "state": "complete",
+        "slot": 0,
+        "round": 0,
+        "seed": {"text": "Actual \x00 and literal \\u0000"},
+        "review": {"summary": "Answer contains \x00"},
+    }
+    trace = {
+        "message_id": "database-trace",
+        "case_id": case["case_id"],
+        "model": "small",
+        "role": "assistant",
+        "round": 0,
+        "sequence": 0,
+        "state": "streaming",
+        "payload": {"reasoning": "Private \x00 thinking", "content": "café"},
+    }
+    try:
+        with engine.begin() as connection:
+            migrate(connection)
+            for name in (login, other_login):
+                connection.execute(text(f"CREATE ROLE \"{name}\" LOGIN PASSWORD '{password}'"))
+                grant_worker_functions(connection, applet, name)
+            connection.execute(text("CREATE SCHEMA another_applet"))
+            connection.execute(text("CREATE TABLE another_applet.private_data(secret text)"))
+        with identity_scope(owner), TestClient(create_api(services)) as client:
+            assert client.post("/runs", json=run).status_code == 200
+            assert client.post("/runs", json={**run, "run_id": "database-unassigned"}).status_code == 200
+            assert client.post(f"/runs/{run['run_id']}/database-worker", json={"role": login}).status_code == 200
+            snapshot = {**run, "generated_tokens": 21, "owner": "forged", "desired_state": "stopped"}
+            assert database.save("/runs", [snapshot]) == {"desired_state": "running"}
+            saved = database.run(run["run_id"])
+            assert saved["generated_tokens"] == 21
+            assert saved["owner"] == owner.user_id and saved["desired_state"] == "running"
+            address = make_url(database_url)
+            connector = MagicMock(spec=Connector)
+            connector.__enter__.return_value = connector
+            connector.connect.side_effect = lambda *args, **kwargs: connect(
+                user=login,
+                password=password,
+                host=address.host,
+                port=address.port,
+                database=address.database,
+            )
+            monkeypatch.setattr("experiments.evaluation.snowball_probes.database.Connector", lambda **kwargs: connector)
+            with cloud_database(DatabaseConfig("test-instance", address.database, login), str(applet)) as connected:
+                assert connected.run(run["run_id"])["generated_tokens"] == 21
+            database.save("/cases", [case])
+            database.save("/traces", [trace])
+            with engine.begin() as upload:
+                upload.execute(
+                    text("UPDATE traces SET updated_at=now() WHERE message_id=:id"), {"id": trace["message_id"]}
+                )
+                with engine.begin() as revision:
+                    revision.execute(text("SET LOCAL lock_timeout='100ms'"))
+                    migrate(revision)
+            detail = database.case(case["case_id"], "streaming")
+            assert detail["seed"] == case["seed"] and detail["review"] == case["review"]
+            assert detail["traces"][0]["payload"] == trace["payload"]
+            assert client.get(f"/cases/{case['case_id']}").json()["traces"][0]["payload"] == trace["payload"]
+            assert database.cases(run["run_id"], "complete")["total"] == 1
+            trace["state"] = "complete"
+            database.save("/traces", [trace])
+            assert database.case(case["case_id"], "streaming")["traces"] == []
+            idea = client.post(
+                f"/runs/{run['run_id']}/ideas",
+                json={
+                    "text": "Check JSON schemas",
+                    "kind": "topic",
+                    "chats": 4,
+                    "mode": "chat",
+                },
+            ).json()
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                claims = list(executor.map(lambda number: database.claim(run["run_id"], f"claim-{number}"), range(8)))
+            claimed = [index for index, value in enumerate(claims) if value["idea"] is not None]
+            assert len(claimed) == 4
+            assert database.claim(run["run_id"], f"claim-{claimed[0]}")["idea"]["idea_id"] == idea["idea_id"]
+            assert client.get(f"/runs/{run['run_id']}/ideas").json()[0]["assigned"] == 4
+            with pytest.raises(DBAPIError):
+                other_database.run(run["run_id"])
+            for operation in (
+                lambda: database.run("database-unassigned"),
+                lambda: database.save("/cases", [{**case, "run_id": "database-unassigned"}]),
+                lambda: database.save("/runs", [{**run, "config": {"candidates": []}}]),
+            ):
+                with pytest.raises(DBAPIError):
+                    operation()
+            for statement in (
+                f"UPDATE {schema}.runs SET owner='forged'",
+                f"UPDATE {schema}.runs SET desired_state='stopped'",
+                f"DROP TABLE {schema}.traces",
+                "SELECT * FROM another_applet.private_data",
+            ):
+                with pytest.raises(DBAPIError):
+                    with worker_engine.begin() as connection:
+                        connection.execute(text(statement))
+            with identity_scope(VerifiedIdentity(user_id="other-user", role="user")):
+                assert (
+                    client.post(f"/runs/{run['run_id']}/database-worker", json={"role": other_login}).status_code == 403
+                )
+            assert client.post(f"/runs/{run['run_id']}/database-worker", json={"role": None}).status_code == 200
+            with pytest.raises(DBAPIError):
+                database.save("/traces", [trace])
+    finally:
+        worker_engine.dispose()
+        other_engine.dispose()
+        with engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+            for name in (login, other_login):
+                connection.execute(text(f'DROP ROLE IF EXISTS "{name}"'))
         engine.dispose()
 
 

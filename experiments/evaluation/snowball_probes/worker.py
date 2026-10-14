@@ -34,10 +34,10 @@ from marin.inference.shell_workspace import (
     ShellWorkspaceTerminated,
     shell_command_result,
 )
-from marina.client import marina_request
 from pydantic import ValidationError
 from rigging.connect import capability_path
 from rigging.timing import Duration
+from sqlalchemy.exc import SQLAlchemyError
 
 from experiments.evaluation.snowball_probes.config import (
     CATEGORIES,
@@ -47,6 +47,7 @@ from experiments.evaluation.snowball_probes.config import (
     WILDCHAT_REVISION,
     ReasoningFormat,
 )
+from experiments.evaluation.snowball_probes.database import DatabaseConfig, WorkerDatabase, cloud_database
 from experiments.evaluation.snowball_probes.protocol import (
     FOLLOWUP_INSTRUCTIONS,
     GLM_LANGUAGE_INSTRUCTIONS,
@@ -267,12 +268,21 @@ class Endpoints:
 
 
 class Worker:
-    def __init__(self, args: argparse.Namespace, store: Store, endpoints: Endpoints, seeds: list[dict], glm_key: str):
+    def __init__(
+        self,
+        args: argparse.Namespace,
+        store: Store,
+        endpoints: Endpoints,
+        seeds: list[dict],
+        glm_key: str,
+        database: WorkerDatabase,
+    ):
         self.args = args
         self.store = store
         self.endpoints = endpoints
         self.seeds = seeds
         self.glm_key = glm_key
+        self.database = database
         self.desired_state = "running"
         self.active: set[str] = set()
         self.upload_error: str | None = None
@@ -307,48 +317,27 @@ class Worker:
             },
         )
 
-    async def upload(self, path: str, body: dict) -> dict:
-        result = await asyncio.to_thread(
-            marina_request,
-            self.args.marina_url,
-            "POST",
-            f"/a/{self.args.applet}/api{path}",
-            json_body=body,
-        )
-        if not isinstance(result, dict):
-            raise ValueError("Applet upload returned a non-object response")
-        return result
-
-    async def restore_from_marina(self) -> None:
+    async def restore_from_database(self) -> None:
         """Recover accounting and interrupted chats when a cluster attempt loses its disk."""
         if self.store.get("/runs", self.args.run_id) is not None:
             return
-        prefix = f"/a/{self.args.applet}/api"
-        snapshot = await asyncio.to_thread(
-            marina_request, self.args.marina_url, "GET", f"{prefix}/runs/{self.args.run_id}"
-        )
-        assert isinstance(snapshot, dict)
+        snapshot = await asyncio.to_thread(self.database.run, self.args.run_id)
         self.store.restore_budget(snapshot["generated_tokens"] + snapshot["reserved_tokens"])
         for state in ("generating", "reviewing"):
             cases = await asyncio.to_thread(
-                marina_request,
-                self.args.marina_url,
-                "GET",
-                f"{prefix}/cases",
-                params={"run_id": self.args.run_id, "state": state, "limit": 200},
+                self.database.cases,
+                self.args.run_id,
+                state,
+                200,
             )
-            assert isinstance(cases, dict)
             if cases["total"] > len(cases["cases"]):
                 raise ValueError("Too many interrupted chats to recover in one cluster attempt")
             for case in cases["cases"]:
                 detail = await asyncio.to_thread(
-                    marina_request,
-                    self.args.marina_url,
-                    "GET",
-                    f"{prefix}/cases/{case['case_id']}",
-                    params={"trace_state": "streaming"},
+                    self.database.case,
+                    case["case_id"],
+                    "streaming",
                 )
-                assert isinstance(detail, dict)
                 for trace in detail["traces"]:
                     if trace["state"] == "streaming":
                         trace["state"] = "interrupted"
@@ -358,13 +347,11 @@ class Worker:
                 case["review"] = {"summary": "Worker restarted; pair unscored", "kind": "infrastructure"}
                 self.store.put("/cases", case["case_id"], case)
         cases = await asyncio.to_thread(
-            marina_request,
-            self.args.marina_url,
-            "GET",
-            f"{prefix}/cases",
-            params={"run_id": self.args.run_id, "limit": 1},
+            self.database.cases,
+            self.args.run_id,
+            "",
+            1,
         )
-        assert isinstance(cases, dict)
         self.case_number = cases["total"]
         self.desired_state = snapshot["desired_state"]
 
@@ -385,11 +372,7 @@ class Worker:
                     size += record_bytes
                 offset += len(batch)
                 bodies = [json.loads(record[2]) for record in batch]
-                result = (
-                    await self.upload(path, bodies[0])
-                    if path == "/runs"
-                    else await self.upload(path + "/batch", {path[1:]: bodies})
-                )
+                result = await asyncio.to_thread(self.database.save, path, bodies)
                 for record in batch:
                     self.store.acknowledge(path, record[1], record[3])
                 if path == "/runs":
@@ -403,7 +386,7 @@ class Worker:
             try:
                 await self.flush()
                 self.upload_error = None
-            except (RuntimeError, httpx.HTTPError, OSError) as error:
+            except (RuntimeError, SQLAlchemyError, OSError) as error:
                 self.upload_error = f"Trace upload failed: {type(error).__name__}"
                 logger.exception("Trace upload failed; local outbox retained")
             await asyncio.sleep(3)
@@ -874,7 +857,7 @@ class Worker:
         self.store.put("/cases", case["case_id"], case)
         self.active.add(case["case_id"])
         try:
-            claimed = await self.upload(f"/runs/{self.args.run_id}/ideas/claim", {"case_id": case["case_id"]})
+            claimed = await asyncio.to_thread(self.database.claim, self.args.run_id, case["case_id"])
             idea = claimed["idea"]
             if idea:
                 idea = {key: idea[key] for key in ("idea_id", "text", "kind", "mode")}
@@ -1090,6 +1073,7 @@ class Worker:
             ),
             "verification_policy": "checks declared before answers; shared opening only; inconclusive pairs excluded",
             "score_policy": "verified opening checks separate from exploratory GLM conversation judgments",
+            "storage_transport": "restricted Postgres functions; no worker requests to Marina",
             "harness_revision": (
                 hashlib.sha256(
                     b"".join(
@@ -1098,12 +1082,12 @@ class Worker:
                     )
                 ).hexdigest()
             ),
-            "version": 19,
+            "version": 20,
         }
 
     async def run(self) -> None:
         if self.args.worker_job is not None:
-            await self.restore_from_marina()
+            await self.restore_from_database()
         logger.info("Waiting for pinned candidate servers")
         await self.endpoints.refresh(self.http)
         self.config = self.configuration()
@@ -1152,7 +1136,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--concurrency", type=int, default=CONCURRENT_CHATS)
     parser.add_argument("--shellsim-cpu-limit", type=int, default=SHELLSIM_CPU_LIMIT)
     parser.add_argument("--inference-timeout", type=float, default=INFERENCE_TIMEOUT)
-    parser.add_argument("--marina-url", default=APPLET_ORIGIN)
+    parser.add_argument("--database-connection", required=True)
+    parser.add_argument("--database-name", required=True)
+    parser.add_argument("--database-user", required=True)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -1178,6 +1164,12 @@ def main(argv: list[str] | None = None) -> None:
         info = get_job_info()
         args.worker_job = str(info.job_id) if info is not None else None
         with ExitStack() as stack:
+            database = stack.enter_context(
+                cloud_database(
+                    DatabaseConfig(args.database_connection, args.database_name, args.database_user),
+                    args.applet,
+                )
+            )
             if info is None:
                 endpoint = stack.enter_context(connect_controller(cluster_name="marin"))
                 client = IrisClient.remote(endpoint.url, credentials=endpoint.credentials)
@@ -1188,7 +1180,7 @@ def main(argv: list[str] | None = None) -> None:
                 origin = info.controller_address
             endpoints = Endpoints(client, origin, args.coordinator, args.glm_gateway)
             try:
-                asyncio.run(Worker(args, store, endpoints, seeds, glm_key).run())
+                asyncio.run(Worker(args, store, endpoints, seeds, glm_key, database).run())
             finally:
                 store.close()
 

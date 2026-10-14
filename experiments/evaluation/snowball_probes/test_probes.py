@@ -17,6 +17,7 @@ from iris.rpc import controller_pb2
 from jsonschema import ValidationError, validate
 
 from experiments.evaluation.snowball_probes.config import load_candidates
+from experiments.evaluation.snowball_probes.database import WorkerDatabase
 from experiments.evaluation.snowball_probes.protocol import (
     infrastructure_review,
     public_history,
@@ -215,7 +216,9 @@ def make_worker(tmp_path: Path, store: Store) -> Worker:
         {"key": "small", "reasoning_parser": "grug_optional", "reasoning_format": "api_fields"},
         {"key": "reference", "reasoning_parser": "qwen3", "reasoning_format": "api_fields"},
     ]
-    return Worker(args, store, endpoints, [{"text": "inspiration", "row": 1}], "test-key")
+    database = Mock(spec=WorkerDatabase)
+    database.claim.return_value = {"idea": None}
+    return Worker(args, store, endpoints, [{"text": "inspiration", "row": 1}], "test-key", database)
 
 
 def test_native_grug_call_executes_while_open_thinking_is_preserved_only_in_model_history(tmp_path, store):
@@ -514,22 +517,21 @@ def test_cluster_retry_restores_accounting_and_marks_unfinished_chats_interrupte
         "payload": {"reasoning": "Saved thinking"},
     }
 
-    def saved_run(origin, method, path, **kwargs):
-        assert method == "GET"
-        if path.endswith("/runs/test"):
-            return {"generated_tokens": 70, "reserved_tokens": 30, "desired_state": "paused"}
-        if path.endswith("/cases/abandoned"):
-            if kwargs.get("params", {}).get("trace_state") != "streaming":
-                raise RuntimeError("Marina request failed (500): full trace history is too large")
-            return {**case, "traces": [trace]}
-        state = kwargs["params"].get("state")
+    def saved_cases(run_id, state, limit):
         return {"total": 0, "cases": []} if state == "reviewing" else {"total": 1, "cases": [case]}
 
-    monkeypatch.setattr("experiments.evaluation.snowball_probes.worker.marina_request", saved_run)
+    def saved_case(case_id, trace_state):
+        if trace_state != "streaming":
+            raise RuntimeError("Full trace history is too large")
+        return {**case, "traces": [trace]}
+
+    worker.database.run.return_value = {"generated_tokens": 70, "reserved_tokens": 30, "desired_state": "paused"}
+    worker.database.cases.side_effect = saved_cases
+    worker.database.case.side_effect = saved_case
 
     async def run():
         try:
-            await worker.restore_from_marina()
+            await worker.restore_from_database()
             assert store.totals() == (100, 0)
             assert store.get("/cases", "abandoned")["state"] == "interrupted"
             saved_trace = store.case_traces("abandoned")[0]
@@ -538,7 +540,7 @@ def test_cluster_retry_restores_accounting_and_marks_unfinished_chats_interrupte
             assert worker.desired_state == "paused"
             # The restored record fences repeated recovery of the same reservation.
             store.put("/runs", "test", {"run_id": "test"})
-            await worker.restore_from_marina()
+            await worker.restore_from_database()
             assert store.totals() == (100, 0)
         finally:
             await worker.http.aclose()
@@ -764,9 +766,6 @@ def test_cpu_exhaustion_fails_chat_without_retries_followups_or_pair_review(tmp_
             chunk = {"choices": [{"delta": delta, "finish_reason": finish}], "usage": {"completion_tokens": 10}}
             return httpx.Response(200, content=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n")
 
-        monkeypatch.setattr(
-            "experiments.evaluation.snowball_probes.worker.marina_request", lambda *a, **k: {"idea": None}
-        )
         worker.http = httpx.AsyncClient(transport=httpx.MockTransport(response))
         try:
             await worker.conversation(0)
@@ -989,11 +988,11 @@ def test_queued_task_branches_independently_and_followups_only_see_their_own_pub
             }
             return httpx.Response(200, content=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n")
 
-        def marina_response(*args, **kwargs):
-            captured["claim"] = kwargs["json_body"]
+        def claim(run_id, case_id):
+            captured["claim"] = {"case_id": case_id}
             return {"idea": idea}
 
-        monkeypatch.setattr("experiments.evaluation.snowball_probes.worker.marina_request", marina_response)
+        worker.database.claim.side_effect = claim
         await worker.http.aclose()
         worker.endpoints.urls["glm"] = "http://glm/v1/chat/completions"
         worker.http = httpx.AsyncClient(transport=httpx.MockTransport(response))
@@ -1045,9 +1044,6 @@ def test_review_repair_pairs_exact_quotes_with_their_candidate_messages(tmp_path
     async def run():
         worker = make_worker(tmp_path, store)
         worker.case_number = 1
-        monkeypatch.setattr(
-            "experiments.evaluation.snowball_probes.worker.marina_request", lambda *args, **kwargs: {"idea": None}
-        )
 
         def response(request):
             if request.url.path == "/tokenize":

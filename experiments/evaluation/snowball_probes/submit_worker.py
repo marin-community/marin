@@ -19,6 +19,7 @@ from marina.client import marina_request
 
 from experiments.evaluation.snowball_probes.cluster_worker import run
 from experiments.evaluation.snowball_probes.config import CONCURRENT_CHATS, TOKEN_CAP
+from experiments.evaluation.snowball_probes.database import DatabaseConfig, cloud_database
 from experiments.evaluation.snowball_probes.store import Store
 from experiments.evaluation.snowball_probes.worker import (
     APPLET_ORIGIN,
@@ -35,20 +36,33 @@ logger = logging.getLogger(__name__)
 async def configuration(args: argparse.Namespace, client: IrisClient, origin: str, seeds: list[dict], key: str) -> dict:
     """Resolve the pinned servers before registering an immutable run configuration."""
     store = Store(args.state_dir / "state.sqlite", args.token_cap)
-    worker = Worker(args, store, Endpoints(client, origin, args.coordinator, args.glm_gateway), seeds, key)
-    try:
-        await worker.endpoints.refresh(worker.http)
-        if not worker.endpoints.metadata:
-            raise RuntimeError("Wait for the pinned candidate metadata before submitting the driver")
-        return worker.configuration()
-    finally:
-        await worker.http.aclose()
-        store.close()
+    with cloud_database(
+        DatabaseConfig(args.database_connection, args.database_name, args.database_user), args.applet
+    ) as database:
+        worker = Worker(args, store, Endpoints(client, origin, args.coordinator, args.glm_gateway), seeds, key, database)
+        try:
+            await worker.endpoints.refresh(worker.http)
+            if not worker.endpoints.metadata:
+                raise RuntimeError("Wait for the pinned candidate metadata before submitting the driver")
+            return worker.configuration()
+        finally:
+            await worker.http.aclose()
+            store.close()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("applet", "coordinator", "glm-gateway", "run-id", "job-name", "user", "worker-identity"):
+    for name in (
+        "applet",
+        "coordinator",
+        "glm-gateway",
+        "run-id",
+        "job-name",
+        "user",
+        "database-connection",
+        "database-name",
+        "database-user",
+    ):
         parser.add_argument(f"--{name}", required=True)
     parser.add_argument("--glm-env", type=Path, required=True)
     parser.add_argument("--previous-run")
@@ -97,7 +111,10 @@ def main() -> None:
             },
         )
         marina_request(
-            args.marina_url, "POST", f"{prefix}/runs/{args.run_id}/worker", json_body={"identity": args.worker_identity}
+            args.marina_url,
+            "POST",
+            f"{prefix}/runs/{args.run_id}/database-worker",
+            json_body={"role": args.database_user},
         )
         arguments = []
         for name in (
@@ -105,7 +122,9 @@ def main() -> None:
             "coordinator",
             "glm_gateway",
             "run_id",
-            "marina_url",
+            "database_connection",
+            "database_name",
+            "database_user",
             "concurrency",
             "token_cap",
             "shellsim_cpu_limit",
