@@ -28,12 +28,16 @@ from experiments.datakit.embeddings.harrier.pipeline import (
     dequantize_to_fp32,
 )
 from experiments.grug.fast_track.corpus_sample import CorpusSource, RawCorpusPool
-from experiments.grug.fast_track.ranked_pool import RankedPool, take_token_prefix, write_parquet_tables
+from experiments.grug.fast_track.ranked_pool import (
+    RANGE_FILE_PREFIX,
+    RankedPool,
+    take_token_prefix,
+    write_parquet_tables,
+)
 
 FEATURE_BATCH_ROWS = 1024
 FEATURE_JOIN_SHARDS = 512
 HARRIER_NORM_FLOOR = 1e-6
-FEATURE_FILE_PREFIX = "range-"
 FEATURE_SCHEMA = pa.schema(
     [
         pa.field("id", pa.string()),
@@ -250,7 +254,7 @@ def _join_source_shard(
 
 def _write_feature_range(output_path: str):
     def write(range_key: int, rows: Iterator[dict]) -> QualityFeatureShard:
-        path = prefix_join(output_path, f"{FEATURE_FILE_PREFIX}{range_key:05d}.parquet")
+        path = prefix_join(output_path, f"{RANGE_FILE_PREFIX}{range_key:05d}.parquet")
 
         def tables() -> Iterator[pa.Table]:
             while batch := list(islice(rows, FEATURE_BATCH_ROWS)):
