@@ -558,3 +558,18 @@ but does not need unrestricted role creation.
 ```bash
 cd infra/marina && uv run pytest        # kernel tests and every app's tests
 ```
+
+## App data and cold starts
+
+Keep shared, queryable catalogs in an app's Postgres schema. Refresh them in a
+scheduled job or an explicit load, then let serving instances read the committed
+snapshot. EvalDash's ingest runner and RL Data Atlas's loader follow this
+pattern. Avoid remote scans in `create_api`: checked-in factories run when the
+shared Marina process starts, and an applet factory runs on its first backend
+request. Applet lifespans and background workers are not supported.
+
+Cache keys must identify the source revision as well as the query. For an
+immutable dataset, a persistent metadata index can use the release URL and row
+position; keep large payloads in object storage. For changing object listings,
+use bounded freshness, an explicit refresh, and a visible timestamp. Live
+telemetry needs a short freshness window rather than a snapshot taken at startup.
