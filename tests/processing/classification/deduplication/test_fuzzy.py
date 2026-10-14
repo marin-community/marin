@@ -183,15 +183,15 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
         rows=[
             {
                 "id": generate_id("Arctic predators have superior auditory capabilities for hunting beneath snow."),
-                "buckets": ["shared-arctic"],
+                "buckets": ["1"],
             },
             {
                 "id": generate_id("Red canids inhabit northern territories worldwide."),
-                "buckets": ["shared-red"],
+                "buckets": ["2"],
             },
             {
                 "id": generate_id("Newborn kits emerge sightless and vulnerable."),
-                "buckets": ["train-unique"],
+                "buckets": ["3"],
             },
         ],
     )
@@ -201,15 +201,15 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
         rows=[
             {
                 "id": generate_id("Arctic predators have superior auditory capabilities for hunting beneath snow."),
-                "buckets": ["shared-arctic"],
+                "buckets": ["1"],
             },
             {
                 "id": generate_id("Red canids inhabit northern territories worldwide."),
-                "buckets": ["shared-red"],
+                "buckets": ["2"],
             },
             {
                 "id": generate_id("Rapid runners represent the most diminutive wild dogs."),
-                "buckets": ["test-unique"],
+                "buckets": ["4"],
             },
         ],
     )
@@ -335,15 +335,15 @@ def test_fuzzy_dups_capped_does_not_raise_and_emits(fox_corpus):
     """
     main_dir = os.path.join(fox_corpus["output_dir"], "path_main")
     texts = [f"path node number {i} with distinct filler content here" for i in range(5)]
-    # Chain the nodes: node i shares bucket b{i-1}{i} with its left neighbor and
-    # b{i}{i+1} with its right neighbor, so links form a path, not a star.
+    # Chain the nodes: node i shares bucket i with its left neighbor and bucket
+    # i + 1 with its right neighbor, so links form a path, not a star.
     rows = []
     for i, text in enumerate(texts):
         buckets = []
         if i > 0:
-            buckets.append(f"b{i - 1}{i}")
+            buckets.append(str(i))
         if i < len(texts) - 1:
-            buckets.append(f"b{i}{i + 1}")
+            buckets.append(str(i + 1))
         rows.append({"id": generate_id(text), "buckets": buckets})
 
     mh = _write_minhash_attr_dataset(
@@ -360,6 +360,35 @@ def test_fuzzy_dups_capped_does_not_raise_and_emits(fox_corpus):
     )
     attr_rows = _read_cluster_attrs(dups.sources[mh.source_key].attr_dir)
     assert attr_rows, "capped run should still emit cluster-member rows"
+
+
+def _minhash_attr_from_table(
+    root: Path, source_key: str, buckets: list[list[int]], bucket_type: pa.DataType
+) -> MinHashAttrData:
+    """Write a MinHash attr shard whose ``buckets`` column has an explicit list type."""
+    attr_dir = root / source_key / "outputs"
+    attr_dir.mkdir(parents=True)
+    if pa.types.is_string(bucket_type) or pa.types.is_large_string(bucket_type):
+        buckets = [[str(b) for b in row] for row in buckets]
+    ids = [f"{source_key}-doc-{i}" for i in range(len(buckets))]
+    schema = pa.schema([pa.field("id", pa.string()), pa.field("buckets", pa.list_(bucket_type))])
+    pq.write_table(pa.table({"id": ids, "buckets": buckets}, schema=schema), str(attr_dir / "part-00000.parquet"))
+    return MinHashAttrData(params=TEST_MINHASH_PARAMS, source_key=source_key, attr_dir=str(attr_dir), counters={})
+
+
+@pytest.mark.parametrize("other_type", [pa.large_string(), pa.uint64()])
+def test_fuzzy_dups_links_sources_across_bucket_types(tmp_path, other_type):
+    """A string-encoded source links with a source of another bucket type at uint64-range buckets."""
+    shared = [[2**63 + 5, 2**64 - 1]]
+    str_mh = _minhash_attr_from_table(tmp_path, "str_src", shared, pa.string())
+    other_mh = _minhash_attr_from_table(tmp_path, "other_src", shared, other_type)
+
+    dups = compute_fuzzy_dups_attrs(inputs=[str_mh, other_mh], output_path=str(tmp_path / "dups"), max_parallelism=2)
+
+    rows = [r for source in dups.sources.values() for r in _read_cluster_attrs(source.attr_dir)]
+    assert len(rows) == 2
+    assert len({r["dup_cluster_id"] for r in rows}) == 1
+    assert sum(r["is_cluster_canonical"] for r in rows) == 1
 
 
 def test_text_cap_chars_truncates_mega_docs_only(tmp_path):
