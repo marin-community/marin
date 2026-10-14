@@ -33,6 +33,7 @@ from marin.evaluation.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_RECORDS_PREFIX,
     EvalRef,
+    EvalRunRecord,
     ModelConfigRef,
     ModelRef,
     read_record,
@@ -251,6 +252,47 @@ def _resolve_hosted_judge(spec: LaunchSpec, candidate_accelerator: AcceleratorCh
     )
 
 
+def _resumed_record(
+    resume_run_id: str | None,
+    records_prefix: str,
+    model_ref: ModelRef,
+    judge: ModelConfig | None,
+    definitions: tuple[tuple[str, _ResolvedDefinition], ...],
+    version: str | None,
+) -> EvalRunRecord | None:
+    """Load the saved record a --resume-run-id launch continues, rejecting identity drift."""
+    if resume_run_id is None:
+        return None
+    if "/" in resume_run_id or resume_run_id in ("", ".", ".."):
+        raise ValueError("--resume-run-id must be a run identifier, not a path")
+    try:
+        record = read_record(record_path(records_prefix, resume_run_id))
+    except FileNotFoundError as exc:
+        raise ValueError(f"No saved record for --resume-run-id {resume_run_id!r} under {records_prefix}") from exc
+    previous_model = record.model
+    if (
+        record.run_id != resume_run_id
+        or previous_model.name != model_ref.name
+        or previous_model.location != model_ref.location
+        or previous_model.backend != model_ref.backend
+        or previous_model.config is None
+        or previous_model.config != model_ref.config
+    ):
+        raise ValueError("Resumed run model configuration differs from this launch")
+    previous_judge = record.judge.model.config if record.judge is not None else None
+    requested_judge = ModelConfigRef.model_validate(asdict(judge.model)) if judge is not None else None
+    if (record.judge is not None) != (judge is not None) or previous_judge != requested_judge:
+        raise ValueError("Resumed run hosted judge configuration differs from this launch")
+    _, definition = definitions[0]
+    if (
+        record.evaluation != definition.record_ref
+        or record.provenance.eval_runtime != definition.runtime_descriptor
+        or record.version != version
+    ):
+        raise ValueError("Resumed run evaluation configuration, runtime, or version differs from this launch")
+    return record
+
+
 def build_evaluation_batch(
     spec: LaunchSpec,
     provenance: LaunchProvenance,
@@ -296,37 +338,7 @@ def build_evaluation_batch(
     if judge is not None and any(isinstance(definition.executor, EvalchemyExecutor) for _, definition in definitions):
         raise ValueError("--judge-model serves Harbor verifiers only; remove it or drop the Evalchemy evaluations")
     records_prefix = records_prefix_for(accelerator, spec)
-    resumed_record = None
-    if spec.resume_run_id is not None:
-        if "/" in spec.resume_run_id or spec.resume_run_id in ("", ".", ".."):
-            raise ValueError("--resume-run-id must be a run identifier, not a path")
-        try:
-            resumed_record = read_record(record_path(records_prefix, spec.resume_run_id))
-        except FileNotFoundError as exc:
-            raise ValueError(
-                f"No saved record for --resume-run-id {spec.resume_run_id!r} under {records_prefix}"
-            ) from exc
-        previous_model = resumed_record.model
-        if (
-            resumed_record.run_id != spec.resume_run_id
-            or previous_model.name != model_ref.name
-            or previous_model.location != model_ref.location
-            or previous_model.backend != model_ref.backend
-            or previous_model.config is None
-            or previous_model.config != model_ref.config
-        ):
-            raise ValueError("Resumed run model configuration differs from this launch")
-        previous_judge = resumed_record.judge.model.config if resumed_record.judge is not None else None
-        requested_judge = ModelConfigRef.model_validate(asdict(judge.model)) if judge is not None else None
-        if (resumed_record.judge is not None) != (judge is not None) or previous_judge != requested_judge:
-            raise ValueError("Resumed run hosted judge configuration differs from this launch")
-        _, definition = definitions[0]
-        if (
-            resumed_record.evaluation != definition.record_ref
-            or resumed_record.provenance.eval_runtime != definition.runtime_descriptor
-            or resumed_record.version != spec.version
-        ):
-            raise ValueError("Resumed run evaluation configuration, runtime, or version differs from this launch")
+    resumed_record = _resumed_record(spec.resume_run_id, records_prefix, model_ref, judge, definitions, spec.version)
     created_at = resumed_record.created_at if resumed_record is not None else datetime.now(UTC).isoformat()
     evaluations: list[Evaluation] = []
     secret_env: dict[str, SecretSpec] = {}
