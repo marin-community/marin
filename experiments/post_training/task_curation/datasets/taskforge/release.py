@@ -53,6 +53,8 @@ EVIDENCE_FILES = ("calibration.json", "decision.json")
 READ_WORKERS = 64
 MANIFEST = "manifest.json"
 README = "README.md"
+TASKS_DIRECTORY = "tasks"
+TASK_FILES = f"{TASKS_DIRECTORY}/*.jsonl"
 
 
 class Band(StrEnum):
@@ -60,6 +62,15 @@ class Band(StrEnum):
 
     CALIBRATED = "calibrated"
     TOO_EASY = "too-easy"
+
+
+def group_name(subject: str, band: Band) -> str:
+    """The release group of a subject's tasks in one band, which names its file and Atlas source."""
+    return subject if band == Band.CALIBRATED else f"{subject}-{band}"
+
+
+def group_file(group: str) -> str:
+    return f"{TASKS_DIRECTORY}/{group}.jsonl"
 
 
 @dataclass(frozen=True)
@@ -90,7 +101,7 @@ class AcceptedItem:
 
     @property
     def group(self) -> str:
-        return self.subject if self.band == Band.CALIBRATED else f"{self.subject}-{self.band}"
+        return group_name(self.subject, self.band)
 
 
 def ledger_rows(text: str) -> list[dict[str, Any]]:
@@ -129,7 +140,7 @@ def read_json(path: StoragePath) -> Any:
     return json.loads(path.read_text())
 
 
-def item_ledger(path: StoragePath) -> AcceptedItem | None:
+def ledger_acceptance(path: StoragePath) -> AcceptedItem | None:
     return accepted_item(ledger_rows(path.read_text()))
 
 
@@ -165,20 +176,21 @@ def accepted_items(run_root: StoragePath) -> list[AcceptedItem]:
     ledgers = [path for path in (run_root / "ledger").ls() if path.name.endswith(".jsonl")]
     ledgers = [path for path in ledgers if not path.name.startswith(IDEA_PREFIX)]
     with ThreadPoolExecutor(READ_WORKERS) as pool:
-        items = [item for item in pool.map(item_ledger, ledgers) if item is not None]
+        items = [item for item in pool.map(ledger_acceptance, ledgers) if item is not None]
     return sorted(items, key=lambda item: item.item_id)
 
 
-def write_release(records: list[dict[str, Any]], output: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+def write_release(
+    records: list[tuple[AcceptedItem, dict[str, Any]]], output: Path, manifest: dict[str, Any]
+) -> dict[str, Any]:
     """Write one JSONL per group plus the manifest and dataset card; returns the completed manifest."""
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for record in records:
-        group = record["subject"] if record["band"] == Band.CALIBRATED else f"{record['subject']}-{record['band']}"
-        groups[group].append(record)
+    for item, record in records:
+        groups[item.group].append(record)
     files = {}
-    (output / "tasks").mkdir(parents=True, exist_ok=True)
+    (output / TASKS_DIRECTORY).mkdir(parents=True, exist_ok=True)
     for group, rows in sorted(groups.items()):
-        relative = f"tasks/{group}.jsonl"
+        relative = group_file(group)
         payload = "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows).encode()
         (output / relative).write_bytes(payload)
         files[relative] = {"rows": len(rows), "sha256": hashlib.sha256(payload).hexdigest()}
@@ -194,7 +206,7 @@ def dataset_card(manifest: Mapping[str, Any]) -> str:
 license: other
 configs:
 - config_name: default
-  data_files: tasks/*.jsonl
+  data_files: {TASK_FILES}
 ---
 
 # Taskforge {manifest["run_label"]}
@@ -213,13 +225,13 @@ accepted by this run's policy.
 """
 
 
-def release_manifest(run_root: StoragePath, run_label: str, records: list[dict[str, Any]]) -> dict[str, Any]:
-    groups = Counter(f"{record['subject']}/{record['band']}" for record in records)
+def release_manifest(run_root: StoragePath, run_label: str, items: list[AcceptedItem]) -> dict[str, Any]:
+    groups = Counter(f"{item.subject}/{item.band}" for item in items)
     return {
         "run_root": str(run_root),
         "run_label": run_label,
         "snapshot": datetime.now(UTC).isoformat(timespec="seconds"),
-        "accepted": len(records),
+        "accepted": len(items),
         "groups": dict(sorted(groups.items())),
         "policy": read_json(run_root / "policy.json"),
     }
@@ -242,8 +254,8 @@ def main(run_root: str, run_label: str, output: Path, repo: str | None, push: bo
     items = accepted_items(root)
     logger.info("%d accepted items in %s", len(items), root)
     with ThreadPoolExecutor(READ_WORKERS) as pool:
-        records = list(pool.map(lambda item: item_record(root, item, run_label), items))
-    manifest = write_release(records, output, release_manifest(root, run_label, records))
+        records = list(pool.map(lambda item: (item, item_record(root, item, run_label)), items))
+    manifest = write_release(records, output, release_manifest(root, run_label, items))
     logger.info("Wrote %s: %s", output, manifest["groups"])
     if not push:
         return
@@ -254,7 +266,7 @@ def main(run_root: str, run_label: str, output: Path, repo: str | None, push: bo
         repo_id=repo,
         repo_type="dataset",
         folder_path=output,
-        delete_patterns=["tasks/*.jsonl"],
+        delete_patterns=[TASK_FILES],
         commit_message=f"Taskforge {run_label}: {manifest['accepted']} accepted tasks at {manifest['snapshot']}",
     )
     click.echo(commit.oid)

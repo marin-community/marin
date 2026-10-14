@@ -31,7 +31,7 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
-from experiments.post_training.task_curation.datasets.taskforge.release import SUBJECTS, Band
+from experiments.post_training.task_curation.datasets.taskforge.release import SUBJECTS, Band, group_file, group_name
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -129,7 +129,7 @@ TASKFORGE_CONTROLS = Controls(golden=taskforge_golden)
 
 
 def _source(subject: str, band: Band) -> RlDataSource[CurationRecipe]:
-    group = subject if band == Band.CALIBRATED else f"{subject}-{band}"
+    group = group_name(subject, band)
     band_note = (
         "Tasks inside the run's solve-rate band (1 to 7 of 8 solver attempts passed)."
         if band == Band.CALIBRATED
@@ -147,7 +147,7 @@ def _source(subject: str, band: Band) -> RlDataSource[CurationRecipe]:
         ),
         config=CurationRecipe(
             name=f"taskforge-{RUN_LABEL}-{group}",
-            source=HfSource(RELEASE_REPO, RELEASE_REVISION, (f"tasks/{group}.jsonl",), SourceFormat.JSONL),
+            source=HfSource(RELEASE_REPO, RELEASE_REVISION, (group_file(group),), SourceFormat.JSONL),
             convert=convert_taskforge,
             version=CONVERTER_VERSION,
             intended_use=IntendedUse.TRAIN,
