@@ -173,8 +173,12 @@ def _checked_arguments(call: ToolCall, tools: Mapping[str, AgentTool]) -> dict[s
     try:
         jsonschema.validate(arguments, dict(tool.parameters))
     except jsonschema.ValidationError as error:
+        # The violation is named by its path and constraint, never by the offending value: jsonschema's
+        # own message quotes the value, and a long argument would come back whole into the context.
         raise _Rejected(
-            ToolOutcome.INVALID_ARGUMENTS, f"error: tool arguments do not match the schema ({error.message})"
+            ToolOutcome.INVALID_ARGUMENTS,
+            f"error: tool arguments do not match the schema at {error.json_path}: "
+            f"{error.validator} {json.dumps(error.validator_value)}",
         ) from error
     return arguments
 

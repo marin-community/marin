@@ -120,6 +120,24 @@ def test_bad_tool_call_returns_an_error_result_and_the_run_continues(fake_glm, l
     assert isinstance(replayed, dict)
 
 
+def test_a_schema_violation_names_the_constraint_without_the_offending_value(fake_glm, ledger, run):
+    """jsonschema's own message quotes the value; a long argument would come back whole into the context."""
+    bounded = AgentTool(
+        name="write",
+        description="Write text.",
+        parameters={"type": "object", "properties": {"text": {"type": "string", "maxLength": 10}}, "required": ["text"]},
+        handler=echo_tool([]).handler,
+    )
+    fake_glm.stream(tool_calls=(("write", json.dumps({"text": "x" * 5000})),), finish="tool_calls")
+    fake_glm.stream(content="done")
+
+    result = run([bounded])
+
+    assert result.turns[0].tool_results[0].outcome is ToolOutcome.INVALID_ARGUMENTS
+    message = tool_messages(fake_glm, 1)[0]["content"]
+    assert message == "error: tool arguments do not match the schema at $.text: maxLength 10"
+
+
 def test_unparseable_arguments_are_replayed_wrapped_in_an_object(fake_glm, ledger, run):
     fake_glm.stream(tool_calls=(("echo", '{"text": "unterminated'),), finish="tool_calls")
     fake_glm.stream(content="done")
