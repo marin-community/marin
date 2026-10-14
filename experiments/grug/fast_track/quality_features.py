@@ -128,8 +128,13 @@ def normalize_harrier_embeddings(raw_embeddings: np.ndarray) -> np.ndarray:
 
 def pinned_quality_feature_sources(sources: Sequence[CorpusSource]) -> tuple[QualityFeatureSource, ...]:
     """Resolve the checked-in normalized and Harrier paths for corpus sources."""
+    harrier_paths = hero_data.pinned_map("harrier")
     return tuple(
-        QualityFeatureSource(source.name, source.normalized_path, hero_data.harrier(source.name))
+        QualityFeatureSource(
+            source.name,
+            source.normalized_path,
+            prefix_join(hero_data.MANIFEST_PREFIX, harrier_paths[source.name]),
+        )
         for source in sorted(sources, key=lambda item: item.name)
     )
 
