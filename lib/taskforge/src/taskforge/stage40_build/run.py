@@ -10,6 +10,7 @@ the step and stores what it returns.
 build's ``ItemBuildProvenance`` to ``<round_dir>/draft/``.
 """
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -19,7 +20,7 @@ from pydantic import TypeAdapter
 from rigging.filesystem.atomic import atomic_rename
 from taskcompendium.models import TaskSpec
 
-from taskforge.content_hash import digest
+from taskforge.content_hash import canonical_json, digest
 from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.stage30_author.program import PROPOSAL_INPUT, RLEnvBuildProgram, RLEnvBuildSink, RLEnvBuildStep
@@ -30,7 +31,6 @@ from taskforge.stage40_build.step_store import (
     RLEnvBuildStepKey,
     RLEnvBuildStepMemo,
     RLEnvBuildStepStore,
-    memoized,
 )
 
 DRAFT_DIR = "draft"
@@ -91,6 +91,29 @@ class TaskDraft:
     provenance: ItemBuildProvenance
 
 
+async def _memoized[T](
+    store: RLEnvBuildStepStore,
+    name: str,
+    key: RLEnvBuildStepKey,
+    output_type: type[T],
+    compute: Callable[[], Awaitable[T]],
+) -> tuple[CacheStatus, RLEnvBuildStepMemo, T]:
+    """Load ``name``'s output under ``key`` from ``store``, or compute and store it on a miss.
+
+    The runner's one store call: it loads first. When a memo exists, it returns ``HIT`` with the
+    memo and the decoded output, leaving ``compute`` uncalled. Otherwise it awaits ``compute()``,
+    stores the result, and returns ``MISS`` with the new memo and the result decoded from its
+    stored form, so a consumer receives the same value on a miss as on a later hit.
+    """
+    loaded = store.load(key, name, output_type)
+    if loaded is not None:
+        memo, output = loaded
+        return CacheStatus.HIT, memo, output
+    computed = await compute()
+    memo = store.store(key, name, computed)
+    return CacheStatus.MISS, memo, TypeAdapter(output_type).validate_json(canonical_json(computed))
+
+
 async def run_program(
     program: RLEnvBuildProgram,
     context: RLEnvBuildContext,
@@ -121,7 +144,7 @@ async def run_program(
         )
         compute = partial(step.fn, context, **{dep: outputs[dep] for dep in step.inputs})
         try:
-            status, memo, output = await memoized(store, step.name, key, output_type, compute)
+            status, memo, output = await _memoized(store, step.name, key, output_type, compute)
         except BuildFailure as failure:
             if failure.step is not None:
                 raise
