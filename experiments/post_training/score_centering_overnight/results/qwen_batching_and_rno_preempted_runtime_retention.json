@@ -1,0 +1,85 @@
+{
+  "runs": [
+    {
+      "run_id": "sc-qwen-transfer-batching-tis-s0-pilot-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 3320,
+      "bytes": 545548234,
+      "manifest_sha256": "c98285a06682016d43d697a65433799167a39b6a56434ea3d2f4dd48bc00a8c9",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-tis-s0-pilot-a4-01a126ce/retained-runtime/promotion-manifest-01a126ce.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s.",
+      "complete": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 4169,
+      "bytes": 3168814522,
+      "manifest_sha256": "930dde9dae4081b10e81ee63c30531468356bf29cb35b224bcaa6a6e805e8db3",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce/retained-runtime/promotion-manifest-01a126ce.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s.",
+      "complete": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 4022,
+      "bytes": 2698469667,
+      "manifest_sha256": "c4397274a13f53642777ac1c5b057c3bf378d3a23098f5a64a7f8f9be35b9e02",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce/retained-runtime/promotion-manifest-01a126ce.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s.",
+      "complete": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-curriculum-tis-s1-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 5558,
+      "bytes": 6889785053,
+      "manifest_sha256": "f75b3694519970acc9200adcdc813f05edbea9455ba2bb1f88cb3505ffc6f904",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-tis-s1-main-rno-a1-01a126ce/retained-runtime/promotion-manifest-01a126ce.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s.",
+      "complete": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 5558,
+      "bytes": 6841128539,
+      "manifest_sha256": "875ec1fa546868e9e58d5d64418d64ae7c4921f96e3b07f31dac593fde0c5739",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/retained-runtime/promotion-manifest-01a126ce.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s.",
+      "complete": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 4278,
+      "bytes": 3509702927,
+      "manifest_sha256": "0e0e4e8a56087754c88721a9560d6c1bc597267ab85bdd8fc9b5a18d5f859724",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce/retained-runtime/promotion-manifest-01a126ce.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s.",
+      "complete": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 4278,
+      "bytes": 3375289073,
+      "manifest_sha256": "6c68f10cc614b7c00fc43828bc08288589af007ae891f1e2adac9a1a823c734b",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce/retained-runtime/promotion-manifest-01a126ce.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s.",
+      "complete": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-optimizer-tis-s0-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 4278,
+      "bytes": 3495273208,
+      "manifest_sha256": "539cf60d0579a3cd1f6f9d439ecf023c15956cafedca61249690e45fcad463cc",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-tis-s0-main-rno-a1-01a126ce/retained-runtime/promotion-manifest-01a126ce.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s.",
+      "complete": true
+    }
+  ],
+  "scope": "CompletedbatchingTIS40 and7originalterminalRNOpreemptedattempt0 groups/logs/debug retained beforeautomaticretryallocation; everypartial/preemptioncharged,no final300endpointsclaimed."
+}
