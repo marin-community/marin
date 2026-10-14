@@ -30,13 +30,9 @@ def sources() -> list[RlDataSource]:
                 tags=("agentic", "multi-turn"),
                 count=7496,
                 notes=(
-                    "Native Harbor training tasks with reference solutions and component-reward verifiers; "
-                    "the paper's private S2EBench is a separate evaluation set. "
-                    "Release 1.0.1 (Hub revision 2, tags latest and v1.0); count from exact release membership "
-                    "checked 2026-10-01. The digest fixes the release independently of those moving tags. "
-                    "Project-owned source is Apache-2.0; third-party skills and assets retain their own terms. "
-                    "https://github.com/marin-community/marin/issues/9630 records a three-task assessment "
-                    "and a confirmed verifier defect. Automatic curation assessment is pending."
+                    "Native Harbor training tasks with reference solutions and programmatic component-reward verifiers. "
+                    "The paper's private S2EBench is a separate evaluation set. "
+                    "Project-owned source is Apache-2.0; third-party skills and assets retain their own terms."
                 ),
                 dataset=SourceReference(
                     "skill2env/skill2env",
