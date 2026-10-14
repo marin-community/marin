@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import pandas as pd
 import pytest
 
 from experiments.domain_phase_mix.release import naming, paths
@@ -24,7 +25,11 @@ def test_tasks_have_58_rows_and_objective_weights_sum_to_one():
     assert len(out) == 58 and out.task_id.is_unique
     assert list(out.task_id) == naming.TASKS
     weights = naming.task_weights()
-    assert sum(weights["uncheatable_fixed"].values()) == pytest.approx(1.0, abs=1e-12)
+    # The paper's fixed Uncheatable rule applies the stored byte shares unchanged; they sum to 1 + 2.1e-8.
+    assert sum(weights["uncheatable_fixed"].values()) == pytest.approx(1.0, abs=1e-6)
+    objectives = pd.read_csv(paths.MIXSEL / "data/objectives.csv")
+    stored_shares = objectives[objectives.objective == "uncheatable"].weight.tolist()
+    assert list(weights["uncheatable_fixed"].values()) == stored_shares
     assert sum(weights["obe_easy"].values()) == pytest.approx(1.0, abs=1e-12)
     assert len(weights["uncheatable_fixed"]) == 7 and len(weights["obe_easy"]) == 51
 

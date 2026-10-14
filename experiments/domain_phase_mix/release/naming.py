@@ -56,10 +56,7 @@ def task_weights() -> dict[str, dict[str, float]]:
     objectives = pd.read_csv(paths.require(paths.MIXSEL / "data/objectives.csv"))
     unch = objectives[objectives.objective == "uncheatable"]
     t9 = objectives[objectives.objective == "table9"]
-    # The bundled Uncheatable byte shares sum to 1 + 2.1e-8; normalizing moves the aggregate by about 2e-8 BPB.
-    unch_weights = unch.weight / unch.weight.sum()
-    t9_weights = t9.weight / t9.weight.sum()
     return {
-        "uncheatable_fixed": {task_public(c): float(w) for c, w in zip(unch.component, unch_weights, strict=True)},
-        "obe_easy": {task_public(c): float(w) for c, w in zip(t9.component, t9_weights, strict=True)},
+        "uncheatable_fixed": {task_public(c): float(w) for c, w in zip(unch.component, unch.weight, strict=True)},
+        "obe_easy": {task_public(c): float(w) for c, w in zip(t9.component, t9.weight, strict=True)},
     }
