@@ -255,7 +255,6 @@ def inference_config_for_model(
     priority: int,
     capability_origin: str | None = None,
     api_model: str | None = None,
-    instances: int | None = None,
     broker: BrokerConfig | None = None,
 ) -> RemoteInferenceConfig:
     """Lower one model and selected accelerator into remote inference configuration."""
@@ -334,7 +333,7 @@ def inference_config_for_model(
             endpoint_ready_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
             priority=priority,
         ),
-        instances=serve.instances if instances is None else instances,
+        instances=serve.instances,
         broker=broker,
         capability_origin=capability_origin,
     )
