@@ -41,11 +41,9 @@ is ``None`` and a program that publishes an image fails with ``NO_IMAGE_BUILDER`
 """
 
 import asyncio
-import contextlib
 import logging
 import os
 import shutil
-import signal
 import sys
 import traceback
 from collections.abc import AsyncIterator
@@ -60,6 +58,7 @@ from pydantic import Field, TypeAdapter
 from rigging.filesystem.atomic import atomic_rename
 from rigging.log_setup import configure_logging
 
+from taskforge.child_process import stop_process_group
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import ModelClient, ModelUnavailable
@@ -79,8 +78,6 @@ MODULE = "taskforge.stage40_build.build_process"
 REQUEST_FILE = "build-request.json"
 RESULT_FILE = "build-result.json"
 LOG_FILE = "build-process.log"
-TERMINATE_GRACE = 10.0
-"""Seconds between the SIGTERM and the SIGKILL that stop a child past its wall clock."""
 LOG_TAIL_LINES = 20
 """Lines of the child's log carried by the failure of a child that wrote no result."""
 
@@ -229,7 +226,7 @@ async def run_build_in_process(request: BuildRequest, *, wall_timeout: float) ->
     except TimeoutError:
         raise BuildFailure(f"the build ran for more than {wall_timeout:.0f} seconds") from None
     finally:
-        await _stop(process)
+        await stop_process_group(process)
     if not result_path.exists():
         lines = log_path.read_text(errors="replace").splitlines()[-LOG_TAIL_LINES:]
         raise BuildInfrastructureFailure(
@@ -249,21 +246,6 @@ async def run_build_in_process(request: BuildRequest, *, wall_timeout: float) ->
     if result.raised is Raised.OS_ERROR:
         raise OSError(result.text)
     raise RuntimeError(result.text)
-
-
-async def _stop(process: asyncio.subprocess.Process) -> None:
-    """SIGTERM the process group of a running ``process``, then SIGKILL it after ``TERMINATE_GRACE``."""
-    if process.returncode is not None:
-        return
-    # The group may exit between the check and either signal.
-    with contextlib.suppress(ProcessLookupError):
-        os.killpg(process.pid, signal.SIGTERM)
-    try:
-        await asyncio.wait_for(process.wait(), TERMINATE_GRACE)
-    except TimeoutError:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
-        await process.wait()
 
 
 def _secret(name: str) -> str:

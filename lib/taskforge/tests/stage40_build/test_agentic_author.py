@@ -9,6 +9,7 @@ The session's ``ProgramBuilder`` runs ``run_build`` in process on a step store u
 recording its step spans to a ``JsonlLedger``; the toy ``PROGRAM`` grades in process and calls no model.
 """
 
+import inspect
 import itertools
 import json
 from collections import deque
@@ -27,6 +28,7 @@ from taskforge.llm.recording import CallLedger
 from taskforge.llm.structured import complete_structured, response_format
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.author import Revision, RevisionKind, program_manifest
+from taskforge.stage30_author.load_process import ProgramManifest, load_program_in_process
 from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage40_build import agentic_author as aa
 from taskforge.stage40_build.agentic_author import (
@@ -42,6 +44,7 @@ from taskforge.stage40_build.agentic_author import (
 from taskforge.stage40_build.glm_author import AUTHOR_DIR, GlmAuthor
 from taskforge.stage40_build.run import ResearchRequirement, TaskDraft, run_build
 from taskforge.stage40_build.services import RLEnvBuildServices
+from taskforge.stage40_build.template import standard
 from tests.stage40_build.conftest import ITEM, SAMPLING
 
 PROGRAM = '''"""Grades 6 * 7 in process."""
@@ -165,6 +168,11 @@ def session_ledger(root: Path) -> JsonlLedger:
     return JsonlLedger(root / "ledger" / "author_session")
 
 
+async def in_process_loader(source: str) -> ProgramManifest:
+    """Loads in this process: the tests check the session, and the child loader has its own tests."""
+    return ProgramManifest.model_validate(program_manifest(load_program_source(source)))
+
+
 def session_build(
     root: Path, model: ScriptedModel, services: RLEnvBuildServices, proposal: TaskProposal, round_no: int
 ) -> SessionBuild:
@@ -189,7 +197,7 @@ def session_build(
             invalidate=invalidate,
         )
 
-    return SessionBuild(builder, store, model, SAMPLING, services, ledger.path_for(ITEM))
+    return SessionBuild(builder, store, model, SAMPLING, services, ledger.path_for(ITEM), in_process_loader)
 
 
 @pytest.fixture
@@ -336,6 +344,37 @@ async def test_agentic_record_has_the_one_shot_record_shape(tmp_path, author, pr
     assert {k: one_shot[k] for k in shared} == {k: agentic_record[k] for k in shared}
     assert agentic_record["author_kind"] == "agentic"
     assert read(target / "author.json")["tested"] is False, "the second submit hands in an untested program"
+
+
+SPINNING_CLASS = "class Spin:\n    while True:\n        pass\n\n\n"
+"""An output model whose class body never returns; the template with it added is a program that spins on load."""
+
+
+async def test_a_module_body_that_never_returns_is_refused_by_the_loader_tool(tmp_path, services, proposal, ledger):
+    """The default loader runs in a child process, so a spinning module body costs the session one refusal."""
+
+    async def bounded(source: str) -> ProgramManifest:
+        return await load_program_in_process(source, wall_timeout=2)
+
+    spinning = inspect.getsource(standard).replace("PROGRAM = ", f"{SPINNING_CLASS}PROGRAM = ")
+    item = tmp_path / "item"
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": spinning})),
+        turn(("run_loader", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": ""})),
+        answer("giving up"),
+        answer("still nothing"),
+        answer("done"),
+    )
+    build = replace(session_build(item.parent, model, services, proposal, 0), loader=bounded)
+
+    outcome = await author_round(CONFIG, model, LLMPolicy(), ledger, build, item, ITEM, 0, proposal, None)
+
+    assert outcome.status is not AuthorStatus.ACCEPTED
+    _, loader, submitted = tool_outputs(model)[:3]
+    cut = "the program's module body ran for more than 2 seconds without returning"
+    assert loader.startswith(f"refused by the loader: {cut}")
+    assert submitted.startswith(f"refused by the loader, nothing handed in: {cut}")
 
 
 async def test_tools_refuse_paths_outside_the_workspace_and_writes_to_the_reference(tmp_path, author):
