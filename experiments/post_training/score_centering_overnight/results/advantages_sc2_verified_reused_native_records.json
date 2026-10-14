@@ -1,0 +1,57 @@
+{
+  "run_id": "sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "archive_after_ms": 1791968939636,
+  "scope": "Existing original record IDs only, re-derived with the frozen native serializer from actual selected-attempt rollout groups; every serialized field equals the older archived record. No synthetic record IDs or inferred response content.",
+  "verified_reused_records": [
+    {
+      "record_id": "7be9a99c9855487930833be88b6905cf1df304d2f5c18344027a5d78e4780dfd",
+      "phase": "train",
+      "step": 5,
+      "instance_id": "299",
+      "repetition_id": 4,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000005/722b46fefbfd37f137784b35e6773e721c14c8d3c237738f5ca3e0ff50057a0f.zip",
+      "archive_etag": "\"ef6fd654a30fbd4ea88c81af162bacc9\"",
+      "archive_modified_ms": 1791955976276,
+      "record_payload_sha256": "1746ad81ed9260ffce07206bfc077ff60cbb9da49e4dd244dfffea7861a39148",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/groups/cb45c2a470eb4364870c4be467127712.pkl",
+      "current_group_etag": "\"021c2b954a4b6f7cd436819610ddfb98\"",
+      "current_group_sha256": "c7a746bb1eddcef4b0487b74a3a90aa58b5213b5b34f94715784faf7adb585a0",
+      "current_group_modified_ms": 1791970266633,
+      "all_serialized_fields_equal": true
+    },
+    {
+      "record_id": "9d1aebc0f09b129bf27f1d6b1aebcb802e8463b5b5f9c825411f92a046992ec9",
+      "phase": "train",
+      "step": 7,
+      "instance_id": "391",
+      "repetition_id": 7,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000007/7fc7ab6e788b9a212560a01b2219373021552de32438f7c53c33ae8d1e3cbf23.zip",
+      "archive_etag": "\"dd3110f5a4e7e241467b682f1607b6e3\"",
+      "archive_modified_ms": 1791956108258,
+      "record_payload_sha256": "435f1eec22d4400e030ad6bb076147d7a2c52f973ad65f50a224e5536c7b52e5",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/groups/f4bcdb86d12345ab9d56ec95a1df8a98.pkl",
+      "current_group_etag": "\"860f3d254799ce933434e7466fff0701\"",
+      "current_group_sha256": "8e0a7ba5a0f4d52af3ce318cc86f17c066bdd8281278bf26a71f84852960684f",
+      "current_group_modified_ms": 1791970398287,
+      "all_serialized_fields_equal": true
+    }
+  ],
+  "physical_budget_checks": [
+    {
+      "step": 5,
+      "new_records": 511,
+      "declared_duplicate_records": 1,
+      "verified_existing_records": 1,
+      "physical_responses": 512
+    },
+    {
+      "step": 7,
+      "new_records": 511,
+      "declared_duplicate_records": 1,
+      "verified_existing_records": 1,
+      "physical_responses": 512
+    }
+  ],
+  "all_verified": true
+}

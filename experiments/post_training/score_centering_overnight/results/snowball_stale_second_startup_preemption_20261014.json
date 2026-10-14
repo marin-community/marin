@@ -7,6 +7,65 @@
     "manifest": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/stale64-tis-s0-attempt1-runtime-promotion.json",
     "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/preserved-controller-attempt1-runtime/retained-runtime/promotion-manifest-01a126ce.json",
     "retention_snapshot_before_ms": 1792013544951,
-    "disposition": "Same-bucket conditional ETag copy after failed attempt, while retry wholly queued. Unique attempt1 destination and pre-query timestamp exclude future-retry writes. Source ETag and destination length/provenance verified; no full-weight SHA claim."
+    "disposition": "Same-bucket conditional ETag copy after failed attempt, while retry wholly queued. Unique attempt1 destination and pre-query timestamp exclude future-retry writes. Source ETag and destination length/provenance verified; no full-weight SHA claim.",
+    "retention_scope": "Cumulative surviving runtime files through originalattempt1 while latestretry2 whollyqueued. All7,221objects are unchanged from originalattempt0; the39-second second startup produced no newer surviving S3 runtime objects. This snapshot is not native stale-calibration evidence.",
+    "attempt1_controller_rows": [
+      {
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/0",
+        "attempt_id": "1",
+        "attempt_uid": "6f9564b0ec15f28a",
+        "state": "11",
+        "exit_code": "",
+        "started_at_ms": "1791970447254",
+        "finished_at_ms": "1791970486399",
+        "node_name": "g739e00",
+        "terminal_reason": ""
+      },
+      {
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/1",
+        "attempt_id": "1",
+        "attempt_uid": "4674e4c1e6858e39",
+        "state": "10",
+        "exit_code": "137",
+        "started_at_ms": "1791970452230",
+        "finished_at_ms": "1791970486399",
+        "node_name": "g8247ba",
+        "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 639c76c2-1426-4aa1-b7b3-204103d90cf0, JobUID: 7e907dce-394e-4c90-aa6a-d9b59fdb7f14) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+      },
+      {
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/2",
+        "attempt_id": "1",
+        "attempt_uid": "4dd7436d6ca230ad",
+        "state": "11",
+        "exit_code": "",
+        "started_at_ms": "1791970452230",
+        "finished_at_ms": "1791970486399",
+        "node_name": "g82d828",
+        "terminal_reason": ""
+      },
+      {
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/3",
+        "attempt_id": "1",
+        "attempt_uid": "b6be1de3718eae85",
+        "state": "11",
+        "exit_code": "",
+        "started_at_ms": "1791970447254",
+        "finished_at_ms": "1791970486399",
+        "node_name": "g83d0f6",
+        "terminal_reason": ""
+      },
+      {
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/4",
+        "attempt_id": "1",
+        "attempt_uid": "ff232f1617f502c5",
+        "state": "11",
+        "exit_code": "",
+        "started_at_ms": "1791970441191",
+        "finished_at_ms": "1791970486399",
+        "node_name": "g73bb8a",
+        "terminal_reason": ""
+      }
+    ],
+    "attempt1_allocated_h100_hours": 0.42630222222222225
   }
 ]

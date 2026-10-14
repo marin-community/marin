@@ -1,6 +1,6 @@
 {
   "basis": "Current controller task_attempts started_at_ms to finished_at_ms, multiplied by GPU count decoded from submitted job_config; every recorded task has an actual node_name. Task allocation intervals, not provider billing. Old provider task events are unavailable; do not infer sub-second scheduler/binding precision.",
-  "observed_at": "2026-10-14T21:46:38.500127+00:00",
+  "observed_at": "2026-10-14T22:23:15.000445+00:00",
   "attempts": [
     {
       "task_id": "/romain/sc-ref-diagnostic-noise001-sc-s0-a0-01a123c0/0",
@@ -1412,8 +1412,8 @@
       "allocated_h100_hours": 5.179686666666666,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_runtime_qualification_tis.json",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_runtime_qualification_tis.json"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-runtime-qual-tis-s0-a0-01a126ce/1",
@@ -1435,8 +1435,8 @@
       "allocated_h100_hours": 5.179686666666666,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_runtime_qualification_tis.json",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_runtime_qualification_tis.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s0-a0-01a126ce/0",
@@ -3789,8 +3789,8 @@
       "allocated_h100_hours": 63.97074444444444,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce.json",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce/1",
@@ -3812,8 +3812,8 @@
       "allocated_h100_hours": 63.957973333333335,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce.json",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce/0",
@@ -3835,8 +3835,8 @@
       "allocated_h100_hours": 51.186751111111114,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce.json",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce/1",
@@ -3858,8 +3858,8 @@
       "allocated_h100_hours": 51.26329555555556,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce.json",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce/0",
@@ -4469,8 +4469,8 @@
       "allocated_h100_hours": 5.330873333333334,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_rno_qualification_v1.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_rno_qualification_v1.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-runtime-qual-rno-sc-s0-a1-01a126ce/1",
@@ -4492,8 +4492,8 @@
       "allocated_h100_hours": 5.342686666666666,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_rno_qualification_v1.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_rno_qualification_v1.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-main-a3-01a126ce/0",
@@ -4725,8 +4725,8 @@
       "allocated_h100_hours": 12.316306666666666,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-sc-s0-pilot-a4-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-sc-s0-pilot-a4-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-advantages-sc-s0-pilot-a4-01a126ce/1",
@@ -4748,8 +4748,8 @@
       "allocated_h100_hours": 12.329484444444445,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-sc-s0-pilot-a4-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-sc-s0-pilot-a4-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce/0",
@@ -4771,8 +4771,8 @@
       "allocated_h100_hours": 12.266013333333333,
       "outcome": "infrastructure interruption; controller restarted the job",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce/1",
@@ -4794,8 +4794,8 @@
       "allocated_h100_hours": 12.266013333333333,
       "outcome": "failed engineering attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce/0",
@@ -4859,8 +4859,8 @@
       "allocated_h100_hours": 4.000851111111111,
       "outcome": "infrastructure interruption; controller restarted the job",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce/1",
@@ -4882,8 +4882,8 @@
       "allocated_h100_hours": 4.000851111111111,
       "outcome": "failed engineering attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-batching-tis-s0-pilot-a4-01a126ce/0",
@@ -4905,8 +4905,8 @@
       "allocated_h100_hours": 4.014193333333333,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-tis-s0-pilot-a4-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-tis-s0-pilot-a4-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-batching-tis-s0-pilot-a4-01a126ce/1",
@@ -4928,8 +4928,8 @@
       "allocated_h100_hours": 4.014193333333333,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-tis-s0-pilot-a4-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-tis-s0-pilot-a4-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce/0",
@@ -5287,8 +5287,8 @@
       "allocated_h100_hours": 6.766575555555555,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-native-window-sc-s0-pilot-a4-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-native-window-sc-s0-pilot-a4-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-pilot-a4-01a126ce/1",
@@ -5310,8 +5310,8 @@
       "allocated_h100_hours": 6.7540000000000004,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-native-window-sc-s0-pilot-a4-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-native-window-sc-s0-pilot-a4-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-native-window-tis-s0-pilot-a4-01a126ce/0",
@@ -5333,8 +5333,8 @@
       "allocated_h100_hours": 6.515924444444445,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-native-window-tis-s0-pilot-a4-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-native-window-tis-s0-pilot-a4-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-native-window-tis-s0-pilot-a4-01a126ce/1",
@@ -5356,8 +5356,8 @@
       "allocated_h100_hours": 6.5036266666666664,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-native-window-tis-s0-pilot-a4-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-native-window-tis-s0-pilot-a4-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s1-main-rno-a1-01a126ce/0",
@@ -5946,8 +5946,8 @@
       "allocated_h100_hours": 72.05869777777778,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s1-main-interactive-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s1-main-interactive-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s1-main-interactive-a1-01a126ce/1",
@@ -5969,8 +5969,8 @@
       "allocated_h100_hours": 72.04706888888889,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s1-main-interactive-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s1-main-interactive-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s0-main-interactive-a1-01a126ce/0",
@@ -5992,8 +5992,8 @@
       "allocated_h100_hours": 77.69806222222222,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s0-main-interactive-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s0-main-interactive-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s0-main-interactive-a1-01a126ce/1",
@@ -6015,8 +6015,8 @@
       "allocated_h100_hours": 77.69806222222222,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s0-main-interactive-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s0-main-interactive-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/0",
@@ -6227,8 +6227,8 @@
       "allocated_h100_hours": 77.52873555555554,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce/1",
@@ -6250,8 +6250,8 @@
       "allocated_h100_hours": 77.53838,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce/0",
@@ -6273,8 +6273,8 @@
       "allocated_h100_hours": 76.3425888888889,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce/1",
@@ -6296,8 +6296,8 @@
       "allocated_h100_hours": 76.38035777777777,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s1-main-rno-a1-01a126ce/0",
@@ -6319,8 +6319,8 @@
       "allocated_h100_hours": 76.24378444444444,
       "outcome": "infrastructure interruption; controller restarted the job",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s1-main-rno-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s1-main-rno-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s1-main-rno-a1-01a126ce/1",
@@ -6342,8 +6342,8 @@
       "allocated_h100_hours": 76.25504444444444,
       "outcome": "failed engineering attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s1-main-rno-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s1-main-rno-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s2-main-rno-a1-01a126ce/0",
@@ -6365,8 +6365,8 @@
       "allocated_h100_hours": 78.33317111111111,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s2-main-rno-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s2-main-rno-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s2-main-rno-a1-01a126ce/1",
@@ -6388,8 +6388,8 @@
       "allocated_h100_hours": 78.33317111111111,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s2-main-rno-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s2-main-rno-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s0-main-rno-a1-01a126ce/0",
@@ -6451,8 +6451,10 @@
       "configuration_sha256": "70b235c298e5a7d4a52291d7271ec4075829476e74ee22fdea275c9808755594",
       "allocated_seconds": 34934.459,
       "allocated_h100_hours": 77.63213111111112,
-      "outcome": "task process succeeded; audit pending",
-      "scientific_attempt_selected": false
+      "outcome": "task process succeeded in selected audited scientific attempt",
+      "scientific_attempt_selected": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-sc-s0-main-rno-a1-01a126ce.json.gz",
+      "scientific_outputs_complete": true
     },
     {
       "task_id": "/romain/sc-qwen-transfer-advantages-sc-s0-main-rno-a1-01a126ce/1",
@@ -6472,8 +6474,10 @@
       "configuration_sha256": "70b235c298e5a7d4a52291d7271ec4075829476e74ee22fdea275c9808755594",
       "allocated_seconds": 34934.459,
       "allocated_h100_hours": 77.63213111111112,
-      "outcome": "task process succeeded; audit pending",
-      "scientific_attempt_selected": false
+      "outcome": "task process succeeded in selected audited scientific attempt",
+      "scientific_attempt_selected": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-sc-s0-main-rno-a1-01a126ce.json.gz",
+      "scientific_outputs_complete": true
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce/0",
@@ -6495,8 +6499,8 @@
       "allocated_h100_hours": 82.7009,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce/1",
@@ -6518,8 +6522,8 @@
       "allocated_h100_hours": 82.71477555555555,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce/0",
@@ -6541,8 +6545,8 @@
       "allocated_h100_hours": 79.78740666666667,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce/1",
@@ -6564,8 +6568,8 @@
       "allocated_h100_hours": 79.90923555555557,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/0",
@@ -6587,8 +6591,8 @@
       "allocated_h100_hours": 77.63664444444444,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/1",
@@ -6610,8 +6614,8 @@
       "allocated_h100_hours": 77.64758222222221,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce/0",
@@ -6633,8 +6637,8 @@
       "allocated_h100_hours": 77.77773555555555,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce/1",
@@ -6656,8 +6660,8 @@
       "allocated_h100_hours": 77.77773555555555,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce/0",
@@ -6679,8 +6683,8 @@
       "allocated_h100_hours": 82.18710888888889,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce/1",
@@ -6702,8 +6706,8 @@
       "allocated_h100_hours": 82.22628666666667,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce/0",
@@ -6725,8 +6729,8 @@
       "allocated_h100_hours": 76.97069111111111,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce/1",
@@ -6748,8 +6752,8 @@
       "allocated_h100_hours": 77.00332,
       "outcome": "task process succeeded in selected audited scientific attempt",
       "scientific_attempt_selected": true,
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce.json.gz",
-      "scientific_outputs_complete": true
+      "scientific_outputs_complete": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce.json.gz"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-advantages-sc-s1-main-rno-a1-01a126ce/0",
@@ -6769,8 +6773,10 @@
       "configuration_sha256": "8e87c75d049d6503153dae2e087ab10b2702d375db01c920a045d38e8c83952b",
       "allocated_seconds": 35929.511,
       "allocated_h100_hours": 79.84335777777777,
-      "outcome": "task process succeeded; audit pending",
-      "scientific_attempt_selected": false
+      "outcome": "task process succeeded in selected audited scientific attempt",
+      "scientific_attempt_selected": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-sc-s1-main-rno-a1-01a126ce.json.gz",
+      "scientific_outputs_complete": true
     },
     {
       "task_id": "/romain/sc-qwen-transfer-advantages-sc-s1-main-rno-a1-01a126ce/1",
@@ -6790,8 +6796,10 @@
       "configuration_sha256": "8e87c75d049d6503153dae2e087ab10b2702d375db01c920a045d38e8c83952b",
       "allocated_seconds": 35940.43,
       "allocated_h100_hours": 79.86762222222222,
-      "outcome": "task process succeeded; audit pending",
-      "scientific_attempt_selected": false
+      "outcome": "task process succeeded in selected audited scientific attempt",
+      "scientific_attempt_selected": true,
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-sc-s1-main-rno-a1-01a126ce.json.gz",
+      "scientific_outputs_complete": true
     },
     {
       "task_id": "/romain/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/0",
@@ -8430,9 +8438,471 @@
       "allocated_h100_hours": 4.646884444444444,
       "outcome": "failed engineering attempt",
       "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/0",
+      "attempt_id": "1",
+      "attempt_uid": "6e84a9a599b917df",
+      "state": "10",
+      "exit_code": "137",
+      "started_at_ms": "1791969587621",
+      "finished_at_ms": "1792015403607",
+      "node_name": "g5ba762",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 33b0121c-3402-4a30-a317-a9ff6b9dde76, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "9bec369f0da416230960850d19ffa92f7686f0fd1ccb7cead5e3b709f99bf6d7",
+      "allocated_seconds": 45815.986,
+      "allocated_h100_hours": 101.81330222222222,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/1",
+      "attempt_id": "1",
+      "attempt_uid": "567d48d2eb44c924",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1791969587621",
+      "finished_at_ms": "1792015403607",
+      "node_name": "g5c0474",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "9bec369f0da416230960850d19ffa92f7686f0fd1ccb7cead5e3b709f99bf6d7",
+      "allocated_seconds": 45815.986,
+      "allocated_h100_hours": 101.81330222222222,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-tis-s0-main-rno-a2-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "a4955a5eb9369668",
+      "state": "10",
+      "exit_code": "137",
+      "started_at_ms": "1791969587621",
+      "finished_at_ms": "1792014882223",
+      "node_name": "g3232cc",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 92fab2a0-db33-4157-9bd2-b8c917c6bf42, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "f156b6a522629b76e2d516a6e014e50fe7b8b357d7d65031d234661d084929e8",
+      "allocated_seconds": 45294.602,
+      "allocated_h100_hours": 100.65467111111111,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-tis-s0-main-rno-a2-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "d8f7a4657506fcf9",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1791969587621",
+      "finished_at_ms": "1792014882223",
+      "node_name": "g4ead54",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "f156b6a522629b76e2d516a6e014e50fe7b8b357d7d65031d234661d084929e8",
+      "allocated_seconds": 45294.602,
+      "allocated_h100_hours": 100.65467111111111,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s2-main-rno-a2-01a126ce/0",
+      "attempt_id": "4",
+      "attempt_uid": "66b370a639159cb1",
+      "state": "10",
+      "exit_code": "137",
+      "started_at_ms": "1792001378668",
+      "finished_at_ms": "1792014882223",
+      "node_name": "g830782",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 92fab2a0-db33-4157-9bd2-b8c917c6bf42, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "04af6e6f1042c8281ce39e4ae6e6edaeb45aea1118fb47764d7251ef760b2543",
+      "allocated_seconds": 13503.555,
+      "allocated_h100_hours": 30.0079,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s2-main-rno-a2-01a126ce/1",
+      "attempt_id": "4",
+      "attempt_uid": "b69a02dd8a904100",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792001398828",
+      "finished_at_ms": "1792014882223",
+      "node_name": "ga8afb0",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "04af6e6f1042c8281ce39e4ae6e6edaeb45aea1118fb47764d7251ef760b2543",
+      "allocated_seconds": 13483.395,
+      "allocated_h100_hours": 29.9631,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-tis-s2-main-rno-a2-01a126ce/0",
+      "attempt_id": "6",
+      "attempt_uid": "67b7fa31e9872d34",
+      "state": "10",
+      "exit_code": "137",
+      "started_at_ms": "1792002182562",
+      "finished_at_ms": "1792014882223",
+      "node_name": "gb960f0",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 92fab2a0-db33-4157-9bd2-b8c917c6bf42, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "ba700ce6c7a417a78577a4f0314dd2b2e3a9179dd2d3745a772aa48488af2af9",
+      "allocated_seconds": 12699.661,
+      "allocated_h100_hours": 28.22146888888889,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-tis-s2-main-rno-a2-01a126ce/1",
+      "attempt_id": "6",
+      "attempt_uid": "eb7bf22651616676",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792002182562",
+      "finished_at_ms": "1792014882223",
+      "node_name": "g463dd6",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "ba700ce6c7a417a78577a4f0314dd2b2e3a9179dd2d3745a772aa48488af2af9",
+      "allocated_seconds": 12699.661,
+      "allocated_h100_hours": 28.22146888888889,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s1-main-rno-a2-01a126ce/0",
+      "attempt_id": "8",
+      "attempt_uid": "ffff2c1167d649a9",
+      "state": "10",
+      "exit_code": "137",
+      "started_at_ms": "1792002311600",
+      "finished_at_ms": "1792014882223",
+      "node_name": "g80f608",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 92fab2a0-db33-4157-9bd2-b8c917c6bf42, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "b7d496aeb9d909a6f17c8fdfe23b2329144b71110fc1082352a3e70a884b92db",
+      "allocated_seconds": 12570.623,
+      "allocated_h100_hours": 27.934717777777777,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s1-main-rno-a2-01a126ce/1",
+      "attempt_id": "8",
+      "attempt_uid": "10a6ac7f5a50a8a0",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792002311600",
+      "finished_at_ms": "1792014882223",
+      "node_name": "gaa0e72",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "b7d496aeb9d909a6f17c8fdfe23b2329144b71110fc1082352a3e70a884b92db",
+      "allocated_seconds": 12570.623,
+      "allocated_h100_hours": 27.934717777777777,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "d7aafb01e8bbfb54",
+      "state": "10",
+      "exit_code": "137",
+      "started_at_ms": "1792008203693",
+      "finished_at_ms": "1792014882223",
+      "node_name": "gb95a00",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 92fab2a0-db33-4157-9bd2-b8c917c6bf42, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "ecf26e090201759a3f93fa7fb3a53fffbbfcc11766df01f4a5b8cd649c56f1f7",
+      "allocated_seconds": 6678.53,
+      "allocated_h100_hours": 14.841177777777776,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "28efca66d26a955a",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792008203693",
+      "finished_at_ms": "1792014882223",
+      "node_name": "gb960a0",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "ecf26e090201759a3f93fa7fb3a53fffbbfcc11766df01f4a5b8cd649c56f1f7",
+      "allocated_seconds": 6678.53,
+      "allocated_h100_hours": 14.841177777777776,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a2-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "961ea5e9c746758c",
+      "state": "10",
+      "exit_code": "137",
+      "started_at_ms": "1792008214903",
+      "finished_at_ms": "1792014882223",
+      "node_name": "gb95a50",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 92fab2a0-db33-4157-9bd2-b8c917c6bf42, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "c9ace3bd26cee3264a6d0d00b3e6d41d4d3e6f2f305e6eab399d6864fe3d494a",
+      "allocated_seconds": 6667.32,
+      "allocated_h100_hours": 14.816266666666666,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a2-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "7cb1a247e8183b24",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792008214903",
+      "finished_at_ms": "1792014882223",
+      "node_name": "gb95ef0",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "c9ace3bd26cee3264a6d0d00b3e6d41d4d3e6f2f305e6eab399d6864fe3d494a",
+      "allocated_seconds": 6667.32,
+      "allocated_h100_hours": 14.816266666666666,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "e4ce90a0822d456d",
+      "state": "10",
+      "exit_code": "137",
+      "started_at_ms": "1792008254478",
+      "finished_at_ms": "1792014882223",
+      "node_name": "g5b9592",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 92fab2a0-db33-4157-9bd2-b8c917c6bf42, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "545b0bbffe46c4ab868c411860fca88a467ec9c847823a7058a20285079d8e76",
+      "allocated_seconds": 6627.745,
+      "allocated_h100_hours": 14.728322222222221,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "b6be6ff5c71abc39",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792008221230",
+      "finished_at_ms": "1792014882223",
+      "node_name": "g5ba7d4",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "545b0bbffe46c4ab868c411860fca88a467ec9c847823a7058a20285079d8e76",
+      "allocated_seconds": 6660.993,
+      "allocated_h100_hours": 14.802206666666667,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce/0",
+      "attempt_id": "5",
+      "attempt_uid": "b80436da1979ecf6",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792011556550",
+      "finished_at_ms": "1792014876220",
+      "node_name": "g538230",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "b0b17c8bdd2fed083c1ab41c8f2fe270a747cac316164cb48ff310283b1cd189",
+      "allocated_seconds": 3319.67,
+      "allocated_h100_hours": 7.3770444444444445,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce/1",
+      "attempt_id": "5",
+      "attempt_uid": "93635b38ddd83906",
+      "state": "10",
+      "exit_code": "143",
+      "started_at_ms": "1792011556550",
+      "finished_at_ms": "1792014876220",
+      "node_name": "g779de0",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 92fab2a0-db33-4157-9bd2-b8c917c6bf42, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "b0b17c8bdd2fed083c1ab41c8f2fe270a747cac316164cb48ff310283b1cd189",
+      "allocated_seconds": 3319.67,
+      "allocated_h100_hours": 7.3770444444444445,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce/0",
+      "attempt_id": "2",
+      "attempt_uid": "a0c3de38bacd6ce8",
+      "state": "10",
+      "exit_code": "137",
+      "started_at_ms": "1792014094684",
+      "finished_at_ms": "1792014394606",
+      "node_name": "gb95d00",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 14a821c6-94a7-492a-8cca-8c73da0331e2, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "0ecd14f75404a2382b9ca05ea5384878f545b568d32b6745e345959491756b02",
+      "allocated_seconds": 299.922,
+      "allocated_h100_hours": 0.6664933333333334,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce/1",
+      "attempt_id": "2",
+      "attempt_uid": "2e81691d2475df69",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792014094684",
+      "finished_at_ms": "1792014394606",
+      "node_name": "gb976f0",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "0ecd14f75404a2382b9ca05ea5384878f545b568d32b6745e345959491756b02",
+      "allocated_seconds": 299.922,
+      "allocated_h100_hours": 0.6664933333333334,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce/0",
+      "attempt_id": "3",
+      "attempt_uid": "77b9452c6937a956",
+      "state": "10",
+      "exit_code": "137",
+      "started_at_ms": "1792014493664",
+      "finished_at_ms": "1792014882223",
+      "node_name": "gb97250",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 92fab2a0-db33-4157-9bd2-b8c917c6bf42, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "0ecd14f75404a2382b9ca05ea5384878f545b568d32b6745e345959491756b02",
+      "allocated_seconds": 388.559,
+      "allocated_h100_hours": 0.8634644444444445,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce/1",
+      "attempt_id": "3",
+      "attempt_uid": "3a01891972c8964e",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792014514931",
+      "finished_at_ms": "1792014882223",
+      "node_name": "g53ee66",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "0ecd14f75404a2382b9ca05ea5384878f545b568d32b6745e345959491756b02",
+      "allocated_seconds": 367.292,
+      "allocated_h100_hours": 0.8162044444444444,
+      "outcome": "failed engineering attempt",
+      "scientific_attempt_selected": false
     }
   ],
-  "terminal_h100_hours": 8375.680077777773,
+  "terminal_h100_hours": 9059.511559999995,
   "terminal_h100_hours_by_stage": {
     "reference diagnostics": 14.997133333333334,
     "reference qualification": 1.1350711111111111,
@@ -8446,7 +8916,7 @@
     "Snowball noise calibration": 235.28845555555557,
     "Snowball incumbent qualification": 92.46114222222224,
     "Qwen transfer pilot": 209.99305111111101,
-    "Qwen transfer main": 3802.6270911111096,
+    "Qwen transfer main": 4486.4585733333315,
     "Snowball staleness calibration": 6.214628888888889
   },
   "active_costs": "Active intervals are partial observations and excluded from terminal stage totals.",
@@ -8467,8 +8937,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "11221253d6a7fbbf918132283d765c290715c4e54493ed9b98c69ca23f4a14ba",
-      "observed_at": "2026-10-14T21:46:32.228422+00:00",
-      "allocated_h100_hours_so_far": 35.009256493250525
+      "observed_at": "2026-10-14T22:23:07.596566+00:00",
+      "allocated_h100_hours_so_far": 39.887852368884616
     },
     {
       "task_id": "/romain/sc-snowball-main-noise005-sc-s0-a2-01a126ce/1",
@@ -8486,8 +8956,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "11221253d6a7fbbf918132283d765c290715c4e54493ed9b98c69ca23f4a14ba",
-      "observed_at": "2026-10-14T21:46:32.228422+00:00",
-      "allocated_h100_hours_so_far": 35.009256493250525
+      "observed_at": "2026-10-14T22:23:07.596566+00:00",
+      "allocated_h100_hours_so_far": 39.887852368884616
     },
     {
       "task_id": "/romain/sc-snowball-main-noise005-sc-s0-a2-01a126ce/2",
@@ -8505,8 +8975,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "11221253d6a7fbbf918132283d765c290715c4e54493ed9b98c69ca23f4a14ba",
-      "observed_at": "2026-10-14T21:46:32.228422+00:00",
-      "allocated_h100_hours_so_far": 35.009256493250525
+      "observed_at": "2026-10-14T22:23:07.596566+00:00",
+      "allocated_h100_hours_so_far": 39.887852368884616
     },
     {
       "task_id": "/romain/sc-snowball-main-noise005-sc-s0-a2-01a126ce/3",
@@ -8524,8 +8994,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "11221253d6a7fbbf918132283d765c290715c4e54493ed9b98c69ca23f4a14ba",
-      "observed_at": "2026-10-14T21:46:32.228422+00:00",
-      "allocated_h100_hours_so_far": 35.009256493250525
+      "observed_at": "2026-10-14T22:23:07.596566+00:00",
+      "allocated_h100_hours_so_far": 39.887852368884616
     },
     {
       "task_id": "/romain/sc-snowball-main-noise005-sc-s0-a2-01a126ce/4",
@@ -8543,8 +9013,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "11221253d6a7fbbf918132283d765c290715c4e54493ed9b98c69ca23f4a14ba",
-      "observed_at": "2026-10-14T21:46:32.228422+00:00",
-      "allocated_h100_hours_so_far": 35.009256493250525
+      "observed_at": "2026-10-14T22:23:07.596566+00:00",
+      "allocated_h100_hours_so_far": 39.887852368884616
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s0-main-interactive-a2-01a126ce/0",
@@ -8562,8 +9032,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "dfbad8cfda991c91781871e0488599231fafdc7a55d23cd5d9279a84059e4cb8",
-      "observed_at": "2026-10-14T21:46:32.228422+00:00",
-      "allocated_h100_hours_so_far": 13.670427604251438
+      "observed_at": "2026-10-14T22:23:07.596566+00:00",
+      "allocated_h100_hours_so_far": 18.549023479885527
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s0-main-interactive-a2-01a126ce/1",
@@ -8581,8 +9051,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "dfbad8cfda991c91781871e0488599231fafdc7a55d23cd5d9279a84059e4cb8",
-      "observed_at": "2026-10-14T21:46:32.228422+00:00",
-      "allocated_h100_hours_so_far": 13.670427604251438
+      "observed_at": "2026-10-14T22:23:07.596566+00:00",
+      "allocated_h100_hours_so_far": 18.549023479885527
     },
     {
       "task_id": "/romain/sc-qwen-transfer-advantages-tis-s1-main-interactive-a1-01a126ce/0",
@@ -8600,8 +9070,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "636aedfcec42e8d9eb916e76031eac19f71cc309503814222b6688c7e22a14c6",
-      "observed_at": "2026-10-14T21:46:32.228422+00:00",
-      "allocated_h100_hours_so_far": 13.646287604437934
+      "observed_at": "2026-10-14T22:23:07.596566+00:00",
+      "allocated_h100_hours_so_far": 18.52488348007202
     },
     {
       "task_id": "/romain/sc-qwen-transfer-advantages-tis-s1-main-interactive-a1-01a126ce/1",
@@ -8619,8 +9089,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "636aedfcec42e8d9eb916e76031eac19f71cc309503814222b6688c7e22a14c6",
-      "observed_at": "2026-10-14T21:46:32.228422+00:00",
-      "allocated_h100_hours_so_far": 13.646287604437934
+      "observed_at": "2026-10-14T22:23:07.596566+00:00",
+      "allocated_h100_hours_so_far": 18.52488348007202
     },
     {
       "task_id": "/romain/sc-qwen-transfer-native-window-tis-s1-main-east-a1-01a126ce/0",
@@ -8638,8 +9108,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "550757c78c5516aa12d3ac10d6d392f769d5ddfac0299fa0bc4e7acc24919ce9",
-      "observed_at": "2026-10-14T21:46:32.228422+00:00",
-      "allocated_h100_hours_so_far": 13.646287604437934
+      "observed_at": "2026-10-14T22:23:07.596566+00:00",
+      "allocated_h100_hours_so_far": 18.52488348007202
     },
     {
       "task_id": "/romain/sc-qwen-transfer-native-window-tis-s1-main-east-a1-01a126ce/1",
@@ -8657,244 +9127,149 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "550757c78c5516aa12d3ac10d6d392f769d5ddfac0299fa0bc4e7acc24919ce9",
-      "observed_at": "2026-10-14T21:46:32.228422+00:00",
-      "allocated_h100_hours_so_far": 13.646287604437934
+      "observed_at": "2026-10-14T22:23:07.596566+00:00",
+      "allocated_h100_hours_so_far": 18.52488348007202
     },
     {
-      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/0",
-      "attempt_id": "1",
-      "attempt_uid": "6e84a9a599b917df",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1791969587621",
-      "finished_at_ms": "",
-      "node_name": "g5ba762",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "9bec369f0da416230960850d19ffa92f7686f0fd1ccb7cead5e3b709f99bf6d7",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 99.57973139339023
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/1",
-      "attempt_id": "1",
-      "attempt_uid": "567d48d2eb44c924",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1791969587621",
-      "finished_at_ms": "",
-      "node_name": "g5c0474",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "9bec369f0da416230960850d19ffa92f7686f0fd1ccb7cead5e3b709f99bf6d7",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 99.57973139339023
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-native-window-tis-s0-main-rno-a2-01a126ce/0",
+      "task_id": "/romain/sc-snowball-runtime-qual-rno-noise005-sc-s0-a0-01a126ce/0",
       "attempt_id": "0",
-      "attempt_uid": "a4955a5eb9369668",
+      "attempt_uid": "dd78894da940f7ac",
       "state": "3",
       "exit_code": "",
-      "started_at_ms": "1791969587621",
+      "started_at_ms": "1792015960700",
       "finished_at_ms": "",
-      "node_name": "g3232cc",
+      "node_name": "g538230",
       "terminal_reason": "",
-      "stage": "Qwen transfer main",
+      "stage": "Snowball GPU qualification",
       "cluster": "cw-rno2a",
       "priority": "batch",
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "f156b6a522629b76e2d516a6e014e50fe7b8b357d7d65031d234661d084929e8",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 99.57973139339023
+      "configuration_sha256": "060d669150560309ff2d9d424e0a60058693ab6fa86fe02893483f97bc639c0f",
+      "observed_at": "2026-10-14T22:23:15.000445+00:00",
+      "allocated_h100_hours_so_far": 1.4095565440919664
     },
     {
-      "task_id": "/romain/sc-qwen-transfer-native-window-tis-s0-main-rno-a2-01a126ce/1",
+      "task_id": "/romain/sc-snowball-runtime-qual-rno-noise005-sc-s0-a0-01a126ce/1",
       "attempt_id": "0",
-      "attempt_uid": "d8f7a4657506fcf9",
+      "attempt_uid": "6dc8cad63bc42f66",
       "state": "3",
       "exit_code": "",
-      "started_at_ms": "1791969587621",
+      "started_at_ms": "1792015960700",
       "finished_at_ms": "",
-      "node_name": "g4ead54",
+      "node_name": "g538314",
+      "terminal_reason": "",
+      "stage": "Snowball GPU qualification",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "060d669150560309ff2d9d424e0a60058693ab6fa86fe02893483f97bc639c0f",
+      "observed_at": "2026-10-14T22:23:15.000445+00:00",
+      "allocated_h100_hours_so_far": 1.4095565440919664
+    },
+    {
+      "task_id": "/romain/sc-snowball-runtime-qual-rno-noise005-sc-s0-a0-01a126ce/2",
+      "attempt_id": "0",
+      "attempt_uid": "a7905af26c4b4089",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1792015960700",
+      "finished_at_ms": "",
+      "node_name": "g53ee66",
+      "terminal_reason": "",
+      "stage": "Snowball GPU qualification",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "060d669150560309ff2d9d424e0a60058693ab6fa86fe02893483f97bc639c0f",
+      "observed_at": "2026-10-14T22:23:15.000445+00:00",
+      "allocated_h100_hours_so_far": 1.4095565440919664
+    },
+    {
+      "task_id": "/romain/sc-snowball-runtime-qual-rno-noise005-sc-s0-a0-01a126ce/3",
+      "attempt_id": "0",
+      "attempt_uid": "ae6ea8bf37b829c6",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1792015960700",
+      "finished_at_ms": "",
+      "node_name": "g5b3dfe",
+      "terminal_reason": "",
+      "stage": "Snowball GPU qualification",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "060d669150560309ff2d9d424e0a60058693ab6fa86fe02893483f97bc639c0f",
+      "observed_at": "2026-10-14T22:23:15.000445+00:00",
+      "allocated_h100_hours_so_far": 1.4095565440919664
+    },
+    {
+      "task_id": "/romain/sc-snowball-runtime-qual-rno-noise005-sc-s0-a0-01a126ce/4",
+      "attempt_id": "0",
+      "attempt_uid": "af655740dc02b76e",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1792015960700",
+      "finished_at_ms": "",
+      "node_name": "g5b9592",
+      "terminal_reason": "",
+      "stage": "Snowball GPU qualification",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "060d669150560309ff2d9d424e0a60058693ab6fa86fe02893483f97bc639c0f",
+      "observed_at": "2026-10-14T22:23:15.000445+00:00",
+      "allocated_h100_hours_so_far": 1.4095565440919664
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce/0",
+      "attempt_id": "6",
+      "attempt_uid": "ff3ce69e761f68d0",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1792015960700",
+      "finished_at_ms": "",
+      "node_name": "g86299e",
       "terminal_reason": "",
       "stage": "Qwen transfer main",
       "cluster": "cw-rno2a",
       "priority": "batch",
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "f156b6a522629b76e2d516a6e014e50fe7b8b357d7d65031d234661d084929e8",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 99.57973139339023
+      "configuration_sha256": "b0b17c8bdd2fed083c1ab41c8f2fe270a747cac316164cb48ff310283b1cd189",
+      "observed_at": "2026-10-14T22:23:15.000445+00:00",
+      "allocated_h100_hours_so_far": 1.4095565440919664
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce/1",
+      "attempt_id": "6",
+      "attempt_uid": "ab7206a33ec47490",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1792015960700",
+      "finished_at_ms": "",
+      "node_name": "gb99af0",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "b0b17c8bdd2fed083c1ab41c8f2fe270a747cac316164cb48ff310283b1cd189",
+      "observed_at": "2026-10-14T22:23:15.000445+00:00",
+      "allocated_h100_hours_so_far": 1.4095565440919664
     },
     {
       "task_id": "/romain/sc-qwen-transfer-native-window-sc-s2-main-rno-a2-01a126ce/0",
-      "attempt_id": "4",
-      "attempt_uid": "66b370a639159cb1",
+      "attempt_id": "5",
+      "attempt_uid": "c2c8c02fb78b009f",
       "state": "3",
       "exit_code": "",
-      "started_at_ms": "1792001378668",
-      "finished_at_ms": "",
-      "node_name": "g830782",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "04af6e6f1042c8281ce39e4ae6e6edaeb45aea1118fb47764d7251ef760b2543",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 28.932960282431708
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s2-main-rno-a2-01a126ce/1",
-      "attempt_id": "4",
-      "attempt_uid": "b69a02dd8a904100",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1792001398828",
-      "finished_at_ms": "",
-      "node_name": "ga8afb0",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "04af6e6f1042c8281ce39e4ae6e6edaeb45aea1118fb47764d7251ef760b2543",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 28.888160282240975
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-native-window-tis-s2-main-rno-a2-01a126ce/0",
-      "attempt_id": "6",
-      "attempt_uid": "67b7fa31e9872d34",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1792002182562",
-      "finished_at_ms": "",
-      "node_name": "gb960f0",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "ba700ce6c7a417a78577a4f0314dd2b2e3a9179dd2d3745a772aa48488af2af9",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 27.14652917120192
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-native-window-tis-s2-main-rno-a2-01a126ce/1",
-      "attempt_id": "6",
-      "attempt_uid": "eb7bf22651616676",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1792002182562",
-      "finished_at_ms": "",
-      "node_name": "g463dd6",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "ba700ce6c7a417a78577a4f0314dd2b2e3a9179dd2d3745a772aa48488af2af9",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 27.14652917120192
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s1-main-rno-a2-01a126ce/0",
-      "attempt_id": "8",
-      "attempt_uid": "ffff2c1167d649a9",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1792002311600",
-      "finished_at_ms": "",
-      "node_name": "g80f608",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "b7d496aeb9d909a6f17c8fdfe23b2329144b71110fc1082352a3e70a884b92db",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 26.859778060383267
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s1-main-rno-a2-01a126ce/1",
-      "attempt_id": "8",
-      "attempt_uid": "10a6ac7f5a50a8a0",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1792002311600",
-      "finished_at_ms": "",
-      "node_name": "gaa0e72",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "b7d496aeb9d909a6f17c8fdfe23b2329144b71110fc1082352a3e70a884b92db",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 26.859778060383267
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/0",
-      "attempt_id": "0",
-      "attempt_uid": "d7aafb01e8bbfb54",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1792008203693",
-      "finished_at_ms": "",
-      "node_name": "gb95a00",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "ecf26e090201759a3f93fa7fb3a53fffbbfcc11766df01f4a5b8cd649c56f1f7",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 13.766238059997558
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/1",
-      "attempt_id": "0",
-      "attempt_uid": "28efca66d26a955a",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1792008203693",
-      "finished_at_ms": "",
-      "node_name": "gb960a0",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "ecf26e090201759a3f93fa7fb3a53fffbbfcc11766df01f4a5b8cd649c56f1f7",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 13.766238059997558
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a2-01a126ce/0",
-      "attempt_id": "0",
-      "attempt_uid": "961ea5e9c746758c",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1792008214903",
+      "started_at_ms": "1792015960700",
       "finished_at_ms": "",
       "node_name": "gb95a50",
       "terminal_reason": "",
@@ -8903,17 +9278,17 @@
       "priority": "batch",
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "c9ace3bd26cee3264a6d0d00b3e6d41d4d3e6f2f305e6eab399d6864fe3d494a",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 13.741326948801676
+      "configuration_sha256": "04af6e6f1042c8281ce39e4ae6e6edaeb45aea1118fb47764d7251ef760b2543",
+      "observed_at": "2026-10-14T22:23:15.000445+00:00",
+      "allocated_h100_hours_so_far": 1.4095565440919664
     },
     {
-      "task_id": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a2-01a126ce/1",
-      "attempt_id": "0",
-      "attempt_uid": "7cb1a247e8183b24",
+      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s2-main-rno-a2-01a126ce/1",
+      "attempt_id": "5",
+      "attempt_uid": "14697f9263acaa8a",
       "state": "3",
       "exit_code": "",
-      "started_at_ms": "1792008214903",
+      "started_at_ms": "1792015960700",
       "finished_at_ms": "",
       "node_name": "gb95ef0",
       "terminal_reason": "",
@@ -8922,123 +9297,47 @@
       "priority": "batch",
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "04af6e6f1042c8281ce39e4ae6e6edaeb45aea1118fb47764d7251ef760b2543",
+      "observed_at": "2026-10-14T22:23:15.000445+00:00",
+      "allocated_h100_hours_so_far": 1.4095565440919664
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a2-01a126ce/0",
+      "attempt_id": "1",
+      "attempt_uid": "7ed9ec8dd947b2bc",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1792015960700",
+      "finished_at_ms": "",
+      "node_name": "g463dd6",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "c9ace3bd26cee3264a6d0d00b3e6d41d4d3e6f2f305e6eab399d6864fe3d494a",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 13.741326948801676
+      "observed_at": "2026-10-14T22:23:15.000445+00:00",
+      "allocated_h100_hours_so_far": 1.4095565440919664
     },
     {
-      "task_id": "/romain/sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce/0",
-      "attempt_id": "0",
-      "attempt_uid": "e4ce90a0822d456d",
+      "task_id": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a2-01a126ce/1",
+      "attempt_id": "1",
+      "attempt_uid": "f92a206066025180",
       "state": "3",
       "exit_code": "",
-      "started_at_ms": "1792008254478",
+      "started_at_ms": "1792015960700",
       "finished_at_ms": "",
-      "node_name": "g5b9592",
+      "node_name": "gb97250",
       "terminal_reason": "",
       "stage": "Qwen transfer main",
       "cluster": "cw-rno2a",
       "priority": "batch",
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "545b0bbffe46c4ab868c411860fca88a467ec9c847823a7058a20285079d8e76",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 13.653382504781087
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce/1",
-      "attempt_id": "0",
-      "attempt_uid": "b6be6ff5c71abc39",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1792008221230",
-      "finished_at_ms": "",
-      "node_name": "g5ba7d4",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "545b0bbffe46c4ab868c411860fca88a467ec9c847823a7058a20285079d8e76",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 13.727266949017842
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce/0",
-      "attempt_id": "5",
-      "attempt_uid": "b80436da1979ecf6",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1792011556550",
-      "finished_at_ms": "",
-      "node_name": "g538230",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "b0b17c8bdd2fed083c1ab41c8f2fe270a747cac316164cb48ff310283b1cd189",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 6.315444726943969
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce/1",
-      "attempt_id": "5",
-      "attempt_uid": "93635b38ddd83906",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1792011556550",
-      "finished_at_ms": "",
-      "node_name": "g779de0",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "b0b17c8bdd2fed083c1ab41c8f2fe270a747cac316164cb48ff310283b1cd189",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 6.315444726943969
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce/0",
-      "attempt_id": "2",
-      "attempt_uid": "a0c3de38bacd6ce8",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1792014094684",
-      "finished_at_ms": "",
-      "node_name": "gb95d00",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "0ecd14f75404a2382b9ca05ea5384878f545b568d32b6745e345959491756b02",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 0.6751469490263197
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce/1",
-      "attempt_id": "2",
-      "attempt_uid": "2e81691d2475df69",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1792014094684",
-      "finished_at_ms": "",
-      "node_name": "gb976f0",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "0ecd14f75404a2382b9ca05ea5384878f545b568d32b6745e345959491756b02",
-      "observed_at": "2026-10-14T21:46:38.500127+00:00",
-      "allocated_h100_hours_so_far": 0.6751469490263197
+      "configuration_sha256": "c9ace3bd26cee3264a6d0d00b3e6d41d4d3e6f2f305e6eab399d6864fe3d494a",
+      "observed_at": "2026-10-14T22:23:15.000445+00:00",
+      "allocated_h100_hours_so_far": 1.4095565440919664
     }
   ]
 }
