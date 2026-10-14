@@ -41,6 +41,7 @@ def test_joint_recipe_crosses_pinned_launcher_boundary(tmp_path):
             data_uri=str(tmp_path / "data"),
             data_version="dev",
             max_steps=2,
+            judge_base_url="https://judge.invalid/v1",
         )
     launch = run.build_config(StepContext.for_fingerprint(run.runtime_args, run.deps))
     path = tmp_path / "launch.yaml"

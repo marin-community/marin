@@ -1,6 +1,11 @@
 # Recipe fragment, not a launch document. Artifact inputs, role geometry, and
 # runtime pins must be bound by the campaign artifact entrypoint before launch.
 entrypoint: taskcompendium
+environment:
+  task_sessions:
+    daytona:
+      api_key_env: DAYTONA_RL_API_KEY
+      ttl_minutes: 60
 data:
   sampling:
     kind: domain-weighted

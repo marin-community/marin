@@ -12,4 +12,4 @@ required-environments = ["sys_platform == 'linux'", "sys_platform == 'darwin' an
 override-dependencies = ["marin-rigging[secrets,prometheus]>=0.2.144.dev37540375919"]
 
 [tool.uv.sources]
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "96463cbcfa2da3a80791fa958e2bff4cf3a2537c" }
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "b00b9460a67e6d908d82eeb4a5ec94299b076bc1" }
