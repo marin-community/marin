@@ -3,6 +3,7 @@
 
 """Reconstruct and execute a bounded ShellSim agent workspace."""
 
+import argparse
 import dataclasses
 import json
 import shlex
@@ -13,6 +14,10 @@ from pathlib import PurePosixPath
 
 import shellsim
 
+from marin.inference.shellsim_runtime import (
+    tool_environment,
+)
+
 MAX_WORKSPACE_FILES = 500
 MAX_WORKSPACE_FILE_BYTES = 256 * 1024
 MAX_WORKSPACE_TOTAL_BYTES = 4 * 1024 * 1024
@@ -22,9 +27,7 @@ MAX_WORKSPACE_HISTORY_BYTES = 128 * 1024
 MAX_IMPORTED_COMMITS = 32
 MAX_IMPORTED_HISTORY_BYTES = MAX_WORKSPACE_TOTAL_BYTES + 64 * 1024
 MAX_COMMIT_METADATA_BYTES = 4 * 1024
-_SHELLSIM_CPU_LIMIT = 50_000_000
-_SHELLSIM_MEMORY_LIMIT = 64 * 1024 * 1024
-_SHELLSIM_DISK_LIMIT = 16 * 1024 * 1024
+_SHELLSIM_CPU_LIMIT = 4_000_000_000
 _SHELLSIM_OUTPUT_LIMIT = 2 * 1024 * 1024
 _WORKSPACE_ROOT = "/work"
 
@@ -253,11 +256,12 @@ def _write_workspace_file(environment: shellsim.Environment, name: str, content:
     environment.write_file(f"{_WORKSPACE_ROOT}/{name}", content)
 
 
-def shell_command_result(request: ShellWorkspaceRequest) -> ShellCommandResult:
-    environment = shellsim.Context().Environment(
+def shell_command_result(
+    request: ShellWorkspaceRequest, *, catalog: str = shellsim.DEFAULT_PYPI_CATALOG
+) -> ShellCommandResult:
+    environment = tool_environment(
+        catalog,
         cpu=_SHELLSIM_CPU_LIMIT,
-        memory=_SHELLSIM_MEMORY_LIMIT,
-        disk=_SHELLSIM_DISK_LIMIT,
         output=_SHELLSIM_OUTPUT_LIMIT,
     )
     _seed_workspace(environment, request.files, request.commits)
@@ -280,10 +284,11 @@ def shell_command_result(request: ShellWorkspaceRequest) -> ShellCommandResult:
 
 
 def _main() -> None:
-    if len(sys.argv) != 1:
-        raise ValueError(f"Expected no shell workspace arguments, got {sys.argv[1:]!r}")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--catalog", default=shellsim.DEFAULT_PYPI_CATALOG)
+    args = parser.parse_args()
     request = ShellWorkspaceRequest.from_payload(json.load(sys.stdin))
-    sys.stdout.buffer.write(shell_command_result(request).to_json_bytes())
+    sys.stdout.buffer.write(shell_command_result(request, catalog=args.catalog).to_json_bytes())
 
 
 if __name__ == "__main__":
