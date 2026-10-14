@@ -22,14 +22,12 @@ from typing import Protocol
 from taskcompendium.models import DOCKER_IMAGE_PATTERN, TaskResource
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
-# The verifier machine of a script grader on a task without its own image: docker/grader-base built for
-# linux/amd64 and pinned by manifest digest. Publish it with
-#   uv run scripts/build_image_job.py --context docker/grader-base --repository capability-infra/taskforge-grader-base
-# and put the printed reference here.
-GRADER_BASE_IMAGE = (
-    "envreg.208261-marin-gpu.coreweave.app/capability-infra/taskforge-grader-base"
-    "@sha256:63eb0b5c3efb5b2e3def1e81f9e076a4c62a077ad5f631cfef95ea9f441240b3"
-)
+# The verifier machine of a script grader on a task without its own image: the multi-platform index of
+# docker.io/library/python:3.12-slim (Debian trixie), pinned by manifest digest. It runs as root with
+# sh, bash, setsid and tar on PATH, and the grading runtime creates the grader's working directory
+# itself, so the image needs no WORKDIR. It stays on Docker Hub because sandbox pods on the Iris
+# clusters carry no pull credential for the task registry (marin-community/marin#9996).
+GRADER_BASE_IMAGE = "docker.io/library/python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
 MANIFEST_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 # Repository path components per the OCI distribution spec.
 REPOSITORY = re.compile(r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*")
