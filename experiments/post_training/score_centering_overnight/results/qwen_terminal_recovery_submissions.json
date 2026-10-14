@@ -1,0 +1,50 @@
+[
+  {
+    "config": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v1/curriculum-tis-s0.yaml",
+    "old_config": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/curriculum-tis-s0.yaml",
+    "run": "sc-qwen-transfer-curriculum-tis-s0-main-interactive-a2-01a126ce",
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "updates": 300,
+    "priority": "interactive",
+    "nodes": 2,
+    "same_learning_recipe": true,
+    "sha256": "dfbad8cfda991c91781871e0488599231fafdc7a55d23cd5d9279a84059e4cb8",
+    "preflight_config": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-terminal-recovery-preflight/curriculum-tis-s0.yaml",
+    "prior_terminal_cause": "Initial retention ledger storage operation exceeded600 seconds on automatic retry; earlier partials and all costs retained. New identity avoids overwriting prior evidence; cause of storage stall remains unproved.",
+    "preflight_passed": true,
+    "confirmed_submitted": true,
+    "submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-qwen-transfer-curriculum-tis-s0-main-interactive-a2-01a126ce-submit.log"
+  },
+  {
+    "config": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v1/advantages-tis-s1.yaml",
+    "old_config": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/advantages-tis-s1.yaml",
+    "run": "sc-qwen-transfer-advantages-tis-s1-main-interactive-a1-01a126ce",
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "updates": 300,
+    "priority": "interactive",
+    "nodes": 2,
+    "same_learning_recipe": true,
+    "sha256": "636aedfcec42e8d9eb916e76031eac19f71cc309503814222b6688c7e22a14c6",
+    "preflight_config": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-terminal-recovery-preflight/advantages-tis-s1.yaml",
+    "prior_terminal_cause": "Initial retention ledger storage operation exceeded600 seconds on automatic retry; earlier partials and all costs retained. New identity avoids overwriting prior evidence; cause of storage stall remains unproved.",
+    "preflight_passed": true,
+    "confirmed_submitted": true,
+    "submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-qwen-transfer-advantages-tis-s1-main-interactive-a1-01a126ce-submit.log"
+  },
+  {
+    "config": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v1/native-window-tis-s1.yaml",
+    "old_config": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v2/native-window-tis-s1.yaml",
+    "run": "sc-qwen-transfer-native-window-tis-s1-main-east-a1-01a126ce",
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "updates": 1200,
+    "priority": "batch",
+    "nodes": 2,
+    "same_learning_recipe": true,
+    "sha256": "550757c78c5516aa12d3ac10d6d392f769d5ddfac0299fa0bc4e7acc24919ce9",
+    "preflight_config": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-terminal-recovery-preflight/native-window-tis-s1.yaml",
+    "prior_terminal_cause": "Initial retention ledger storage operation exceeded600 seconds on automatic retry; earlier partials and all costs retained. New identity avoids overwriting prior evidence; cause of storage stall remains unproved.",
+    "preflight_passed": true,
+    "confirmed_submitted": true,
+    "submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-qwen-transfer-native-window-tis-s1-main-east-a1-01a126ce-submit.log"
+  }
+]

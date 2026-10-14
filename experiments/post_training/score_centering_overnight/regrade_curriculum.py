@@ -144,6 +144,7 @@ def main() -> None:
     records = []
     digest = hashlib.sha256()
     record_ids = set()
+    reused = {row["record_id"]: row for row in audited.get("verified_reused_records", [])}
     for item in sorted(audited["selected_archives"], key=lambda item: item["Key"]):
         relative = "attempts/" + item["Key"].split("/attempts/", 1)[1]
         with zipfile.ZipFile(args.cache / relative) as archive:
@@ -152,6 +153,12 @@ def main() -> None:
                     continue
                 raw = gzip.decompress(archive.read(name))
                 record = json.loads(raw)
+                if item["last_modified_ms"] < audited["archive_after_ms"]:
+                    reference = reused.get(record["record_id"])
+                    if reference is None:
+                        continue
+                    assert reference["archive_key"] == item["Key"]
+                    assert reference["record_payload_sha256"] == hashlib.sha256(raw).hexdigest()
                 assert record["record_id"] not in record_ids
                 record_ids.add(record["record_id"])
                 digest.update(raw)

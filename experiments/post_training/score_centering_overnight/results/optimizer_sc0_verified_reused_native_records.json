@@ -1,0 +1,165 @@
+{
+  "run_id": "sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "archive_after_ms": 1791944981357,
+  "scope": "Existing original record IDs only, re-derived with the frozen native serializer from actual selected-attempt rollout groups; every serialized field equals the older archived record. No synthetic record IDs or inferred response content.",
+  "verified_reused_records": [
+    {
+      "record_id": "73f63b733d15eebc102703172ec214d104f980459d262b2b27324189f37eb2dd",
+      "phase": "train",
+      "step": 2,
+      "instance_id": "80",
+      "repetition_id": 4,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/57bcf8c0278986ffa56254e7bc44222065f86e1625affe6e735b6e64c95a29fd.zip",
+      "archive_etag": "\"3e4ab3d6fee1e5739aa93a722dacf268\"",
+      "archive_modified_ms": 1791936099556,
+      "record_payload_sha256": "1ea5b507706c7146b3a5e7ad7838233098902605d2302ea77a9824fb06243388",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/groups/fb6ae37f791c4f6fa404980697d7606d.pkl",
+      "current_group_etag": "\"2088ba0dddc8cb1ca580c0807e5d8fc0\"",
+      "current_group_sha256": "8cc3d93f43ef013212492111474239d5df8d54c1c4ba8f2a7042cb95422e60b5",
+      "current_group_modified_ms": 1791946414587,
+      "all_serialized_fields_equal": true
+    },
+    {
+      "record_id": "ac4552567b0482fa761093a46e11ba039019e864e32e0e6cbed4b737ac4fe2f0",
+      "phase": "train",
+      "step": 4,
+      "instance_id": "195",
+      "repetition_id": 4,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000004/dc2772785c85cd1cf3edb5a033f37d61e8a9aa75a60fadc3e58776dde3ebff6f.zip",
+      "archive_etag": "\"42b657b6261ed2eb149174dbfba033c1\"",
+      "archive_modified_ms": 1791936249101,
+      "record_payload_sha256": "0fe8d53fa9d64ba200b76e2301fa89613c6843cbb5eca41bfe2d05dd8f3747af",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/groups/0c17801b6592441faf7bbbd89be8cd5a.pkl",
+      "current_group_etag": "\"68d91a84366553d2115c84a83080cde6\"",
+      "current_group_sha256": "b6824232e9c1ea60c1eda0f3066e71bf8e0fa1afb4de90415fa5577e76e550bb",
+      "current_group_modified_ms": 1791946570393,
+      "all_serialized_fields_equal": true
+    },
+    {
+      "record_id": "225e55eb889267ac64961c6a98631f2aa7cbbc51b2741782875c3028938cca50",
+      "phase": "train",
+      "step": 5,
+      "instance_id": "318",
+      "repetition_id": 2,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000005/fe8c3d55eb3c13729bd5be9b01ddcafac0de900ad94ac1432fb90410bce28f9a.zip",
+      "archive_etag": "\"4313917f4d99ccb9d40c5c12b71d12f4\"",
+      "archive_modified_ms": 1791936400440,
+      "record_payload_sha256": "803509b7ae753012992cd58c573466d501cc3559867d703beb3e323a62e92b9b",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/groups/a20de801ee244805ae60ec8e93230213.pkl",
+      "current_group_etag": "\"5ed3ccc2289cd75fdee7c23aea2148de\"",
+      "current_group_sha256": "8deb978648f1bb5f69050a5a3dab9c80be1d431d7dddcac43a6b0830c2e6fc8d",
+      "current_group_modified_ms": 1791946723180,
+      "all_serialized_fields_equal": true
+    },
+    {
+      "record_id": "bb00544de4921d45d6ce4280a82dd1abae3387a6b2b849536127240c69399eec",
+      "phase": "train",
+      "step": 11,
+      "instance_id": "656",
+      "repetition_id": 3,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000011/55b24499eec36cf5b37df080f122c025249be4bdb2206f43dff09a39741acb65.zip",
+      "archive_etag": "\"f49d137cdbfc560fc3c6f0889bd58dac\"",
+      "archive_modified_ms": 1791936907124,
+      "record_payload_sha256": "e66e96296ef1b529bec126530adba79afe5a78a48bc003197df4eeb86413abd5",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/groups/693eae65c5634b78bea21bbb1193e019.pkl",
+      "current_group_etag": "\"c94fd45f836e8108f37ec0811c4e07f8\"",
+      "current_group_sha256": "ec595742fcd518aadbea17fba06dabdeff2dcd9247145526151c70cd90b81c33",
+      "current_group_modified_ms": 1791947220031,
+      "all_serialized_fields_equal": true
+    },
+    {
+      "record_id": "b77c23a116a0c3f39aaae675ae7bdfef591d04be4cfe1f583dc441e1fa6726b2",
+      "phase": "train",
+      "step": 11,
+      "instance_id": "693",
+      "repetition_id": 0,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000011/858f04046e9d0c00e8fdf909b4ddb0db026d2125084888dee3ca780d62ed984e.zip",
+      "archive_etag": "\"aca058dc9bdeab21baa4f33e4f918a70\"",
+      "archive_modified_ms": 1791936926927,
+      "record_payload_sha256": "18cfd2a34e252dbe499b702993f7313bca8797a82e2b3ac98c4f7b759f41b9cc",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/groups/97291d62bb98436688cd37b4b1fdd9cb.pkl",
+      "current_group_etag": "\"d07b798299ded036c3eae43f46fb5356\"",
+      "current_group_sha256": "f39bef51e7dc17521620206b90d68b84bd545f9f52a10868e6cbbff64771cec9",
+      "current_group_modified_ms": 1791947243166,
+      "all_serialized_fields_equal": true
+    },
+    {
+      "record_id": "6c1fd56554f3def420fe583ca856b61483dc8cb5f159cbaa741d84bb5b18e4da",
+      "phase": "train",
+      "step": 15,
+      "instance_id": "955",
+      "repetition_id": 1,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000015/73fdbf778c7d1544497ad6ed47b164a693402102511690665ef2560e72199569.zip",
+      "archive_etag": "\"9f40293c87cdaf0d83d4d5280ec1e6b8\"",
+      "archive_modified_ms": 1791937265235,
+      "record_payload_sha256": "eb1cf569c8737aecc1ed7563430bae5bd78048bd8436dd338ddee6c656eb1162",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/groups/68f80f03b627444291a6fe4aa5f1d29e.pkl",
+      "current_group_etag": "\"4b0aa5ed7817ec3177836657ca028dec\"",
+      "current_group_sha256": "42d50d3babe40658013b6c1304dbe3f4689b4f9a66af4b91770b6885ce87c032",
+      "current_group_modified_ms": 1791947580825,
+      "all_serialized_fields_equal": true
+    },
+    {
+      "record_id": "aa99beaa5dcf738b6790b131391ab87c03b586285c007351b58b36948a3d157d",
+      "phase": "train",
+      "step": 35,
+      "instance_id": "2183",
+      "repetition_id": 1,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000035/40c1986d3380ec215c54a715b79ed88e01f3567c5fa5b6bcdbabecacb152da60.zip",
+      "archive_etag": "\"60955554db13131b8581d507b33e6bdd\"",
+      "archive_modified_ms": 1791939519758,
+      "record_payload_sha256": "618ebb88e2b45e9a32c8d60cc44f726cfbf354dbdbb7300806ec8a3ccbaa3026",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/groups/45b632893c734ba1adf1a064e0259b35.pkl",
+      "current_group_etag": "\"49abeb841ad9aefd42077909983866e3\"",
+      "current_group_sha256": "f79001e51e78bffae1c5efa3bae538d88b3d251d21f033c0fe0e38836c4bb1ee",
+      "current_group_modified_ms": 1791949812293,
+      "all_serialized_fields_equal": true
+    }
+  ],
+  "physical_budget_checks": [
+    {
+      "step": 2,
+      "new_records": 511,
+      "declared_duplicate_records": 1,
+      "verified_existing_records": 1,
+      "physical_responses": 512
+    },
+    {
+      "step": 4,
+      "new_records": 511,
+      "declared_duplicate_records": 1,
+      "verified_existing_records": 1,
+      "physical_responses": 512
+    },
+    {
+      "step": 5,
+      "new_records": 511,
+      "declared_duplicate_records": 1,
+      "verified_existing_records": 1,
+      "physical_responses": 512
+    },
+    {
+      "step": 11,
+      "new_records": 510,
+      "declared_duplicate_records": 2,
+      "verified_existing_records": 2,
+      "physical_responses": 512
+    },
+    {
+      "step": 15,
+      "new_records": 511,
+      "declared_duplicate_records": 1,
+      "verified_existing_records": 1,
+      "physical_responses": 512
+    },
+    {
+      "step": 35,
+      "new_records": 511,
+      "declared_duplicate_records": 1,
+      "verified_existing_records": 1,
+      "physical_responses": 512
+    }
+  ],
+  "all_verified": true
+}

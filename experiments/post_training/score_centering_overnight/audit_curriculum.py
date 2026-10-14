@@ -34,12 +34,30 @@ def audit(
     max_train_errors: int = 0,
     recorded_learner_steps: bool = False,
     ordinary_incumbent: bool = False,
+    verified_record_reuse: dict | None = None,
 ) -> dict:
     uri = config["artifacts"]["attempts_root"].removesuffix("/attempts")
     prefix = urlparse(uri).path.lstrip("/").rstrip("/") + "/"
     inventory = {
         item["Key"].removeprefix(prefix): item for item in json.loads((root / "object_inventory.json").read_text())
     }
+    reused = {}
+    if verified_record_reuse is not None:
+        assert verified_record_reuse["run_id"] == config["run"]["id"]
+        assert verified_record_reuse["source"] == config["runtime"]["launcher_commit"]
+        assert verified_record_reuse["archive_after_ms"] == archive_after_ms
+        assert verified_record_reuse["all_verified"] is True
+        for reference in verified_record_reuse["verified_reused_records"]:
+            assert reference["all_serialized_fields_equal"] is True
+            assert reference["archive_modified_ms"] < archive_after_ms <= reference["current_group_modified_ms"]
+            assert reference["archive_key"].startswith(prefix + "attempts/trajectories/")
+            assert reference["current_group_key"].startswith(
+                urlparse(config["skyrl"]["trainer"]["rollout_buffer"]["object_store_root"]).path.lstrip("/") + "/"
+            )
+            assert reference["record_id"] not in reused
+            reused[reference["record_id"]] = reference
+    reused_archives = {reference["archive_key"] for reference in reused.values()}
+    matched_reused = set()
 
     def require_current_attempt(path: Path) -> None:
         if archive_after_ms:
@@ -175,14 +193,25 @@ def audit(
     selected_archives = []
     for path in (root / "attempts/trajectories").glob("**/*.zip"):
         item = inventory[str(path.relative_to(root))]
-        if archive_after_ms and item["last_modified_ms"] < archive_after_ms:
+        older_archive = bool(archive_after_ms and item["last_modified_ms"] < archive_after_ms)
+        if older_archive and item["Key"] not in reused_archives:
             continue
         selected_archives.append(item)
         with zipfile.ZipFile(path) as archive:
             for name in archive.namelist():
                 if not name.startswith("records/"):
                     continue
-                row = json.loads(gzip.decompress(archive.read(name)))
+                raw = gzip.decompress(archive.read(name))
+                row = json.loads(raw)
+                if older_archive:
+                    reference = reused.get(row["record_id"])
+                    if reference is None:
+                        continue
+                    assert reference["archive_key"] == item["Key"]
+                    assert reference["archive_etag"] == item["ETag"]
+                    assert reference["record_payload_sha256"] == hashlib.sha256(raw).hexdigest()
+                    assert row["record_id"] not in matched_reused
+                    matched_reused.add(row["record_id"])
                 phase, step = row["phase"], row["global_step"]
                 if ordinary_incumbent and phase == "train":
                     assert (
@@ -259,6 +288,7 @@ def audit(
         assert (
             sum(phase == "eval" for phase, _, _ in errors) <= max_eval_errors
         ), f"native evaluation errors: {errors[:10]}"
+    assert matched_reused == set(reused)
     retained_learner_rows = Counter()
     for (step, _), group in training_groups.items():
         if group["has_loss"]:
@@ -306,6 +336,7 @@ def audit(
         ),
         "graded_training_responses": {str(step): accepted[("train", step)] for step in range(1, updates + 1)},
         "archive_after_ms": archive_after_ms,
+        "verified_reused_records": list(reused.values()),
         "selected_archives": selected_archives,
         "score_centering": algorithm["score_centering_enabled"],
         "learner_evidence": evidence,
@@ -334,6 +365,7 @@ def main() -> None:
     parser.add_argument("--max-train-errors", type=int, default=0)
     parser.add_argument("--recorded-learner-steps", action="store_true")
     parser.add_argument("--ordinary-incumbent", action="store_true")
+    parser.add_argument("--verified-record-reuse", type=Path)
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text())
     client = boto3.client(
@@ -354,6 +386,9 @@ def main() -> None:
         max_train_errors=args.max_train_errors,
         recorded_learner_steps=args.recorded_learner_steps,
         ordinary_incumbent=args.ordinary_incumbent,
+        verified_record_reuse=(
+            json.loads(args.verified_record_reuse.read_text()) if args.verified_record_reuse is not None else None
+        ),
     )
     checkpoint = urlparse(config["artifacts"]["checkpoint_root"])
     marker_object = client.get_object(

@@ -1,0 +1,47 @@
+[
+  {
+    "run": "sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce",
+    "state": "submitted",
+    "cluster": "cw-rno2a",
+    "priority": "batch",
+    "updates": 1200,
+    "retired_owned_queued_predecessor": null,
+    "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/batching-sc-s1-main-rno-a2-submit.log"
+  },
+  {
+    "run": "sc-qwen-transfer-batching-sc-s2-main-rno-a2-01a126ce",
+    "state": "submitted",
+    "cluster": "cw-rno2a",
+    "priority": "batch",
+    "updates": 1200,
+    "retired_owned_queued_predecessor": null,
+    "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/batching-sc-s2-main-rno-a2-submit.log"
+  },
+  {
+    "run": "sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce",
+    "state": "submitted",
+    "cluster": "cw-rno2a",
+    "priority": "batch",
+    "updates": 1200,
+    "retired_owned_queued_predecessor": null,
+    "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/batching-tis-s0-main-rno-a2-submit.log"
+  },
+  {
+    "run": "sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce",
+    "state": "submitted",
+    "cluster": "cw-rno2a",
+    "priority": "batch",
+    "updates": 1200,
+    "retired_owned_queued_predecessor": null,
+    "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/batching-tis-s1-main-rno-a2-submit.log"
+  },
+  {
+    "run": "sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce",
+    "state": "submitted",
+    "cluster": "cw-rno2a",
+    "priority": "batch",
+    "updates": 1200,
+    "retired_owned_queued_predecessor": null,
+    "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/batching-tis-s2-main-rno-a2-submit.log"
+  }
+]

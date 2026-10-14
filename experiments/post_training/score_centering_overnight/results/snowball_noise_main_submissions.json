@@ -1,0 +1,47 @@
+[
+  {
+    "run": "sc-snowball-main-noise005-sc-s1-a2-01a126ce",
+    "state": "submitted",
+    "cluster": "cw-us-east-02a",
+    "priority": "batch",
+    "updates": 1200,
+    "retired_owned_queued_predecessor": null,
+    "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-noise005-sc-s1-main-v3-submit.log"
+  },
+  {
+    "run": "sc-snowball-main-noise005-sc-s2-a2-01a126ce",
+    "state": "submitted",
+    "cluster": "cw-us-east-02a",
+    "priority": "batch",
+    "updates": 1200,
+    "retired_owned_queued_predecessor": null,
+    "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-noise005-sc-s2-main-v3-submit.log"
+  },
+  {
+    "run": "sc-snowball-main-noise005-tis-s0-a2-01a126ce",
+    "state": "submitted",
+    "cluster": "cw-us-east-02a",
+    "priority": "batch",
+    "updates": 1200,
+    "retired_owned_queued_predecessor": null,
+    "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-noise005-tis-s0-main-v3-submit.log"
+  },
+  {
+    "run": "sc-snowball-main-noise005-tis-s1-a2-01a126ce",
+    "state": "submitted",
+    "cluster": "cw-us-east-02a",
+    "priority": "batch",
+    "updates": 1200,
+    "retired_owned_queued_predecessor": null,
+    "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-noise005-tis-s1-main-v3-submit.log"
+  },
+  {
+    "run": "sc-snowball-main-noise005-tis-s2-a2-01a126ce",
+    "state": "submitted",
+    "cluster": "cw-us-east-02a",
+    "priority": "batch",
+    "updates": 1200,
+    "retired_owned_queued_predecessor": null,
+    "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-noise005-tis-s2-main-v3-submit.log"
+  }
+]
