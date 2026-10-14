@@ -65,6 +65,8 @@ model_config_overrides:
     tau3-pi: model-configs/tau3/laion-snowball-67b-a2b-relay-sft-acont-step999.yaml
   laion-snowball-67b-a2b-relay-sft-allkimi-step1203:
     tau3-pi: model-configs/tau3/laion-snowball-67b-a2b-relay-sft-allkimi-step1203.yaml
+  marianna13-Grug-67B-A2B-Antidoom-RLVR1-Step12-SFT-mix-v4-think-step465:
+    tau3-pi: model-configs/tau3/marianna13-Grug-67B-A2B-Antidoom-RLVR1-Step12-SFT-mix-v4-think-step465.yaml
   moonshotai-Kimi-Linear-48B-A3B-Instruct:
     tau3-pi: model-configs/tau3/moonshotai-Kimi-Linear-48B-A3B-Instruct.yaml
   nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16:
