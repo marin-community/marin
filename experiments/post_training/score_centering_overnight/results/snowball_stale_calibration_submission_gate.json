@@ -1,0 +1,112 @@
+{
+  "qualified_source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "transfer_pilot_audits": [
+    {
+      "file": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-sc-s0-pilot-a4-01a126ce.json.gz",
+      "sha256": "dacf85e40dca96757899c05a2037c58b273405af9476ed341c5003c951678a93",
+      "run_id": "sc-qwen-transfer-advantages-sc-s0-pilot-a4-01a126ce",
+      "completed_updates": 40,
+      "audit_passed": true,
+      "source_task_errors": []
+    },
+    {
+      "file": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce.json.gz",
+      "sha256": "7631a6838fb2e3c99220bc5458c4eda5935e3b6cfb01c8c242baeaac04b22678",
+      "run_id": "sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce",
+      "completed_updates": 40,
+      "audit_passed": true,
+      "source_task_errors": [
+        [
+          "train",
+          33,
+          "2109"
+        ]
+      ]
+    },
+    {
+      "file": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce.json.gz",
+      "sha256": "117059fb414c665249ada40dd265adaeb79af41936dc8cbefa29abb8d1c18d62",
+      "run_id": "sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce",
+      "completed_updates": 40,
+      "audit_passed": true,
+      "source_task_errors": []
+    },
+    {
+      "file": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-tis-s0-pilot-a4-01a126ce.json.gz",
+      "sha256": "21aa1cd7fc55193a680e584fecb328a22c0d02e132493a9f30c74613045fcb88",
+      "run_id": "sc-qwen-transfer-batching-tis-s0-pilot-a4-01a126ce",
+      "completed_updates": 40,
+      "audit_passed": true,
+      "source_task_errors": []
+    },
+    {
+      "file": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce.json.gz",
+      "sha256": "828ada8054d6eb38310c4e06a4320f9712affb7fe44d1a830dcdfcee7c89be58",
+      "run_id": "sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce",
+      "completed_updates": 40,
+      "audit_passed": true,
+      "source_task_errors": []
+    },
+    {
+      "file": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s0-pilot-a4-01a126ce.json.gz",
+      "sha256": "26569e6935f8debcc82dee6174e947b4da3a0513af1cc2355c1364c7760c9548",
+      "run_id": "sc-qwen-transfer-curriculum-tis-s0-pilot-a4-01a126ce",
+      "completed_updates": 40,
+      "audit_passed": true,
+      "source_task_errors": []
+    },
+    {
+      "file": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-native-window-sc-s0-pilot-a4-01a126ce.json.gz",
+      "sha256": "863fd6df77ecac4ab798622c63c12b1eb28988449ccb10cce0010ee5d8881c33",
+      "run_id": "sc-qwen-transfer-native-window-sc-s0-pilot-a4-01a126ce",
+      "completed_updates": 40,
+      "audit_passed": true,
+      "source_task_errors": []
+    },
+    {
+      "file": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-native-window-tis-s0-pilot-a4-01a126ce.json.gz",
+      "sha256": "da9ae790177266c90dac6dc2bcb9d9153134764de894ea6c3c93b8b48f00c979",
+      "run_id": "sc-qwen-transfer-native-window-tis-s0-pilot-a4-01a126ce",
+      "completed_updates": 40,
+      "audit_passed": true,
+      "source_task_errors": []
+    },
+    {
+      "file": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s0-pilot-a4-01a126ce.json.gz",
+      "sha256": "903e7dd0da109d6d7cac65427969041e68499379a9e6880c9bbd84e1fa794708",
+      "run_id": "sc-qwen-transfer-optimizer-sc-s0-pilot-a4-01a126ce",
+      "completed_updates": 40,
+      "audit_passed": true,
+      "source_task_errors": []
+    },
+    {
+      "file": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s0-pilot-a4-01a126ce.json.gz",
+      "sha256": "d9981f00e4da8f4224cc9f83975f54839ba08a54389269b0a78f1b0fa65493e4",
+      "run_id": "sc-qwen-transfer-optimizer-tis-s0-pilot-a4-01a126ce",
+      "completed_updates": 40,
+      "audit_passed": true,
+      "source_task_errors": []
+    }
+  ],
+  "snowball_exact_source_runtime_audit": {
+    "file": "experiments/post_training/score_centering_overnight/results/snowball0212_qualification.json.gz",
+    "run_id": "sc-snowball-runtime-qual-sc-s0-a3-01a126ce",
+    "audit_passed": true,
+    "completed_updates": 5
+  },
+  "real_attention_proof": "experiments/post_training/score_centering_overnight/results/snowball0212_attention_proof.json",
+  "decision": "The faithful reference and port results, all five complete paired transfer pilots and exact-source five-node Snowball qualification establish the implementation gates for separate TIS-only staleness calibration. The five full three-seed Qwen main comparisons remain required and continue in parallel. No pilot is treated as a completed main comparison.",
+  "first_submission": {
+    "config": "experiments/post_training/score_centering_overnight/snowball_stale_calibration_v4/stale64-tis-s0.yaml",
+    "sha256": "1e0f72290813d53d80f2420f61f639ae1d2cc8ef19d1cdc626905355e844215c",
+    "run_id": "sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+    "updates": 130,
+    "refresh_period": 65,
+    "nodes": 5,
+    "gpus_per_node": 8,
+    "priority": "batch"
+  },
+  "matched_fresh_submission_gate": "At least two actual finite applied stale-calibration updates with aligned natural K128/chosen-q/TIS2 evidence, generating snapshot0 at updates1/2, unchanged model/data/grading/geometry and required append-only archives, before submitting the separately prepared matched fresh130 control.",
+  "main_submission_gate": "Full separate stale/fresh130 audits, measured actual age/version, mismatch and usability, then a justified frozen setting and horizon before stale1200 main seeds. Earlier controlled-noise calibration selects noise.05 separately. No full Snowball main is admitted by this calibration gate.",
+  "submitted": false
+}
