@@ -104,9 +104,9 @@ repository is not part of the identity. The build:
    with `docker buildx imagetools inspect`, which needs `docker buildx` and a
    `docker login` for the repository's registry;
 4. writes the artifact `images/env-<identity[:16]>`, which stores the lock as
-   `requirements.lock` and records the identity, the lock's SHA-256, `apt`,
-   `data`, the `dockerfile` fragment's SHA-256, the Python version, the base
-   image, and any built image and tag.
+   `requirements.lock` and records the identity, any built image digest, and
+   the lock's SHA-256 and `data` that a worker reads back to build its
+   environment from the lock URL alone. The other inputs are in the identity.
 
 A second run with an unchanged declaration finds the artifact and starts no
 build. Planning a source whose environment has no artifact for its current

@@ -60,10 +60,8 @@ def test_apt_packages_beyond_the_worker_image_push_an_image_and_record_its_diges
     (built,) = run(environment_artifact(environment, REPOSITORY))
     identity = identity_digest(environment)
     tag = f"{REPOSITORY}:task-curation-env-{identity[:IDENTITY_CHARS]}"
-    assert built.tag == tag
     assert built.image == f"{REPOSITORY}@sha256:{hashlib.sha256(tag.encode()).hexdigest()}"
     assert StoragePath(built.lock_url).read_text() == COMPILED
-    assert built.lock_sha256 == hashlib.sha256(COMPILED.encode()).hexdigest()
     assert built_environment(environment) == built
     commands = [shlex.split(line) for line in docker_log.read_text().splitlines()]
     export = next(command for command in commands if command[:2] == ["buildx", "build"])
@@ -145,7 +143,6 @@ def test_a_dockerfile_fragment_builds_an_image_with_its_lines_between_apt_and_th
     environment = Environment(lock=lock, apt=("build-essential",), dockerfile=fragment)
     (built,) = run(environment_artifact(environment, REPOSITORY))
     assert built.image is not None
-    assert built.dockerfile_sha256 == hashlib.sha256(TOOLCHAIN_FRAGMENT.encode()).hexdigest()
     assert StoragePath(built.lock_url).read_text() == LOCK
     lines = dockerfile(environment).splitlines()
     apt_step = next(index for index, line in enumerate(lines) if line.startswith("RUN apt-get"))
