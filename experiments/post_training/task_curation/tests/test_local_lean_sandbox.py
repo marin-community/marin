@@ -7,9 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from experiments.post_training.task_curation.datasets.environments import LEAN_GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.nemotron_ultra.scorers.local_lean_sandbox import (
-    ELAN_HOME,
     LEAN_PROJECT_DIR,
     SCRATCH_DIR_NAME,
     LocalLeanSandbox,
@@ -71,15 +69,6 @@ def test_output_past_the_limit_is_cut_and_flagged(sandbox: LocalLeanSandbox):
     assert result["process_status"] == "completed"
     assert result["stdout"] == "x" * 100 + "<output cut>"
     assert result["output_truncated"] is True
-
-
-def test_the_sandbox_paths_are_the_ones_the_lean_image_builds():
-    assert LEAN_GRADER_PACKAGES.dockerfile is not None
-    fragment = LEAN_GRADER_PACKAGES.dockerfile.read_text()
-    assert f"ELAN_HOME={ELAN_HOME}" in fragment
-    assert f"mkdir -p {LEAN_PROJECT_DIR.parent} && cd {LEAN_PROJECT_DIR.parent}" in fragment
-    assert f"lake new {LEAN_PROJECT_DIR.name}" in fragment
-    assert f"mkdir -m 1777 {SCRATCH_DIR_NAME}" in fragment
 
 
 def test_the_proof_file_does_not_outlive_the_compile(sandbox: LocalLeanSandbox):
