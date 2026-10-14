@@ -33,7 +33,7 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 from experiments.post_training.task_curation.tasktrove.compare import source_file_path
 
 
-def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, download_cache, source_files_override=None):
+def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, cache_dir, source_files_override=None):
     runtime = CampaignRuntime()
     options = PipelineOptions(
         SourceProcessingMode.QUICK,
@@ -52,7 +52,7 @@ def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, down
         output_root,
         runtime=runtime,
         max_workers=max_workers,
-        download_cache=download_cache,
+        cache_dir=cache_dir,
         source_ids={name: source.info.id for name, source in sources.items()},
     )
 
@@ -89,7 +89,7 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
             output,
             inputs={},
             max_workers=1,
-            download_cache=tmp_path / "downloads",
+            cache_dir=tmp_path / "downloads",
         )
     report = json.loads((output / "campaign.json").read_text())
     assert report["status"] == "failed"
@@ -142,7 +142,7 @@ def test_quick_blend_root_uses_current_raw_rows_with_missing_or_stale_preparatio
         ),
     )
     output = tmp_path / "output"
-    run_recipes({source.name: source}, primary, output, inputs={}, max_workers=1, download_cache=tmp_path / "downloads")
+    run_recipes({source.name: source}, primary, output, inputs={}, max_workers=1, cache_dir=tmp_path / "downloads")
     task = converted_task(output, source.name)
     assert task.context.events[0].content == "Current question"
     assert verifyit_spec(cast(VerifyitGrader, task.grader)) == ExactSpec(("current",), ignore_case=False)
@@ -184,7 +184,7 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     monkeypatch.setattr(pipeline_module, "plan_download", local_plan)
     cache = tmp_path / "downloads"
     cold = tmp_path / "cold"
-    run_recipes({source.name: source}, None, cold, inputs={}, max_workers=1, download_cache=cache)
+    run_recipes({source.name: source}, None, cold, inputs={}, max_workers=1, cache_dir=cache)
     task = converted_task(cold, source.name)
     assert verifyit_spec(cast(VerifyitGrader, task.grader)) == ExactSpec(("two",), ignore_case=False)
     assert not list(cache.rglob("unselected.jsonl"))
@@ -197,7 +197,7 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     payloads = {file: file.read_bytes() for file in (cold / source.name).rglob("*.parquet")}
     manifest_bytes = (cold / source.name / "manifest.json").read_bytes()
     with pytest.raises(CampaignFailed):
-        run_recipes({source.name: source}, None, cold, inputs={}, max_workers=1, download_cache=cache)
+        run_recipes({source.name: source}, None, cold, inputs={}, max_workers=1, cache_dir=cache)
     assert os.environ["MARIN_PREFIX"] == ambient
     assert {file: file.read_bytes() for file in payloads} == payloads
     assert (cold / source.name / "manifest.json").read_bytes() == manifest_bytes
@@ -209,7 +209,7 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
 
     shutil.rmtree(remote)
     warm = tmp_path / "warm"
-    run_recipes({source.name: source}, None, warm, inputs={}, max_workers=1, download_cache=cache)
+    run_recipes({source.name: source}, None, warm, inputs={}, max_workers=1, cache_dir=cache)
     assert converted_task(warm, source.name) == task
 
     # Remove the test-owned auxiliary cache after taking the remote offline.
@@ -226,7 +226,7 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
         overridden,
         inputs={"answers": str(override)},
         max_workers=1,
-        download_cache=cache,
+        cache_dir=cache,
     )
     override_task = converted_task(overridden, source.name)
     assert verifyit_spec(cast(VerifyitGrader, override_task.grader)) == ExactSpec(
@@ -241,7 +241,7 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     (updated / "rows.jsonl").write_text('{"prompt": "The next pinned question"}\n')
     source = replace(source, source=replace(cast(HfSource, source.source), revision=next_revision))
     next_output = tmp_path / "next"
-    run_recipes({source.name: source}, None, next_output, inputs={}, max_workers=1, download_cache=cache)
+    run_recipes({source.name: source}, None, next_output, inputs={}, max_workers=1, cache_dir=cache)
     next_task = converted_task(next_output, source.name)
     assert next_task.source.revision == next_revision
     assert cast(TextMessage, next_task.context.events[0]).content == "The next pinned question"
@@ -261,7 +261,7 @@ def test_explicit_local_file_preserves_logical_identity_and_records_actual_bytes
         output,
         inputs={},
         max_workers=1,
-        download_cache=tmp_path / "downloads",
+        cache_dir=tmp_path / "downloads",
         source_files_override={logical_path: local_file},
     )
     records = [row for file in (output / source.name / "normalize").glob("*.parquet") for row in load_parquet(str(file))]

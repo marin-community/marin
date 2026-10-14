@@ -21,6 +21,7 @@ prompt and Lean resources use the blend's later verifier pin `e44c4bfcb62c489286
 | `skyrl_gym/envs/nemotron_ultra/mcqa.py` | [`nemotron_ultra/mcqa.py`](https://github.com/marin-community/MarinSkyRL/blob/d8b6e8c163def3660e9d3072c1c174226a1709fa/skyrl-gym/skyrl_gym/envs/nemotron_ultra/mcqa.py) | Unchanged. |
 | `skyrl_gym/envs/nemotron_ultra/rdkit_chemistry.py` | [`nemotron_ultra/rdkit_chemistry.py`](https://github.com/marin-community/MarinSkyRL/blob/d8b6e8c163def3660e9d3072c1c174226a1709fa/skyrl-gym/skyrl_gym/envs/nemotron_ultra/rdkit_chemistry.py) | Unchanged. Compares exact answers and does not import RDKit. |
 | `skyrl_gym/envs/nemotron_ultra/structured_outputs.py` | [`nemotron_ultra/structured_outputs.py`](https://github.com/marin-community/MarinSkyRL/blob/d8b6e8c163def3660e9d3072c1c174226a1709fa/skyrl-gym/skyrl_gym/envs/nemotron_ultra/structured_outputs.py) | Patched to retry a text-mode parse with the first Markdown code fence when the whole reply does not parse. Uses `verifyit.modes.extract.unwrap_fence` from the grader packages. |
+| `local_lean_sandbox.py` | none | Ours. `LocalLeanSandbox.execute` replaces the NeMo Skills sandbox server for `language="lean4"`: it compiles the proof with `lake env lean` in the Mathlib project that [`../lean.Dockerfile`](../lean.Dockerfile) builds into `LEAN_GRADER_PACKAGES` and returns the server's response fields. |
 
 The NVARC scorer and its sandbox client live with the ARC family in [`../../arc/scorers/`](../../arc/scorers/VENDORED.md).
 

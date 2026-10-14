@@ -75,9 +75,9 @@ def test_gate_router_decay_mask_selects_only_gate_and_router():
 def test_ladder_defaults_gate_router_weight_decay_on_with_opt_out():
     # Weight decay is on by default for the hero recipe, so a resume can never silently continue
     # without it; passing 0 is the explicit opt-out.
-    default_step = build_ladder_run(run_id="test-wd-default", size="d6144", num_steps=1, version="2026.08.18")
+    default_step = build_ladder_run(run_id="test-wd-default", size="d6144", version="2026.08.18")
     opt_out_step = build_ladder_run(
-        run_id="test-wd-off", size="d6144", num_steps=1, gate_router_weight_decay=0.0, version="2026.08.18"
+        run_id="test-wd-off", size="d6144", gate_router_weight_decay=0.0, version="2026.08.18"
     )
 
     def optimizer_of(step):
@@ -105,7 +105,13 @@ def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
         StepContext.for_fingerprint(runtime_arg_keys=ladder.runtime_args, deps=ladder.deps)
     )
 
+    # The diagnostic is one rack of the hero: the same model, and the hero's per-rack batch at its context.
+    # It trains at that context from its start, so it carries no context history.
     assert diagnostic_config.model == ladder_config.model
+    assert (
+        diagnostic_config.trainer.trainer.train_batch_size
+        == ladder_config.trainer.trainer.train_batch_size // ladder_config.trainer.replica_axis_size
+    )
     assert diagnostic_config.processes_per_task == ladder_config.processes_per_task
     assert diagnostic_config.tensorstore_cache_bytes == ladder_config.tensorstore_cache_bytes
     assert diagnostic_config.trainer == dataclasses.replace(
@@ -135,12 +141,9 @@ def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
     ]
 
 
-@pytest.mark.parametrize(
-    ("size", "num_steps", "expected_simulated_epoching"),
-    [("d2048", None, True), ("d6144", 1, True), ("d6144", None, False)],
-)
-def test_scaling_ladder_disables_simulated_epoching_above_flop_limit(size, num_steps, expected_simulated_epoching):
-    step = build_ladder_run(run_id=f"test-{size}", size=size, num_steps=num_steps, version="2026.08.18")
+@pytest.mark.parametrize(("size", "expected_simulated_epoching"), [("d2048", True), ("d6144", False)])
+def test_scaling_ladder_disables_simulated_epoching_above_flop_limit(size, expected_simulated_epoching):
+    step = build_ladder_run(run_id=f"test-{size}", size=size, version="2026.08.18")
     ctx = StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps)
 
     data = step.build_config(ctx).data
@@ -149,10 +152,29 @@ def test_scaling_ladder_disables_simulated_epoching_above_flop_limit(size, num_s
     assert (data.experiment_budget is not None) is expected_simulated_epoching
 
 
+def test_d6144_continues_the_checked_in_context_history_and_narrow_rungs_start_fresh():
+    hero_step = build_ladder_run(run_id="test-d6144-history", size="d6144", version="dev")
+    narrow_step = build_ladder_run(run_id="test-d2048-history", size="d2048", version="dev")
+    hero = hero_step.build_config(StepContext.for_fingerprint(hero_step.runtime_args, hero_step.deps))
+    narrow = narrow_step.build_config(StepContext.for_fingerprint(narrow_step.runtime_args, narrow_step.deps))
+
+    phases = launch_scaling_ladder.HERO_CONTEXT_PHASES
+    assert hero.flops_baseline == FlopsBaseline(phases[-1].end_step, launch_scaling_ladder.HERO_FLOPS_BASELINE_TOTAL)
+    assert [(p.end_step, p.seq_len) for p in hero.data.prior_context_phases] == [(p.end_step, p.seq_len) for p in phases]
+    assert narrow.flops_baseline is None
+    assert narrow.data.prior_context_phases == []
+
+
+def test_d6144_rejects_a_schedule_that_would_rebuild_its_history_differently():
+    # The prior phases' data stages derive from the schedule length; another length would move their data offsets.
+    with pytest.raises(ValueError, match="keeps its schedule"):
+        build_ladder_run(run_id="test-d6144-steps", size="d6144", num_steps=300_000, version="dev")
+
+
 def test_scaling_ladder_searches_permanent_and_cluster_temp_roots(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
     monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://hero-checkpoints")
-    step = build_ladder_run(run_id="test-d6144", size="d6144", num_steps=1, version="2026.08.18")
+    step = build_ladder_run(run_id="test-d6144", size="d6144", version="2026.08.18")
     output_path = "s3://marin-us-east-02a/marin/grug/test-d6144/v"
     ctx = dataclasses.replace(
         StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps),
@@ -167,7 +189,7 @@ def test_scaling_ladder_searches_permanent_and_cluster_temp_roots(monkeypatch):
 
 
 def test_d6144_pins_permanent_checkpoint_at_55000_alongside_the_6000_cadence():
-    step = build_ladder_run(run_id="test-d6144-ckpt", size="d6144", num_steps=390_251, version="2026.08.18")
+    step = build_ladder_run(run_id="test-d6144-ckpt", size="d6144", version="2026.08.18")
     ctx = StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps)
     keep = step.build_config(ctx).trainer.trainer.checkpointer.keep
 
@@ -191,16 +213,10 @@ def _set_hero_seq_len(monkeypatch, seq_len):
 
 
 def test_context_switch_preserves_optimizer(monkeypatch):
-    parent_step = build_ladder_run(run_id="context-parent", size="d6144", version="dev")
-    _set_hero_seq_len(monkeypatch, 16384)
-    child_step = build_ladder_run(
-        run_id="context-child",
-        size="d6144",
-        qk_mult=1.48,
-        version="dev",
-        context_phases=(HarrierContextPhase(end_step=231_600, seq_len=4096),),
-        flops_baseline_total=1e24,
-    )
+    # The child is the checked-in hero with its context history; the parent is the 4K hero it resumes.
+    child_step = build_ladder_run(run_id="context-child", size="d6144", version="dev")
+    _set_hero_seq_len(monkeypatch, 4096)
+    parent_step = build_ladder_run(run_id="context-parent", size="d6144", version="dev", context_phases=())
     parent = parent_step.build_config(StepContext.for_fingerprint(parent_step.runtime_args, parent_step.deps))
     child = child_step.build_config(StepContext.for_fingerprint(child_step.runtime_args, child_step.deps))
     # The child resumes the parent's optimizer state, so its schedule and hyperparameters must not move.
