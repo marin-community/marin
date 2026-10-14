@@ -214,11 +214,10 @@ in the store carry no status, because the store writes a memo only on a miss or 
 
 Each step's output is memoized under a key built from `SDK_VERSION`, a source digest, the content
 digest of each input, and `build_model_digest(model, sampling, services)`. The decorator computes
-the source digest over the step's own source text, followed by the source of its output type when
-the program defines that class beside the step. An output type imported from a library, such as
-`TaskSpec`, falls under `SDK_VERSION`. A step should therefore read everything it depends on from
-its inputs, its own body or an output type defined beside it. Editing a helper defined outside the
-body leaves the key unchanged, so a library change of that kind comes with an `SDK_VERSION` bump.
+the source digest over the step's own source text and everything the step reaches in its own
+module: the helpers it calls, the constants it reads, the classes in its return annotation at any
+depth, and what those classes reach in turn. Names bound by imports stay out; a library type such
+as `TaskSpec` falls under `SDK_VERSION`, so a library change comes with an `SDK_VERSION` bump.
 The model digest covers the model id, the sampling policy, the agent loops' reasoning replay and
 their limits (`AgentLimits`), so a build that drops reasoning, or bounds its agents differently,
 reruns every step; `run_build(model_digest=...)` overrides it. The machines, images, web tools and

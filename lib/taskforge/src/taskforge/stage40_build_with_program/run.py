@@ -21,6 +21,7 @@ host and reads any step's stored output, such as the grader's reference answer, 
 ``step_output``.
 """
 
+import asyncio
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from functools import partial
@@ -142,14 +143,16 @@ async def run_program(
     model_digest: str,
     invalidate: frozenset[str] = frozenset(),
 ) -> tuple[TaskSpec, tuple[RLEnvBuildStepOutcome, ...]]:
-    """Run ``program`` in order and return the sink's ``TaskSpec`` with one outcome per step.
+    """Run ``program`` and return the sink's ``TaskSpec`` with one outcome per step, in ``program.order``.
 
-    A step's key holds the output digest of each input, with ``content_hash.digest`` of
-    ``proposal`` for ``PROPOSAL_INPUT``. The runner passes the key to ``memoized``. When ``store``
-    holds a memo under it, the step is a ``HIT`` and the runner passes the decoded output on.
-    Otherwise ``memoized`` calls the step with its context and inputs and stores the output, and
-    the step is a ``MISS``. A step named in ``invalidate`` runs either way and is ``INVALIDATED``.
-    The sink runs last, the same way.
+    Every step starts as soon as the steps it takes inputs from have finished, so steps that do not
+    depend on each other run at the same time; the sink runs once every step has. A step's key
+    holds the output digest of each input, with ``content_hash.digest`` of ``proposal`` for
+    ``PROPOSAL_INPUT``. The runner passes the key to ``memoized``. When ``store`` holds a memo
+    under it, the step is a ``HIT`` and the runner passes the decoded output on. Otherwise
+    ``memoized`` calls the step with its context and inputs and stores the output, and the step is
+    a ``MISS``. A step named in ``invalidate`` runs either way and is ``INVALIDATED``. The first
+    step to fail ends the build: the steps still running are cancelled and its failure is raised.
 
     Raises:
         BuildFailure: a step raised one. When the step left ``step`` unset, the runner sets it to
@@ -162,7 +165,7 @@ async def run_program(
     assert not unknown, f"invalidate names {unknown}, which are not steps of the program"
     outputs: dict[str, Any] = {PROPOSAL_INPUT: proposal}
     digests: dict[str, str] = {PROPOSAL_INPUT: digest(proposal)}
-    outcomes: list[RLEnvBuildStepOutcome] = []
+    outcomes: dict[str, RLEnvBuildStepOutcome] = {}
 
     async def run[T](step: RLEnvBuildStep | RLEnvBuildSink, output_type: type[T]) -> T:
         name = step.name
@@ -196,14 +199,29 @@ async def run_program(
             fields.output_hash = memo.output_digest
         outputs[name] = output
         digests[name] = memo.output_digest
-        outcomes.append(RLEnvBuildStepOutcome(status, memo))
+        outcomes[name] = RLEnvBuildStepOutcome(status, memo)
         return output
 
-    for name in program.order[:-1]:
-        step = program.steps[name]
-        await run(step, step.output_type)
-    task = await run(program.sink, TaskSpec)
-    return task, tuple(outcomes)
+    started: dict[str, asyncio.Task[Any]] = {}
+
+    async def after_inputs[T](step: RLEnvBuildStep | RLEnvBuildSink, output_type: type[T]) -> T:
+        for dep in step.inputs:
+            if dep in started:
+                await started[dep]
+        return await run(step, output_type)
+
+    try:
+        async with asyncio.TaskGroup() as group:
+            for name in program.order[:-1]:
+                step = program.steps[name]
+                started[name] = group.create_task(after_inputs(step, step.output_type))
+            sink = group.create_task(after_inputs(program.sink, TaskSpec))
+    except ExceptionGroup as failures:
+        # One step failed and the group cancelled the rest. Raise that failure as a serial run
+        # would, with its own cause chain and without the group as context.
+        failure = failures.exceptions[0]
+        raise failure from failure.__cause__
+    return sink.result(), tuple(outcomes[name] for name in program.order)
 
 
 def check_research(proposal: TaskProposal, sources: Sources) -> None:
