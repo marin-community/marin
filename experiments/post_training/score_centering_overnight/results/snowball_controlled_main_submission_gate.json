@@ -1,0 +1,68 @@
+{
+  "selection_source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
+  "current_training_source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "current_source_geometry_qualification_noise": 0.0,
+  "selected_noise": 0.05,
+  "full_scientific_horizon": 1200,
+  "required_main_paired_seeds": [
+    0,
+    1,
+    2
+  ],
+  "separate_calibration_selection": {
+    "run_id": "sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce",
+    "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
+    "relative_initial_noise": 0.05,
+    "physical_behavior_responses": 6144,
+    "native_passes": 2033,
+    "native_execution_or_grading_errors": 1,
+    "max_per_update_pooled_abs_log_gap_p99": 1.0236490583419817,
+    "audit_sha256": "f25100c13a19295bdc9d9e7de9e48bbf9180f25b42372dc6fefcc1e68202cc4e"
+  },
+  "calibration_replay_provenance": [
+    "results/snowball_noise005_calibration_regrading.json",
+    "results/snowball_noise005_eos_replay_correction.json",
+    "results/snowball_noise005_worker_failure_recovery.json"
+  ],
+  "calibration_failures": "Original full replay report remains unchanged with its historical discrepancies; EOS correction and isolated unchanged-deadline worker replays resolve those discrepancies. One native AgentTimeout masked placeholder has no recoverable attempted text and remains zero quality in the full denominator.",
+  "source_identity_bridge": [
+    {
+      "path": "skyrl-train/skyrl_train/inference_engines/vllm/fixed_sampler_noise.py",
+      "sha256_by_source": {
+        "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b": "2e86d08aa514608890b342f43df85322a2f599461c6c152bc26be46f3c7c0bca",
+        "0212d03c68bf1cf366776dfe08f99c6a33d43779": "2e86d08aa514608890b342f43df85322a2f599461c6c152bc26be46f3c7c0bca"
+      },
+      "bytes_identical": true
+    },
+    {
+      "path": "skyrl-train/skyrl_train/inference_engines/vllm/vllm_engine.py",
+      "sha256_by_source": {
+        "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b": "c8b1266977b58b95147c78ad4948ea119c874392abfbca1a2951046379fc8219",
+        "0212d03c68bf1cf366776dfe08f99c6a33d43779": "c8b1266977b58b95147c78ad4948ea119c874392abfbca1a2951046379fc8219"
+      },
+      "bytes_identical": true
+    },
+    {
+      "path": "skyrl-train/skyrl_train/objective/score_centering.py",
+      "sha256_by_source": {
+        "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b": "bdfa50f95408da1e229eed83a15cac9bba3f8782516381ddf56d2877b6708871",
+        "0212d03c68bf1cf366776dfe08f99c6a33d43779": "bdfa50f95408da1e229eed83a15cac9bba3f8782516381ddf56d2877b6708871"
+      },
+      "bytes_identical": true
+    }
+  ],
+  "exact_current_source_gpu_qualification": {
+    "file": "results/snowball0212_qualification.json.gz",
+    "updates": 5,
+    "noise": 0.0,
+    "both_pipeline_flash_attention_proven": true
+  },
+  "completed_transfer_pilots": "All five separately labeled paired40-update pilots passed full native audits and identity/checkpoint checks. Their full3-seed300/1200 mains remain required and continue in parallel.",
+  "first_main_config": "experiments/post_training/score_centering_overnight/snowball_noise_main_v3/sc-s0.yaml",
+  "first_main_config_sha256": "11221253d6a7fbbf918132283d765c290715c4e54493ed9b98c69ca23f4a14ba",
+  "first_main_run_id": "sc-snowball-main-noise005-sc-s0-a2-01a126ce",
+  "geometry": "4 learner plus1 inference node;5 BATCH8H100 nodes, PP2/EP8/TP1/CP1/SP1",
+  "broader_submission_gate": "First two current-source noise.05 main updates must have finite applied gradients, aligned naturalK128/chosen-q/TIS2/p=o evidence, recorded actual centering-correction magnitude, native required archive counts/usability and real256 global-expert delta identity matching the frozen seed0 calibration. Zero advantages in a retained row are reported, not filtered or treated as failed learning. Record actual mismatch tails before other noise seeds/arms. Matched fresh mains have a separate first actual capture gate.",
+  "staleness_comparison_gate": "Separate stale65/fresh130 calibration still must complete before justified stale main setting/horizon freeze; no stale main is admitted by this controlled-noise gate.",
+  "submitted": false
+}

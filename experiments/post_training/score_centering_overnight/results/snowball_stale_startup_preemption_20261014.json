@@ -1,0 +1,109 @@
+{
+  "scope": "First five-node Snowball stale65/TIS130 calibration attempt was capacity-preempted during startup, with zero published training updates. Original job retries automatically at its unchanged full130 horizon.",
+  "interruptions": [
+    {
+      "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "attempt_number": 0,
+      "attempt_rows": [
+        {
+          "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "d20cb8668d48870e",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791958199503",
+          "finished_at_ms": "1791958723798",
+          "node_name": "g7387bc",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "edf7dddcfd8b07a7",
+          "state": "10",
+          "exit_code": "143",
+          "started_at_ms": "1791958199503",
+          "finished_at_ms": "1791958723798",
+          "node_name": "g73e294",
+          "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 748ef627-c7a6-4e9b-b440-9f3035fb91de, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+        },
+        {
+          "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/2",
+          "attempt_id": "0",
+          "attempt_uid": "6e8f54d1e1917c7e",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791958205079",
+          "finished_at_ms": "1791958723798",
+          "node_name": "g83d142",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/3",
+          "attempt_id": "0",
+          "attempt_uid": "abc9336e2f906075",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791958205079",
+          "finished_at_ms": "1791958723798",
+          "node_name": "g853b26",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/4",
+          "attempt_id": "0",
+          "attempt_uid": "65d0058aaec6a170",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791958205079",
+          "finished_at_ms": "1791958723798",
+          "node_name": "g73bb8a",
+          "terminal_reason": ""
+        }
+      ],
+      "allocated_h100_hours": 5.788326666666666,
+      "published_training_updates_in_attempt": 0,
+      "export_objects_written_in_attempt": [],
+      "raw_controller_evidence": [
+        {
+          "attempt_ref": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/0:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-stale-startup-preemption-20261014/stale64-tis-s0-a0-rank0-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-stale-startup-preemption-20261014/stale64-tis-s0-a0-rank0-events.log"
+          }
+        },
+        {
+          "attempt_ref": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/1:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-stale-startup-preemption-20261014/stale64-tis-s0-a0-rank1-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-stale-startup-preemption-20261014/stale64-tis-s0-a0-rank1-events.log"
+          }
+        },
+        {
+          "attempt_ref": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/2:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-stale-startup-preemption-20261014/stale64-tis-s0-a0-rank2-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-stale-startup-preemption-20261014/stale64-tis-s0-a0-rank2-events.log"
+          }
+        },
+        {
+          "attempt_ref": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/3:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-stale-startup-preemption-20261014/stale64-tis-s0-a0-rank3-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-stale-startup-preemption-20261014/stale64-tis-s0-a0-rank3-events.log"
+          }
+        },
+        {
+          "attempt_ref": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/4:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-stale-startup-preemption-20261014/stale64-tis-s0-a0-rank4-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-stale-startup-preemption-20261014/stale64-tis-s0-a0-rank4-events.log"
+          }
+        }
+      ],
+      "disposition": "Batch capacity preemption during startup, before first published training update. Automatic retry keeps the original job handle and full planned scientific horizon. Charge both task allocation intervals."
+    }
+  ],
+  "total_allocated_h100_hours": 5.788326666666666
+}
