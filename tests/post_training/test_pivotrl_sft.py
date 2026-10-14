@@ -7,6 +7,7 @@ import json
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from marin.rl.nemotron_pivot import VALIDATION_FILENAME
 from marin.rl.pass_rates import PASS_RATES_FILENAME
 
 from experiments.post_training.pivotrl.sft import (
@@ -17,6 +18,7 @@ from experiments.post_training.pivotrl.sft import (
     example_tokens_bound,
     grid_bands,
     write_sft_examples,
+    write_validation_examples,
 )
 from experiments.post_training.pivotrl.sft_templates import GRUG_FINAL_TURN_TEMPLATE, QWEN3_FINAL_TURN_TEMPLATE
 
@@ -158,3 +160,26 @@ def test_write_sft_examples_selects_the_band_across_read_batches(tmp_path):
     commands = [example["messages"][-1]["tool_calls"][0]["function"]["arguments"] for example in examples]
     expected = [index for index in range(3 * ROWS_PER_BATCH) if 1 <= index % 9 <= 3]
     assert commands == [json.dumps({"command": f"echo {index}"}) for index in expected]
+
+
+def test_write_validation_examples_measures_rows_and_drops_long_ones(tmp_path, gpt2_tokenizer_path):
+    short = [{"role": "user", "content": "Fix the bug."}]
+    long = [{"role": "user", "content": "Fix the bug. " + "context " * 2000}]
+    rows = [_swe_row(1, short, "ls"), _swe_row(2, long, "cat a.py")]
+    pq.write_table(pa.Table.from_pylist(rows), tmp_path / VALIDATION_FILENAME)
+    output = tmp_path / "out"
+
+    write_validation_examples(
+        rows_path=str(tmp_path),
+        output_path=str(output),
+        task="experiments.post_training.pivotrl.task:PIVOT_TOOL_CALL",
+        tokenizer=gpt2_tokenizer_path,
+        chat_template=GRUG_FINAL_TURN_TEMPLATE,
+        enable_thinking=False,
+        max_tokens=1024,
+    )
+
+    with gzip.open(output / EXAMPLES_FILENAME, "rt") as stream:
+        (example,) = [json.loads(line) for line in stream]
+    assert example["messages"][:-1] == short
+    assert json.loads((output / "manifest.json").read_text())["too_long"] == 1

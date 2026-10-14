@@ -27,6 +27,7 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from levanter.optim.config import AdamConfig
+from levanter.tokenizers import load_tokenizer
 from levanter.utils.mesh import MeshConfig
 from marin.evaluation.model_config import ModelConfig
 from marin.execution.artifact import Artifact
@@ -36,13 +37,14 @@ from marin.execution.remote import remote
 from marin.experiment.checkpoints import hf_to_levanter
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
+from marin.rl.nemotron_pivot import VALIDATION_FILENAME
 from marin.rl.pass_rates import PASS_RATES_FILENAME, PassRateTask
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.writers import write_jsonl_file
 
-from experiments.post_training.pivotrl.pipeline import pivot_steps, policy_key
+from experiments.post_training.pivotrl.pipeline import full_candidate_step, pivot_steps, policy_key
 from experiments.post_training.pivotrl.runs import (
     GRUG_SMOKE_RUNS,
     OPENHANDS_GRUG,
@@ -54,6 +56,7 @@ from experiments.post_training.pivotrl.sft_templates import GRUG_FINAL_TURN_TEMP
 from experiments.sft.launcher import (
     LLAMA3_CHAT_EOS_TOKEN_IDS,
     ArtifactDatasetSpec,
+    ArtifactValidationSpec,
     ConvertedCheckpointModel,
     HFModel,
     ModelSource,
@@ -136,6 +139,16 @@ def example_tokens_bound(prompt_tokens: int, action: dict[str, Any]) -> int:
     return prompt_tokens + len(json.dumps(action, ensure_ascii=False).encode()) + TURN_TOKENS
 
 
+def chat_example(reader: ReferenceTask, row: dict[str, Any], enable_thinking: bool) -> dict[str, Any]:
+    """The row's requested prompt and tools, followed by the expert's action."""
+    body = reader.request(row)
+    return {
+        "messages": [*body["messages"], reader.reference(row)],
+        # Levanter's renderer, unlike transformers', leaves an unset ``tools`` undefined.
+        "chat_template_kwargs": {"tools": body.get("tools"), "enable_thinking": enable_thinking},
+    }
+
+
 def write_sft_examples(
     *,
     pass_rates_path: str,
@@ -170,18 +183,13 @@ def write_sft_examples(
     def examples() -> Iterator[dict[str, Any]]:
         nonlocal too_long
         for row in band_rows(pass_rates_path, band):
-            body = reader.request(row)
-            action = reader.reference(row)
-            bound = example_tokens_bound(served[reader.row_id(row)], action)
+            example = chat_example(reader, row, enable_thinking)
+            bound = example_tokens_bound(served[reader.row_id(row)], example["messages"][-1])
             if bound > max_tokens:
                 too_long += 1
                 continue
             bounds.append(bound)
-            yield {
-                "messages": [*body["messages"], action],
-                # Levanter's renderer, unlike transformers', leaves an unset ``tools`` undefined.
-                "chat_template_kwargs": {"tools": body.get("tools"), "enable_thinking": enable_thinking},
-            }
+            yield example
 
     output = StoragePath(output_path)
     write_jsonl_file(examples(), str(output / EXAMPLES_FILENAME))
@@ -195,6 +203,53 @@ def write_sft_examples(
         "max_tokens": max_tokens,
         "longest_example_tokens_bound": max(bounds),
     }
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+
+def write_validation_examples(
+    *,
+    rows_path: str,
+    output_path: str,
+    task: str,
+    tokenizer: str,
+    chat_template: str,
+    enable_thinking: bool,
+    max_tokens: int,
+) -> None:
+    """Write one chat example per held-out row, as :func:`write_sft_examples` writes training rows.
+
+    Held-out rows were never sampled, so they have no served lengths; each example is rendered and
+    measured with the policy's tokenizer instead, which is cheap at validation's size. Examples longer
+    than ``max_tokens`` are dropped, since Levanter refuses over-long unpacked sequences.
+
+    Args:
+        rows_path: A candidate artifact holding ``validation.parquet``.
+        output_path: Where ``train.jsonl.gz`` and ``manifest.json`` go.
+        task: Import path of the :class:`ReferenceTask` that reads these rows.
+        tokenizer: The policy's tokenizer, by an ``hf://`` reference.
+        chat_template: The SFT chat template, which renders the measured example.
+        enable_thinking: The thinking mode pass rates sample with.
+        max_tokens: The training sequence length.
+    """
+    module, attribute = task.split(":")
+    reader: ReferenceTask = getattr(importlib.import_module(module), attribute)
+    with (StoragePath(rows_path) / VALIDATION_FILENAME).open("rb") as source:
+        rows = pq.read_table(source).to_pylist()
+    measure = load_tokenizer(tokenizer)
+    examples = []
+    for row in rows:
+        example = chat_example(reader, row, enable_thinking)
+        encoded = measure.apply_chat_template_with_masks(
+            [example["messages"]], chat_template=chat_template, **example["chat_template_kwargs"]
+        )
+        if len(encoded["input_ids"][0]) <= max_tokens:
+            examples.append(example)
+    if not examples:
+        raise ValueError(f"no validation example fits in {max_tokens} tokens")
+
+    output = StoragePath(output_path)
+    write_jsonl_file(examples, str(output / EXAMPLES_FILENAME))
+    manifest = {"rows": len(rows), "examples": len(examples), "too_long": len(rows) - len(examples)}
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
@@ -255,7 +310,12 @@ class SFTBudget:
     batch_size: int
     steps: int
     learning_rate: float
-    """Constant Adam learning rate."""
+    """Adam learning rate, constant after warmup."""
+    warmup: int
+    """Linear warmup, in updates, so a fresh Adam's first updates stay small."""
+    max_grad_norm: float
+    steps_per_eval: int
+    """How often held-out loss is computed."""
 
 
 @dataclass(frozen=True)
@@ -333,6 +393,23 @@ def sft_examples_step(run: PivotSFTRun) -> ArtifactStep[Artifact]:
     )
 
 
+def validation_examples_step(run: PivotSFTRun) -> ArtifactStep[Artifact]:
+    """Held-out chat examples from the candidates' validation split, shared by every band and seed."""
+    pivots = run.pivots
+    model = pivots.model
+    return apply(
+        user_owned_name(f"pivotrl/{pivots.candidates.dataset}/sft-validation/{model.name}/max-{run.budget.seq_len}"),
+        remote(write_validation_examples, resources=ResourceConfig.with_cpu(cpu=2, ram="16g")),
+        rows_path=full_candidate_step(pivots.candidates),
+        output_path=OUT,
+        task=pivots.candidates.task,
+        tokenizer=f"hf://{model.location}@{model.revision}",
+        chat_template=run.policy.chat_template,
+        enable_thinking=pivots.sampling.enable_thinking,
+        max_tokens=run.budget.seq_len,
+    )
+
+
 def pivot_sft_step(run: PivotSFTRun) -> ArtifactStep[LevanterCheckpoint]:
     examples = sft_examples_step(run)
     budget = run.budget
@@ -354,9 +431,9 @@ def pivot_sft_step(run: PivotSFTRun) -> ArtifactStep[LevanterCheckpoint]:
             beta2=0.999,
             epsilon=1e-8,
             weight_decay=0.0,
-            max_grad_norm=1.0,
+            max_grad_norm=budget.max_grad_norm,
             lr_schedule="constant",
-            warmup=0.0,
+            warmup=budget.warmup,
         ),
         mesh=run.policy.mesh,
         seq_len=budget.seq_len,
@@ -367,6 +444,14 @@ def pivot_sft_step(run: PivotSFTRun) -> ArtifactStep[LevanterCheckpoint]:
         hf_save_dtype="bfloat16",
         wandb_project="pivotrl-sft",
         seed=run.seed,
+        validation=[
+            ArtifactValidationSpec(
+                slug=f"{run.pivots.candidates.dataset}-validation",
+                artifact=validation_examples_step(run),
+                glob=EXAMPLES_FILENAME,
+            )
+        ],
+        steps_per_eval=budget.steps_per_eval,
     )
     return sft_step(spec, run.policy.resources)
 
@@ -408,12 +493,19 @@ def k16_grid_runs(pivots: PivotRLRun, budget: SFTBudget) -> tuple[PivotSFTRun, .
 
 
 # The MarinSkyRL reference-action baseline's budget: 32 updates of 4 examples at a constant 2e-6.
-QWEN_SMOKE_BUDGET = SFTBudget(seq_len=32768, batch_size=4, steps=32, learning_rate=2e-6)
+QWEN_SMOKE_BUDGET = SFTBudget(
+    seq_len=32768, batch_size=4, steps=32, learning_rate=2e-6, warmup=0, max_grad_norm=1.0, steps_per_eval=8
+)
 # Grug trains in the 64k window it is served and RL-trained in, so no candidate it was graded on is cut.
-GRUG_BUDGET = SFTBudget(seq_len=65536, batch_size=64, steps=32, learning_rate=2e-6)
-# 9,600 examples: about one epoch of SWE's hard band, the smallest, so every band trains on as many
-# examples and none repeats one.
-SWE_GRID_BUDGET = SFTBudget(seq_len=65536, batch_size=64, steps=150, learning_rate=2e-6)
+GRUG_BUDGET = SFTBudget(
+    seq_len=65536, batch_size=64, steps=32, learning_rate=2e-6, warmup=0, max_grad_norm=1.0, steps_per_eval=8
+)
+# The update of the MarinSkyRL SFT and RL runs on Grug: batch 512 at 4e-6, gradients clipped at 0.5,
+# with a short warmup for the fresh optimizer. 19 updates are 9,728 examples, about one epoch of SWE's
+# hard band, the smallest, so every band trains on as many examples and none repeats one.
+SWE_GRID_BUDGET = SFTBudget(
+    seq_len=65536, batch_size=512, steps=19, learning_rate=4e-6, warmup=3, max_grad_norm=0.5, steps_per_eval=2
+)
 GRID_SEEDS = (0, 1, 2)
 
 QWEN_SMOKE_SFT_RUNS = tuple(
