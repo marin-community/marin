@@ -63,6 +63,7 @@ SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope not in {"deploy", "iac"}),
     SourceRoot("infra/deploy/src/marin_deploy", "infra/deploy/src"),
     SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
+    SourceRoot("infra/shellsim", "."),
     SourceRoot("experiments", "."),
     SourceRoot("infra/ci", "."),
     SourceRoot("infra/marina/src/marina", "infra/marina/src"),
@@ -152,9 +153,8 @@ SOURCE_BUILD_TIMEOUT = 30
 DEFAULT_LEG_TIMEOUT = 15
 
 # Suites outside the import-selected Python matrix.
-# TaskCompendium and Shellbox use the root lock; RolloutEngine uses a separate
-# uv lock. Iris smoke
-# drives a browser. Levanter's accelerator lanes use its selected files below.
+# TaskCompendium, Shellbox, RolloutEngine and Taskforge use the root lock. Iris
+# smoke drives a browser. Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "iris-e2e-smoke": ("lib/iris/", *DEPENDENCY_MANIFESTS),
@@ -179,6 +179,19 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "lib/verifyit/",
         "lib/rigging/",
         "lib/shellbox/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
+    "taskforge-unit": (
+        "lib/taskforge/",
+        "experiments/post_training/capability_driven_envs/",
+        "experiments/post_training/glm.py",
+        "lib/taskcompendium/",
+        "lib/iris/",
+        "lib/shellbox/",
+        "lib/verifyit/",
+        "lib/rigging/",
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
         *DEPENDENCY_MANIFESTS,

@@ -14,6 +14,9 @@ import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
 
+IMAGE_METADATA_FILE = "image.json"
+IMAGE_REFERENCE_KEY = "image_reference"
+
 
 def _guest_file(name: str):
     return importlib.resources.files("shellbox.backends.qemu").joinpath(f"guest/{name}")
@@ -160,8 +163,8 @@ def _oci_disk(
         if task_dockerfile is not None:
             metadata["dockerfile_sha256"] = hashlib.sha256(task_dockerfile.read_bytes()).hexdigest()
         if image_reference is not None:
-            metadata["image_reference"] = image_reference
-        (output / "image.json").write_text(json.dumps(metadata, indent=2) + "\n")
+            metadata[IMAGE_REFERENCE_KEY] = image_reference
+        (output / IMAGE_METADATA_FILE).write_text(json.dumps(metadata, indent=2) + "\n")
         _boot_initramfs(busybox, output / "initramfs.cpio.gz")
 
 

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Let an external agent request generations from the shared rollout loop."""
+"""Adapt an agent's model requests to the task-session lifecycle."""
 
 import asyncio
 from collections.abc import Awaitable, Callable
@@ -10,15 +10,11 @@ from typing import Any, Protocol
 
 from taskcompendium.grading_result import GradeResult
 
-from rolloutengine.contracts import ModelTurn, RolloutContractError, SessionStart, Transition
+from rolloutengine.contracts import ModelTurn, RolloutContractError, SessionStart, TaskGrader, Transition
 
 
 class AgentCompletion(Protocol):
     async def __call__(self, request: SessionStart) -> ModelTurn: ...
-
-
-class AgentGrader(Protocol):
-    async def __call__(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult: ...
 
 
 @dataclass(frozen=True)
@@ -27,7 +23,7 @@ class _PendingRequest:
     response: asyncio.Future[ModelTurn]
 
 
-class ExternalAgentSession:
+class AgentTaskSession:
     """Run a sequential agent while the engine owns each model generation.
 
     The agent adapter translates its wire protocol to ``SessionStart`` and calls
@@ -39,7 +35,7 @@ class ExternalAgentSession:
     def __init__(
         self,
         run_agent: Callable[[AgentCompletion], Awaitable[None]],
-        grader: AgentGrader,
+        grader: TaskGrader,
     ):
         self.run_agent = run_agent
         self.grader = grader
@@ -77,10 +73,13 @@ class ExternalAgentSession:
             receive.cancel()
             await asyncio.gather(receive, return_exceptions=True)
 
+    async def _run_agent(self) -> None:
+        await self.run_agent(self._complete)
+
     async def prepare(self) -> SessionStart:
         if self.agent is not None:
             raise RuntimeError("The agent session was already started")
-        self.agent = asyncio.create_task(self.run_agent(self._complete))
+        self.agent = asyncio.create_task(self._run_agent())
         self.pending = await self._next_request()
         if self.pending is None:
             raise RolloutContractError("The agent exited before requesting a model response")
@@ -98,8 +97,17 @@ class ExternalAgentSession:
         # Native agents may compact history or change the available tools.
         # Both require a new exact-token prefix instead of appending observations.
         if request.messages[: len(prefix)] != prefix or request.options != previous.request.options:
-            return Transition(done=False, reset_conversation=request.messages, next_options=request.options)
-        return Transition(done=False, observations=request.messages[len(prefix) :])
+            return Transition(
+                done=False,
+                reset_conversation=request.messages,
+                next_options=request.options,
+                next_prompt_token_ids=request.prompt_token_ids,
+            )
+        return Transition(
+            done=False,
+            observations=request.messages[len(prefix) :],
+            next_prompt_token_ids=request.prompt_token_ids,
+        )
 
     async def grade(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult:
         return await self.grader(messages, stop_reason=stop_reason)

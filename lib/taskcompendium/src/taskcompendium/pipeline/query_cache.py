@@ -13,6 +13,8 @@ from functools import partial
 from typing import Any
 
 from finestore.cache import PersistentKvCache
+from finestore.layout import BlobTables
+from finestore.store import DataStore
 from zephyr import counters
 
 from taskcompendium.pipeline.review_requests import (
@@ -24,6 +26,15 @@ from taskcompendium.pipeline.review_requests import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def compact_query_cache(root: str) -> None:
+    """Compact the optional request cache on a best-effort basis, retaining superseded objects."""
+    try:
+        with DataStore.open(root, writer_id="query-cache-compaction") as store:
+            store.compact(BlobTables.DESCRIPTORS)
+    except Exception as error:
+        logger.warning("Request-cache compaction failed; continuing with best-effort cache reads: %s", error)
 
 
 @dataclass(frozen=True)
@@ -175,7 +186,9 @@ def _submitted_completions(
     missing_requests = list(misses.values())
     result = submit(missing_requests)
     rows = {}
-    for line in result.output.splitlines():
+    for line in result.output.split("\n"):
+        if not line.strip():
+            continue
         task_id = json.loads(line)["custom_id"]
         if task_id not in misses:
             raise ValueError(f"Unexpected batch response ID: {task_id}")

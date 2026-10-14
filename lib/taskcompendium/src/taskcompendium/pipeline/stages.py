@@ -82,7 +82,6 @@ from taskcompendium.pipeline.transforms import (
 )
 from taskcompendium.pipeline.verification import verify_task
 
-AUDIT_SHARDS = 64
 AUDIT_INPUT_PATTERN = "audit/*.parquet"
 AUDIT_SHARD_TEMPLATE = "audit/part-{shard:05d}.parquet"
 REVIEW_INPUT_PATTERN = "review-inputs/batch-*.jsonl.gz"
@@ -384,12 +383,15 @@ def prepare_source(
     limit: int | None,
     execution: AuditExecution,
     *,
+    num_output_shards: int,
     telemetry: PhaseTelemetry | None = None,
     context: ZephyrContext | None = None,
     normalized_rows: Dataset | None = None,
 ) -> dict[str, Any]:
     """Normalize, deduplicate, and run recipe checks before quality review.
 
+    ``num_output_shards`` sets the normalization and deduplication partitions.
+    Persisted review batches remain independently schedulable.
     ``normalized_rows`` supplies rows already passed through ``normalize_row`` in place of the source.
     """
     _check_execution(execution)
@@ -404,13 +406,16 @@ def prepare_source(
         if limit is not None:
             selected = selected.take_per_shard(limit)
         normalized_rows = selected.group_by(
-            lambda row: row["locator"], reducer=lambda _key, rows: rows, num_output_shards=AUDIT_SHARDS
+            lambda row: row["locator"], reducer=lambda _key, rows: rows, num_output_shards=num_output_shards
         ).map(partial(normalize_row, recipe=recipe))
     elif limit is not None:
         raise ValueError("A row limit applies only to rows read from the source")
     prepared = (
         normalized_rows.group_by(
-            public_group_key, reducer=deduplicate_group, sort_by=source_locator_order, num_output_shards=AUDIT_SHARDS
+            public_group_key,
+            reducer=deduplicate_group,
+            sort_by=source_locator_order,
+            num_output_shards=num_output_shards,
         )
         .map(_check_prepared_audit)
         # Persist inside each dedup reducer: reference-only resharding would

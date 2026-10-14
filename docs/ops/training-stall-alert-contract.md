@@ -45,7 +45,11 @@ ORDER BY timestamp_ms DESC, seq DESC
 LIMIT 20;
 ```
 
-For an unsuffixed root, remove `-coord` to get `<hero-run-id>`. For a suffixed root, also remove the retry suffix. An empty result identifies missing Levanter telemetry. The root becomes `initializing_stale` after 45 minutes.
+For an unsuffixed root, remove `-coord` to get `<hero-run-id>`. For a suffixed root, also remove
+the retry suffix. An empty result in this 30-minute window does not show whether the run published
+older telemetry. Extend the phase query to 24 hours for an older active run. A root with no telemetry
+reaches `initializing_stale` after 45 minutes; a root whose last training heartbeat went stale is
+handled by `TrainingTelemetryGone`.
 
 Levanter republishes phase every minute. A current phase row binds progress to one execution. [`TrainingTelemetryGone`](hero-run-health-alerts.md) covers loss of the telemetry path for an enrolled run, and the Finelog health alerts cover the durable path itself. Launcher-specific process watchdogs provide additional coverage where configured.
 
@@ -114,4 +118,7 @@ The NVIDIA probe follows the same sparse convention. Every poll emits `nvidia_he
 
 GPU utilization, power, and power-limit metrics remain diagnostic evidence available in finelog and the capture bundle; they do not gate or classify this alert. This avoids hiding a stalled job when node attribution is unavailable.
 
-The rule currently covers CoreWeave controllers whose active root-job state is forwarded into the `marin` finelog hub. GCE controllers do not emit `iris.task_state`, so their jobs are not evaluated by this rule.
+The rule currently covers CoreWeave controllers whose active root-job state is forwarded into the
+`marin` finelog hub. GCE controllers do not emit `iris.task_state`, so their jobs are not evaluated
+by this rule. [GCE hero-run alert coverage](https://github.com/marin-community/marin/issues/9731)
+is tracked separately.

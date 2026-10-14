@@ -3,9 +3,9 @@
 
 """Validate runtime selections before an attempt acquires resources."""
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 
-from shellbox.machine import Machine, MachineFactory
+from shellbox.machine import MachineFactory
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -20,7 +20,7 @@ from taskcompendium.models import (
 from taskcompendium.runtime.environment import validate_machine_spec
 from taskcompendium.runtime.shell import resolve_shell_tool
 
-from rolloutengine.contracts import TaskSession
+from rolloutengine.contracts import TaskSessionFactory
 from rolloutengine.machines import _machine_spec
 from rolloutengine.spec import LoweredTaskSpec, TaskRuntimeSpec, TaskSessionSpec
 
@@ -33,7 +33,7 @@ def lower_task(
     session: TaskSessionSpec,
     *,
     factories: Mapping[str, MachineFactory],
-    sessions: Mapping[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]],
+    sessions: Mapping[str, TaskSessionFactory],
 ) -> LoweredTaskSpec:
     """Preserve the task definition and validate its selected execution providers."""
     lowered = LoweredTaskSpec(task=task, runtime=runtime, session=session)
@@ -45,7 +45,7 @@ def validate_lowered_task(
     lowered: LoweredTaskSpec,
     *,
     factories: Mapping[str, MachineFactory],
-    sessions: Mapping[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]],
+    sessions: Mapping[str, TaskSessionFactory],
 ) -> None:
     """Reject unknown providers and unsupported task requirements before startup."""
     task = lowered.task
@@ -97,8 +97,6 @@ def validate_lowered_task(
         shell_tool is None or tool.name != shell_tool.definition.name for tool in task.interaction_tools
     ):
         raise NotImplementedError("Native tool providers require a registered task session")
-    if set(task.environment_requirements.capabilities) - {"shell", "filesystem"}:
-        raise NotImplementedError("The Shellbox session supports only shell and filesystem capabilities")
     if lowered.runtime.task_machine is None and (
         task.resources.all
         or task.resources.worker

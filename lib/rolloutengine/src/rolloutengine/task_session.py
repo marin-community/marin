@@ -4,16 +4,14 @@
 """Shellbox task operations and public model request preparation."""
 
 import json
-from collections.abc import Mapping
-from contextlib import AsyncExitStack
 from typing import Any
 
-from shellbox.machine import Machine, MachineFactory
 from taskcompendium.chat import assistant_message
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import (
     ANSWER_CALL_NAME,
     CONVERSATION_ANSWERS,
+    TOOL_ARGUMENTS_OBJECT_ERROR,
     AnswerCall,
     AnswerType,
     AssistantToolCalls,
@@ -30,10 +28,7 @@ from taskcompendium.submission import (
     submission_instruction,
 )
 
-from rolloutengine.cleanup import _Cleanup
-from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, Transition
-from rolloutengine.grading import _grade_rollout
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, TaskSessionContext, Transition
 
 WORKSPACE_INSTRUCTION = (
     "Use the {tool_name} tool to inspect and change the workspace. Send a final response when the task is completed."
@@ -78,20 +73,11 @@ def session_start(task: TaskSpec, shell_tool: BoundShellTool | None) -> SessionS
 class _ShellboxTaskSession:
     """Execute shell calls and grade final task evidence."""
 
-    def __init__(
-        self,
-        lowered: LoweredTaskSpec,
-        machine: Machine | None,
-        factories: Mapping[str, MachineFactory],
-        cleanup: _Cleanup,
-        resources: AsyncExitStack,
-    ):
-        self.lowered = lowered
-        self.machine = machine
-        self.factories = factories
-        self.cleanup = cleanup
-        self.resources = resources
-        self.shell_tool = resolve_shell_tool(lowered.task, lowered.session.shell_tool)
+    def __init__(self, context: TaskSessionContext):
+        self.lowered = context.lowered
+        self.machine = context.machine
+        self.grader = context.require_task_grader()
+        self.shell_tool = resolve_shell_tool(context.lowered.task, context.lowered.session.shell_tool)
 
     async def prepare(self) -> SessionStart:
         return session_start(self.lowered.task, self.shell_tool)
@@ -110,7 +96,7 @@ class _ShellboxTaskSession:
             if call.name in final_tools or answer_call:
                 return Transition(done=True)
             if not isinstance(call.arguments, dict):
-                observation = json.dumps({"error": "Tool arguments must be a JSON object"})
+                observation = json.dumps({"error": TOOL_ARGUMENTS_OBJECT_ERROR})
             elif self.shell_tool is None:
                 observation = json.dumps({"error": "No shell tool is available"})
             else:
@@ -130,15 +116,7 @@ class _ShellboxTaskSession:
         return Transition(done=False, observations=tuple(observations))
 
     async def grade(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult:
-        return await _grade_rollout(
-            self.lowered,
-            messages,
-            self.machine,
-            self.factories,
-            self.cleanup,
-            self.resources,
-            stop_reason=stop_reason,
-        )
+        return await self.grader(messages, stop_reason=stop_reason)
 
     async def close(self) -> None:
         pass

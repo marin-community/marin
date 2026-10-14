@@ -211,6 +211,7 @@ class PythonTestsSource:
     convert: Converter
     rubric: str
     info: SourceInfo = field(kw_only=True)
+    version: str = "4"
 
 
 SOURCES = {
@@ -235,6 +236,7 @@ SOURCES = {
         "DCAgent__exp_rpt_curriculum-medium-v2",
         convert_python_tests,
         CURRICULUM_MEDIUM_RUBRIC,
+        version="5",
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_curriculum-medium-v2",
             title="DCAgent/exp_rpt_curriculum-medium-v2",
@@ -252,6 +254,7 @@ SOURCES = {
         "DCAgent__exp_rpt_e2egit-v2",
         convert_python_tests,
         E2EGIT_RUBRIC,
+        version="7",
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_e2egit-v2",
             title="DCAgent/exp_rpt_e2egit-v2",
@@ -396,7 +399,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name=f"tasktrove-{name}",
                 source=tasktrove_source(source.config),
                 convert=TaskTroveConverter(source.config, source.convert),
-                version="1",
+                version=source.version,
                 intended_use=IntendedUse.TRAIN,
                 rubric=source.rubric,
                 controls=PYTHON_TESTS_CONTROLS,

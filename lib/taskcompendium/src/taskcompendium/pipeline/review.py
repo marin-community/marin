@@ -25,6 +25,7 @@ from taskcompendium.pipeline.query_cache import (
     read_cached_requests,
 )
 from taskcompendium.pipeline.review_requests import (
+    DEFAULT_BATCH_POLL_SECONDS,
     DEFAULT_MAX_BATCH_BYTES,
     BatchClient,
     RequestOutput,
@@ -535,7 +536,7 @@ class BatchReviewer:
     model_revision: str
     max_tokens: int = DEFAULT_REVIEW_MAX_TOKENS
     max_prompt_characters: int = DEFAULT_PROMPT_CHARACTERS
-    poll_seconds: float = 5.0
+    poll_seconds: float = DEFAULT_BATCH_POLL_SECONDS
     max_attempts: int = DEFAULT_REVIEW_MAX_ATTEMPTS
     retry_max_tokens: int = DEFAULT_REVIEW_RETRY_MAX_TOKENS
     retry_max_prompt_characters: int = DEFAULT_PROMPT_CHARACTERS

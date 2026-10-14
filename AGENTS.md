@@ -33,6 +33,10 @@ matching skill exists** by scanning the skill descriptions in your system
 prompt. If a skill matches, invoke it via the Skill tool — do not skip it in
 favor of ad-hoc commands.
 
+External fork refreshes use [refresh-fork](.agents/skills/refresh-fork/SKILL.md).
+For vLLM GPU wheels, read its [trigger and test table](.agents/skills/refresh-fork/docs/vllm.md#triggers-and-tests)
+and source, release, and adoption procedure.
+
 ## Handle Requests
 
 If a request comes from Slack or GitHub and appears to be a simple question,

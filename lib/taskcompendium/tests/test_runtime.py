@@ -4,6 +4,7 @@
 """Executable task evidence, reset behavior and curation replay."""
 
 import asyncio
+import io
 import json
 import os
 import sys
@@ -13,15 +14,17 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
+from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
     Backend,
     Command,
     DockerImage,
     ExitReason,
+    HostImage,
     MachineSpec,
+    PackageSpec,
     Result,
-    ShellSimBuiltins,
     UnsupportedMachineSpec,
 )
 from verifyit.spec import ScriptSpec, render_spec, spec_from_table
@@ -61,7 +64,13 @@ from taskcompendium.runtime.episode import ScriptedActor, run_episode
 from taskcompendium.runtime.grading import SPEC_PATH, STAGING_ARCHIVE, grade_empty_in_sandbox, grade_in_sandbox
 from taskcompendium.runtime.models import RuntimeEvidence, Termination, grading_attempt
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.runtime.shell import CONTROL_PATH, OUTPUT_PATH, ShellFactory, ShellToolConfig
+from taskcompendium.runtime.shell import (
+    CONTROL_PATH,
+    OUTPUT_PATH,
+    ShellFactory,
+    ShellToolConfig,
+    upload_resources,
+)
 from taskcompendium.runtime.task_grading import grade_task
 
 GRADER_IMAGE = "fixture@sha256:" + "a" * 64
@@ -110,6 +119,13 @@ class FileMachine:
     async def run(self, command: Command):
         if command.argv[0] == "mkdir":
             return EXITED
+        if command.argv[0] == "tar":
+            with tarfile.open(fileobj=io.BytesIO(self.files[command.argv[2]])) as archive:
+                for member in archive:
+                    stream = archive.extractfile(member)
+                    assert stream is not None
+                    self.files["/" + member.name] = stream.read()
+            return EXITED
         if command.argv[:2] == ("rm", "-f"):
             for path in command.argv[2:]:
                 self.files.pop(path, None)
@@ -132,7 +148,7 @@ class FileMachine:
 
 
 @dataclass
-class FileMachines:
+class FileMachines(DockerMachineFactory):
     backend = Backend.DOCKER
     machines: list[FileMachine] = field(default_factory=list)
 
@@ -140,6 +156,40 @@ class FileMachines:
         machine = FileMachine()
         self.machines.append(machine)
         return machine
+
+
+def test_resource_upload_preserves_nested_bytes_executable_modes_and_last_write(local_machine_environment):
+    _, factory = local_machine_environment
+    resources = (
+        inline_resource("app/value.txt", b"old"),
+        inline_resource("app/value.txt", b"answer\n"),
+        inline_resource("app/bin/read.sh", b"#!/bin/sh\ncat /app/value.txt\n").model_copy(update={"mode": "755"}),
+        inline_resource("tests/opaque.bin", b"\x00\xff"),
+    )
+
+    async def scenario():
+        machine = await factory.create(MachineSpec(HostImage()))
+        try:
+            initialized = await machine.run(Command(("mkdir", "-p", "/app")))
+            assert initialized.exit_code == 0
+            permissions = await machine.run(Command(("chmod", "700", "/app")))
+            assert permissions.exit_code == 0
+            await upload_resources(machine, resources, 10, user=None)
+            result = await machine.run(Command(("/app/bin/read.sh",)))
+            assert (result.exit_code, result.stdout) == (0, b"answer\n")
+            opaque = await machine.run(Command(("cat", "/tests/opaque.bin")))
+            assert (opaque.exit_code, opaque.stdout) == (0, b"\x00\xff")
+            mode = await machine.run(Command(("stat", "-c", "%a", "/app")))
+            assert (mode.exit_code, mode.stdout) == (0, b"700\n")
+            remaining = await machine.run(
+                Command(("find", "/tmp", "-maxdepth", "1", "-name", "taskcompendium-resources-*.tar"))
+            )
+            assert remaining.exit_code == 0
+            assert remaining.stdout == b""
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("entrypoint", ["factory", "episode"])
@@ -245,7 +295,7 @@ class LocalGradingMachine:
 
 
 @dataclass
-class LocalGradingMachines:
+class LocalGradingMachines(DockerMachineFactory):
     root: Path
     remove_exit_code: int = 0
     machines: list[LocalGradingMachine] = field(default_factory=list)
@@ -374,7 +424,7 @@ def test_script_grader_reads_captured_state(tmp_path, script_grading_task, state
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
 
 
-class UnavailableMachines:
+class UnavailableMachines(DockerMachineFactory):
     backend = Backend.DOCKER
 
     async def create(self, spec):
@@ -406,7 +456,7 @@ async def test_shell_uploads_public_files_without_oracle_and_captures_submission
             )
         }
     )
-    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins()), {}, 1, 1024)
+    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(PackageSpec()), {}, 1, 1024)
     env = await factory.create(task)
     try:
         public = await env.machine.run(Command(("cat", "/workspace/people.csv")))
@@ -469,7 +519,7 @@ async def test_episode_provides_shell_tool_and_collects_nested_output(shell_task
             ),
         )
     )
-    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins()), {}, 1, 1024, shell_tool=binding)
+    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(PackageSpec()), {}, 1, 1024, shell_tool=binding)
     rollout = await run_episode(task, actor, factory, max_steps=2, control="fixture")
     assert rollout.termination == Termination.FINAL_MESSAGE
     assert rollout.evidence().files == {"/workspace/submission/nested/result": b"answer"}
@@ -495,6 +545,60 @@ async def test_grader_setup_uses_prepared_cwd_before_explicit_grader_command(she
 
 
 @pytest.mark.asyncio
+async def test_local_script_grader_stages_inputs_and_runs_setup_as_host_user(shell_task, local_machine_environment):
+    environment, factory = local_machine_environment
+    grader = ScriptGrader(
+        argv=(
+            "sh",
+            "-c",
+            f'test "$(id -u)" = {os.geteuid()} && test -f /setup/prepared.csv && test ! -e {STAGING_ARCHIVE}',
+        ),
+        cwd="/grading",
+        answer_path=None,
+        reward=ExitCodeReward(),
+        environment=environment.model_copy(
+            update={"working_directory": "/setup", "setup_commands": ("cp /workspace/people.csv prepared.csv",)}
+        ),
+    )
+    task = shell_task.model_copy(update={"grader": grader, "output_paths": ()})
+
+    result = await grade_in_sandbox(task, GradingAttempt(finished(task)), factory, MachineSpec(HostImage()))
+
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
+
+
+@pytest.mark.asyncio
+async def test_local_shell_setup_preserves_host_user_and_task_directory(shell_task, local_machine_environment):
+    requirements, machine_factory = local_machine_environment
+    task = shell_task.model_copy(
+        update={
+            "environment_requirements": requirements.model_copy(
+                update={
+                    "packages_lock": None,
+                    "package_spec": PackageSpec(tools=("sh",)),
+                    "capabilities": ("shell", "filesystem"),
+                    "working_directory": "/task",
+                    "setup_commands": ("cp /workspace/people.csv prepared.csv",),
+                }
+            )
+        }
+    )
+    task = TaskSpec.model_validate_json(task.model_dump_json())
+    factory = ShellFactory(machine_factory, MachineSpec(HostImage()), {}, 10, 1024)
+    environment = await factory.create(task)
+    try:
+        result = json.loads(
+            await environment.step(
+                FunctionCall(name="shell", arguments={"command": "pwd; head -n 1 prepared.csv; id -u"})
+            )
+        )
+        assert result["exit_code"] == 0
+        assert result["stdout"] == f"/task\nname,team\n{os.geteuid()}\n"
+    finally:
+        await environment.close()
+
+
+@pytest.mark.asyncio
 async def test_shell_commands_use_required_directory_and_variables(shell_task, monkeypatch):
     monkeypatch.setenv("TASKCOMPENDIUM_TEST_SETTING", "required")
     task = shell_task.model_copy(
@@ -503,6 +607,7 @@ async def test_shell_commands_use_required_directory_and_variables(shell_task, m
                 update={
                     "docker_image": None,
                     "command_semantics": CommandSemantics.SHELL_SIMULATOR,
+                    "package_spec": PackageSpec(),
                     "working_directory": "/task",
                     "setup_commands": ("cp /workspace/people.csv prepared.csv",),
                     "environment_variables": {"SETTING": "${TASKCOMPENDIUM_TEST_SETTING}"},
@@ -510,9 +615,10 @@ async def test_shell_commands_use_required_directory_and_variables(shell_task, m
             )
         }
     )
+    task = TaskSpec.model_validate_json(task.model_dump_json())
     factory = ShellFactory(
         ShellSimMachineFactory(),
-        MachineSpec(ShellSimBuiltins(), workdir="/incoming", env={"SETTING": "incoming", "RETAINED": "kept"}),
+        MachineSpec(PackageSpec(), workdir="/incoming", env={"SETTING": "incoming", "RETAINED": "kept"}),
         {},
         1,
         1024,

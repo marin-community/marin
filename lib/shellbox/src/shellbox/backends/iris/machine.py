@@ -30,14 +30,18 @@ from rigging.timing import Duration, ExponentialBackoff, retry_with_backoff
 
 from shellbox.image import RegistryImage
 from shellbox.machine import (
+    LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
+    CommandSemantics,
+    ExecutionRequirements,
     ExitReason,
     MachineSpec,
     MachineTerminated,
     NetworkPolicy,
     Result,
     UnsupportedMachineSpec,
+    check_execution_requirements,
 )
 
 # The worker runs `docker exec` or `kubectl exec` with the command as argv, and Linux caps one
@@ -280,14 +284,27 @@ class IrisMachineFactory:
         self.disk_mb = disk_mb
         self.secret_env = dict(secret_env or {})
 
-    async def create(self, spec: MachineSpec) -> IrisMachine:
+    def _check_spec(self, spec: MachineSpec) -> RegistryImage:
         if spec.gpus:
             raise UnsupportedMachineSpec("The Iris machine factory does not provide GPU allocation")
         if not isinstance(spec.source, RegistryImage):
             raise UnsupportedMachineSpec("Iris requires a registry image reference")
-        return await asyncio.to_thread(self._create_sync, spec)
+        return spec.source
 
-    def _create_sync(self, spec: MachineSpec) -> IrisMachine:
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        source = self._check_spec(spec)
+        check_execution_requirements(
+            requirements,
+            spec,
+            semantics=CommandSemantics.LINUX_PROCESS,
+            capabilities=LINUX_PROCESS_CAPABILITIES,
+            image_reference=source.reference,
+        )
+
+    async def create(self, spec: MachineSpec) -> IrisMachine:
+        return await asyncio.to_thread(self._create_sync, spec, self._check_spec(spec))
+
+    def _create_sync(self, spec: MachineSpec, source: RegistryImage) -> IrisMachine:
         endpoint = connect_controller(cluster_name=self.cluster, controller_url=self.controller_url)
         url, credentials = endpoint.url, endpoint.credentials
         client = None
@@ -315,7 +332,7 @@ class IrisMachineFactory:
                     memory=(spec.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,
                     disk=(spec.storage_mb or self.disk_mb) * 1024 * 1024,
                 ),
-                task_image=spec.source.reference,
+                task_image=source.reference,
                 container_profile=job_pb2.CONTAINER_PROFILE_SANDBOX,
                 egress_policy=EGRESS_POLICIES[spec.network],
                 scheduling_timeout=Duration.from_seconds(self.scheduling_timeout),

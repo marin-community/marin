@@ -6,22 +6,27 @@
 import asyncio
 import logging
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, load_docker_image, process_image_cache
+from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
+    LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
+    CommandSemantics,
     DockerImage,
+    ExecutionRequirements,
     ExitReason,
     MachineSpec,
     NetworkPolicy,
     Result,
     UnsupportedMachineSpec,
+    check_execution_requirements,
 )
 
 logger = logging.getLogger(__name__)
+IMAGE_PLATFORM = "linux/amd64"
 
 # The parent waits so setsid is not a process-group leader and cannot detach.
 # Keep stdin available because non-interactive shells redirect background jobs to /dev/null.
@@ -258,47 +263,60 @@ class DockerMachineFactory:
 
     backend: Backend = Backend.DOCKER
 
-    def __init__(
-        self,
-        *,
-        skopeo: Path | None = None,
-        image_cache: Path | None = None,
-        authfile: Path | None = None,
-        policy: Path | None = None,
-        runtime: str | None = None,
-    ):
-        self.skopeo = skopeo
-        self.image_cache = image_cache
-        self.authfile = authfile
-        self.policy = policy
+    def __init__(self, *, runtime: str | None = None):
         self.runtime = runtime
 
+    def _check_spec(self, spec: MachineSpec) -> DockerImage | RegistryImage | DockerfileSource:
+        if not isinstance(spec.source, (DockerImage, RegistryImage, DockerfileSource)):
+            raise UnsupportedMachineSpec("Docker requires a DockerImage, RegistryImage or DockerfileSource")
+        return spec.source
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        source = self._check_spec(spec)
+        reference = source.reference if isinstance(source, (DockerImage, RegistryImage)) else None
+        check_execution_requirements(
+            requirements,
+            spec,
+            semantics=CommandSemantics.LINUX_PROCESS,
+            capabilities=LINUX_PROCESS_CAPABILITIES,
+            image_reference=reference,
+        )
+
     async def create(self, spec: MachineSpec) -> DockerMachine:
-        if isinstance(spec.source, (RegistryImage, DockerfileSource)):
-            if self.image_cache is None or self.skopeo is None:
-                raise UnsupportedMachineSpec("Registry images and Dockerfiles require an image cache and Skopeo")
-            cache = process_image_cache(self.image_cache, self.skopeo, self.authfile, self.policy)
-            image = await asyncio.to_thread(cache.prepare, spec.source)
-            spec = replace(spec, source=image)
-        if isinstance(spec.source, PreparedImage):
-            if self.skopeo is None:
-                raise UnsupportedMachineSpec("Prepared OCI images require a Skopeo path for Docker")
-            reference = await asyncio.to_thread(load_docker_image, spec.source, skopeo=self.skopeo, policy=self.policy)
-            spec = replace(spec, source=DockerImage(reference))
-        if not isinstance(spec.source, DockerImage):
-            raise UnsupportedMachineSpec("Docker requires a DockerImage source")
+        source = self._check_spec(spec)
+        image = source
+        pull = "never"
+        if isinstance(source, RegistryImage):
+            pull = "missing"
+            image = DockerImage(source.reference)
+        elif isinstance(source, DockerfileSource):
+            built = await docker(
+                "build",
+                "--quiet",
+                "--platform",
+                IMAGE_PLATFORM,
+                "-f",
+                str(source.dockerfile),
+                str(source.context),
+            )
+            if built.exit_code:
+                raise RuntimeError(built.stderr.decode(errors="replace"))
+            image = DockerImage(built.stdout.decode().strip())
+        assert isinstance(image, DockerImage)
         name = f"harbor-machine-{uuid.uuid4().hex}"
         args = [
             "run",
             "--rm",
             "--init",
-            "--pull=never",
+            f"--pull={pull}",
             "-d",
             "--name",
             name,
             "--network",
             "none" if spec.network is NetworkPolicy.DENY else "bridge",
         ]
+        if pull == "missing":
+            args.extend(("--platform", IMAGE_PLATFORM))
         if spec.memory_mb is not None:
             args.extend(("--memory", f"{spec.memory_mb}m"))
         if spec.cpus is not None:
@@ -311,7 +329,7 @@ class DockerMachineFactory:
             args.extend(("--runtime", self.runtime))
         for key, value in spec.env.items():
             args.extend(("-e", f"{key}={value}"))
-        args.extend(("--entrypoint", "/bin/sh", spec.source.reference, "-c", "while :; do sleep 3600; done"))
+        args.extend(("--entrypoint", "/bin/sh", image.reference, "-c", "while :; do sleep 3600; done"))
         try:
             result = await docker(*args)
             if result.exit_code:

@@ -1,6 +1,6 @@
 # Task rollouts
 
-`ShellboxRolloutEngine.run(lowered)` executes one single-stage task and returns `RolloutData`.
+`RolloutEngine.run(lowered)` executes one single-stage task and returns `RolloutData`.
 The caller supplies the model callable, configured Shellbox factories, and optional task-session factories.
 The caller owns concurrency, retries, group grading, and training projections.
 TaskCompendium defines `TaskSpec`, its graders, and grading outcomes. VerifyIT supplies grading modes and their implementations.
@@ -12,7 +12,7 @@ flowchart TD
     Task --> Lower[LoweredTaskSpec: preserved task, runtime, session limits]
     Config[Deployment configuration] --> Lower
     Lower --> Worker[Caller: task scheduler or rollout worker]
-    Worker --> Engine[ShellboxRolloutEngine]
+    Worker --> Engine[RolloutEngine]
     Engine --> Model[Model callable: public messages and exact tokens]
     Model --> Engine
     Engine --> Session[TaskSession: task operations and grading]
@@ -48,8 +48,21 @@ Other deadlines accept `None` or a finite, positive value.
 
 `backend` identifies a factory in the engine's `factories` mapping.
 `task_session` identifies a factory in its `sessions` mapping.
-The reserved session identifier `shellbox` selects the engine's shell-tool session.
-Custom session factories receive `(lowered, machine)` and return a fresh session for each attempt.
+The reserved session identifier `shellbox` selects the built-in shell-tool session.
+Each entry in `sessions` is a callable that receives a `TaskSessionContext` and
+constructs a fresh session for each attempt.
+Its `lowered` and `machine` fields describe that attempt. `task_grader` applies the task's
+`TaskSpec` grader, or is `None` for a `SessionGrader` task that grades itself.
+Sessions that delegate grading call `context.require_task_grader()`; self-grading sessions need no task grader.
+A class whose constructor accepts `TaskSessionContext` can be registered directly:
+
+```python
+from rolloutengine.engine import RolloutEngine
+
+engine = RolloutEngine(model, factories, sessions={"custom": CustomSession})
+```
+
+`CustomSession` implements the `TaskSession` protocol through its methods; no base class is required.
 A machine selection of `None` supplies no machine.
 Answer-only tasks can omit the task machine.
 A grader with an environment requires a `verifier_machine` selection. Every other grader requires `verifier_machine=None`.
@@ -71,8 +84,11 @@ Grader staging runs as root, so local grading requires a host process running as
 Local machines reject CPU, storage, and GPU allocations; leave those fields unset and `gpus=0`.
 
 Native environments explicitly declare `CommandSemantics.LINUX_PROCESS`.
+`environment.package_spec` selects Python requirements and tools through one shared
+`shellbox.PackageSpec`. Bubblewrap installs Python wheels in a cached read-only environment
+and uses host tools; Shellsim resolves the same declaration through its Context catalog.
 `CommandSemantics.SHELL_SIMULATOR` selects built-in shell and virtual filesystem semantics,
-which require `ShellSimBuiltins` and a ShellSim factory. Missing native dependencies do not imply simulation.
+which require `PackageSpec` and a ShellSim factory. Missing native dependencies do not imply simulation.
 The default workdir is the image's workdir, or `/workspace` for the built-in filesystem.
 An explicit `working_directory` overrides that selection.
 
@@ -87,15 +103,48 @@ The verifier machine uses its own configured default user.
 The engine installs `resources.all` and `resources.worker` on the task machine before session preparation.
 It calls these session methods:
 
-1. `prepare()` returns `SessionStart`: public messages and model options.
+1. `prepare()` returns `SessionStart`: public messages, model options, and optionally exact initial prompt tokens.
 2. `advance(turn)` executes task operations and returns `Transition`: observations, completion, and optional per-turn grades or credit.
 3. `grade(messages, stop_reason=...)` returns the final `GradeResult`.
 4. `close()` releases session resources before machine cleanup.
 
+The session is the task harness. It can assemble the system prompt and available tools
+in `prepare()`, inspect `ModelTurn.text` or its parsed message in `advance()`, execute
+tools, and return observations or a new conversation for the next model turn.
+The built-in `shellbox` session follows the same lifecycle as registered sessions.
+Its preflight checks reject tools and environments it does not support.
 The engine owns model calls, conversation accumulation, and exact-token accounting.
+It records the model transport's assistant message before `advance()` runs. A session can
+parse that message and choose the next conversation, but cannot replace the recorded message.
 Each model request returns one turn, then `advance` executes that turn's operations.
 Completion, a generation limit, the turn limit, or the cumulative turn deadline starts final grading.
-A session does not call the model.
+Ordinary task sessions return observations to the engine, which calls the model.
+An agent that controls its own prompt and tool loop can use `AgentTaskSession` from
+`rolloutengine.agent_session`. Its coroutine sends each `SessionStart` to an async
+completion callback and receives the exact `ModelTurn` produced by the engine.
+Only one completion request may be pending at a time. Register the agent as a
+session factory and select its name in `TaskSessionSpec.task_session`.
+Given a model callable, machine factories, and an async `run_agent(machine, complete)` callback:
+
+```python
+from rolloutengine.agent_session import AgentTaskSession
+from rolloutengine.engine import RolloutEngine
+
+
+def agent_session(context):
+    return AgentTaskSession(
+        lambda complete: run_agent(context.machine, complete),
+        context.require_task_grader(),
+    )
+
+engine = RolloutEngine(model, factories, sessions={"agent": agent_session})
+```
+
+The function binds this attempt's machine and grader to an agent runner whose
+own API does not accept `TaskSessionContext`.
+
+The engine closes the selected session before the task machine.
+Agents with their own grader can pass that callback to `AgentTaskSession` instead.
 The default session exposes `shell(command: string)` when the task declares the shell capability.
 Each command runs through `bash -c`. Files persist between commands; shell variables do not.
 TaskSpec can own the shell interface when its prompt names a particular tool. Declare the
@@ -262,6 +311,8 @@ Patch collection compares the final index with that revision, including agent co
 
 The model callable accepts `ModelRequest` and returns `ModelTurn` with a parsed assistant message and exact served token IDs.
 `ModelRequest.messages` contains public messages. `prefix_token_ids` contains the earlier served tokens that the next request must preserve.
+If `SessionStart.prompt_token_ids` is set, `ModelRequest.prompt_token_ids` carries that exact
+prefix to the model transport. The returned turn must report the same prompt tokens.
 `ModelTurn.prompt_token_ids` contains the exact prompt sent to inference. `response_token_ids` contains the sampled response.
 Optional log probabilities align with response tokens.
 A continuation prompt preserves the full served prefix, including earlier response tokens.
@@ -274,6 +325,10 @@ Model tokens have loss mask 1. Observation tokens have mask 0 and log probabilit
 The caller applies its training and failure policies when it projects the record.
 A conversation reset discards earlier turns from the training record when another turn is available.
 The session supplies new public messages in `Transition.reset_conversation`.
+`Transition.next_options` replaces the model options for the next request, including when the agent
+changes its tool set after a conversation reset.
+`Transition.next_prompt_token_ids` forwards an exact prefix for the next model request, including
+after an agent compacts its conversation.
 The engine clears the accumulated prefix, turns, and token evidence, then starts a fresh prefix check.
 The reset preserves session state and workspace files.
 Final grading receives the new conversation and its subsequent turns.
@@ -315,7 +370,7 @@ This function accepts a fully lowered record and a model callable:
 from collections.abc import Awaitable, Callable
 
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutData
-from rolloutengine.engine import ShellboxRolloutEngine
+from rolloutengine.engine import RolloutEngine
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -324,7 +379,7 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 async def run_task(
     lowered: LoweredTaskSpec, model: Callable[[ModelRequest], Awaitable[ModelTurn]]
 ) -> RolloutData:
-    engine = ShellboxRolloutEngine(
+    engine = RolloutEngine(
         model,
         {"docker": DockerMachineFactory(), "shellsim": ShellSimMachineFactory()},
     )

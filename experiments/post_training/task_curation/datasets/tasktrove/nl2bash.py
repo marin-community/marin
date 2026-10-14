@@ -74,7 +74,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name="tasktrove-nl2bash",
                 source=tasktrove_source(CONFIG),
                 convert=TaskTroveConverter(CONFIG, convert_nl2bash_task),
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=NL2BASH_RUBRIC,
                 controls=Controls(golden=solve_script),

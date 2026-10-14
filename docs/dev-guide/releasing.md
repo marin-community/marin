@@ -20,6 +20,7 @@ store a PyPI API token.
 | --- | --- |
 | Native source change merged to `main` | Package-specific dev release, followed by an automatic compatibility-floor and `uv.lock` pull request. |
 | Daily pure-library schedule (06:00 UTC) | Coupled pure-library development release, published. |
+| `workflow_dispatch` (development mode on `main`) | On-demand development release of the selected family, published. |
 | Push a package release tag | Stable release at the tag version, published. |
 | `workflow_dispatch` (manual mode) | Build-only smoke; nothing is published. |
 | Pull request touching package build inputs | Build the selected family; native wheels are installed and imported; nothing is published. |
@@ -51,6 +52,40 @@ consumer dependency floor and locks that exact registry version. A targeted
 lock validation rejects unrelated package churn. The general Python family
 does not need a follow-up pull request because the checkout resolves its
 workspace packages locally. Published wheels refer to PyPI distributions.
+
+### Adopting a Python library change downstream
+
+Develop and test the change in the Marin workspace, then merge it to `main`.
+The declared version in each workspace package is a release floor; do not edit
+it for a development release. Wait for the 06:00 UTC family release, or publish
+the current `main` sooner with:
+
+```bash
+gh workflow run marin-release-libs-wheels.yaml --repo marin-community/marin \
+  --ref main -f package=python-libs -f mode=development
+```
+
+Wait for the publish job and use the new PyPI version in the consumer. If the
+consumer's code requires the feature, raise that package's minimum in its
+`pyproject.toml` and refresh its lock (substitute the changed package):
+
+```bash
+uv lock --upgrade-package marin-rigging
+```
+
+Published Python-family wheels pin their sibling dependencies to the same
+release version, so the resolver may advance those packages together. Test the
+consumer and commit its manifest and lock. A consumer with multiple projects
+must refresh each affected lock.
+
+After a MarinSkyRL dependency change merges, advance the external Git revision
+and regenerate Marin's isolated lock and pins:
+
+```bash
+uv run config/update-external.py MarinSkyRL
+```
+
+### Stable releases
 
 To cut a stable release, pick the next [SemVer](https://semver.org/) version
 and push the tag — no `pyproject.toml` edit required:

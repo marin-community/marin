@@ -7,14 +7,13 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, replace
-from functools import partial
+from typing import Any
 
-from shellbox.machine import Machine, MachineFactory
+from shellbox.machine import MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import SessionGrader, TaskSpec
 from taskcompendium.submission import conversation_messages
 
-from rolloutengine.agent_session import AgentCompletion, ExternalAgentSession
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.contracts import (
     LENGTH_STOP_REASON,
@@ -29,8 +28,11 @@ from rolloutengine.contracts import (
     RolloutOperation,
     RolloutStep,
     TaskSession,
+    TaskSessionContext,
+    TaskSessionFactory,
     Transition,
 )
+from rolloutengine.grading import _grade_rollout
 from rolloutengine.lowering import SHELLBOX_SESSION, validate_lowered_task
 from rolloutengine.machines import _prepare_machine
 from rolloutengine.spec import LoweredTaskSpec
@@ -50,30 +52,22 @@ def _empty_rollout(task: TaskSpec) -> RolloutData:
     )
 
 
-class ShellboxRolloutEngine:
-    """Generate exact-token rollouts from lowered single-stage tasks.
-
-    An optional external agent controls conversation with the task machine and
-    a completion callback. Shellbox still owns isolated grading and cleanup.
-    """
+class RolloutEngine:
+    """Generate exact-token rollouts from lowered single-stage tasks."""
 
     def __init__(
         self,
         model: Callable[[ModelRequest], Awaitable[ModelTurn]],
         factories: Mapping[str, MachineFactory],
         *,
-        sessions: Mapping[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]] | None = None,
-        agent: Callable[[Machine | None, AgentCompletion], Awaitable[None]] | None = None,
+        sessions: Mapping[str, TaskSessionFactory] | None = None,
     ):
         self.model = model
         self.factories = factories
         self.sessions = {} if sessions is None else sessions
-        self.agent = agent
 
     async def run(self, lowered: LoweredTaskSpec) -> RolloutData:
         """Run one attempt; release its resources outside the attempt deadline."""
-        if self.agent is not None and lowered.session.task_session != SHELLBOX_SESSION:
-            raise ValueError("External agents require the Shellbox task session")
         validate_lowered_task(lowered, factories=self.factories, sessions=self.sessions)
         deadline = asyncio.timeout(lowered.session.attempt_timeout)
         cleanup = _Cleanup(lowered.session.cleanup_timeout)
@@ -122,19 +116,22 @@ class ShellboxRolloutEngine:
             )
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.START) from error
+
+        async def grade(messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult:
+            return await _grade_rollout(
+                lowered, messages, machine, self.factories, cleanup, resources, stop_reason=stop_reason
+            )
+
+        session_factories: Mapping[str, TaskSessionFactory] = {
+            **self.sessions,
+            SHELLBOX_SESSION: _ShellboxTaskSession,
+        }
         try:
-            if lowered.session.task_session == SHELLBOX_SESSION:
-                session = _ShellboxTaskSession(lowered, machine, self.factories, cleanup, resources)
-            else:
-                session = self.sessions[lowered.session.task_session](lowered, machine)
+            context = TaskSessionContext(lowered, machine, None if isinstance(task.grader, SessionGrader) else grade)
+            session = session_factories[lowered.session.task_session](context)
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.PREPARE) from error
         resources.push_async_callback(cleanup.run, "session_close", session.close)
-        if self.agent is not None:
-            # Keep the selected session's grader and resource ownership; only
-            # conversation control moves to the installed agent.
-            session = ExternalAgentSession(partial(self.agent, machine), session.grade)
-            resources.push_async_callback(cleanup.run, "agent_close", session.close)
         return await self._run_session(lowered, session, attempt)
 
     async def _run_session(
@@ -152,6 +149,7 @@ class ShellboxRolloutEngine:
             raise RolloutInterrupted(completed, RolloutOperation.PREPARE) from error
         messages = list(start.messages)
         options = start.options
+        replay_prompt_token_ids = start.prompt_token_ids
         completed = replace(completed, messages=tuple(messages))
         prompt: tuple[int, ...] = ()
         tokens: tuple[int, ...] = ()
@@ -173,7 +171,7 @@ class ShellboxRolloutEngine:
                                     options,
                                     tokens,
                                     assistant_index,
-                                    start.prompt_token_ids if index == 0 else None,
+                                    replay_prompt_token_ids,
                                 )
                             )
                     except GenerationLimitReached as limit:
@@ -198,13 +196,9 @@ class ShellboxRolloutEngine:
                         raise RolloutContractError("Model logprobs must align with response tokens")
                     if not turn.response_token_ids:
                         raise RolloutContractError("Model response contains no token evidence")
+                    if replay_prompt_token_ids is not None and turn.prompt_token_ids != replay_prompt_token_ids:
+                        raise RolloutContractError("Model transport changed the replay token prefix")
                     if assistant_index is None:
-                        if (
-                            index == 0
-                            and start.prompt_token_ids is not None
-                            and turn.prompt_token_ids != start.prompt_token_ids
-                        ):
-                            raise RolloutContractError("Model transport changed the initial replay token prefix")
                         prompt = turn.prompt_token_ids
                         tokens = prompt
                     if turn.prompt_token_ids[: len(tokens)] != tokens:
@@ -252,6 +246,7 @@ class ShellboxRolloutEngine:
                     stop_reason = turn.stop_reason
                     if transition.next_options is not None:
                         options = transition.next_options
+                    replay_prompt_token_ids = transition.next_prompt_token_ids
                     if transition.reset_conversation is not None and index + 1 < limits.max_turns:
                         messages = list(transition.reset_conversation)
                         prompt = tokens = masks = ()

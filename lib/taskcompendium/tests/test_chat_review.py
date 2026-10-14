@@ -5,15 +5,16 @@ import json
 
 import pytest
 from finestore.cache import PersistentKvCache
+from finestore.layout import BlobTables
+from finestore.reader import ReadView
 
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.models import RawRow, ReviewRubric, ReviewStatus
-from taskcompendium.pipeline.query_cache import cached_request_output
+from taskcompendium.pipeline.query_cache import cached_request_output, compact_query_cache
 from taskcompendium.pipeline.review import BatchReviewer, ChatReviewer, valid_review_completion
 from taskcompendium.pipeline.review_requests import RequestObservation, RequestOutput
 
-from .pipeline_stages import svamp_row_task
-from .test_pipeline import response
+from .pipeline_stages import response, svamp_row_task
 
 
 class UnusedBatchClient:
@@ -91,6 +92,34 @@ def test_direct_review_reuses_exact_cache_across_modes_and_source_ids(tmp_path):
     assert [row.task_id for row in first + second + third] == ["source-a", "source-b", "source-c"]
     assert len(chat.requests) == 1
     assert abandoned.read_bytes() == original
+
+
+@pytest.mark.parametrize("separator", ["\u0085", "\u2028", "\u2029"])
+def test_cached_request_output_preserves_unicode_separators(tmp_path, separator):
+    requests = [{"custom_id": "task", "body": {"prompt": "Count apples."}}]
+    row = response("task")
+    function = row["response"]["body"]["choices"][0]["message"]["tool_calls"][0]["function"]
+    verdict = json.loads(function["arguments"])
+    verdict["evidence"] = f"First paragraph{separator}Second paragraph"
+    function["arguments"] = json.dumps(verdict, ensure_ascii=False)
+    raw = json.dumps(row, ensure_ascii=False)
+    calls = []
+
+    def submit(selected):
+        calls.append(selected)
+        return RequestOutput(tuple(selected), [RequestObservation(("task",), raw + "\n")])
+
+    options = dict(
+        cache_root=str(tmp_path / "cache"),
+        model_revision="pinned",
+        valid_completion=valid_review_completion,
+        submit=submit,
+    )
+    first = cached_request_output(requests, **options)
+    second = cached_request_output(requests, **options)
+    assert first.output == second.output == raw
+    assert second.cache_hits == ("task",)
+    assert calls == [requests]
 
 
 @pytest.mark.parametrize("corruption", ["malformed", "mismatched", "invalid_output", "invalid_shape"])
@@ -197,3 +226,20 @@ def test_cache_storage_failure_does_not_discard_provider_response(tmp_path, monk
     assert result.output == raw
     assert submitted == requests
     assert result.observations[0].output == raw
+
+
+def test_campaign_cache_compaction_preserves_values_and_consolidates_lookups(tmp_path):
+    root = str(tmp_path / "cache")
+    expected = {"first": b"response one", "second": b"response two"}
+    for key, value in expected.items():
+        cache = PersistentKvCache.at(root)
+        cache.store(key, value)
+        cache.close()
+    assert len(ReadView(root).list_shards(BlobTables.DESCRIPTORS)) == 2
+    compact_query_cache(root)
+    assert len(ReadView(root).list_shards(BlobTables.DESCRIPTORS)) == 1
+    cache = PersistentKvCache.at(root)
+    try:
+        assert cache.load_many(list(expected)) == expected
+    finally:
+        cache.close()

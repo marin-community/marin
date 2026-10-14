@@ -96,6 +96,7 @@ PspecAxis: TypeAlias = str | tuple[str, ...] | None
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
 MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
+    "ring_gather_combine",  # `ring` moving activations only by gather; the default on GPUs.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "fixed_all_to_all",  # Expert-parallel all-to-all with fixed sender/expert cells.
     "fixed_pooled_wave_all_to_all",  # Destination-pooled static waves with fixed receiver buffers.
@@ -107,6 +108,7 @@ MoeImplementation: TypeAlias = Literal[
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 _EP_MOE_IMPLEMENTATIONS = (
     "ring",
+    "ring_gather_combine",
     "ragged_all_to_all",
     "fixed_all_to_all",
     "fixed_pooled_wave_all_to_all",
@@ -182,12 +184,23 @@ class MoEExpertMlpPspecs:
         return P(self.expert, self.intermediate, self.hidden)
 
 
-def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:
-    if implementation is None:
-        return "ring"
-    if implementation not in _VALID_MOE_IMPLEMENTATIONS:
+def validate_moe_implementation(implementation: MoeImplementation | str | None) -> None:
+    """Raise unless `implementation` is None or a known implementation, without initializing JAX."""
+    if implementation is not None and implementation not in _VALID_MOE_IMPLEMENTATIONS:
         valid = ", ".join(repr(choice) for choice in _VALID_MOE_IMPLEMENTATIONS)
         raise ValueError(f"implementation must be one of {valid} or None, got {implementation!r}")
+
+
+def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:
+    """Validate `implementation`, mapping None to `ring_gather_combine` on GPUs and to `ring` on other backends.
+
+    Mapping None reads JAX's default backend, which initializes JAX.
+    """
+    if implementation is None:
+        # XLA's GPU scatter-adds are slow, and become sorts under deterministic ops. On TPU the gather combine made
+        # steps 9% slower (#9860).
+        return "ring_gather_combine" if jax.default_backend() == "gpu" else "ring"
+    validate_moe_implementation(implementation)
     return cast(MoeImplementation, implementation)
 
 

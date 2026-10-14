@@ -15,7 +15,7 @@ import tempfile
 import uuid
 from collections.abc import Callable
 from contextlib import AsyncExitStack
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
@@ -34,7 +34,19 @@ from rigging.timing import ExponentialBackoff
 
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
-from shellbox.machine import Backend, Command, ExitReason, MachineSpec, NetworkPolicy, Result, UnsupportedMachineSpec
+from shellbox.machine import (
+    LINUX_PROCESS_CAPABILITIES,
+    Backend,
+    Command,
+    CommandSemantics,
+    ExecutionRequirements,
+    ExitReason,
+    MachineSpec,
+    NetworkPolicy,
+    Result,
+    UnsupportedMachineSpec,
+    check_execution_requirements,
+)
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
 CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
@@ -336,18 +348,42 @@ class DaytonaMachineFactory:
         self.create_timeout = create_timeout
         self.network_policy = network_policy
 
-    async def create(self, spec: MachineSpec) -> DaytonaMachine:
+    def _check_spec(self, spec: MachineSpec) -> DockerfileSource | RegistryImage:
         source: DockerfileSource | RegistryImage
         if isinstance(spec.source, DockerfileSource):
-            source = DockerfileSource(spec.source.context.resolve(), spec.source.dockerfile.resolve())
-            if source.dockerfile.parent != source.context:
-                raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
-            if re.search(r"^\s*ADD(?:\s|$)", source.dockerfile.read_text(), re.IGNORECASE | re.MULTILINE):
-                raise UnsupportedMachineSpec("Daytona Dockerfiles with ADD require a prebuilt registry image")
+            source = spec.source
         elif isinstance(spec.source, RegistryImage):
             source = spec.source
         else:
             raise UnsupportedMachineSpec("Daytona requires a registry image or Docker build context")
+        if self.network_policy is not None:
+            self.network_policy.parameters()
+        return source
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        source = self._check_spec(spec)
+        reference = source.reference if isinstance(source, RegistryImage) else None
+        if self.network_policy is not None:
+            network = (
+                NetworkPolicy.DENY if self.network_policy.mode == DaytonaNetworkMode.BLOCK_ALL else NetworkPolicy.ALLOW
+            )
+            spec = replace(spec, network=network)
+        check_execution_requirements(
+            requirements,
+            spec,
+            semantics=CommandSemantics.LINUX_PROCESS,
+            capabilities=LINUX_PROCESS_CAPABILITIES,
+            image_reference=reference,
+        )
+
+    async def create(self, spec: MachineSpec) -> DaytonaMachine:
+        source = self._check_spec(spec)
+        if isinstance(source, DockerfileSource):
+            source = DockerfileSource(source.context.resolve(), source.dockerfile.resolve())
+            if source.dockerfile.parent != source.context:
+                raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
+            if re.search(r"^\s*ADD(?:\s|$)", source.dockerfile.read_text(), re.IGNORECASE | re.MULTILINE):
+                raise UnsupportedMachineSpec("Daytona Dockerfiles with ADD require a prebuilt registry image")
         resources = Resources(
             cpu=spec.cpus,
             memory=math.ceil(spec.memory_mb / 1024) if spec.memory_mb is not None else None,

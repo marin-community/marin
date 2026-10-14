@@ -1344,6 +1344,38 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
     assert k8s.get_json(K8sResource.CONFIGMAPS, "recent-succeeded-pod-wf") is not None
 
 
+def test_gc_retains_old_pod_until_after_output_uploader_finishes(provider, k8s):
+    now = datetime.now(UTC)
+    task_id = JobName.from_wire("/completed-after-long-run/0")
+    entry = RunningTaskEntry(task_id=task_id, attempt_id=0)
+    pod_name = _pod_name(task_id, 0)
+    populate_pod(k8s, pod_name, "Running", labels={_LABEL_TASK_HASH: _task_hash(task_id.to_wire())})
+    pod = k8s.get_json(K8sResource.PODS, pod_name)
+    pod["metadata"]["creationTimestamp"] = (now - timedelta(hours=11)).isoformat()
+    pod["status"]["containerStatuses"] = [
+        {
+            "name": "task",
+            "state": {"terminated": {"exitCode": 0, "finishedAt": (now - timedelta(hours=2)).isoformat()}},
+        },
+        {"name": "output-uploader", "state": {"running": {}}},
+    ]
+    batch = make_batch(running_tasks=[entry])
+
+    assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
+    pod["status"]["phase"] = "Succeeded"
+    pod["status"]["containerStatuses"][1]["state"] = {
+        "terminated": {"exitCode": 0, "finishedAt": (now - timedelta(seconds=30)).isoformat()}
+    }
+
+    provider.collect_garbage()
+
+    assert k8s.get_json(K8sResource.PODS, pod_name) is not None
+    assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
+    pod["status"]["containerStatuses"][1]["state"]["terminated"]["finishedAt"] = (now - timedelta(hours=2)).isoformat()
+    provider.collect_garbage()
+    assert k8s.get_json(K8sResource.PODS, pod_name) is None
+
+
 def test_gc_cleans_up_deferred_configmaps(provider, k8s):
     """GC deletes configmaps after the control loop tears down a stray pod."""
     task_id = "/deferred-job/0"
@@ -1648,6 +1680,64 @@ def test_gc_sweeps_crashed_gang_pods_on_short_retention(provider, k8s):
     assert k8s.get_json(K8sResource.PODS, "crashed-gang-pod") is None
     assert k8s.get_json(K8sResource.WORKLOADS, group) is None
     assert k8s.get_json(K8sResource.PODS, "plain-failed-pod") is not None, "1h retention for plain pods must hold"
+
+
+def test_gc_gang_retention_starts_after_container_finishes(provider, k8s):
+    now = datetime.now(UTC)
+    created = (now - timedelta(hours=2)).isoformat()
+    name = "recently-finished-gang-pod"
+    group = "recently-finished-gang"
+    _seed_gang_pod(k8s, name, group, created)
+    pod = k8s.get_json(K8sResource.PODS, name)
+    pod["status"]["containerStatuses"] = [
+        {"name": "task", "state": {"terminated": {"finishedAt": (now - timedelta(seconds=30)).isoformat()}}}
+    ]
+    k8s.seed_resource(K8sResource.WORKLOADS, group, {"kind": "Workload", "metadata": {"name": group}})
+
+    provider.collect_garbage()
+    assert k8s.get_json(K8sResource.PODS, name) is not None
+    assert k8s.get_json(K8sResource.WORKLOADS, group) is not None
+
+    pod["status"]["containerStatuses"][0]["state"]["terminated"]["finishedAt"] = (now - timedelta(minutes=2)).isoformat()
+    provider.collect_garbage()
+    assert k8s.get_json(K8sResource.PODS, name) is None
+    assert k8s.get_json(K8sResource.WORKLOADS, group) is None
+
+
+def test_gc_retains_old_gang_pod_after_recent_init_failure(provider, k8s):
+    now = datetime.now(UTC)
+    task_id = JobName.from_wire("/failed-during-staging/0")
+    pod_name = _pod_name(task_id, 0)
+    group = "failed-during-staging"
+    populate_pod(
+        k8s,
+        pod_name,
+        "Failed",
+        labels={_LABEL_TASK_HASH: _task_hash(task_id.to_wire()), _KUEUE_POD_GROUP_NAME: group},
+    )
+    pod = k8s.get_json(K8sResource.PODS, pod_name)
+    pod["metadata"]["creationTimestamp"] = (now - timedelta(hours=2)).isoformat()
+    pod["status"]["initContainerStatuses"] = [
+        {
+            "name": "stage-workdir",
+            "state": {
+                "terminated": {
+                    "exitCode": 1,
+                    "reason": "Error",
+                    "message": "download failed",
+                    "finishedAt": (now - timedelta(seconds=30)).isoformat(),
+                }
+            },
+        }
+    ]
+    k8s.seed_resource(K8sResource.WORKLOADS, group, {"kind": "Workload", "metadata": {"name": group}})
+
+    provider.collect_garbage()
+
+    assert k8s.get_json(K8sResource.PODS, pod_name) is not None
+    update = provider.sync(make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0)]))[0]
+    assert update.new_state == job_pb2.TASK_STATE_FAILED
+    assert update.terminal_reason == "Init:Error stage-workdir: download failed"
 
 
 def test_gc_skips_gang_with_active_sibling(provider, k8s):

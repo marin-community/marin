@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 from dataclasses import replace
 from functools import partial
@@ -9,6 +10,7 @@ from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from fray.local_backend import LocalClient
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
@@ -20,7 +22,7 @@ from taskcompendium.models import ResourceGroups, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.conversion import convert_raw_row, convert_source_row
 from taskcompendium.pipeline.execution_telemetry import SourceTelemetry
-from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
     Controls,
     ImportRejection,
@@ -36,6 +38,7 @@ from taskcompendium.pipeline.source_processing import (
     run_source_pipeline,
     write_conversion,
 )
+from taskcompendium.pipeline.sources import prepared_component_path, prepared_manifest_path
 from taskcompendium.pipeline.transforms import normalize_row
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
@@ -59,6 +62,25 @@ def selected_answer(row: dict, _context: ConversionContext) -> bool:
 
 def decode_answer(row: dict, _context: ConversionContext) -> dict:
     return {**row, "prompt": f"Decoded: {row['prompt']}"}
+
+
+def prepared_answers(file: Path, rows: list[dict]) -> None:
+    source = StoragePath(str(file))
+    prepared_manifest_path(source).parent.mkdirs()
+    counts = {}
+    for component in sorted({row["component"] for row in rows}):
+        records = [
+            {"component": component, "source_index": index, "raw_json": json.dumps(row).encode()}
+            for index, row in enumerate(rows)
+            if row["component"] == component
+        ]
+        pq.write_table(pa.Table.from_pylist(records), str(prepared_component_path(source, component)))
+        counts[component] = len(records)
+    prepared_manifest_path(source).write_text(json.dumps({"source_rows": len(rows), "components": counts}))
+
+
+def select_left_answer(row: dict, _context: ConversionContext) -> bool:
+    return row["component"] == "left" and row["keep"]
 
 
 def test_recipe_free_conversion_persists_caller_identity_and_execution_counters(tmp_path: Path):
@@ -163,6 +185,144 @@ def test_split_parquet_matches_whole_file_tasks_and_rejections_after_selection(t
     assert split.rejections == whole.rejections == {"source_defect:missing_answer": 3}
     task = TaskSpec.model_validate_json(split_rows["rows.parquet:23"]["task_json"])
     assert cast(TextMessage, task.context.events[0]).content == "Decoded: Name a color"
+
+
+@pytest.mark.parametrize("override_state", ["absent", "matching", "stale"])
+def test_prepared_jsonl_matches_native_tasks_locators_and_rejections(tmp_path: Path, override_state: str):
+    source = tmp_path / "input"
+    source.mkdir()
+    rows = [
+        {
+            "path": f"row-{index}",
+            "prompt": "Name a color",
+            "answer": "red" if index % 7 else "",
+            "component": "left" if index % 2 else "right",
+            "keep": index % 5 != 0,
+        }
+        for index in range(30)
+    ]
+    file = source / "rows.jsonl"
+    file.write_text("\n\n".join(json.dumps(row) for row in rows) + "\n")
+    prepared_answers(file, rows)
+    if override_state == "stale":
+        rows[1]["prompt"] = "Updated source prompt"
+        file.write_text("\n\n".join(json.dumps(row) for row in rows) + "\n")
+    overrides = (
+        {file.name: SourceFileOverride(str(file), hashlib.sha256(file.read_bytes()).hexdigest())}
+        if override_state != "absent"
+        else None
+    )
+    recipe = SourceRecipe(
+        name="colors",
+        version="1",
+        source=SourceFiles(
+            "colors", "pinned", (file.name,), SourceFormat.JSONL, select=select_left_answer, decode=decode_answer
+        ),
+        convert=convert_answer,
+        intended_use=IntendedUse.TRAIN,
+        rubric=None,
+        controls=None,
+    )
+    with ZephyrContext(client=LocalClient(), max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+        native = run_source_pipeline(
+            recipe,
+            context,
+            str(source),
+            str(tmp_path / "native"),
+            source_overrides=overrides,
+            mode=SourceProcessingMode.QUICK,
+            canonical_source=recipe.name,
+        )
+        prepared = run_source_pipeline(
+            replace(recipe, source=replace(recipe.source, prepared_component="left")),
+            context,
+            str(source),
+            str(tmp_path / "prepared"),
+            source_overrides=overrides,
+            parquet_shard_bytes=1,
+            mode=SourceProcessingMode.QUICK,
+            canonical_source=recipe.name,
+        )
+    native, prepared = cast(ConversionResult, native), cast(ConversionResult, prepared)
+    native_rows = {
+        row["source_row"]: row
+        for shard in Path(native.normalized_path).glob("*.parquet")
+        for row in load_parquet(str(shard))
+    }
+    prepared_rows = {
+        row["source_row"]: row
+        for shard in Path(prepared.normalized_path).glob("*.parquet")
+        for row in load_parquet(str(shard))
+    }
+    assert prepared_rows == native_rows
+    assert set(prepared_rows) == {f"rows.jsonl:{index}" for index in range(30) if index % 2 and index % 5}
+    assert prepared.input_rows == native.input_rows == 12
+    assert prepared.converted_rows == native.converted_rows == 10
+    assert prepared.rejections == native.rejections == {"source_defect:missing_answer": 2}
+    task = TaskSpec.model_validate_json(prepared_rows["rows.jsonl:1"]["task_json"])
+    assert cast(TextMessage, task.context.events[0]).content == f"Decoded: {rows[1]['prompt']}"
+
+
+def test_prepared_conversion_subdivides_a_row_group_without_changing_records(tmp_path: Path):
+    source = tmp_path / "input"
+    source.mkdir()
+    file = source / "rows.jsonl"
+    rows = [
+        {
+            "component": "left" if index % 2 else "right",
+            "keep": True,
+            "prompt": f"Question {index}",
+            "answer": "red" if index % 17 else "",
+        }
+        for index in range(1026)
+    ]
+    file.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    prepared_answers(file, rows)
+    recipe = SourceRecipe(
+        name="colors",
+        version="1",
+        source=SourceFiles(
+            "colors", "pinned", (file.name,), SourceFormat.JSONL, select=select_left_answer, decode=decode_answer
+        ),
+        convert=convert_answer,
+        intended_use=IntendedUse.TRAIN,
+        rubric=None,
+        controls=None,
+    )
+    with ZephyrContext(client=LocalClient(), max_workers=4, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+        native = cast(
+            ConversionResult,
+            run_source_pipeline(
+                recipe,
+                context,
+                str(source),
+                str(tmp_path / "native"),
+                mode=SourceProcessingMode.QUICK,
+                canonical_source=recipe.name,
+            ),
+        )
+        prepared = cast(
+            ConversionResult,
+            run_source_pipeline(
+                replace(recipe, source=replace(recipe.source, prepared_component="left")),
+                context,
+                str(source),
+                str(tmp_path / "prepared"),
+                mode=SourceProcessingMode.QUICK,
+                canonical_source=recipe.name,
+            ),
+        )
+    native_rows = {
+        row["source_row"]: row
+        for shard in Path(native.normalized_path).glob("*.parquet")
+        for row in load_parquet(str(shard))
+    }
+    prepared_shards = list(Path(prepared.normalized_path).glob("*.parquet"))
+    prepared_rows = {row["source_row"]: row for shard in prepared_shards for row in load_parquet(str(shard))}
+    assert len(prepared_shards) > 1
+    assert prepared_rows == native_rows
+    assert len(prepared_rows) == prepared.input_rows == native.input_rows == 513
+    assert prepared.rejections == native.rejections
 
 
 def test_conversion_retains_duplicate_tasks_and_rejections_without_review_or_controls(tmp_path: Path):
