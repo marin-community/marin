@@ -118,10 +118,7 @@ def _gradeable_empty_text(task: TaskSpec, attempt: GradingAttempt, verifier: Spe
     """Whether a blank final text is a candidate under the verifier's explicit policy."""
     if not isinstance(task.answer_format, PlainText):
         return False
-    try:
-        policy = empty_output_policy(verifier)
-    except InvalidTask:
-        return False
+    policy = empty_output_policy(verifier)
     if policy is not EmptyOutputPolicy.GRADE:
         return False
     final = attempt.conversation.events[-1]
@@ -146,8 +143,10 @@ def grade_answer(task: TaskSpec, attempt: GradingAttempt) -> GradeResult:
     return grade_result(verifier, grade_candidate(verifier, candidate, resources))
 
 
-def grade_remote_judge_answer(task: TaskSpec, attempt: GradingAttempt, connection: JudgeConnection) -> GradeResult:
-    """Grade one judge submission through an explicit endpoint outside its network-denied sandbox."""
+def grade_remote_judge_answer(
+    task: TaskSpec, attempt: GradingAttempt, connection: JudgeConnection | None
+) -> GradeResult:
+    """Grade one judge submission, using the explicit endpoint when its local gates do not decide."""
     grader = task.grader
     if not isinstance(grader, VerifyitGrader):
         raise TypeError(f"Remote judge grading requires a verifyit grader, not {grader.kind}")

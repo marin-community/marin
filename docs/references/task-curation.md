@@ -136,7 +136,7 @@ The `CurationRecipe` configuration has these fields:
 | `version` | Converter revision; bump it when conversion or bundled grader code changes. |
 | `intended_use` | `train` or `eval`. |
 | `rubric` | Optional review rubric string, one criterion per paragraph. |
-| `controls` | Optional `Controls(golden, memory_mb)` for grader verification. |
+| `controls` | Optional `Controls(golden, negative, memory_mb, negative_reward)` for grader verification. |
 | `inputs` | Auxiliary pinned sources, staged by name in `ConversionContext.inputs`. |
 | `grader` | The `Environment` that grade scripts need, such as `GRADER_PACKAGES` from `datasets/environments.py`. The pipeline builds it and decides where it runs (see [Environments](#environments)); the converter reads the result as `ConversionContext.grader_environment`. |
 | `resource_budget_bytes` | Decoded resource bytes admitted by reviewed modes, default 1,000,000; larger tasks are deferred as `resources_over_budget`. Quick mode skips this budget. |
@@ -236,7 +236,10 @@ comparators or rewrite tests to accept a reference.
 Controls check a grader before its tasks are admitted. For each sampled task the
 pipeline grades exactly one submission: `golden(task)`, which must score 1, or,
 when the declaration has no `golden` or it returns `None` because the task has no
-known answer, an empty submission, which shows that the grader runs. A grader that
+known answer, `negative(task)` when supplied, otherwise an empty submission.
+A negative must score zero unless `negative_reward(task)` declares its expected
+partial reward. MultiChallenge uses this to account for `NO` criteria that an
+empty reply satisfies. A grader that
 runs in a machine grades the empty submission in a fresh machine of its environment,
 staged as for a rollout whose agent replied with empty text and wrote nothing: an
 empty answer file where the grader reads one, a conversation ending in the empty
@@ -257,10 +260,50 @@ image, such as a conversation task, runs its oracle in the grader's machine. The
 oracle's output is then graded like any other submission. In-process numeric,
 MCQ, exact and action graders are also checked per task during preparation.
 
-Sources graded by an LLM judge (verifyit's judge mode) run declared controls
-through the configured remote judge connection. Sources without controls record
-`skipped` with reason `The source declares no controls`; their kept judge-graded
-rows are admitted without control verification.
+Judge controls require an explicit `JudgeConnection`. The recipe settings' API
+key and base URL configure it even when the recipe has no review rubric. A
+local constraint, exact-match gate or submission rejection cannot establish
+endpoint readiness: a judge control passes only after a remote verdict. For
+example, an instruction-following negative rejected by an IFEval constraint
+fails verification instead of certifying an untested endpoint. Sources without
+controls still record verification as skipped.
+
+Remote verdicts are not reused across verification runs because the connection
+does not identify an immutable model deployment. This affects cached evidence,
+not the runtime's ability to grade a submission.
+
+Nemotron Lean controls run with 8 GiB of memory. The grader first compiles a
+trusted Mathlib proof as uid 65534 inside the network-denied image. Failure of
+that probe, a compiler timeout or a failed compiler process without a diagnostic
+for the submitted proof is an infrastructure error. Invalid proofs and `sorry`
+score zero.
+
+Reasoning Gym's native VerifyIt mode and Nemotron grader share
+`verifyit.modes.extract.extract_markdown_answer`. It extracts the last `# Answer`
+heading (one to six `#` characters), stopping at the next heading, horizontal
+rule or code fence, and strips outer emphasis. It does not guess answers from
+prose sentences. Each
+grading mode chooses which answer wrappers its contract accepts.
+
+The tool-judge challenge set and its source provenance live under
+`experiments/post_training/task_curation/scripts/fixtures`. Cases pin the hashes
+of the normalized tasks they were labelled against. With `GLM_BULK_TOKEN` set,
+first enter an Iris job that can reach the relay, then run the command below.
+Replace `/OWNER/RELAY_JOB` with the Iris job ID of your relay deployment:
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
+  experiments.post_training.task_curation.scripts.calibrate_tool_judge \
+  --relay-job /OWNER/RELAY_JOB --repeats 3 --output calibration.json
+```
+
+The report records each trial, per-category agreement, transport failures and
+prompt hashes. This tool-call challenge set does not calibrate other tool-use
+sources or the GenRM, abstention, MultiChallenge, jailbreak and instruction
+families. Those sources keep the default recipe version 3 in
+`datasets/nemotron_ultra/components.py` until repeated labelled cases for each
+source establish their expected reward contracts across repeated verdicts.
+The checked-in tool-call results apply only to toolcall-schema rows.
 
 Lock-backed bubblewrap graders share content-addressed Python environments on
 each host. On Iris, they use the executable `/cache/task-curation` mount because

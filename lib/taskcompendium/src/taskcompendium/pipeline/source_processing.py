@@ -34,7 +34,7 @@ from taskcompendium.pipeline.audit_schema import (
     RAW_SCHEMA,
     TASK_SCHEMA,
 )
-from taskcompendium.pipeline.controls import ControlRuntime, GradingMachines, control_suite
+from taskcompendium.pipeline.controls import GradingMachines, control_suite
 from taskcompendium.pipeline.conversion import (
     ConvertedRow,
     convert_source_row,
@@ -421,10 +421,9 @@ class _SourceRun:
 
 @dataclass(frozen=True)
 class _Panel:
-    """The bounded raw panel, its normalized rows, and whether it covers the whole population."""
+    """The bounded raw panel, its converted rows, and whether it covers the whole population."""
 
     sample: RawSample
-    normalized: list[dict[str, Any]]
     converted: list[ConvertedRow]
     coverage: QualitySampleCoverage
 
@@ -527,7 +526,6 @@ def _sample_panel(run: _SourceRun) -> _Panel:
     census = sample.population_count <= policy.sample_size
     return _Panel(
         sample,
-        [row.normalized for row in checked],
         [converted for converted, _ in converted_and_checked],
         QualitySampleCoverage.CENSUS if census else QualitySampleCoverage.RAW_SAMPLE,
     )
@@ -630,7 +628,7 @@ def _verify(run: _SourceRun) -> tuple[dict[str, Any], StoragePath]:
             str(filtered),
             str(verified),
             run.config.verification_policy,
-            control_suite(ControlRuntime(run.recipe.controls, run.config.machines, run.config.judge_connection)),
+            control_suite(run.recipe.controls, run.config.machines, run.config.judge_connection),
             run.config.execution.max_workers,
             run.config.execution.worker_resources,
             context=run.context,

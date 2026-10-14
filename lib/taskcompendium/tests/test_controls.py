@@ -38,12 +38,18 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
 )
-from taskcompendium.pipeline.controls import ControlRuntime, answer_reply, control_suite, reference_reply
+from taskcompendium.pipeline.controls import answer_reply, control_suite, reference_reply
 from taskcompendium.pipeline.models import CheckStatus, Controls, OracleCommand, RawRow, Reply, WorkspaceFiles
 from taskcompendium.runtime.local import LocalGraderMachines
 from taskcompendium.runtime.resources import inline_resource
 
-from .pipeline_stages import GRADER_IMAGE, FixtureGradingMachines, ShellSimImages, UnavailableImages, script_graded
+from .pipeline_stages import (
+    GRADER_IMAGE,
+    FixtureGradingMachines,
+    ShellSimImages,
+    UnavailableImages,
+    script_graded,
+)
 
 PASS, FAIL, DEFECT = CheckStatus.PASS, CheckStatus.FAIL, CheckStatus.DEFECT
 ROW = RawRow("task", Source(dataset="fixture", revision="1", row="0", importer_revision="1"), {})
@@ -92,7 +98,7 @@ class RecordingImages(DockerMachineFactory):
 
 
 def checks(task: TaskSpec, controls: Controls, machines: FixtureGradingMachines | None = None) -> dict[str, CheckStatus]:
-    return {check.check: check.status for check in control_suite(ControlRuntime(controls, machines)).run(task).checks}
+    return {check.check: check.status for check in control_suite(controls, machines).run(task).checks}
 
 
 def in_process_task(kind: str) -> TaskSpec:
@@ -152,7 +158,7 @@ def test_task_without_a_golden_is_checked_with_an_empty_submission(controls):
 @pytest.mark.parametrize("grader", [NoGrader(reason="Source evaluator unavailable"), SessionGrader()])
 def test_graders_without_offline_grading_have_unsupported_controls(grader):
     task = in_process_task("numeric").model_copy(update={"grader": grader})
-    report = control_suite(ControlRuntime(REFERENCE_CONTROLS, FixtureGradingMachines())).run(task)
+    report = control_suite(REFERENCE_CONTROLS, FixtureGradingMachines()).run(task)
     assert [check.status for check in report.checks] == [CheckStatus.UNSUPPORTED]
 
 
@@ -169,7 +175,7 @@ def test_controls_reject_unresolved_build_before_machine_selection_or_oracle_fal
         task = task.model_copy(update={"grader": task.grader.model_copy(update={"environment": build})})
     # No machine provider is supplied: unresolved recipes must be rejected before
     # providers are required, and must never use the grader image for an oracle.
-    suite = control_suite(ControlRuntime(Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh")), None))
+    suite = control_suite(Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh")), None)
     with pytest.raises(UnsupportedMachineSpec):
         suite.run(task)
 
@@ -300,7 +306,7 @@ def test_local_oracle_and_grader_setup_run_without_changing_host_user(local_mach
     )
     controls = Controls(golden=lambda _: OracleCommand("cat ready.txt > answer.out", answer_file="answer.out"))
 
-    report = control_suite(ControlRuntime(controls, LocalGraderMachines())).run(task)
+    report = control_suite(controls, LocalGraderMachines()).run(task)
 
     assert {check.check: check.status for check in report.checks} == {"golden": PASS}
 
@@ -314,9 +320,7 @@ def test_lock_backed_oracle_rejects_image_only_provider_before_acquisition():
         }
     )
     images = RecordingImages()
-    suite = control_suite(
-        ControlRuntime(Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh")), OracleMachines(images))
-    )
+    suite = control_suite(Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh")), OracleMachines(images))
     with pytest.raises(UnsupportedMachineSpec):
         suite.run(task)
     assert images.created == []

@@ -5,7 +5,6 @@
 
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 REPOSITORY = "registry.invalid/fixture/images"
@@ -14,36 +13,34 @@ TOOLCHAIN_FRAGMENT = "ENV TOOLCHAIN_HOME=/opt/toolchain\nRUN mkdir -p /opt/toolc
 
 # Records each invocation and answers `imagetools inspect` with a digest derived from the tag, so a
 # changed environment pushes a different digest.
-FAKE_DOCKER = """import hashlib
-import json
-import os
-import sys
-
-with open(os.environ["FAKE_DOCKER_LOG"], "a") as log:
-    log.write(" ".join(sys.argv[1:]) + "\\n")
-match sys.argv[1:3]:
-    case ["buildx", "version"]:
-        print("github.com/docker/buildx v0.0.0-fixture")
-    case ["buildx", "build"]:
-        pass
-    case ["buildx", "imagetools"]:
-        print(json.dumps({"digest": "sha256:" + hashlib.sha256(sys.argv[4].encode()).hexdigest()}))
-    case _:
-        sys.exit(1)
+FAKE_DOCKER = """#!/bin/sh
+echo "$*" >> "$FAKE_DOCKER_LOG"
+case "$1 $2" in
+  "buildx version") echo "github.com/docker/buildx v0.0.0-fixture" ;;
+  "buildx build") ;;
+  "buildx imagetools")
+    digest=$(printf %s "$4" |
+      python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
+    printf '{"digest": "sha256:%s"}' "$digest" ;;
+  *) exit 1 ;;
+esac
 """
 
 # Answers `uv pip compile ... --output-file OUT IN` offline: each input pin with a hash derived from it.
-FAKE_UV = r"""import hashlib
-import sys
-from pathlib import Path
-
-assert sys.argv[1:3] == ["pip", "compile"]
-output = Path(sys.argv[sys.argv.index("--output-file") + 1])
-source = Path(sys.argv[-1])
-with output.open("w") as compiled:
-    for requirement in source.read_text().splitlines():
-        digest = hashlib.sha256(requirement.encode()).hexdigest()
-        compiled.write(f"{requirement} \\\n    --hash=sha256:{digest}\n")
+FAKE_UV = """#!/bin/sh
+[ "$1 $2" = "pip compile" ] || exit 1
+shift 2
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --output-file) output="$2"; shift 2 ;;
+    *) source="$1"; shift ;;
+  esac
+done
+while IFS= read -r requirement; do
+  digest=$(printf %s "$requirement" |
+    python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
+  printf '%s \\\\\\n    --hash=sha256:%s\\n' "$requirement" "$digest"
+done < "$source" > "$output"
 """
 
 
@@ -56,7 +53,7 @@ def install_fake_build_tools(root: Path, monkeypatch) -> Path:
     bin_dir.mkdir()
     config_dir.mkdir()
     for name, script in (("docker", FAKE_DOCKER), ("uv", FAKE_UV)):
-        (bin_dir / name).write_text(f"#!{sys.executable}\n{script}")
+        (bin_dir / name).write_text(script)
         (bin_dir / name).chmod(0o755)
     (config_dir / "config.json").write_text(json.dumps({"auths": {REPOSITORY.split("/")[0]: {}}}))
     log.touch()

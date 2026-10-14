@@ -35,7 +35,8 @@ def parse_grid(text: str) -> list[list[int]] | None:
     except json.JSONDecodeError:
         pass
     else:
-        return value if _valid_grid(value) else None
+        if _valid_grid(value):
+            return value
     rows = []
     for line in text.strip().splitlines():
         line = line.strip()

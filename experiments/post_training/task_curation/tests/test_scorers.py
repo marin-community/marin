@@ -134,17 +134,18 @@ def test_structured_output_accepts_a_markdown_fenced_document(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
-    "answer",
+    ("answer", "expected"),
     [
-        "```text\n1 2\n3 4\n```",
-        "```json\n[[1, 2], [3, 4]]\n```",
-        "[[1, 2], [3, 4]]",
-        "\\boxed{12\n34}",
-        "<|start_think|>try a transform<|end_think|>\n```\n12\n34\n```",
+        ("```text\n1 2\n3 4\n```", [[1, 2], [3, 4]]),
+        ("```json\n[[1, 2], [3, 4]]\n```", [[1, 2], [3, 4]]),
+        ("[[1, 2], [3, 4]]", [[1, 2], [3, 4]]),
+        ("\\boxed{12\n34}", [[1, 2], [3, 4]]),
+        ("<|start_think|>try a transform<|end_think|>\n```\n12\n34\n```", [[1, 2], [3, 4]]),
+        ("12", [[1, 2]]),
     ],
-    ids=["fenced_rows", "fenced_json", "json", "boxed_compact", "reasoning_then_fenced_compact"],
+    ids=["fenced_rows", "fenced_json", "json", "boxed_compact", "reasoning_then_fenced_compact", "single_row"],
 )
-def test_nvarc_transductive_accepts_common_grid_formats(answer: str, tmp_path: Path):
+def test_nvarc_transductive_accepts_common_grid_formats(answer: str, expected: list[list[int]], tmp_path: Path):
     NVARC.skip_if_unavailable()
     tests = NVARC.stage(tmp_path)
     result = subprocess.run(
@@ -154,7 +155,7 @@ def test_nvarc_transductive_accepts_common_grid_formats(answer: str, tmp_path: P
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == [[1, 2], [3, 4]]
+    assert json.loads(result.stdout) == expected
 
 
 @pytest.mark.parametrize(

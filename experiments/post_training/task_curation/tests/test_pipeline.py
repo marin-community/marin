@@ -17,7 +17,15 @@ from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.backends.iris.machine import IrisMachineFactory
 from taskcompendium.convert.answers import exact_answer_task
-from taskcompendium.models import TaskSpec, TextMessage, VerifyitGrader, verifyit_spec
+from taskcompendium.grader import verifyit_package
+from taskcompendium.models import (
+    CommandSemantics,
+    EnvironmentRequirements,
+    TaskSpec,
+    TextMessage,
+    VerifyitGrader,
+    verifyit_spec,
+)
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import Controls, FilterPolicy, ReviewRubric
@@ -26,7 +34,7 @@ from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
 from taskcompendium.pipeline.sources import prepared_component_path
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
-from verifyit.spec import ExactSpec
+from verifyit.spec import EmptyOutputPolicy, ExactSpec, JudgeSpec
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
@@ -34,6 +42,7 @@ from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignRuntime, PipelineResult, error_chain
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import prepare_blend
+from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import semantic_empty_negative
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import (
@@ -474,3 +483,70 @@ def test_url_download_stages_the_file_only_when_its_digest_matches(tmp_path, ser
     with pytest.raises(ValueError, match="SHA-256"):
         download_source(DownloadRequest(bad, str(tmp_path / "bad")), campaign=CampaignRuntime())
     assert not (tmp_path / "bad" / "rows.jsonl").exists()
+
+
+def convert_judge_fixture(row, context):
+    task = convert_fixture(row, context)
+    assert isinstance(task, TaskSpec)
+    package = verifyit_package(
+        JudgeSpec(
+            references=(row.data["answer"],),
+            rubric="labels",
+            model="fixture-judge",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+            empty_output=EmptyOutputPolicy.GRADE,
+        ),
+        environment=EnvironmentRequirements(docker_image=AGENT_IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS),
+    )
+    return task.model_copy(update={"grader": package.grader})
+
+
+def test_recipe_without_review_uses_its_explicit_connection_for_judge_controls(
+    tmp_path, config, monkeypatch, review_server
+):
+    primary = tmp_path / "source"
+    primary.mkdir()
+    (primary / "rows.jsonl").write_text('{"prompt":"Two plus two?","answer":"4"}\n')
+    recipe = replace(
+        math500(),
+        source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
+        convert=convert_judge_fixture,
+        rubric=None,
+        controls=Controls(negative=semantic_empty_negative),
+        grader=None,
+    )
+    runtime = CampaignRuntime()
+    options = PipelineOptions(
+        SourceProcessingMode.FULL,
+        runtime,
+        inputs=InputOverrides(root=str(primary)),
+        recipe_settings=RecipeSettings(
+            config=replace(
+                config,
+                review=None,
+                execution=AuditExecution(),
+                machines=None,
+                verification_policy=SourceVerificationPolicy(10, 0, 1, 1),
+            ),
+            base_url=f"http://127.0.0.1:{review_server.server_port}/v1",
+            api_key="fixture-key",
+        ),
+    )
+    review_server.judge_replies = ["FAIL"]
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    client = LocalClient()
+    try:
+        with (
+            set_current_client(client),
+            ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context,
+            runtime.activate(context),
+        ):
+            artifact = run(source_step(recipe, options), max_concurrent=1)[0]
+        result = cast(PipelineResult, artifact.result)
+        verification = json.loads((StoragePath(result.evidence["verify"]) / "report.json").read_text())
+        assert verification["status"] == "passed"
+        assert len(review_server.requests) == 1
+        assert review_server.requests[0]["model"] == "fixture-judge"
+    finally:
+        client.shutdown()

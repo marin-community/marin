@@ -20,7 +20,7 @@ from taskcompendium.convert.answers import json_schema_task
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
-from taskcompendium.pipeline.controls import ControlRuntime, control_suite
+from taskcompendium.pipeline.controls import control_suite
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry
 from taskcompendium.pipeline.models import (
     CheckResult,
@@ -134,7 +134,7 @@ def write_evidence(path, verified, policy):
 
 
 def test_exact_reuse_preserves_independent_controls_and_original_provenance(tmp_path, reusable_schema_row):
-    suite = control_suite(ControlRuntime(SCHEMA_CONTROLS, None))
+    suite = control_suite(SCHEMA_CONTROLS, None)
     policy = SourceVerificationPolicy(1, 0, 2, 1.0)
     identity = verification_identity(suite, policy)
     original_path = tmp_path / "verification.json"
@@ -198,7 +198,7 @@ def test_exact_reuse_preserves_independent_controls_and_original_provenance(tmp_
 def test_attempt_with_infrastructure_error_is_rerun_before_it_is_recorded(reusable_schema_row, outages):
     """A sandbox that never started says nothing about the task, so the attempt runs again; only
     an outage that outlasts every retry is recorded."""
-    suite = control_suite(ControlRuntime(SCHEMA_CONTROLS, None))
+    suite = control_suite(SCHEMA_CONTROLS, None)
     runs = []
 
     def flaky(task):
@@ -227,7 +227,7 @@ def test_attempt_with_infrastructure_error_is_rerun_before_it_is_recorded(reusab
 def test_mixed_failure_infrastructure_trial_reexecutes_without_erasing_definite_failure(
     tmp_path, reusable_schema_row, second_failed
 ):
-    suite = control_suite(ControlRuntime(SCHEMA_CONTROLS, None))
+    suite = control_suite(SCHEMA_CONTROLS, None)
     policy = SourceVerificationPolicy(1, 0, 2, 1.0)
     identity = verification_identity(suite, policy)
     original = _verify_sample_with_evidence(
@@ -291,14 +291,14 @@ def test_mixed_failure_infrastructure_trial_reexecutes_without_erasing_definite_
     [
         ({"backend": "qemu", "bundle_path": "/tmp/changeable"}, False),
         ({"network": "allow"}, False),
-        ({"execution": "remote_judge"}, False),
+        ({"judge_base_url": "http://judge.invalid/v1"}, False),
         ({"backend": "qemu", "worker_image": "image@sha256:" + "1" * 64}, True),
         (FixtureGradingMachines().identity(), True),
     ],
     ids=["qemu_bundle_path", "network_allowed", "remote_judge", "qemu_worker_image", "offline_machines"],
 )
 def test_source_rerun_requires_immutable_offline_runtime(tmp_path, reusable_schema_row, runtime, reusable):
-    suite = replace(control_suite(ControlRuntime(SCHEMA_CONTROLS, None)), parameters=runtime)
+    suite = replace(control_suite(SCHEMA_CONTROLS, None), parameters=runtime)
     source = tmp_path / "source" / "audit"
     source.mkdir(parents=True)
     (source.parent / "manifest.json").write_text(json.dumps({"input_rows": 1}))
@@ -410,7 +410,7 @@ def test_task_without_a_golden_is_verified_by_its_empty_submission(tmp_path):
             str(source),
             str(output),
             SourceVerificationPolicy(1, 0, 1, 1.0),
-            control_suite(ControlRuntime(SCHEMA_CONTROLS, None)),
+            control_suite(SCHEMA_CONTROLS, None),
             1,
             context=context,
             telemetry=telemetry,
@@ -649,7 +649,7 @@ def test_verification_writes_complete_audit_accepted_rows_and_matching_counts(tm
         pq.write_table(pa.Table.from_pylist(shard, schema=TASK_SCHEMA), source / f"audit/part-{index:05d}.parquet")
     output = tmp_path / "verified"
     telemetry = PhaseTelemetry("verification")
-    suite = replace(control_suite(ControlRuntime(SCHEMA_CONTROLS, None)), run=fixture_control_outcome)
+    suite = replace(control_suite(SCHEMA_CONTROLS, None), run=fixture_control_outcome)
     with ZephyrContext(max_workers=2, name="verification-outputs") as context:
         manifest = verify_source(
             str(source),

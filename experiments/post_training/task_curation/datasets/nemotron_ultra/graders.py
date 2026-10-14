@@ -50,7 +50,6 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.controls import answer_reply, reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import (
-    ControlExecution,
     Controls,
     ImportRejection,
     NormalizationChange,
@@ -58,7 +57,7 @@ from taskcompendium.pipeline.models import (
     RawRow,
     Reply,
 )
-from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.candidate import grade_candidate
 from verifyit.grade import InvalidTask, Status, positive_candidate
 from verifyit.modes.extract import extract_boxed
@@ -81,6 +80,7 @@ PLACEHOLDER_SOURCE_FIELD = "placeholder_source"
 AGENT_CAPABILITY_PREFIX = "nemotron-agent:"
 SCORER_TIMEOUT = 60.0
 CODE_SCORER_TIMEOUT = 330.0
+LEAN_GRADER_MEMORY_MB = 8192
 
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
@@ -112,10 +112,10 @@ MCQA_GRADE = ultra_grade_script("mcqa_grade.py", "mcqa")
 CODE_GRADE = (*ultra_grade_script("code_grade.py", "code_gen"), *CONVERSATION, LIVECODEBENCH)
 STRUCTURED_OUTPUT_GRADE = (*ultra_grade_script("structured_output_grade.py", "structured_outputs"), *CONVERSATION)
 RDKIT_GRADE = ultra_grade_script("rdkit_chemistry_grade.py", "rdkit_chemistry")
-REASONING_GYM_GRADE = (*ultra_grade_script("reasoning_gym_grade.py"), *shipped_files(HERE, "reasoning_gym_answer.py"))
+REASONING_GYM_GRADE = ultra_grade_script("reasoning_gym_grade.py")
 LEAN_GRADE = (
     *ultra_grade_script("lean_grade.py", "lean", "lean_feedback", "lean_proof_utils", "sandbox"),
-    *shipped_files(SCORERS, "skyrl_gym/verification.py"),
+    *shipped_files(SCORERS, "skyrl_gym/verification.py", "local_lean_sandbox.py"),
 )
 
 TOOLCALL_SCHEMA_AGENT = "toolcall_schema_single_step_tool_use_with_argument_comparison_agent"
@@ -139,9 +139,8 @@ FORMAT_VERIFIER_TYPES = frozenset({"regex", "inline_prose", "string_match"})
 MATH_AGENTS = ("math_with_judge_simple_agent", "ns_tools_simple_agent")
 """The math components' agents: a plain chat, and a chat with a Python tool."""
 MATH_VERIFIER = "math_with_judge"
-LEAN_SANDBOX_HOST = "snowball-nemo-skills-sandbox.iris.svc.cluster.local"
-LEAN_SANDBOX_PORT = 6000
 JUDGE_REQUEST_TIMEOUT = 120.0
+LEAN_SCORER_TIMEOUT = 120.0
 
 DAPO = "BytedTsinghua-SIA/DAPO-Math-17k"
 DAPO_PREFIX = (
@@ -370,6 +369,7 @@ def convert_instruction_following(row: RawRow, context: ConversionContext) -> No
         model=GLM_MODEL,
         strip_candidate_reasoning_blocks=True,
         request_timeout=JUDGE_REQUEST_TIMEOUT,
+        empty_output=EmptyOutputPolicy.GRADE,
     )
     package = verifyit_package(spec, (resource,), environment=required_grader_environment(context))
     normalized = blend_task(row, request, package)
@@ -452,7 +452,7 @@ def convert_multichallenge(row: RawRow, context: ConversionContext) -> Normalize
     resource = inline_resource(
         MULTICHALLENGE_CONTEXT,
         json.dumps(
-            {"source_context": source_context, "public_conversation": public_conversation},
+            {"source_context": source_context, "public_conversation": public_conversation, "rubric": rubric},
             ensure_ascii=False,
             sort_keys=True,
         ).encode(),
@@ -573,13 +573,9 @@ def convert_lean(row: RawRow, context: ConversionContext) -> NormalizedTask | Im
             return source_defect("invalid_lean_contract", f"Lean rows require a nonempty {field}")
     package = script_package(
         LEAN_GRADE,
-        {
-            "contract": request.contract,
-            "sandbox_host": LEAN_SANDBOX_HOST,
-            "sandbox_port": LEAN_SANDBOX_PORT,
-        },
+        {"contract": request.contract},
         environment=required_grader_environment(context),
-        timeout=SCORER_TIMEOUT,
+        timeout=LEAN_SCORER_TIMEOUT,
         answer_path=DEFAULT_OUTPUT,
     )
     normalized = blend_task(row, request, package)
@@ -601,6 +597,23 @@ def convert_code(row: RawRow, context: ConversionContext) -> NormalizedTask | Im
     return _scored(row, request, CODE_GRADE, context, timeout=CODE_SCORER_TIMEOUT, env=THREAD_ENVIRONMENT)
 
 
+SCHEMA_MAPPING_KEYWORDS = ("$defs", "definitions", "dependentSchemas", "patternProperties", "properties")
+SCHEMA_SEQUENCE_KEYWORDS = ("allOf", "anyOf", "oneOf", "prefixItems")
+SCHEMA_VALUE_KEYWORDS = (
+    "additionalItems",
+    "additionalProperties",
+    "contains",
+    "else",
+    "if",
+    "items",
+    "not",
+    "propertyNames",
+    "then",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+)
+
+
 def _deduplicate_required_fields(value: Any) -> bool:
     """Remove repeated JSON Schema ``required`` names and report whether any list changed."""
     changed = False
@@ -611,11 +624,20 @@ def _deduplicate_required_fields(value: Any) -> bool:
             if unique != required:
                 value["required"] = unique
                 changed = True
-        for child in value.values():
-            changed = _deduplicate_required_fields(child) or changed
-    elif isinstance(value, list):
-        for child in value:
-            changed = _deduplicate_required_fields(child) or changed
+        for keyword in SCHEMA_MAPPING_KEYWORDS:
+            child = value.get(keyword)
+            if isinstance(child, dict):
+                for schema in child.values():
+                    changed = _deduplicate_required_fields(schema) or changed
+        for keyword in SCHEMA_SEQUENCE_KEYWORDS:
+            child = value.get(keyword)
+            if isinstance(child, list):
+                for schema in child:
+                    changed = _deduplicate_required_fields(schema) or changed
+        for keyword in SCHEMA_VALUE_KEYWORDS:
+            child = value.get(keyword)
+            if isinstance(child, dict):
+                changed = _deduplicate_required_fields(child) or changed
     return changed
 
 
@@ -958,7 +980,7 @@ def tool_action_negative(task: TaskSpec) -> Reply:
 
 
 def lean_negative(task: TaskSpec) -> Reply:
-    """Submit invalid Lean syntax so source verification reaches the compiler endpoint."""
+    """Submit invalid Lean syntax so source verification reaches the local compiler."""
     return answer_reply(task, "```lean4\nby\n  definitely_not_a_lean_tactic\n```")
 
 
@@ -980,6 +1002,18 @@ def jailbreak_negative(task: TaskSpec) -> Reply:
     )
 
 
+def semantic_empty_negative(task: TaskSpec) -> Reply:
+    """Send an empty candidate through judges configured to grade empty output."""
+    return answer_reply(task, "")
+
+
+def multichallenge_empty_reward(task: TaskSpec) -> float:
+    rubric = json.loads(
+        resource_bytes(next(resource for resource in task.resources.verifier if resource.path == MULTICHALLENGE_CONTEXT))
+    )["rubric"]
+    return sum(item.get("pass_criteria", "YES").upper() == "NO" for item in rubric) / len(rubric)
+
+
 # Components whose rows carry no known answer check only that an empty reply scores zero.
 REPLY_CONTROLS = Controls()
 MATH_CONTROLS = Controls(golden=reference_reply)
@@ -991,13 +1025,11 @@ RDKIT_CONTROLS = Controls(golden=rdkit_golden)
 # suite supplies human-labeled positive and alternative-answer controls.
 TOOL_ACTION_CONTROLS = Controls(
     negative=tool_action_negative,
-    execution=ControlExecution.REMOTE_JUDGE,
 )
-TOOLCALL_SCHEMA_CONTROLS = TOOL_ACTION_CONTROLS
-LEAN_CONTROLS = Controls(negative=lean_negative)
-GENRM_CONTROLS = Controls(negative=genrm_negative, execution=ControlExecution.REMOTE_JUDGE)
-ABSTENTION_CONTROLS = Controls(negative=abstention_negative, execution=ControlExecution.REMOTE_JUDGE)
-MULTICHALLENGE_CONTROLS = Controls(execution=ControlExecution.REMOTE_JUDGE)
-JAILBREAK_CONTROLS = Controls(negative=jailbreak_negative, execution=ControlExecution.REMOTE_JUDGE)
-INSTRUCTION_CONTROLS = Controls(execution=ControlExecution.REMOTE_JUDGE)
+LEAN_CONTROLS = Controls(negative=lean_negative, memory_mb=LEAN_GRADER_MEMORY_MB)
+GENRM_CONTROLS = Controls(negative=genrm_negative)
+ABSTENTION_CONTROLS = Controls(negative=abstention_negative)
+MULTICHALLENGE_CONTROLS = Controls(negative=semantic_empty_negative, negative_reward=multichallenge_empty_reward)
+JAILBREAK_CONTROLS = Controls(negative=jailbreak_negative)
+INSTRUCTION_CONTROLS = Controls(negative=semantic_empty_negative)
 REASONING_GYM_CONTROLS = Controls(golden=reasoning_gym_golden)

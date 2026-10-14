@@ -113,27 +113,22 @@ class OracleCommand:
 type ControlSubmission = Reply | WorkspaceFiles | OracleCommand
 
 
-class ControlExecution(StrEnum):
-    DEFAULT = "default"
-    REMOTE_JUDGE = "remote_judge"
-
-
 @dataclass(frozen=True)
 class Controls:
     """The one control submission that tests a source's grader on each sampled task.
 
     ``golden(task)`` is a known-correct submission, which must score one. ``negative(task)`` is a
-    known-invalid submission, which must score zero. When neither callable supplies a submission,
+    known-invalid submission, which must score zero unless ``negative_reward(task)`` supplies the
+    expected partial reward. When neither callable supplies a submission,
     the task is graded on an empty submission, which must score zero; a sandbox grader grades it in
-    a fresh grading machine. ``memory_mb`` sizes each fresh grading machine. ``execution`` selects
-    the campaign's explicit remote judge connection for judge-graded tasks that cannot run in the
-    network-denied sandbox environment.
+    a fresh grading machine. ``memory_mb`` sizes each fresh grading machine. Judge-graded tasks use
+    the campaign's explicit remote judge connection rather than a network-denied grading machine.
     """
 
     golden: Callable[[TaskSpec], ControlSubmission | None] | None = None
     negative: Callable[[TaskSpec], ControlSubmission | None] | None = None
     memory_mb: int = 512
-    execution: ControlExecution = ControlExecution.DEFAULT
+    negative_reward: Callable[[TaskSpec], float] | None = None
 
 
 @dataclass(frozen=True)

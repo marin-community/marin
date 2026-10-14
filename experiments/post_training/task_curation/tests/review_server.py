@@ -11,6 +11,7 @@ class ReviewHTTPServer(ThreadingHTTPServer):
         self.requests: list[dict] = []
         self.review_available = True
         self.assessment_available = True
+        self.judge_replies: list[str] = []
         super().__init__(("127.0.0.1", 0), ReviewHandler)
 
 
@@ -18,6 +19,20 @@ class ReviewHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         cast(ReviewHTTPServer, self.server).requests.append(body)
+        if "tool_choice" not in body:
+            reply = cast(ReviewHTTPServer, self.server).judge_replies.pop(0)
+            self.respond(
+                {
+                    "id": "chatcmpl-fixture",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": body["model"],
+                    "choices": [
+                        {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": reply}}
+                    ],
+                }
+            )
+            return
         task = json.loads(body["messages"][-1]["content"])
         tool = body["tool_choice"]["function"]["name"]
         server = cast(ReviewHTTPServer, self.server)
@@ -64,6 +79,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 }
             ],
         }
+        self.respond(result)
+
+    def respond(self, result: dict) -> None:
         payload = json.dumps(result).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

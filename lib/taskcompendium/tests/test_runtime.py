@@ -413,7 +413,7 @@ def test_script_grader_scores_captured_files_in_sandbox_and_task_grading(
     assert all(machine.closed for machine in factory.machines)
 
 
-def test_native_action_judge_grader_receives_the_semantic_action_in_its_sandbox(tmp_path, shell_task):
+def test_native_action_judge_exact_gate_receives_the_semantic_action(shell_task):
     candidate = '{"arguments":{"index":3},"name":"lookup","type":"function_call"}'
     package = verifyit_package(
         JudgeSpec(
@@ -446,8 +446,6 @@ def test_native_action_judge_grader_receives_the_semantic_action_in_its_sandbox(
     result = grade_task(
         task,
         attempt,
-        machine_factory=LocalGradingMachines(tmp_path),
-        machine_spec=GRADER_MACHINE,
     )
 
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0)

@@ -36,7 +36,7 @@ from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file
 
 from experiments.post_training.task_curation.datasets.arc.arc import ULTRA_ARC_CONTROLS, convert_ultra_arc
-from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
+from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES, LEAN_GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import (
     ABSTENTION_CONTROLS,
     CODE_CONTROLS,
@@ -53,7 +53,6 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
     REASONING_GYM_CONTROLS,
     REPLY_CONTROLS,
     TOOL_ACTION_CONTROLS,
-    TOOLCALL_SCHEMA_CONTROLS,
     VERIFIER_REVISION,
     convert_abstention,
     convert_calendar,
@@ -376,7 +375,7 @@ INSTRUCTION_FOLLOWING = scored(convert_instruction_following, INSTRUCTION_FOLLOW
 MATH = Component(
     convert_math, MATH_ANSWER_RUBRIC, MATH_CONTROLS, decode=attach_placeholder_source, inputs=PLACEHOLDER_INPUTS
 )
-MATH_PROOF = scored(convert_lean, MATH_PROOF_RUBRIC, LEAN_CONTROLS)
+MATH_PROOF = Component(convert_lean, MATH_PROOF_RUBRIC, LEAN_CONTROLS, grader=LEAN_GRADER_PACKAGES)
 MCQA = scored(convert_mcqa, QA_MULTIPLE_CHOICE_RUBRIC, MCQA_CONTROLS)
 MULTICHALLENGE = scored(convert_multichallenge, INSTRUCTION_FOLLOWING_RUBRIC, MULTICHALLENGE_CONTROLS)
 NEXT_ACTION = scored(convert_tool_action, SWE_REPO_RUBRIC, TOOL_ACTION_CONTROLS)
@@ -388,7 +387,7 @@ STRUCTURED_OUTPUT = scored(convert_structured_output, INSTRUCTION_FOLLOWING_RUBR
 SWE_REPO = Component(convert_ungraded_agent, SWE_REPO_RUBRIC)
 SWE_NEXT_ACTION = scored(convert_tool_action, SWE_REPO_RUBRIC, TOOL_ACTION_CONTROLS)
 TAU_PIVOT = scored(convert_tool_action, TOOL_USE_RUBRIC, TOOL_ACTION_CONTROLS)
-TOOLCALL_SCHEMA = scored(convert_tool_action, TOOL_USE_RUBRIC, TOOLCALL_SCHEMA_CONTROLS)
+TOOLCALL_SCHEMA = scored(convert_tool_action, TOOL_USE_RUBRIC, TOOL_ACTION_CONTROLS)
 
 HS3_EN = Component(
     convert_ungraded,
@@ -472,33 +471,20 @@ COMPONENTS: dict[str, Component] = {
 }
 
 BASE_RECIPE_VERSION = "3"
-REPAIRED_GRADER_PATHS = frozenset(
-    {
-        "ultra_sft_step3200_nvarc_transductive",
-        "ultra_sft_step3200_structured_outputs_v2",
-        "ultra_sft_step3200_structured_outputs_v3",
-        "ultra_sft_step3200_toolcall_schema",
-        "ultra_v3_agentic_rl_step73_structured_outputs_v2",
-    }
-)
 REPAIRED_RECIPE_VERSION = "4"
 TOOLCALL_SCHEMA_RECIPE_VERSION = "5"
-RLVR1_REMEDIATION_RECIPE_VERSION = "6"
-RLVR1_REMEDIATION_PATHS = frozenset(
-    {
-        "language_mixing_hs3_ultra_genrm_fmt",
-        "ultra_sft_step3200_instruction_following",
-        "ultra_sft_step3200_abstention",
-        "ultra_sft_step3200_comp_coding",
-        "ultra_sft_step3200_jailbreak",
-        "ultra_sft_step3200_lean",
-        "ultra_sft_step3200_multichallenge_len40k",
-        "ultra_sft_step3200_reasoning_gym",
-        f"ultra_sft_step3200_swe_pivot_len40k/{SweSplit.SWE_GYM}",
-        f"ultra_sft_step3200_swe_pivot_len40k/{SweSplit.SWE_REBENCH}",
-        "ultra_sft_step3200_tau_pivot",
-    }
-)
+EXECUTABLE_GRADER_RECIPE_VERSION = "6"
+RECIPE_VERSIONS = {
+    "ultra_sft_step3200_nvarc_transductive": REPAIRED_RECIPE_VERSION,
+    "ultra_sft_step3200_structured_outputs_v2": REPAIRED_RECIPE_VERSION,
+    "ultra_sft_step3200_structured_outputs_v3": REPAIRED_RECIPE_VERSION,
+    "ultra_v3_agentic_rl_step73_structured_outputs_v2": REPAIRED_RECIPE_VERSION,
+    "ultra_sft_step3200_toolcall_schema": TOOLCALL_SCHEMA_RECIPE_VERSION,
+    "ultra_sft_step3200_comp_coding": EXECUTABLE_GRADER_RECIPE_VERSION,
+    "ultra_sft_step3200_lean": EXECUTABLE_GRADER_RECIPE_VERSION,
+    "ultra_sft_step3200_reasoning_gym": EXECUTABLE_GRADER_RECIPE_VERSION,
+}
+"""Calibrated or deterministic grader revisions; new judge families stay on version 3 until calibrated."""
 
 
 # Counts come from a complete selection audit of ULTRA_REVISION's blend files,
@@ -1146,15 +1132,7 @@ def _source(blend: str, path: str) -> RlDataSource[CurationRecipe]:
                 prepared_component=name,
             ),
             convert=component.convert,
-            version=(
-                RLVR1_REMEDIATION_RECIPE_VERSION
-                if path in RLVR1_REMEDIATION_PATHS
-                else (
-                    TOOLCALL_SCHEMA_RECIPE_VERSION
-                    if path == "ultra_sft_step3200_toolcall_schema"
-                    else REPAIRED_RECIPE_VERSION if path in REPAIRED_GRADER_PATHS else BASE_RECIPE_VERSION
-                )
-            ),
+            version=RECIPE_VERSIONS.get(path, BASE_RECIPE_VERSION),
             intended_use=IntendedUse.TRAIN,
             rubric=component.rubric,
             controls=component.controls,

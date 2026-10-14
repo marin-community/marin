@@ -46,7 +46,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.models import RuntimeEvidence, grading_attempt
 from taskcompendium.runtime.task_grading import grade_task
-from taskcompendium.submission import native_action_text, submission_compatibility
+from taskcompendium.submission import submission_compatibility
 
 GRADING_ENVIRONMENT = EnvironmentRequirements(
     docker_image="private/grader@sha256:" + "a" * 64, command_semantics=CommandSemantics.LINUX_PROCESS
@@ -167,11 +167,10 @@ def test_captured_null_state_is_a_submission_but_missing_state_is_not():
     assert (captured.status, captured.reward) == (Outcome.GRADED, 1.0)
 
 
-def test_remote_judge_control_grades_a_typed_native_action_through_the_supplied_endpoint(judge_server):
+def test_runtime_grades_a_typed_native_action_through_the_supplied_judge_endpoint(judge_server):
     response = AssistantToolCalls(
         calls=(ConversationToolCall(call_id="transport-id", name="lookup", arguments={"query": "weather"}),)
     )
-    candidate = native_action_text(response)
     package = verifyit_package(
         JudgeSpec(
             references=("Public conversation and tool schema",),
@@ -204,16 +203,27 @@ def test_remote_judge_control_grades_a_typed_native_action_through_the_supplied_
     )
     attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, response)))
 
-    result = grade_remote_judge_answer(
+    result = grade_task(
         task,
         attempt,
-        JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "secret"),
+        judge_connection=JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "secret"),
     )
 
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
     assert result.detail["verdict"] == "PASS"
     assert len(judge_server.requests) == 1
-    assert candidate in judge_server.requests[0]["messages"][-1]["content"]
+    prompt = judge_server.requests[0]["messages"][-1]["content"]
+    assert json.loads(prompt.split("\nCandidate: ", 1)[1]) == {
+        "type": "function_call",
+        "name": "lookup",
+        "arguments": {"query": "weather"},
+    }
+
+
+def test_runtime_requires_an_explicit_connection_for_judge_grading():
+    task = _task(verifyit_package(JudgeSpec(references=("answer",)), environment=GRADING_ENVIRONMENT).grader)
+    result = grade_task(task, _attempt(task, "candidate"))
+    assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
 
 
 def test_remote_judge_rejects_an_empty_candidate_without_calling_the_endpoint():
