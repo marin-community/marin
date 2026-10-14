@@ -16,6 +16,7 @@ from taskforge.spec.controls import (
     Expectation,
     Transcript,
     Workspace,
+    check_expectations,
     controls_json,
     parse_controls,
     reply,
@@ -242,44 +243,67 @@ def test_control_ids_are_unique():
         ),
         (
             ControlKind.NEGATIVE,
-            ControlCategory.PLAUSIBLE_WRONG,
-            ControlConcern.ACCEPTANCE,
-            Expectation(Outcome.GRADED, reward_max=0.5),
-            "<= 0.2",
-        ),
-        (
-            ControlKind.NEGATIVE,
             ControlCategory.REWARD_HACK,
             ControlConcern.SHORTCUT,
             Expectation(Outcome.GRADED),
-            "<= 0.2",
+            "graded maximum reward",
+        ),
+        (
+            ControlKind.NEGATIVE,
+            ControlCategory.PLAUSIBLE_WRONG,
+            ControlConcern.ACCEPTANCE,
+            Expectation(Outcome.SUBMISSION_FAILURE),
+            "graded maximum reward",
         ),
         (
             ControlKind.MALFORMED,
             ControlCategory.EMPTY_OR_MALFORMED,
             ControlConcern.EXTRACTION,
             Expectation(Outcome.GRADED),
-            "<= 0.2",
+            "maximum reward",
         ),
         (
             ControlKind.POSITIVE,
             ControlCategory.KNOWN_CORRECT,
             ControlConcern.REFERENCE,
             Expectation(Outcome.GRADED, reward_max=1.0),
-            "minimum",
-        ),
-        (
-            ControlKind.POSITIVE,
-            ControlCategory.KNOWN_CORRECT,
-            ControlConcern.REFERENCE,
-            Expectation(Outcome.GRADED, reward_min=0.0),
-            "above 0.2",
+            "graded minimum reward",
         ),
     ],
 )
 def test_control_labels_must_match_their_expected_grade(kind, category, concern, expect, message):
     with pytest.raises(ValueError, match=message):
         control("c", kind, category, concern, Transcript((reply("x"),)), expect)
+
+
+def test_control_bounds_follow_the_graders_rejection_ceiling():
+    """A grader with partial credit raises what a negative may earn and what a positive must earn."""
+    wrong = control(
+        "wrong",
+        ControlKind.NEGATIVE,
+        ControlCategory.PLAUSIBLE_WRONG,
+        ControlConcern.ACCEPTANCE,
+        Transcript((reply("13"),)),
+        Expectation(Outcome.GRADED, reward_max=0.4),
+    )
+    gold = control(
+        "gold",
+        ControlKind.POSITIVE,
+        ControlCategory.KNOWN_CORRECT,
+        ControlConcern.REFERENCE,
+        Transcript((reply("12"),)),
+        Expectation(Outcome.GRADED, reward_min=0.99),
+    )
+    unsure = replace(gold, id="unsure", expect=Expectation(Outcome.GRADED, reward_min=0.4))
+    refused = replace(answer_controls()[1], expect=Expectation(Outcome.SUBMISSION_FAILURE))
+
+    check_expectations([wrong, gold, refused], 0.4)
+    with pytest.raises(ValueError, match=r"wrong must demand a reward at most .* rejection ceiling 0\.2"):
+        check_expectations([wrong, gold], 0.2)
+    with pytest.raises(ValueError, match=r"unsure must demand a minimum reward above .* rejection ceiling 0\.4"):
+        check_expectations([wrong, unsure], 0.4)
+    with pytest.raises(ValueError, match=r"rejection ceiling is a reward in \[0, 1\)"):
+        check_expectations([gold], 1.0)
 
 
 @pytest.mark.parametrize("identifier", ["", "../escape", "has space"])

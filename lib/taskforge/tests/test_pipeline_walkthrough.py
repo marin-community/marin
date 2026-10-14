@@ -147,6 +147,7 @@ async def grader(context: RLEnvBuildContext) -> Grader:
         reference_reply="42",
         reference_files=(),
         secret_values=("42",),
+        rejection_ceiling=0.0,
         prototyped=(),
     )
 

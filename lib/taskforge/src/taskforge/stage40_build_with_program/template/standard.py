@@ -22,9 +22,9 @@ The steps, in run order:
 4. ``grader`` writes the grader: an in-process verifyit grader (exact, numeric, math, mcq) when the
    answer is one value, otherwise a Python grader program in a verifier machine. Before it returns,
    the step grades its reference answer and the empty answer with ``grade_candidate``. A reference below
-   ``FULL_CREDIT`` or an empty answer above ``REJECTION_CEILING`` goes back to the model, and after
-   ``ATTEMPTS`` requests the build fails. The returned ``Grader`` holds the reference answer and
-   every graded candidate.
+   ``FULL_CREDIT``, a reward outside the grader's score range, or an empty answer above the grader's
+   declared ``rejection_ceiling`` goes back to the model, and after ``ATTEMPTS`` requests the build
+   fails. The returned ``Grader`` holds the reference answer, the ceiling and every graded candidate.
 5. ``instructions`` writes the solver-facing prompt around the grader's answer contract and sends
    back one that leaks a graded answer, runs past ``INSTRUCTION_WORD_LIMIT`` words, copies file
    lines, or asks for work by hand.
@@ -40,8 +40,7 @@ from taskcompendium.models import AnswerType, EnvironmentRequirements, Source, T
 
 from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
 from taskforge.spec import draft
-from taskforge.spec.controls import REJECTION_CEILING
-from taskforge.spec.verdict import grader_checks
+from taskforge.spec.verdict import grader_checks, reward_in_range
 from taskforge.stage10_proposal.model import Environment, TaskProposal
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build_with_program.context import BuildFailure, RLEnvBuildContext
@@ -144,8 +143,9 @@ async def grader(
         f"{SUBMISSION}\n\n{NUMERIC_LITERALS}\n\n"
         "Write the grader from the proposal's 'Grader design and controls' section. Prefer an in-process kind "
         "(exact, numeric, math or mcq) whenever the answer is one value; use kind=script only when the checks "
-        "need code. Give partial credit only where the proposal does. The reference reply and files must earn "
-        "full credit."
+        "need code. Rewards lie in [0, 1]. Give partial credit only where the proposal does, and declare "
+        "rejection_ceiling as the most a submission wrong in substance can collect under that scheme (0 without "
+        "partial credit). The reference reply and files must earn full credit."
     )
     prototyped: list[GradedCandidate] = []
 
@@ -171,6 +171,11 @@ async def grader(
         except (ValueError, BuildFailure) as error:
             return str(error)
         prototyped.append(graded_candidate(submitted.reference_reply, reference_files, reference))
+        if reference.status == Outcome.GRADED and not reward_in_range(reference):
+            return (
+                f"the reference answer got reward {reference.reward}, outside the grader's score range "
+                f"[{reference.score_min}, {reference.score_max}]; a grader returns a reward in that range"
+            )
         if reference.status != Outcome.GRADED or (reference.reward or 0.0) < FULL_CREDIT:
             return (
                 f"the reference answer was graded {reference.status} reward={reference.reward}: "
@@ -198,8 +203,11 @@ async def grader(
             output_paths=paths,
         )
         prototyped.append(graded_candidate("", (), empty))
-        if empty.status == Outcome.GRADED and (empty.reward or 0.0) > REJECTION_CEILING:
-            return f"an empty answer got reward {empty.reward}; it must get at most {REJECTION_CEILING}"
+        if empty.status == Outcome.GRADED and (empty.reward or 0.0) > submitted.rejection_ceiling:
+            return (
+                f"an empty answer got reward {empty.reward}; it must get at most the declared rejection_ceiling "
+                f"{submitted.rejection_ceiling}"
+            )
         return None
 
     submitted = await structured_until(context, task_messages(proposal, request), GraderDraft, problem)
@@ -209,6 +217,7 @@ async def grader(
         reference_reply=submitted.reference_reply,
         reference_files=tuple(task_file(f) for f in submitted.reference_files),
         secret_values=tuple(value for value in submitted.secret_values if value.strip()),
+        rejection_ceiling=submitted.rejection_ceiling,
         prototyped=tuple(prototyped),
     )
 

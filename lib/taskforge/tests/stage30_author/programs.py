@@ -30,7 +30,7 @@ async def question(context: RLEnvBuildContext) -> Question:
 @rl_env_build_step
 async def grader(context: RLEnvBuildContext) -> Grader:
     package = draft.answer_grader(ExactSpec(expected=("42",)))
-    return Grader(package, "Reply with the number.", "42", (), ("42",), ())
+    return Grader(package, "Reply with the number.", "42", (), ("42",), 0.0, ())
 
 
 @rl_env_build_sink

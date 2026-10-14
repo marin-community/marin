@@ -5,9 +5,11 @@
 
 ``write_controls`` asks the model for the controls the proposal's "Grader design and controls"
 section calls for, so their ids and expectations follow the proposal. It sends a submission back
-when ``validate_controls`` refuses the set or when a control repeats a candidate the grader step
-graded while it prototyped the grader (``check_controls_not_graded``): controls are written, not
-fitted to the grader. The reference answer and the empty answer are exempt, since the grader step
+when ``validate_controls`` refuses the set, when a control's reward bounds cross the grader's
+declared rejection ceiling (``check_expectations``: the most a submission wrong in substance can
+earn under the grader's partial-credit scheme), or when a control repeats a candidate the grader
+step graded while it prototyped the grader (``check_controls_not_graded``): controls are written,
+not fitted to the grader. The reference answer and the empty answer are exempt, since the grader step
 must grade both, and they are also the usual reference and malformed controls. The grader comes
 from the draft's ``grader`` step output (``stage40_build_with_program.run.step_output``), so the reference
 answer validation replays is the one the build checked.
@@ -36,7 +38,6 @@ from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.spec.controls import (
-    REJECTION_CEILING,
     Control,
     ControlCategory,
     ControlConcern,
@@ -44,6 +45,7 @@ from taskforge.spec.controls import (
     Expectation,
     Transcript,
     Workspace,
+    check_expectations,
     controls_json,
     parse_controls,
     reply,
@@ -104,7 +106,8 @@ class ControlDraft(BaseModel):
     )
     reward_min: float | None = Field(description="Positive controls: the minimum reward, e.g. 0.99. Otherwise null.")
     reward_max: float | None = Field(
-        description=f"Negative and malformed controls: the maximum reward, at most {REJECTION_CEILING}."
+        description="Negative and malformed controls: the maximum reward, at most the grader's rejection ceiling "
+        "the request states. Otherwise null."
     )
     rationale: str = Field(description="Why this candidate must receive that grade.")
 
@@ -228,6 +231,20 @@ def output_paths_text(output_paths: Sequence[str], shipped: Sequence[str]) -> st
     return text
 
 
+def ceiling_text(rejection_ceiling: float) -> str:
+    """The request's statement of the grader's rejection ceiling."""
+    if rejection_ceiling == 0:
+        return (
+            "The grader gives no partial credit: a submission wrong in substance scores 0, so negative and "
+            "malformed controls demand reward_max 0."
+        )
+    return (
+        f"The grader's partial-credit scheme lets a submission wrong in substance score up to {rejection_ceiling}, "
+        f"so negative and malformed controls demand reward_max at most {rejection_ceiling}, and positive "
+        f"controls demand more."
+    )
+
+
 def shipped_output_paths(task: TaskSpec) -> tuple[str, ...]:
     """The task's output paths that its agent-visible files already occupy."""
     shipped = {f"/{resource.path}" for resource in (*task.resources.all, *task.resources.worker)}
@@ -263,13 +280,20 @@ async def write_controls(
         f"# Reference reply\n\n{grader.reference_reply}\n\n"
         f"# Reference files\n\n{files_text(grader.reference_files, '/')}\n\n"
         f"# Output paths\n\n{output_paths_text(task.output_paths, shipped_output_paths(task))}\n\n"
+        f"# Rejection ceiling\n\n{ceiling_text(grader.rejection_ceiling)}\n\n"
         "Write the fixed controls from the proposal's 'Grader design and controls' section: at least one "
         "known_correct positive control with concern reference (reward_min 0.99), one plausible_wrong control "
         "with concern acceptance, one task_specific_shortcut or reward_hack control with concern shortcut, and "
-        "one empty_or_malformed control with concern extraction (negative and malformed controls: reward_max at "
-        f"most {REJECTION_CEILING}). Keep extraction controls few: they pin only how the answer is parsed. "
-        "A negative control must be a candidate the grader scores at most "
-        f"{REJECTION_CEILING}; if the proposal's partial-credit controls would score higher, leave them out."
+        "one empty_or_malformed control with concern extraction. Keep extraction controls few: they pin only "
+        "how the answer is parsed.\n"
+        "- A positive control follows the answer contract exactly, in the reference reply's format, so that "
+        "only its content is under test; a correct answer in a different format is not a positive control.\n"
+        "- A negative control is wrong in substance: a plausible_wrong control gives a wrong answer in the "
+        "contract's format, and a task_specific_shortcut or reward_hack control earns credit without doing the "
+        "task (a copied reference, a hard-coded output, a grader-pleasing reply). A reply that is right but "
+        "formatted differently is not a negative control; it belongs to extraction if anywhere.\n"
+        "- Negative and malformed controls demand reward_max at most the rejection ceiling; a candidate the "
+        "proposal's partial-credit scheme would score above it is not a negative control."
     )
 
     async def problem(submitted: ControlsDraft) -> str | None:
@@ -277,6 +301,7 @@ async def write_controls(
             check_control_files(submitted.controls, task.output_paths)
             controls = [control_from_draft(c) for c in submitted.controls]
             validate_controls(task, controls)
+            check_expectations(controls, grader.rejection_ceiling)
             check_controls_not_graded(controls, grader)
         except ValueError as error:
             return str(error)

@@ -262,6 +262,20 @@ def test_candidate_code_error_is_a_graded_failed_attempt(math_task, grader, deta
     assert not candidate_code_error(GradeResult(Outcome.GRADED, 1.0, detail=detail), task)
 
 
+def test_a_reward_outside_the_graders_score_range_is_an_ungraded_grader_defect(math_task):
+    """A grader scoring 0 to 100 is not a solve at 100; the trial carries the defect as its cause."""
+    task = math_task.task
+    rollout = RolloutData(task.id, (), (), (), (), None, GradeResult(Outcome.GRADED, 100.0), "stop")
+
+    outcome = trial_outcome(rollout, task)
+
+    assert isinstance(outcome, Ungraded) and outcome.cause is Cause.GRADER_REWARD_RANGE
+    assert outcome.detail == "reward 100.0 is outside the grader's score range [0.0, 1.0]"
+    assert not outcome.retryable and outcome.rollout is rollout
+    solved = RolloutData(task.id, (), (), (), (), None, GradeResult(Outcome.GRADED, 1.0), "stop")
+    assert isinstance(trial_outcome(solved, task), Graded)
+
+
 def test_a_token_contract_break_keeps_the_conversation_up_to_the_break(math_task):
     messages = ({"role": "user", "content": "q"}, {"role": "assistant", "content": "a"})
     error = TokenContractBreak("served prompt diverges", turn=1, messages=messages, prefix_length=42)
