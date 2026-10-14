@@ -99,7 +99,7 @@ private data under `/tests`, never stdin, and writes its verdict to `draft.GRADE
 `{{"reward": r, "detail": {{"checks": [{{"name": ..., "passed": ..., "weight": ...}}, ...]}}}}`, one \
 check per independently gradable property, exiting 0 for every candidate. No grader runs in the \
 solver's machine.
-- ShellSim, the image-less task machine, has `sh`, coreutils and a minimal `python3` shim, not CPython. \
+- ShellSim, the image-less task machine, has `sh`, coreutils, `awk` and `jq`, and no Python at all. \
 A task whose solution needs real arithmetic or data processing runs on \
 `draft.requirements(image=GRADER_BASE_IMAGE, ...)`. Never ask the solver to compute by hand.
 - Data and fixtures go in workspace files. The instruction stays within 500 words, never inlines \
