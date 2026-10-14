@@ -53,6 +53,8 @@ jq -n -c --argjson passed "$passed" '{
 }' > /logs/verifier/reward.json
 """
 WRONG_GRADER = GOOD_GRADER.replace('"ANSWER = ', '"RESULT = ')
+PERCENT_GRADER = GOOD_GRADER.replace("then 1.0 else 0.0", "then 100.0 else 0.0")
+LENIENT_GRADER = GOOD_GRADER.replace("then 1.0 else 0.0", "then 1.0 else 0.3")
 FAILED_CHECK_GRADER = """jq -n -c '{reward: 0.0, detail: {
     checks: [{name: "reference query", passed: false, weight: 1.0}], reason: "not authorized"
 }}' > /logs/verifier/reward.json
@@ -79,6 +81,7 @@ def grader_call(script: str) -> dict:
         "reference_reply": REFERENCE_REPLY,
         "reference_files": [],
         "secret_values": ["42"],
+        "rejection_ceiling": 0.0,
     }
 
 
@@ -200,6 +203,33 @@ async def test_the_grader_step_sends_back_a_numeric_answer_that_is_not_a_literal
     assert "numeric value requires one finite scalar literal" in fake_glm.requests[1]["messages"][-2]["content"]
 
 
+async def test_the_grader_step_sends_back_a_reward_outside_the_score_range(context, proposal, fake_glm):
+    """A grader scoring 0 to 100 would read every reward as full credit; the step sends it back."""
+    fake_glm.stream(content=json.dumps(grader_call(PERCENT_GRADER)))
+    fake_glm.stream(content=json.dumps(grader_call(GOOD_GRADER)))
+
+    grader = await standard.grader.fn(context(), proposal, FIXTURES, SHELLSIM)
+
+    assert grader.rejection_ceiling == 0.0
+    feedback = fake_glm.requests[1]["messages"][-2]["content"]
+    assert "the reference answer got reward 100.0, outside the grader's score range [0.0, 1.0]" in feedback
+
+
+async def test_the_grader_step_keeps_the_declared_rejection_ceiling(context, proposal, fake_glm):
+    """The ceiling the grader declares reaches validation through the ``Grader`` output."""
+    fake_glm.stream(content=json.dumps({**grader_call(LENIENT_GRADER), "rejection_ceiling": 0.3}))
+
+    grader = await standard.grader.fn(context(), proposal, FIXTURES, SHELLSIM)
+
+    assert grader.rejection_ceiling == 0.3
+    assert "declare rejection_ceiling" in fake_glm.requests[0]["messages"][-2]["content"]
+
+
+def test_a_rejection_ceiling_at_full_credit_is_refused():
+    with pytest.raises(ValueError, match=r"rejection_ceiling is a reward from 0 up to, not including, 0\.99"):
+        GraderDraft.model_validate({**grader_call(GOOD_GRADER), "rejection_ceiling": 0.99})
+
+
 async def test_the_grader_step_sends_back_a_grader_without_per_check_results(context, proposal, fake_glm):
     fake_glm.stream(content=json.dumps(grader_call(NO_CHECKS_GRADER)))
     fake_glm.stream(content=json.dumps(grader_call(GOOD_GRADER)))
@@ -293,6 +323,7 @@ async def test_the_instructions_step_sends_back_an_instruction_with_a_problem(
         reference_reply="ANSWER = 1234.56",
         reference_files=(),
         secret_values=(),
+        rejection_ceiling=0.0,
         prototyped=(),
     )
     requirements = draft.requirements(image=GRADER_BASE_IMAGE, workdir=WORKDIR)

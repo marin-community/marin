@@ -45,6 +45,7 @@ from verifyit.spec import Mode
 
 from taskforge.llm.client import ContextExhausted, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.rollout_model import TokenContractBreak
+from taskforge.spec.verdict import reward_in_range
 from taskforge.stage50_validate.outcome import GRADED_STATUSES, Cause, ContractBreak, Graded, Outcome, Ungraded
 
 GRADING_FAILURES = {
@@ -107,9 +108,13 @@ def trial_outcome(result: RolloutData | Exception, task: TaskSpec) -> Outcome:
     (``UNAVAILABLE``), which is ``Ungraded(AGENT_TIMEOUT)``.
     """
     if isinstance(result, RolloutData):
-        if result.grade.status in GRADED_STATUSES:
-            return Graded(result, candidate_code_error(result.grade, task))
-        return Ungraded(classify(result, task), result.grade.error or str(result.grade.status), result, None)
+        grade = result.grade
+        if grade.status in GRADED_STATUSES and reward_in_range(grade):
+            return Graded(result, candidate_code_error(grade, task))
+        if grade.status in GRADED_STATUSES:
+            detail = f"reward {grade.reward} is outside the grader's score range [{grade.score_min}, {grade.score_max}]"
+            return Ungraded(classify(result, task), detail, result, None)
+        return Ungraded(classify(result, task), grade.error or str(grade.status), result, None)
     cause = classify(result, task)
     detail = "".join(traceback.format_exception(result))
     rollout = result.rollout if isinstance(result, RolloutInterrupted) else None
@@ -190,6 +195,8 @@ def _interruption_cause(error: RolloutInterrupted) -> Cause:
 def _grade_cause(rollout: RolloutData, task: TaskSpec) -> Cause:
     grade = rollout.grade
     if grade.status in GRADED_STATUSES:
+        if not reward_in_range(grade):
+            return Cause.GRADER_REWARD_RANGE
         raise ValueError(f"A {grade.status} rollout has no failure cause")
     if grade.status is GradeStatus.INFRA_ERROR:
         return Cause.GRADER_INFRA if grade.failure is None else GRADING_FAILURES[grade.failure]

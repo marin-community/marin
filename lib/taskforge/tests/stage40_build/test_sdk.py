@@ -67,6 +67,26 @@ async def test_structured_until_fails_the_build_after_its_attempts(context, fake
         await structured_until(context(), [{"role": "user", "content": "Pick an even number."}], Answer, even)
 
 
+async def test_a_reply_the_output_limit_cut_counts_as_a_failed_submission(context, fake_glm):
+    fake_glm.stream(content='{"value": 4', finish="length")
+    fake_glm.stream(content=json.dumps({"value": 42}))
+
+    answer = await structured_until(context(), [{"role": "user", "content": "Pick an even number."}], Answer, even)
+
+    assert answer == Answer(value=42)
+    retry = fake_glm.requests[1]["messages"]
+    assert retry[-3] == {"role": "assistant", "content": '{"value": 4 ...[cut by the output limit]'}
+    assert "the reply was cut off by the output limit after" in retry[-2]["content"]
+
+
+async def test_replies_cut_at_every_attempt_fail_the_build(context, fake_glm):
+    for _ in range(ATTEMPTS):
+        fake_glm.stream(content='{"value": 4', finish="length")
+
+    with pytest.raises(BuildFailure, match=f"after {ATTEMPTS} requests; last problem: the reply was cut off"):
+        await structured_until(context(), [{"role": "user", "content": "Pick an even number."}], Answer, even)
+
+
 async def test_research_without_a_web_call_fails_the_build(context, proposal, fake_glm):
     fake_glm.stream(content="6 x 7 is 42, as everyone knows.")
 

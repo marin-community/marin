@@ -248,8 +248,11 @@ sources(proposal) -> fixtures(proposal, sources) -> requirements(proposal, fixtu
 `run_build(research=ResearchRequirement.ENFORCED)` fails a build whose `Sources` lacks a finding for one of them.
 `grader` grades its own reference answer and the empty answer with `grade_candidate` before it returns,
 sends a failing grader back to the model, and after `sdk.ATTEMPTS` requests fails the build, so a
-grader that rejects its own reference is a build failure. The `Grader` it returns holds the
-reference answer and every candidate it graded.
+grader that rejects its own reference, returns a reward outside its score range, or credits the
+empty answer above its declared `rejection_ceiling` is a build failure. The `Grader` it returns
+holds the reference answer, the ceiling (the most a submission wrong in substance can earn under
+its partial-credit scheme) and every candidate it graded. `sdk.checked_structured` treats a reply
+the output limit cut off as one failed submission and asks for a shorter one.
 
 `stage40_build.glm_author.GlmAuthor` asks GLM for a program with the template as its example, and
 returns an `AuthoredProgram` holding the program and its source, which
@@ -266,9 +269,11 @@ the author receives.
 `stage50_validate.lowering.lower(task, host, factories)` lowers a draft's task for the validating
 host. `stage50_validate.control_drafts.write_controls(task, grader, proposal, ...)` asks the model
 for the round's fixed controls from the proposal's control plan and writes them to
-`controls.json`. It reads the reference answer from the draft's `grader` step output and sends
-back a control that repeats a candidate the grader step graded, other than the reference and the
-empty answer.
+`controls.json`. It reads the reference answer and the rejection ceiling from the draft's `grader`
+step output: negative and malformed controls demand at most the ceiling, positive controls more
+(`spec.controls.check_expectations`), and a control that repeats a candidate the grader step
+graded, other than the reference and the empty answer, goes back to the model. A trial whose
+reward lies outside the grader's declared score range is `Ungraded(GRADER_REWARD_RANGE)`.
 
 `stage50_validate.trials.run_trials(lowered, plan, settings, model)` runs k trials of a
 `LoweredTaskSpec` through `RolloutEngine`. Each attempt runs on

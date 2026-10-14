@@ -4,6 +4,7 @@
 """Validation writes the controls from the grader's stored output, then replays them."""
 
 import json
+from dataclasses import replace
 
 import pytest
 from pydantic import ValidationError
@@ -54,6 +55,7 @@ GRADER = Grader(
     reference_reply="42",
     reference_files=(),
     secret_values=("42",),
+    rejection_ceiling=0.0,
     prototyped=(
         GradedCandidate("42", (), Outcome.GRADED, 1.0),
         GradedCandidate("", (), Outcome.GRADED, 0.0),
@@ -146,6 +148,55 @@ async def test_a_control_set_the_model_never_gets_right_fails_as_the_controls_st
 
     assert failure.value.step == "controls"
     assert not (tmp_path / CONTROLS_FILE).exists()
+
+
+async def test_control_bounds_follow_the_graders_rejection_ceiling(glm_client, fake_glm, ledger, tmp_path):
+    """A grader with partial credit lets a negative control demand up to its ceiling and no more."""
+    lenient = replace(GRADER, rejection_ceiling=0.4)
+    over = json.loads(controls("41"))
+    over["controls"][1]["reward_max"] = 0.5
+    within = json.loads(controls("41"))
+    within["controls"][1]["reward_max"] = 0.4
+    fake_glm.stream(content=json.dumps(over))
+    fake_glm.stream(content=json.dumps(within))
+
+    written = await write_controls(
+        TASK, lenient, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "item", 0, "controls"), tmp_path
+    )
+
+    request = fake_glm.requests[0]["messages"][-2]["content"]
+    assert "lets a submission wrong in substance score up to 0.4" in request
+    assert "wrong in substance" in request and "follows the answer contract exactly" in request
+    repair = fake_glm.requests[1]["messages"][-2]["content"]
+    assert "N1-shortcut must demand a reward at most the grader's rejection ceiling 0.4, not 0.5" in repair
+    assert written[1].expect.reward_max == 0.4
+
+
+async def test_a_controls_reply_the_output_limit_cut_is_asked_again_shorter(glm_client, fake_glm, ledger, tmp_path):
+    """A cut reply is one failed submission, not an unhandled error ending the item."""
+    fake_glm.stream(content='{"controls": [{"id": "P-reference", "kind": "positive"', finish="length")
+    fake_glm.stream(content=controls("41"))
+
+    written = await write_controls(
+        TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "item", 0, "controls"), tmp_path
+    )
+
+    retry = fake_glm.requests[1]["messages"]
+    assert retry[-3]["role"] == "assistant" and retry[-3]["content"].endswith("...[cut by the output limit]")
+    assert "the reply was cut off by the output limit" in retry[-2]["content"]
+    assert [c.id for c in written] == ["P-reference", "N1-shortcut", "N2-off-by-two", "N3"]
+
+
+async def test_controls_cut_at_every_attempt_fail_as_the_controls_step(glm_client, fake_glm, ledger, tmp_path):
+    for _ in range(3):
+        fake_glm.stream(content='{"controls": [', finish="length")
+
+    with pytest.raises(BuildFailure, match="cut off by the output limit") as failure:
+        await write_controls(
+            TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "item", 0, "controls"), tmp_path
+        )
+
+    assert failure.value.step == "controls"
 
 
 async def test_a_control_writing_files_outside_the_output_paths_goes_back_to_the_model(

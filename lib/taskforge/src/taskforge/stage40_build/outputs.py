@@ -109,6 +109,10 @@ class Grader:
         reference_files: Files a correct solver leaves in the task machine, paths relative to the
             machine root, when the grader reads any.
         secret_values: Answer strings the instruction must not contain.
+        rejection_ceiling: The highest reward the grader gives a submission that is wrong in
+            substance: 0 for an all-or-nothing grader, else the most partial credit a wrong answer can
+            collect under its scheme. The empty answer must score at most this, and validation's
+            negative controls demand at most this (``spec.controls.check_expectations``).
         prototyped: Every candidate the grader step graded, in order. Validation refuses a control
             that repeats one of them, other than the reference answer and the empty answer.
     """
@@ -118,6 +122,7 @@ class Grader:
     reference_reply: str
     reference_files: tuple[TaskResource, ...]
     secret_values: tuple[str, ...]
+    rejection_ceiling: float
     prototyped: tuple[GradedCandidate, ...]
 
 

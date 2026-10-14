@@ -76,11 +76,13 @@ the steps. Every other step must be an input of another step or of the sink.
 - The grader step checks its own grader before it returns: it grades the reference answer with \
 `grade_candidate`, and the empty answer too, and raises `BuildFailure` (through `structured_until`, \
 which sends each problem back to the model first) when the reference is not `Outcome.GRADED` with at \
-least `FULL_CREDIT`, or when the empty answer is `Outcome.GRADED` above the rejection ceiling. The \
+least `FULL_CREDIT`, when a reward lies outside the grader's score range (`reward_in_range`), or when \
+the empty answer is `Outcome.GRADED` above the grader's declared `rejection_ceiling`: the highest reward \
+a submission wrong in substance can earn, 0 unless the proposal gives partial credit. The \
 empty answer comes back either as `Outcome.SUBMISSION_FAILURE` with reward 0.0 (the submission \
 refused before any grader runs) or as `Outcome.GRADED` with whatever reward an empty candidate \
 earns, usually 0.0; both count as a rejection. Test the empty answer as the template's grader step \
-does, with `empty.status == Outcome.GRADED and (empty.reward or 0.0) > REJECTION_CEILING`, and never \
+does, with `empty.status == Outcome.GRADED and (empty.reward or 0.0) > submitted.rejection_ceiling`, and never \
 require a particular status of it. It keeps every candidate it graded in \
 `Grader.prototyped` (`graded_candidate`). Validation writes the controls later and refuses one that \
 repeats a prototyped candidate other than the reference and the empty answer, so prototype wrong \

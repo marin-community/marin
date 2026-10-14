@@ -134,7 +134,7 @@ async def grade_candidate(
     TaskCompendium refuses the submission before any grader runs, or as ``Outcome.GRADED`` with the
     reward an empty candidate earns under the grader's empty-output policy, usually 0.0. A caller
     counts both as a rejection: the grader step of ``template.standard`` fails an empty answer only
-    when it comes back ``GRADED`` above ``REJECTION_CEILING``.
+    when it comes back ``GRADED`` above the grader's declared rejection ceiling.
 
     Raises:
         BuildFailure: ``spec.draft.assemble`` or ``spec.draft.lower`` rejects the provisional task,

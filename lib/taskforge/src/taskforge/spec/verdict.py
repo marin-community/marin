@@ -59,3 +59,14 @@ def grader_checks(grade: GradeResult) -> tuple[GraderCheck, ...] | None:
 def verdict_json(reward: float, checks: Sequence[GraderCheck]) -> str:
     """The verdict file text a grader program writes for ``reward`` and ``checks``."""
     return json.dumps({"reward": reward, "detail": {CHECKS_KEY: [asdict(check) for check in checks]}})
+
+
+def reward_in_range(grade: GradeResult) -> bool:
+    """Whether a graded result's reward lies within the grader's declared ``[score_min, score_max]``.
+
+    A grader that scores 0 to 100 against the default range of 0 to 1 is a grader defect: every
+    reward it gives reads as full credit and its mean is off the scale.
+    """
+    if grade.reward is None:
+        return True
+    return grade.score_min <= grade.reward <= grade.score_max

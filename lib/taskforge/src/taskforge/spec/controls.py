@@ -44,8 +44,6 @@ SHELL_TOOL = ShellToolConfig()
 """The shell tool RolloutEngine offers a task with the shell capability and no tool binding of its own."""
 
 CONTROL_ID = re.compile(r"[A-Za-z0-9._-]+")
-REJECTION_CEILING = 0.2
-"""Highest reward a negative or graded malformed control may demand."""
 
 
 class ControlKind(StrEnum):
@@ -203,7 +201,7 @@ class Control:
             raise ValueError(f"Control {self.id}: {self.category} is not a {self.kind} category")
         if self.concern not in CONCERNS[self.category]:
             raise ValueError(f"Control {self.id}: a {self.category} control cannot exercise {self.concern}")
-        _check_expectation(self)
+        _check_expectation_shape(self)
 
 
 def shell_turn(*commands: tuple[str, str]) -> AssistantToolCalls:
@@ -293,6 +291,38 @@ def validate_controls(task: TaskSpec, controls: Sequence[Control]) -> None:
         raise ValueError(f"Controls lack concern: {', '.join(uncovered)}")
 
 
+def check_expectations(controls: Sequence[Control], rejection_ceiling: float) -> None:
+    """Check each control's reward bounds against the grader's ``rejection_ceiling``.
+
+    The ceiling is the highest reward the grader gives a submission that is wrong in substance: 0
+    for an all-or-nothing grader, else the most partial credit a wrong answer can collect. A negative
+    or graded malformed control may demand at most that much, and a positive control must demand
+    more. ``validate_controls`` does not know the grader, so the writer calls this beside it.
+
+    Raises:
+        ValueError: naming the first control whose bounds cross the ceiling, or a ceiling outside
+            [0, 1).
+    """
+    if not (math.isfinite(rejection_ceiling) and 0 <= rejection_ceiling < 1):
+        raise ValueError(f"A rejection ceiling is a reward in [0, 1), not {rejection_ceiling}")
+    for control in controls:
+        expect = control.expect
+        if control.kind == ControlKind.POSITIVE:
+            assert expect.reward_min is not None
+            if expect.reward_min <= rejection_ceiling:
+                raise ValueError(
+                    f"Positive control {control.id} must demand a minimum reward above the grader's rejection "
+                    f"ceiling {rejection_ceiling}, not {expect.reward_min}"
+                )
+        elif expect.status == Outcome.GRADED:
+            assert expect.reward_max is not None
+            if expect.reward_max > rejection_ceiling:
+                raise ValueError(
+                    f"{control.kind.capitalize()} control {control.id} must demand a reward at most the grader's "
+                    f"rejection ceiling {rejection_ceiling}, not {expect.reward_max}"
+                )
+
+
 CONTROLS = TypeAdapter(tuple[Control, ...])
 
 
@@ -305,22 +335,18 @@ def parse_controls(data: bytes | str) -> tuple[Control, ...]:
     return CONTROLS.validate_json(data)
 
 
-def _check_expectation(control: Control) -> None:
+def _check_expectation_shape(control: Control) -> None:
+    """A positive control demands a graded minimum; a negative or graded malformed control, a graded maximum.
+
+    The bounds themselves are checked against the grader's rejection ceiling by ``check_expectations``.
+    """
     expect = control.expect
-    if control.kind == ControlKind.POSITIVE and (
-        expect.status != Outcome.GRADED or expect.reward_min is None or expect.reward_min <= REJECTION_CEILING
-    ):
-        raise ValueError(f"Positive control {control.id} must demand a graded minimum reward above {REJECTION_CEILING}")
-    if control.kind == ControlKind.NEGATIVE and (
-        expect.status != Outcome.GRADED or expect.reward_max is None or expect.reward_max > REJECTION_CEILING
-    ):
-        raise ValueError(f"Negative control {control.id} must demand a graded reward <= {REJECTION_CEILING}")
-    if (
-        control.kind == ControlKind.MALFORMED
-        and expect.status == Outcome.GRADED
-        and (expect.reward_max is None or expect.reward_max > REJECTION_CEILING)
-    ):
-        raise ValueError(f"Graded malformed control {control.id} must demand reward <= {REJECTION_CEILING}")
+    if control.kind == ControlKind.POSITIVE and (expect.status != Outcome.GRADED or expect.reward_min is None):
+        raise ValueError(f"Positive control {control.id} must demand a graded minimum reward")
+    if control.kind == ControlKind.NEGATIVE and (expect.status != Outcome.GRADED or expect.reward_max is None):
+        raise ValueError(f"Negative control {control.id} must demand a graded maximum reward")
+    if control.kind == ControlKind.MALFORMED and expect.status == Outcome.GRADED and expect.reward_max is None:
+        raise ValueError(f"Graded malformed control {control.id} must demand a maximum reward")
 
 
 def _check_payload(task: TaskSpec, control: Control) -> None:

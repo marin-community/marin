@@ -70,6 +70,9 @@ class Cause(StrEnum):
     GRADER_MISSING_REWARD = "grader_missing_reward"
     GRADER_EMPTY_REWARD = "grader_empty_reward"
     GRADER_INVALID_REWARD = "grader_invalid_reward"
+    GRADER_REWARD_RANGE = "grader_reward_range"
+    """The grader returned a reward outside its declared score range: a grader defect, and the trial
+    has no usable grade."""
     GRADER_EXECUTION = "grader_execution"
     GRADER_INFRA = "grader_infra"
     """An infrastructure grade with no ``GradingFailure``."""

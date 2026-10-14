@@ -42,6 +42,7 @@ from taskforge.llm.agent import AgentRun, AgentStop, AgentTool, AgentTurn, ToolO
 from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger, recorded_structured
+from taskforge.llm.structured import CutReplyError, StructuredOutputError
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import draft
 from taskforge.spec.draft import ANSWER_PATH, GRADER_RESOURCE_ROOT, GRADER_VERDICT_PATH, VERDICT_REWARD
@@ -60,6 +61,8 @@ FULL_CREDIT = 0.99
 """The least reward a reference answer must receive."""
 ATTEMPTS = 3
 """Requests ``structured_until`` sends before it fails the build."""
+CUT_REPLY_CHARS = 2000
+"""How much of a reply the output limit cut off goes back to the model as its own turn."""
 INSTRUCTION_WORD_LIMIT = 500
 """Words an instruction may hold outside the verbatim answer contract."""
 INLINED_LINE_CHARS = 40
@@ -276,11 +279,24 @@ class GraderDraft(BaseModel):
         "grader reads any; else empty. Only these paths reach an image-less task's grader program."
     )
     secret_values: list[str] = Field(description="Graded answer strings that must not appear in the instruction.")
+    rejection_ceiling: float = Field(
+        description="The highest reward this grader gives a submission that is wrong in substance: 0 for an "
+        "all-or-nothing grader, else the most partial credit a wrong answer can collect under the proposal's "
+        "partial-credit scheme (for example 0.4 when format and a correct intermediate earn 0.4 together). The "
+        "empty answer must score at most this, and validation's negative controls will demand at most this."
+    )
 
     @field_validator("reference_files")
     @classmethod
     def workspace(cls, files: list[FileDraft]) -> list[FileDraft]:
         return under_workspace(files)
+
+    @field_validator("rejection_ceiling")
+    @classmethod
+    def below_full_credit(cls, ceiling: float) -> float:
+        if not 0 <= ceiling < FULL_CREDIT:
+            raise ValueError(f"rejection_ceiling is a reward from 0 up to, not including, {FULL_CREDIT}; got {ceiling}")
+        return ceiling
 
 
 class InstructionsDraft(BaseModel):
@@ -403,6 +419,11 @@ async def checked_structured[T: BaseModel](
     accept(value)`` does, is awaited rather than read as a problem. ``structured_until`` calls this
     with a step's context; validation calls it directly.
 
+    A reply the output limit cut off counts as a failed submission too: its first
+    ``CUT_REPLY_CHARS`` go back as the assistant turn with the cut named as the problem, so the model
+    sends a shorter submission rather than the item failing on an unhandled error. Any other
+    ``StructuredOutputError`` propagates.
+
     Raises:
         BuildFailure: ``ATTEMPTS`` submissions all had a problem; the message ends with the last one.
     """
@@ -410,7 +431,22 @@ async def checked_structured[T: BaseModel](
     issue = "no submission"
     name = output_type.__name__
     for _ in range(ATTEMPTS):
-        result = await recorded_structured(model, conversation, output_type, sampling, record, {"output": name})
+        try:
+            result = await recorded_structured(model, conversation, output_type, sampling, record, {"output": name})
+        except StructuredOutputError as error:
+            if not isinstance(error.__cause__, CutReplyError):
+                raise
+            cut = error.completions[-1]
+            issue = (
+                f"the reply was cut off by the output limit after {cut.usage.completion_tokens} tokens, before "
+                f"the {name} was complete. Send a shorter submission: fewer or smaller parts, no repetition."
+            )
+            cut_feedback: list[Message] = [
+                {"role": "assistant", "content": f"{cut.content[:CUT_REPLY_CHARS]} ...[cut by the output limit]"},
+                {"role": "user", "content": FEEDBACK_PROMPT.format(problem=issue)},
+            ]
+            conversation += cut_feedback
+            continue
         found = await problem(result.value)
         if inspect.isawaitable(found):
             found = await found
