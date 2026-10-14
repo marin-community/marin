@@ -48,11 +48,14 @@ def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: in
 
 
 def _replicate_sequence_axis(x: jax.Array) -> jax.Array:
-    """Replicate a ``[B, S]`` metadata array over sequence, preserving batch sharding."""
+    """Replicate sequence metadata while preserving nontrivial batch partitions."""
     spec = partition_spec_of(x)
-    if spec is None or len(spec) < 2 or spec[1] is None:
+    if spec is None:
         return x
-    return reshard(x, P(spec[0], None))
+    # Size-one batch axes cannot partition data. Remove their annotations before
+    # slicing/associative_scan, whose size-one slices otherwise disagree on layout.
+    batch_axis = spec[0] if len(spec) and x.shape[0] > 1 else None
+    return reshard(x, P(batch_axis, None))
 
 
 def _segment_starts(segment_ids: jax.Array) -> jax.Array:
