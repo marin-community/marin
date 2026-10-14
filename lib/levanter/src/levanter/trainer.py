@@ -64,6 +64,7 @@ from levanter.callbacks import (
 )
 from levanter.callbacks.profiler import ProfilerConfig, XlaDumpUploadConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
+from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import (
     Checkpointer,
@@ -143,15 +144,23 @@ class TrainerHooks:
     def __init__(self):
         self.hooks = []
         self.jit_hooks = []
+        self.completed_step_hooks = StateCallbackRunner[TrainerState](
+            step_getter=lambda state: state.step,
+            model_getter=lambda state: state.model,
+            eval_model_getter=lambda state: state.eval_model,
+            opt_state_getter=lambda state: state.opt_state,
+        )
 
     def run_hooks(self, info: StepInfo, force: bool = False):
         for hook in self.hooks:
             if force or (info.step > 1 and info.step % hook.every == 0):
                 hook.fn.on_step(info, force=force)
+        self.completed_step_hooks.run(info.state, loss=info.loss, step_duration=info.step_duration, force=force)
 
     def emit_event(self, event: ProgressEvent) -> None:
         for hook in self.hooks:
             hook.fn.on_event(event)
+        self.completed_step_hooks.emit_event(event)
 
     def run_jit_hooks_outside_step(self, info: StepInfo, cb_infos: Sequence[PyTree], force: bool = False):
         for s_hook, cb_info in zip(self.jit_hooks, cb_infos):
@@ -367,6 +376,10 @@ class Trainer:
         self.hooks.run_hooks(info, force=force)
         if self._xla_dump_upload is not None:
             self._xla_dump_upload(info)
+
+    def add_completed_step_hook(self, fn: Callable[[StepInfo], Any] | Callback, *, every: int = 1) -> None:
+        """Run a hook after each multiple of completed updates, including the first interval."""
+        self.hooks.completed_step_hooks.add_hook(fn, every=every)
 
     def request_checkpoint(self, retention: CheckpointRetention) -> None:
         """Request a checkpoint after the current step with the given retention."""
