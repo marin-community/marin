@@ -148,16 +148,29 @@ def blend_request(data: Mapping[str, Any]) -> BlendRequest | ImportRejection:
         return unsupported("unresolved_external_placeholder", json.dumps(data[PLACEHOLDER_FIELD], ensure_ascii=False))
     request = data[REQUEST_FIELD]
     try:
-        events, changes = conversation_events(request["input"])
+        events, event_changes = conversation_events(request["input"])
         context = ConversationInput(events=events)
         tools = functions(request.get("tools", []))
     except (ValueError, KeyError, TypeError, ValidationError) as error:
         return unsupported("unsupported_request", str(error))
-    names = set()
-    for tool in tools:
-        if tool.name in names:
+    unique_tools = {}
+    tool_changes = []
+    for index, tool in enumerate(tools):
+        previous = unique_tools.get(tool.name)
+        if previous is None:
+            unique_tools[tool.name] = tool
+            continue
+        if tool != previous:
             return source_defect("duplicate_tool_name", tool.name)
-        names.add(tool.name)
+        tool_changes.append(
+            NormalizationChange(
+                field=f"tools[{index}]",
+                reason="Remove an identical duplicate function declaration",
+                original=json.dumps(request["tools"][index], ensure_ascii=False),
+                replacement="Removed",
+            )
+        )
+    tools = tuple(unique_tools.values())
     contract = {key: value for key, value in data.items() if key not in {REQUEST_FIELD, "path"}}
     contract["request_options"] = {key: value for key, value in request.items() if key not in {"input", "tools"}}
     reasoning = [item for item in request["input"] if item.get("type") == "reasoning"]
@@ -169,7 +182,7 @@ def blend_request(data: Mapping[str, Any]) -> BlendRequest | ImportRejection:
         tools=tools,
         contract=contract,
         state={key: data[key] for key in STATE_FIELDS if key in data},
-        changes=changes,
+        changes=(*event_changes, *tool_changes),
     )
 
 

@@ -25,6 +25,7 @@ class RecipeSettings:
     review: ReviewConfig | None = None
     review_cache: str | None = None
     base_url: str | None = None
+    api_key: str | None = None
     relay_job: str = DEFAULT_GLM_RELAY_JOB
     review_concurrency: int = MAX_DIRECT_CONCURRENT_REQUESTS
     normalized_shards: int | None = None

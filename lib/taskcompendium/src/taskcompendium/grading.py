@@ -11,9 +11,19 @@ validation and scoring.
 import json
 import math
 
+from openai import APIError
 from verifyit.candidate import Candidate, grade_candidate
-from verifyit.grade import Reward, Status
-from verifyit.spec import ExactSpec, NumericSpec, PredictedActionSpec, Spec, StructuredExactSpec
+from verifyit.grade import GradingInfraError, InvalidTask, Reward, Status, empty_output_policy
+from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate
+from verifyit.spec import (
+    EmptyOutputPolicy,
+    ExactSpec,
+    JudgeSpec,
+    NumericSpec,
+    PredictedActionSpec,
+    Spec,
+    StructuredExactSpec,
+)
 from verifyit.spec import FunctionCall as CandidateCall
 
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -24,16 +34,18 @@ from taskcompendium.models import (
     AssistantToolCalls,
     GradingAttempt,
     JsonSubmission,
+    PlainText,
     StateSubmission,
     Submission,
     SubmissionFailure,
     TaskSpec,
+    TextMessage,
     TextSubmission,
     VerifyitGrader,
     verifyit_spec,
 )
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.submission import require_submission_compatibility
+from taskcompendium.submission import native_action_text, require_submission_compatibility
 
 
 def grade_result(verifier: Spec, verdict: Reward) -> GradeResult:
@@ -102,6 +114,17 @@ def _candidate(verifier: Spec, submission: Submission) -> Candidate:
     raise TypeError(f"{type(verifier).__name__} cannot grade a {type(submission).__name__}")
 
 
+def _gradeable_empty_text(task: TaskSpec, attempt: GradingAttempt, verifier: Spec) -> bool:
+    """Whether a blank final text is a candidate under the verifier's explicit policy."""
+    if not isinstance(task.answer_format, PlainText):
+        return False
+    policy = empty_output_policy(verifier)
+    if policy is not EmptyOutputPolicy.GRADE:
+        return False
+    final = attempt.conversation.events[-1]
+    return isinstance(final, TextMessage) and final.role == "assistant" and not final.content.strip()
+
+
 def grade_answer(task: TaskSpec, attempt: GradingAttempt) -> GradeResult:
     """Extract the task's submission and score it with its in-process verifyit mode."""
     grader = task.grader
@@ -113,6 +136,49 @@ def grade_answer(task: TaskSpec, attempt: GradingAttempt) -> GradeResult:
     try:
         candidate = _candidate(verifier, answer_submission(task, attempt))
     except SubmissionFailure as error:
-        return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+        if not _gradeable_empty_text(task, attempt, verifier):
+            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+        candidate = ""
     resources = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
     return grade_result(verifier, grade_candidate(verifier, candidate, resources))
+
+
+def grade_remote_judge_answer(
+    task: TaskSpec, attempt: GradingAttempt, connection: JudgeConnection | None
+) -> GradeResult:
+    """Grade one judge submission, using the explicit endpoint when its local gates do not decide."""
+    grader = task.grader
+    if not isinstance(grader, VerifyitGrader):
+        raise TypeError(f"Remote judge grading requires a verifyit grader, not {grader.kind}")
+    verifier = verifyit_spec(grader)
+    if not isinstance(verifier, JudgeSpec):
+        raise TypeError(f"Remote judge grading requires a judge verifier, not {grader.mode}")
+    require_submission_compatibility(task)
+    try:
+        submission = answer_submission(task, attempt)
+    except SubmissionFailure as error:
+        if not _gradeable_empty_text(task, attempt, verifier):
+            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+        candidate = ""
+    else:
+        if isinstance(submission, TextSubmission):
+            candidate = submission.value
+        elif isinstance(submission, ActionSubmission):
+            if isinstance(submission.message, TextMessage) and not submission.message.content.strip():
+                return GradeResult(Outcome.GRADED, 0.0, detail={"reason": "empty_candidate"})
+            candidate = native_action_text(submission.message)
+        else:
+            raise TypeError(f"A judge cannot grade a {type(submission).__name__}")
+    if not candidate.strip() and verifier.empty_output is EmptyOutputPolicy.ZERO:
+        return GradeResult(Outcome.GRADED, 0.0, detail={"reason": "empty_candidate"})
+    resources = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
+    if verifier.context and verifier.context not in resources:
+        return GradeResult(Outcome.INVALID_TASK, None, f"judge context {verifier.context!r} is not in task resources")
+    context = resources.get(verifier.context, b"").decode(errors="replace")
+    try:
+        verdict = grade_judge_candidate(verifier, candidate, connection=connection, runtime=None, context=context)
+    except InvalidTask as error:
+        return GradeResult(Outcome.INVALID_TASK, None, str(error))
+    except (APIError, GradingInfraError, RuntimeError, OSError) as error:
+        return GradeResult(Outcome.INFRA_ERROR, None, str(error))
+    return grade_result(verifier, verdict)
