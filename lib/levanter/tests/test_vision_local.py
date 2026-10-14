@@ -11,7 +11,7 @@ from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compati
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.image import RepeatedImageDataset
 from levanter.models.siglip import SiglipVisionConfig, SiglipVisionModel
-from levanter.models.vision_transformer import VisionAttention
+from levanter.models.vision_model import VisionAttention
 from levanter.models.siglip2 import Siglip2VisionConfig, Siglip2VisionModel, Siglip2VisionEmbeddings
 from levanter.layers.attention import AttentionMask
 from levanter.testing.helpers import skip_if_no_torch, use_test_mesh
