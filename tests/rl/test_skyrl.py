@@ -82,6 +82,9 @@ def _role_plan() -> SkyRLRolePlan:
         colocate_all=True,
         policy_num_nodes=1,
         policy_num_gpus_per_node=4,
+        colocate_policy_ref=True,
+        reference_num_nodes=1,
+        reference_num_gpus_per_node=4,
         num_inference_engines=4,
         inference_engine_tensor_parallel_size=1,
         inference_engine_pipeline_parallel_size=1,
@@ -148,6 +151,21 @@ def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
     )
 
 
+def test_megatron_microbatch_mismatch_fails_before_launch() -> None:
+    # Reject incompatible microbatch sizes before allocating the GPU workers.
+    base = _spec()
+    plan = dataclasses.replace(base.topology.role_plan, micro_train_batch_size_per_gpu=2)
+    recipe = yaml.safe_load(_config_yaml(strategy="megatron"))
+    recipe["trainer"]["micro_forward_batch_size_per_gpu"] = 1
+    with pytest.raises(ValueError, match="equal micro_forward_batch_size_per_gpu"):
+        dataclasses.replace(
+            base,
+            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+            topology=dataclasses.replace(base.topology, role_plan=plan),
+            config_yaml=yaml.safe_dump(recipe),
+        )
+
+
 @pytest.mark.parametrize("key", ["use_conversation_multi_turn", "require_exact_chat_transport"])
 @pytest.mark.parametrize("value", [False, True])
 def test_skyrl_spec_rejects_retired_transport_options_before_submission(key: str, value: bool) -> None:
@@ -172,6 +190,8 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
         colocate_all=False,
         policy_num_nodes=4,
         policy_num_gpus_per_node=8,
+        reference_num_nodes=4,
+        reference_num_gpus_per_node=8,
         num_inference_engines=1,
         inference_engine_data_parallel_size=8,
         inference_engine_expert_parallel_size=8,
@@ -213,6 +233,8 @@ def test_skyrl_topology_accepts_node_local_dp8_engines() -> None:
         colocate_all=False,
         policy_num_nodes=4,
         policy_num_gpus_per_node=8,
+        reference_num_nodes=4,
+        reference_num_gpus_per_node=8,
         num_inference_engines=4,
         inference_engine_data_parallel_size=8,
         inference_engine_expert_parallel_size=8,
@@ -225,6 +247,7 @@ def test_skyrl_topology_rejects_a_colocated_slice_that_does_not_tile_the_node() 
     plan = dataclasses.replace(
         _role_plan(),
         policy_num_gpus_per_node=8,
+        reference_num_gpus_per_node=8,
         num_inference_engines=2,
         inference_engine_tensor_parallel_size=3,
     )
@@ -237,6 +260,7 @@ def test_skyrl_topology_rejects_unequal_colocated_role_sizes() -> None:
     plan = dataclasses.replace(
         _role_plan(),
         policy_num_gpus_per_node=8,
+        reference_num_gpus_per_node=8,
         num_inference_engines=3,
         inference_engine_tensor_parallel_size=2,
     )
@@ -251,6 +275,41 @@ def test_skyrl_spec_rejects_config_that_disagrees_with_role_plan() -> None:
             _spec(),
             config_yaml=_config_yaml().replace("  max_steps: 8", "  max_steps: 8\n  train_batch_size: 32"),
         )
+
+
+def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles() -> None:
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        colocate_policy_ref=False,
+        policy_num_nodes=4,
+        policy_num_gpus_per_node=8,
+        reference_num_nodes=2,
+        reference_num_gpus_per_node=8,
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=8,
+        inference_engine_expert_parallel_size=8,
+    )
+    with pytest.raises(ValueError, match="core role plan exceeds the allocated topology"):
+        SkyRLTopology(num_nodes=5, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+    spec = dataclasses.replace(
+        _spec(),
+        config_yaml=_config_yaml(strategy="megatron").replace("use_kl_loss: false", "use_kl_loss: true"),
+        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        topology=SkyRLTopology(num_nodes=7, gpus_per_node=8, gpu_variant="H100", role_plan=plan),
+    )
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = yaml.safe_load(config.launch_config_yaml)
+    assert launch["iris"]["allocation"]["num_nodes"] * launch["iris"]["allocation"]["gpus_per_node"] == 56
+    assert launch["skyrl"]["trainer"]["placement"] == {
+        "colocate_all": False,
+        "colocate_policy_ref": False,
+        "policy_num_nodes": 4,
+        "policy_num_gpus_per_node": 8,
+        "ref_num_nodes": 2,
+        "ref_num_gpus_per_node": 8,
+    }
 
 
 def test_skyrl_spec_rejects_distinct_batch_sizes_for_fully_async() -> None:

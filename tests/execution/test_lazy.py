@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 import pytest
 from fray.types import ResourceConfig
-from marin.execution.artifact import Artifact, ArtifactTypeMismatchError
+from marin.execution.artifact import Artifact, ArtifactTypeMismatchError, read_record
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, lower, materialized_config, resolve, run
 from marin.execution.remote import remote
 
@@ -226,6 +226,37 @@ def test_resources_do_not_affect_identity():
         )
 
     assert on(ResourceConfig.with_tpu("v5p-8")).fingerprint() == on(ResourceConfig.with_tpu("v6e-8")).fingerprint()
+
+
+def test_remote_artifact_step_round_trips_typed_result(tmp_path, monkeypatch):
+    """A remote artifact build must persist the value returned inside the Fray job."""
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    step = ArtifactStep(
+        name="checkpoints/remote_dclm_1b",
+        version="2026.10.06",
+        artifact_type=Ckpt,
+        run=remote(_make_ckpt, resources=ResourceConfig.with_cpu(cpu=2, ram="8g")),
+        build_config=lambda ctx: TrainCfg(
+            out=ctx.output_path,
+            data="gs://dclm/tokenized",
+            lr=3e-3,
+            steps=10,
+        ),
+    )
+
+    [result] = run(step)
+
+    assert result == Ckpt(
+        path=str(tmp_path / "checkpoints/remote_dclm_1b/2026.10.06"),
+        out=str(tmp_path / "checkpoints/remote_dclm_1b/2026.10.06"),
+        data="gs://dclm/tokenized",
+        lr=3e-3,
+        steps=10,
+    )
+    record = read_record(result.path)
+    assert record is not None
+    assert record.result == result.result_payload()
+    assert record.fingerprint == step.fingerprint()
 
 
 def test_runtime_arg_is_live_at_run_but_not_in_identity():
