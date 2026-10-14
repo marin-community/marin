@@ -1,0 +1,117 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Start a task's machine on its lowered backend before any trial, and fall back when it cannot.
+
+``draft.host_requirements`` lowers a grader-base task onto the host's local backend when its shipped
+files and working directories stay off that backend's read-only system directories. A setup command
+can still write under one (``mkdir -p /opt/gen`` in a task's ``setup_commands``), and the lowering
+cannot see that without running the command, so every trial of such a task would fail its setup on
+the local backend while the same task runs in a container.
+
+``preflight`` lowers the task, and when its task machine lands on the local backend it runs the
+engine's own preparation once (machine start, resources, setup commands) by rolling out a probe that
+answers at once, then grades. A preparation failure (``PREPARATION_CAUSES``) re-lowers the task with
+the local backend withheld, so the task machine takes the container backend, and the result carries
+a ``BackendFallback`` for the lower record. Any other outcome of the probe, a grade included, keeps
+the first lowering: what the probe says about the grader the trials will say again. A verifier
+machine never falls back: its preparation failure is a task defect the trials report.
+
+The probe is not evidence: it records no attempt file and no ledger span.
+"""
+
+import asyncio
+from collections.abc import Mapping
+from dataclasses import dataclass
+
+from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutData
+from rolloutengine.spec import LoweredTaskSpec
+from shellbox.machine import Backend, MachineFactory
+from taskcompendium.models import TaskSpec
+
+from taskforge.sandbox.factories import MachineHost
+from taskforge.stage50_validate.classify import trial_outcome
+from taskforge.stage50_validate.lowering import lower
+from taskforge.stage50_validate.outcome import Cause, Ungraded
+from taskforge.stage50_validate.trials import Deadlines, EngineSettings
+
+PREPARATION_CAUSES = frozenset(
+    {Cause.MACHINE_START, Cause.MACHINE_START_TIMEOUT, Cause.MACHINE_UNSUPPORTED, Cause.TASK_SETUP}
+)
+"""The probe outcomes that mean the task machine could not be prepared on its backend."""
+PROBE_REPLY = ""
+PROBE_TOKEN = 0
+"""The one token id the probe's reply carries: the engine requires token evidence, and the probe is never recorded."""
+
+
+@dataclass(frozen=True)
+class BackendFallback:
+    """The task machine moved off ``from_backend`` because the probe could not prepare it there."""
+
+    from_backend: str
+    to_backend: str
+    cause: Cause
+    detail: str
+
+
+@dataclass(frozen=True)
+class Preflight:
+    lowered: LoweredTaskSpec
+    fallback: BackendFallback | None
+
+
+class _ProbeModel:
+    """Answers the first request with an empty final reply, so the engine prepares the machine and grades."""
+
+    def for_step(self, step: str) -> "_ProbeModel":
+        return self
+
+    async def __call__(self, request: ModelRequest) -> ModelTurn:
+        return ModelTurn(
+            message={"role": "assistant", "content": PROBE_REPLY},
+            prompt_token_ids=(PROBE_TOKEN,),
+            response_token_ids=(PROBE_TOKEN,),
+            logprobs=None,
+            stop_reason="stop",
+            text=PROBE_REPLY,
+        )
+
+
+async def preflight(
+    task: TaskSpec,
+    host: MachineHost,
+    factories: Mapping[str, MachineFactory],
+    settings: EngineSettings,
+    deadlines: Deadlines,
+) -> Preflight:
+    """Lower ``task`` for ``host``, probing a local task machine and falling back to a container when it cannot start.
+
+    Raises:
+        ValueError: RolloutEngine rejects the lowered spec (``lowering.lower``).
+    """
+    lowered = lower(task, host, factories)
+    machine = lowered.runtime.task_machine
+    if machine is None or machine.backend != Backend.LOCAL.value:
+        return Preflight(lowered, None)
+    outcome = await _probe(lowered, settings, deadlines)
+    if not isinstance(outcome, Ungraded) or outcome.cause not in PREPARATION_CAUSES:
+        return Preflight(lowered, None)
+    without_local = {backend: factory for backend, factory in factories.items() if backend != Backend.LOCAL.value}
+    fallback = lower(task, host, without_local)
+    assert fallback.runtime.task_machine is not None
+    return Preflight(
+        fallback,
+        BackendFallback(machine.backend, fallback.runtime.task_machine.backend, outcome.cause, outcome.detail),
+    )
+
+
+async def _probe(lowered: LoweredTaskSpec, settings: EngineSettings, deadlines: Deadlines):
+    """One engine run of ``lowered`` with the probe model, classified as a trial outcome would be."""
+    engine = settings.engine(_ProbeModel())
+    prepared = settings.apply(deadlines.apply(lowered))
+    try:
+        async with asyncio.timeout(deadlines.attempt_timeout):
+            result: RolloutData | Exception = await engine.run(prepared)
+    except Exception as error:
+        result = error
+    return trial_outcome(result, prepared.task)
