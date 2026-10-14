@@ -299,11 +299,7 @@ def _task_with_attempts(
     task_id: JobName,
     wire_name: str,
 ) -> tuple[tasks.TaskWithAttempts, reads.FederatedHandle | None]:
-    """Read the task and, when its root job was handed off to a peer, the handle to proxy through.
-
-    One snapshot serves both reads: sandbox exec calls this once per command, so each
-    extra snapshot is a shared read-pool checkout per command.
-    """
+    """Read the task and, when its root job was handed off to a peer, the handle to proxy through."""
     _authorize_federated_debug_target(dependencies, task_id.root_job)
     with dependencies.db.read_snapshot() as tx:
         task = tasks.read_task_with_attempts(tx, task_id)

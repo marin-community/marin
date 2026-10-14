@@ -58,7 +58,7 @@ from iris.cluster.controller.reconcile.worker import (
 )
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import job_config_table, task_attempts_table
-from iris.cluster.controller.transition_reader import DbTransitionReader
+from iris.cluster.controller.transition_reader import TxTransitionReader
 from iris.cluster.controller.worker_health import (
     BUILD_FAILURE_THRESHOLD,
     MIN_UNREACHABLE_FAILURES,
@@ -671,13 +671,14 @@ def _apply_provider_observation(
     state: ControllerTestState,
     observation: ReconcileObservation,
 ) -> ControllerEffects:
-    application = apply_observation(
-        DbTransitionReader(state._db),
-        observation.task_updates,
-        observation.worker_health_events,
-        worker_health=state._health,
-        now=Timestamp.now(),
-    )
+    with state._db.transaction() as cur:
+        application = apply_observation(
+            TxTransitionReader(cur),
+            observation.task_updates,
+            observation.worker_health_events,
+            worker_health=state._health,
+            now=Timestamp.now(),
+        )
     return application.effects
 
 
@@ -805,7 +806,7 @@ def test_reconcile_recycled_address_marks_target_worker_unreachable(state):
     observation = provider.reconcile(_worker_reconcile_request(state))
     effects = _apply_provider_observation(state, observation)
 
-    assert effects.is_empty
+    assert (effects.tasks, effects.attempts, effects.jobs) == ({}, {}, {})
     assert state._health.liveness(WorkerId(_W1)).consecutive_failures == 1
 
 

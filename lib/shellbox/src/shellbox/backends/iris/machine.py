@@ -93,17 +93,47 @@ class ExecOutput:
     stderr: str
 
 
-def _parse_run_frame(response: ExecOutput) -> tuple[int, int, bytes, bytes]:
-    """Stream sizes and heads from ``run``'s framed exec output: sizes, stdout, separator, stderr."""
+@dataclass(frozen=True)
+class RunFrame:
+    """What the exec behind one ``run`` reports: each stream's full size and its first bytes."""
+
+    stdout_size: int
+    stderr_size: int
+    stdout_head: bytes
+    stderr_head: bytes
+
+
+def _parse_run_frame(response: ExecOutput) -> RunFrame:
+    """Decode ``_framed_run_script`` output: both sizes, stdout's base64, the separator, stderr's base64."""
     lines = response.stdout.split("\n")
     try:
         stdout_size, stderr_size = (int(size) for size in lines[0].split())
         separator = lines.index(FRAME_SEPARATOR, 1)
     except ValueError as error:
         raise RuntimeError(f"Iris command output is not framed: {response.stderr or response.stdout[:200]}") from error
-    stdout = base64.b64decode("".join(lines[1:separator]))
-    stderr = base64.b64decode("".join(lines[separator + 1 :]))
-    return stdout_size, stderr_size, stdout, stderr
+    return RunFrame(
+        stdout_size,
+        stderr_size,
+        base64.b64decode("".join(lines[1:separator])),
+        base64.b64decode("".join(lines[separator + 1 :])),
+    )
+
+
+def _framed_run_script(body: str, stdin: str, stdout_path: str, stderr_path: str, inline: int, cleanup: str) -> str:
+    """Run ``body`` in a subshell whose streams go to files, then print the frame ``_parse_run_frame`` reads.
+
+    The script exits with ``body``'s status and runs ``cleanup`` once the frame is printed.
+    """
+    out, err = shlex.quote(stdout_path), shlex.quote(stderr_path)
+    return (
+        f"(\n{body}\n) < {stdin} > {out} 2> {err}\n"
+        "status=$?\n"
+        f"o=$(wc -c < {out}) && e=$(wc -c < {err}) || exit 1\n"
+        "echo $o $e\n"
+        f"head -c {inline} {out} | base64\necho {FRAME_SEPARATOR}\nhead -c {inline} {err} | base64\n"
+        f"{cleanup}\n"
+        'exit "$status"'
+    )
 
 
 class IrisMachine:
@@ -230,7 +260,6 @@ class IrisMachine:
         prefix = f"/tmp/.shellbox-{uuid.uuid4().hex}"
         stdin_path, stdout_path, stderr_path = (f"{prefix}-{part}" for part in ("in", "out", "err"))
         files = shlex.join((stdin_path, stdout_path, stderr_path))
-        out, err = shlex.quote(stdout_path), shlex.quote(stderr_path)
         if command.stdin:
             await self._upload_bytes(command.stdin, stdin_path)
         exports = "\n".join(
@@ -238,34 +267,30 @@ class IrisMachine:
         )
         if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) for key in {**self.spec.env, **command.env}):
             raise ValueError("Environment variable names must be shell identifiers")
-        inline = min(command.output_limit_bytes, TRANSFER_CHUNK_BYTES)
-        # One exec runs the command in a subshell whose streams go to files, then frames its
-        # own stdout as both stream sizes and the head of each stream in base64. It removes
-        # the files unless a stream has more within the limit to read back.
+        limit = command.output_limit_bytes
+        inline = min(limit, TRANSFER_CHUNK_BYTES)
+        # The exec returns each stream's first ``inline`` bytes. It removes the files unless
+        # a stream holds more within the limit, which further execs then read back.
         cleanup = f"rm -f {files}"
-        if command.output_limit_bytes > inline:
+        if limit > inline:
             cleanup = f'[ "$o" -gt {inline} ] || [ "$e" -gt {inline} ] || {cleanup}'
-        script = (
-            f"(\n{exports}\ncd {shlex.quote(command.cwd or self.spec.workdir)} || exit 1\n"
-            f"{shlex.join(command.argv)}\n) < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
-            f"> {out} 2> {err}\n"
-            "status=$?\n"
-            f"o=$(wc -c < {out}) && e=$(wc -c < {err}) || exit 1\n"
-            "echo $o $e\n"
-            f"head -c {inline} {out} | base64\necho {FRAME_SEPARATOR}\nhead -c {inline} {err} | base64\n"
-            f"{cleanup}\n"
-            'exit "$status"'
-        )
+        body = f"{exports}\ncd {shlex.quote(command.cwd or self.spec.workdir)} || exit 1\n{shlex.join(command.argv)}"
+        stdin = shlex.quote(stdin_path) if command.stdin else "/dev/null"
+        script = _framed_run_script(body, stdin, stdout_path, stderr_path, inline, cleanup)
         removed = False
         try:
             response = await asyncio.wait_for(self._script(script), timeout=command.timeout)
-            stdout_size, stderr_size, stdout, stderr = _parse_run_frame(response)
-            limit = command.output_limit_bytes
-            removed = limit <= inline or (stdout_size <= inline and stderr_size <= inline)
-            stdout += await self._read_range(stdout_path, len(stdout), min(stdout_size, limit))
-            stderr += await self._read_range(stderr_path, len(stderr), min(stderr_size, limit))
+            frame = _parse_run_frame(response)
+            removed = max(min(frame.stdout_size, limit), min(frame.stderr_size, limit)) <= inline
+            stdout = frame.stdout_head + await self._read_range(stdout_path, inline, min(frame.stdout_size, limit))
+            stderr = frame.stderr_head + await self._read_range(stderr_path, inline, min(frame.stderr_size, limit))
             return Result(
-                response.exit_code, stdout, stderr, stdout_size > limit, stderr_size > limit, ExitReason.EXITED
+                response.exit_code,
+                stdout,
+                stderr,
+                frame.stdout_size > limit,
+                frame.stderr_size > limit,
+                ExitReason.EXITED,
             )
         except TimeoutError:
             await self.close()
