@@ -107,7 +107,8 @@ def test_a_program_loads_once_per_source_with_its_own_output_models():
                 "sdk import ANSWER_FORMAT\n",
                 "sdk import ANSWER_FORMAT\nfrom taskforge.stage40_build.sandbox_effects import machine\n",
             ),
-            r"has no name 'machine'; did you mean 'build_machine' from taskforge\.stage40_build\.sandbox_effects\?",
+            r"has no name 'machine'; did you mean 'build_machine' from taskforge\.stage40_build\.sandbox_effects, "
+            r"or 'machine' from taskforge\.spec\.draft\?",
         ),
         (
             lambda s: s.replace(
@@ -130,6 +131,15 @@ def test_a_program_loads_once_per_source_with_its_own_output_models():
                 "sdk import ANSWER_FORMAT\nfrom taskforge.stage40_build.sandbox_effects import try_grader\n",
             ),
             r"has no name 'try_grader'; did you mean 'grade_candidate' from taskforge\.stage40_build\.sandbox_effects\?",
+        ),
+        (
+            lambda s: s.replace(
+                "    package = draft.answer_grader(",
+                "    timeout = draft.GRADER_TIMEOUT\n    package = draft.answer_grader(",
+            ),
+            r"`draft\.GRADER_TIMEOUT` \(line \d+\): 'taskforge\.spec\.draft' has no name 'GRADER_TIMEOUT'; "
+            r"did you mean 'GRADER_RESOURCE_ROOT' from taskforge\.spec\.draft, "
+            r"or 'GRADER_TIMEOUT' from taskforge\.stage40_build\.sdk\?",
         ),
         (
             lambda s: s.replace("stage40_build.outputs import", "stage40_build.output import"),
@@ -164,6 +174,7 @@ def test_a_program_loads_once_per_source_with_its_own_output_models():
         "unimported-sdk-name",
         "former-sdk-name",
         "former-sdk-name-import",
+        "attribute-of-the-wrong-module",
         "misspelt-module",
         "no-sink-keyword",
         "step-as-sink",
