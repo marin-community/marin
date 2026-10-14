@@ -188,15 +188,13 @@ def test_loom_pr_review_launcher_starts_one_bounded_review_session() -> None:
     assert launch["uses"] == "./.github/actions/launch-loom-run"
     assert "head.repo.full_name == github.repository" in job["if"]
     assert "strategy" not in job
-    assert launch["with"]["idempotency-key"] == (
-        "pr-review:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}"
-    )
+    assert launch["with"]["idempotency-key"] == "pr-review:${{ github.event.pull_request.number }}"
 
     review_profile = stack["config"]["marin-loom:profiles"]["pr-review"]
     assert 0 < review_profile["idleArchiveSeconds"] <= 900
 
 
-def test_loom_holistic_review_launcher_reviews_each_head_once_and_cancels_stale_runs() -> None:
+def test_loom_holistic_review_launcher_bounds_automatic_sessions_per_pr() -> None:
     workflow_path = ROOT.parent.parent / ".github/workflows/ops-loom-holistic-review.yaml"
     workflow = yaml.safe_load(workflow_path.read_text())
     stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
@@ -204,7 +202,7 @@ def test_loom_holistic_review_launcher_reviews_each_head_once_and_cancels_stale_
     job = workflow["jobs"]["review"]
 
     assert set(trigger) == {"pull_request_target"}
-    assert "synchronize" in trigger["pull_request_target"]["types"]
+    assert "synchronize" not in trigger["pull_request_target"]["types"]
     assert workflow["concurrency"]["cancel-in-progress"] is True
     assert "head.repo.full_name == github.repository" in job["if"]
     checkout, author, gate, launch = job["steps"]
@@ -213,9 +211,7 @@ def test_loom_holistic_review_launcher_reviews_each_head_once_and_cancels_stale_
     assert gate["if"] == "steps.author.outputs.allowed == 'true'"
     assert launch["if"] == "steps.gate.outputs.run == 'true'"
     assert launch["uses"] == "./.github/actions/launch-loom-run"
-    assert launch["with"]["idempotency-key"] == (
-        "pr-holistic:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}"
-    )
+    assert launch["with"]["idempotency-key"] == "pr-holistic:${{ github.event.pull_request.number }}"
 
     profile = stack["config"]["marin-loom:profiles"]["pr-holistic-review"]
     assert 0 < profile["idleArchiveSeconds"] <= 900
@@ -224,6 +220,33 @@ def test_loom_holistic_review_launcher_reviews_each_head_once_and_cancels_stale_
         "/.github/workflows/ops-loom-holistic-review.yaml@refs/heads/main"
     )
     assert federations["pr-holistic-review"]["profile"] == "pr-holistic-review"
+
+
+@pytest.mark.parametrize(
+    ("workflow_name", "job_name", "number_expression"),
+    [
+        ("ops-loom-review.yaml", "review", "github.event.pull_request.number"),
+        ("ops-loom-holistic-review.yaml", "review", "github.event.pull_request.number"),
+        ("ops-loom-github.yaml", "deslop", "github.event.issue.number || github.event.pull_request.number"),
+    ],
+)
+def test_pr_automation_redeliveries_keep_the_same_run_key(
+    workflow_name: str, job_name: str, number_expression: str
+) -> None:
+    workflow = yaml.safe_load((ROOT.parent.parent / ".github/workflows" / workflow_name).read_text())
+    launch = next(
+        step for step in workflow["jobs"][job_name]["steps"] if step.get("uses") == "./.github/actions/launch-loom-run"
+    )
+    template = launch["with"]["idempotency-key"]
+    keys = []
+    for head, delivery in [("first-head", "1"), ("deslop-head", "2"), ("deslop-head", "3")]:
+        key = template.replace("${{ " + number_expression + " }}", "10070")
+        key = key.replace("${{ github.event.pull_request.head.sha }}", head)
+        key = key.replace("${{ github.event.comment.id || github.event.review.id }}", delivery)
+        assert "${{" not in key
+        keys.append(key)
+    assert len(set(keys)) == 1
+    assert template.replace("${{ " + number_expression + " }}", "10132") != keys[0]
 
 
 def test_loom_launch_action_uses_registered_automation_endpoint() -> None:

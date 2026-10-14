@@ -2,13 +2,12 @@ name: "Ops - Loom Holistic Review"
 
 # This workflow runs from the trusted default branch and never checks out or
 # executes pull-request code. It launches one whole-change review session for
-# a large pull request or one that adds a new abstraction, and launches again
-# after a push; the session itself skips small deltas since the last reviewed
-# head. The gate step reads the pull request's size and file patches through
-# the GitHub API without checking anything out.
+# a large pull request or one that adds a new abstraction. A durable per-PR
+# key bounds this lane to one automatic session. The gate step reads the pull
+# request's size and file patches through the GitHub API.
 on:
   pull_request_target:
-    types: [opened, ready_for_review, reopened, synchronize]
+    types: [opened, ready_for_review, reopened]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
@@ -86,7 +85,7 @@ jobs:
         uses: ./.github/actions/launch-loom-run
         with:
           profile: ${{ vars.LOOM_PR_HOLISTIC_REVIEW_PROFILE }}
-          idempotency-key: pr-holistic:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}
+          idempotency-key: pr-holistic:${{ github.event.pull_request.number }}
           title: "Holistic review for #${{ github.event.pull_request.number }}"
           goal: >-
             Review pull request #${{ github.event.pull_request.number }} at head
