@@ -152,6 +152,25 @@ def test_scaling_ladder_disables_simulated_epoching_above_flop_limit(size, expec
     assert (data.experiment_budget is not None) is expected_simulated_epoching
 
 
+def test_d6144_continues_the_checked_in_context_history_and_narrow_rungs_start_fresh():
+    hero_step = build_ladder_run(run_id="test-d6144-history", size="d6144", version="dev")
+    narrow_step = build_ladder_run(run_id="test-d2048-history", size="d2048", version="dev")
+    hero = hero_step.build_config(StepContext.for_fingerprint(hero_step.runtime_args, hero_step.deps))
+    narrow = narrow_step.build_config(StepContext.for_fingerprint(narrow_step.runtime_args, narrow_step.deps))
+
+    phases = launch_scaling_ladder.HERO_CONTEXT_PHASES
+    assert hero.flops_baseline == FlopsBaseline(phases[-1].end_step, launch_scaling_ladder.HERO_FLOPS_BASELINE_TOTAL)
+    assert [(p.end_step, p.seq_len) for p in hero.data.prior_context_phases] == [(p.end_step, p.seq_len) for p in phases]
+    assert narrow.flops_baseline is None
+    assert narrow.data.prior_context_phases == []
+
+
+def test_d6144_rejects_a_schedule_that_would_rebuild_its_history_differently():
+    # The prior phases' data stages derive from the schedule length; another length would move their data offsets.
+    with pytest.raises(ValueError, match="keeps its schedule"):
+        build_ladder_run(run_id="test-d6144-steps", size="d6144", num_steps=300_000, version="dev")
+
+
 def test_scaling_ladder_searches_permanent_and_cluster_temp_roots(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
     monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://hero-checkpoints")
@@ -170,7 +189,7 @@ def test_scaling_ladder_searches_permanent_and_cluster_temp_roots(monkeypatch):
 
 
 def test_d6144_pins_permanent_checkpoint_at_55000_alongside_the_6000_cadence():
-    step = build_ladder_run(run_id="test-d6144-ckpt", size="d6144", num_steps=390_251, version="2026.08.18")
+    step = build_ladder_run(run_id="test-d6144-ckpt", size="d6144", version="2026.08.18")
     ctx = StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps)
     keep = step.build_config(ctx).trainer.trainer.checkpointer.keep
 

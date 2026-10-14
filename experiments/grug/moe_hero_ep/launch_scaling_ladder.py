@@ -14,12 +14,13 @@ rung predicts the d6144 hero. ``d6144`` is the hero itself.
     d1024    2     2048    15276  every 5%    final only    128B    162M    4.0B    2.7e20
     d1536    6     6144    15128  every 5%    final only    381B    481M   11.5B    1.8e21
     d2048   11    11264    20072  every 5%    final only    926B    1.2B   27.7B    9.2e21
-    d6144   11    11264   390251  every 3000  every 6k       18T     23B     535B    2.7e24
+    d6144   11     2816   390251  every 3000  every 6k       18T     23B     535B    2.7e24
 
 At 4K, train batch is 1024 x racks; longer contexts shrink it to preserve tokens per step (the d6144
-hero trains at 16K with batch 2816 from step 257553). Eval batch is 64 x racks (one sequence per
+hero trained at 4K with batch 11264 until step 257553). Eval batch is 64 x racks (one sequence per
 device). Tokens/steps hold 791 tokens per active parameter (18T at d6144); FLOPs are the levanter
-analytic estimate (forward+backward, including attention and the latent-MoE correction).
+analytic estimate (forward+backward, including attention and the latent-MoE correction), with the
+d6144 run counted at 4K throughout.
 
 Changelog:
     2026-09-02 (#8818, PR #8833): decoupled weight decay on the attn_gate and router weights is on by
@@ -247,6 +248,9 @@ def build_ladder_run(
     batch_size = hero_rack_batch_size(seq_len) * dp_racks
     eval_batch_size = HERO_EP_EXPERT_AXIS_SIZE * dp_racks
 
+    if context_phases and num_steps is not None:
+        # The prior phases' data stages are rebuilt from the schedule length, so it must stay the run's own.
+        raise ValueError("A run with a context history keeps its schedule; do not pass num_steps")
     if num_steps is None:
         num_steps = max(1, round(TOKENS_PER_ACTIVE_PARAM * _active_params(model) / global_tokens_per_step))
     elif num_steps <= 0:
