@@ -31,6 +31,8 @@ Changelog:
         default after the pooled-wave fallback of 2026-09-03 (#8884).
         hero-ragged_a2a-ep-step81k forks hero-wd-gate-router-p02-step58k at step 81716 (see ``trigger_hero.sh``).
         hero-ragged_a2a-nccl2307-ep-step81k restarts that fork on the NCCL 2.30.7 PJRT wheel (#9062).
+    2026-10-14 (#9615): the hero trains at 16K context with qk_mult 1.48 from step 257553.
+        hero-ctx16k-step257k forks hero-mfu30-step231k at permanent step 257553 (see ``trigger_hero.sh``).
 """
 
 import dataclasses
@@ -113,9 +115,9 @@ HERO_INITIAL_SEQ_LEN = 4096
 HERO_TOKENS_PER_RACK = HERO_EP_BATCH_SIZE * HERO_INITIAL_SEQ_LEN
 # The context lengths the d6144 hero trained at before its current one, oldest first, each with the
 # step at which it ended. A context-switch deploy PR appends one entry and sets the baseline below.
-HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = ()
+HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = (HarrierContextPhase(end_step=257_553, seq_len=4096),)
 # The parent's cumulative training FLOPs after HERO_CONTEXT_PHASES[-1].end_step updates.
-HERO_FLOPS_BASELINE_TOTAL: float | None = None
+HERO_FLOPS_BASELINE_TOTAL: float | None = 1.7792877262736668e24
 
 
 def _hero_flops_baseline(
