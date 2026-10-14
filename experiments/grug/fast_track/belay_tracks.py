@@ -76,7 +76,10 @@ def main(argv: list[str]) -> None:
         i = rest.index(flag)
         values[flag] = rest[i + 1]
         del rest[i : i + 2]
-    launch.main.main(args=[*track_args(Track(values["--track"]), values["--size"]), *rest])
+    args = [*track_args(Track(values["--track"]), values["--size"]), *rest]
+    # --submit re-runs the launcher on the cluster from sys.argv, so it must hold the expanded launcher arguments.
+    sys.argv = [sys.argv[0], *args]
+    launch.main.main(args=args)
 
 
 if __name__ == "__main__":

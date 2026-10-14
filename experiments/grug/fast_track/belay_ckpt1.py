@@ -132,7 +132,10 @@ def main(argv: list[str]) -> None:
         raise SystemExit("usage: belay_ckpt1 --size <d512|d768|d1024|d1280|gb200-d6144> [launch args...]")
     i = argv.index("--size")
     size, rest = argv[i + 1], argv[:i] + argv[i + 2 :]
-    launch.main.main(args=[*recipe_args(size), *rest])
+    args = [*recipe_args(size), *rest]
+    # --submit re-runs the launcher on the cluster from sys.argv, so it must hold the expanded launcher arguments.
+    sys.argv = [sys.argv[0], *args]
+    launch.main.main(args=args)
 
 
 if __name__ == "__main__":
