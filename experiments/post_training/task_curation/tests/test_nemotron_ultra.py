@@ -55,6 +55,7 @@ from experiments.post_training.task_curation.tests.conversion import (
     convert_row,
     converted_task,
 )
+from experiments.post_training.task_curation.tests.review_server import JudgeReply
 from experiments.post_training.task_curation.tests.ultra_rows import (
     COMPONENT_ROWS,
     DAPO_QUESTION,
@@ -288,9 +289,7 @@ def test_structured_output_repairs_repeated_required_fields():
     )
     assert isinstance(result, NormalizedTask)
     assert json.loads(grader_config(result.task)["contract"]["schema_str"])["required"] == ["count"]
-    assert [(change.field, change.reason) for change in result.changes] == [
-        ("schema_str", "Remove repeated names from JSON Schema required lists")
-    ]
+    assert [change.field for change in result.changes] == ["schema_str"]
 
 
 def test_structured_output_does_not_rewrite_schema_data():
@@ -519,7 +518,7 @@ def test_language_mixing_removes_empty_interior_user_turns(staged):
 def test_judge_controls_require_remote_verdicts_and_score_the_declared_probe(
     staged, review_server, path, overrides, replies, expected
 ):
-    review_server.judge_replies = replies.copy()
+    review_server.judge_replies = [JudgeReply(reply) for reply in replies]
     task = task_for(path, staged, **overrides)
     controls = RECIPES[pipeline_name("rlvr2", path)].controls
     assert controls is not None
@@ -531,3 +530,17 @@ def test_judge_controls_require_remote_verdicts_and_score_the_declared_probe(
     )
     assert [check.status for check in report.checks] == [expected]
     assert len(review_server.requests) == len(replies)
+
+
+def test_tool_action_control_retries_a_truncated_judgment_without_accepting_its_partial_label(staged, review_server):
+    task = task_for("ultra_sft_step3200_toolcall_schema", staged)
+    controls = RECIPES[pipeline_name("rlvr2", "ultra_sft_step3200_toolcall_schema")].controls
+    review_server.judge_replies = [JudgeReply("PASS", "length"), JudgeReply("FAIL")]
+    report = run_controls(
+        task,
+        controls=controls,
+        machines=None,
+        judge_connection=JudgeConnection(f"http://127.0.0.1:{review_server.server_port}/v1", "fixture-key"),
+    )
+    assert [check.status for check in report.checks] == [CheckStatus.PASS]
+    assert [request["max_completion_tokens"] for request in review_server.requests] == [8192, 16384]

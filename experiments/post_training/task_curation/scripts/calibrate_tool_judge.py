@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -34,6 +35,7 @@ from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import (
     TOOL_ACTION_JUDGE_PROMPT,
     TOOL_ACTION_JUDGE_REASONING_EFFORT,
+    TOOL_ACTION_JUDGE_RETRY_TOKENS,
     TOOL_ACTION_JUDGE_SYSTEM,
 )
 
@@ -63,11 +65,13 @@ class CalibrationResult:
     expected_reward: float
     reward: float | None
     status: str
+    duration: float
     error: str | None
     correct: bool
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
+MINIMUM_SCORED_COVERAGE = 0.9
 
 
 def _cases(path: Path) -> tuple[CalibrationCase, ...]:
@@ -96,6 +100,7 @@ def _tasks(normalized: Path, cases: tuple[CalibrationCase, ...]) -> dict[int, Ta
                     "system_prompt": TOOL_ACTION_JUDGE_SYSTEM,
                     "prompt_template": TOOL_ACTION_JUDGE_PROMPT,
                     "reasoning_effort": TOOL_ACTION_JUDGE_REASONING_EFFORT,
+                    "incomplete_retry_tokens": TOOL_ACTION_JUDGE_RETRY_TOKENS,
                 }
                 tasks[source_row] = task.model_copy(
                     update={"grader": task.grader.model_copy(update={"parameters": parameters})}
@@ -127,6 +132,7 @@ def _grade(
     tasks: dict[int, TaskSpec],
     connection: JudgeConnection,
 ) -> CalibrationResult:
+    started = time.monotonic()
     result = grade_remote_judge_answer(
         tasks[case.source_row], _attempt(tasks[case.source_row], case, repeat), connection
     )
@@ -137,6 +143,7 @@ def _grade(
         expected_reward=case.expected_reward,
         reward=result.reward,
         status=result.status.value,
+        duration=time.monotonic() - started,
         error=result.error,
         correct=result.reward == case.expected_reward,
     )
@@ -161,6 +168,8 @@ def main() -> None:
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         results = list(pool.map(lambda call: _grade(*call, tasks, connection), calls))
     correct = sum(result.correct for result in results)
+    scored = sum(result.status == "graded" for result in results)
+    coverage = scored / len(results)
     category_summary = {
         category: {
             "correct": sum(result.correct for result in results if result.category == category),
@@ -169,13 +178,23 @@ def main() -> None:
         for category in sorted({case.category for case in cases})
     }
     report = {
+        "concurrency": args.workers,
+        "incomplete_retry_tokens": TOOL_ACTION_JUDGE_RETRY_TOKENS,
+        "scored": scored,
+        "coverage": coverage,
+        "minimum_coverage": MINIMUM_SCORED_COVERAGE,
+        "reportable": coverage >= MINIMUM_SCORED_COVERAGE,
         "model": GLM_MODEL,
         "relay_job": args.relay_job,
         "repeats": args.repeats,
         "cases_sha256": hashlib.sha256(args.cases.read_bytes()).hexdigest(),
         "system_prompt_sha256": hashlib.sha256(TOOL_ACTION_JUDGE_SYSTEM.encode()).hexdigest(),
         "prompt_template_sha256": hashlib.sha256(TOOL_ACTION_JUDGE_PROMPT.encode()).hexdigest(),
-        "summary": {"correct": correct, "total": len(results), "accuracy": correct / len(results)},
+        "summary": {
+            "correct": correct,
+            "total": len(results),
+            "accuracy": correct / len(results) if coverage >= MINIMUM_SCORED_COVERAGE else None,
+        },
         "categories": category_summary,
         "cases": [asdict(case) for case in cases],
         "results": [asdict(result) for result in results],

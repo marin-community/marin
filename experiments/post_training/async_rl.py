@@ -25,6 +25,7 @@ telemetry settings before the job takes a GPU.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, fields, replace
 from types import MappingProxyType
@@ -480,7 +481,8 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     # Score the starting weights once when evaluation is on, so the curves have a step-0 point.
     trainer["eval_before_train"] = trainer["eval_interval"] > 0
     trainer["ckpt_interval"] = checkpoint_interval(trainer["max_steps"], trainer["eval_interval"])
-    trainer["hf_save_interval"] = trainer["ckpt_interval"]
+    # Enable terminal export without an earlier periodic export; its interval must align with checkpoints.
+    trainer["hf_save_interval"] = math.ceil(trainer["max_steps"] / trainer["ckpt_interval"]) * trainer["ckpt_interval"]
     check_loop_shape(config)
     return config
 

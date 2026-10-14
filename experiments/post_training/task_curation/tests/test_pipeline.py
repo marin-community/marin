@@ -67,6 +67,7 @@ from experiments.post_training.task_curation.tests.image_builds import (
     install_fake_build_tools,
     tracked_lock,
 )
+from experiments.post_training.task_curation.tests.review_server import JudgeReply
 
 AGENT_IMAGE = "ghcr.io/marin-community/iris-task@sha256:" + "d" * 64
 
@@ -533,7 +534,7 @@ def test_recipe_without_review_uses_its_explicit_connection_for_judge_controls(
             api_key="fixture-key",
         ),
     )
-    review_server.judge_replies = ["FAIL"]
+    review_server.judge_replies = [JudgeReply("FAIL")]
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     client = LocalClient()
     try:

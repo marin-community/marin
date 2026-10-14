@@ -157,6 +157,7 @@ TOOL_ACTION_JUDGE_SYSTEM = (
     "world knowledge."
 )
 TOOL_ACTION_JUDGE_REASONING_EFFORT = "medium"
+TOOL_ACTION_JUDGE_RETRY_TOKENS = 16384
 TOOL_ACTION_JUDGE_PROMPT = """Public conversation and available functions:
 {reference}
 
@@ -723,6 +724,7 @@ def _semantic_tool_action(
         strip_candidate_reasoning_blocks=True,
         label_scan="lines",
         reasoning_effort=TOOL_ACTION_JUDGE_REASONING_EFFORT,
+        incomplete_retry_tokens=TOOL_ACTION_JUDGE_RETRY_TOKENS,
         request_timeout=JUDGE_REQUEST_TIMEOUT,
         model=GLM_MODEL,
     )

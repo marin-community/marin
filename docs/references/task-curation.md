@@ -297,13 +297,29 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   --relay-job /OWNER/RELAY_JOB --repeats 3 --output calibration.json
 ```
 
-The report records each trial, per-category agreement, transport failures and
-prompt hashes. This tool-call challenge set does not calibrate other tool-use
+Tool-action judges retry a truncated completion once with a 16,384-token
+budget. Malformed or contradictory labels remain unscored. Each request keeps
+its 120-second timeout; allow both attempts within the caller's verifier deadline.
+
+The report records each trial's status, failure reason and duration, per-category
+agreement, requested concurrency, verdict coverage and prompt hashes. Aggregate
+accuracy is withheld below 90% scored coverage. Require the same minimum
+coverage before comparing model validation scores. A load probe with known-invalid
+submissions measures judge availability; it is not a model validation score.
+This tool-call challenge set does not calibrate other tool-use
 sources or the GenRM, abstention, MultiChallenge, jailbreak and instruction
 families. Those sources keep the default recipe version 3 in
 `datasets/nemotron_ultra/components.py` until repeated labelled cases for each
 source establish their expected reward contracts across repeated verdicts.
 The checked-in tool-call results apply only to toolcall-schema rows.
+
+For model-output validation, check the message that TaskSpec actually grades.
+A serving endpoint can remove thinking markers from chat content while retaining
+them in exact response tokens. Recover the final text from those tokens before
+constructing the assistant message, and preserve parsed native tool calls.
+Changing a separate display-text field does not repair the grading boundary.
+Saved-token replay can diagnose this mismatch; it does not recover an API message
+that the original validation dump omitted.
 
 Lock-backed bubblewrap graders share content-addressed Python environments on
 each host. On Iris, they use the executable `/cache/task-curation` mount because
