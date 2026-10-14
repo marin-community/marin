@@ -2,8 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
+
+
+@dataclass(frozen=True)
+class JudgeReply:
+    content: str
+    finish_reason: str = "stop"
 
 
 class ReviewHTTPServer(ThreadingHTTPServer):
@@ -11,7 +18,7 @@ class ReviewHTTPServer(ThreadingHTTPServer):
         self.requests: list[dict] = []
         self.review_available = True
         self.assessment_available = True
-        self.judge_replies: list[str] = []
+        self.judge_replies: list[JudgeReply] = []
         super().__init__(("127.0.0.1", 0), ReviewHandler)
 
 
@@ -28,7 +35,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     "created": 0,
                     "model": body["model"],
                     "choices": [
-                        {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": reply}}
+                        {
+                            "index": 0,
+                            "finish_reason": reply.finish_reason,
+                            "message": {"role": "assistant", "content": reply.content},
+                        }
                     ],
                 }
             )
