@@ -488,12 +488,13 @@ def grader_package(grader: GraderDraft, fixtures: Fixtures, requirements: Enviro
 
 
 def output_paths(package: GraderPackage, reference_files: Sequence[TaskResource]) -> tuple[str, ...]:
-    """The machine files a grader program reads without artifacts: the reference files' absolute paths.
+    """The files a solver is to leave in its machine for a grader program: the reference files' absolute paths.
 
-    Other graders need none.
+    They are the task's ``output_paths``: what validation captures for the grader and what a control
+    may write. A grader that reads the workspace through an artifact still names them, since the
+    controls are written against them. Answer graders read no files and need none.
     """
-    grader = package.grader
-    if not isinstance(grader, ScriptGrader) or grader.artifacts:
+    if not isinstance(package.grader, ScriptGrader):
         return ()
     return tuple(sorted(f"/{resource.path}" for resource in reference_files))
 
