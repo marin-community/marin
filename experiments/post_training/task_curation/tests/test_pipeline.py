@@ -35,7 +35,7 @@ from experiments.post_training.task_curation.campaign import CampaignRuntime, Pi
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import prepare_blend
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
-from experiments.post_training.task_curation.environment import Environment
+from experiments.post_training.task_curation.environment import Archive, Environment
 from experiments.post_training.task_curation.images.build import (
     built_environment,
     environment_artifact,
@@ -54,9 +54,11 @@ from experiments.post_training.task_curation.pipeline import (
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tests.image_builds import (
+    COMPILED_LOCK,
+    DATA_PATH,
     REPOSITORY,
+    REQUIREMENTS,
     install_fake_build_tools,
-    tracked_lock,
 )
 
 AGENT_IMAGE = "ghcr.io/marin-community/iris-task@sha256:" + "d" * 64
@@ -122,27 +124,26 @@ def test_image_factory_enters_identity_only_with_controls(config):
 
 
 @pytest.fixture
-def grader_lock(tmp_path, monkeypatch):
+def grader_build(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
     install_fake_build_tools(tmp_path, monkeypatch)
-    return tracked_lock(tmp_path)
 
 
-def test_a_changed_grader_environment_renames_the_artifact(grader_lock, config):
-    grader = Environment(lock=grader_lock)
+def test_a_changed_grader_environment_renames_the_artifact(grader_build, config):
+    grader = Environment(requirements=REQUIREMENTS)
     pipeline = replace(math500(), grader=grader)
     run(environment_artifact(grader, REPOSITORY))
     original = source_step(
         pipeline, PipelineOptions(config.mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=config))
     )
     assert environment_artifact(grader).name in [dep.name for dep in original.deps]
-    grader_lock.write_text("numpy==2.3.4\n")
-    run(environment_artifact(grader, REPOSITORY))
-    assert step_name(pipeline, config) != original.name
+    changed = replace(grader, requirements=("numpy==2.3.4",))
+    run(environment_artifact(changed, REPOSITORY))
+    assert step_name(replace(pipeline, grader=changed), config) != original.name
 
 
-def test_apt_packages_beyond_the_worker_image_run_in_a_sandbox_of_the_built_image(grader_lock):
-    environment = Environment(lock=grader_lock, apt=("build-essential", "jq"))
+def test_apt_packages_beyond_the_worker_image_run_in_a_sandbox_of_the_built_image(grader_build):
+    environment = Environment(requirements=REQUIREMENTS, apt=("build-essential", "jq"))
     (built,) = run(environment_artifact(environment, REPOSITORY))
     requirements = environment_requirements(environment, built_environment(environment))
     assert built.image is not None and built.image.startswith(f"{REPOSITORY}@sha256:")
@@ -151,36 +152,44 @@ def test_apt_packages_beyond_the_worker_image_run_in_a_sandbox_of_the_built_imag
 
 
 @pytest.mark.parametrize(
-    "declare",
+    "environment",
     [
-        pytest.param(lambda lock: Environment(lock=lock, apt=("build-essential", "git")), id="worker-image-apt"),
-        pytest.param(lambda lock: Environment(lock=lock), id="lock-only"),
-        pytest.param(lambda lock: Environment(pypi=("numpy==2.3.5",)), id="pypi-only"),
+        pytest.param(Environment(requirements=REQUIREMENTS, apt=("build-essential", "git")), id="worker-image-apt"),
+        pytest.param(Environment(requirements=REQUIREMENTS), id="requirements-only"),
     ],
 )
-def test_environments_the_worker_image_covers_run_in_the_worker_from_their_lock(grader_lock, declare):
-    environment = declare(grader_lock)
+def test_environments_the_worker_image_covers_run_in_the_worker_from_their_lock(grader_build, environment):
     (built,) = run(environment_artifact(environment, REPOSITORY))
     requirements = environment_requirements(environment, built_environment(environment))
     assert requirements.docker_image is None
     assert requirements.packages_lock == built.lock_url
-    assert hashlib.sha256(StoragePath(requirements.packages_lock).read_bytes()).hexdigest() == built.lock_sha256
+    assert StoragePath(requirements.packages_lock).read_text() == COMPILED_LOCK
+
+
+PINNED_ARCHIVE = Archive("https://archives.invalid/data.zip", "0" * 64, "english")
 
 
 @pytest.mark.parametrize(
     "declare",
     [
-        pytest.param(lambda lock: Environment(pypi=("numpy==2.3.5",), lock=lock), id="pypi-and-lock"),
-        pytest.param(lambda lock: Environment(pypi=("numpy>=2",)), id="unpinned-pypi"),
-        pytest.param(lambda lock: Environment(image="ghcr.io/marin-community/iris-task:latest"), id="unpinned-image"),
-        pytest.param(lambda lock: Environment(image=AGENT_IMAGE, lock=lock), id="image-with-packages"),
-        pytest.param(lambda lock: Environment(lock=lock, data=("punkt_tab",)), id="data-without-a-downloader"),
-        pytest.param(lambda lock: Environment(lock=lock, apt=("jq; rm -rf /",)), id="apt-not-a-package-name"),
+        pytest.param(lambda: Environment(requirements=("numpy>=2",)), id="unpinned-requirement"),
+        pytest.param(
+            lambda: Environment(requirements=("verifiable-instructions @ https://github.com/x/y/archive/main.tar.gz",)),
+            id="url-requirement-without-a-commit",
+        ),
+        pytest.param(lambda: Environment(image="ghcr.io/marin-community/iris-task:latest"), id="unpinned-image"),
+        pytest.param(lambda: Environment(image=AGENT_IMAGE, requirements=REQUIREMENTS), id="image-with-packages"),
+        pytest.param(lambda: Environment(files={"share/data/english": PINNED_ARCHIVE}), id="relative-file-path"),
+        pytest.param(lambda: Environment(files={DATA_PATH: replace(PINNED_ARCHIVE, sha256="abc")}), id="bad-sha256"),
+        pytest.param(
+            lambda: Environment(files={DATA_PATH: replace(PINNED_ARCHIVE, member="../etc")}), id="escaping-member"
+        ),
+        pytest.param(lambda: Environment(apt=("jq; rm -rf /",)), id="apt-not-a-package-name"),
     ],
 )
-def test_environment_declarations_reject_contradictory_or_unpinned_needs(grader_lock, declare):
+def test_environment_declarations_reject_contradictory_or_unpinned_needs(declare):
     with pytest.raises(ValueError):
-        declare(grader_lock)
+        declare()
 
 
 def test_rubric_paragraphs_become_review_criteria():

@@ -4,23 +4,28 @@
 """Build declared environments and record each as an artifact under MARIN_PREFIX.
 
 An ``Environment`` without an image is built once, as the artifact ``images/env-<identity[:16]>``.
-Its identity is the SHA-256 of everything that determines the build: the pypi pins or the lock's
-bytes, the apt packages, the data, the Dockerfile fragment's bytes, the Python version and platform,
-the digest-pinned base image, the files of the runtime packages every environment carries (verifyit),
-and where the environment runs. The build stores the environment's hash lock in the artifact. When
-the environment names a Dockerfile fragment or needs apt packages the worker image lacks, it also
-builds an image from a generated Dockerfile, pushes it, and records its digest. A run whose
-declaration is unchanged finds the artifact and builds nothing.
+Its identity is the SHA-256 of everything that determines the build: the requirements, the apt
+packages, the files and the archives they come from, the env, the Dockerfile fragment's bytes, the Python
+version and platform, the digest-pinned base image, the files of the runtime packages every
+environment carries (verifyit), and where the environment runs. The build compiles the requirements
+to a hash lock and materializes the files, and stores both in the artifact. When the environment
+names a Dockerfile fragment or needs apt packages the worker image lacks, it also builds an image
+from a generated Dockerfile, pushes it, and records its digest. A run whose declaration is unchanged
+finds the artifact and builds nothing.
 """
 
 import hashlib
+import io
 import json
 import os
 import shutil
 import subprocess
+import tarfile
+import urllib.request
+import zipfile
 from dataclasses import dataclass
 from functools import partial
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Any
 
@@ -29,17 +34,19 @@ from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.runtime.local import (
+    ENVIRONMENT_MANIFEST,
     EXECUTABLE_MODE,
+    FILES_ARCHIVE,
+    FILES_DIRECTORY,
     IDENTITY_CHARS,
     LOCK_FILE,
     RUNTIME_PACKAGES,
     RUNTIME_PTH,
     context_files,
-    nltk_packages,
     runtime_files,
 )
 
-from experiments.post_training.task_curation.environment import Environment, Placement, placement
+from experiments.post_training.task_curation.environment import Archive, Environment, Placement, placement
 
 # New GHCR packages are created org-internal and the Iris workers pull anonymously, so built
 # images are tagged into the public iris-task package until a public task-curation package exists.
@@ -59,16 +66,14 @@ class MissingEnvironmentArtifact(RuntimeError):
 
 
 class EnvironmentArtifact(Artifact):
-    """A built environment: its hash lock, stored beside the record, and the image built for it, if any.
+    """A built environment: its hash lock, placed files and env, stored beside the record, and its image, if any.
 
-    A worker receives only the lock's URL and reads ``lock_sha256`` and ``data`` back out of this record
-    through ``taskcompendium.runtime.local``, which cannot import this module. The other build inputs
-    are already in the identity, so the record does not repeat them.
+    A worker receives only the lock's URL; ``taskcompendium.runtime.local`` reads the environment
+    manifest and files archive from beside it. The build inputs are in the identity, so the record does
+    not repeat them.
     """
 
     identity: str
-    lock_sha256: str
-    data: list[str]
     image: str | None = None
 
     @property
@@ -88,10 +93,13 @@ def environment_identity(environment: Environment) -> dict[str, Any]:
     if environment.image is not None:
         raise ValueError(f"An image environment is used as-is, not built: {environment.image}")
     identity = {
-        "pypi": sorted(environment.pypi),
-        "lock_sha256": hashlib.sha256(environment.lock.read_bytes()).hexdigest() if environment.lock else None,
+        "requirements": sorted(environment.requirements),
         "apt": sorted(environment.apt),
-        "data": sorted(environment.data),
+        "files": {
+            path: {"url": archive.url, "sha256": archive.sha256, "member": archive.member}
+            for path, archive in sorted(environment.files.items())
+        },
+        "env": dict(sorted(environment.env.items())),
         "dockerfile_sha256": _fragment_sha256(environment),
         "python": PYTHON_VERSION,
         "platform": PLATFORM,
@@ -161,8 +169,51 @@ def compile_lock(requirements: tuple[str, ...], output: Path) -> None:
         )
 
 
+def download(url: str) -> bytes:
+    with urllib.request.urlopen(url) as response:
+        return response.read()
+
+
+def _archive_members(data: bytes, member: str) -> dict[str, bytes]:
+    """The files of ``member`` (itself, or everything below it) in a zip or tar archive, by path below ``member``."""
+    prefix = member.rstrip("/") + "/"
+    selected = {}
+    if zipfile.is_zipfile(io.BytesIO(data)):
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            for info in archive.infolist():
+                if info.is_dir() or (info.filename != member and not info.filename.startswith(prefix)):
+                    continue
+                selected[info.filename] = archive.read(info)
+    else:
+        with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+            for info in archive.getmembers():
+                if not info.isfile() or (info.name != member and not info.name.startswith(prefix)):
+                    continue
+                extracted = archive.extractfile(info)
+                assert extracted is not None
+                selected[info.name] = extracted.read()
+    if not selected:
+        raise ValueError(f"The archive has no member {member}")
+    escaping = [name for name in selected if ".." in PurePosixPath(name).parts]
+    if escaping:
+        raise ValueError(f"Archive members escape their directory: {escaping}")
+    return {name.removeprefix(prefix): content for name, content in selected.items()}
+
+
+def materialize(archive: Archive, target: Path) -> None:
+    """Download ``archive``, verify its digest, and place its member at ``target``, a file or a directory."""
+    data = download(archive.url)
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != archive.sha256:
+        raise ValueError(f"{archive.url} has SHA-256 {digest}, not the declared {archive.sha256}")
+    for name, content in _archive_members(data, archive.member).items():
+        path = target if name == archive.member else target / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+
 def dockerfile(environment: Environment) -> str:
-    """A Dockerfile that installs ``environment`` on the base image from a context holding its lock.
+    """A Dockerfile that installs ``environment`` on the base image from a context holding its lock and files.
 
     The runtime packages arrive as named build contexts, ``--build-context <name>=<directory>``.
     """
@@ -173,15 +224,15 @@ def dockerfile(environment: Environment) -> str:
             f" && apt-get install -y --no-install-recommends {' '.join(sorted(environment.apt))}"
             " && rm -rf /var/lib/apt/lists/*"
         )
+    if environment.files:
+        # Before the fragment and the lock sync, so the files' layer stays cached across their changes.
+        lines.append(f"COPY {FILES_DIRECTORY}/ /")
+    lines.extend(f"ENV {name}={json.dumps(value)}" for name, value in sorted(environment.env.items()))
     if environment.dockerfile is not None:
         # Before the lock sync, so toolchain layers stay cached across lock changes.
         lines.append(environment.dockerfile.read_text().strip())
     lines.append(f"COPY {LOCK_FILE} /opt/task-curation/{LOCK_FILE}")
     lines.append(f"RUN uv pip sync --system --no-cache --require-hashes /opt/task-curation/{LOCK_FILE}")
-    packages = nltk_packages(environment.data)
-    if packages:
-        # NLTK looks under /usr/local/share/nltk_data without an environment variable.
-        lines.append(f"RUN python3 -m nltk.downloader -d /usr/local/share/nltk_data {' '.join(packages)}")
     lines.extend(
         f"COPY --from={package.name} . /opt/task-curation/runtime/{package.name}" for package in RUNTIME_PACKAGES
     )
@@ -195,14 +246,24 @@ def dockerfile(environment: Environment) -> str:
 
 
 def write_context(environment: Environment, directory: Path) -> None:
-    """Write the lock and the Dockerfile an image of ``environment`` builds from into ``directory``."""
+    """Write the lock, the placed files and the Dockerfile an image of ``environment`` builds from into ``directory``.
+
+    The files lie under ``files/`` at their guest paths, so ``COPY files/ /`` places them.
+    """
     directory.mkdir(parents=True, exist_ok=True)
-    lock = directory / LOCK_FILE
-    if environment.lock is not None:
-        shutil.copyfile(environment.lock, lock)
-    else:
-        compile_lock(environment.pypi, lock)
+    compile_lock(environment.requirements, directory / LOCK_FILE)
+    for path, archive in environment.files.items():
+        materialize(archive, directory / FILES_DIRECTORY / path.removeprefix("/"))
     (directory / "Dockerfile").write_text(dockerfile(environment))
+
+
+def files_archive(files: Path) -> bytes:
+    """A tar of every file under ``files`` by its path relative to ``files``, as the worker extracts it."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as tar:
+        for path in sorted(file for file in files.rglob("*") if file.is_file()):
+            tar.add(path, arcname=path.relative_to(files).as_posix())
+    return buffer.getvalue()
 
 
 def _docker_config() -> dict[str, Any]:
@@ -230,14 +291,14 @@ def _git_tracked(directory: Path, pathspec: str) -> set[str]:
 
 
 def _require_tracked(environment: Environment) -> None:
-    """The files the identity hashes must be exactly git-tracked files, and package files have no exec bits.
+    """The fragment the identity hashes must be a git-tracked file, and package files have no exec bits.
 
     Consumers recompute the identity from a workspace bundle that has no git metadata and no exec bits,
     so an untracked or executable file here would give them a different identity.
     """
-    for hashed in (environment.lock, environment.dockerfile):
-        if hashed is not None and hashed.name not in _git_tracked(hashed.parent, hashed.name):
-            raise ValueError(f"{hashed} must be tracked by git")
+    fragment = environment.dockerfile
+    if fragment is not None and fragment.name not in _git_tracked(fragment.parent, fragment.name):
+        raise ValueError(f"{fragment} must be tracked by git")
     for package in RUNTIME_PACKAGES:
         files = context_files(package)
         found = {file.path for file in files}
@@ -282,7 +343,7 @@ def _push_image(context: Path, tag: str) -> str:
 
 
 def build_environment(environment: Environment, build: EnvironmentBuild) -> EnvironmentArtifact:
-    """Store ``environment``'s hash lock and, when it needs packages the worker image lacks, push its image."""
+    """Store ``environment``'s lock, files and env and, when it needs what the worker image lacks, push its image."""
     if identity_digest(environment) != build.identity:
         raise RuntimeError("The environment changed after its artifact was planned; rerun the build")
     builds_image = placement(environment) == Placement.BUILT_IMAGE
@@ -294,17 +355,18 @@ def build_environment(environment: Environment, build: EnvironmentBuild) -> Envi
         context = Path(directory)
         write_context(environment, context)
         lock = (context / LOCK_FILE).read_bytes()
+        files = files_archive(context / FILES_DIRECTORY) if environment.files else None
         if builds_image:
             tag = image_tag(build.repository, build.identity)
             image = f"{build.repository}@{_push_image(context, tag)}"
-    (StoragePath(build.output_path) / LOCK_FILE).write_bytes(lock, auto_mkdir=True)
-    return EnvironmentArtifact(
-        path=build.output_path,
-        identity=build.identity,
-        lock_sha256=hashlib.sha256(lock).hexdigest(),
-        data=list(environment.data),
-        image=image,
-    )
+    output = StoragePath(build.output_path)
+    (output / LOCK_FILE).write_bytes(lock, auto_mkdir=True)
+    if files is not None:
+        (output / FILES_ARCHIVE).write_bytes(files)
+    if environment.files or environment.env:
+        manifest = {"files": sorted(environment.files), "env": dict(sorted(environment.env.items()))}
+        (output / ENVIRONMENT_MANIFEST).write_text(json.dumps(manifest))
+    return EnvironmentArtifact(path=build.output_path, identity=build.identity, image=image)
 
 
 # Built artifacts by path; every declaration that names an environment reads the same record.

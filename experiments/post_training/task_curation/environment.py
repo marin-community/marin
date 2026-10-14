@@ -1,18 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grader build inputs and their packaging in an image or worker package lock."""
+"""Grader environment declarations and where the pipeline runs them."""
 
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
+from shellbox.backends.local.machine import SYSTEM_DIRECTORIES
 from taskcompendium.models import DOCKER_IMAGE_PATTERN
 
 PINNED_IMAGE = re.compile(DOCKER_IMAGE_PATTERN)
-PYPI_PIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9._,-]+\])?==[^\s=;]+")
-NLTK_DATA = re.compile(r"nltk:[a-z0-9_]+")
+REQUIREMENT_NAME = r"[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9._,-]+\])?"
+PINNED_REQUIREMENT = re.compile(REQUIREMENT_NAME + r"==[^\s=;@]+")
+"""An exact ``name==version`` pin, optionally with extras."""
+ARCHIVE_REQUIREMENT = re.compile(REQUIREMENT_NAME + r" @ https://\S*(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])\S*")
+"""A direct URL requirement whose URL names the commit it archives."""
+SHA256 = re.compile(r"[0-9a-f]{64}")
+VARIABLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 APT_PACKAGE = re.compile(r"[a-z0-9][a-z0-9+.-]+")
 
 FRAGMENT_INSTRUCTIONS = frozenset({"ARG", "ENV", "RUN"})
@@ -44,42 +51,88 @@ An environment that needs only these runs in the worker; update this set when th
 
 
 @dataclass(frozen=True)
-class Environment:
-    """What a machine must provide; the pipeline decides where to run it.
+class Archive:
+    """A pinned archive whose ``member`` (a file or directory inside it) is placed at an absolute path.
 
-    ``pypi`` holds exact ``name==version`` pins, compiled to a hash lock at build time; ``lock`` is a
-    uv-compiled requirements lock with hashes, used verbatim instead. ``apt`` names Debian packages and
-    ``data`` downloads such as ``nltk:punkt_tab``. ``image`` is a digest-pinned image used as-is and
-    excludes every other field. ``dockerfile`` is a checked-in, self-contained Dockerfile fragment that
-    installs a toolchain the packages cannot provide, such as Lean and Mathlib; the environment's image
-    build runs it after the apt step, so it excludes ``image``. It may use only ``FRAGMENT_INSTRUCTIONS``.
+    ``url`` is an https URL of a zip or tar archive and ``sha256`` the digest of the archive's bytes.
     """
 
-    pypi: tuple[str, ...] = ()
-    lock: Path | None = None
+    url: str
+    sha256: str
+    member: str
+
+    def __post_init__(self) -> None:
+        if not self.url.startswith("https://"):
+            raise ValueError(f"An archive URL must be https: {self.url}")
+        if SHA256.fullmatch(self.sha256) is None:
+            raise ValueError(f"An archive digest must be 64 lowercase hex digits: {self.sha256}")
+        member = PurePosixPath(self.member)
+        if not self.member or member.is_absolute() or ".." in member.parts:
+            raise ValueError(f"An archive member must be a relative path inside the archive: {self.member}")
+
+
+def _relative_or_escaping(path: str) -> bool:
+    parts = PurePosixPath(path)
+    return not parts.is_absolute() or ".." in parts.parts
+
+
+def _within_system_directories(path: str) -> bool:
+    return any(PurePosixPath(path).is_relative_to(directory) for directory in SYSTEM_DIRECTORIES)
+
+
+@dataclass(frozen=True)
+class Environment:
+    """What a grader machine must provide; the build resolves it and the pipeline decides where to run it.
+
+    ``requirements`` are the direct Python requirements, each an exact ``name==version`` pin or a direct
+    URL requirement whose URL names a commit; the build compiles them to a hash lock. ``apt`` names
+    Debian packages. ``files`` places pinned archive members at absolute paths: the same path in a built
+    image and in the worker, where bubblewrap binds each read-only, so a path cannot lie under the host
+    system directories (``/usr``, ``/etc``, ``/opt`` and the rest of ``SYSTEM_DIRECTORIES``), which are
+    already bound read-only. ``env`` sets environment variables for graders in both placements. ``image``
+    is a digest-pinned image used as-is and excludes every other field. ``dockerfile`` is a checked-in,
+    self-contained Dockerfile fragment that installs a toolchain the packages cannot provide, such as
+    Lean and Mathlib; the environment's image build runs it after the apt step. It may use only
+    ``FRAGMENT_INSTRUCTIONS``.
+    """
+
+    requirements: tuple[str, ...] = ()
     apt: tuple[str, ...] = ()
+    files: Mapping[str, Archive] = field(default_factory=dict)
+    env: Mapping[str, str] = field(default_factory=dict)
     image: str | None = None
-    data: tuple[str, ...] = ()
     dockerfile: Path | None = None
 
     def __post_init__(self) -> None:
-        if self.pypi and self.lock is not None:
-            raise ValueError("An environment names its packages as pypi pins or as a lock, not both")
         if self.image is not None:
             if PINNED_IMAGE.fullmatch(self.image) is None:
                 raise ValueError(f"An environment image must be pinned by digest: {self.image}")
-            if self.pypi or self.lock is not None or self.apt or self.data or self.dockerfile is not None:
+            if self.requirements or self.apt or self.files or self.env or self.dockerfile is not None:
                 raise ValueError(
-                    f"An environment image is used as-is; declare no packages, data or dockerfile: {self.image}"
+                    "An environment image is used as-is; declare no requirements, apt, files, env or dockerfile:"
+                    f" {self.image}"
                 )
-        unpinned = [requirement for requirement in self.pypi if PYPI_PIN.fullmatch(requirement) is None]
+        unpinned = [
+            requirement
+            for requirement in self.requirements
+            if PINNED_REQUIREMENT.fullmatch(requirement) is None and ARCHIVE_REQUIREMENT.fullmatch(requirement) is None
+        ]
         if unpinned:
-            raise ValueError(f"pypi requirements must be exact name==version pins: {unpinned}")
+            raise ValueError(
+                f"Requirements must be exact name==version pins or name @ https://... URLs naming a commit: {unpinned}"
+            )
         invalid = [package for package in self.apt if APT_PACKAGE.fullmatch(package) is None]
         if invalid:
             raise ValueError(f"apt entries must be Debian package names: {invalid}")
-        if self.lock is not None and not self.lock.is_file():
-            raise ValueError(f"Lock file does not exist: {self.lock}")
+        misplaced = [path for path in self.files if _relative_or_escaping(path)]
+        if misplaced:
+            raise ValueError(f"files are placed at absolute paths: {misplaced}")
+        system = [path for path in self.files if _within_system_directories(path)]
+        if system:
+            raise ValueError(f"files cannot be placed under the worker's read-only system directories: {system}")
+        invalid_names = [name for name in self.env if VARIABLE_NAME.fullmatch(name) is None]
+        if invalid_names:
+            raise ValueError(f"env names must be environment variable names: {invalid_names}")
         if self.dockerfile is not None:
             if not self.dockerfile.is_file():
                 raise ValueError(f"Dockerfile fragment does not exist: {self.dockerfile}")
@@ -89,9 +142,6 @@ class Environment:
                     f"A Dockerfile fragment may use only {sorted(FRAGMENT_INSTRUCTIONS)}, not {forbidden}:"
                     f" {self.dockerfile}"
                 )
-        unsupported = [entry for entry in self.data if NLTK_DATA.fullmatch(entry) is None]
-        if unsupported:
-            raise ValueError(f"Data entries must be nltk:<package>: {unsupported}")
 
 
 def dockerfile_instructions(text: str) -> list[str]:

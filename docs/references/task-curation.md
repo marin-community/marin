@@ -157,24 +157,25 @@ grader requirements on each TaskSpec; execution selects suitable Shellbox machin
 
 | Field | Meaning |
 |---|---|
-| `pypi` | Exact `name==version` pins, compiled at build time with `uv pip compile --generate-hashes` for Python 3.12 on `x86_64-unknown-linux-gnu`. |
-| `lock` | A uv-compiled requirements lock with hashes, used verbatim. It excludes `pypi`. |
+| `requirements` | Direct Python requirements, each an exact `name==version` pin or a `name @ https://...` URL naming a commit, compiled at build time with `uv pip compile --generate-hashes` for Python 3.12 on `x86_64-unknown-linux-gnu`. |
 | `apt` | Debian package names. |
-| `data` | Downloads; only `nltk:<package>` is supported. |
+| `files` | Absolute guest paths, each receiving a member (a file or directory) of an https archive pinned by URL and SHA-256. The path is the same in both placements and the worker binds it read-only, so it cannot lie under the host system directories such as `/usr`. |
+| `env` | Environment variables for the grader in both placements. |
 | `image` | A digest-pinned image used as-is. It excludes every other field. |
-| `dockerfile` | A checked-in, self-contained Dockerfile fragment that installs a toolchain, such as Lean and Mathlib, using only `ARG`, `ENV` and `RUN`. The generated Dockerfile runs its lines after the apt step and before the lock sync; its bytes enter the identity. It excludes `image`. |
+| `dockerfile` | A checked-in, self-contained Dockerfile fragment that installs a toolchain, such as Lean and Mathlib, using only `ARG`, `ENV` and `RUN`. The generated Dockerfile runs its lines after the apt and files steps and before the lock sync; its bytes enter the identity. It excludes `image`. |
 
 | Declaration | Placement | Recorded `EnvironmentRequirements` |
 |---|---|---|
 | `image` set | A sandbox of that image | `command_semantics=LINUX_PROCESS`, `docker_image=image` |
 | `dockerfile` set, or `apt` names a package outside `WORKER_IMAGE_APT` | A sandbox of an image built for the environment | `command_semantics=LINUX_PROCESS`, `docker_image=<built digest>` |
-| Anything else | A bubblewrap sandbox on the Zephyr worker | `command_semantics=LINUX_PROCESS`, `packages_lock=<lock URL>` |
+| Anything else | A bubblewrap sandbox on the Zephyr worker, with each `files` path mounted read-only and `env` set | `command_semantics=LINUX_PROCESS`, `packages_lock=<lock URL>` |
 
 `WORKER_IMAGE_APT` in `environment.py` lists the Debian packages the `task`
 stage of `lib/iris/Dockerfile` installs, such as `build-essential` and `git`.
 An environment that needs only those runs in the worker. `GRADER_PACKAGES`, the
-lock every grade script in the catalog imports with the NLTK `punkt_tab` and
-`wordnet` data, runs in the worker. The TaskTrove competitive-programming
+requirements every grade script in the catalog imports with the NLTK `punkt_tab`
+tokenizer placed under `/srv/nltk_data` and `NLTK_DATA` pointing there, runs in
+the worker. The TaskTrove competitive-programming
 sources declare `COMPILER_GRADER_PACKAGES`, which adds `build-essential` for
 C++ submissions; the worker image provides it, so they also run in the worker.
 `LEAN_GRADER_PACKAGES` adds the Lean 4 and Mathlib fragment
@@ -367,15 +368,16 @@ uv run python -m experiments.post_training.task_curation.images --identity IDENT
 ```
 
 Each environment without an `image` becomes the artifact
-`images/env-<identity[:16]>`, which stores its hash lock as `requirements.lock`.
-The identity hashes the `pypi` pins or the lock's bytes, `apt`, `data`, the
-`dockerfile` fragment's bytes, Python 3.12, the platform, the digest-pinned
+`images/env-<identity[:16]>`, which stores its hash lock as `requirements.lock`
+and, when it places files or sets variables, `files.tar` and `environment.json`.
+The identity hashes the `requirements`, `apt`, `files` with their archives'
+URLs, digests and members, `env`, the `dockerfile` fragment's bytes, Python 3.12, the platform, the digest-pinned
 base image, the files of `verifyit` (which every built environment puts on the
 grader's import path) and the placement, so a rerun with an unchanged
 declaration does nothing. An environment placed in a built image also gets a
 generated Dockerfile: the pinned `iris-task` base, `apt-get install` of `apt`,
-the `dockerfile` fragment's lines, `uv pip sync --require-hashes` of the lock,
-the NLTK data and `verifyit`. The build pushes it
+`COPY files/ /`, `ENV` lines for `env`, the `dockerfile` fragment's lines, `uv
+pip sync --require-hashes` of the lock and `verifyit`. The build pushes it
 as `ghcr.io/marin-community/iris-task:task-curation-env-<identity[:16]>` and
 records the digest. An image build needs a `docker login` for ghcr.io; every
 build needs, for a CoreWeave `MARIN_PREFIX`, the `CW_KEY_ID` and
@@ -387,9 +389,10 @@ Local graders run in bubblewrap sandboxes on the Zephyr worker, each over a
 private root, so the worker pods need Iris's privileged container profile
 (`--container-profile CONTAINER_PROFILE_PRIVILEGED`). On first use, each worker downloads the environment's lock from its artifact and builds a
 self-contained Python environment (a uv-managed CPython 3.12 and a venv) under
-`/tmp/task-curation-env-<identity>`, with the NLTK data and `verifyit`; the
-sandbox mounts only that directory and the system directories, and concurrent
-graders on one host build it once.
+`/tmp/task-curation-env-<identity>`, with `verifyit` and the placed files from
+`files.tar`; the sandbox mounts that directory, the system directories and each
+placed file at its declared path, runs graders with the declared `env`, and
+concurrent graders on one host build it once.
 Image grading requires `--image-backend gvisor` or `--image-backend daytona`.
 The gVisor launcher uses the enclosing Iris job's controller, or `--controller-url`
 outside a job, to create sandbox jobs. Daytona creates remote sandboxes through its API.

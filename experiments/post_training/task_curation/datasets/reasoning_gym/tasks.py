@@ -66,8 +66,8 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 
 HERE = Path(__file__).parent
 GENERATE = HERE / "generate.py"
-# The grader lock (``datasets/grader.lock``) pins this wheel by the same hash, so the grader regenerates
-# entries with the code that generated them.
+# The grader packages (``datasets/environments.py``) pin this version, so the grader regenerates entries with
+# the code that generated them.
 GENERATOR_VERSION = "0.1.25"
 GENERATOR_ARCHIVE = f"reasoning_gym-{GENERATOR_VERSION}-py3-none-any.whl"
 GENERATOR_URL = (

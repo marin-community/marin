@@ -72,7 +72,7 @@ from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_REVISION, Sour
 from taskcompendium.pipeline.source_verification import SOURCE_VERIFICATION_REVISION, SourceVerificationPolicy
 from taskcompendium.pipeline.sources import conversion_shards, source_files_identity, staged_files
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
-from taskcompendium.runtime.local import LocalGraderMachines
+from taskcompendium.runtime.local import LOCK_FILE, LocalGraderMachines
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.runners import SubprocessRunner
@@ -190,6 +190,11 @@ def environment_requirements(
         assert built.image is not None
         return EnvironmentRequirements(docker_image=built.image, command_semantics=CommandSemantics.LINUX_PROCESS)
     return EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=built.lock_url)
+
+
+def planned_lock_url(environment: Environment) -> str:
+    """Where ``environment``'s artifact stores its lock under the active artifact prefix, built or not."""
+    return str(StoragePath(environment_artifact(environment).path()) / LOCK_FILE)
 
 
 def environment_record(environment: Environment, built: EnvironmentArtifact | None) -> dict[str, Any]:
@@ -501,8 +506,9 @@ def _run_curation(
 ) -> ConversionResult | SourcePipelineResult:
     """Run a declared source against staged inputs in quick, sample, or full mode.
 
-    QUICK records the declared grader lock without building or running it.
-    SAMPLE and FULL use the invocation mode and the campaign's resolved settings.
+    QUICK records the lock the grader's environment artifact stores under the active artifact prefix
+    without building or running it. SAMPLE and FULL use the invocation mode and the campaign's
+    resolved settings.
     """
     missing = pipeline.inputs.keys() - inputs.keys()
     if missing:
@@ -514,13 +520,9 @@ def _run_curation(
             environment = pipeline.grader
             if environment.image is not None:
                 grader_environment = environment_requirements(environment)
-            elif environment.lock is not None:
-                grader_environment = EnvironmentRequirements(
-                    command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=str(environment.lock.resolve())
-                )
             else:
-                raise ValueError(
-                    f"Quick conversion of {pipeline.name} needs a declared grader lock or resolved environment"
+                grader_environment = EnvironmentRequirements(
+                    command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=planned_lock_url(environment)
                 )
     return run_source_pipeline(
         source_recipe(pipeline, inputs, grader_environment),

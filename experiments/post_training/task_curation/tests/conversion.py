@@ -15,7 +15,7 @@ from taskcompendium.pipeline.models import ImportRejection, NormalizedTask, RawR
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
-from experiments.post_training.task_curation.images.build import BASE_IMAGE, PYTHON_VERSION, EnvironmentArtifact
+from experiments.post_training.task_curation.images.build import EnvironmentArtifact
 from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
     environment_requirements,
@@ -32,11 +32,6 @@ def fixture_build(environment: Environment) -> EnvironmentArtifact:
     return EnvironmentArtifact(
         path=FIXTURE_ENVIRONMENT_PATH,
         identity="0" * 64,
-        lock_sha256="0" * 64,
-        apt=list(environment.apt),
-        data=list(environment.data),
-        python=PYTHON_VERSION,
-        base_image=BASE_IMAGE,
         image=FIXTURE_GRADER_IMAGE if placement(environment) == Placement.BUILT_IMAGE else None,
     )
 
