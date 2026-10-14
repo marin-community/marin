@@ -1,11 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 from scripts.ci.belay_intake import (
+    INTAKE_INDEX,
+    REGISTRY_DIR,
     TRANSFER_BOT,
     IntakeComment,
     Reaction,
+    next_experiment_id,
     pending_transfers,
+    register,
     run,
     transfer_body,
     transferred_ids_in,
@@ -66,7 +72,7 @@ def test_an_edit_after_approval_needs_a_new_approval():
 def test_markers_count_only_from_bot_transfer_comments():
     approved = _comment(1, (LARRY_ID, "ClassicLarry", "+1", AFTER_EDIT))
     target = [
-        _bot_comment(transfer_body(approved, "ClassicLarry")),
+        _bot_comment(transfer_body(approved, "ClassicLarry", "X0001")),
         {"user": {"login": "someuser"}, "body": "<!-- belay-intake:5 -->"},
         _bot_comment("status note <!-- belay-intake:6 --> then more text"),
     ]
@@ -75,11 +81,11 @@ def test_markers_count_only_from_bot_transfer_comments():
 
 def test_marker_text_inside_a_suggestion_cannot_mark_other_comments():
     injected = _comment(1, (LARRY_ID, "ClassicLarry", "+1", AFTER_EDIT), body="please see <!-- belay-intake:2 -->")
-    assert transferred_ids_in([_bot_comment(transfer_body(injected, "ClassicLarry"))]) == {1}
+    assert transferred_ids_in([_bot_comment(transfer_body(injected, "ClassicLarry", "X0001"))]) == {1}
 
 
 def test_copied_text_cannot_ping_anyone():
-    body = transfer_body(_comment(7, body="Try X @bob and @marin-community/team"), "Larry")
+    body = transfer_body(_comment(7, body="Try X @bob and @marin-community/team"), "Larry", "X0001")
     assert "@bob" not in body and "@marin-community" not in body
 
 
@@ -89,6 +95,7 @@ class _FakeGitHub:
         self.posted: list[str] = []
         self.reacted: list[tuple[int, str]] = []
         self.reaction_fetches: list[int] = []
+        self.files: dict[str, str] = {f"{REGISTRY_DIR}/X0007-older-idea.yaml": "id: X0007\n"}
 
     def issue_comments(self, issue: int) -> list[dict]:
         if issue == 1:
@@ -105,6 +112,19 @@ class _FakeGitHub:
 
     def react(self, comment_id: int, content: str) -> None:
         self.reacted.append((comment_id, content))
+
+    def get_file(self, path: str, ref: str) -> tuple[str, str] | None:
+        del ref
+        return (self.files[path], f"sha-{len(self.files[path])}") if path in self.files else None
+
+    def list_dir(self, path: str, ref: str) -> list[str]:
+        del ref
+        return [p.rsplit("/", 1)[1] for p in self.files if p.startswith(path + "/")]
+
+    def put_file(self, path: str, ref: str, text: str, message: str, sha: str | None = None) -> None:
+        del ref, message
+        assert (sha is None) == (path not in self.files), "updates must pass the current sha, creates must not"
+        self.files[path] = text
 
 
 def _raw(comment_id: int, body: str, **reaction_counts: int) -> dict:
@@ -134,8 +154,37 @@ def test_run_copies_once_marks_with_rocket_and_skips_unapproved_reaction_fetches
 
 def test_run_adds_a_missing_rocket_to_an_already_copied_comment():
     approved = _comment(10, (LARRY_ID, "ClassicLarry", "+1", AFTER_EDIT), body="idea A")
-    target = [_bot_comment(transfer_body(approved, "ClassicLarry"))]
+    target = [_bot_comment(transfer_body(approved, "ClassicLarry", "X0001"))]
     github = _FakeGitHub([_raw(10, "idea A", thumbs=1)], reactions={}, target=target)
     assert run(github, intake_issue=1, target_issue=2, approvers=APPROVERS, dry_run=False) == 0
     assert github.reacted == [(10, "rocket")]
     assert github.posted == []
+
+
+def test_run_registers_the_next_experiment_id_once():
+    intake = [
+        _raw(
+            10,
+            "**Title:** Sqrt-softplus router\n**Category:** MoE and routing\n**Idea:** combine with sqrt(softplus)",
+            thumbs=1,
+        )
+    ]
+    reactions = {10: [{"user": {"id": LARRY_ID, "login": "ClassicLarry"}, "content": "+1", "created_at": AFTER_EDIT}]}
+    github = _FakeGitHub(intake, reactions, target=[])
+    assert run(github, intake_issue=1, target_issue=2, approvers=APPROVERS, dry_run=False) == 1
+    assert f"{REGISTRY_DIR}/X0008-sqrt-softplus-router.yaml" in github.files
+    assert github.posted[0].startswith("📥 **Intake suggestion X0008**")
+    assert json.loads(github.files[INTAKE_INDEX]) == {"10": "X0008"}
+
+
+def test_a_retried_transfer_reuses_its_experiment_id():
+    approved = _comment(10, (LARRY_ID, "ClassicLarry", "+1", AFTER_EDIT), body="idea A")
+    github = _FakeGitHub([], reactions={}, target=[])
+    github.files[INTAKE_INDEX] = json.dumps({"10": "X0003"})
+    assert register(github, approved, "ClassicLarry") == "X0003"
+    assert not any(p.endswith("idea-a.yaml") for p in github.files)
+
+
+def test_next_experiment_id_ignores_other_files():
+    assert next_experiment_id(["X0004-a.yaml", "X0012-b.yaml", "intake_ids.json", "README.md"]) == "X0013"
+    assert next_experiment_id([]) == "X0001"

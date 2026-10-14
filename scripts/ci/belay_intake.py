@@ -8,14 +8,18 @@ A comment on the intake issue is approved when an allowlisted user reacts to it 
 comment's last edit, so editing an approved comment needs a fresh approval. The allowlist holds numeric GitHub user
 ids, not logins: ids never change or get reused, while a login freed by a rename can be claimed by someone else.
 
-An approved comment is copied (quoted, attributed, with @-mentions and marker syntax neutralized) into the main issue,
-ending in a hidden marker, and the intake comment gets a rocket reaction. Only markers in comments posted by the
+An approved comment first gets an experiment id in the Marin Belay registry (``experiments/belay/registry`` on the
+registry branch): the next free ``X####``, with a ``status: approved`` entry built from the comment, recorded in the
+registry's ``intake_ids.json`` so a retried run reuses it. It is then copied (quoted, attributed, headed with its id,
+with @-mentions and marker syntax neutralized) into the main issue, ending in a hidden marker, and the intake comment
+gets a rocket reaction. Only markers in comments posted by the
 workflow's own account count, so quoted text cannot mark other comments as transferred. A comment is copied once; a later
 run adds a missing rocket if an earlier run posted the copy but stopped before reacting. The agent that runs the Belay
 loop reads only the main issue, so only approved text reaches it.
 """
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -35,6 +39,27 @@ _MARKER_RE = re.compile(re.escape(_MARKER_TEMPLATE).replace(r"\{\}", r"(\d+)") +
 # from forming an HTML comment (and so a marker).
 _MENTION_RE = re.compile(r"@(?=[A-Za-z0-9-])")
 _ZERO_WIDTH_SPACE = "​"
+
+REGISTRY_BRANCH = "marin_belay_v1_registry"
+REGISTRY_DIR = "experiments/belay/registry"
+INTAKE_INDEX = f"{REGISTRY_DIR}/intake_ids.json"
+# experiments.belay.registry.CATEGORIES; an intake comment that names none of them is filed as "Unsorted".
+CATEGORIES = (
+    "Attention variants",
+    "Linear attention / KDA",
+    "Depth connections",
+    "Embeddings and inputs",
+    "MoE and routing",
+    "Optimizers",
+    "Normalization",
+    "Output head and loss",
+    "Training dynamics and schedules",
+    "Systems and speed",
+    "Recipe stacks",
+    "Unsorted",
+)
+_FIELD_RE = re.compile(r"^\s*\*\*(Title|Category|Idea):\*\*\s*(.+?)\s*$", re.MULTILINE)
+_EXPERIMENT_FILE_RE = re.compile(r"^X(\d{4})-.*\.yaml$")
 
 
 @dataclass(frozen=True)
@@ -95,12 +120,78 @@ def transferred_ids_in(target_comments: list[dict]) -> set[int]:
     return ids
 
 
-def transfer_body(comment: IntakeComment, approver: str) -> str:
-    """The main-issue comment for an approved intake comment: attribution, the quoted text, and the marker."""
+def intake_fields(body: str) -> dict[str, str]:
+    """The intake template's Title / Category / Idea fields present in ``body`` (see experiments/belay)."""
+    return {name.lower(): value for name, value in _FIELD_RE.findall(body)}
+
+
+def slugify(text: str, max_words: int = 6) -> str:
+    words = re.findall(r"[a-z0-9]+", text.lower())[:max_words]
+    return "-".join(words) or "intake"
+
+
+def next_experiment_id(filenames: list[str]) -> str:
+    """The id after the highest ``X####-*.yaml`` in ``filenames``."""
+    numbers = [int(m.group(1)) for name in filenames if (m := _EXPERIMENT_FILE_RE.match(name))]
+    return f"X{max(numbers, default=0) + 1:04d}"
+
+
+def registry_entry(xid: str, comment: IntakeComment, approver: str) -> tuple[str, str]:
+    """``(filename, yaml)`` of the approved registry entry for an intake comment. Strings are JSON-quoted, which is
+    valid YAML, so writing it needs no YAML library."""
+    fields = intake_fields(comment.body)
+    first_line = next((line.strip() for line in comment.body.splitlines() if line.strip()), "Intake suggestion")
+    name = fields.get("title", first_line)[:120]
+    category = fields.get("category", "")
+    category = category if category in CATEGORIES else "Unsorted"
+    summary = fields.get("idea", name)[:500]
+    slug = slugify(name)
+    q = json.dumps
+    lines = [
+        f"id: {xid}",
+        f"slug: {slug}",
+        f"name: {q(name)}",
+        f"category: {q(category)}",
+        f"summary: {q(summary)}",
+        "source: intake",
+        "status: approved",
+        "details:",
+        *(f"- {q(line)}" for line in comment.body.splitlines() if line.strip()),
+        "intake:",
+        f"  url: {q(comment.url)}",
+        f"  author: {q(comment.author)}",
+        f"  approved_by: {q(approver)}",
+    ]
+    return f"{xid}-{slug}.yaml", "\n".join(lines) + "\n"
+
+
+def register(github: "GitHub", comment: IntakeComment, approver: str) -> str:
+    """The experiment id of an approved intake comment, writing its registry entry the first time."""
+    index_file = github.get_file(INTAKE_INDEX, REGISTRY_BRANCH)
+    index = json.loads(index_file[0]) if index_file else {}
+    key = str(comment.comment_id)
+    if key in index:
+        return index[key]
+    xid = next_experiment_id(github.list_dir(REGISTRY_DIR, REGISTRY_BRANCH))
+    filename, entry = registry_entry(xid, comment, approver)
+    github.put_file(f"{REGISTRY_DIR}/{filename}", REGISTRY_BRANCH, entry, f"Belay registry: {xid} from intake {key}")
+    index[key] = xid
+    github.put_file(
+        INTAKE_INDEX,
+        REGISTRY_BRANCH,
+        json.dumps(index, indent=1, sort_keys=True) + "\n",
+        f"Belay registry: intake {key} -> {xid}",
+        sha=index_file[1] if index_file else None,
+    )
+    return xid
+
+
+def transfer_body(comment: IntakeComment, approver: str, xid: str) -> str:
+    """The main-issue comment for an approved intake comment: id, attribution, the quoted text, and the marker."""
     text = _MENTION_RE.sub("@" + _ZERO_WIDTH_SPACE, comment.body).replace("<!--", "<" + _ZERO_WIDTH_SPACE + "!--")
     quoted = "\n".join(f"> {line}" if line else ">" for line in text.splitlines())
     return (
-        f"📥 **Intake suggestion** from {comment.author}, approved by {approver} ([original]({comment.url})):\n\n"
+        f"📥 **Intake suggestion {xid}** from {comment.author}, approved by {approver} ([original]({comment.url})):\n\n"
         f"{quoted}\n\n{_MARKER_TEMPLATE.format(comment.comment_id)}"
     )
 
@@ -144,6 +235,28 @@ class GitHub:
     def react(self, comment_id: int, content: str) -> None:
         self._request("POST", f"{API}/repos/{self._repo}/issues/comments/{comment_id}/reactions", {"content": content})
 
+    def get_file(self, path: str, ref: str) -> tuple[str, str] | None:
+        """``(text, blob sha)`` of ``path`` at branch ``ref``, or None if it does not exist."""
+        try:
+            data, _ = self._request("GET", f"{API}/repos/{self._repo}/contents/{path}?ref={ref}")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            raise
+        assert isinstance(data, dict), data
+        return base64.b64decode(data["content"]).decode(), data["sha"]
+
+    def list_dir(self, path: str, ref: str) -> list[str]:
+        data, _ = self._request("GET", f"{API}/repos/{self._repo}/contents/{path}?ref={ref}")
+        assert isinstance(data, list), data
+        return [item["name"] for item in data]
+
+    def put_file(self, path: str, ref: str, text: str, message: str, sha: str | None = None) -> None:
+        payload = {"message": message, "content": base64.b64encode(text.encode()).decode(), "branch": ref}
+        if sha is not None:
+            payload["sha"] = sha
+        self._request("PUT", f"{API}/repos/{self._repo}/contents/{path}", payload)
+
 
 def _next_link(link_header: str) -> str | None:
     for part in link_header.split(","):
@@ -185,7 +298,8 @@ def run(github: GitHub, *, intake_issue: int, target_issue: int, approvers: froz
     for comment, approver in pending:
         print(f"copy intake comment {comment.comment_id} by {comment.author} (approved by {approver})")
         if not dry_run:
-            github.post_comment(target_issue, transfer_body(comment, approver))
+            xid = register(github, comment, approver)
+            github.post_comment(target_issue, transfer_body(comment, approver, xid))
             github.react(comment.comment_id, TRANSFERRED_REACTION)
     for comment_id in unmarked:
         print(f"add the missing rocket to already-copied intake comment {comment_id}")
