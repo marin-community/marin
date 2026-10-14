@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Source and output locations of the dataset export. Every source is read-only."""
 
 from pathlib import Path

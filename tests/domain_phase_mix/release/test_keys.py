@@ -1,3 +1,8 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import re
+
 import pandas as pd
 import pytest
 
@@ -38,6 +43,18 @@ def test_observation_registry_is_stable_and_opaque(tmp_path):
     reg.save()
     reloaded = keys.ObservationRegistry(salt="unit-test-salt", map_path=tmp_path / "map.csv")
     assert reloaded.id_for("lwspu_t9_snc_cap08_3e18-6c15f1") == first
+
+
+def test_load_salt_rejects_malformed_file(tmp_path):
+    empty = tmp_path / "empty_salt"
+    empty.touch()
+    with pytest.raises(ValueError):
+        keys.load_salt(empty)
+    fresh = tmp_path / "private" / "salt"
+    salt = keys.load_salt(fresh)
+    assert re.fullmatch(r"[0-9a-f]{64}", salt)
+    assert fresh.stat().st_mode & 0o777 == 0o600
+    assert keys.load_salt(fresh) == salt
 
 
 def test_add_aggregates_uses_given_weights():

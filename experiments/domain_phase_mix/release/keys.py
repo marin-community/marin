@@ -1,12 +1,18 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Public identifiers: content hashes for mixtures, exposures and schedules; salted opaque ids for runs."""
 
 import csv
 import hashlib
+import os
+import re
 import secrets
 from collections.abc import Mapping
 from pathlib import Path
 
 ROUND = 9
+SALT_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
 
 
 def _canon(values: Mapping[str, float]) -> str:
@@ -55,9 +61,16 @@ class ObservationRegistry:
 
 
 def load_salt(path: Path) -> str:
-    """The salt lives outside the repo; create it once with 32 random bytes."""
+    """The salt lives outside the repo; create it once, owner-only, with 32 random bytes.
+
+    Raises ValueError unless the file holds exactly 64 hex characters, so a truncated salt never reaches `id_for`.
+    """
     if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.touch(mode=0o600)
-        path.write_text(secrets.token_hex(32))
-    return path.read_text().strip()
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(secrets.token_hex(32))
+    salt = path.read_text().strip()
+    if not SALT_PATTERN.fullmatch(salt):
+        raise ValueError(f"malformed salt at {path}")
+    return salt
