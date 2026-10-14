@@ -74,10 +74,11 @@ preparation omits that allocation because bubblewrap cannot enforce it.
 
 An environment with `docker_image` uses that prebuilt image. The reference must contain a SHA-256 digest.
 An environment with `packages_lock` and no image requires a `LocalMachineFactory`.
-TaskCompendium reads the lock's digest and data entries from the adjacent curation `.artifact.json` result,
-then builds a managed CPython environment with the locked packages, verifyit, and declared NLTK data.
-The factory mounts the built root read-only and puts its Python on `PATH`; attempts share the built runtime
-but each gets a fresh sandbox. The selected factory's mounts, executable paths, bubblewrap binary, and hash seed remain in use.
+TaskCompendium downloads the lock and the `environment.json` and `files.tar` stored beside it, if any,
+then builds a managed CPython environment with the locked packages, verifyit, and the placed files.
+The factory mounts the built root read-only, mounts each placed file at its declared path, sets the
+declared variables and puts its Python on `PATH`; attempts share the built runtime but each gets a
+fresh sandbox. The selected factory's mounts, executable paths, bubblewrap binary, and hash seed remain in use.
 Building the runtime is included in the startup deadline and, for graders, the verifier deadline.
 The host needs `uv`, download access for an uncached build, and a working bubblewrap setup.
 Grader staging runs as root, so local grading requires a host process running as root.

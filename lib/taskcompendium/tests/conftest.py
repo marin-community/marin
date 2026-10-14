@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import hashlib
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -78,9 +77,6 @@ def local_pipeline_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 def local_machine_environment(tmp_path: Path) -> tuple[EnvironmentRequirements, LocalMachineFactory]:
     lock = tmp_path / "requirements.lock"
     lock.write_bytes(b"")
-    (tmp_path / ".artifact.json").write_text(
-        json.dumps({"result": {"lock_sha256": hashlib.sha256(b"").hexdigest(), "data": []}})
-    )
     try:
         factory = LocalMachineFactory()
     except SandboxUnavailable as error:

@@ -1,15 +1,28 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""``docker`` and ``uv`` stand-ins and a git-tracked lock, so builds run without a daemon, registry or index."""
+"""``docker``, ``uv`` and archive-download stand-ins and a git repository, so builds run offline without a daemon."""
 
+import hashlib
+import io
 import json
 import subprocess
+import zipfile
+from collections.abc import Mapping
 from pathlib import Path
 
+from experiments.post_training.task_curation.environment import Archive
+from experiments.post_training.task_curation.images import build
+
 REPOSITORY = "registry.invalid/fixture/images"
-LOCK = "numpy==2.3.5 \\\n    --hash=sha256:" + "a" * 64 + "\n"
+REQUIREMENTS = ("numpy==2.3.5",)
+COMPILED_LOCK = "numpy==2.3.5 \\\n    --hash=sha256:" + hashlib.sha256(b"numpy==2.3.5").hexdigest() + "\n"
+"""What the ``uv`` stand-in compiles ``REQUIREMENTS`` to."""
 TOOLCHAIN_FRAGMENT = "ENV TOOLCHAIN_HOME=/opt/toolchain\nRUN mkdir -p /opt/toolchain && touch /opt/toolchain/ready\n"
+ARCHIVE_URL = "https://archives.invalid/fixture/data.zip"
+DATA_PATH = "/srv/fixture/english"
+DATA_FILES = {"english/abbrev.tab": b"etc\n", "english/sentence_starters.txt": b"The\n"}
+"""A zip of a directory member, as the NLTK data archives are laid out; ``DATA_PATH`` receives ``english``."""
 
 # Records each invocation and answers `imagetools inspect` with a digest derived from the tag, so a
 # changed environment pushes a different digest.
@@ -63,23 +76,41 @@ def install_fake_build_tools(root: Path, monkeypatch) -> Path:
     return log
 
 
+def zip_bytes(files: Mapping[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, content in sorted(files.items()):
+            archive.writestr(name, content)
+    return buffer.getvalue()
+
+
+def install_fake_archive(monkeypatch) -> Archive:
+    """Serve a zip of ``DATA_FILES`` at ``ARCHIVE_URL`` instead of downloading, and declare its ``english`` member."""
+    data = zip_bytes(DATA_FILES)
+
+    def serve(url: str) -> bytes:
+        if url != ARCHIVE_URL:
+            raise AssertionError(f"Unexpected download: {url}")
+        return data
+
+    monkeypatch.setattr(build, "download", serve)
+    return Archive(ARCHIVE_URL, hashlib.sha256(data).hexdigest(), "english")
+
+
 def track_all(repository: Path) -> None:
     subprocess.run(["git", "add", "-A"], cwd=repository, check=True)
 
 
-def tracked_lock(root: Path) -> Path:
-    """A lock file in a git repository that tracks it."""
+def tracked_repository(root: Path) -> Path:
+    """An empty git repository, for files the build requires git to track."""
     repository = root / "repository"
     repository.mkdir()
-    lock = repository / "fixture.lock"
-    lock.write_text(LOCK)
     subprocess.run(["git", "init", "--quiet"], cwd=repository, check=True)
-    track_all(repository)
-    return lock
+    return repository
 
 
-def tracked_fragment(lock: Path) -> Path:
-    fragment = lock.parent / "toolchain.Dockerfile"
+def tracked_fragment(repository: Path) -> Path:
+    fragment = repository / "toolchain.Dockerfile"
     fragment.write_text(TOOLCHAIN_FRAGMENT)
-    track_all(lock.parent)
+    track_all(repository)
     return fragment
