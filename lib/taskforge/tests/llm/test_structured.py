@@ -177,6 +177,23 @@ def test_schema_instruction_renders_each_field_constraint():
     )
 
 
+class Alternatives(BaseModel):
+    status: Literal["ready"] | Literal["pending"]
+    tags: list[Annotated[str, StringConstraints(max_length=3)] | None]
+    score: Annotated[int, Field(ge=0, le=10)] | Annotated[int, Field(ge=20, le=30)]
+    note: str | None = Field(default=None, max_length=5)
+
+
+def test_schema_instruction_keeps_union_members_apart():
+    assert schema_instruction(Alternatives) == (
+        "Reply with one JSON object with these fields:\n"
+        'status (string, exactly "ready" or exactly "pending", required): Status\n'
+        "tags (list of string or null, each at most 3 characters, required): Tags\n"
+        "score (integer, at least 0 and at most 10 or at least 20 and at most 30, required): Score\n"
+        "note (string or null, at most 5 characters, optional): Note"
+    )
+
+
 class Location(BaseModel):
     """Where the file goes."""
 

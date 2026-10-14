@@ -86,7 +86,7 @@ def _definition(schema: Mapping[str, Any], defs: Mapping[str, Any]) -> Mapping[s
 def _type_name(schema: Mapping[str, Any], defs: Mapping[str, Any]) -> str:
     schema = _definition(schema, defs)
     if "anyOf" in schema:
-        return " or ".join(_type_name(member, defs) for member in schema["anyOf"])
+        return " or ".join(dict.fromkeys(_type_name(member, defs) for member in schema["anyOf"]))
     if schema.get("type") == "array":
         return f"list of {_type_name(schema.get('items', {}), defs)}"
     return schema.get("type", "any")
@@ -112,17 +112,23 @@ def _keyword_text(schema: Mapping[str, Any]) -> list[str]:
 
 
 def _constraints(schema: Mapping[str, Any], defs: Mapping[str, Any]) -> list[str]:
-    """Describe a field's constraints, gathering them from its ``anyOf`` members and its list items too.
+    """Describe a schema's constraints, keeping the alternatives of an ``anyOf`` apart.
 
-    Constraints on list items get an ``each`` prefix, as in ``each at most 200 characters``.
+    Constraints on list items get an ``each`` prefix, as in ``each at most 200 characters``. When one
+    ``anyOf`` member alone carries constraints, as for an optional field, they render as they would
+    on a plain field. When several members carry constraints, the members become one term of
+    alternatives with each member's constraints joined by ``and``, as in
+    ``at least 0 and at most 10 or at least 20 and at most 30``.
     """
     schema = _definition(schema, defs)
-    words = []
-    for member in (schema, *schema.get("anyOf", ())):
-        member = _definition(member, defs)
-        words += _keyword_text(member)
-        if "items" in member:
-            words += [f"each {text}" for text in _keyword_text(_definition(member["items"], defs))]
+    if "anyOf" in schema:
+        members = [words for member in schema["anyOf"] if (words := _constraints(member, defs))]
+        if len(members) > 1:
+            return [" or ".join(" and ".join(words) for words in members)]
+        return members[0] if members else []
+    words = _keyword_text(schema)
+    if "items" in schema:
+        words += [f"each {text}" for text in _constraints(schema["items"], defs)]
     return words
 
 
@@ -193,9 +199,10 @@ def schema_instruction(output_type: type[BaseModel]) -> str:
     - ``enum`` and ``const`` as the allowed JSON values,
     - ``pattern`` as the regex to match.
 
-    For a list, the constraints on its items follow with an ``each`` prefix. A field without
-    constraints renders as ``<name> (<type>, required|optional)``. A field without a description falls
-    back to its title.
+    For a list, the constraints on its items follow with an ``each`` prefix. A union whose members
+    carry constraints of their own renders them as alternatives, each member's constraints joined by
+    ``and``, as in ``exactly "ready" or exactly "pending"``. A field without constraints renders as
+    ``<name> (<type>, required|optional)``. A field without a description falls back to its title.
 
     Below a field holding a model, whether directly, in a list or as an optional, the function writes
     the model's docstring and its fields one indent further in. It recurses the same way through models
