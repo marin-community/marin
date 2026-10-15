@@ -57,7 +57,7 @@ def main(cluster, batch_size, prompt_count, samples_per_prompt):
     config = merge(config, probe_block(settings))
     plan = replace(SNOWBALL_RECIPE.role_plan, train_batch_size=batch_size, policy_mini_batch_size=batch_size)
     name = user_owned_name("checkpoints/startup-refresh/snowball")
-    data = ArtifactStep.adopt("documents/startup-refresh/snowball-inputs", "exact-chat-v1", INPUTS, kind=Artifact)
+    data = ArtifactStep.adopt("documents/startup-refresh/snowball-inputs", "2026.09.14", INPUTS, kind=Artifact)
     step = skyrl_step(
         SkyRLSpec(
             name=name,
