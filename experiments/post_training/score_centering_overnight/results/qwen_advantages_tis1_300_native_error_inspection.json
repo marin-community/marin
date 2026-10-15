@@ -1,0 +1,292 @@
+{
+  "run_id": "sc-qwen-transfer-advantages-tis-s1-main-interactive-a1-01a126ce",
+  "after_ms": 1792008251399,
+  "before_ms": 0,
+  "native_errors": [
+    {
+      "record_id": "b7d872247d21cead5ccadb845cbfd3a220ca3f75438e0729400388536eed6f7b",
+      "phase": "train",
+      "step": 283,
+      "instance_id": "7706",
+      "disposition": {
+        "error_treatment": "zero",
+        "exception_type": "AgentTimeoutError",
+        "server_error": null
+      },
+      "verification_result": {
+        "diagnostics": {
+          "exception_type": "AgentTimeoutError",
+          "operation": "advance",
+          "timed_out": true
+        },
+        "passed": null,
+        "reason": "Rollout execution failed",
+        "score": null,
+        "score_max": 1.0,
+        "score_min": 0.0,
+        "status": "error"
+      },
+      "response_keys": [
+        "generation_limit",
+        "loop_spans",
+        "loss_mask",
+        "messages",
+        "step_boundaries",
+        "stop_reason",
+        "text",
+        "token_ids",
+        "trainable_spans"
+      ],
+      "response_token_count": 1,
+      "trainable_spans": [],
+      "text_fields_lengths": {
+        "stop_reason": 5,
+        "text": 1
+      },
+      "exact_compressed_record_sha256": "adfb769df855b2d33f07b1316fc82f36fcb1ca2205277442b7a3746ff288d437",
+      "exact_raw_record": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/advantages-tis1-300-native-error-inspection/b7d872247d21cead5ccadb845cbfd3a220ca3f75438e0729400388536eed6f7b.json.gz",
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-tis-s1-main-interactive-a1-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000283/8339a038db94dc8990a7e71e24cd04c092afd9b1ac1105a60e110b9d660e74e0.zip",
+      "archive_etag": "\"8cf58113ba78900f151d6ec3fdedab01\"",
+      "archive_modified_ms": 1792040782850
+    },
+    {
+      "record_id": "9a5622e7d82be83a144a9cf39b110daf5bd469692256a3a893e913a8c67ec337",
+      "phase": "train",
+      "step": 236,
+      "instance_id": "4723",
+      "disposition": {
+        "error_treatment": "mask",
+        "exception_type": "PrecisionExhausted",
+        "server_error": null
+      },
+      "verification_result": {
+        "diagnostics": {
+          "exception_type": "PrecisionExhausted",
+          "operation": "advance",
+          "timed_out": false
+        },
+        "passed": null,
+        "reason": "Rollout execution failed",
+        "score": null,
+        "score_max": 1.0,
+        "score_min": 0.0,
+        "status": "error"
+      },
+      "response_keys": [
+        "generation_limit",
+        "loop_spans",
+        "loss_mask",
+        "messages",
+        "step_boundaries",
+        "stop_reason",
+        "text",
+        "token_ids",
+        "trainable_spans"
+      ],
+      "response_token_count": 1,
+      "trainable_spans": [],
+      "text_fields_lengths": {
+        "stop_reason": 5,
+        "text": 1
+      },
+      "exact_compressed_record_sha256": "119ed0f0fa11e4bd29d6b99e56ff475d77eeafe488858379054c1db36754d1b4",
+      "exact_raw_record": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/advantages-tis1-300-native-error-inspection/9a5622e7d82be83a144a9cf39b110daf5bd469692256a3a893e913a8c67ec337.json.gz",
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-tis-s1-main-interactive-a1-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000236/f177e0ec9a2f7b662a091d3619a6b52e7915eab12dba8c5a327e1afc1751198c.zip",
+      "archive_etag": "\"187ea6268ff61b16bc0151c544d25d3b\"",
+      "archive_modified_ms": 1792035090330
+    },
+    {
+      "record_id": "89a64044705b99fbcc891f724874d5b2612e33d87f0d45069d163efe0274cc3f",
+      "phase": "train",
+      "step": 136,
+      "instance_id": "8677",
+      "disposition": {
+        "error_treatment": "zero",
+        "exception_type": "AgentTimeoutError",
+        "server_error": null
+      },
+      "verification_result": {
+        "diagnostics": {
+          "exception_type": "AgentTimeoutError",
+          "operation": "advance",
+          "timed_out": true
+        },
+        "passed": null,
+        "reason": "Rollout execution failed",
+        "score": null,
+        "score_max": 1.0,
+        "score_min": 0.0,
+        "status": "error"
+      },
+      "response_keys": [
+        "generation_limit",
+        "loop_spans",
+        "loss_mask",
+        "messages",
+        "step_boundaries",
+        "stop_reason",
+        "text",
+        "token_ids",
+        "trainable_spans"
+      ],
+      "response_token_count": 1,
+      "trainable_spans": [],
+      "text_fields_lengths": {
+        "stop_reason": 5,
+        "text": 1
+      },
+      "exact_compressed_record_sha256": "0f758565d74673fcbbf05e049f2fbcca77cee1e1ccf5b7d829e052a7cd601d50",
+      "exact_raw_record": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/advantages-tis1-300-native-error-inspection/89a64044705b99fbcc891f724874d5b2612e33d87f0d45069d163efe0274cc3f.json.gz",
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-tis-s1-main-interactive-a1-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000136/67f9c8d97533c5d822de7223f7f08b10df2f99eed8ac348b6d62df82352d6844.zip",
+      "archive_etag": "\"37d3427d516aae364520caf90e47799a\"",
+      "archive_modified_ms": 1792023961282
+    },
+    {
+      "record_id": "bb67ac6d5378c72235d18ae6a29f19f9fed43cccdd6438954c448b96103ef2ed",
+      "phase": "train",
+      "step": 298,
+      "instance_id": "8677",
+      "disposition": {
+        "error_treatment": "zero",
+        "exception_type": "AgentTimeoutError",
+        "server_error": null
+      },
+      "verification_result": {
+        "diagnostics": {
+          "exception_type": "AgentTimeoutError",
+          "operation": "advance",
+          "timed_out": true
+        },
+        "passed": null,
+        "reason": "Rollout execution failed",
+        "score": null,
+        "score_max": 1.0,
+        "score_min": 0.0,
+        "status": "error"
+      },
+      "response_keys": [
+        "generation_limit",
+        "loop_spans",
+        "loss_mask",
+        "messages",
+        "step_boundaries",
+        "stop_reason",
+        "text",
+        "token_ids",
+        "trainable_spans"
+      ],
+      "response_token_count": 1,
+      "trainable_spans": [],
+      "text_fields_lengths": {
+        "stop_reason": 5,
+        "text": 1
+      },
+      "exact_compressed_record_sha256": "c511cf590a8e2346a2486ecaf63c488c52de888de9f705916d039932836d7d61",
+      "exact_raw_record": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/advantages-tis1-300-native-error-inspection/bb67ac6d5378c72235d18ae6a29f19f9fed43cccdd6438954c448b96103ef2ed.json.gz",
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-tis-s1-main-interactive-a1-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000298/e5e2f3dc7c418f5db569725f4edae63f35948a2b68e2f853b40a3645ebacf179.zip",
+      "archive_etag": "\"b5db803bf1cc78dea06de53887a24982\"",
+      "archive_modified_ms": 1792042034068
+    },
+    {
+      "record_id": "9fa31ad9a3501fa2a8a186e7b6cf2fe257aa30f1b69962d173efdd5383928729",
+      "phase": "train",
+      "step": 298,
+      "instance_id": "8677",
+      "disposition": {
+        "error_treatment": "zero",
+        "exception_type": "AgentTimeoutError",
+        "server_error": null
+      },
+      "verification_result": {
+        "diagnostics": {
+          "exception_type": "AgentTimeoutError",
+          "operation": "advance",
+          "timed_out": true
+        },
+        "passed": null,
+        "reason": "Rollout execution failed",
+        "score": null,
+        "score_max": 1.0,
+        "score_min": 0.0,
+        "status": "error"
+      },
+      "response_keys": [
+        "generation_limit",
+        "loop_spans",
+        "loss_mask",
+        "messages",
+        "step_boundaries",
+        "stop_reason",
+        "text",
+        "token_ids",
+        "trainable_spans"
+      ],
+      "response_token_count": 1,
+      "trainable_spans": [],
+      "text_fields_lengths": {
+        "stop_reason": 5,
+        "text": 1
+      },
+      "exact_compressed_record_sha256": "a6ff131e7023d8eea7b81cc5b233258ccbe370262a437efd6b5c9a7d4a8eb9e5",
+      "exact_raw_record": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/advantages-tis1-300-native-error-inspection/9fa31ad9a3501fa2a8a186e7b6cf2fe257aa30f1b69962d173efdd5383928729.json.gz",
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-tis-s1-main-interactive-a1-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000298/e5e2f3dc7c418f5db569725f4edae63f35948a2b68e2f853b40a3645ebacf179.zip",
+      "archive_etag": "\"b5db803bf1cc78dea06de53887a24982\"",
+      "archive_modified_ms": 1792042034068
+    },
+    {
+      "record_id": "0f81b1946c437afdb4773e3390d8d60ef1e38c9fc771c79d80cb644d0738408e",
+      "phase": "train",
+      "step": 244,
+      "instance_id": "5254",
+      "disposition": {
+        "error_treatment": "zero",
+        "exception_type": "AgentTimeoutError",
+        "server_error": null
+      },
+      "verification_result": {
+        "diagnostics": {
+          "exception_type": "AgentTimeoutError",
+          "operation": "advance",
+          "timed_out": true
+        },
+        "passed": null,
+        "reason": "Rollout execution failed",
+        "score": null,
+        "score_max": 1.0,
+        "score_min": 0.0,
+        "status": "error"
+      },
+      "response_keys": [
+        "generation_limit",
+        "loop_spans",
+        "loss_mask",
+        "messages",
+        "step_boundaries",
+        "stop_reason",
+        "text",
+        "token_ids",
+        "trainable_spans"
+      ],
+      "response_token_count": 1,
+      "trainable_spans": [],
+      "text_fields_lengths": {
+        "stop_reason": 5,
+        "text": 1
+      },
+      "exact_compressed_record_sha256": "9d757d96b9534fc2623991dea46121e4b25c1dcb31c695401d25798f850e57ad",
+      "exact_raw_record": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/advantages-tis1-300-native-error-inspection/0f81b1946c437afdb4773e3390d8d60ef1e38c9fc771c79d80cb644d0738408e.json.gz",
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-tis-s1-main-interactive-a1-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000244/bcb72ee5d5ed11e1873bfd8222ac2c2bc37fa53b0be87b6ae7df2fa1b33c7079.zip",
+      "archive_etag": "\"1246cb2fc7c79fb9423106a399f76c1b\"",
+      "archive_modified_ms": 1792036374923
+    }
+  ],
+  "exception_counts": {
+    "AgentTimeoutError": 5,
+    "PrecisionExhausted": 1
+  },
+  "training_errors": 6,
+  "evaluation_errors": 0,
+  "fully_masked_records": 6,
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "disposition": "Preserve each exact original native failure record; all six are fully masked training placeholders. Keep zero-quality fixed denominators, no original-response replay invented, and no evaluation error allowance. Five AgentTimeoutError and one PrecisionExhausted retain their original native types and treatments."
+}
