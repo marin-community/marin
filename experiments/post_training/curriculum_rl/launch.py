@@ -47,7 +47,8 @@ from marin.rl.skyrl import (
     SkyRLSpec,
     skyrl_step,
 )
-from marin.skyrl_recipe import (
+from marin.training.training import LevanterCheckpoint
+from marinskyrl.recipe_schema import (
     Algorithm,
     ContextBudget,
     Data,
@@ -67,7 +68,6 @@ from marin.skyrl_recipe import (
     SkyRLRecipe,
     Trainer,
 )
-from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import username_segment
 
@@ -167,6 +167,29 @@ SNOWBALL_MODEL = ArtifactStep.adopt(
     kind=LevanterCheckpoint,
 )
 
+SNOWBALL_PARALLELISM = RecipePatch(
+    trainer=Trainer(
+        policy=Policy(
+            megatron_config=PolicyMegatronConfig(
+                tensor_model_parallel_size=1,
+                pipeline_model_parallel_size=2,
+                context_parallel_size=1,
+                expert_model_parallel_size=GPUS_PER_NODE,
+                expert_tensor_parallel_size=1,
+            )
+        ),
+        ref=Ref(
+            megatron_config=RefMegatronConfig(
+                tensor_model_parallel_size=1,
+                pipeline_model_parallel_size=2,
+                context_parallel_size=1,
+                expert_model_parallel_size=GPUS_PER_NODE,
+                expert_tensor_parallel_size=1,
+            )
+        ),
+    )
+)
+
 # The Snowball SFT trains where its export lives (us-east-02a) so 134GB of
 # shards never stream cross-region. Rollout and serving engines mirror the
 # export's profile: one node-sized vLLM instance, tensor_parallel_size=1,
@@ -187,31 +210,13 @@ SNOWBALL_POLICY = PolicySpec(
     # and curb thinking loops with a light repetition penalty.
     serve_gen_kwargs=(("skip_special_tokens", "false"), ("repetition_penalty", "1.1")),
     adopted_model=SNOWBALL_MODEL,
-    recipe=RecipePatch(
-        trainer=Trainer(
-            flash_attn=False,
-            gradient_checkpointing=True,
-            offload_optimizer_during_rollouts=True,
-            policy=Policy(
-                megatron_config=PolicyMegatronConfig(
-                    tensor_model_parallel_size=1,
-                    pipeline_model_parallel_size=2,
-                    context_parallel_size=1,
-                    expert_model_parallel_size=GPUS_PER_NODE,
-                    expert_tensor_parallel_size=1,
-                    optimizer_checkpoint_sharding_type="dp_reshardable",
-                )
-            ),
-            ref=Ref(
-                megatron_config=RefMegatronConfig(
-                    tensor_model_parallel_size=1,
-                    pipeline_model_parallel_size=2,
-                    context_parallel_size=1,
-                    expert_model_parallel_size=GPUS_PER_NODE,
-                    expert_tensor_parallel_size=1,
-                )
-            ),
-        )
+    recipe=RecipePatch.combine(
+        parallelism=SNOWBALL_PARALLELISM,
+        model=RecipePatch(
+            trainer=Trainer(
+                flash_attn=False,
+            )
+        ),
     ),
 )
 POLICIES = {policy.label: policy for policy in (QWEN_POLICY, SNOWBALL_POLICY)}
@@ -620,12 +625,23 @@ def rl_recipe(preset: ScalePreset, arm: ArmSpec, policy: PolicySpec) -> SkyRLRec
             algorithm=Algorithm(**({"dynamic_sampling": DynamicSampling(type="filter")} if arm.dapo else {}))
         ),
     )
+    model = policy.recipe
+    if policy.label == "snowball":
+        model = model.merge(
+            RecipePatch(
+                trainer=Trainer(
+                    offload_optimizer_during_rollouts=True,
+                    policy=Policy(
+                        megatron_config=PolicyMegatronConfig(optimizer_checkpoint_sharding_type="dp_reshardable")
+                    ),
+                )
+            )
+        )
     recipe = SkyRLRecipe.combine(
         base=RecipePatch(
             entrypoint=RLEntrypoint.STANDARD,
             environment=Environment(env_class="gsm8k"),
             trainer=Trainer(
-                strategy="megatron",
                 flash_attn=True,
                 use_sample_packing=False,
                 algorithm=Algorithm(advantage_estimator="grpo", use_kl_loss=True),
@@ -644,14 +660,12 @@ def rl_recipe(preset: ScalePreset, arm: ArmSpec, policy: PolicySpec) -> SkyRLRec
                 vllm_attention_backend="FLASH_ATTN",
                 gpu_memory_utilization=0.75,
                 enforce_eager=False,
-                run_engines_locally=True,
                 weight_sync_backend="nccl",
                 sampling_params=SamplingParams(temperature=1.0, top_p=1.0),
             ),
             data=Data(kind="parquet", train_data=(), val_data=()),
-        ),
+        ).merge(model),
         preset=preset.recipe,
-        policy=policy.recipe,
         arm=arm_part,
         evaluation=RecipePatch(trainer=Trainer(eval_before_train=preset.recipe.trainer.eval_interval > 0)),
     )

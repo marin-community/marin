@@ -15,7 +15,6 @@ from typing import IO
 import pytest
 import yaml
 from marin.execution.artifact import Artifact
-from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.external_dependencies import MARIN_SKYRL
 from marin.rl.skyrl import (
@@ -33,7 +32,8 @@ from marin.rl.skyrl import (
     skyrl_temporary_run_path,
 )
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
-from marin.skyrl_recipe import (
+from marin.training.training import LevanterCheckpoint
+from marinskyrl.recipe_schema import (
     Algorithm,
     ContextBudget,
     Generator,
@@ -45,9 +45,6 @@ from marin.skyrl_recipe import (
     Trainer,
     Training,
 )
-from marin.training.training import LevanterCheckpoint
-
-from experiments.post_training.tasktrove.rl_smoke import smoke_step
 
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
@@ -93,7 +90,6 @@ def _recipe() -> SkyRLRecipe:
     return SkyRLRecipe(
         context_budget=ContextBudget(request_window_tokens=512, max_new_tokens_per_turn=256, max_turns=1),
         trainer=Trainer(
-            strategy="megatron",
             max_steps=8,
             placement=Placement(
                 colocate_all=True,
@@ -110,7 +106,6 @@ def _recipe() -> SkyRLRecipe:
         ),
         generator=Generator(
             backend="vllm",
-            run_engines_locally=True,
             num_inference_engines=4,
             inference_engine_tensor_parallel_size=1,
             inference_engine_pipeline_parallel_size=1,
@@ -154,6 +149,13 @@ def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
         coordinator_timeout_hours=12,
         job_timeout_seconds=1800,
     )
+
+
+@pytest.mark.parametrize("key", ["use_conversation_multi_turn", "require_exact_chat_transport"])
+@pytest.mark.parametrize("value", [False, True])
+def test_skyrl_spec_rejects_retired_transport_options_before_submission(key: str, value: bool) -> None:
+    with pytest.raises(ValueError, match=f"generator.{key}"):
+        _spec().recipe.with_settings([f"generator.{key}={str(value).lower()}"])
 
 
 def test_skyrl_retention_allows_explicit_rollback_depth_up_to_five() -> None:
@@ -378,28 +380,6 @@ def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert run.iris_job_id == "01KNOEXPORT"
 
 
-def test_tasktrove_smoke_renders_serializable_launch_document(tmp_path: Path) -> None:
-    release = ArtifactStep.adopt("tasktrove/clean", "2026.09.10", str(tmp_path))
-    (tmp_path / "manifest.json").write_text(json.dumps({"verify_tool_ref": "verifyit@abc123"}))
-    with build_context(BuildContext(versions=VersionCodex(default="2026.09.10"))):
-        step = smoke_step(release)
-    config = step.build_config(
-        StepContext.for_run(
-            output_path=str(tmp_path / "output"),
-            prefix=str(tmp_path),
-            runtime_args=step.runtime_args,
-            deps=step.deps,
-        )
-    )
-    launch = yaml.safe_load(config.launch_config_yaml)
-    source = json.loads(json.dumps(launch))["inputs"]["train_data"][0]
-
-    assert source["kind"] == "tasktrove_parquet"
-    assert source["uri"] == str(tmp_path / "tasks/part-00000.parquet")
-    assert source["verifier_ref"] == "verifyit@abc123"
-    assert source["selection"]["tag_match"] == "all"
-
-
 def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) -> None:
     release = ArtifactStep.adopt("tasktrove/clean", "2026.09.10", str(tmp_path))
     (tmp_path / "manifest.json").write_text(json.dumps({"verify_tool_ref": "verifyit@abc123"}))
@@ -413,6 +393,7 @@ def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) 
             limit=160,
             seed=17,
         ),
+        relative_path="tasks.parquet",
     )
     context = StepContext.for_run(
         output_path=str(tmp_path / "output"),
@@ -423,8 +404,8 @@ def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) 
 
     resolved = source.resolve(context)
 
-    assert resolved.uri == str(tmp_path / "tasks/part-00000.parquet")
-    assert resolved.relative_path == "part-00000.parquet"
+    assert resolved.uri == str(tmp_path / "tasks.parquet")
+    assert resolved.relative_path == "tasks.parquet"
     assert resolved.verifier_ref == "verifyit@abc123"
     assert resolved.selection.sources == ("source-a", "source-b")
     assert resolved.selection.tags == ("bash", "terminal")

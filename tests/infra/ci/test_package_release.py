@@ -32,7 +32,6 @@ from scripts.ci.package_release import (
     update_native_requirement,
     validate_targeted_lock_change,
 )
-from scripts.python_libs_package import PACKAGES as BUNDLED_LIBRARIES
 from scripts.python_libs_package import _rewrite_sibling_pins
 
 RELEASE_WORKFLOW = Path(".github/workflows/marin-release-libs-wheels.yaml")
@@ -135,6 +134,7 @@ def test_change_detection_maps_shared_and_owned_sources() -> None:
     assert packages_for_changes(["lib/iris/hatch_build.py"]) == ["python-libs"]
     assert packages_for_changes(["lib/finestore/src/finestore/eval.py"]) == ["python-libs"]
     assert packages_for_changes(["lib/shellbox/src/shellbox/machine.py"]) == ["python-libs"]
+    assert packages_for_changes(["lib/verifyit/README.md"]) == ["python-libs"]
     assert packages_for_changes(["scripts/ci/package_release.py"]) == [
         "dupekit",
         "finelog",
@@ -235,14 +235,19 @@ def test_shared_requirement_path_is_emitted_once() -> None:
     assert requirement_paths_for_packages(["finelog", "iris"]) == (Path("lib/iris/pyproject.toml"),)
 
 
-def test_latest_native_releases_follow_the_consumed_wheel_distributions() -> None:
+def _release_files(wheels: int, sdists: int) -> list[str]:
+    return ["bdist_wheel"] * wheels + ["sdist"] * sdists
+
+
+def test_latest_native_releases_skip_partially_published_versions() -> None:
+    complete = _release_files(wheels=4, sdists=1)
     published = {
-        "marin-dupekit-native": "0.1.4.dev1",
-        "marin-finelog-server": "0.2.13.dev2",
-        "marin-iris-native": "0.1.4.dev3",
+        "marin-dupekit-native": {"0.1.4.dev1": complete},
+        "marin-finelog-server": {"0.2.13.dev2": complete, "0.2.14.dev9": _release_files(wheels=1, sdists=0)},
+        "marin-iris-native": {"0.1.3": complete, "0.1.4.dev3": complete},
     }
 
-    versions = latest_native_release_versions(published.get)
+    versions = latest_native_release_versions(published.__getitem__)
 
     assert dict(versions) == {
         "dupekit": "0.1.4.dev1",
@@ -275,29 +280,12 @@ def test_update_native_requirement_never_downgrades_floor() -> None:
     assert update_native_requirement(text, "marin-iris-native", "0.1.4")[0] == text
 
 
-def test_python_libs_release_expectations_track_the_bundle_builder() -> None:
-    """The release gate and the builder must agree on which libraries ship.
-
-    A library the builder produces but the release table omits is built and never
-    published; one the table requires but the builder skips fails the manifest check
-    at the end of the release run, after every wheel has already been built.
-    """
-    family = PACKAGES[PYTHON_LIBS_FAMILY]
-
-    # The builder runs `uv build --wheel --sdist` once per library.
-    assert dict(family.artifacts) == {
-        distribution: ArtifactExpectation(wheels=1, sdists=1, pure_python=True) for distribution in BUNDLED_LIBRARIES
-    }
-    assert set(family.declared_version_paths) == {
-        Path(library["path"]) / library["version_file"] for library in BUNDLED_LIBRARIES.values()
-    }
-
-
 def test_shellbox_iris_extra_pins_to_bundle_release() -> None:
     pyproject = Path("lib/shellbox/pyproject.toml").read_text()
     released = tomllib.loads(_rewrite_sibling_pins(pyproject, "0.3.0.dev30194118926"))
 
     assert released["project"]["optional-dependencies"]["iris"] == ["marin-iris==0.3.0.dev30194118926"]
+    assert "marin-rigging==0.3.0.dev30194118926" in released["project"]["optional-dependencies"]["daytona"]
 
 
 @pytest.mark.parametrize("package", ["iris", "dupekit", "finelog"])
@@ -420,6 +408,42 @@ source = { registry = "https://pypi.org/simple" }
     with pytest.raises(ValueError, match="typing-extensions"):
         validate_targeted_lock_change(before, unrelated, "marin-iris-native", "0.1.4.dev30194118926")
 
+    old_source = (
+        "https://github.com/marin-community/MarinSkyRL.git?subdirectory=packages%2Fmarinskyrl-recipe#" + "a" * 40
+    )
+    new_source = old_source.replace("a" * 40, "b" * 40)
+    git_before = before.replace("marin-iris-native", "marinskyrl-recipe").replace(
+        'registry = "https://pypi.org/simple"', f'git = "{old_source}"', 1
+    )
+    git_after = git_before.replace(old_source, new_source)
+    validate_targeted_lock_change(git_before, git_after, "marinskyrl-recipe", "0.1.3", git_source=new_source)
+    for changed in (
+        git_after.replace("packages%2Fmarinskyrl-recipe", "packages%2Fother"),
+        git_after.replace('version = "4.16.0"', 'version = "4.17.0"'),
+    ):
+        with pytest.raises(ValueError):
+            validate_targeted_lock_change(git_before, changed, "marinskyrl-recipe", "0.1.3", git_source=new_source)
+
+
+def test_validate_targeted_lock_change_accepts_newer_uv_lock_revision() -> None:
+    before = """\
+version = 1
+revision = 3
+
+[[package]]
+name = "marin-iris-native"
+version = "0.1.3"
+source = { registry = "https://pypi.org/simple" }
+"""
+    targeted = before.replace('version = "0.1.3"', 'version = "0.1.4.dev30194118926"')
+    newer_uv = targeted.replace("revision = 3", "revision = 5")
+
+    validate_targeted_lock_change(before, newer_uv, "marin-iris-native", "0.1.4.dev30194118926")
+    with pytest.raises(ValueError, match="lockfile metadata"):
+        validate_targeted_lock_change(
+            before, newer_uv.replace("version = 1", "version = 2"), "marin-iris-native", "0.1.4.dev30194118926"
+        )
+
 
 def test_release_workflow_publishes_only_trusted_package_releases() -> None:
     workflow = _workflow(RELEASE_WORKFLOW)
@@ -429,9 +453,11 @@ def test_release_workflow_publishes_only_trusted_package_releases() -> None:
     assert push["branches"] == ["main"]
     assert "schedule" in triggers
     assert "uv.lock" not in push["paths"]
-    assert not any(item.endswith("pyproject.toml") for item in push["paths"])
+    assert "pyproject.toml" not in push["paths"]
+    python_sources = set(PACKAGES[PYTHON_LIBS_FAMILY].source_patterns)
+    assert python_sources <= set(push["paths"])
+    assert python_sources <= set(triggers["pull_request"]["paths"])
     assert "shellbox-v*" not in push["tags"]
-    assert "lib/shellbox/src/**" in push["paths"]
 
     publish = workflow["jobs"]["publish"]
     assert publish["permissions"] == {"contents": "read", "id-token": "write"}

@@ -59,7 +59,8 @@ from marin.rl.skyrl import (
     SkyRLSpec,
     skyrl_step,
 )
-from marin.skyrl_recipe import (
+from marin.training.training import LevanterCheckpoint
+from marinskyrl.recipe_schema import (
     Algorithm,
     ContextBudget,
     Data,
@@ -74,7 +75,6 @@ from marin.skyrl_recipe import (
     SkyRLRecipe,
     Trainer,
 )
-from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.writers import write_parquet_file
 

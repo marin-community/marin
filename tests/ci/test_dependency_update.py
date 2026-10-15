@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import hashlib
 import json
 import os
 import runpy
@@ -267,20 +266,6 @@ def test_publish_update_stages_the_allowlist_and_creates_an_app_pull_request(mon
 
 def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_project_files(tmp_path: Path) -> None:
     repository, _remote, _main_sha = _git_repository(tmp_path)
-    upstream, _upstream_remote, _upstream_sha = _git_repository(tmp_path / "upstream")
-    schema = upstream / "marinskyrl/recipe_schema"
-    schema.mkdir(parents=True)
-    (schema / "__init__.py").write_text("from .old import VALUE\n")
-    (schema / "old.py").write_text("VALUE = 1\n")
-    _git(upstream, "add", "marinskyrl")
-    _git(upstream, "commit", "-m", "author schema")
-    original_schema_commit = _git(upstream, "rev-parse", "HEAD")
-    (schema / "old.py").unlink()
-    (schema / "new.py").write_text("VALUE = 2\n")
-    (schema / "__init__.py").write_text("from .new import VALUE\n")
-    _git(upstream, "add", "marinskyrl")
-    _git(upstream, "commit", "-m", "updated author schema")
-    new_commit = _git(upstream, "rev-parse", "HEAD")
     source = Path(__file__).resolve().parents[2]
     shutil.copytree(source / "config/external", repository / "config/external")
     shutil.copy2(source / "config/update-external.py", repository / "config/update-external.py")
@@ -293,25 +278,12 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
     pins = repository / "lib/marin/src/marin/external_dependencies.py"
     pins.parent.mkdir(parents=True)
     shutil.copy2(source / "lib/marin/src/marin/external_dependencies.py", pins)
-    skyrl_lock = repository / "config/external/MarinSkyRL/uv.lock"
-    content = skyrl_lock.read_text()
-    package = next(entry for entry in tomllib.loads(content)["package"] if entry["name"] == "marinskyrl")
-    skyrl_lock.write_text(content.replace(package["source"]["git"].rsplit("#", 1)[1], original_schema_commit))
-    git_environment = {
-        **os.environ,
-        "GIT_CONFIG_COUNT": "1",
-        "GIT_CONFIG_KEY_0": f"url.{upstream.as_uri()}.insteadOf",
-        "GIT_CONFIG_VALUE_0": "https://github.com/marin-community/MarinSkyRL.git",
-    }
-    subprocess.run(
-        [sys.executable, "config/update-external.py", "vllm"],
-        cwd=repository,
-        env=git_environment,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    _git(repository, "add", "config", "scripts", "lib")
+    manifest = repository / "lib/marin/pyproject.toml"
+    shutil.copy2(source / "lib/marin/pyproject.toml", manifest)
+    shutil.copy2(source / "uv.lock", repository / "uv.lock")
+    original_manifest = manifest.read_bytes()
+    original_root_lock = (repository / "uv.lock").read_bytes()
+    _git(repository, "add", "config", "scripts", "lib", "uv.lock")
     _git(repository, "commit", "-m", "external project inputs")
     _git(repository, "push", "origin", "main")
     main_sha = _git(repository, "rev-parse", "HEAD")
@@ -329,6 +301,7 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
         )
         for project, path in locks.items()
     }
+    new_commit = "b" * 40
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     resolver = fake_bin / "uv"
@@ -336,6 +309,19 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
         f"#!{sys.executable}\n"
         "import sys, tomllib\n"
         "from pathlib import Path\n"
+        "if sys.argv[1] == 'sync':\n"
+        "    directory = Path(sys.argv[sys.argv.index('--project') + 1])\n"
+        "    metadata = tomllib.loads((directory / 'pyproject.toml').read_text())\n"
+        "    overrides = metadata['tool']['uv']['override-dependencies']\n"
+        "    assert any('marin-rigging[secrets,prometheus]' in dependency for dependency in overrides)\n"
+        "    (directory / '.venv').mkdir()\n"
+        "    (directory / '.venv' / 'validated-project').write_text(str(directory))\n"
+        "    raise SystemExit(0)\n"
+        "if sys.argv[1:3] == ['pip', 'check']:\n"
+        "    environment = Path(sys.argv[sys.argv.index('--python') + 1]).parents[1]\n"
+        "    assert (environment / 'validated-project').is_file()\n"
+        f"    Path({str(tmp_path / 'validated-environment')!r}).write_text('valid')\n"
+        "    raise SystemExit(0)\n"
         "directory = Path(sys.argv[sys.argv.index('--project') + 1])\n"
         "distribution = sys.argv[sys.argv.index('--upgrade-package') + 1]\n"
         "path = directory / 'uv.lock'\n"
@@ -343,6 +329,8 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
         "package = next(p for p in tomllib.loads(original)['package'] if p['name'] == distribution)\n"
         "git_source = package['source']['git']\n"
         f"updated = git_source.rsplit('#', 1)[0] + '#{new_commit}'\n"
+        "if distribution == 'marinskyrl-recipe':\n"
+        "    original = original.replace(git_source.rsplit('#', 1)[1], updated.rsplit('#', 1)[1])\n"
         "path.write_text(original.replace(git_source, updated))\n"
     )
     github = fake_bin / "gh"
@@ -359,7 +347,7 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
     )
     resolver.chmod(0o755)
     github.chmod(0o755)
-    environment = {**git_environment, "PATH": f"{fake_bin}:{os.environ['PATH']}", "PYTHONPATH": ""}
+    environment = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "PYTHONPATH": ""}
     workflow = yaml.safe_load((source / ".github/workflows/ops-external-dependencies.yaml").read_text())
     select_projects = next(step for step in workflow["jobs"]["projects"]["steps"] if step.get("id") == "projects")
     matrix_output = tmp_path / "projects-output"
@@ -389,7 +377,7 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
                 "--repository",
                 "marin-community/marin",
                 "--github-output",
-                str(tmp_path / "outputs"),
+                "outputs",
             ],
             cwd=repository,
             env=environment,
@@ -400,15 +388,9 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
         )
         assert _git(repository, "rev-parse", "HEAD") == main_sha
         branches.append(_git(repository, "branch", "--show-current"))
-        summary = tmp_path / "summary.md"
+        summary = repository / "summary.md"
         subprocess.run(
-            [
-                sys.executable,
-                "config/update-external.py",
-                project.value,
-                "--summary-file",
-                str(summary),
-            ],
+            [sys.executable, "config/update-external.py", project.value, "--summary-file", str(summary)],
             cwd=repository,
             env=environment,
             check=True,
@@ -435,88 +417,40 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
             text=True,
             timeout=30,
         )
-        expected = {f"config/external/{project.value}/uv.lock", str(pins.relative_to(repository))}
         if project is ExternalRuntime.MARIN_SKYRL:
-            expected |= {
-                "lib/marin/src/marin/skyrl_recipe.provenance.json",
-                "lib/marin/src/marin/skyrl_recipe/__init__.py",
-                "lib/marin/src/marin/skyrl_recipe/old.py",
-                "lib/marin/src/marin/skyrl_recipe/new.py",
-            }
-            assert not (repository / "lib/marin/src/marin/skyrl_recipe/old.py").exists()
-            assert (repository / "lib/marin/src/marin/skyrl_recipe/new.py").read_text() == "VALUE = 2\n"
-        assert set(changed.stdout.splitlines()) == expected
+            assert (tmp_path / "validated-environment").read_text() == "valid"
+        expected_files = {f"config/external/{project.value}/uv.lock", str(pins.relative_to(repository))}
         if project is ExternalRuntime.MARIN_SKYRL:
-            copied = repository / "lib/marin/src/marin/skyrl_recipe"
-            provenance = copied.with_suffix(".provenance.json")
-            original_copy = {path: path.read_bytes() for path in copied.iterdir()}
-            original_provenance = provenance.read_bytes()
-            manifest = json.loads(original_provenance)
-            digest = hashlib.sha256()
-            for path, content in sorted(original_copy.items()):
-                digest.update(path.name.encode() + b"\0" + content + b"\0")
-            assert manifest["commit"] == new_commit
-            assert manifest["sha256"] == digest.hexdigest()
-            check_command = [sys.executable, "config/update-external.py", "--check"]
-            offline_bin = tmp_path / "offline-bin"
-            offline_bin.mkdir()
-            for tool in ("git", "uv"):
-                executable = offline_bin / tool
-                executable.write_text("#!/bin/sh\nexit 99\n")
-                executable.chmod(0o755)
-            offline_environment = {**environment, "PATH": f"{offline_bin}:{environment['PATH']}"}
-            clean = subprocess.run(
-                check_command, cwd=repository, env=offline_environment, capture_output=True, text=True, timeout=30
-            )
-            assert clean.returncode == 0, clean.stderr
-            for drift in ("content", "extra", "missing"):
-                if drift.startswith("content"):
-                    (copied / "new.py").write_text("VALUE = 3\n")
-                elif drift == "extra":
-                    (copied / "extra.py").write_text("VALUE = 4\n")
-                else:
-                    (copied / "new.py").unlink()
-                before = {path: path.read_bytes() for path in (*copied.iterdir(), provenance, pins)}
-                rejected_copy = subprocess.run(
-                    check_command, cwd=repository, env=offline_environment, capture_output=True, text=True, timeout=30
-                )
-                assert rejected_copy.returncode != 0, drift
-                assert {path: path.read_bytes() for path in (*copied.iterdir(), provenance, pins)} == before
-                (copied / "extra.py").unlink(missing_ok=True)
-                for path, content in original_copy.items():
-                    path.write_bytes(content)
-                provenance.write_bytes(original_provenance)
-        _git(repository, "add", *sorted(expected))
-        _git(repository, "commit", "-m", "generated runtime update")
-        remote_check = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                """
-import json, sys
-from scripts.ci.dependency_update import PullRequestSnapshot, validated_pull_request
-from scripts.ci.dependency_update_policy import EXTERNAL_RUNTIME_POLICIES, ExternalRuntime
-policy = EXTERNAL_RUNTIME_POLICIES[ExternalRuntime(sys.argv[1])]
-snapshot = PullRequestSnapshot(
-    author='app/marin-external-runtime-updater', base_branch=policy.base_branch,
-    files=tuple(json.loads(sys.argv[2])), head_branch=policy.head_branch,
-    head_sha=sys.argv[3], state='OPEN', title=policy.title, url='https://example.test/pr',
-)
-print(validated_pull_request(snapshot, policy=policy,
-    expected_app_slug='marin-external-runtime-updater', expected_head_sha=sys.argv[3]).head_sha)
-""",
-                project.value,
-                json.dumps(sorted(expected)),
-                _git(repository, "rev-parse", "HEAD"),
-            ],
+            expected_files |= {"lib/marin/pyproject.toml", "uv.lock"}
+            root_lock = tomllib.loads((repository / "uv.lock").read_text())
+            schema = next(entry for entry in root_lock["package"] if entry["name"] == "marinskyrl-recipe")
+            assert schema["source"]["git"].endswith(f"#{new_commit}")
+            assert f"@{new_commit}#subdirectory=packages/marinskyrl-recipe" in manifest.read_text()
+        else:
+            assert manifest.read_bytes() == original_manifest
+            assert (repository / "uv.lock").read_bytes() == original_root_lock
+        assert set(changed.stdout.splitlines()) == expected_files
+        checked = subprocess.run(
+            [sys.executable, "config/update-external.py", "--check"],
             cwd=repository,
             env=environment,
             capture_output=True,
             text=True,
             timeout=30,
         )
-        assert remote_check.returncode == 0, remote_check.stderr
-        assert remote_check.stdout.strip() == _git(repository, "rev-parse", "HEAD")
+        assert checked.returncode == 0, checked.stderr
+        if project is ExternalRuntime.MARIN_SKYRL:
+            manifest.write_text(manifest.read_text().replace(new_commit, "c" * 40))
+            stale = subprocess.run(
+                [sys.executable, "config/update-external.py", "--check"],
+                cwd=repository,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            assert stale.returncode != 0
+            manifest.write_text(manifest.read_text().replace("c" * 40, new_commit))
         for other, path in locks.items():
             if other != project:
                 assert path.read_bytes() == originals[other]
@@ -539,9 +473,13 @@ print(validated_pull_request(snapshot, policy=policy,
             timeout=30,
         )
         assert rejected.returncode != 0
-        _git(repository, "restore", str(foreign_lock.relative_to(repository)))
+        for other, path in locks.items():
+            path.write_bytes(originals[other])
+        shutil.copy2(source / "lib/marin/src/marin/external_dependencies.py", pins)
+        manifest.write_bytes(original_manifest)
+        (repository / "uv.lock").write_bytes(original_root_lock)
     assert len(set(branches)) == len(ExternalRuntime)
-    assert (repository / "uv.lock").read_text() == "initial\n"
+    assert (repository / "uv.lock").read_bytes() == original_root_lock
 
 
 def test_native_package_policy_matches_every_compatibility_floor() -> None:

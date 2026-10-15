@@ -5,10 +5,8 @@
 
 import importlib.util
 import json
-import subprocess
+import runpy
 import tomllib
-import zipfile
-from email import message_from_bytes
 from pathlib import Path
 
 import pytest
@@ -138,62 +136,42 @@ def test_promote_gpu_release_keeps_the_pin_when_the_rendered_wheel_fails_validat
     assert not list(tmp_path.glob("gpu.*.toml.tmp"))
 
 
-@pytest.mark.timeout(180)
-def test_marin_wheel_authors_recipes_with_its_minimum_pydantic_dependency(tmp_path: Path) -> None:
-    root = _workspace_root()
-    built = subprocess.run(
-        ["uv", "build", str(root / "lib/marin"), "--wheel", "--out-dir", str(tmp_path / "dist")],
-        capture_output=True,
-        text=True,
-        timeout=90,
-    )
-    assert built.returncode == 0, built.stderr
-    wheel = next((tmp_path / "dist").glob("*.whl"))
-    with zipfile.ZipFile(wheel) as archive:
-        metadata = message_from_bytes(
-            archive.read(next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA")))
-        )
-    requirement = next(row for row in metadata.get_all("Requires-Dist") if row.startswith("pydantic"))
-    minimum = requirement.split(">=")[1].split(",")[0].split(";")[0].strip()
-    environment = tmp_path / "environment"
-    subprocess.run(
-        ["uv", "venv", "--python", "3.12", str(environment)], check=True, capture_output=True, text=True, timeout=30
-    )
-    python = environment / "bin/python"
-    subprocess.run(
-        ["uv", "pip", "install", "--python", str(python), "--no-deps", str(wheel)],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    subprocess.run(
-        ["uv", "pip", "install", "--python", str(python), f"pydantic=={minimum}"],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    program = """
-import importlib.util, json, pickle
-from pathlib import Path
-import marin.skyrl_recipe as schema
-from marin.skyrl_recipe import Algorithm, ContextBudget, Generator, RecipePatch, SkyRLRecipe, Trainer
-assert 'site-packages' in Path(schema.__file__).parts, schema.__file__
-assert all(importlib.util.find_spec(name) is None for name in ('yaml','ray','torch','hydra','omegaconf'))
-recipe = SkyRLRecipe.combine(
-    budget=RecipePatch(context_budget=ContextBudget(
-        request_window_tokens=512,max_new_tokens_per_turn=128,max_turns=1)),
-    policy=RecipePatch(trainer=Trainer(algorithm=Algorithm(use_kl_loss=False)),
-                       generator=Generator(backend='vllm')),
-).with_settings(['context_budget.max_turns=4'])
-assert pickle.loads(pickle.dumps(recipe)) == recipe
-print(json.dumps(recipe.to_skyrl()))
-"""
-    result = subprocess.run([str(python), "-I", "-c", program], cwd=tmp_path, capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == {
-        "context_budget": {"request_window_tokens": 512, "max_new_tokens_per_turn": 128, "max_turns": 4},
-        "trainer": {"algorithm": {"use_kl_loss": False}},
-        "generator": {"backend": "vllm"},
-    }
+@pytest.fixture
+def gpu_pin_workspace(tmp_path, monkeypatch):
+    update_external = _update_external()
+    pin = tmp_path / "gpu.toml"
+    generated = tmp_path / "external_dependencies.py"
+    monkeypatch.setattr(update_external, "VLLM_GPU_RELEASE_CONFIG", pin)
+    monkeypatch.setattr(update_external, "GENERATED_PINS", generated)
+    generated.write_text("# previous generated pins\n")
+    return update_external, pin, generated
+
+
+def test_promote_gpu_release_updates_pin_and_generated_dependencies(tmp_path, gpu_pin_workspace):
+    update_external, pin, generated = gpu_pin_workspace
+    previous = _promoted_manifest()
+    previous["source"]["fork_commit"] = "e" * 40
+    previous["release"]["tag"] = "marin-vllm-gpu-20251201-eeeeeeeeeeee"
+    pin.write_text(update_external.render_gpu_release_toml(previous))
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(_promoted_manifest()))
+
+    update_external.promote_gpu_release(manifest_path)
+
+    release = update_external.load_vllm_gpu_release(pin)
+    packaged = runpy.run_path(str(generated))["VLLM_GPU_RELEASE"]
+    assert release.release_tag == packaged.release_tag == _promoted_manifest()["release"]["tag"]
+    assert release.source_commit == packaged.source_commit == "a" * 40
+
+
+def test_gpu_manifest_generation_failure_preserves_the_existing_pin(tmp_path, monkeypatch, gpu_pin_workspace):
+    update_external, pin, generated = gpu_pin_workspace
+    original = update_external.render_gpu_release_toml(_promoted_manifest())
+    pin.write_text(original)
+    monkeypatch.setattr(update_external, "TPU_FORKS_CONFIG", tmp_path / "missing-tpu.toml")
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(_promoted_manifest()))
+    with pytest.raises(FileNotFoundError):
+        update_external.promote_gpu_release(manifest_path)
+    assert pin.read_text() == original
+    assert generated.read_text() == "# previous generated pins\n"

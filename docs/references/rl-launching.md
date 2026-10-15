@@ -51,12 +51,21 @@ are present in its environment.
 Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no parallel request
 envelope and no internal command-line rendering layer.
 
+The runtime executes tasks through `TaskSession` and sends token requests to model engines.
+Harbor tasks use the Shellbox session. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
+See [task rollouts](task-rollouts.md) for task execution and backend limits.
+
+The launcher uses the frozen project in `config/external/MarinSkyRL` in an isolated environment.
+This project supplies the pinned SkyRL revision, published Rigging package, and platform wheel sources.
+The launch document records that revision in `runtime.launcher_commit`.
+Outside a Marin checkout, the launcher raises `RuntimeError` before submission.
+
 ```text
 Marin experiment
   SkyRLSpec + IrisSkyRLExecution + resolved artifacts
                          |
                          v
-  source launch.yaml: run, runtime, iris, ingress, ray,
+  source launch.yaml: run, runtime, iris, ray,
                       artifacts, inputs, skyrl recipe
                          |
                          v
@@ -99,29 +108,28 @@ forwarding tests at every process boundary.
 
 ## Typed recipes
 
-`marin.skyrl_recipe` contains Schema classes generated from MarinSkyRL's YAML and the immutable,
+`marinskyrl.recipe_schema` contains Schema classes generated from MarinSkyRL's YAML and the immutable,
 sparse Recipe API. Only explicitly authored fields appear in `recipe.to_skyrl()`. Hydra supplies
 runtime defaults on the launch host.
 
 Construct a `SkyRLRecipe` from typed sections and pass it as `SkyRLSpec(recipe=..., hardware=...)`.
 `SkyRLHardware` declares the GPU variant and GPUs per node. The launcher derives physical node
-count, runtime profile and ingress mode from the composed recipe.
+count and runtime profile from the composed recipe.
 
 ```python
-from marin.skyrl_recipe import Algorithm, ContextBudget, Generator, Placement, SkyRLRecipe, Trainer
+from marinskyrl.recipe_schema import Algorithm, ContextBudget, Generator, Placement, SkyRLRecipe, Trainer
 from marin.rl.skyrl import SkyRLHardware
 
 recipe = SkyRLRecipe(
     context_budget=ContextBudget(request_window_tokens=2048, max_new_tokens_per_turn=1024, max_turns=1),
     trainer=Trainer(
-        strategy="megatron",
         placement=Placement(colocate_all=False, colocate_policy_ref=True,
                             policy_num_nodes=1, policy_num_gpus_per_node=8,
                             ref_num_nodes=1, ref_num_gpus_per_node=8),
         train_batch_size=64, policy_mini_batch_size=32, micro_train_batch_size_per_gpu=4,
         algorithm=Algorithm(use_kl_loss=True),
     ),
-    generator=Generator(backend="vllm", run_engines_locally=True, num_inference_engines=8,
+    generator=Generator(backend="vllm", num_inference_engines=8,
                         inference_engine_tensor_parallel_size=1,
                         inference_engine_pipeline_parallel_size=1,
                         inference_engine_data_parallel_size=1,
@@ -131,7 +139,8 @@ hardware = SkyRLHardware(gpu_variant="H100", gpus_per_node=8)
 ```
 
 Marin requires explicit placement, inference geometry, batch sizes, samples per prompt,
-`trainer.algorithm.use_kl_loss`, strategy, backend and local-engine mode. It checks `model_fields_set`
+`trainer.algorithm.use_kl_loss` and backend. The adapter contributes strategy="megatron" and
+run_engines_locally=True as a fixed named part. It checks `model_fields_set`
 for these declarations and requires policy GPU width to match the hardware. Read authored policy
 through typed attributes, such as `recipe.trainer.placement.policy_num_nodes`; effective values come
 from the launcher's prepare mode. MarinSkyRL owns resource arithmetic and trainer batch validation.
@@ -149,19 +158,22 @@ A derived token limit names `context_budget` as its owner. Run seed, retention, 
 other launch-owned values belong in the launch envelope. Harbor and engine kwargs remain intentional
 open mappings with the shared ownership checks.
 
-## Pin and copied schema
+## Package and launcher pin
 
-`config/update-external.py` copies the flat schema at the commit in the MarinSkyRL external lock
-into `marin.skyrl_recipe`. Its adjacent provenance records that commit, per-file hashes and one
-content hash. The updater verifies the launcher commit and copies its Git blobs. `--check` hashes
-the copied file names and contents and compares the result with the provenance manifest, without
-Git access, fetching or writing.
+Marin-core depends on `marinskyrl-recipe` through the MarinSkyRL Git repository's
+`packages/marinskyrl-recipe` subdirectory. The package ships the author schema and depends only
+on pydantic. Its commit matches `MARIN_SKYRL.commit` and the isolated launcher's frozen lock.
+`config/update-external.py MarinSkyRL` refreshes the requirement, root lock, external lock and
+generated pins together. `--check` verifies those identities locally.
 
-Marin format, license and type-file checks exclude copied source; callers remain type checked.
-The manifest hash check owns the copy. Bot updates admit only the copied inventory and provenance
-alongside the project lock and generated pins. The required unit-test launch-document check builds
-every supported producer configuration and loads each document with the installed pin. A breaking
-pin migration is a human PR that changes the pin, copy and producers together.
+The PyPI build of `marin-core` strips direct URL requirements. Users of that artifact must install
+`marinskyrl-recipe` separately from the same Git commit before importing RL launch modules.
+The locked workspace installs it automatically.
+
+A schema-only root lock update selects the launch-document compatibility test. That test builds
+every supported producer configuration and loads it through production's isolated frozen project.
+Changes to other dependencies retain their ordinary test selection. Before a breaking pin update
+lands, its producer migration must pass this compatibility test.
 
 ## Artifact and runtime boundaries
 

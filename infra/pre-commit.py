@@ -46,9 +46,10 @@ MARIN_LICENSE = ROOT_DIR / "etc/license_header.txt"
 LEVANTER_BLACK_CONFIG = ROOT_DIR / "lib/levanter/pyproject.toml"
 HALIAX_BLACK_CONFIG = ROOT_DIR / "lib/haliax/pyproject.toml"
 MARIN_RUFF_CONFIG = ROOT_DIR / "lib/marin/pyproject.toml"
-COPIED_RECIPE_PATTERN = "lib/marin/src/marin/skyrl_recipe/**"
 
 EXCLUDE_PATTERNS = [
+    # Upstream scorers are vendored byte for byte; see each family's scorers/VENDORED.md.
+    "experiments/post_training/task_curation/datasets/*/scorers/**",
     ".git/**",
     ".github/**",
     "tests/snapshots/**",
@@ -821,30 +822,14 @@ def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Pyrefly type checker", result.returncode, output)
 
 
-def check_skyrl_recipe(_files: list[pathlib.Path], _fix: bool) -> int:
-    result = run_cmd(["uv", "run", "config/update-external.py", "--check"])
-    return _record("Pinned SkyRL recipe source", result.returncode, result.stdout + result.stderr)
-
-
 @dataclass
 class PrecommitConfig:
     patterns: list[str]
     checks: list[Callable[[list[pathlib.Path], bool], int]]
-    exclude_patterns: list[str] = field(default_factory=lambda: [COPIED_RECIPE_PATTERN])
+    exclude_patterns: list[str] = field(default_factory=list)
 
 
 PRECOMMIT_CONFIGS = [
-    PrecommitConfig(
-        patterns=[
-            COPIED_RECIPE_PATTERN,
-            "lib/marin/src/marin/skyrl_recipe.provenance.json",
-            "lib/marin/src/marin/external_dependencies.py",
-            "config/external/MarinSkyRL/*",
-            "config/update-external.py",
-        ],
-        checks=[check_skyrl_recipe],
-        exclude_patterns=[],
-    ),
     PrecommitConfig(
         patterns=["lib/levanter/**/*.py"],
         checks=[

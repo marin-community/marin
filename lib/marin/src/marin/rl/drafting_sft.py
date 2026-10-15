@@ -3,9 +3,7 @@
 
 """Reusable authored recipes for online draft-model SFT during SkyRL rollouts."""
 
-from rigging.filesystem.storage_path import StoragePath
-
-from marin.skyrl_recipe import (
+from marinskyrl.recipe_schema import (
     Algorithm,
     ContextBudget,
     Data,
@@ -19,6 +17,7 @@ from marin.skyrl_recipe import (
     SpeculativeDecoding,
     Trainer,
 )
+from rigging.filesystem.storage_path import StoragePath
 
 
 def draft_sft_recipe(
@@ -26,7 +25,7 @@ def draft_sft_recipe(
     initial_draft_identity: str,
     *,
     policy: RecipePatch,
-    training: SpeculativeDecoding,
+    speculative_decoding: SpeculativeDecoding,
     environment: str,
     project_name: str,
     request_window_tokens: int,
@@ -43,7 +42,6 @@ def draft_sft_recipe(
             ),
             environment=Environment(env_class=environment),
             trainer=Trainer(
-                strategy="megatron",
                 flash_attn=False,
                 use_sample_packing=False,
                 offload_optimizer_during_rollouts=True,
@@ -65,7 +63,6 @@ def draft_sft_recipe(
                 vllm_attention_backend="FLASH_ATTN",
                 gpu_memory_utilization=0.75,
                 enforce_eager=False,
-                run_engines_locally=True,
                 weight_sync_backend="nccl",
                 engine_init_kwargs={"async_scheduling": False},
                 sampling_params=SamplingParams(temperature=1.0, top_p=1.0),
@@ -74,12 +71,11 @@ def draft_sft_recipe(
             extra_env={"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
         ),
         policy=policy,
-        draft=RecipePatch(
+        draft=RecipePatch(generator=Generator(speculative_decoding=speculative_decoding)),
+        source=RecipePatch(
             generator=Generator(
-                speculative_decoding=training.merge(
-                    SpeculativeDecoding(
-                        model=Model(source_uri=str(initial_draft), source_identity=initial_draft_identity)
-                    )
+                speculative_decoding=SpeculativeDecoding(
+                    model=Model(source_uri=str(initial_draft), source_identity=initial_draft_identity)
                 )
             )
         ),

@@ -6,8 +6,8 @@ from dataclasses import replace
 import pytest
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
-from marin.skyrl_recipe import SkyRLRecipe
 from marin.training.training import LevanterCheckpoint
+from marinskyrl.recipe_schema import SkyRLRecipe
 
 from experiments.post_training.iceball_micro import iceball_rl_spec
 

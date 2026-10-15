@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import inspect
-import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
@@ -23,9 +21,9 @@ from experiments.post_training import async_rl, iceball_micro, snowball_online_e
 from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
 from experiments.post_training.mismatch_probe import launch as mismatch
-from experiments.post_training.tasktrove import rl_smoke as tasktrove
+from experiments.post_training.task_sessions import validation
 
-VERSION = "2026.10.03"
+VERSION = "2026.10.15"
 
 
 @dataclass(frozen=True)
@@ -33,7 +31,6 @@ class LaunchDocument:
     case: str
     document: dict[str, Any]
     fingerprint: str
-    launcher_requirement: str
 
 
 @dataclass(frozen=True)
@@ -69,20 +66,8 @@ def _iceball_step() -> ArtifactStep[SkyRLRun]:
     return iceball_micro.build_workflow(version=VERSION).rl
 
 
-def _tasktrove_step(artifact_root: Path) -> ArtifactStep[SkyRLRun]:
-    release_path = artifact_root / "tasktrove"
-    release_path.mkdir(parents=True, exist_ok=True)
-    (release_path / "manifest.json").write_text(json.dumps({"verify_tool_ref": "verifyit==0.1.0"}))
-    release = ArtifactStep.adopt("documents/launch-census-tasktrove", VERSION, str(release_path))
-    return tasktrove.smoke_step(release)
-
-
-def _probe_step(
-    artifact_root: Path, settings: dict[str, int | float | str | tuple[str, ...] | None]
-) -> ArtifactStep[SkyRLRun]:
-    # The build-options wrapper displays/runs a graph. Its wrapped Click build body returns that graph.
-    builder = inspect.unwrap(mismatch.main.callback)
-    return builder(
+def _probe_step(artifact_root: Path, settings: dict) -> ArtifactStep[SkyRLRun]:
+    return mismatch.build_run(
         model_uri=str(artifact_root / "iceball-sft"),
         data_uri=str(artifact_root / "gsm8k"),
         input_version=VERSION,
@@ -130,14 +115,15 @@ def launch_builders(
     )
     builders["canary/seed-identity"] = partial(canary.build_run, preset="dry", version=VERSION, seed=18)
     builders["iceball/workflow"] = _iceball_step
-    builders["tasktrove/smoke"] = partial(_tasktrove_step, artifact_root)
+    for mode in ("whole", "step"):
+        builders[f"task-sessions/{mode}"] = partial(validation.build_run, mode=mode, version=VERSION, steps=10)
     for label, preset in snowball_online_eagle.PRESETS.items():
         builders[f"eagle/{label}"] = partial(snowball_online_eagle.online_eagle_step, preset)
     replay_choices = ((), *((mode,) for mode in mismatch.REPLAY_MODES), mismatch.REPLAY_MODES)
     for cache, replay, updates, resume, reuse in product(
         ("off", "on", "both"), replay_choices, (0, 2), (False, True), (False, True)
     ):
-        settings: dict[str, int | float | str | tuple[str, ...] | None] = dict(
+        settings = dict(
             seed=17,
             prompt_count=2,
             samples_per_prompt=2,
@@ -180,11 +166,7 @@ def render_launch_census(artifact_root: Path) -> LaunchCensus:
                 step = build()
                 _write_model_metadata(step, artifact_root)
                 config = materialized_config(step, str(artifact_root))
-                documents.append(
-                    LaunchDocument(
-                        name, yaml.safe_load(config.launch_config_yaml), step.fingerprint(), config.launcher_requirement
-                    )
-                )
+                documents.append(LaunchDocument(name, yaml.safe_load(config.launch_config_yaml), step.fingerprint()))
             except Exception as error:
                 failures.append(BuildFailure(name, type(error).__name__, str(error)))
     return LaunchCensus(tuple(builders), tuple(documents), tuple(failures), unsupported)

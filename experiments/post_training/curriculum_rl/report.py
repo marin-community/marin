@@ -178,8 +178,8 @@ def sampler_of(arm: str) -> str:
 def responses_per_generate(arm: str) -> int:
     """TOKENS_KEY is a per-response mean, so token spend scales by the arm's
     responses per generate call: train_batch_size * n_samples_per_prompt."""
-    plan = SCALES[family_of(arm).scale].role_plan
-    return plan.train_batch_size * plan.n_samples_per_prompt
+    recipe = SCALES[family_of(arm).scale].recipe
+    return recipe.trainer.train_batch_size * recipe.generator.n_samples_per_prompt
 
 
 def arm_of(run_name: str) -> str | None:

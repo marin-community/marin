@@ -18,6 +18,7 @@ from enum import StrEnum, auto
 from itertools import groupby, islice
 from typing import Any
 
+from pyarrow import Schema
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
@@ -132,6 +133,23 @@ class Reshard:
 
 
 @dataclass
+class Split:
+    """Expose each existing chunk as a task, retaining its parent shard and order."""
+
+
+@dataclass
+class Concat:
+    """Restore the shard layout preceding Split by concatenating ordered references."""
+
+
+@dataclass
+class ParquetOutput:
+    """Materialize map fragments as Arrow batches for a following Parquet writer."""
+
+    schema: Schema
+
+
+@dataclass
 class Join:
     """Join two sorted streams."""
 
@@ -139,7 +157,7 @@ class Join:
     right_plan: "PhysicalPlan | None" = None
 
 
-PhysicalOp = Map | Write | Scatter | Reduce | Fold | Reshard | Join
+PhysicalOp = Map | Write | Scatter | Reduce | Fold | Reshard | Split | Concat | ParquetOutput | Join
 
 
 class StageType(StrEnum):
@@ -148,6 +166,12 @@ class StageType(StrEnum):
     MAP_WORKER = auto()
     REDUCE_WORKER = auto()
     RESHARD = auto()
+    SPLIT = auto()
+    CONCAT = auto()
+
+    @property
+    def runs_on_worker(self) -> bool:
+        return self in (StageType.MAP_WORKER, StageType.REDUCE_WORKER)
 
 
 def _map_gen(stream: Iterator, fn: Callable) -> Iterator:
@@ -235,7 +259,7 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
     return pipeline
 
 
-def _writer_for(writer_type: str, schema: Any) -> Callable[[Iterable, str], object]:
+def _writer_for(writer_type: str, schema: Schema | None) -> Callable[[Iterable, str], object]:
     """Bind a logical writer type (and optional schema) to its writer callable.
 
     Resolved once at plan time so ``run_stage`` neither dispatches on a string
@@ -285,6 +309,8 @@ class PhysicalStage:
     - MAP_WORKER: Normal worker execution (map/filter/write)
     - REDUCE_WORKER: Memory-intensive worker execution (scatter/reduce/join)
     - RESHARD: Redistribute chunks across shards (no worker execution)
+    - SPLIT: Expose ordered chunks as independent tasks
+    - CONCAT: Restore the parent shard layout after split tasks
     """
 
     operations: list[PhysicalOp] = field(default_factory=list)
@@ -490,10 +516,10 @@ class FusionState:
     stage_type: StageType | None = None
 
     def _set_stage_type(self, op: PhysicalOp) -> None:
-        if isinstance(op, (Reshard)):
+        if isinstance(op, (Reshard, Split, Concat)):
             if self.stage_type is not None:
-                raise ValueError("Reshard should be the only op in a RESHARD stage")
-            self.stage_type = StageType.RESHARD
+                raise ValueError("Reference operations require their own stage")
+            self.stage_type = {Reshard: StageType.RESHARD, Split: StageType.SPLIT, Concat: StageType.CONCAT}[type(op)]
         elif isinstance(op, (Reduce, Join)):
             self.stage_type = StageType.REDUCE_WORKER
         else:
@@ -553,8 +579,26 @@ class FusionState:
         self.end_stage()
         return self.stages
 
+    def flush_parallel(self, output: ParquetOutput | None = None) -> None:
+        """Bracket independent row operations with Split/Concat stage boundaries."""
+        if not self.pending_fusible:
+            return
+        pending = self.pending_fusible
+        self.pending_fusible = []
+        self.end_stage()
+        self.add_op(Split())
+        self.end_stage()
+        self.pending_fusible = pending
+        if output is not None:
+            self.add_op(output)
+        self.end_stage()
+        self.add_op(Concat())
+        self.end_stage()
 
-def _fuse_operations(operations: list) -> list[PhysicalStage]:
+
+def _fuse_operations(
+    operations: list, *, parallelism: int, source_shards: int, source_tasks: int
+) -> list[PhysicalStage]:
     """Fuse logical operations into physical stages.
 
     Transforms logical ops into physical ops:
@@ -567,6 +611,9 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
 
     Args:
         operations: List of logical operations
+        parallelism: Worker limit for independent row operations.
+        source_shards: Number of original source shards.
+        source_tasks: Number of source fragments.
 
     Returns:
         List of PhysicalStages with physical operations and execution metadata
@@ -575,8 +622,26 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
         return []
 
     state = FusionState()
+    current_shards = source_shards
+    splittable_refs = source_tasks > source_shards
+
+    def can_split() -> bool:
+        return current_shards < parallelism and splittable_refs
 
     for op in operations:
+        if can_split():
+            if isinstance(op, (LoadFileOp, MapOp, FilterOp, FlatMapOp, SelectOp)):
+                state.pending_fusible.append(op)
+                continue
+            # An explicit schema keeps fragment inference from changing the
+            # final file's types (e.g. an all-null fragment versus later strings).
+            output = (
+                ParquetOutput(op.schema)
+                if isinstance(op, WriteOp) and op.writer_type == "parquet" and op.schema is not None
+                else None
+            )
+            state.flush_parallel(output)
+
         if isinstance(op, WriteOp):
             state.add_op(
                 Write(
@@ -599,6 +664,9 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
             )
             state.end_stage()
             state.add_op(Reduce(key_fn=op.key_fn, reducer_fn=op.reducer_fn))
+            current_shards = op.num_output_shards or current_shards
+            # Maps following a reduction stay on its output shard.
+            splittable_refs = False
 
         elif isinstance(op, ReduceOp):
             state.add_op(Fold(fn=op.local_reducer))
@@ -606,14 +674,18 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
             state.add_op(Reshard(num_shards=1), output_shards=1)
             state.end_stage()
             state.add_op(Fold(fn=op.global_reducer))
+            current_shards = 1
+            splittable_refs = False
 
         elif isinstance(op, ReshardOp):
             state.end_stage()
             state.add_op(Reshard(num_shards=op.num_shards), output_shards=op.num_shards)
             state.end_stage()
+            current_shards = op.num_shards
+            splittable_refs = True
 
         elif isinstance(op, JoinOp):
-            right_plan = compute_plan(op.right_dataset)
+            right_plan = compute_plan(op.right_dataset, parallelism=parallelism)
             state.add_op(
                 Join(
                     fn=compose_join(op.left_key_fn, op.right_key_fn, op.combiner_fn, op.join_type),
@@ -625,7 +697,11 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
             # Fusible ops: LoadFileOp, MapOp, FilterOp, FlatMapOp, MapShardOp,
             # TakePerShardOp, WindowOp, SelectOp
             state.pending_fusible.append(op)
+            if can_split():
+                state.flush_pending()
 
+    if can_split():
+        state.flush_parallel()
     return state.finalize()
 
 
@@ -634,6 +710,9 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
 # corpus of thousands of files from serializing into thousands of round-trips.
 _FOOTER_READ_CONCURRENCY = 32
 
+# Extra source tasks let uneven row maps keep workers busy as tasks finish.
+_SOURCE_TASKS_PER_WORKER = 4
+
 # Whole-file read: a single span with no explicit row bounds.
 _WHOLE_FILE_ROW_RANGE: tuple[int | None, int | None] = (None, None)
 
@@ -641,17 +720,16 @@ _WHOLE_FILE_ROW_RANGE: tuple[int | None, int | None] = (None, None)
 def _row_ranges_per_file(
     files: list[FileEntry],
     load_op: LoadFileOp,
+    parallelism: int,
 ) -> list[list[tuple[int | None, int | None]]]:
     """Row spans covering each file, in input order.
 
-    Without ``approx_shard_bytes`` every file is one unbounded span and no IO
-    happens. With it, each Parquet file is split at row-group boundaries, which
-    costs one footer read per file; those reads run concurrently. Splits are
-    best-effort: a row group is never divided, so a span can exceed
-    ``approx_shard_bytes`` when a single row group is larger.
+    With neither byte splitting nor intra-shard execution, each file is an
+    unbounded span and no IO happens. Otherwise Parquet footers provide bounded
+    spans, preserving row groups and any explicit byte-based shard layout.
     """
     approx_shard_bytes = load_op.approx_shard_bytes
-    if approx_shard_bytes is None:
+    if approx_shard_bytes is None and parallelism == 1:
         return [[_WHOLE_FILE_ROW_RANGE] for _ in files]
 
     def row_ranges(entry: FileEntry) -> list[tuple[int | None, int | None]]:
@@ -664,21 +742,70 @@ def _row_ranges_per_file(
         return list(pool.map(row_ranges, files))
 
 
+def _source_items_for_files(
+    files: list[FileEntry],
+    load_op: LoadFileOp,
+    parallelism: int,
+    columns: list[str] | None,
+    filter_expr: Expr | None,
+) -> list[SourceItem]:
+    """Size ordered source tasks from Parquet row counts while retaining shard IDs."""
+    # A RecordBatch is a user-visible item; changing source ranges would change
+    # its boundaries and therefore the result of arbitrary batch maps.
+    split_source = not load_op.batch_mode and len(files) < parallelism
+    source_items: list[SourceItem] = []
+    ranges_per_file = _row_ranges_per_file(files, load_op, parallelism if split_source else 1)
+    spans = [(entry, start, end) for entry, ranges in zip(files, ranges_per_file, strict=True) for start, end in ranges]
+    fragment_counts = [1] * len(spans)
+    if split_source and len(spans) < parallelism:
+        capacity = sum(max(0, end - start - 1) for _, start, end in spans if start is not None and end is not None)
+        target = min(parallelism * _SOURCE_TASKS_PER_WORKER, len(spans) + capacity)
+        candidates = [
+            (-(end - start), index)
+            for index, (_, start, end) in enumerate(spans)
+            if start is not None and end is not None and end - start > 1
+        ]
+        heapq.heapify(candidates)
+        for _ in range(target - len(spans)):
+            _, index = heapq.heappop(candidates)
+            fragment_counts[index] += 1
+            _, start, end = spans[index]
+            assert start is not None and end is not None
+            if fragment_counts[index] < end - start:
+                heapq.heappush(candidates, (-(end - start) / fragment_counts[index], index))
+
+    for shard_idx, ((entry, start, end), count) in enumerate(zip(spans, fragment_counts, strict=True)):
+        for fragment_idx in range(count):
+            if start is None:
+                row_start, row_end = None, None
+            else:
+                assert end is not None
+                row_start = start + (fragment_idx * (end - start)) // count
+                row_end = start + ((fragment_idx + 1) * (end - start)) // count
+            source_items.append(
+                SourceItem(
+                    shard_idx=shard_idx,
+                    data=InputFileSpec(
+                        path=entry.path,
+                        format=load_op.format,
+                        columns=columns,
+                        row_start=row_start,
+                        row_end=row_end,
+                        filter_expr=filter_expr,
+                    ),
+                )
+            )
+
+    return source_items
+
+
 def _compute_file_pushdown(
     files: list[FileEntry],
     load_op: LoadFileOp,
     operations: list,
+    parallelism: int,
 ) -> tuple[list[SourceItem], list]:
-    """Create source items for file pipeline with pushdown optimizations applied.
-
-    Args:
-        files: List of FileEntry objects (path + size from bulk listing)
-        load_op: The LoadFileOp specifying format and default columns
-        operations: Full operations list (first op is LoadFileOp)
-
-    Returns:
-        Tuple of (source_items, remaining_operations), where filter/select have been pushed down.
-    """
+    """Push file filters and projections into the source reader."""
     filter_expr: Expr | None = None
     select_columns = load_op.columns
     ops_to_skip: set[int] = set()
@@ -708,32 +835,20 @@ def _compute_file_pushdown(
         else:
             break
 
-    # Create InputFileSpecs with final columns/filter, one per row span.
-    source_items: list[SourceItem] = []
-    for entry, row_ranges in zip(files, _row_ranges_per_file(files, load_op), strict=True):
-        for row_start, row_end in row_ranges:
-            source_items.append(
-                SourceItem(
-                    shard_idx=len(source_items),
-                    data=InputFileSpec(
-                        path=entry.path,
-                        format=load_op.format,
-                        columns=select_columns,
-                        row_start=row_start,
-                        row_end=row_end,
-                        filter_expr=filter_expr,
-                    ),
-                )
-            )
-
     # Build final operations list: LoadFileOp + remaining ops
     final_ops = [load_op] + [op for i, op in enumerate(operations) if i not in ops_to_skip]
-
+    source_items = _source_items_for_files(files, load_op, parallelism, select_columns, filter_expr)
     return source_items, final_ops
 
 
-def compute_plan(dataset: Dataset) -> PhysicalPlan:
-    """Compute physical execution plan from logical dataset."""
+def compute_plan(dataset: Dataset, *, parallelism: int = 1) -> PhysicalPlan:
+    """Compute a plan, optionally executing independent maps within each shard.
+
+    Args:
+        dataset: Logical operations and their source.
+        parallelism: Worker limit for source task sizing. One retains fused
+            execution; larger values can split independent row operations.
+    """
     operations = list(dataset.operations)
     source = dataset.source
 
@@ -745,6 +860,7 @@ def compute_plan(dataset: Dataset) -> PhysicalPlan:
                 file_entries,
                 operations[0],
                 operations[1:],
+                parallelism,
             )
         else:
             # from_files() without load_file() — source items are plain paths
@@ -756,12 +872,16 @@ def compute_plan(dataset: Dataset) -> PhysicalPlan:
             entries,
             operations[0],
             operations[1:],
+            parallelism,
         )
     else:
         source_list = list(source)
         source_items = [SourceItem(shard_idx=i, data=item) for i, item in enumerate(source_list)]
 
-    stages = _fuse_operations(operations)
+    source_shards = len({item.shard_idx for item in source_items})
+    stages = _fuse_operations(
+        operations, parallelism=parallelism, source_shards=source_shards, source_tasks=len(source_items)
+    )
     return PhysicalPlan(source_items=source_items, stages=stages)
 
 
@@ -956,9 +1076,12 @@ def run_stage(
             stream = iter([result])
             op_index += 1
 
-        elif isinstance(op, Reshard):
-            # Reshard is handled by the backend, not in worker
-            raise ValueError("Reshard should not be executed in run_stage")
+        elif isinstance(op, (Reshard, Split, Concat)):
+            raise ValueError("Reference operations should not be executed in run_stage")
+
+        elif isinstance(op, ParquetOutput):
+            # Materialization belongs to the stage IO layer, just like scatter.
+            op_index += 1
 
         elif isinstance(op, Join):
             right_shard = ctx.get_right_shard(op_index)

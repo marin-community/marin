@@ -36,11 +36,11 @@ from marin.rl.skyrl import (
     SkyRLSpec,
     skyrl_step,
 )
-from marin.skyrl_recipe import (
+from marin.training.training import LevanterCheckpoint
+from marinskyrl.recipe_schema import (
     Generator,
     Placement,
     Policy,
-    PolicyMegatronConfig,
     PolicyOptimizerConfig,
     RecipePatch,
     SkyRLRecipe,
@@ -48,9 +48,9 @@ from marin.skyrl_recipe import (
     Trainer,
     Training,
 )
-from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.curriculum_rl.launch import SNOWBALL_PARALLELISM
 from experiments.post_training.curriculum_rl.pool import (
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
@@ -115,18 +115,12 @@ POLICY = RecipePatch.combine(
             eval_batch_size=64,
             policy=Policy(
                 optimizer_config=PolicyOptimizerConfig(lr=1e-06, max_grad_norm=1.0),
-                megatron_config=PolicyMegatronConfig(
-                    tensor_model_parallel_size=1,
-                    pipeline_model_parallel_size=2,
-                    context_parallel_size=1,
-                    expert_model_parallel_size=8,
-                    expert_tensor_parallel_size=1,
-                ),
+                megatron_config=SNOWBALL_PARALLELISM.trainer.policy.megatron_config,
             ),
         )
     ),
 )
-TRAINING = SpeculativeDecoding(
+SPECULATIVE_DECODING = SpeculativeDecoding(
     method="eagle3",
     num_speculative_tokens=3,
     training=Training(
@@ -152,7 +146,7 @@ def _snowball_recipe(preset: _OnlineEaglePreset) -> SkyRLRecipe:
         initial_draft=INITIAL_DRAFT_URI,
         initial_draft_identity=INITIAL_DRAFT_REVISION,
         policy=POLICY,
-        training=TRAINING,
+        speculative_decoding=SPECULATIVE_DECODING,
         environment="aime",
         project_name="marin-snowball-online-eagle",
         request_window_tokens=9856,

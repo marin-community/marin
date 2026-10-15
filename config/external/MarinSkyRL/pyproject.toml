@@ -8,7 +8,8 @@ dependencies = ["marinskyrl"]
 package = false
 prerelease = "allow"
 required-environments = ["sys_platform == 'linux'"]
+# Select the published wheel. SkyRL metrics use Rigging's Prometheus extra.
+override-dependencies = ["marin-rigging[secrets,prometheus]>=0.2.144.dev37540375919"]
 
 [tool.uv.sources]
-# The isolated lock keeps the selected branch revision immutable.
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "1b72125e9d46a6036c419e2c767a8187cf94da02" }
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "f47748384015a35a5256a51bee5c11b633f987a4" }

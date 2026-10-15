@@ -213,6 +213,9 @@ class StoragePath:
         return fs.modified(path)
 
     def mkdirs(self, *, exist_ok: bool = True) -> None:
+        """Create directories; S3 prefixes require no creation."""
+        if self.scheme == "s3":
+            return
         fs, path = _url_to_fs(str(self))
         fs.makedirs(path, exist_ok=exist_ok)
 

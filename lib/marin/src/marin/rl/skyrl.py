@@ -13,13 +13,15 @@ import uuid
 from collections import deque
 from dataclasses import asdict, dataclass
 from enum import StrEnum
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
 import fsspec
 import yaml
 from iris.cluster.client.job_info import get_job_info
+from marinskyrl.recipe_schema import Generator, LaunchResult, LaunchState, RecipePatch, SkyRLRecipe, Trainer
 from pydantic import TypeAdapter
+from rigging.config_discovery import find_project_root
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -29,11 +31,9 @@ from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import sanitize_job_name
 from marin.external_dependencies import MARIN_SKYRL
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
-from marin.skyrl_recipe import LaunchResult, LaunchState, SkyRLRecipe
 from marin.training.training import LevanterCheckpoint
 
 _EXECUTION = "skyrl_execution"
-_LAUNCHER_PYTHON = "3.12"
 _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _TRACE_JOBS_SUBDIR = "trace_jobs"
@@ -209,11 +209,11 @@ class ArtifactDataSource:
 
 @dataclass(frozen=True)
 class TaskTroveDataSource:
-    """A metadata-selected cohort from the compatibility RL view of a TaskTrove release."""
+    """A metadata-selected cohort from an explicitly named packed Harbor file."""
 
     step: ArtifactStep[Artifact]
     selection: TaskTroveSelection
-    relative_path: str = "tasks/part-00000.parquet"
+    relative_path: str
     manifest_path: str = "manifest.json"
 
     def __post_init__(self) -> None:
@@ -245,6 +245,9 @@ class TaskTroveDataSource:
 type SkyRLDataSource = ArtifactDataSource | TaskTroveDataSource
 
 
+_MARIN_POLICY = RecipePatch(trainer=Trainer(strategy="megatron"), generator=Generator(run_engines_locally=True))
+
+
 @dataclass(frozen=True)
 class SkyRLSpec:
     """Backend-neutral, identity-bearing SkyRL experiment definition."""
@@ -260,14 +263,15 @@ class SkyRLSpec:
     seed: int
 
     def __post_init__(self) -> None:
-        recipe = self.recipe
+        recipe = SkyRLRecipe.combine(authored=self.recipe, marin=_MARIN_POLICY)
+        object.__setattr__(self, "recipe", recipe)
         trainer, generator = recipe.trainer, recipe.generator
         placement = trainer.placement
         for section, path, keys in (
             (
                 trainer,
                 "trainer",
-                ("strategy", "train_batch_size", "policy_mini_batch_size", "micro_train_batch_size_per_gpu"),
+                ("train_batch_size", "policy_mini_batch_size", "micro_train_batch_size_per_gpu"),
             ),
             (
                 placement,
@@ -286,7 +290,6 @@ class SkyRLSpec:
                 "generator",
                 (
                     "backend",
-                    "run_engines_locally",
                     "num_inference_engines",
                     "inference_engine_tensor_parallel_size",
                     "inference_engine_pipeline_parallel_size",
@@ -300,10 +303,6 @@ class SkyRLSpec:
             for key in keys:
                 if key not in section.model_fields_set:
                     raise ValueError(f"SkyRL recipe must explicitly set {path}.{key}")
-        if trainer.strategy != "megatron":
-            raise ValueError("Marin SkyRL artifacts require trainer.strategy=megatron")
-        if generator.run_engines_locally is not True:
-            raise ValueError("Marin SkyRL artifacts require generator.run_engines_locally=true")
         if placement.policy_num_gpus_per_node != self.hardware.gpus_per_node:
             raise ValueError("SkyRL policy_num_gpus_per_node must match the whole-node hardware width")
         if trainer.critic.model.path:
@@ -373,7 +372,6 @@ class SkyRLRunConfig:
     output: SkyRLOutputPaths
     export_hf: bool
     draft_checkpoint_root: str | None
-    launcher_requirement: str
 
 
 class SkyRLRun(Artifact):
@@ -392,17 +390,17 @@ class SkyRLRun(Artifact):
 _LAUNCH_RESULT = TypeAdapter(LaunchResult)
 
 
-def _launcher_command(requirement: str, config_path: str) -> list[str]:
+def _launcher_command(config_path: str) -> list[str]:
+    workspace_root = find_project_root(Path(__file__))
+    if workspace_root is None:
+        raise RuntimeError("The MarinSkyRL launcher requires a Marin checkout")
     return [
         "uv",
         "run",
         "--isolated",
-        "--no-project",
-        "--prerelease=allow",
-        "--python",
-        _LAUNCHER_PYTHON,
-        "--with",
-        requirement,
+        "--project",
+        str(workspace_root / "config/external" / MARIN_SKYRL.config_name),
+        "--frozen",
         "marinskyrl",
         "iris",
         "launch",
@@ -439,7 +437,7 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as launch_file:
             launch_file.write(config.launch_config_yaml)
             launch_file.flush()
-            completed = _run_launcher(_launcher_command(config.launcher_requirement, launch_file.name))
+            completed = _run_launcher(_launcher_command(launch_file.name))
         if not completed.stdout.strip():
             raise RuntimeError(
                 f"MarinSkyRL launcher exited {completed.returncode} without a terminal response:\n"
@@ -515,9 +513,6 @@ def _launch_config_yaml(
 ) -> str:
     recipe = spec.recipe.to_skyrl()
     task_env = recipe.get("extra_env", {})
-    terminal_bench = spec.recipe.terminal_bench or {}
-    harbor = terminal_bench.get("harbor", {})
-    controller_ingress = harbor.get("name") == "opencode"
     submit_through_ambient_controller = get_job_info() is not None and execution.target_cluster is not None
     target_cluster = None if submit_through_ambient_controller else execution.target_cluster
     parent_cluster_config = None if submit_through_ambient_controller else execution.parent_cluster_config
@@ -554,11 +549,6 @@ def _launch_config_yaml(
             "timeout": execution.job_timeout_seconds,
             "target_cluster": target_cluster,
             "parent_cluster_config": parent_cluster_config,
-        },
-        "ingress": {
-            "host": "iris.oa.dev" if controller_ingress and execution.cluster.startswith("cw-") else "",
-            "record_literal": controller_ingress,
-            "vllm_http_port": 8000,
         },
         "ray": {
             "port": 6379,
@@ -647,7 +637,6 @@ def skyrl_step(
             output=output,
             export_hf=export_hf,
             draft_checkpoint_root=draft_checkpoint_root,
-            launcher_requirement=MARIN_SKYRL.requirement(),
         )
 
     return ArtifactStep(

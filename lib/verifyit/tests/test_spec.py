@@ -18,6 +18,7 @@ from verifyit.spec import (
     PytestSpec,
     ReasoningGymSpec,
     StdioSpec,
+    StructuredExactSpec,
     parse_spec,
     render_spec,
     spec_from_table,
@@ -30,13 +31,15 @@ from verifyit.spec import (
 def test_round_trip_every_field_kind():
     specs = [
         McqSpec(expected="C", options=5),
+        StructuredExactSpec(expected={"values": [None, True, 1, 1.0, {"text": "value"}]}),
+        StructuredExactSpec(expected=None, empty_output=EmptyOutputPolicy.GRADE),
         PredictedActionSpec(
             expected_calls=(FunctionCall("lookup", {"values": [None, True, 1, 1.0, {"text": "value"}]}),),
             numeric_tolerance=0.01,
         ),
         MathSpec(expected="(1, 2)", math_type=MathType.TUPLE),
         MathSpec(expected="0.5", profile=MathProfile.BOXED),
-        NumericSpec(expected=42.0, tolerance_abs=0.1, tolerance_rel=0.01),
+        NumericSpec(expected="42", tolerance_abs=0.1, tolerance_rel=0.01),
         ExactSpec(expected=("a", "b"), ordered=False, strip_outer_whitespace=False),
         IfevalSpec(constraints=(Constraint("last_word:last_word_answer", {"last_word": "contest"}),)),
         StdioSpec(command="python3 /app/main.py", compare=Compare.FLOAT, special_judge="judge.py", min_cases=3),
@@ -51,6 +54,13 @@ def test_single_string_becomes_tuple_and_none_is_omitted():
     spec = parse_spec('mode = "exact"\nexpected = "42"\n')
     assert spec == ExactSpec(expected=("42",))
     assert "special_judge" not in render_spec(StdioSpec(command="./a.out"))
+
+
+def test_large_repository_test_id_lists_round_trip():
+    # SWE-smith repositories can carry thousands of parametrized PASS_TO_PASS IDs.
+    ids = tuple(f'tests/test_schema.py::test_schema[case-{i}-"quoted"-\\-\n-λ]' for i in range(10_000))
+    spec = PytestSpec(must_pass=ids[:2], must_not_break=ids)
+    assert parse_spec(render_spec(spec)) == spec
 
 
 @pytest.mark.parametrize(
@@ -97,7 +107,7 @@ def test_reasoning_gym_params_roundtrip_and_legacy_default():
         ("predicted_action", {"expected_calls": [{"name": "lookup", "arguments": {"id": 1}}]}),
         ("mcq", {"expected": "A"}),
         ("math", {"expected": "1"}),
-        ("numeric", {"expected": 1.0}),
+        ("numeric", {"expected": "1", "tolerance_abs": 0.0, "tolerance_rel": 0.0}),
         ("exact", {"expected": [""]}),
         ("json-schema", {}),
         ("xml-elements", {"required": ["answer"]}),
@@ -116,3 +126,15 @@ def test_output_modes_materialize_and_render_explicit_empty_policy(mode, fields)
     assert parse_spec(render_spec(configured)) == configured
     with pytest.raises(ValueError):
         spec_from_table({"mode": mode, **fields, "empty_output": "reward_half"})
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "mode = 'structured_exact'\nexpected = '{\"value\":1,\"value\":2}'\n",
+        "mode = 'predicted_action'\n[[expected_calls]]\nname = 'submit'\narguments = '{\"value\":1,\"value\":2}'\n",
+    ],
+)
+def test_embedded_private_json_rejects_duplicate_keys(text):
+    with pytest.raises(ValueError):
+        parse_spec(text)

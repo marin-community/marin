@@ -37,6 +37,7 @@ from iris.cluster.constraints import ConstraintOp
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.cluster.types import JobName, ResourceSpec, gpu_device
 from iris.resources.state import JobState as IrisJobState
+from iris.rpc import job_pb2
 from rigging.timing import Duration
 
 
@@ -289,6 +290,22 @@ class TestImagePlumbing:
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] == "custom/swetrace:dev"
         assert kwargs["replicas"] == 2
+
+    def test_create_actor_group_passes_the_container_profile_to_iris(self):
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-123")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+
+        class _DummyActor:
+            pass
+
+        client.create_actor_group(
+            _DummyActor,
+            name="dummy",
+            count=1,
+            resources=ResourceConfig(cpu=2, ram="4g", container_profile="CONTAINER_PROFILE_PRIVILEGED"),
+        )
+        assert fake_iris.submit.call_args.kwargs["container_profile"] == job_pb2.CONTAINER_PROFILE_PRIVILEGED
 
     def test_create_actor_group_default_image_is_none(self):
         """When ResourceConfig.image is unset, task_image flows through as None."""

@@ -20,6 +20,7 @@ from reasoning_gym.factory import DATASETS
 from verifyit.file_ops.read import read_text
 from verifyit.grade import InvalidTask, Reward, empty_output_policy, read_output, scored
 from verifyit.json_objects import unique_object
+from verifyit.modes.extract import extract_markdown_answer
 from verifyit.spec import EmptyOutputPolicy, ReasoningGymSpec
 
 CANDIDATE_DETAIL_CHARS = 200
@@ -107,7 +108,12 @@ def _grade_candidate(
     policy = empty_output_policy(spec)
     if candidate is None or (not candidate.strip() and policy is EmptyOutputPolicy.ZERO):
         return scored(0.0, reason="no_output")
-    answer = candidate.strip()
+    answer = extract_markdown_answer(candidate) or candidate.strip()
+    metadata = entry["metadata"]
+    output = metadata.get("output")
+    if isinstance(output, list) and all(isinstance(row, list) for row in output):
+        # JSON turns tuple grids into lists, while the grid scorers parse replies into tuples.
+        entry = {**entry, "metadata": {**metadata, "output": tuple(tuple(row) for row in output)}}
     score = score_answer(answer, entry)
     if isinstance(score, bool) or not isinstance(score, int | float):
         raise TypeError(f"reasoning-gym scorer for {spec.dataset} returned {type(score).__name__}")

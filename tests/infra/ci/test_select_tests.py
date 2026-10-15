@@ -3,12 +3,14 @@
 
 """Tests for the import-driven test selector (infra/ci/select_tests.py)."""
 
+import re
 import subprocess
 import textwrap
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+import yaml
 
 from infra.ci.select_tests import (
     SCOPES,
@@ -129,7 +131,7 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
     [
         "experiments/post_training/curriculum_rl/policy.yaml",
         "lib/marin/src/marin/rl/skyrl.py",
-        "lib/marin/src/marin/rl/recipe_schema/sections.py",
+        "uv.lock",
         "config/external/MarinSkyRL/uv.lock",
         "config/external/MarinSkyRL/pyproject.toml",
         "lib/marin/src/marin/external_dependencies.py",
@@ -139,6 +141,51 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
     ],
 )
 def test_launch_documents_run_for_config_and_bot_changes_without_import_edges(tmp_path: Path, changed_file: str) -> None:
+    if changed_file == "uv.lock":
+        _commit_base_tpu_workspace(tmp_path)
+        repository = "https://github.com/marin-community/MarinSkyRL.git"
+        old = "a" * 40
+        new = "b" * 40
+        requirement = f"marinskyrl-recipe @ git+{repository}@{old}#subdirectory=packages/marinskyrl-recipe"
+        write(tmp_path, "lib/marin/pyproject.toml", f'[project]\ndependencies = ["{requirement}"]\n')
+        lock = (
+            (tmp_path / "uv.lock").read_text()
+            + f"""
+[[package]]
+name = "marinskyrl-recipe"
+version = "0.1.0"
+source = {{ git = "{repository}?subdirectory=packages%2Fmarinskyrl-recipe#{old}" }}
+[[package]]
+name = "marin-core"
+source = {{ editable = "lib/marin" }}
+dependencies = [{{ name = "marinskyrl-recipe" }}]
+[package.metadata]
+requires-dist = [
+{{ name = "marinskyrl-recipe", git = "{repository}?subdirectory=packages%2Fmarinskyrl-recipe&rev={old}" }}
+]
+"""
+        )
+        write(tmp_path, "uv.lock", lock)
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "recipe"],
+            cwd=tmp_path,
+            check=True,
+        )
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+        write(tmp_path, "uv.lock", lock.replace(old, new))
+        write(tmp_path, "lib/marin/pyproject.toml", f'[project]\ndependencies = ["{requirement.replace(old, new)}"]\n')
+        write(tmp_path, "tests/rl/test_rl_launch_documents.py", "def test_launch_documents():\n    assert True\n")
+        changed = ["uv.lock", "lib/marin/pyproject.toml"]
+        selection = select_changed_tests(changed, tmp_path, base_ref=base)
+        assert leg_paths(selection.matrix, "marin") == ["tests/rl/test_rl_launch_documents.py"]
+        assert selection.suites == []
+        assert len(selection.matrix) == 1
+        write(tmp_path, "uv.lock", lock.replace(old, new).replace('name = "shared"', 'name = "changed-shared"'))
+        broad = select_changed_tests(changed, tmp_path, base_ref=base)
+        assert "shellbox-unit" in broad.suites
+        assert len(broad.matrix) > 1
+        return
     write(tmp_path, changed_file)
     write(tmp_path, "tests/rl/test_rl_launch_documents.py", "def test_launch_documents():\n    assert True\n")
     write(tmp_path, "tests/test_unrelated.py", "def test_unrelated():\n    assert True\n")
@@ -189,15 +236,16 @@ def test_full_marin_suite_includes_experiment_tests(
 
     selection = select_changed_tests(changed_files, tmp_path, run_all_tests=run_all_tests)
 
-    assert leg_paths(selection.matrix, "marin") == ["tests", "experiments"]
+    assert leg_paths(selection.matrix, "marin") == ["experiments/moe/test_optimizer.py", "tests/test_root.py"]
 
 
 def test_deleted_experiment_source_runs_full_marin_suite(tmp_path: Path) -> None:
     write(tmp_path, "experiments/moe/test_optimizer.py", "from experiments.moe.optimizer import RATE\n")
+    write(tmp_path, "tests/test_root.py", "def test_root():\n    assert True\n")
 
     matrix = select_matrix(["experiments/moe/optimizer.py"], tmp_path)
 
-    assert leg_paths(matrix, "marin") == ["tests", "experiments"]
+    assert leg_paths(matrix, "marin") == ["experiments/moe/test_optimizer.py", "tests/test_root.py"]
 
 
 def test_deleted_experiment_test_is_not_handed_to_pytest(tmp_path: Path) -> None:
@@ -286,14 +334,80 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     ]
 
 
-def test_taskcompendium_change_selects_isolated_suite(tmp_path: Path) -> None:
-    selection = select_changed_tests(["lib/taskcompendium/src/taskcompendium/lowering.py"], tmp_path)
+@pytest.mark.parametrize(
+    "changed_path,suites",
+    [
+        (
+            "lib/taskcompendium/src/taskcompendium/lowering.py",
+            ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"],
+        ),
+        ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit"]),
+        (
+            "lib/shellbox/src/shellbox/machine.py",
+            ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit", "taskforge-unit"],
+        ),
+        (
+            "lib/shellbox/tests/test_docker_machine.py",
+            ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit", "taskforge-unit"],
+        ),
+        (
+            "lib/shellbox/pyproject.toml",
+            ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit", "taskforge-unit"],
+        ),
+        (
+            "lib/verifyit/src/verifyit/grading.py",
+            ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"],
+        ),
+        ("lib/rigging/src/rigging/message.py", ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"]),
+        ("lib/iris/src/iris/client/client.py", ["iris-e2e-smoke", "taskforge-unit"]),
+        ("lib/taskforge/src/taskforge/llm/glm_client.py", ["taskforge-unit"]),
+    ],
+)
+def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_path: str, suites: list[str]) -> None:
+    selection = select_changed_tests([changed_path], tmp_path)
 
     assert selection.matrix == []
-    assert selection.suites == ["taskcompendium-unit"]
+    assert selection.suites == suites
 
     full_selection = select_changed_tests([], tmp_path, run_all_tests=True)
-    assert "taskcompendium-unit" in full_selection.suites
+    assert set(suites) <= set(full_selection.suites)
+
+
+@pytest.mark.parametrize(
+    "path", ["experiments/post_training/capability_driven_envs/generate_tasks.py", "experiments/post_training/glm.py"]
+)
+def test_capability_environment_change_selects_the_taskforge_suite(tmp_path: Path, path: str) -> None:
+    selection = select_changed_tests([path], tmp_path)
+
+    assert "taskforge-unit" in selection.suites
+
+
+@pytest.mark.parametrize(
+    "shellbox_result, expected_exit", [("success", 0), ("skipped", 0), ("failure", 1), ("cancelled", 1)]
+)
+def test_required_unit_check_propagates_shellbox_result(shellbox_result: str, expected_exit: int) -> None:
+    workflow_path = Path(__file__).resolve().parents[3] / ".github/workflows/unified-unit.yaml"
+    aggregate = yaml.safe_load(workflow_path.read_text())["jobs"]["unit_tests"]
+    results = dict.fromkeys(aggregate["needs"], "success")
+    if "shellbox" in results:
+        results["shellbox"] = shellbox_result
+    script = re.sub(
+        r"\$\{\{ needs\.(\w+)\.result \}\}",
+        lambda match: results.get(match.group(1), ""),
+        aggregate["steps"][0]["run"],
+    )
+
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+
+    assert result.returncode == expected_exit
+
+
+@pytest.mark.parametrize("changed_file", ["pyproject.toml", "uv.lock"])
+def test_shared_dependency_change_selects_taskcompendium_and_shellbox_suites(tmp_path: Path, changed_file: str) -> None:
+    selection = select_changed_tests([changed_file], tmp_path)
+
+    assert "taskcompendium-unit" in selection.suites
+    assert "shellbox-unit" in selection.suites
 
 
 def test_verifier_change_selects_library_and_dependent_marin_tests(tmp_path: Path) -> None:
@@ -306,7 +420,7 @@ def test_verifier_change_selects_library_and_dependent_marin_tests(tmp_path: Pat
 
     assert leg_paths(matrix, "verifyit") == ["lib/verifyit/tests/test_grade.py"]
     assert leg_paths(matrix, "marin") == ["tests/test_verifier.py"]
-    verifier_leg = next(leg for leg in matrix if leg.package == "verifyit")
+    verifier_leg = next(leg for leg in matrix if leg.package == "marin-verifyit")
     assert verifier_leg.extras == "--extra all"
 
 
@@ -351,9 +465,9 @@ def _tpu_lock(
     name = "marin-root"
     version = "0.1.0"
     source = {{ editable = "." }}
-    dependencies = [{{ name = "verifyit" }}]
+    dependencies = [{{ name = "marin-verifyit" }}]
     [[package]]
-    name = "verifyit"
+    name = "marin-verifyit"
     version = "0.1.0"
     source = {{ {source} }}
     [[package]]
@@ -399,11 +513,11 @@ def _tpu_manifest(verifier_source: str = "workspace") -> str:
     [project]
     name = "marin-root"
     requires-python = ">=3.12"
-    dependencies = ["verifyit"]
+    dependencies = ["marin-verifyit"]
     [tool.uv.workspace]
     members = [{_verifier_members(verifier_source)}]
     [tool.uv.sources]
-    verifyit = {source}
+    marin-verifyit = {source}
     """
 
 
@@ -473,6 +587,7 @@ def test_scheduled_full_suite_still_selects_tpu(tmp_path: Path) -> None:
     selection = select_all_tests(tmp_path)
 
     assert selection.reason == "run-all-tests"
+    assert "shellbox-unit" in selection.suites
     assert selection.suite_test_paths["levanter-tpu"] == ["lib/levanter/tests/test_model.py"]
 
 

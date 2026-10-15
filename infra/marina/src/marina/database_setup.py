@@ -11,6 +11,7 @@ from sqlalchemy.engine import Engine
 APPLET_READER_ROLE = "marina_reader"
 APPLET_ROLE_PREFIX = "applet_"
 MARINA_SCHEMA = "marina"
+LOOM_DATABASE_USER = "loom-vm@hai-gcp-models.iam"
 PROVISION_APPLET_FUNCTION = f"{MARINA_SCHEMA}.provision_applet"
 POSTGRES_ROLE_PATTERN = re.compile(r"^[A-Za-z0-9_@.\-]+$")
 

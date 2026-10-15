@@ -8,14 +8,18 @@ how Marin pins a fork and how the refresh runs.
 
 ## How Marin pins a fork
 
-Every fork is pinned under `config/external/`. The pins feed
+Forks except XLA are pinned under `config/external/`. Those pins feed
 `config/update-external.py`, which regenerates
-`lib/marin/src/marin/external_dependencies.py`; nothing else imports a fork
-revision directly. There are three pin kinds:
+`lib/marin/src/marin/external_dependencies.py`. MarinSkyRL's recipe package shares that
+launcher pin through its library requirement. XLA uses the workspace wheel pin below.
+The pin kinds are:
 
 - Isolated uv lock (`evalchemy`, `harbor`, `MarinSkyRL`): the fork is a git
   dependency in `config/external/<fork>/uv.lock`. `uv run
   config/update-external.py <fork>` advances the lock and regenerates the pins.
+- Git-subdirectory library (`marinskyrl-recipe`): `lib/marin/pyproject.toml` requires
+  `packages/marinskyrl-recipe` from the MarinSkyRL repository at the isolated launcher's commit.
+  The MarinSkyRL updater refreshes both locks and the requirement together.
 - Descriptor SHA (`vllm` TPU source, `tpu-inference`): the exact pair lives in
   `config/external/vllm/tpu.toml`. Its vLLM commit comes from the same maintained
   `main` lineage as GPU releases. The stack runs from an isolated `uvx`
@@ -47,13 +51,12 @@ There is no stored PAT.
 `MarinSkyRL` is pinned and refreshable through the skill on demand, but is not yet
 in the weekly rotation. A human runs the skill for a single fork the same way.
 
-The session runs the `refresh-fork` skill
-(`.agents/skills/refresh-fork/SKILL.md`), which owns the migration procedure:
-select a new upstream base or existing main-line source, replay Marin's overlays
-for overlay forks, stage rebases on `main-next`, re-pin Marin, run the fork's declared
-end-to-end test, and on green open one draft Marin PR requesting the descriptor's
-reviewer. On an unresolved external blocker it files a "can't migrate" issue
-instead of a PR.
+The session follows `.agents/skills/refresh-fork/SKILL.md` and the fork's guide.
+It selects a source, replays Marin's patches when needed, and runs the declared
+tests before opening one adoption PR. The GPU guide requires source approval
+on `main` before building wheels. For other rebased forks, the admin reviews
+the adoption PR before moving `main`. An unresolved external blocker gets an
+issue assigned to the descriptor's owner.
 
 `config/external/migration.toml` is the per-fork descriptor. It records the
 upstream repository, the pin kind, the fork branch the pin tracks, how to select a
@@ -80,31 +83,27 @@ recorded as a baseline failure and left for its own fix.
 
 ## The vLLM GPU release pipeline
 
-The GPU pin resolves to a prebuilt wheel. The current `marin-community/vllm`
-pipeline builds an immutable CUDA 13.2 x86_64 wheel for H100, validates the
-exact wheel bytes on real GPUs, and publishes a GitHub release carrying
-`marin-vllm-gpu-manifest.json`. The GPU overlay lives on the fork's `main`, which
-the candidate build triggers on.
+Review source on the vLLM fork's `main`, build both wheels, run the existing
+H100 and GB200 tests, and publish once. A developer or agent then tests those
+published wheels in Marin and opens one adoption PR. Marin uses the wheels
+after that PR merges.
 
-A refresh dispatches those workflows against the staged `main-next` branch, waits
-for the promoted release, downloads the manifest, and re-pins with:
-
-```sh
-uv run config/update-external.py --promote-gpu-release marin-vllm-gpu-manifest.json
-```
-
-That command writes `gpu.toml` (release tag, source commit, version, torch
-backend, and each arch's wheel URL and SHA-256) and regenerates the pins. Do not
-hand-edit `gpu.toml`; the helper re-encodes the wheel URLs the way the pin
-loader validates.
+The [GPU guide](https://github.com/marin-community/marin/blob/main/.agents/skills/refresh-fork/docs/vllm.md#triggers-and-tests)
+contains the trigger table, exact commands, and admin handoff for upstream
+rebases. The same build and adoption process applies to ordinary fork patches.
 
 ## Promotion
 
-The refresh never force-moves a fork's stable branch. A rebase stages on `main-next`
-and leaves the protected stable branch at the old tip; the draft Marin PR names
-the `main-next` to `main` hard swap an admin performs after review. Because
-the staged tip and the eventual stable tip are the same commit, the pins need no
-change after promotion.
+The refresh agent never force-moves a protected stable branch. For descriptor
+and isolated-project rebases, `main-next` stays separate until the e2e passes
+and an admin reviews the draft Marin PR. That admin performs the backed-up
+hard swap to `main` before the PR merges. Descriptor pins already name the exact
+validated SHA; isolated projects restore their uv source to `main` and relock
+at that same SHA.
+
+For a vLLM GPU rebase, follow the GPU guide above. It uses the rollback tags
+and source swap in `.agents/skills/refresh-fork/docs/promotion-protocol.md`
+before wheel builds.
 
 The vLLM TPU selector is the exception: it reuses an exact commit already on
 the fork's `main` lineage, so it has no vLLM staging branch or protected-branch

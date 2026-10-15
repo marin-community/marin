@@ -6,11 +6,11 @@ import logging
 import os
 import subprocess
 import time
+import tomllib
 from dataclasses import asdict
 from pathlib import Path
 
 import pytest
-from marin import external_dependencies
 from marin.external_dependencies import MARIN_SKYRL
 
 from tests.rl.launch_document_census import render_launch_census
@@ -21,12 +21,15 @@ logger = logging.getLogger(__name__)
 @pytest.mark.timeout(540)
 def test_rl_launch_documents_load_with_the_installed_launcher(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[2]
-    assert Path(external_dependencies.__file__).resolve() == root / "lib/marin/src/marin/external_dependencies.py"
+    project = root / "config/external" / MARIN_SKYRL.config_name
+    lock = tomllib.loads((project / "uv.lock").read_text())
+    package = next(package for package in lock["package"] if package["name"] == MARIN_SKYRL.distribution)
+    assert package["source"]["git"].rsplit("#", 1)[1] == MARIN_SKYRL.commit
     census = render_launch_census(tmp_path / "artifacts")
     (tmp_path / "manifest.json").write_text(json.dumps(asdict(census)))
     assert not census.failures, census.failures
     assert census.documents
-    assert {entry.launcher_requirement for entry in census.documents} == {MARIN_SKYRL.requirement()}
+    assert {entry.document["runtime"]["launcher_commit"] for entry in census.documents} == {MARIN_SKYRL.commit}
     source = tmp_path / "source.json"
     source.write_text(json.dumps([{"case": entry.case, "document": entry.document} for entry in census.documents]))
     output = tmp_path / "loaded.json"
@@ -38,12 +41,9 @@ def test_rl_launch_documents_load_with_the_installed_launcher(tmp_path: Path) ->
             "uv",
             "run",
             "--isolated",
-            "--no-project",
-            "--prerelease=allow",
-            "--python",
-            "3.12",
-            "--with",
-            MARIN_SKYRL.requirement(),
+            "--project",
+            str(project),
+            "--frozen",
             "python",
             str(Path(__file__).with_name("launch_document_loader.py")),
             "--input",

@@ -25,9 +25,9 @@ sampled completion token IDs for the behavior-policy loss.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, fields, replace
-from math import lcm
 from types import MappingProxyType
 
 import click
@@ -47,9 +47,8 @@ from marin.rl.skyrl import (
     SkyRLSpec,
     skyrl_step,
 )
-from marin.skyrl_recipe import (
+from marinskyrl.recipe_schema import (
     Algorithm,
-    ChatTemplate,
     ContextBudget,
     Data,
     Environment,
@@ -57,16 +56,14 @@ from marin.skyrl_recipe import (
     Generator,
     Placement,
     Policy,
-    PolicyMegatronConfig,
     PolicyOptimizerConfig,
     RecipePatch,
-    Ref,
-    RefMegatronConfig,
     RLEntrypoint,
     RolloutBuffer,
     SamplingParams,
     SkyRLRecipe,
     Trainer,
+    WeightSyncPause,
 )
 from rigging.provenance import username_segment
 
@@ -127,39 +124,13 @@ SNOWBALL_RESOURCES = RecipePatch(
 )
 
 
-SNOWBALL_RECIPE = RecipePatch.combine(
-    resources=SNOWBALL_RESOURCES,
-    policy=RecipePatch(
-        entrypoint=RLEntrypoint.STANDARD,
-        trainer=Trainer(
-            strategy="megatron",
-            resume_mode="latest",
-            policy=Policy(
-                optimizer_config=PolicyOptimizerConfig(
-                    optimizer="AdamW", lr=1e-06, weight_decay=0.01, max_grad_norm=1.0
-                ),
-                megatron_config=PolicyMegatronConfig(
-                    tensor_model_parallel_size=1,
-                    pipeline_model_parallel_size=2,
-                    context_parallel_size=1,
-                    expert_model_parallel_size=8,
-                    expert_tensor_parallel_size=1,
-                ),
-            ),
-            ref=Ref(
-                megatron_config=RefMegatronConfig(
-                    tensor_model_parallel_size=1,
-                    pipeline_model_parallel_size=2,
-                    context_parallel_size=1,
-                    expert_model_parallel_size=8,
-                    expert_tensor_parallel_size=1,
-                )
-            ),
-        ),
-        generator=Generator(backend="vllm", run_engines_locally=True, engine_init_kwargs={"moe_backend": "triton"}),
-        data=Data(kind="parquet", train_data=(), val_data=()),
-    ),
+LAUNCH_POLICY = RecipePatch(
+    entrypoint=RLEntrypoint.STANDARD,
+    trainer=Trainer(resume_mode="latest"),
+    generator=Generator(backend="vllm", engine_init_kwargs={"moe_backend": "triton"}),
+    data=Data(kind="parquet", train_data=(), val_data=()),
 )
+PAUSE_MODE = "keep"
 HOST_MEMORY = "1800GB"
 
 
@@ -181,7 +152,7 @@ class AsyncPreset:
     # sampled by the current weights.
     max_staleness_steps: int
     # Maximum prompt groups admitted to the rollout buffer at once.
-    max_in_flight_groups: int
+    generation_workers: int
     # Prompt-plus-response budget one request may occupy in the engine, in tokens.
     request_window_tokens: int
     # Longest response the policy may generate, in tokens; it also caps the in-run evaluation.
@@ -189,6 +160,8 @@ class AsyncPreset:
     # Evaluation suites the ``evaluation`` stage scores the terminal export on, comma separated.
     evals: str
     # Export the telemetry the async RL dashboard reads.
+    clear_kv_cache_on_weight_sync: bool = True
+    batch_policy: str = "rolling"
     telemetry: bool = True
 
 
@@ -199,7 +172,7 @@ DEFAULT = AsyncPreset(
     max_steps=100,
     eval_interval=10,
     max_staleness_steps=4,
-    max_in_flight_groups=192,
+    generation_workers=192,
     request_window_tokens=8192,
     max_new_tokens=4096,
     evals="math500,gsm8k-0shot",
@@ -229,8 +202,8 @@ def checkpoint_interval(max_steps: int, eval_interval: int) -> int:
 CURRICULUM_TEMPLATE = SNOWBALL_SMOKE
 
 
-def training_recipe(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> SkyRLRecipe:
-    """Combine the loop preset, Snowball policy and checkpoint schedule."""
+def training_recipe(policy: PolicySpec, preset: AsyncPreset, settings: tuple[str, ...] = ()) -> SkyRLRecipe:
+    """Combine the policy, loop preset and checkpoint schedule."""
     recipe = SkyRLRecipe.combine(
         preset=RecipePatch(
             context_budget=ContextBudget(
@@ -256,7 +229,9 @@ def training_recipe(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> SkyR
                 policy_train_spans=preset.telemetry,
                 algorithm=Algorithm(
                     advantage_estimator="grpo",
-                    policy_loss_type="behavior_clip",
+                    policy_loss_type="regular",
+                    loss_reduction="token_mean",
+                    kl_estimator_type="k3_unbiased_gradient",
                     use_kl_loss=False,
                     use_kl_in_reward=False,
                     off_policy_correction="none",
@@ -265,14 +240,16 @@ def training_recipe(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> SkyR
                 ),
                 rollout_buffer=RolloutBuffer(
                     max_staleness_steps=preset.max_staleness_steps,
-                    max_in_flight=preset.max_in_flight_groups,
-                    batch_policy="rolling",
+                    max_in_flight=preset.generation_workers,
+                    batch_policy=preset.batch_policy,
+                    object_store_root=None,
                 ),
             ),
             generator=Generator(
                 model_dtype="bfloat16",
                 vllm_attention_backend="FLASH_ATTN",
                 weight_sync_backend="nccl",
+                weight_sync_pause=WeightSyncPause(mode=PAUSE_MODE, clear_cache=preset.clear_kv_cache_on_weight_sync),
                 weight_sync_transport="expert_block",
                 expert_block_sync=ExpertBlockSync(timeout_seconds=600, verify=False),
                 gpu_memory_utilization=0.75,
@@ -281,15 +258,25 @@ def training_recipe(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> SkyR
                 enable_prefix_caching=True,
                 enable_chunked_prefill=True,
                 enforce_eager=False,
-                enable_http_endpoint=True,
-                use_conversation_multi_turn=True,
-                chat_template=ChatTemplate(source="name", name_or_path=None),
+                enable_http_endpoint=False,
+                chat_template=None,
                 sampling_params=SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
             ),
             extra_env={"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
             environment=Environment(env_class="gsm8k"),
         ),
-        policy=SNOWBALL_RECIPE,
+        policy=policy.recipe,
+        optimizer=RecipePatch(
+            trainer=Trainer(
+                policy=Policy(
+                    optimizer_config=PolicyOptimizerConfig(
+                        optimizer="AdamW", lr=1e-06, weight_decay=0.01, max_grad_norm=1.0
+                    )
+                )
+            )
+        ),
+        resources=SNOWBALL_RESOURCES,
+        launch_policy=LAUNCH_POLICY,
     ).with_settings(settings)
     trainer = recipe.trainer
     interval = checkpoint_interval(trainer.max_steps, trainer.eval_interval)
@@ -297,20 +284,17 @@ def training_recipe(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> SkyR
         trainer=Trainer(
             eval_before_train=trainer.eval_interval > 0,
             ckpt_interval=interval,
-            hf_save_interval=lcm(trainer.max_steps, interval),
+            hf_save_interval=math.ceil(trainer.max_steps / interval) * interval,
         )
     )
     recipe = SkyRLRecipe.combine(
         recipe=recipe,
         resources=SNOWBALL_RESOURCES,
-        launch_policy=RecipePatch(
-            entrypoint=RLEntrypoint.STANDARD,
-            trainer=Trainer(resume_mode="latest"),
-            generator=Generator(run_engines_locally=True),
-            data=Data(kind="parquet", train_data=(), val_data=()),
-        ),
+        launch_policy=LAUNCH_POLICY,
         checkpoint_schedule=computed,
     )
+    if recipe.trainer.rollout_buffer.max_staleness_steps < 0:
+        raise click.BadParameter("rollout_buffer.max_staleness_steps must be a nonnegative integer")
     budget = recipe.context_budget
     if MAX_PROMPT_TOKENS > budget.request_window_tokens - budget.max_new_tokens_per_turn:
         raise click.BadParameter("pool prompts do not fit the request window beside the response cap")
@@ -325,7 +309,7 @@ class AsyncRun:
 
 def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, settings: tuple[str, ...] = ()) -> AsyncRun:
     """Assemble the RL step and its evaluation for one policy and preset."""
-    config = training_recipe(preset, settings)
+    config = training_recipe(policy, preset, settings)
     pool = pool_step(POOL_ARTIFACT_NAME, version or resolve_version(POOL_ARTIFACT_NAME, None))
     model = policy.adopted_model or model_step(version or resolve_version(MODEL_ARTIFACT_NAME, None))
     # A --set run gets its own address: the name carries a hash of its settings.

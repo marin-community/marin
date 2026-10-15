@@ -9,9 +9,10 @@
 """Advance external projects and package their immutable runtime inputs."""
 
 import argparse
-import hashlib
 import json
 import re
+import runpy
+import shutil
 import subprocess
 import tempfile
 import tomllib
@@ -22,15 +23,16 @@ from urllib.parse import parse_qs, quote, urlsplit, urlunsplit
 
 ROOT = Path(__file__).parents[1]
 EXTERNAL_ROOT = Path(__file__).with_name("external")
+RECIPE_MANIFEST = ROOT / "lib/marin/pyproject.toml"
+RECIPE_SUBDIRECTORY = "packages/marinskyrl-recipe"
+RECIPE_DISTRIBUTION = "marinskyrl-recipe"
 GENERATED_PINS = ROOT / "lib" / "marin" / "src" / "marin" / "external_dependencies.py"
-RECIPE_SCHEMA = ROOT / "lib/marin/src/marin/skyrl_recipe"
-RECIPE_PROVENANCE = RECIPE_SCHEMA.with_suffix(".provenance.json")
-UPSTREAM_RECIPE_SCHEMA = "marinskyrl/recipe_schema"
 GIT_SUFFIX = ".git"
 GIT_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 GENERATED_STRING_CHUNK_WIDTH = 88
 VLLM_CONFIG_NAME = "vllm"
+MARINSKYRL_CONFIG_NAME = "MarinSkyRL"
 VLLM_GPU_RELEASE_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "gpu.toml"
 TPU_FORKS_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "tpu.toml"
 GPU_RELEASE_REPOSITORY = "marin-community/vllm"
@@ -68,6 +70,7 @@ class LockedDependency:
 class LockedGitSource:
     repository: str
     commit: str
+    subdirectory: str | None = None
 
 
 @dataclass(frozen=True)
@@ -109,7 +112,7 @@ EXTERNAL_PROJECTS = (
         "HARBOR",
         runtime_distributions=("daytona", "gcsfs", "pydantic-settings", "s3fs"),
     ),
-    ExternalProject("MarinSkyRL", "marinskyrl", "MARIN_SKYRL"),
+    ExternalProject(MARINSKYRL_CONFIG_NAME, "marinskyrl", "MARIN_SKYRL"),
 )
 
 
@@ -130,10 +133,14 @@ def locked_git_source(lock_path: Path, distribution: str) -> LockedGitSource:
     commit = parsed.fragment
     if GIT_COMMIT_PATTERN.fullmatch(commit) is None:
         raise ValueError(f"{lock_path}: expected a Git source ending in a full commit, found {source!r}")
-    if "subdirectory" in parse_qs(parsed.query):
-        raise ValueError(f"{lock_path}: expected a root Git source, found {source!r}")
+    subdirectories = parse_qs(parsed.query, keep_blank_values=True).get("subdirectory", [None])
+    if len(subdirectories) != 1 or (
+        subdirectories[0] is not None
+        and (not subdirectories[0] or any(part in {"", ".", ".."} for part in subdirectories[0].split("/")))
+    ):
+        raise ValueError(f"{lock_path}: invalid Git subdirectory in {source!r}")
     repository = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-    return LockedGitSource(repository=repository, commit=commit)
+    return LockedGitSource(repository=repository, commit=commit, subdirectory=subdirectories[0])
 
 
 def tpu_fork_source(path: Path, name: str) -> LockedGitSource:
@@ -539,120 +546,82 @@ def project_by_name(name: str) -> ExternalProject:
     return next(project for project in EXTERNAL_PROJECTS if project.config_name == name)
 
 
+def validate_marinskyrl_environment(project: ExternalProject) -> None:
+    """Check installed metadata that uv's rigging override replaces during resolution."""
+    with tempfile.TemporaryDirectory(prefix="marinskyrl-lock-") as temporary_directory:
+        directory = Path(temporary_directory)
+        for name in ("pyproject.toml", "uv.lock"):
+            shutil.copyfile(project.directory / name, directory / name)
+        subprocess.run(["uv", "sync", "--project", str(directory), "--frozen", "--no-dev", "--quiet"], check=True)
+        subprocess.run(["uv", "pip", "check", "--python", str(directory / ".venv" / "bin" / "python")], check=True)
+
+
+def synchronize_recipe_package(dependency: LockedDependency, *, check: bool) -> bool:
+    """Keep Marin's recipe requirement and root lock at the launcher's commit."""
+    requirement = (
+        f"{RECIPE_DISTRIBUTION} @ git+{dependency.repository}@{dependency.commit}" f"#subdirectory={RECIPE_SUBDIRECTORY}"
+    )
+    original = RECIPE_MANIFEST.read_text()
+    expected, count = re.subn(r"marinskyrl-recipe @ [^\"]+", requirement, original)
+    if count != 1:
+        raise ValueError(f"{RECIPE_MANIFEST}: expected one recipe package requirement")
+    expected_source = LockedGitSource(dependency.repository, dependency.commit, RECIPE_SUBDIRECTORY)
+    lock_path = ROOT / "uv.lock"
+    if check:
+        return expected == original and locked_git_source(lock_path, RECIPE_DISTRIBUTION) == expected_source
+    before = lock_path.read_text()
+    try:
+        RECIPE_MANIFEST.write_text(expected)
+        subprocess.run(["uv", "lock", "--project", str(ROOT), "--upgrade-package", RECIPE_DISTRIBUTION], check=True)
+        if locked_git_source(lock_path, RECIPE_DISTRIBUTION) != expected_source:
+            raise ValueError("recipe package and launcher commits differ")
+        validator = runpy.run_path(str(ROOT / "scripts/ci/package_release.py"))["validate_targeted_lock_change"]
+        validator(
+            before,
+            lock_path.read_text(),
+            RECIPE_DISTRIBUTION,
+            locked_package(lock_path, RECIPE_DISTRIBUTION)["version"],
+            allowed_packages=("marin-core",),
+            git_source=f"{dependency.repository}?subdirectory={RECIPE_SUBDIRECTORY}#{dependency.commit}",
+        )
+    except BaseException:
+        RECIPE_MANIFEST.write_text(original)
+        lock_path.write_text(before)
+        raise
+    return expected == original and before == lock_path.read_text()
+
+
 def regenerate_generated_pins(dependencies: tuple[LockedDependency, ...], *, check: bool) -> bool:
     """Render external_dependencies.py from the locks, TPU fork pins, and promoted GPU release.
 
     Returns whether the generated file already matched (the drift signal `--check` reports on).
     """
-    vllm_gpu_release = load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)
-    vllm_source = tpu_fork_source(TPU_FORKS_CONFIG, "vllm")
-    tpu_inference_source = tpu_fork_source(TPU_FORKS_CONFIG, "tpu-inference")
     return synchronize_file(
         GENERATED_PINS,
-        render_pins(
-            dependencies,
-            vllm_gpu_release=vllm_gpu_release,
-            vllm_fork_requirement=f"vllm @ git+{vllm_source.repository}@{vllm_source.commit}",
-            tpu_inference_fork_requirement=(
-                f"tpu-inference @ git+{tpu_inference_source.repository}@{tpu_inference_source.commit}"
-            ),
-        ),
+        render_generated_pins(dependencies, load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)),
         check=check,
     )
 
 
-def recipe_schema_hash(files: dict[str, bytes]) -> str:
-    """Hash the sorted file names and contents of a flat recipe schema."""
-    digest = hashlib.sha256()
-    for name, content in sorted(files.items()):
-        digest.update(name.encode() + b"\0" + content + b"\0")
-    return digest.hexdigest()
-
-
-def synchronize_recipe_schema(dependency: LockedDependency, *, check: bool) -> bool:
-    """Return copy equality in check mode, or synchronize the copy and return True."""
-    if RECIPE_SCHEMA.is_symlink() or RECIPE_PROVENANCE.is_symlink():
-        raise ValueError("recipe schema and provenance must be local regular paths")
-    actual = (
-        {path.name for path in RECIPE_SCHEMA.iterdir() if path.name != "__pycache__" and path.suffix != ".pyc"}
-        if RECIPE_SCHEMA.exists()
-        else set()
+def render_generated_pins(dependencies: tuple[LockedDependency, ...], vllm_gpu_release: VllmGpuRelease) -> str:
+    """Render packaged dependency pins."""
+    vllm_source = tpu_fork_source(TPU_FORKS_CONFIG, "vllm")
+    tpu_inference_source = tpu_fork_source(TPU_FORKS_CONFIG, "tpu-inference")
+    return render_pins(
+        dependencies,
+        vllm_gpu_release=vllm_gpu_release,
+        vllm_fork_requirement=f"vllm @ git+{vllm_source.repository}@{vllm_source.commit}",
+        tpu_inference_fork_requirement=(
+            f"tpu-inference @ git+{tpu_inference_source.repository}@{tpu_inference_source.commit}"
+        ),
     )
-    if check:
-        if not RECIPE_PROVENANCE.is_file() or any(
-            (RECIPE_SCHEMA / name).is_symlink() or not (RECIPE_SCHEMA / name).is_file() for name in actual
-        ):
-            return False
-        files = {name: (RECIPE_SCHEMA / name).read_bytes() for name in actual}
-        return recipe_schema_hash(files) == json.loads(RECIPE_PROVENANCE.read_text())["sha256"]
-
-    with tempfile.TemporaryDirectory(prefix="marinskyrl-schema-") as directory:
-        source = Path(directory)
-        subprocess.run(["git", "init", "--quiet", str(source)], check=True)
-        subprocess.run(
-            ["git", "-C", str(source), "fetch", "--quiet", "--depth=1", dependency.repository, dependency.commit],
-            check=True,
-        )
-        commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "FETCH_HEAD"], text=True).strip()
-        if commit != dependency.commit:
-            raise ValueError(f"fetched MarinSkyRL commit {commit} does not match the pin {dependency.commit}")
-        inventory = subprocess.check_output(
-            ["git", "-C", str(source), "ls-tree", "-r", "-z", commit, UPSTREAM_RECIPE_SCHEMA]
-        )
-        files = {}
-        for entry in inventory.split(b"\0"):
-            if not entry:
-                continue
-            metadata, path = entry.decode().split("\t", 1)
-            mode, kind, blob = metadata.split()
-            name = Path(path).relative_to(UPSTREAM_RECIPE_SCHEMA)
-            if mode != "100644" or kind != "blob" or len(name.parts) != 1:
-                raise ValueError(f"recipe schema must contain flat regular files: {path}")
-            files[str(name)] = subprocess.check_output(["git", "-C", str(source), "cat-file", "blob", blob])
-    if "__init__.py" not in files:
-        raise ValueError("pinned MarinSkyRL source has no public recipe schema")
-    provenance = {
-        "repository": dependency.repository,
-        "commit": dependency.commit,
-        "source_path": UPSTREAM_RECIPE_SCHEMA,
-        "sha256": recipe_schema_hash(files),
-        "files": {name: hashlib.sha256(content).hexdigest() for name, content in sorted(files.items())},
-    }
-    rendered = json.dumps(provenance, indent=2) + "\n"
-    matches = actual == files.keys() and all(
-        not (RECIPE_SCHEMA / name).is_symlink()
-        and (RECIPE_SCHEMA / name).is_file()
-        and (RECIPE_SCHEMA / name).read_bytes() == content
-        for name, content in files.items()
-    )
-    matches = matches and RECIPE_PROVENANCE.exists() and RECIPE_PROVENANCE.read_text() == rendered
-    if matches:
-        return True
-    previous = json.loads(RECIPE_PROVENANCE.read_text())["files"] if RECIPE_PROVENANCE.exists() else {}
-    unknown = actual - files.keys() - previous.keys()
-    if unknown:
-        raise ValueError(f"recipe schema contains unmanaged files: {sorted(unknown)}")
-    RECIPE_SCHEMA.mkdir(parents=True, exist_ok=True)
-    for name in actual - files.keys():
-        if len(Path(name).parts) != 1 or not (RECIPE_SCHEMA / name).is_file():
-            raise ValueError(f"recipe schema contains an unexpected path: {name}")
-        (RECIPE_SCHEMA / name).unlink()
-    for name, content in files.items():
-        target = RECIPE_SCHEMA / name
-        if target.is_symlink():
-            raise ValueError(f"recipe schema contains a symlink: {name}")
-        target.write_bytes(content)
-    RECIPE_PROVENANCE.write_text(rendered)
-    return True
 
 
 def promote_gpu_release(manifest_path: Path) -> None:
-    """Re-pin gpu.toml from a promoted manifest and regenerate external_dependencies.py.
+    """Update the GPU descriptor and packaged pins from a published release manifest.
 
-    ``manifest_path`` is a ``marin-vllm-gpu-manifest.json`` downloaded from the fork release;
-    the fork's release pipeline is the only writer of that artifact. The rendered pin is
-    validated on a staging file before it atomically replaces the canonical one, so a manifest
-    that renders but violates a loader invariant leaves the existing pin in place.
+    Validate and render both outputs before replacing the descriptor. A validation or
+    rendering failure leaves the existing pins in place.
     """
     manifest = json.loads(manifest_path.read_text())
     rendered = render_gpu_release_toml(manifest)
@@ -661,12 +630,13 @@ def promote_gpu_release(manifest_path: Path) -> None:
         handle.write(rendered)
         staging = Path(handle.name)
     try:
-        load_vllm_gpu_release(staging)
+        release = load_vllm_gpu_release(staging)
+        dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
+        generated = render_generated_pins(dependencies, release)
         staging.replace(VLLM_GPU_RELEASE_CONFIG)
+        synchronize_file(GENERATED_PINS, generated, check=False)
     finally:
         staging.unlink(missing_ok=True)
-    dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
-    regenerate_generated_pins(dependencies, check=False)
     print(f"re-pinned vllm GPU release {manifest['release']['tag']} from {manifest_path}")
 
 
@@ -700,8 +670,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     args = parser.parse_args()
-    if args.check and args.summary_file is not None:
-        parser.error("--check does not write --summary-file")
     if args.promote_gpu_release is not None and (args.check or args.projects or args.summary_file):
         parser.error("--promote-gpu-release runs on its own; drop --check, PROJECT, and --summary-file")
     return args
@@ -729,6 +697,8 @@ def main() -> None:
                 ],
                 check=True,
             )
+            if project.config_name == MARINSKYRL_CONFIG_NAME:
+                validate_marinskyrl_environment(project)
 
     dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
     vllm_gpu_release = load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)
@@ -746,12 +716,13 @@ def main() -> None:
         updates = dependency_updates(previous_dependencies, dependencies)
         selected_dependencies = tuple(dependency for dependency in dependencies if dependency.project in selected)
         args.summary_file.write_text(render_summary(selected_dependencies, updates))
+    recipe_match = synchronize_recipe_package(
+        next(dependency for dependency in dependencies if dependency.project.config_name == MARINSKYRL_CONFIG_NAME),
+        check=args.check or not any(project.config_name == MARINSKYRL_CONFIG_NAME for project in selected),
+    )
     pins_match = regenerate_generated_pins(dependencies, check=args.check)
-    if args.check and not pins_match:
+    if args.check and not (pins_match and recipe_match):
         raise SystemExit("external dependency pins are stale; run `uv run config/update-external.py`")
-    skyrl = next(dependency for dependency in dependencies if dependency.project.config_name == "MarinSkyRL")
-    if not synchronize_recipe_schema(skyrl, check=args.check):
-        raise SystemExit("copied recipe schema is stale; run `uv run config/update-external.py`")
 
 
 if __name__ == "__main__":

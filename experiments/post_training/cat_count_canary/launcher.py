@@ -31,9 +31,7 @@ from marin.rl.skyrl import (
     run_skyrl,
     skyrl_step,
 )
-from marin.skyrl_recipe import (
-    DERIVED_PATHS,
-    LAUNCH_PATHS,
+from marinskyrl.recipe_schema import (
     Algorithm,
     Callback,
     ChatTemplate,
@@ -154,6 +152,7 @@ def resource_recipe(
             train_batch_size=batch_size,
             policy_mini_batch_size=batch_size,
             micro_train_batch_size_per_gpu=micro_train_batch_size,
+            micro_forward_batch_size_per_gpu=micro_train_batch_size,
         ),
         generator=Generator(
             num_inference_engines=GPUS_PER_NODE,
@@ -166,51 +165,10 @@ def resource_recipe(
     )
 
 
-_RESOURCES = resource_recipe()
-ROLE_SETTINGS = frozenset(
-    {
-        *(f"trainer.{key}" for key in _RESOURCES.trainer.model_fields_set if key != "placement"),
-        *(f"trainer.placement.{key}" for key in _RESOURCES.trainer.placement.model_fields_set),
-        *(f"generator.{key}" for key in _RESOURCES.generator.model_fields_set),
-    }
-)
-PROTECTED_SETTINGS = (
-    ROLE_SETTINGS
-    | DERIVED_PATHS
-    | LAUNCH_PATHS
-    | frozenset(
-        {
-            "entrypoint",
-            "trainer.strategy",
-            "trainer.policy.megatron_config",
-            "trainer.ref.megatron_config",
-            "trainer.resume_mode",
-            "trainer.eval_before_train",
-            "trainer.ckpt_interval",
-            "trainer.callbacks",
-            "generator.chat_template",
-            "generator.chat_template_kwargs",
-            "generator.run_engines_locally",
-            "generator.enable_http_endpoint",
-            "generator.backend",
-            "generator.use_conversation_multi_turn",
-            "generator.require_exact_chat_transport",
-            "environment.env_class",
-            "data.kind",
-        }
-    )
-)
-
-
 def validate_setting(text: str) -> None:
     key, separator, _raw = text.partition("=")
     if not separator or not key:
         raise click.BadParameter(f"expected dotted.key=value, got {text!r}")
-    if any(
-        key == protected or key.startswith(f"{protected}.") or protected.startswith(f"{key}.")
-        for protected in PROTECTED_SETTINGS
-    ) or key.startswith("data."):
-        raise click.BadParameter(f"{key!r} is owned by the launcher; use a typed option")
     if not key.startswith(("trainer.", "generator.", "context_budget.")):
         raise click.BadParameter(f"{key!r} is outside the configurable recipe")
 
@@ -241,13 +199,48 @@ def training_recipe(
     max_steps = preset_config.max_steps
     if eval_minimum_score is None:
         eval_minimum_score = preset_config.minimum_score
+    fixed = RecipePatch(
+        entrypoint=RLEntrypoint.STANDARD,
+        environment=Environment(env_class=ENV_CLASS),
+        trainer=Trainer(
+            resume_mode="latest" if checkpoint else "none",
+            policy=Policy(
+                optimizer_config=PolicyOptimizerConfig(
+                    optimizer="AdamW", lr=2e-06, weight_decay=0.01, max_grad_norm=1.0
+                ),
+                megatron_config=PolicyMegatronConfig(
+                    tensor_model_parallel_size=1,
+                    pipeline_model_parallel_size=1,
+                    context_parallel_size=1,
+                    expert_model_parallel_size=1,
+                    expert_tensor_parallel_size=1,
+                    check_dp_weight_consistency=True,
+                ),
+            ),
+            ref=Ref(
+                megatron_config=RefMegatronConfig(
+                    tensor_model_parallel_size=1,
+                    pipeline_model_parallel_size=1,
+                    context_parallel_size=1,
+                    expert_model_parallel_size=1,
+                    expert_tensor_parallel_size=1,
+                )
+            ),
+        ),
+        generator=Generator(
+            backend="vllm",
+            enable_http_endpoint=False,
+            chat_template=ChatTemplate(source="name", name_or_path=choice.chat_template),
+        ),
+        data=Data(kind="parquet", shuffle=False, train_data=(), val_data=()),
+    )
+    geometry = resource_recipe(
+        batch_size=batch_size, group_size=group_size, micro_train_batch_size=micro_train_batch_size
+    )
     recipe = SkyRLRecipe.combine(
-        base=SkyRLRecipe(
-            entrypoint=RLEntrypoint.STANDARD,
+        base=RecipePatch(
             context_budget=ContextBudget(request_window_tokens=128, max_new_tokens_per_turn=64, max_turns=1),
-            environment=Environment(env_class=ENV_CLASS),
             trainer=Trainer(
-                strategy="megatron",
                 flash_attn=False,
                 use_sample_packing=False,
                 gradient_checkpointing=False,
@@ -257,7 +250,6 @@ def training_recipe(
                 eval_batch_size=len(cat_count_eval_ns(train_ns)),
                 eval_interval=1 if preset == "dry" else 5,
                 hf_save_interval=max_steps,
-                resume_mode="latest" if checkpoint else "none",
                 logger="wandb",
                 project_name="marin-cat-count-canary",
                 tracker_commit_each_step=True,
@@ -274,28 +266,6 @@ def training_recipe(
                     off_policy_correction="tis" if lane == "sync" else "none",
                     dynamic_sampling=DynamicSampling(type=None),
                 ),
-                policy=Policy(
-                    optimizer_config=PolicyOptimizerConfig(
-                        optimizer="AdamW", lr=2e-06, weight_decay=0.01, max_grad_norm=1.0
-                    ),
-                    megatron_config=PolicyMegatronConfig(
-                        tensor_model_parallel_size=1,
-                        pipeline_model_parallel_size=1,
-                        context_parallel_size=1,
-                        expert_model_parallel_size=1,
-                        expert_tensor_parallel_size=1,
-                        check_dp_weight_consistency=True,
-                    ),
-                ),
-                ref=Ref(
-                    megatron_config=RefMegatronConfig(
-                        tensor_model_parallel_size=1,
-                        pipeline_model_parallel_size=1,
-                        context_parallel_size=1,
-                        expert_model_parallel_size=1,
-                        expert_tensor_parallel_size=1,
-                    )
-                ),
                 rollout_buffer=RolloutBuffer(
                     max_staleness_steps=0 if lane == "sync" else 2,
                     batch_policy="full_batch",
@@ -304,30 +274,23 @@ def training_recipe(
                 ),
             ),
             generator=Generator(
-                backend="vllm",
                 model_dtype="bfloat16",
                 vllm_attention_backend="FLASH_ATTN",
-                run_engines_locally=True,
-                enable_http_endpoint=False,
                 weight_sync_backend="nccl",
-                use_conversation_multi_turn=False,
-                require_exact_chat_transport=False,
                 gpu_memory_utilization=0.7,
                 enforce_eager=False,
-                chat_template=ChatTemplate(source="name", name_or_path=choice.chat_template),
                 sampling_params=SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
                 eval_sampling_params=EvalSamplingParams(temperature=0.0),
                 eval_n_samples_per_prompt=1,
                 inference_stats_interval=1,
             ),
-            data=Data(kind="parquet", shuffle=False, train_data=(), val_data=()),
         ),
-        geometry=resource_recipe(
-            batch_size=batch_size, group_size=group_size, micro_train_batch_size=micro_train_batch_size
-        ),
+        geometry=geometry,
+        fixed=fixed,
     )
     if choice.chat_template_kwargs is not None:
-        recipe = recipe.merge(RecipePatch(generator=Generator(chat_template_kwargs=choice.chat_template_kwargs)))
+        fixed = fixed.merge(RecipePatch(generator=Generator(chat_template_kwargs=choice.chat_template_kwargs)))
+        recipe = recipe.merge(fixed)
     for setting in settings:
         validate_setting(setting)
     recipe = recipe.with_settings(settings)
@@ -379,6 +342,8 @@ def training_recipe(
         raise ValueError("the sync lane requires zero rollout staleness")
     return SkyRLRecipe.combine(
         authored=recipe,
+        fixed=fixed,
+        geometry=geometry,
         callbacks=RecipePatch(
             trainer=Trainer(eval_before_train=eval_before_train, ckpt_interval=ckpt_interval, callbacks=tuple(callbacks))
         ),

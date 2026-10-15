@@ -20,12 +20,13 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
+from urllib.parse import parse_qs, urlsplit
 
 PYPI_PROJECT_JSON_URL = "https://pypi.org/pypi/{distribution}/json"
 PYPI_VERSION_JSON_URL = "https://pypi.org/pypi/{distribution}/{version}/json"
@@ -118,6 +119,9 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                 Path("lib/haliax/src/haliax/__about__.py"),
                 Path("lib/finestore/pyproject.toml"),
                 Path("lib/shellbox/pyproject.toml"),
+                Path("lib/verifyit/pyproject.toml"),
+                Path("lib/taskcompendium/pyproject.toml"),
+                Path("lib/rolloutengine/pyproject.toml"),
             ),
             artifacts=MappingProxyType(
                 {
@@ -132,6 +136,9 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                         "marin-haliax",
                         "marin-finestore",
                         "marin-shellbox",
+                        "marin-verifyit",
+                        "marin-taskcompendium",
+                        "marin-rolloutengine",
                     )
                 }
             ),
@@ -143,6 +150,13 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                 "lib/shellbox/src/**",
                 "lib/shellbox/pyproject.toml",
                 "lib/shellbox/README.md",
+                "lib/verifyit/src/**",
+                "lib/verifyit/pyproject.toml",
+                "lib/verifyit/README.md",
+                "lib/taskcompendium/src/**",
+                "lib/taskcompendium/pyproject.toml",
+                "lib/rolloutengine/src/**",
+                "lib/rolloutengine/pyproject.toml",
             ),
             build_legs=(("ubuntu-latest", BuildOperation.PYTHON),),
             build=PythonBundle(script_path=Path("scripts/python_libs_package.py")),
@@ -353,18 +367,34 @@ def _declared_version(repo_root: Path, package: PackageFamily) -> str:
     return max(versions, key=_version_key)
 
 
-def latest_pypi_version(distribution: str) -> str | None:
-    """Return the latest supported PyPI release, or None before the first release."""
+def latest_complete_version(releases: Mapping[str, Sequence[str]], expectation: ArtifactExpectation) -> str | None:
+    """Return the greatest supported version whose PyPI files include every expected artifact."""
+    complete = []
+    for version, package_types in releases.items():
+        if (
+            package_types.count("bdist_wheel") >= expectation.wheels
+            and package_types.count("sdist") >= expectation.sdists
+        ):
+            complete.append(version)
+    return latest_supported_version(complete)
+
+
+def pypi_releases(distribution: str) -> Mapping[str, Sequence[str]]:
+    """Return the PyPI package type of each file per release, or an empty mapping before the first release."""
     url = PYPI_PROJECT_JSON_URL.format(distribution=distribution)
     try:
         with urllib.request.urlopen(url, timeout=30) as response:
             data = json.load(response)
     except urllib.error.HTTPError as error:
         if error.code == 404:
-            return None
+            return {}
         raise
-    releases = data.get("releases", {})
-    return latest_supported_version(releases)
+    return {version: tuple(file["packagetype"] for file in files) for version, files in data.get("releases", {}).items()}
+
+
+def latest_pypi_version(distribution: str) -> str | None:
+    """Return the latest supported PyPI release, or None before the first release."""
+    return latest_supported_version(pypi_releases(distribution))
 
 
 def latest_family_version(package: PackageFamily) -> str | None:
@@ -374,15 +404,20 @@ def latest_family_version(package: PackageFamily) -> str | None:
 
 
 def latest_native_release_versions(
-    latest_version: Callable[[str], str | None] = latest_pypi_version,
+    releases: Callable[[str], Mapping[str, Sequence[str]]] = pypi_releases,
 ) -> Mapping[str, str]:
-    """Return the newest published wheel version consumed by each native family."""
+    """Return the newest completely published wheel version consumed by each native family.
+
+    A release run that fails after its first upload leaves a partial PyPI release, for example
+    one macOS wheel, which other platforms cannot install.
+    """
     versions = {}
     for name, package in sorted(PACKAGES.items()):
         build = package.build
         if not isinstance(build, NativeBuild):
             continue
-        version = latest_version(build.requirement_distribution)
+        expectation = package.artifacts[build.requirement_distribution]
+        version = latest_complete_version(releases(build.requirement_distribution), expectation)
         if version is None:
             raise ValueError(f"No published release found for {build.requirement_distribution}")
         versions[name] = version
@@ -552,7 +587,8 @@ def published_artifacts(distribution: str, version: str) -> list[PublishedArtifa
 
 def _canonical_package_entries(lock_text: str) -> tuple[dict, dict[str, list[str]]]:
     lock = tomllib.loads(lock_text)
-    metadata = {key: value for key, value in lock.items() if key != "package"}
+    # uv writes its own lockfile format revision, so a newer uv changes it on each re-lock.
+    metadata = {key: value for key, value in lock.items() if key not in ("package", "revision")}
     packages: dict[str, list[str]] = {}
     for package in lock.get("package", []):
         packages.setdefault(package["name"], []).append(json.dumps(package, sort_keys=True))
@@ -568,8 +604,9 @@ def validate_targeted_lock_change(
     version: str,
     *,
     allowed_packages: Iterable[str] = (),
+    git_source: str | None = None,
 ) -> None:
-    """Reject lock changes outside the released distribution and requirement owner."""
+    """Reject lock changes outside the target distribution and requirement owner."""
     before_metadata, before_packages = _canonical_package_entries(before)
     after_metadata, after_packages = _canonical_package_entries(after)
     if before_metadata != after_metadata:
@@ -590,8 +627,20 @@ def validate_targeted_lock_change(
     if len(target_entries) != 1 or target_entries[0].get("version") != expected:
         versions = sorted(entry.get("version") for entry in target_entries)
         raise ValueError(f"Expected {distribution}=={expected} in uv.lock, found {versions}")
-    if "registry" not in target_entries[0].get("source", {}):
-        raise ValueError(f"Expected {distribution}=={expected} to resolve from a registry")
+    source = target_entries[0].get("source", {})
+    if git_source is None:
+        if "registry" not in source:
+            raise ValueError(f"Expected {distribution}=={expected} to resolve from a registry")
+    else:
+        actual, target = urlsplit(source.get("git", "")), urlsplit(git_source)
+        if (actual.scheme, actual.netloc, actual.path, actual.fragment, parse_qs(actual.query).get("subdirectory")) != (
+            target.scheme,
+            target.netloc,
+            target.path,
+            target.fragment,
+            parse_qs(target.query).get("subdirectory"),
+        ) or re.fullmatch(r"[0-9a-f]{40}", actual.fragment) is None:
+            raise ValueError(f"Expected {distribution} to resolve from {git_source}")
 
 
 def emit_github_output(path: Path | None, **values: str) -> None:
@@ -750,7 +799,8 @@ def _build_python_bundle(build: PythonBundle, version: str, operation: str, repo
     subprocess.run(
         [
             sys.executable,
-            build.script_path.as_posix(),
+            "-m",
+            ".".join(build.script_path.with_suffix("").parts),
             "--mode",
             "stable",
             "--version",
