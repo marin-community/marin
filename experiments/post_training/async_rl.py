@@ -108,8 +108,7 @@ class TrainingRecipe:
     max_grad_norm: float
     # Megatron parallelism for the policy and the reference model.
     megatron: MegatronGeometry
-    # Host memory per training task. Megatron checkpoint staging needs 1800GB; the policy spec's
-    # 512GB is sized for an FSDP load.
+    # Host memory includes Megatron checkpoint staging buffers.
     host_memory: str
     # vLLM engine settings the model needs beyond the ones the launcher writes itself.
     engine_init_kwargs: Mapping[str, object]
