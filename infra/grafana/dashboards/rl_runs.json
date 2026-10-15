@@ -1067,7 +1067,7 @@
     {
       "id": 113,
       "type": "timeseries",
-      "title": "Straggler proxy: rollout wait p99 \u00f7 p50",
+      "title": "Straggler proxy: rollout wait p99 ÷ p50",
       "description": "The 99th percentile of the trainer's rollout wait divided by its median over steps in each 30-minute bucket. This measures step-to-step spread across executions of the run. A partial bucket uses the steps inside the selected window.\n\nRun-wide: this panel ignores the Job and Execution pickers.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -1087,7 +1087,7 @@
             "fillOpacity": 8,
             "showPoints": "never",
             "spanNulls": false,
-            "axisLabel": "p99 \u00f7 p50"
+            "axisLabel": "p99 ÷ p50"
           },
           "min": 0,
           "unit": "none",
@@ -2334,7 +2334,7 @@
         {
           "id": 54,
           "type": "timeseries",
-          "title": "Trainer/vLLM logprob mismatch \u03c1 (staleness 0)",
+          "title": "Trainer/vLLM logprob mismatch ρ (staleness 0)",
           "description": "training_metric_value for policy/mismatch/staleness0/*: log-ratio mean/p99/p999, the fraction outside [0.5x, 2x], ESS fraction, KL and chi-squared, for staleness-zero loss tokens only. Computed by mismatch_ratio_metrics, isolating tokens with no policy drift since generation. Empty without trainer.training_metrics.\n\nA sync run shows staleness 0 only.",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
@@ -4796,7 +4796,7 @@
     {
       "id": 57,
       "type": "timeseries",
-      "title": "Position dependence of |log \u03c1|",
+      "title": "Position dependence of |log ρ|",
       "description": "training_metric_value for policy/mismatch/pooled/pos_* and policy/log_ratio_pos_*: mean absolute log-ratio by response position (first/last 256 tokens, middle) for the rollout-mismatch and within-update-drift families. Computed by mismatch_ratio_metrics and LogRatioMonitor. Empty without trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
