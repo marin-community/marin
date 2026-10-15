@@ -1,0 +1,48 @@
+{
+  "prepared_only": true,
+  "submitted": false,
+  "scope": "Prospective pairedseed0 complete1200 native-window SC/TIS comparison; previous partials are not endpoints.",
+  "gate": "Both current300-update interactive recoveries must finish and the campaign-wide count of allocated plus queued interactive nodes across both clusters must allow this pair, never exceeding4. Inspect validated sequential controller snapshots immediately before submission.",
+  "predecessor_rule": "Prefer this pair only if both exact RNOa3 predecessors remain queued. Preserve a predecessor that has begun healthy learning. Confirm concrete published replacements before retiring exact owned queued predecessors. Retain all originala2+a3 allocation intervals and partial raw outputs; update final analysis selectors only after submission confirmation.",
+  "learning_recipe_identical_between_methods_except_centering": true,
+  "configs": [
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_long_interactive_v1/native-window-sc-s0.yaml",
+      "sha256": "5bf33a5828e5774b6107e53a7ba08604003214924cda29415190bd3f963e306f",
+      "run_id": "sc-qwen-transfer-native-window-sc-s0-main-interactive-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "source_configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v1/native-window-sc-s0.yaml",
+      "current_predecessor": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce",
+      "seed": 0,
+      "horizon": 1200,
+      "cluster": "cw-us-east-02a",
+      "priority": "interactive",
+      "nodes": 2,
+      "gpus_per_node": 8,
+      "checkpoint_steps": 1200,
+      "evaluation_steps": 20,
+      "remaining_learning_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log_sha256": "20e9d153d1d2ae478c5a5799fe89aed0e0cfd70fc4680695aba6e7e8b3e35cc3"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_long_interactive_v1/native-window-tis-s0.yaml",
+      "sha256": "996865b3eabca4bcc4a4bf1146a75408c9b0e38355f2be7ea39d096360e88a85",
+      "run_id": "sc-qwen-transfer-native-window-tis-s0-main-interactive-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "source_configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v1/native-window-tis-s0.yaml",
+      "current_predecessor": "/romain/sc-qwen-transfer-native-window-tis-s0-main-rno-a3-01a126ce",
+      "seed": 0,
+      "horizon": 1200,
+      "cluster": "cw-us-east-02a",
+      "priority": "interactive",
+      "nodes": 2,
+      "gpus_per_node": 8,
+      "checkpoint_steps": 1200,
+      "evaluation_steps": 20,
+      "remaining_learning_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log_sha256": "f189272d66f7fe690ef10f0dd3e614df0a845d7f43b6e302cdffa9acd8453e64"
+    }
+  ]
+}
