@@ -21,7 +21,6 @@ def load_manifest(app_dir: Path) -> AppManifest:
         data_url=manifest.data_url,
         jobs=manifest.jobs,
         agent=manifest.agent,
-        python_entrypoint=manifest.python_entrypoint,
     )
 
 

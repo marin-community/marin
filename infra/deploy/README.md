@@ -34,8 +34,9 @@ deploying an unmerged checkout.
 
 Marina production updates require a clean checkout at the current remote main;
 use its main-branch workflow for a redeploy and local previews for branch work.
-This also applies to direct `pulumi up` on the `marin-marina` stack. Uploaded
-applets have separate per-UUID releases; a runtime rollout does not publish them.
+This also applies to direct `pulumi up` on the `marin-marina` stack. Every Marina
+application uses `marina release` to publish its Postgres package independently;
+a runtime rollout updates the kernel and installed dependencies.
 
 Finelog Kubernetes deployments add revision rollback support:
 

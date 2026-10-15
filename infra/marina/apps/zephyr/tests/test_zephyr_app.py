@@ -6,7 +6,6 @@
 The fixture dataclasses carry only the columns the app queries.
 """
 
-import importlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -21,12 +20,12 @@ from connectrpc.errors import ConnectError
 from fastapi.testclient import TestClient
 from finelog.client import LogClient, StatsError
 from finelog.embedded import require_embedded_server
-from marina.apps import Services, create_api
 from marina.db import UrlDatabase
 from marina.preview import install_preview_sources
 from marina.server import MarinaConfig, create_app
-from marina.sources import load_manifest
-from marina.testing import isolated_database
+from marina.testing import SourceServices, isolated_database
+
+from infra.marina.apps.zephyr.backend import app as backend
 
 APP = Path(__file__).resolve().parents[1]
 EXECUTION = "20260910-195311-32c9cebb"
@@ -168,7 +167,7 @@ def finelog(tmp_path_factory):
 def api(finelog, monkeypatch):
     monkeypatch.setenv("ZEPHYR_FINELOG_URL", finelog)
     monkeypatch.delenv("ZEPHYR_IAP_CLUSTER", raising=False)
-    app = create_api(load_manifest(APP), Services(name="zephyr", data_url="file:///tmp/zephyr", database=None))
+    app = backend.create_api(SourceServices(name="zephyr", data_url="file:///tmp/zephyr", database=None))
     assert Path(zephyr.__file__).resolve() == APP.parents[3] / "lib/zephyr/src/zephyr/__init__.py"
     # Pin "now" one hour after the seeded rows so the listing window is stable.
     executions = next(route for route in app.app.routes if getattr(route, "path", None) == "/executions")
@@ -188,8 +187,6 @@ def test_health_reports_source_and_namespaces(api, finelog):
 
 
 def test_finelog_read_retries_after_log_client_invalidates_its_transport():
-    create_api(load_manifest(APP), Services(name="zephyr", data_url="file:///tmp/zephyr", database=None))
-    backend = importlib.import_module("_marina_app_zephyr.app")
     finelog = backend._Finelog(url="http://finelog.invalid", iap_cluster=None)
     attempts = 0
 

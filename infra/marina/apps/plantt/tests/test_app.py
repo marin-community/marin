@@ -5,14 +5,14 @@ from typing import Any, cast
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from marina.apps import Services
+from marina.testing import SourceServices
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.pool import StaticPool
 
 from plantt import app as plantt
 
 
-class FakeServices(Services):
+class FakeServices(SourceServices):
     _engine: Engine
 
     def __init__(self, engine: Engine):

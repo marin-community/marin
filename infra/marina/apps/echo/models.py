@@ -5,9 +5,9 @@
 
 from fastembed import TextEmbedding
 from fastembed.rerank.cross_encoder import TextCrossEncoder
-from marina.models import shared_embedding
+from marina.models import shared_embedding, shared_reranker
 
-from . import reranking, search_config
+from . import search_config
 
 
 class SearchModels:
@@ -15,4 +15,9 @@ class SearchModels:
         return shared_embedding(search_config.EMBED_MODEL, search_config.INFERENCE_THREADS)
 
     def reranker(self) -> TextCrossEncoder:
-        return reranking.text_cross_encoder()
+        return shared_reranker(
+            search_config.RERANK_MODEL,
+            search_config.RERANK_MODEL_SOURCE,
+            search_config.RERANK_MODEL_FILE,
+            search_config.INFERENCE_THREADS,
+        )

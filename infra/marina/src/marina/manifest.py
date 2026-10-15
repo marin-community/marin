@@ -90,7 +90,6 @@ class AppManifest:
     data_url: str | None = None
     jobs: tuple[AppJob, ...] = ()
     agent: AgentPanelManifest | None = None
-    python_entrypoint: str | None = None
 
     @property
     def path(self) -> str:

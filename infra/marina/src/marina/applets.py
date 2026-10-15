@@ -37,12 +37,11 @@ from marina.database_setup import (
     MARINA_SCHEMA,
     PROVISION_APPLET_FUNCTION,
 )
-from marina.db import DatabaseSpec, engine_for, engine_for_role, grant_read_on_connection
+from marina.db import DatabaseSpec, engine_for, engine_for_role, grant_read_on_connection, schema_name
 from marina.manifest import APP_NAME_PATTERN, KERNEL_PREFIXES, AgentPanelManifest, AppJob, agent_panel, app_jobs
 
 APPLET_MANIFEST = "applet.toml"
 DIST_PREFIX = "dist/"
-SERVER_PREFIX = "server/"
 INDEX_FILE = "dist/index.html"
 MAX_PACKAGE_BYTES = 25 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 30 * 1024 * 1024
@@ -53,6 +52,7 @@ MAX_QUERY_ROWS = 10_000
 MAX_QUERY_RESPONSE_BYTES = 5 * 1024 * 1024
 MAX_REVISIONS = 5
 BACKEND_VALIDATION_TIMEOUT = 15
+SCHEMA_ADOPTION_LOCK_TIMEOUT = "5s"
 KNOWN_MANIFEST_KEYS = frozenset(
     {"title", "description", "connect_src", "build_command", "python_entrypoint", "name", "data_url", "jobs", "agent"}
 )
@@ -363,12 +363,12 @@ def package_applet(app_dir: Path, *, extra_files: dict[str, bytes] | None = None
     return payload
 
 
-def applet_schema(applet_id: uuid.UUID) -> str:
-    return f"{APPLET_ROLE_PREFIX}{applet_id.hex}"
+def applet_schema(applet_id: uuid.UUID, name: str | None = None) -> str:
+    return schema_name(name) if name is not None else applet_role(applet_id)
 
 
 def applet_role(applet_id: uuid.UUID) -> str:
-    return applet_schema(applet_id)
+    return f"{APPLET_ROLE_PREFIX}{applet_id.hex}"
 
 
 def _manifest_json(manifest: AppletManifest) -> str:
@@ -489,7 +489,7 @@ class AppletStore:
             self._insert_version(connection, applet_id, version, package, owner)
             self._store_files(connection, applet_id, version, package.files)
             connection.execute(text(f'SET LOCAL ROLE "{applet_role(applet_id)}"'))
-            schema = package.manifest.name.replace("-", "_") if package.manifest.name else applet_schema(applet_id)
+            schema = applet_schema(applet_id, package.manifest.name)
             connection.execute(text(f'SET LOCAL search_path TO "{schema}", public'))
             self._run_migration(connection, applet_id, version, package)
             grant_read_on_connection(connection, schema, APPLET_READER_ROLE)
@@ -576,7 +576,7 @@ class AppletStore:
         effective_mode = mode or AppletMode.PRIVATE
         connection.execute(text(f"SELECT {PROVISION_APPLET_FUNCTION}(:id)"), {"id": applet_id})
         if manifest.name is not None:
-            AppletStore._adopt_schema(connection, manifest.name.replace("-", "_"), applet_role(applet_id))
+            AppletStore._adopt_schema(connection, schema_name(manifest.name), applet_role(applet_id))
         connection.execute(
             text(
                 "INSERT INTO applets (id, title, description, owner, mode, name) "
@@ -596,6 +596,7 @@ class AppletStore:
     @staticmethod
     def _adopt_schema(connection: Connection, schema: str, role: str) -> None:
         """Keep existing application data while transferring its schema to the package role."""
+        connection.execute(text(f"SET LOCAL lock_timeout = '{SCHEMA_ADOPTION_LOCK_TIMEOUT}'"))
         connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}" AUTHORIZATION "{role}"'))
         connection.execute(text(f'ALTER SCHEMA "{schema}" OWNER TO "{role}"'))
         relations = connection.execute(
@@ -783,7 +784,7 @@ class AppletStore:
             row = connection.execute(text("SELECT name FROM applets WHERE id = :id"), {"id": applet_id}).first()
         if row is None:
             raise AppletNotFound(str(applet_id))
-        return row[0].replace("-", "_") if row[0] else applet_schema(applet_id)
+        return applet_schema(applet_id, row[0])
 
     def snapshots(self, runner: str) -> tuple[AppletSnapshot, ...]:
         """Read a runner's current packages atomically so pruning cannot race its snapshot."""

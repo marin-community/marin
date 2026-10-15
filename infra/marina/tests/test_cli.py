@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import shutil
 import textwrap
 from collections.abc import Iterator
@@ -58,9 +59,38 @@ def runner_config(root: Path, permissions: dict[UUID, tuple[str, ...]]) -> Path:
     return config
 
 
-def test_run_attempts_later_released_jobs_and_filters_secrets(tmp_path: Path, job_registry) -> None:
+@pytest.mark.parametrize("command", [["validate"], ["release", "--dry-run"]])
+def test_validation_imports_job_modules_without_a_backend(tmp_path: Path, command: list[str]) -> None:
+    source = tmp_path / "scheduled"
+    (source / "dist").mkdir(parents=True)
+    (source / "dist/index.html").write_text("scheduled")
+    (source / "applet.toml").write_text(
+        'name = "scheduled"\ntitle = "Scheduled"\ndescription = "Job-only application"\n'
+        '[[jobs]]\nname = "work"\nrunner = "hourly"\nmodule = "work"\ntimeout = 10\n'
+    )
+    module = source / "work.py"
+    module.write_text("import missing_job_dependency\ndef main():\n    pass\n")
+    runner = CliRunner()
+    failed = runner.invoke(cli, [*command, str(source), "--json"])
+    assert failed.exit_code != 0
+    assert "missing_job_dependency" in failed.output
+    module.write_text("def main():\n    pass\n")
+    valid = runner.invoke(cli, [*command, str(source), "--json"])
+    assert valid.exit_code == 0, valid.output
+    assert "job_import" in json.loads(valid.output)["checks"]
+
+
+@pytest.mark.parametrize("failure", ["exit", "revoked_permission"])
+def test_run_attempts_later_released_jobs_and_filters_secrets(tmp_path: Path, job_registry, failure: str) -> None:
     store, url = job_registry
-    first = release_job(tmp_path, store, "alpha", "raise SystemExit(2)", secrets=("ALPHA_TOKEN",))
+    marker = tmp_path / "first-ran"
+    first = release_job(
+        tmp_path,
+        store,
+        "alpha",
+        f"from pathlib import Path\nPath({str(marker)!r}).touch()\nraise SystemExit(2)",
+        secrets=("ALPHA_TOKEN",),
+    )
     output = tmp_path / "observed"
     second = release_job(
         tmp_path,
@@ -69,7 +99,10 @@ def test_run_attempts_later_released_jobs_and_filters_secrets(tmp_path: Path, jo
         f'from pathlib import Path\nimport os\nPath({str(output)!r}).write_text(str("ALPHA_TOKEN" in os.environ))',
         secrets=("BETA_TOKEN",),
     )
-    config = runner_config(tmp_path, {first: ("ALPHA_TOKEN",), second: ("BETA_TOKEN",)})
+    permissions = {second: ("BETA_TOKEN",)}
+    if failure == "exit":
+        permissions[first] = ("ALPHA_TOKEN",)
+    config = runner_config(tmp_path, permissions)
     result = CliRunner().invoke(
         cli,
         ["run", "hourly"],
@@ -82,6 +115,7 @@ def test_run_attempts_later_released_jobs_and_filters_secrets(tmp_path: Path, jo
     )
     assert result.exit_code == 1, result.output
     assert output.read_text() == "False"
+    assert marker.exists() is (failure == "exit")
 
 
 def test_migration_gate_requires_explicit_release_and_preserves_revision(tmp_path: Path, job_registry) -> None:

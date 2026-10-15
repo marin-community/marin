@@ -43,8 +43,6 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
 
-from .db_migrations import apply_migrations
-
 logger = logging.getLogger(__name__)
 
 metadata = MetaData()
@@ -228,13 +226,6 @@ class CatalogSnapshot:
 class _CatalogSource:
     run_id: str | None
     missing_since: datetime | None
-
-
-def migrate_schema(engine: Engine) -> None:
-    """Upgrade the schema to what this EvalDash build requires, then check the result."""
-    with engine.begin() as connection:
-        apply_migrations(connection)
-    verify_schema(engine)
 
 
 def _own_schema(engine: Engine) -> str | None:

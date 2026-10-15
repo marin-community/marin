@@ -40,7 +40,7 @@ from marina.db import (
 )
 from marina.jobs import execute_jobs
 from marina.journey_plugin import DEFAULT_SHOTS_DIR, JOURNEYS_DIR
-from marina.journeys import running_kernel
+from marina.journeys import LOOPBACK, running_kernel
 from marina.local_postgres import docker_database
 from marina.preview import install_preview_sources
 from marina.releases import (
@@ -55,7 +55,7 @@ from marina.releases import (
     source_status,
 )
 from marina.runtime import load_runtime_config
-from marina.server import MarinaConfig, create_app
+from marina.server import CLOUD_RUN_SERVICE_ENV, MarinaConfig, create_app
 from marina.sources import discover_apps
 from marina.table_load import read_table, table_statements
 
@@ -70,6 +70,7 @@ class _AppletValidationCheck(StrEnum):
     PACKAGE = "package"
     INLINE_SCRIPTS = "inline_scripts"
     BACKEND_IMPORT = "backend_import"
+    JOB_IMPORT = "job_import"
     BACKEND_FACTORY_EXECUTION = "backend_factory_execution"
     MIGRATION_EXECUTION = "migration_execution"
     BROWSER = "browser"
@@ -182,7 +183,7 @@ def _publish_package(
     return payload, read_applet_package(payload)
 
 
-def _validation_report(package: AppletPackage, *, backend_import_checked: bool) -> _AppletValidationReport:
+def _validation_report(package: AppletPackage, *, imports_checked: bool) -> _AppletValidationReport:
     files = tuple(sorted(package.files))
     checks = [_AppletValidationCheck.PACKAGE, _AppletValidationCheck.INLINE_SCRIPTS]
     not_checked = [_AppletValidationCheck.BROWSER]
@@ -192,10 +193,12 @@ def _validation_report(package: AppletPackage, *, backend_import_checked: bool) 
             _AppletValidationCheck.MIGRATION_EXECUTION,
             *not_checked,
         ]
-        if backend_import_checked:
+        if imports_checked:
             checks.append(_AppletValidationCheck.BACKEND_IMPORT)
         else:
             not_checked.insert(0, _AppletValidationCheck.BACKEND_IMPORT)
+    if package.manifest.jobs:
+        (checks if imports_checked else not_checked).append(_AppletValidationCheck.JOB_IMPORT)
     return _AppletValidationReport(
         files=files,
         file_count=len(files),
@@ -206,8 +209,8 @@ def _validation_report(package: AppletPackage, *, backend_import_checked: bool) 
     )
 
 
-def _print_validation_report(package: AppletPackage, *, backend_import_checked: bool, json_output: bool) -> None:
-    report = _validation_report(package, backend_import_checked=backend_import_checked)
+def _print_validation_report(package: AppletPackage, *, imports_checked: bool, json_output: bool) -> None:
+    report = _validation_report(package, imports_checked=imports_checked)
     if json_output:
         click.echo(json.dumps(asdict(report), sort_keys=True))
         return
@@ -225,13 +228,13 @@ def _print_validation_report(package: AppletPackage, *, backend_import_checked: 
 def validate(app_dir: Path, build: bool, json_output: bool) -> None:
     """Validate an applet package and import its backend in the Marina runtime."""
     _payload, package = _publish_package(app_dir, build=build)
-    backend_import_checked = package.manifest.python_entrypoint is not None
-    if backend_import_checked:
+    imports_checked = package.manifest.python_entrypoint is not None or bool(package.manifest.jobs)
+    if imports_checked:
         try:
             validate_backend_import(package)
         except ValueError as error:
             raise click.UsageError(str(error)) from error
-    _print_validation_report(package, backend_import_checked=backend_import_checked, json_output=json_output)
+    _print_validation_report(package, imports_checked=imports_checked, json_output=json_output)
 
 
 def _print_publish_result(result: dict[str, object], service_url: str, *, json_output: bool) -> None:
@@ -258,7 +261,7 @@ def _serve_local_applet(payload: bytes, *, applet_id: str, mode: AppletMode | No
                     data_root=str(data_root),
                     iap_audience=None,
                     database=database,
-                    runtime=load_runtime_config(),
+                    runtime=replace(load_runtime_config(), named_readers=()),
                 )
                 with running_kernel(config) as kernel:
                     result = publish_applet(
@@ -325,7 +328,9 @@ def release(
             validate_backend_import(package)
         if dry_run:
             _print_validation_report(
-                package, backend_import_checked=package.manifest.python_entrypoint is not None, json_output=json_output
+                package,
+                imports_checked=package.manifest.python_entrypoint is not None or bool(package.manifest.jobs),
+                json_output=json_output,
             )
             return
         if local:
@@ -575,7 +580,7 @@ def load_applet_table(applet_id: str, table_name: str, source: Path, replace: bo
 @click.option("--apps-dir", type=click.Path(path_type=Path), default=DEFAULT_APPS_DIR, show_default=True)
 @click.option("--data-root", default=str(DEFAULT_DATA_ROOT), show_default=True, help="Directory or gs:// URL.")
 @click.option("--port", type=int, default=DEFAULT_PORT, show_default=True)
-@click.option("--host", default="127.0.0.1", show_default=True)
+@click.option("--host", default=LOOPBACK, show_default=True)
 def dev(apps_dir: Path, data_root: str, port: int, host: str) -> None:
     """Serve the apps on loopback with the anonymous admin identity."""
     with docker_database() as database_url:
@@ -632,7 +637,7 @@ def serve(host: str, local_publisher: str | None) -> None:
     """Serve for production: configuration from the environment, bound on all interfaces."""
     config = MarinaConfig.from_env()
     if local_publisher is not None:
-        if host != "127.0.0.1" or config.iap_audience is not None or os.environ.get("K_SERVICE"):
+        if host != LOOPBACK or config.iap_audience is not None or os.environ.get(CLOUD_RUN_SERVICE_ENV):
             raise click.UsageError("--local-publisher requires --host 127.0.0.1 outside Cloud Run and IAP")
         config = replace(config, local_publisher=local_publisher)
     click.echo(

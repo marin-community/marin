@@ -309,10 +309,55 @@ startup also checks that the required named UUIDs are registered. Neither step
 publishes packages. A first unattended rollout stops at this gate and leaves the
 previous serving revision in traffic.
 
-Perform the initial handover explicitly after this change reaches main. An
-operator with the runtime's Cloud SQL access runs the new kernel locally against
-the existing database. Use the same verified owner ID that future IAP releases
-will use, or configure the intended production operators before the handover:
+Perform the initial handover before the first runtime cutover. Prepare these
+prerequisites while the existing service and workers still run:
+
+- The operator needs `roles/iam.serviceAccountTokenCreator` on
+  `marina@hai-gcp-models.iam.gserviceaccount.com`, plus its established Cloud SQL
+  access. The Marina stack does not grant impersonation. Arrange an approved
+  binding through the global `marin` IAM workflow before attempting bootstrap.
+- Copy the `user` value from `/api/marina/me` on the deployed authenticated
+  service for `OWNER_ID`. The default operator list is empty: only that exact
+  publisher ID can update or archive the five named apps after bootstrap.
+  To share those operations, commit the intended verified user IDs in the stack's
+  `applet_operators` configuration and apply that configuration during cutover.
+- Inspect schema and relation ownership through an administrative SQL connection.
+  The following query must return no rows; resolve any other owners explicitly
+  before release:
+
+```sql
+WITH application_schemas AS (
+    SELECT oid, nspname, nspowner FROM pg_namespace
+    WHERE nspname IN ('echo', 'evaldash', 'plantt', 'tasktrove', 'zephyr')
+)
+SELECT nspname AS schema, 'schema' AS kind, nspname AS object,
+       pg_get_userbyid(nspowner) AS owner
+FROM application_schemas
+WHERE pg_get_userbyid(nspowner) <> 'marina@hai-gcp-models.iam'
+UNION ALL
+SELECT n.nspname, c.relkind::text, c.relname, pg_get_userbyid(c.relowner)
+FROM pg_class c JOIN application_schemas n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+  AND pg_get_userbyid(c.relowner) <> 'marina@hai-gcp-models.iam';
+```
+
+Also inspect custom functions, enum types and domains in these schemas. Automatic
+adoption covers schemas, tables, views and sequences; other application objects
+need an explicit ownership plan. A failed adoption rolls back the registration.
+
+Pause both scheduler triggers and wait for their running executions to finish.
+Do not cancel running work. Keep them paused through the handover and rollout:
+
+```bash
+gcloud scheduler jobs pause marina-hourly-trigger --location us-central1 --project hai-gcp-models
+gcloud scheduler jobs pause marina-evaldash-trigger --location us-central1 --project hai-gcp-models
+gcloud run jobs executions list --job marina-hourly --region us-central1 --project hai-gcp-models
+gcloud run jobs executions list --job marina-evaldash --region us-central1 --project hai-gcp-models
+```
+
+Run the following commands from the repository root in a clean current-main
+checkout. The new kernel runs locally as the service account against the existing
+database. Replace the literal `OWNER_ID` with the verified value collected above:
 
 ```bash
 gcloud auth application-default login \
@@ -325,15 +370,17 @@ uv run marina migrate
 uv run marina serve --host 127.0.0.1 --local-publisher OWNER_ID
 ```
 
-The operator needs existing permission to impersonate the Marina service account.
 The Postgres connection must use that service role, which owns the existing schemas;
 the operator's personal database login cannot adopt them. Do not run the bootstrap
 with `K_SERVICE` or `MARINA_IAP_AUDIENCE` set. `--local-publisher` is rejected with
 IAP, in Cloud Run, or on a non-loopback bind. The local kernel admits loopback
 callers only; the owner ID is the operator's explicit assignment.
+Ownership changes wait at most five seconds for database locks. On lock contention,
+leave the old service serving, identify the holder and retry after it finishes.
 
-From another clean current-main checkout, release each named app through that
-kernel. Inspect versions first if a previous attempt completed any releases:
+Leave that server running. In a second terminal at the same clean checkout's root,
+release each named app through the local kernel. A separate checkout is unnecessary.
+Inspect versions first if a previous attempt completed any releases:
 
 ```bash
 uv run marina release infra/marina/apps/echo --base-version 0 --url http://127.0.0.1:8080
@@ -341,13 +388,28 @@ uv run marina release infra/marina/apps/evaldash --base-version 0 --url http://1
 uv run marina release infra/marina/apps/plantt --base-version 0 --url http://127.0.0.1:8080
 uv run marina release infra/marina/apps/tasktrove --base-version 0 --url http://127.0.0.1:8080
 uv run marina release infra/marina/apps/zephyr --base-version 0 --url http://127.0.0.1:8080
-uv run marina migrate --require-apps
 ```
 
 Verify existing records, named APIs, MCP discovery, Plantt's agent metadata and
-job-module imports. Stop the local kernel, dispatch the main runtime rollout,
-and verify the deployed named routes and scheduled runners. Atlas and Filer keep
-their existing pointers throughout. No dataset load is part of this handover.
+job-module imports. In the first terminal, stop the local kernel with Ctrl-C,
+then check registrations using its existing database environment and dispatch
+the main-branch runtime workflow:
+
+```bash
+uv run marina migrate --require-apps
+gh workflow run ops-pulumi-rollout.yaml --ref main -f service=marina
+```
+
+Verify the deployed named routes and scheduled runners. Resume both triggers
+after successful cutover, or if aborting the handover and keeping the old runtime:
+
+```bash
+gcloud scheduler jobs resume marina-hourly-trigger --location us-central1 --project hai-gcp-models
+gcloud scheduler jobs resume marina-evaldash-trigger --location us-central1 --project hai-gcp-models
+```
+
+Atlas and Filer keep their existing pointers throughout. No dataset load is part
+of this handover.
 
 Keep the previous service serving until the handover and runtime rollout succeed.
 Application migrations must support that overlap. Prefer an explicit app rollback
@@ -356,7 +418,7 @@ active package format, services and installed dependencies; it must not select
 application revisions as a side effect.
 
 If Pulumi reports a lock, identify its owning rollout/process first. Once that
-owner has stopped, `uv run pulumi cancel --stack marin-marina` from this directory
+owner has stopped, `uv run pulumi cancel --stack marin-marina` from `infra/marina/`
 clears its lock; then dispatch the main rollout. Never cancel a live update to
 make room. See the [Marina incident record](https://marina.oa.dev/echo/wiki/734).
 

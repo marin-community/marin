@@ -20,8 +20,6 @@ from marina.applets import (
     package_applet,
     read_applet_package,
 )
-from marina.apps import create_api as create_registered_api
-from marina.apps import services_for
 from marina.db import UrlDatabase
 from marina.mcp import marina_mcp
 from marina.preview import install_preview_sources
@@ -235,9 +233,13 @@ def test_agent_origin_rejects_insecure_remote_service(tmp_path: Path, source_dat
         create_app(config)
 
 
-def test_registered_application_is_searchable_and_callable_over_mcp(tmp_path: Path) -> None:
-    manifest = load_manifest(write_api_app(tmp_path / "apps", "tasktrove"))
-    registered = create_registered_api(manifest, services_for(manifest, str(tmp_path / "data"), None))
+def test_registered_application_is_searchable_and_callable_over_mcp(tmp_path: Path, source_database: str) -> None:
+    write_api_app(tmp_path / "apps", "tasktrove")
+    config = config_for(tmp_path, source_database)
+    store = AppletStore(UrlDatabase(source_database))
+    selected = store.named_applet("tasktrove")
+    registered = AppletRuntime(store, config.data_root).registered_api(selected.id, selected.current_version)
+    assert registered is not None
     server = marina_mcp({"tasktrove": registered.mcp})
 
     async def exercise_mcp():
@@ -288,6 +290,7 @@ def test_registered_application_is_searchable_and_callable_over_mcp(tmp_path: Pa
 
     assert found_write.data == []
     assert [tool["name"] for tool in found_read.data] == ["tasktrove_whoami"]
+    store.engine.dispose()
 
 
 def test_mcp_is_served_over_authenticated_streamable_http(tmp_path: Path, source_database: str) -> None:

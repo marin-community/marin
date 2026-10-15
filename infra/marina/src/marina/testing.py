@@ -12,12 +12,28 @@ import os
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 
 import sqlalchemy
 
+from marina.db import DatabaseSpec, engine_for
 from marina.local_postgres import docker_database
 
 TEST_DATABASE_URL_ENV = "MARINA_TEST_DATABASE_URL"
+
+
+@dataclass(frozen=True)
+class SourceServices:
+    """Backend services for unit tests that manage their own schema."""
+
+    name: str
+    data_url: str
+    database: DatabaseSpec | None
+
+    def engine(self) -> sqlalchemy.Engine:
+        if self.database is None:
+            raise RuntimeError(f"app {self.name} needs a database")
+        return engine_for(self.database, self.name)
 
 
 @contextmanager

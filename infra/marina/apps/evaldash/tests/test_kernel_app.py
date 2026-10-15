@@ -15,8 +15,8 @@ import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, results_db
 from marin.evaluation.records import write_record
-from marina.apps import Services
 from marina.db import UrlDatabase, engine_for
+from marina.testing import SourceServices
 from starlette.testclient import TestClient
 
 APP = "evaldash"
@@ -57,7 +57,7 @@ def test_the_mounted_api_serves_what_the_reconciler_committed(engine, records, d
         "trigger_cloud_run_job",
         lambda job: triggered.append(job) or "operations/evaldash-ingest",
     )
-    services = Services(name=APP, data_url="memory://evaldash", database=UrlDatabase(url=database_url))
+    services = SourceServices(name=APP, data_url="memory://evaldash", database=UrlDatabase(url=database_url))
 
     api = evaldash_app.create_api(services)
     with TestClient(api.app) as client:
