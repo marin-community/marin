@@ -352,6 +352,56 @@ async def test_shell_rejects_nonobject_arguments_and_grades_repaired_file(argume
     assert json.loads(record.messages[2]["content"]) == {"error": "Tool arguments must be a JSON object"}
 
 
+async def test_declared_outputs_return_in_the_record_and_reach_the_grader():
+    task = file_task(
+        b"""test "$(cat /workspace/out/task.json)" = '{"id": 1}' && echo 1 || echo 0""",
+        output_paths=("/workspace/out",),
+        grader=workspace_grader(argv=("sh", "/tests/grade.sh")),
+    )
+    model = ReplayModel(
+        [
+            shell_call("""mkdir -p /workspace/out && echo '{"id": 1}' > /workspace/out/task.json"""),
+            shell_call("echo notes > /workspace/scratch.txt", call_id="scratch"),
+            {"role": "assistant", "content": "Done"},
+        ]
+    )
+    record = await RolloutEngine(model.complete, {"local": RecordingShellSimFactory()}).run(
+        lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
+    assert record.outputs == {"/workspace/out/task.json": b'{"id": 1}\n'}
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+
+
+async def test_session_graded_task_returns_declared_outputs():
+    class Session:
+        def __init__(self, context):
+            self.machine = context.machine
+
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Write the report."},), {})
+
+        async def advance(self, turn):
+            written = await self.machine.run(
+                Command(("sh", "-c", f"echo {turn.message['content']} > /workspace/report.txt; echo x > /workspace/x"))
+            )
+            assert written.exit_code == 0
+            return Transition(done=True)
+
+        async def grade(self, _messages, *, stop_reason):
+            return GradeResult(Outcome.GRADED, 1.0)
+
+        async def close(self):
+            pass
+
+    task = file_task(grader=SessionGrader(), resources=ResourceGroups(), output_paths=("/workspace/report.txt",))
+    record = await RolloutEngine(
+        ReplayModel([{"role": "assistant", "content": "ready"}]).complete,
+        {"local": RecordingShellSimFactory()},
+        sessions={"fixture": Session},
+    ).run(lowered(task, machine=machine_runtime(), task_session="fixture"))
+    assert record.outputs == {"/workspace/report.txt": b"ready\n"}
+
+
 @pytest.mark.parametrize("compact", [False, True])
 async def test_agent_session_receives_engine_turns_and_controls_next_history(compact):
     first = ({"role": "user", "content": "Return 12."},)

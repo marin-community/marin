@@ -73,6 +73,12 @@ class RolloutFailure:
 
 @dataclass(frozen=True)
 class RolloutData:
+    """One attempt's conversation, token evidence, grade, and captured run outputs.
+
+    ``outputs`` maps each regular file under ``TaskSpec.output_paths`` on the task machine
+    to its bytes. The engine captures them once after the turn loop, before final grading.
+    """
+
     task_id: str
     messages: tuple[dict[str, Any], ...]
     prompt_token_ids: tuple[int, ...]
@@ -83,6 +89,7 @@ class RolloutData:
     stop_reason: str
     steps: tuple["RolloutStep", ...] = ()
     metrics: dict[str, Any] = field(default_factory=dict)
+    outputs: dict[str, bytes] = field(default_factory=dict)
     failure: RolloutFailure | None = None
 
 
