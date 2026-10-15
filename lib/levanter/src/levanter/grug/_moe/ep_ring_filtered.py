@@ -13,7 +13,9 @@ full-size output, this moves only the rows a destination works on: with top-4 of
 8 shards, about 42% of ring's bytes at a sender capacity factor of 1.0.
 
 Every hidden-width data movement is a gather whose transpose is another gather, so neither the
-forward nor the backward uses a hidden-width scatter-add.
+forward nor the backward uses a hidden-width scatter-add. The routing-weight gradient comes from
+the down projection's backward (``_down_project_combine``), so the backward never needs the expert
+outputs: remat neither saves them nor recomputes the down projection.
 """
 
 import math
@@ -27,18 +29,68 @@ from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
-    _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
     _scaled_capacity,
     CapacityDrops,
 )
-from levanter.grug._moe.ep_common import _assignment_sources, _combine_gather_sum
+from levanter.grug._moe.ep_common import _assignment_sources, _combine_gather_sum_impl
 from levanter.grug._moe.ep_ring import _combine_rows, _dispatch_rows, _select_local_assignments
 
 
 def destination_hit_fraction(*, num_experts: int, local_experts: int, topk: int) -> float:
     """Probability that a token's ``topk`` distinct uniform experts include one on a given shard."""
     return 1.0 - math.comb(num_experts - local_experts, topk) / math.comb(num_experts, topk)
+
+
+@jax.custom_vjp
+def _down_project_combine(
+    hidden: Float[Array, "M I"],
+    moe_w2: Float[Array, "Elocal I H"],
+    group_sizes: Int[Array, "Elocal"],
+    weights: Float[Array, "N J"],
+    inv: Int[Array, "N J"],
+    flat_idx: Int[Array, "M"],
+) -> Float[Array, "N H"]:
+    """``out[n] = sum_j weights[n, j] * y[inv[n, j]]`` with ``y = ragged_dot(hidden, moe_w2, group_sizes)``.
+
+    ``flat_idx[m]`` is the flat ``n * J + j`` entry that reads row ``m`` (or a sentinel), so the
+    backward for ``y`` is a gather.
+
+    The backward takes the routing-weight gradient from the down projection's own backward
+    instead of from ``y``, so ``y`` is never saved or recomputed. For ``m = inv[n, j]``,
+    ``dy[m] = weights[n, j] * cotangent[n]`` and ``dhidden = dy @ moe_w2[e].T``, hence
+    ``<hidden[m], dhidden[m]> = weights[n, j] * <y[m], cotangent[n]> = weights[n, j] * dweights[n, j]``.
+    The gradient is that row sum, in float32, divided by the weight; a zero weight gets zero.
+    """
+    y = ragged_dot(hidden, moe_w2, group_sizes)
+    return _combine_gather_sum_impl(y, inv.reshape(-1), weights, y.dtype)
+
+
+def _down_project_combine_fwd(hidden, moe_w2, group_sizes, weights, inv, flat_idx):
+    y = ragged_dot(hidden, moe_w2, group_sizes)
+    out = _combine_gather_sum_impl(y, inv.reshape(-1), weights, y.dtype)
+    return out, (hidden, moe_w2, group_sizes, weights, inv, flat_idx)
+
+
+def _down_project_combine_bwd(residual, cotangent):
+    hidden, moe_w2, group_sizes, weights, inv, flat_idx = residual
+    num_rows, num_slots = weights.shape
+    flat_valid = flat_idx < num_rows * num_slots
+    safe_flat = jnp.minimum(flat_idx, num_rows * num_slots - 1)
+    row_weight = jnp.where(flat_valid, weights.reshape(-1)[safe_flat].astype(jnp.float32), 0.0)
+    d_y = (cotangent[safe_flat // num_slots].astype(jnp.float32) * row_weight[:, None]).astype(hidden.dtype)
+
+    _, down_vjp = jax.vjp(lambda h, w: ragged_dot(h, w, group_sizes), hidden, moe_w2)
+    d_hidden, d_w2 = down_vjp(d_y)
+
+    weighted_score = jnp.sum(hidden.astype(jnp.float32) * d_hidden.astype(jnp.float32), axis=-1)
+    nonzero = row_weight != 0
+    row_score = jnp.where(nonzero, weighted_score / jnp.where(nonzero, row_weight, 1.0), 0.0)
+    d_weights = jnp.take(row_score, inv, mode="fill", fill_value=0).astype(weights.dtype)
+    return d_hidden, d_w2, None, d_weights, None, None
+
+
+_down_project_combine.defvjp(_down_project_combine_fwd, _down_project_combine_bwd)
 
 
 def _moe_mlp_ep_ring_filtered_local(
@@ -162,19 +214,11 @@ def _moe_mlp_ep_ring_filtered_local(
         w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out_dispatch = tree_checkpoint_name(
-            ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes),
-            _CHECKPOINT_DISPATCH_OUTPUT,
+        expert_combined = _down_project_combine(
+            activation_fn(gate) * up, moe_w2_local, group_sizes, received_weights, position, picked
         )
 
     with jax.named_scope("combine"):
-        expert_combined = _combine_gather_sum(
-            out_dispatch,
-            position.reshape(-1),
-            picked,
-            received_weights,
-            out_dispatch.dtype,
-        )
         returned = jax.lax.all_to_all(
             expert_combined.reshape(ep_size, pair_capacity, hidden_dim),
             "expert",
