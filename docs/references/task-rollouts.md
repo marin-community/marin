@@ -208,8 +208,8 @@ It raises `RuntimeError` if a session calls it during the turn loop, before the 
 
 Capture runs inside the verifier deadline, as part of the final grading phase.
 A capture failure or expired deadline raises `RolloutInterrupted` with operation `grade`.
-A record interrupted before capture, during startup, preparation, a transition, or at the attempt deadline, has empty `outputs`.
-A record interrupted after capture, by a grading failure or a model failure, retains `outputs`.
+A record interrupted before capture, during startup, preparation, a transition, or at an attempt deadline that expires before capture completes, has empty `outputs`.
+A record interrupted after capture, by a grading failure, a model failure, or an attempt deadline that expires during grading, retains `outputs`.
 Attempts that end before the first model response are not graded and have empty `outputs`.
 
 ## Grader files
