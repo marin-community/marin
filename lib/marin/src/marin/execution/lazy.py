@@ -39,6 +39,7 @@ from rigging.filesystem.cluster_config import marin_prefix, marin_region
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import prefix_join
 from rigging.provenance import Provenance
+from rigging.timing import log_time
 
 from marin.execution.artifact import (
     EXPECTED_FINGERPRINT_KEY,
@@ -421,10 +422,13 @@ def run(*handles: "ArtifactStep[T]", max_concurrent: int = 8, force_run_failed: 
     separate read. Provenance is captured once, so every artifact built records the same launch.
     ``force_run_failed`` reruns a previously-FAILED step instead of raising.
     """
-    provenance = Provenance.capture()
+    with log_time("execution/provenance"):
+        provenance = Provenance.capture()
     memo: dict[int, StepSpec] = {}
+    with log_time("execution/lower"):
+        steps = [_lower(h, provenance, memo) for h in handles]
     StepRunner().run(
-        [_lower(h, provenance, memo) for h in handles],
+        steps,
         force_run_failed=force_run_failed,
         max_concurrent=max_concurrent,
     )
