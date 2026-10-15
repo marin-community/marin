@@ -6,7 +6,7 @@
 import json
 import os
 from contextlib import ExitStack
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
@@ -209,7 +209,14 @@ def _write_corpus(roots: dict[str, str], inventory: list[SourceDeclaration], rep
     (StoragePath(report_path).parent / "corpus.json").write_text(json.dumps(result, indent=2))
 
 
-def _corpus_sources(corpus: str) -> tuple[dict[str, str], list[SourceDeclaration], str]:
+@dataclass(frozen=True)
+class _CorpusSources:
+    roots: dict[str, str]
+    inventory: list[SourceDeclaration]
+    population: str
+
+
+def _corpus_sources(corpus: str) -> _CorpusSources:
     document = json.loads(StoragePath(corpus).read_text())
     inventory = [SourceDeclaration.model_validate(row) for row in document["inventory"]]
     roots = {}
@@ -220,7 +227,7 @@ def _corpus_sources(corpus: str) -> tuple[dict[str, str], list[SourceDeclaration
         if row["source_id"] in roots:
             raise ValueError(f"Duplicate corpus source: {row['source_id']}")
         roots[row["source_id"]] = row["root"]
-    return roots, inventory, document["population"]
+    return _CorpusSources(roots, inventory, document["population"])
 
 
 def _embedding_pass(
@@ -523,12 +530,12 @@ def main(
     )
     inventory = [source.declaration for source in {**all_sources(), **selected}.values()]
     if corpus is not None:
-        roots, inventory, population = _corpus_sources(corpus)
+        restored = _corpus_sources(corpus)
         assert review_cache is not None and embed is not None
         _embedding_pass(
-            roots,
-            inventory=inventory,
-            population=population,
+            restored.roots,
+            inventory=restored.inventory,
+            population=restored.population,
             catalog_root=catalog_root,
             runtime=runtime,
             model=description_model,

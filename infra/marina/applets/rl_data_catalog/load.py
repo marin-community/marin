@@ -171,11 +171,8 @@ def load_catalog(catalog: CurationCatalog, query: Query) -> dict[str, Any]:
     }
 
 
-@click.command(help=__doc__)
-@click.option("--catalog-root", required=True, help="Published FineStore catalog; run in its storage region.")
-@click.option("--applet-id", required=True)
-@click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
-def main(catalog_root: str, applet_id: str, service_url: str) -> None:
+def applet_query(service_url: str, applet_id: str) -> Query:
+    """Return a SQL client for the applet's authenticated origin."""
     details = marina_request(service_url, "GET", f"/api/marina/applets/{applet_id}")
     assert isinstance(details, dict)
     parsed = urlparse(details["authenticated_url"])
@@ -188,7 +185,15 @@ def main(catalog_root: str, applet_id: str, service_url: str) -> None:
         assert isinstance(result, dict)
         return result
 
-    click.echo(json.dumps(load_catalog(CurationCatalog(catalog_root), query)))
+    return query
+
+
+@click.command(help=__doc__)
+@click.option("--catalog-root", required=True, help="Published FineStore catalog; run in its storage region.")
+@click.option("--applet-id", required=True)
+@click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
+def main(catalog_root: str, applet_id: str, service_url: str) -> None:
+    click.echo(json.dumps(load_catalog(CurationCatalog(catalog_root), applet_query(service_url, applet_id))))
 
 
 if __name__ == "__main__":

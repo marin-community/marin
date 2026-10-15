@@ -10,15 +10,14 @@ import uuid
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
 from typing import Any
-from urllib.parse import urlparse
 
 import click
 import pyarrow.parquet as pq
 from finestore.rl.curriculum import AlignmentRelease
-from marina.client import DEFAULT_MARINA_URL, marina_request
+from marina.client import DEFAULT_MARINA_URL
 from rigging.filesystem.storage_path import StoragePath
 
-from infra.marina.applets.rl_data_catalog.load import Query, batches, insert_rows
+from infra.marina.applets.rl_data_catalog.load import Query, applet_query, batches, insert_rows
 
 DELETE_BATCH_SIZE = 10_000
 TABLE_COLUMNS = {
@@ -220,19 +219,7 @@ def load_curriculum(release_uri: str, query: Query) -> dict[str, Any]:
 @click.option("--applet-id", required=True)
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 def main(release_uri: str, applet_id: str, service_url: str) -> None:
-    details = marina_request(service_url, "GET", f"/api/marina/applets/{applet_id}")
-    assert isinstance(details, dict)
-    parsed = urlparse(details["authenticated_url"])
-    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
-
-    def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
-        result = marina_request(
-            origin, "POST", f"/a/{applet_id}/query", json_body={"sql": sql, "parameters": parameters}
-        )
-        assert isinstance(result, dict)
-        return result
-
-    click.echo(json.dumps(load_curriculum(release_uri, query)))
+    click.echo(json.dumps(load_curriculum(release_uri, applet_query(service_url, applet_id))))
 
 
 if __name__ == "__main__":
