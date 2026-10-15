@@ -8,7 +8,8 @@ import math
 from pathlib import Path
 
 from verifyit.grade import InvalidTask, Reward, read_output, scored
-from verifyit.json_comparison import json_values_equal
+from verifyit.json_comparison import NumericTypePolicy, json_values_equal
+from verifyit.json_objects import unique_object
 from verifyit.spec import FunctionCall, PredictedActionSpec, spec_from_table
 
 
@@ -52,7 +53,10 @@ def grade_predicted_action_candidate(spec: PredictedActionSpec, actual: tuple[Fu
         [
             index
             for index, right in enumerate(actual)
-            if left.name == right.name and json_values_equal(left.arguments, right.arguments, spec.numeric_tolerance)
+            if left.name == right.name
+            and json_values_equal(
+                left.arguments, right.arguments, spec.numeric_tolerance, numeric_types=NumericTypePolicy.STRICT
+            )
         ]
         for left in spec.expected_calls
     ]
@@ -79,7 +83,9 @@ def grade(spec: PredictedActionSpec, _tests_dir: Path, workspace: Path) -> Rewar
     if candidate is None:
         return scored(0.0, reason="no_output")
     try:
-        calls = spec_from_table({"mode": "predicted_action", "expected_calls": json.loads(candidate)})
+        calls = spec_from_table(
+            {"mode": "predicted_action", "expected_calls": json.loads(candidate, object_pairs_hook=unique_object)}
+        )
         assert isinstance(calls, PredictedActionSpec)
         validate_predicted_action(calls)
     except (ValueError, InvalidTask):

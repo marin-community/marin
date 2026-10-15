@@ -157,9 +157,9 @@ config:
       allowedTools: []
       mcpAccess: *builtinMcpAccess
     pr-review:
-      agent: codex
+      agent: claude
       description: Review trusted Marin pull requests from immutable head commits
-      model: *codexModel
+      model: claude-opus-5-5
       effort: xhigh
       protocol: acp
       mode: auto
@@ -168,10 +168,32 @@ config:
       envClear: true
       ambientAllowlist: []
       idleArchiveSeconds: 60
-      maxConcurrent: 16
+      maxConcurrent: 8
       turnBudget: 200
       prelude: weaver
       instructionsFile: profiles/pr-review/AGENTS.md
+      env: *loomIrisUser
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools: []
+      mcpAccess: *builtinMcpAccess
+    pr-holistic-review:
+      agent: claude
+      description: Review large or agent-authored Marin pull requests as whole changes from immutable head commits
+      model: claude-opus-5-5
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 60
+      maxConcurrent: 8
+      turnBudget: 200
+      prelude: weaver
+      instructionsFile: profiles/pr-holistic-review/AGENTS.md
       env: *loomIrisUser
       restricted: false
       githubRepositories:
@@ -397,6 +419,13 @@ config:
       workflowRef: marin-community/marin/.github/workflows/ops-loom-review.yaml@refs/heads/main
       profile: pr-review
       serviceTag: pr-review
+      event: pull_request_target
+      ref: refs/heads/main
+    - name: pr-holistic-review
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-loom-holistic-review.yaml@refs/heads/main
+      profile: pr-holistic-review
+      serviceTag: pr-holistic-review
       event: pull_request_target
       ref: refs/heads/main
     - name: codehealth-refinement

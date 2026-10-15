@@ -5,14 +5,13 @@
 
 
 import itertools
-import sys
 
 import msgspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import zstandard as zstd
-from zephyr.expr import ColumnExpr, CompareExpr, LiteralExpr
+from zephyr.expr import ColumnExpr, CompareExpr, LiteralExpr, col
 from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
 from zephyr.readers import (
     SUPPORTED_EXTENSIONS,
@@ -167,19 +166,33 @@ def test_compute_parquet_splits_row_ranges_are_readable(tmp_path):
     assert sorted(all_ids) == list(range(20))
 
 
-def test_load_parquet_no_dataset_api(tmp_path, monkeypatch):
-    """Verify that load_parquet does NOT import pyarrow.dataset."""
-
-    path = str(tmp_path / "data.parquet")
-    _write_test_parquet(path, RECORDS)
-
-    # Remove pyarrow.dataset from sys.modules and block re-import
-    sys.modules.pop("pyarrow.dataset", None)
-    monkeypatch.setitem(sys.modules, "pyarrow.dataset", None)
-
-    # Should succeed without pyarrow.dataset
-    result = list(load_parquet(path))
-    assert len(result) == len(RECORDS)
+@pytest.mark.parametrize("row_start,row_end", [(None, None), (2, 3)])
+def test_load_parquet_filter_skips_corrupt_unrelated_payload(tmp_path, row_start, row_end):
+    """Footer pruning must avoid reading payloads belonging to other components."""
+    path = tmp_path / "data.parquet"
+    records = [
+        {"component": "left", "payload": "unrelated-a"},
+        {"component": "left", "payload": "unrelated-b"},
+        {"component": "right", "payload": "selected-a"},
+        {"component": "right", "payload": "selected-b"},
+    ]
+    pq.write_table(pa.Table.from_pylist(records), path, row_group_size=2, compression="zstd")
+    payload = pq.ParquetFile(path).metadata.row_group(0).column(1)
+    with path.open("r+b") as stream:
+        stream.seek(payload.dictionary_page_offset)
+        stream.write(b"\x00" * payload.total_compressed_size)
+    with pytest.raises(OSError):
+        list(load_parquet(str(path)))
+    predicate = col("component") == "right"
+    spec = InputFileSpec(
+        path=str(path), columns=["payload"], filter_expr=predicate, row_start=row_start, row_end=row_end
+    )
+    expected = [{"payload": "selected-a"}]
+    if row_end is None:
+        expected.append({"payload": "selected-b"})
+    assert list(load_parquet(spec)) == expected
+    assert compute_parquet_splits(str(path), 1, filter_expr=predicate) == [(2, 4)]
+    assert compute_parquet_splits(str(path), 1, filter_expr=col("component") == "absent") == []
 
 
 def test_load_parquet_batch_returns_record_batches(tmp_path):

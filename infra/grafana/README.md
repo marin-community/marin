@@ -268,8 +268,20 @@ take Grafana down with it.
 
 The controller and finelog IPs are resolved from GCE labels and refreshed after a
 connection failure. A dead controller or GitHub returns 5xx (not empty rows) and the
-failure is not cached, so a panel shows an error rather than blank data; `iris/.../health`
+expected failures are cached as message-only errors without traceback or response
+objects, so retries still show an error rather than blank data; `iris/.../health`
 is the exception — it returns `reachable=false` so the panel can render the outage.
+
+Pod scans process one API page at a time. The control-plane crashloop alert
+queries only the watched deployments using their label selectors; broad pod
+scans remain for workload, termination, and architecture views. Malformed JSON
+is reported as an HTTP upstream failure without retaining its response body.
+
+Dashboard dataset loading and projection allow at most two computations at a
+time, including vLLM views. Waiting requests do not load Arrow inputs. The shared
+Arrow source cache has a 128 MiB referenced-buffer budget; this is separate from
+active query and projection memory. Expected cached errors retain only their
+message and HTTP classification. Grafana's Cloud Run container has 4 GiB.
 
 ## Layout
 

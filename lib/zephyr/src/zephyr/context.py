@@ -7,6 +7,7 @@ import enum
 import logging
 import math
 import os
+import re
 import threading
 import time
 import uuid
@@ -59,11 +60,21 @@ logger = logging.getLogger(__name__)
 # Keep a Zephyr worker actor group below the practical Iris/Kubernetes control-plane
 # ceiling. Additional shards are pulled by these long-lived replicas.
 MAX_IRIS_WORKER_REPLICAS = 1_000
+MAX_EXECUTION_NAME_LENGTH = 64
 
 
-def _generate_execution_id() -> str:
+class IntraShardExecution(enum.StrEnum):
+    """Whether independent row transforms can use multiple tasks within a shard."""
+
+    OFF = "off"
+    AUTO = "auto"
+
+
+def _generate_execution_id(name: str | None = None) -> str:
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{ts}-{uuid.uuid4().hex[:8]}"
+    suffix = f"{ts}-{uuid.uuid4().hex[:8]}"
+    prefix = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")[:MAX_EXECUTION_NAME_LENGTH].rstrip("-")
+    return f"{prefix}-{suffix}" if prefix else suffix
 
 
 # Application errors that should never be retried by the execute() retry loop.
@@ -214,6 +225,10 @@ class ZephyrContext:
         max_workers: Worker limit for a dedicated or owned shared pool. Distributed
             pools are capped at 1,000 replicas; additional shards multiplex through
             the existing workers. Local execution is uncapped.
+        intra_shard_execution: AUTO splits independent row transforms into tasks
+            and concatenates results in order before shard-level operations.
+            Parquet ranges target four tasks per worker; overlapping row groups
+            are reread.
         resources: CPU, memory, and device resources for each worker.
         coordinator_resources: Resources for the coordinator actor.
         chunk_storage_prefix: Storage prefix for shared data, chunks, and results.
@@ -233,6 +248,7 @@ class ZephyrContext:
 
     client: Client | None = None
     max_workers: int | None = None
+    intra_shard_execution: IntraShardExecution = IntraShardExecution.OFF
     resources: ResourceConfig | None = None
     coordinator_resources: ResourceConfig = field(
         default_factory=lambda: ResourceConfig(cpu=0.1, ram="4g", preemptible=False)
@@ -255,6 +271,7 @@ class ZephyrContext:
     _state_lock: threading.Lock = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        self.intra_shard_execution = IntraShardExecution(self.intra_shard_execution)
         if self.client is None:
             self.client = current_client()
 
@@ -446,11 +463,24 @@ class ZephyrContext:
         verbose: bool = False,
         dry_run: bool = False,
         *,
+        name: str | None = None,
         map_task_resources: ResourceConfig | None = None,
         reduce_task_resources: ResourceConfig | None = None,
     ) -> ZephyrExecutionResult:
-        """Execute one dataset on a dedicated or supplied shared pool."""
-        plan = compute_plan(dataset)
+        """Execute one dataset on a dedicated or supplied shared pool.
+
+        Args:
+            dataset: Dataset to execute.
+            verbose: Log the execution plan.
+            dry_run: Log the plan without executing it.
+            name: Optional execution ID prefix, normalized to lowercase ASCII
+                alphanumerics and dashes and truncated to 64 characters. An empty
+                normalized prefix keeps the timestamp/hash ID format.
+            map_task_resources: Per-task resources for map stages.
+            reduce_task_resources: Per-task resources for reduce stages.
+        """
+        parallelism = self._worker_limit() if self.intra_shard_execution == IntraShardExecution.AUTO else 1
+        plan = compute_plan(dataset, parallelism=parallelism)
         if verbose or dry_run:
             _print_plan(dataset.operations, plan)
         if dry_run:
@@ -474,7 +504,7 @@ class ZephyrContext:
 
         if state in {_ContextState.OWNER, _ContextState.BORROWED}:
             assert coordinator is not None
-            execution_id = _generate_execution_id()
+            execution_id = _generate_execution_id(name)
             logger.info("Starting shared Zephyr pipeline %s", execution_id)
             self._upload_shared_data(execution_id)
             try:
@@ -497,11 +527,12 @@ class ZephyrContext:
         last_exception: Exception | None = None
         backoff = ExponentialBackoff(initial=2.0, maximum=60.0, factor=2.0, jitter=0.1)
         for attempt in range(self.max_execution_retries + 1):
-            execution_id = _generate_execution_id()
+            execution_id = _generate_execution_id(name)
+            logger.info("Starting dedicated Zephyr pipeline %s", execution_id)
             pool: _OwnedPool | None = None
             try:
                 self._upload_shared_data(execution_id)
-                needed_workers = math.ceil(plan.num_shards / tasks_per_worker)
+                needed_workers = max(parallelism, math.ceil(plan.num_shards / tasks_per_worker))
                 pool = self._start_pool(
                     min(self._worker_limit(), needed_workers),
                     _IdleWorkerPolicy.DRAIN,
@@ -525,7 +556,8 @@ class ZephyrContext:
                     raise
                 delay = backoff.next_interval()
                 logger.warning(
-                    "Pipeline attempt %d failed (%d retries left), retrying in %.1fs: %s",
+                    "Pipeline %s attempt %d failed (%d retries left), retrying in %.1fs: %s",
+                    execution_id,
                     attempt,
                     self.max_execution_retries - attempt,
                     delay,

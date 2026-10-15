@@ -8,12 +8,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from taskcompendium.models import (
+    TOOL_ARGUMENTS_OBJECT_ERROR,
     AssistantMessage,
     ConversationEvent,
     FunctionCall,
     TaskSpec,
     TextMessage,
     ToolResult,
+    require_resolved_environment,
 )
 from taskcompendium.runtime.models import (
     Actor,
@@ -54,6 +56,7 @@ async def run_episode(
     """Run a fresh episode; a final message completes it, while exhaustion truncates it."""
     if max_steps <= 0:
         raise ValueError("A positive turn budget is required")
+    require_resolved_environment(task.environment_requirements)
     events = list(task.context.events)
     environment: Environment | None = None
     termination = Termination.STEP_LIMIT
@@ -61,7 +64,8 @@ async def run_episode(
     detail = ""
     try:
         environment = await factory.create(task)
-        public = ActorTask(task.id, task.interaction_tools)
+        tools = environment.tools
+        public = ActorTask(task.id, tools)
         for _ in range(max_steps):
             response = actor.respond(public, events)
             if isinstance(response, TextMessage) and response.role != "assistant":
@@ -71,8 +75,10 @@ async def run_episode(
                 termination = Termination.FINAL_MESSAGE
                 break
             for call in response.calls:
-                if call.name not in {tool.name for tool in task.interaction_tools}:
+                if call.name not in {tool.name for tool in tools}:
                     observation = json.dumps({"error": "Tool is not advertised"})
+                elif not isinstance(call.arguments, dict):
+                    observation = json.dumps({"error": TOOL_ARGUMENTS_OBJECT_ERROR})
                 else:
                     observation = await environment.step(FunctionCall(name=call.name, arguments=call.arguments))
                 events.append(ToolResult(call_id=call.call_id, content=observation))

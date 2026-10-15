@@ -6,6 +6,13 @@ Checked-in apps and private applets use the same IAP login, database, app
 directory, and browser test harness. An isolated public service exposes only
 applets that their publishers explicitly mark public.
 
+Start with [Building Marina apps](../../docs/references/marina.md) for app types,
+features, build commands, and Postgres loading and caching decisions. This README
+is the detailed kernel and publishing reference.
+
+[Filer](../../docs/references/filer.md) is the private object-storage browser and
+file viewer, maintained as an applet under `applets/filer/`.
+
 ## Layout
 
 ```
@@ -160,6 +167,11 @@ with the `vector` and `pg_trgm` extensions, then `uv run marina migrate`.
 Tests get one from `marina.testing.test_database()`, a throwaway
 `pgvector/pgvector` container, or from `MARINA_TEST_DATABASE_URL`.
 
+For catalogs and reusable remote data, follow the
+[loading and caching guide](../../docs/references/marina.md#load-and-cache-data).
+Load committed snapshots into Postgres separately from serving startup; use
+`services.engine()` for the app's existing schema.
+
 ## Journeys
 
 A journey is a browser walk through an app that is also a test. Specs live in
@@ -210,7 +222,9 @@ a comma-separated set of user IDs allowed to update, roll back, or archive any
 applet; otherwise only the recorded owner may do so.
 
 `MARINA_APPLET_HOSTS` can assign named hosts to applet UUIDs. Each host serves
-only its assigned applet behind the same authentication. Its root redirects
+only its assigned applet behind the same authentication. The deployment stack
+reads the host-to-UUID mapping from `marin-marina:applet_hosts` and provisions
+its DNS records and Cloud Run domain mappings. Its root redirects
 to `/v/<current>/` on that host; assets, queries, and Python APIs remain pinned
 to that revision. Existing URLs on `MARINA_APPLET_ORIGIN` remain valid.
 

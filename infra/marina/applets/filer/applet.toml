@@ -1,0 +1,4 @@
+title = "Filer"
+description = "Browse Marin object storage and preview datasets, documents, and images. Inspect file contents and selected Parquet columns without downloading whole datasets."
+python_entrypoint = "server.app:create_api"
+build_command = "npm ci && npm run build"

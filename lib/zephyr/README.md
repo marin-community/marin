@@ -32,6 +32,44 @@ ctx.execute(pipeline)
 
 Pass `include_file_paths=True` to add `__file_path` to each row (or set `file_path_column` to use another name). Selecting only that column returns the source path for each matching row. Parquet path-only reads skip source data columns unless a filter needs them.
 
+For CPU-heavy local row transforms, enable intra-shard execution on the context:
+
+```python
+from zephyr.context import IntraShardExecution, ZephyrContext
+from zephyr.runners import SubprocessRunner
+
+ctx = ZephyrContext(
+    max_workers=4,
+    stage_runner_factory=SubprocessRunner,
+    intra_shard_execution=IntraShardExecution.AUTO,
+)
+```
+
+The planner inserts `Split → Map → Concat` around independent row operations.
+Use this option when row callbacks do not depend on per-shard mutable state.
+When there are fewer source shards than workers, the planner reads Parquet
+footers and divides row ranges into up to four tasks per worker, capped at one
+task per row. It gives larger row ranges more tasks. Existing shards stay
+intact when they already fill the worker pool, avoiding extra `Split` and
+`Concat` stages. A later reshard to fewer shards can still split existing
+intermediate chunks. Row maps after `group_by` stay with the reduce stage and
+run on each whole output shard.
+`Concat` restores each original shard's row order and ID before writes, joins,
+windows, `take_per_shard`, and `map_shard`. Output filenames and shard counts
+therefore stay the same. The default is `OFF`.
+
+This adds intermediate writes and reads, without a key shuffle. When an
+independent map chain ends in `write_parquet` with an explicit schema, fragments
+are written as Parquet and the final writer consumes Arrow batches. Other
+boundaries use the existing pickle chunks. Parquet workers
+still read overlapping row groups in full, so splitting a large row group
+increases read work and memory use. Batch-mode Parquet sources retain their
+original batch boundaries. Opaque loaders and `map_shard` callbacks are not
+subdivided internally; a source yielding a single item or chunk may still have
+only one runnable task.
+As with explicit resharding, materialized map stages run before a final writer
+can skip an existing output file.
+
 **Transformations:**
 - `.map(fn)` - transform each item
 - `.flat_map(fn)` - expand items (e.g., `load_jsonl`)
@@ -49,6 +87,7 @@ Pass `include_file_paths=True` to add `__file_path` to each row (or set `file_pa
 - `ZephyrContext(max_workers=N)` — auto-detects the backend (Iris inside an Iris job, local otherwise) via `fray.current_client()`
 - `ZephyrContext(client=LocalClient())` — explicit local backend (testing)
 - `ctx.execute(pipeline)` — runs the pipeline; returns a `ZephyrExecutionResult(results, counters)`
+- `ctx.execute(pipeline, name="rlvr-ifeval-review")` — prefixes the execution ID shown in logs and the dashboard. Names become lowercase ASCII alphanumerics and dashes, capped at 64 characters. Omitted or empty normalized names keep the timestamp/hash format.
 
 ## Real Usage
 
@@ -136,5 +175,9 @@ Zephyr consolidates ad-hoc distributed and Hugging Face dataset processing patte
 - Automatic chunking to prevent large object overhead
 - fsspec integration (GCS, S3, local)
 - Type-safe operation chaining
+
+Shuffle ingestion bounds its input buffer by serialized payload bytes and item
+count before passing frames to the memory-aware writer. This also applies when
+each item is itself a batch. A single item must still fit in task memory.
 
 See `AGENTS.md` for execution internals and source layout.

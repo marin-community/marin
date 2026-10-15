@@ -201,8 +201,8 @@ class StepRunner:
         scheduled in post-order before the step itself (deduped by
         ``output_path`` across the whole run). Already-succeeded deps
         (``STATUS_SUCCESS`` on disk) resolve via the cache check.
-        Concurrency is bounded by the thread pool (``max_concurrent``
-        workers, default 8).
+        Submit at most ``max_concurrent`` steps (default 8). Keep other ready
+        steps in graph order so newly ready dependents can use the next slot.
         """
         configure_logging_if_unset()
 
@@ -278,7 +278,7 @@ class StepRunner:
                 if any(d in failed for d in step.dep_paths):
                     waiting.pop(i)
                     failed.add(path)
-                elif all(d in completed for d in step.dep_paths):
+                elif len(running) < max_workers and all(d in completed for d in step.dep_paths):
                     waiting.pop(i)
                     _do_launch(step)
                 else:
@@ -335,7 +335,7 @@ class StepRunner:
                     _confirm_pruned(step)
                 elif any(d in failed for d in step.dep_paths):
                     failed.add(path)
-                elif all(d in completed for d in step.dep_paths):
+                elif len(running) < max_workers and all(d in completed for d in step.dep_paths):
                     _do_launch(step)
                 else:
                     waiting.append(step)

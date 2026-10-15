@@ -3,7 +3,7 @@
 
 """The verifier contract: ``tests/verifier.toml`` is one flat table, ``mode`` plus that mode's fields.
 
-Predicted-action call arguments use JSON strings in TOML to preserve JSON null and nested values.
+Structured references and predicted-action arguments use JSON strings in TOML to preserve JSON null and nested values.
 
 Every mode is a frozen dataclass here. ``parse_spec`` builds one from TOML text and rejects unknown
 or missing fields; ``render_spec`` writes it back. Paths in a spec (``schema``, ``cases``,
@@ -17,7 +17,10 @@ from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from typing import Any
 
-import tomlkit
+import tomli_w
+
+from verifyit.json_comparison import JsonValue, NumericTypePolicy
+from verifyit.json_objects import unique_object
 
 DEFAULT_REWARD_KEY = "reward"
 DEFAULT_OUTPUT = "/app/answer.txt"
@@ -25,6 +28,7 @@ DEFAULT_WORKSPACE = "/app"
 
 
 class Mode(StrEnum):
+    STRUCTURED_EXACT = "structured_exact"
     PREDICTED_ACTION = "predicted_action"
     MCQ = "mcq"
     MATH = "math"
@@ -100,6 +104,14 @@ class PredictedActionSpec:
 
 
 @dataclass(frozen=True)
+class StructuredExactSpec:
+    expected: JsonValue
+    output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
+    numeric_types: NumericTypePolicy = field(default=NumericTypePolicy.VALUE, kw_only=True)
+
+
+@dataclass(frozen=True)
 class McqSpec:
     expected: str
     options: int = 4
@@ -119,9 +131,9 @@ class MathSpec:
 
 @dataclass(frozen=True)
 class NumericSpec:
-    expected: float
-    tolerance_abs: float = 1e-6
-    tolerance_rel: float = 1e-6
+    expected: str
+    tolerance_abs: float
+    tolerance_rel: float
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
 
@@ -210,12 +222,16 @@ class StdioSpec:
 class PytestSpec:
     paths: tuple[str, ...] = ()
     args: tuple[str, ...] = ()
+    candidate_modules: tuple[str, ...] = ()
+    """Python modules the task explicitly asks the candidate to implement."""
     must_pass: tuple[str, ...] = ()
     must_not_break: tuple[str, ...] = ()
     setup: str = ""
     """Shell command run in the workspace after restore and before the tests, with
     ``VERIFYIT_TESTS_DIR`` and ``VERIFYIT_WORKSPACE`` in its environment."""
     restore: tuple[str, ...] = ()
+    protected_paths_files: tuple[str, ...] = ()
+    """Tests-directory manifests of workspace paths restored by setup."""
     python: str = "python3"
     timeout: float = 600.0
     workspace: str = DEFAULT_WORKSPACE
@@ -286,6 +302,7 @@ class JudgeSpec:
     exact_gate_answers: tuple[str, ...] = ()
     exact_gate_label: str = ""
     strip_reasoning_blocks: bool = False
+    strip_candidate_reasoning_blocks: bool = False
     max_completion_tokens: int = 8192
     incomplete_retry_tokens: int = 0
     reasoning_effort: str = ""
@@ -311,7 +328,8 @@ class ScriptSpec:
 
 
 Spec = (
-    PredictedActionSpec
+    StructuredExactSpec
+    | PredictedActionSpec
     | McqSpec
     | MathSpec
     | NumericSpec
@@ -329,25 +347,66 @@ Spec = (
     | ScriptSpec
 )
 
-SPEC_TYPES: dict[Mode, type] = {
-    Mode.PREDICTED_ACTION: PredictedActionSpec,
-    Mode.MCQ: McqSpec,
-    Mode.MATH: MathSpec,
-    Mode.NUMERIC: NumericSpec,
-    Mode.EXACT: ExactSpec,
-    Mode.JSON_SCHEMA: JsonSchemaSpec,
-    Mode.XML_ELEMENTS: XmlElementsSpec,
-    Mode.CSV_COLUMNS: CsvColumnsSpec,
-    Mode.IFEVAL: IfevalSpec,
-    Mode.REASONING_GYM: ReasoningGymSpec,
-    Mode.STDIO: StdioSpec,
-    Mode.PYTEST: PytestSpec,
-    Mode.JUNIT: JunitSpec,
-    Mode.GOTEST: GotestSpec,
-    Mode.JUDGE: JudgeSpec,
-    Mode.SCRIPT: ScriptSpec,
+
+@dataclass(frozen=True)
+class CandidateEntrypoints:
+    """Names in the mode module; modules stay lazy to preserve optional dependencies."""
+
+    validate: str
+    grade: str
+
+
+@dataclass(frozen=True)
+class ModeDescriptor:
+    spec_type: type[Spec]
+    module: str
+    candidate: CandidateEntrypoints | None = None
+
+
+MODE_DESCRIPTORS: dict[Mode, ModeDescriptor] = {
+    Mode.STRUCTURED_EXACT: ModeDescriptor(
+        StructuredExactSpec,
+        "grade_structured_exact",
+        CandidateEntrypoints("validate_structured_exact", "grade_structured_exact_candidate"),
+    ),
+    Mode.PREDICTED_ACTION: ModeDescriptor(
+        PredictedActionSpec,
+        "grade_predicted_action",
+        CandidateEntrypoints("validate_predicted_action", "grade_predicted_action_candidate"),
+    ),
+    Mode.MCQ: ModeDescriptor(McqSpec, "grade_mcq", CandidateEntrypoints("validate_mcq", "grade_mcq_candidate")),
+    Mode.MATH: ModeDescriptor(
+        MathSpec, "grade_math", CandidateEntrypoints("validate_math", "grade_math_text_candidate")
+    ),
+    Mode.NUMERIC: ModeDescriptor(
+        NumericSpec, "grade_math", CandidateEntrypoints("validate_numeric", "grade_numeric_text_candidate")
+    ),
+    Mode.EXACT: ModeDescriptor(
+        ExactSpec, "grade_exact", CandidateEntrypoints("validate_exact", "grade_exact_candidate")
+    ),
+    Mode.JSON_SCHEMA: ModeDescriptor(
+        JsonSchemaSpec,
+        "grade_json_schema",
+        CandidateEntrypoints("validate_json_schema", "grade_json_resource_candidate"),
+    ),
+    Mode.XML_ELEMENTS: ModeDescriptor(
+        XmlElementsSpec, "grade_xml", CandidateEntrypoints("validate_xml_elements", "grade_xml_candidate")
+    ),
+    Mode.CSV_COLUMNS: ModeDescriptor(
+        CsvColumnsSpec, "grade_csv", CandidateEntrypoints("validate_csv_columns", "grade_csv_candidate")
+    ),
+    Mode.IFEVAL: ModeDescriptor(
+        IfevalSpec, "grade_ifeval", CandidateEntrypoints("validate_ifeval", "grade_ifeval_candidate")
+    ),
+    Mode.REASONING_GYM: ModeDescriptor(ReasoningGymSpec, "grade_reasoning_gym"),
+    Mode.STDIO: ModeDescriptor(StdioSpec, "grade_stdio"),
+    Mode.PYTEST: ModeDescriptor(PytestSpec, "grade_pytest"),
+    Mode.JUNIT: ModeDescriptor(JunitSpec, "grade_junit"),
+    Mode.GOTEST: ModeDescriptor(GotestSpec, "grade_gotest"),
+    Mode.JUDGE: ModeDescriptor(JudgeSpec, "grade_judge"),
+    Mode.SCRIPT: ModeDescriptor(ScriptSpec, "grade_script"),
 }
-MODES: dict[type, Mode] = {t: m for m, t in SPEC_TYPES.items()}
+MODES: dict[type[Spec], Mode] = {descriptor.spec_type: mode for mode, descriptor in MODE_DESCRIPTORS.items()}
 
 
 def mode_of(spec: Spec) -> Mode:
@@ -400,7 +459,7 @@ def spec_from_table(table: dict[str, Any]) -> Spec:
     if "mode" not in table:
         raise ValueError("verifier spec has no mode")
     mode = Mode(table["mode"])
-    spec_type = SPEC_TYPES[mode]
+    spec_type = MODE_DESCRIPTORS[mode].spec_type
     declared = {f.name: f for f in fields(spec_type)}
     unknown = sorted(set(table) - set(declared) - {"mode"})
     if unknown:
@@ -421,16 +480,20 @@ def parse_spec(text: str) -> Spec:
     if table.get("mode") == Mode.PREDICTED_ACTION and isinstance(table.get("expected_calls"), list):
         for call in table.get("expected_calls", []):
             if isinstance(call, dict) and isinstance(call.get("arguments"), str):
-                call["arguments"] = json.loads(call["arguments"])
+                call["arguments"] = json.loads(call["arguments"], object_pairs_hook=unique_object)
+    if table.get("mode") == Mode.STRUCTURED_EXACT and "expected" in table:
+        if not isinstance(table["expected"], str):
+            raise ValueError("Structured reference in TOML must be a JSON string")
+        table["expected"] = json.loads(table["expected"], object_pairs_hook=unique_object)
     return spec_from_table(table)
 
 
 def spec_to_table(spec: Spec) -> dict[str, Any]:
-    """The flat TOML table for a spec: ``mode`` first, then every field, ``None`` fields omitted."""
+    """The flat TOML table for a spec: ``mode`` first, then every field, optional ``None`` fields omitted."""
     table: dict[str, Any] = {"mode": mode_of(spec).value}
     for f in fields(spec):
         value = getattr(spec, f.name)
-        if value is None:
+        if value is None and f.default is None:
             continue
         if isinstance(value, tuple):
             value = [dataclasses.asdict(v) if dataclasses.is_dataclass(v) else v for v in value]
@@ -446,4 +509,6 @@ def render_spec(spec: Spec) -> str:
         table["expected_calls"] = [
             {"name": call.name, "arguments": json.dumps(call.arguments, allow_nan=False)} for call in spec.expected_calls
         ]
-    return tomlkit.dumps(table)
+    if isinstance(spec, StructuredExactSpec):
+        table["expected"] = json.dumps(spec.expected, allow_nan=False)
+    return tomli_w.dumps(table)

@@ -123,6 +123,22 @@ Resolver options:
 The actor system also provides `ActorPool` for round-robin calls and broadcast
 RPCs across all resolved endpoints.
 
+Actor RPC uses `cloudpickle` for arguments, results, and exceptions. Deserializing
+these payloads can execute Python code, so clients must trust servers and servers
+must trust clients. `ActorServer` has no authentication middleware and binds to
+`0.0.0.0` by default: restrict direct listeners to trusted networks. Expose a
+controller endpoint proxy externally only with authentication enforced. Null-auth
+proxies are permissive and must stay on trusted networks. A token or share link
+that exposes an actor RPC endpoint grants code execution in the actor process;
+give it only to trusted recipients. This also applies when the actor serves a web
+application.
+
+Run model-controlled or other untrusted jobs with
+[`CONTAINER_PROFILE_SANDBOX`](docs/container-profiles.md#sandbox-jobs) and
+`INTERNET` or `NONE` egress. Sandbox jobs reject `CLUSTER` egress, which permits
+access to actor listeners and other trusted cluster services. On Kubernetes, the
+network plugin must enforce NetworkPolicy for the egress restriction to take effect.
+
 Example:
 
 ```python

@@ -3,7 +3,7 @@
 
 # Copyright 2026 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-"""MMMU source extraction composed with MCQ, numeric and substring exact grading."""
+"""MMMU source extraction with MCQ, source float and substring exact grading."""
 
 import ast
 import functools
@@ -15,9 +15,9 @@ from verifyit.adapters import harness_validation as validation
 from verifyit.adapters.skyrl import grade_literal_candidate
 from verifyit.grade import InvalidTask, Reward, scored
 from verifyit.modes.grade_exact import grade_exact_candidate
-from verifyit.modes.grade_math import grade_numeric_candidate
+from verifyit.modes.grade_math import grade_numeric_candidate_float
 from verifyit.modes.grade_mcq import grade_mcq_candidate
-from verifyit.spec import ExactSpec, McqSpec, NumericSpec
+from verifyit.spec import ExactSpec, McqSpec
 
 _SUFFIX = "/tasks/mmmu/utils.py"
 _ORIGINAL = "65e52c4a7694c68df5fdd250be8c3998af3a835d22e669a64235197d42a83057"
@@ -168,7 +168,7 @@ def grade_mmmu_open(references, candidates) -> Reward:
                     candidate,
                 )
             elif type(candidate) is float and type(reference) is float:
-                result = grade_numeric_candidate(NumericSpec(reference, tolerance_abs=0.0, tolerance_rel=0.0), candidate)
+                result = grade_numeric_candidate_float(reference, candidate, tolerance_abs=0.0)
             else:
                 continue
             if result.reward:
