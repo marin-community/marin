@@ -49,6 +49,6 @@ def export(ctx) -> dict[str, pd.DataFrame]:
 
     tasks = naming.task_table().copy()
     weights = naming.task_weights()
-    aggregate_weight = {**weights["uncheatable_fixed"], **weights["obe_easy"]}
+    aggregate_weight = {**weights["uncheatable"], **weights["obe_easy"]}
     tasks["aggregate_weight"] = [aggregate_weight[t] for t in tasks.task_id]
     return {"partition": partition, "tasks": tasks}

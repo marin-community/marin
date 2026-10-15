@@ -92,10 +92,12 @@ def objective_public(internal: str) -> str:
 
 @cache
 def task_weights() -> dict[str, dict[str, float]]:
+    """Each objective's task weights, which define its aggregate: the paper's fixed byte shares of the seven Uncheatable
+    corpora, and equal weights over the 51 OlmoBaseEval Easy tasks."""
     objectives = tables.read_csv(paths.require(OBJECTIVE_WEIGHTS))
     unch = objectives[objectives.objective == "uncheatable"]
     t9 = objectives[objectives.objective == "table9"]
     return {
-        "uncheatable_fixed": {task_public(c): float(w) for c, w in zip(unch.component, unch.weight, strict=True)},
+        "uncheatable": {task_public(c): float(w) for c, w in zip(unch.component, unch.weight, strict=True)},
         "obe_easy": {task_public(c): float(w) for c, w in zip(t9.component, t9.weight, strict=True)},
     }

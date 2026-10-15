@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from experiments.domain_phase_mix.release import context, naming, paths
+from experiments.domain_phase_mix.release import context, naming, paths, tables
 from experiments.domain_phase_mix.release.configs import heldout, validation
 from experiments.domain_phase_mix.release.run_names import training_run_name_from_uri
 
@@ -84,7 +84,7 @@ def test_exposure_ids_split_what_mixture_ids_merge(table):
     assert frozen.exposure_id.nunique() == 425
 
 
-def test_labels_are_kept_and_aggregates_versioned(table):
+def test_labels_are_kept(table):
     assert table.proposal_method.notna().all()
     # Objectives take their public names (the registry's `table9`, `table9_macro_bpb`, `uncheatable_and_table9` and
     # `baseline` among them); the Llama panels record none.
@@ -102,18 +102,35 @@ def test_labels_are_kept_and_aggregates_versioned(table):
     # it: no objective and the construction's epoch cap of 8.
     baseline = table[table.proposal_objective == "none"]
     assert len(baseline) == 1 and baseline.epoch_cap.tolist() == [8.0]
-    assert set(table.aggregate_version) == {"fixed_20260927", "legacy", "pooled_schema2"}
-    assert (table.loc[table.swarm != "qwen3_360m_1p6b", "aggregate_version"] == "legacy").all()
-    # The path-midpoint and RegMix-reference launches recorded the BPB-schema-2 pooled Uncheatable aggregate, about
-    # 0.01 BPB above the fixed weighting of the same components; every other Qwen3 run recorded the fixed weighting.
-    pooled = table[table.aggregate_version == "pooled_schema2"]
-    assert len(pooled) == 14 and set(pooled.proposal_method) == {"path_midpoints", "regmix_reference"}
-    assert (pooled.bpb__uncheatable_source - pooled.bpb__uncheatable_fixed).between(0.005, 0.013).all()
-    qwen = table[(table.aggregate_version == "fixed_20260927") & table.bpb__uncheatable_fixed.notna()]
-    assert np.allclose(qwen.bpb__uncheatable_fixed, qwen.bpb__uncheatable_source, rtol=0, atol=2e-6)
-    # OlmoBaseEval Easy is a plain mean in every panel, so it checks each swarm's component join.
-    obe = table[table.bpb__obe_easy.notna()]
-    assert np.allclose(obe.bpb__obe_easy, obe.bpb__obe_easy_source, rtol=0, atol=1e-12)
+
+
+def test_aggregates_recompute_the_recorded_values(table):
+    # The registry records each run's aggregates, row for row with the table. The Qwen3 panel recorded Uncheatable
+    # under the fixed rule, except the path-midpoint and RegMix-reference launches, which recorded the BPB-schema-2
+    # pooled aggregate, about 0.01 BPB above the fixed weighting of the same components; the Llama panels recorded it
+    # under the legacy weights, within 1e-4 of the fixed rule. OlmoBaseEval Easy is a plain mean in every panel, so it
+    # checks each swarm's component join.
+    runs = tables.read_csv(SRC / "heldout_runs.csv")
+    complete = {
+        objective: table[[f"bpb__{t}" for t in weights]].notna().all(axis=1)
+        for objective, weights in naming.task_weights().items()
+    }
+    pooled = runs.source.isin(heldout.POOLED_SOURCES)
+    assert pooled.sum() == 14 and set(table.proposal_method[pooled]) == {"path_midpoints", "regmix_reference"}
+    assert complete["uncheatable"][pooled].all()
+    assert (runs.uncheatable_bpb - table.bpb__uncheatable)[pooled].between(0.005, 0.013).all()
+    qwen = table.swarm == "qwen3_360m_1p6b"
+    fixed = qwen & ~pooled & runs.uncheatable_bpb.notna()
+    assert np.allclose(table.bpb__uncheatable[fixed], runs.uncheatable_bpb[fixed], rtol=0, atol=2e-6)
+    legacy = ~qwen & complete["uncheatable"] & runs.uncheatable_bpb.notna()
+    assert (table.bpb__uncheatable - runs.uncheatable_bpb)[legacy].abs().max() < 1e-4
+    obe = runs.table9_macro_bpb.notna()
+    assert np.allclose(table.bpb__obe_easy[obe], runs.table9_macro_bpb[obe], rtol=0, atol=1e-12)
+    # Without all of an objective's components, a run takes its fixed-rule record or has no value; one Llama 160M run
+    # records Uncheatable under the legacy weights only and has none.
+    assert table.bpb__uncheatable.notna().equals(complete["uncheatable"] | fixed)
+    assert table.bpb__obe_easy.notna().equals(complete["obe_easy"] | obe)
+    assert (~complete["uncheatable"] & ~fixed & runs.uncheatable_bpb.notna()).sum() == 1
 
 
 def test_weights_and_pool_fractions(table):

@@ -7,13 +7,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from experiments.domain_phase_mix.release import context, naming, paths
+from experiments.domain_phase_mix.release import context, naming, paths, run_names, tables
 from experiments.domain_phase_mix.release.configs import heldout, swarm_llama
 
 pytestmark = pytest.mark.skipif(
     not (paths.RO / "60m_39bucket_checkpoint_audit_20260724").exists(), reason="archived swarm sources absent"
 )
 APPENDIX = paths.DRIVE / "sections/appendix.tex"
+# Exports the 200M swarm's builder wrote independently of the sources the exporter reads.
+SCORES_200 = paths.RO / "one_phase_swarm_scores_export_300m_20260630"
 PAPER_COLUMN = {"swarm_llama_160m_1p2b": 2, "swarm_llama_200m_6b": 3}  # columns of Table tab:a-hyperparameters
 PAPER_ROWS = {
     "Total parameters": "total_parameters",
@@ -52,9 +54,7 @@ def test_160m_rows_and_components(out):
     t = out["swarm_llama_160m_1p2b"]
     assert len(t) == 281 + 10 and t.observation_id.is_unique
     assert t.fit_inclusion.sum() == 281 and t[t.fit_inclusion].mixture_id.is_unique
-    assert t.components_available.sum() >= 200
-    with_components = t[t.components_available]
-    assert np.allclose(with_components.bpb__obe_easy, with_components.bpb__obe_easy_source, rtol=0, atol=1e-6)
+    assert t.components_available.all()
     assert t.design_kind.value_counts().to_dict() == {"sampled": 238, "deletion": 39, "repeat": 10, "baseline": 4}
     assert (t.fit_inclusion == (t.design_kind != "repeat")).all()
     # Seeds come from the launch manifests; none of the deletions' launch is among the sources.
@@ -69,8 +69,6 @@ def test_200m_rows_and_components(out):
     # 240 runs trained for the single-phase swarm, plus the 39 deletions and the stratified baseline, whose native
     # evaluations the parity panel carries.
     assert t.fit_inclusion.sum() == 280 and t.components_available.all()
-    with_components = t[t.components_available]
-    assert np.allclose(with_components.bpb__obe_easy, with_components.bpb__obe_easy_source, rtol=0, atol=1e-6)
     assert t.design_kind.value_counts().to_dict() == {"sampled": 238, "deletion": 39, "repeat": 10, "baseline": 3}
     assert (t.fit_inclusion == (t.design_kind != "repeat")).all()
     # The July panel replaced the proportional run's targets by the mean of 11 proportional runs; the table keeps the
@@ -106,14 +104,54 @@ def test_setup_columns_match_the_paper(out):
         assert int(_cells(appendix, "Proportional repeats")[column]) == (t.design_kind == "repeat").sum()
 
 
-def test_weights_sum_to_one_and_legacy_aggregates(out):
+def test_weights_sum_to_one(out):
     for t in out.values():
         assert np.allclose(t[[f"w__{b}" for b in naming.BUCKETS]].sum(axis=1), 1.0, rtol=0, atol=1e-9)
-        assert (t.aggregate_version == "legacy").all()
-        assert t.bpb__uncheatable_source.notna().all()
-        # The legacy Uncheatable weights differ from the fixed rule by at most 2.5e-4 per corpus, so the components
-        # reproduce each run's source aggregate within 1e-4; a component row paired with another run would not.
-        assert (t.bpb__uncheatable_fixed - t.bpb__uncheatable_source).abs().max() < 1e-4
+
+
+def _recorded_aggregates(ctx) -> pd.DataFrame:
+    """Each run's aggregates as its sources record them, indexed by observation id: the 160M audit's runs, and the 200M
+    builder's exports of its fit panel and repeats. The fit panel's proportional row records the mean of 11 runs, so it
+    is left out."""
+    audit = pd.concat(
+        [
+            tables.read_csv(swarm_llama.AUDIT_160 / name)
+            for name in ("fit_single_phase.csv", "heldout_observations.csv", "repeat_observations.csv")
+        ]
+    )
+    small = pd.DataFrame(
+        {"uncheatable": audit.uncheatable_bpb.to_numpy(), "obe_easy": audit.table9_macro_bpb.to_numpy()},
+        index=audit.checkpoint_root.map(run_names.training_run_name_from_uri).to_numpy(),
+    ).drop_duplicates()  # the audit lists some runs in two files
+    panel = tables.read_csv(SCORES_200 / "one_phase_augmented_fit_panel_uncheatable_table9_scores_300m.csv")
+    panel = panel[~panel.target_uses_proportional_reference_mean]
+    references = tables.read_csv(SCORES_200 / "proportional_reference_uncheatable_table9_scores_300m.csv")
+    references = references[references.panel == "proportional_noise"]
+    large = pd.DataFrame(
+        {
+            "uncheatable": [*panel.eval_uncheatable_eval_bpb, *references.eval_uncheatable_eval_bpb],
+            "obe_easy": [*panel.table9_macro_bpb, *references.table9_macro_bpb],
+        },
+        index=[*panel.training_wandb_id, *references.wandb_run_id],
+    )
+    recorded = pd.concat([small, large])
+    assert recorded.index.is_unique
+    return recorded.set_axis(recorded.index.map(ctx.registry.id_for))
+
+
+def test_aggregates_recompute_the_recorded_values(ctx, out):
+    # The sources record each run's Uncheatable aggregate under the legacy weights, which differ from the fixed rule by
+    # at most 2.5e-4 per corpus, so the components reproduce it within 1e-4; a component row paired with another run
+    # would not. No row copies its legacy record. OlmoBaseEval Easy is a plain mean in every source.
+    recorded = _recorded_aggregates(ctx)
+    for name, t in out.items():
+        run = recorded.reindex(t.observation_id).set_axis(t.index)
+        compared = run.uncheatable.notna()
+        left_out = (t.run_label == "baseline_proportional") & (name == "swarm_llama_200m_6b")
+        assert compared.equals(~left_out), name
+        gap = (t.bpb__uncheatable - run.uncheatable)[compared].abs()
+        assert gap.max() < 1e-4 and (gap > 0).all(), name
+        assert np.allclose(t.bpb__obe_easy[compared], run.obe_easy[compared], rtol=0, atol=1e-6)
 
 
 def test_observation_ids_key_on_hashed_training_run_names(ctx, out):

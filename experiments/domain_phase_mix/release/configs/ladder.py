@@ -16,7 +16,9 @@ components from the Table 9 result saved beside them. The baselines come from th
 records their seven Uncheatable components but no OlmoBaseEval Easy component. Their 1e21 components are those of the
 accuracy table, and the 3e18 proportional run's are those the UniMax cap sweep collected again beside its own runs;
 each set's mean reproduces the run's recorded aggregate. The 2e19 and 3e20 components exist only on W&B, so those four
-rows have Uncheatable components only (`components_available` false).
+rows have Uncheatable components only (`components_available` false) and keep their recorded OlmoBaseEval Easy mean:
+every ladder source scored both aggregates with the fixed rule, and `tables.add_aggregates` recomputes them wherever a
+run has the components.
 
 Observation ids key on the hashed training run name: the audited `run_name` (the run directory in its evaluation
 metrics URI) and, for the baselines, the W&B run id, which is the same name. Data seeds are as the sources record them,
@@ -76,9 +78,9 @@ CAP_SWEEP_PROPORTIONAL = "proportional_3e18"  # the sweep's key of that run
 CAP_SWEEP_TABLE = "ladder_unimax_cap_sweep"
 # The sweep's launch record: each run's mixture, seeds and size (run_specs.json) and each mixture's cap (summary.json).
 CAP_SWEEP_LAUNCH = paths.RO / "delphi_baseline_mixtures_issue6607_20260623"
-# The audits recorded the fixed weighting of each run's components; the June ladder's legacy-schema aggregates agree
-# with it to 8e-8.
-AGGREGATE_VERSION = "fixed_20260927"
+# Every ladder source scored both aggregates with the fixed rule: the audits recorded the fixed weighting of each run's
+# components, and the June ladder's legacy-schema aggregates agree with it to 8e-8.
+FIXED_RULE = {"uncheatable": True, "obe_easy": True}
 SWARM_FLOPS = 3e18
 ACCURACY_FLOPS = 1e21
 SEEDS = ["data_seed", "trainer_seed"]
@@ -194,8 +196,8 @@ def _audited(folder: Path) -> pd.DataFrame:
             "policy": results.policy,
             "compute_flops": results.target_flops.astype(float),
             "data_seed": results.data_seed.astype(int),
-            "bpb__uncheatable_source": results.uncheatable_bpb,
-            "bpb__obe_easy_source": results.table9_macro_bpb,
+            "recorded_uncheatable": results.uncheatable_bpb,
+            "recorded_obe_easy": results.table9_macro_bpb,
         }
     )
     uncheatable = results[[f"uncheatable_{t.removeprefix('uncheatable/')}_bpb" for t in UNCHEATABLE_TASKS]]
@@ -231,8 +233,8 @@ def _baselines(accuracy: pd.DataFrame) -> pd.DataFrame:
             "policy": wandb.mixture,
             "compute_flops": wandb.flops.astype(float),
             "data_seed": wandb.data_seed.astype(int),
-            "bpb__uncheatable_source": wandb.eval_uncheatable_eval_bpb,
-            "bpb__obe_easy_source": wandb.olmo_base_easy_table9_51_component_macro_bpb,
+            "recorded_uncheatable": wandb.eval_uncheatable_eval_bpb,
+            "recorded_obe_easy": wandb.olmo_base_easy_table9_51_component_macro_bpb,
         }
     )
     uncheatable = wandb[[f"eval/uncheatable_eval/{t.removeprefix('uncheatable/')}/bpb" for t in UNCHEATABLE_TASKS]]
@@ -258,7 +260,8 @@ def _seeds(run_name: str, data_seed: int) -> tuple[int, int]:
 
 
 def _ladder(ctx: ExportContext, runs: pd.DataFrame) -> pd.DataFrame:
-    """The ladder table of `runs` (source rows with `run_name`, `policy`, `compute_flops`, `data_seed` and BPB)."""
+    """The ladder table of `runs` (source rows with `run_name`, `policy`, `compute_flops`, `data_seed`, per-task BPB and
+    recorded aggregates)."""
     ids = pd.DataFrame(
         {
             "observation_id": runs.run_name.map(ctx.registry.id_for),
@@ -287,9 +290,10 @@ def _ladder(ctx: ExportContext, runs: pd.DataFrame) -> pd.DataFrame:
     mixtures = [dict(zip(ctx.buckets, row, strict=True)) for row in table[wcols].to_numpy()]
     table["mixture_id"] = [keys.mixture_id(w) for w in mixtures]
     table["exposure_id"] = [keys.exposure_id(w, pool_fractions, paths.PARTITION_REVISION) for w in mixtures]
-    table["aggregate_version"] = AGGREGATE_VERSION
     table["components_available"] = table[[f"bpb__{t}" for t in ctx.tasks]].notna().all(axis=1)
-    table = tables.add_aggregates(table, ctx.weights)  # NaN OlmoBaseEval Easy where components are missing
+    recorded = pd.DataFrame({objective: runs[f"recorded_{objective}"] for objective in ctx.weights})
+    fixed_rule = pd.DataFrame(FIXED_RULE, index=runs.index)
+    table = tables.add_aggregates(table, ctx.weights, recorded, fixed_rule)
     return tables.order_columns(table, ctx.buckets, ctx.tasks)
 
 
@@ -400,7 +404,7 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     # The mean of a run's components is its recorded aggregate, which ties each component set to its run.
     obe = runs[[f"bpb__{t}" for t in OBE_TASKS]]
     complete = obe.notna().all(axis=1)
-    if not np.allclose(obe[complete].mean(axis=1), runs.bpb__obe_easy_source[complete], rtol=0, atol=1e-12):
+    if not np.allclose(obe[complete].mean(axis=1), runs.recorded_obe_easy[complete], rtol=0, atol=1e-12):
         raise ValueError("a run's OlmoBaseEval Easy components do not reproduce its recorded aggregate")
     ladder_table = _ladder(ctx, runs)
     return {
@@ -417,9 +421,8 @@ def with_3e18_rows(
     """The ladder with the rest of its 3e18 rung: copies of the `validation_3e18` rows of VALIDATION_3E18 and of the
     proportional repeats of `swarm_qwen3_360m_1p6b`.
 
-    A copy keeps its run's observation id, weights, seeds and BPB, and takes the rung's model size and token count
-    (SCALES) and its mixture's method and objective (POLICY). The swarm table records no OlmoBaseEval Easy source
-    aggregate, so its copies take the mean of their 51 components, as every source computes it.
+    A copy keeps its run's observation id, weights, seeds, BPB and `components_available`, and takes the rung's model
+    size and token count (SCALES) and its mixture's method and objective (POLICY).
     """
     chosen = [
         validation_table.launch.eq(launch) & validation_table.variant.isin(variants)
@@ -432,7 +435,6 @@ def with_3e18_rows(
     repeats = swarm_table[swarm_table.design_kind == SWARM_REPEATS].assign(policy=PROPORTIONAL)
     if len(repeats) != 10:
         raise ValueError(f"expected the swarm's ten proportional repeats, found {len(repeats)}")
-    repeats["bpb__obe_easy_source"] = repeats[[f"bpb__{t}" for t in OBE_TASKS]].mean(axis=1)
 
     rows = pd.concat([validated, repeats], ignore_index=True)
     rows["method"] = [POLICY[p][0] for p in rows.policy]
@@ -440,7 +442,6 @@ def with_3e18_rows(
     rows["compute_flops"] = SWARM_FLOPS
     for column, value in SCALES[SWARM_FLOPS].items():
         rows[column] = value
-    rows["components_available"] = rows[[f"bpb__{t}" for t in naming.TASKS]].notna().all(axis=1)
     ladder = pd.concat([ladder_table, rows[ladder_table.columns]], ignore_index=True)
     if not ladder.observation_id.is_unique:
         raise ValueError("a 3e18 run is already a ladder row")

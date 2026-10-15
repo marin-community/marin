@@ -7,11 +7,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from experiments.domain_phase_mix.release import context, naming, paths
+from experiments.domain_phase_mix.release import context, naming, paths, tables
 from experiments.domain_phase_mix.release.configs import fits, heldout, swarm_qwen3, validation
 
 pytestmark = pytest.mark.skipif(not all(path.exists() for path in fits.required_sources()), reason="fits sources absent")
-AGGREGATES = {"obe_easy": "obe_easy", "uncheatable": "uncheatable_fixed"}  # objective -> ctx.weights key
 
 
 @pytest.fixture(scope="module")
@@ -68,13 +67,14 @@ def test_learning_curves_name_tasks_and_selections_publicly(out, heldout_table):
     per_task = t[(t.evaluation == "oof_component") & (t.stratum != "component_mean")]
     assert set(per_task.stratum) == set(naming.TASKS)
     # A held-out selection names the selected mixture by its exposure id; the measured BPB the study recorded for it
-    # is the mean of the objective's source aggregate over that exposure's held-out runs.
+    # is the mean of the objective's recorded aggregate over that exposure's held-out runs. The registry records the
+    # aggregates row for row with the held-out table.
     selected = t[t.selected_exposure_id.notna()]
     assert (selected.evaluation == "heldout").all() and len(selected) == 50_400
-    means = {
-        objective: heldout_table.groupby("exposure_id")[f"bpb__{objective}_source"].mean()
-        for objective in ("obe_easy", "uncheatable")
-    }
+    runs = tables.read_csv(heldout.EXPANDED / "heldout_runs.csv")
+    recorded = pd.DataFrame({"obe_easy": runs.table9_macro_bpb, "uncheatable": runs.uncheatable_bpb})
+    recorded["exposure_id"] = heldout_table.exposure_id
+    means = recorded.groupby("exposure_id").mean()
     for objective, rows in selected.groupby("target"):
         expected = rows.selected_exposure_id.map(means[objective])
         assert expected.notna().all()
@@ -95,9 +95,9 @@ def test_swarm_predictions_key_on_the_fit_rows_of_the_swarm_table(ctx, out):
     assert set(p.observation_id) == set(fit.index)
     # The reference fit's values at its own training mixtures follow the measured BPB (rank correlation 0.94 on
     # OlmoBaseEval Easy, 0.98 on Uncheatable); a run keyed to another run's predictions would break that.
-    for objective, weights_key in AGGREGATES.items():
-        predicted = _aggregate(p, objective, ctx.weights[weights_key])
-        measured = fit[f"bpb__{weights_key}"].reindex(predicted.index)
+    for objective, weights in ctx.weights.items():
+        predicted = _aggregate(p, objective, weights)
+        measured = fit[f"bpb__{objective}"].reindex(predicted.index)
         assert predicted.corr(measured, method="spearman") > 0.9
 
 
@@ -111,9 +111,9 @@ def test_heldout_predictions_key_through_the_heldout_registry(ctx, out, heldout_
     assert p.groupby("objective").observation_id.nunique().to_dict() == {"obe_easy": 310, "uncheatable": 471}
     assert exposure.groupby(p.objective).nunique().to_dict() == {"obe_easy": 247, "uncheatable": 408}
     assert p.groupby([p.objective, exposure, p.task_id]).predicted_bpb.nunique().max() == 1
-    for objective, weights_key in AGGREGATES.items():
-        predicted = _aggregate(p, objective, ctx.weights[weights_key])
-        measured = table[f"bpb__{objective}_source"].reindex(predicted.index)
+    for objective, weights in ctx.weights.items():
+        predicted = _aggregate(p, objective, weights)
+        measured = table[f"bpb__{objective}"].reindex(predicted.index)
         assert predicted.corr(measured, method="spearman") > 0.9
 
 
@@ -239,7 +239,7 @@ def test_olmix_task_laws_reproduce_the_matched_olmix_predictions(ctx, out, valid
         objective = {"table9": "obe_easy", "uncheatable": "uncheatable"}[row.target]
         task_laws = laws[laws.objective == objective].set_index("task_id")
         per_task = np.exp(task_laws.log_c) + np.exp(task_laws[coefficients].to_numpy() @ weights)
-        predicted = (per_task * pd.Series(ctx.weights[AGGREGATES[objective]])).sum()
+        predicted = (per_task * pd.Series(ctx.weights[objective])).sum()
         assert abs(predicted - row.predicted_runtime) <= 1e-9, variant
         own = p[(p.observation_id.isin(run.observation_id)) & (p.predictor == "olmix") & (p.objective == objective)]
         assert ((own.predicted_bpb - predicted).abs() <= 1e-9).all() and len(own) == len(run)

@@ -17,6 +17,11 @@ Seeds come from the launch records that `validation_3e18` reads, wherever they h
 run's from the directory that holds it (`run_names.seeds_from_uri`), and the UniMax-8 run's from the UniMax-8 repeats'
 record. They must agree with the registry's seeds, which it records for 42 of the 116 validation-launch runs. Every
 other run keeps the registry's seeds, which are null for the Llama runs and for some frozen Qwen3 runs.
+
+Aggregates follow `tables.add_aggregates`: recomputed from a run's components where it has them all, else the
+registry's recorded aggregate where that used the fixed rule. Every run whose recorded Uncheatable aggregate uses other
+weights (the Llama panels' legacy weights, or the BPB-schema-2 pooled value of the 14 path-midpoint and RegMix-reference
+runs) has its Uncheatable components, except one Llama 160M run (LEGACY_AGGREGATE_ONLY), whose aggregates stay null.
 """
 
 from pathlib import Path
@@ -47,17 +52,19 @@ META = {
     "trainer_seed": "trainer_seed",
     "subset_seed": "subset_seed",
     "phase_tv": "phase_tv",
-    "uncheatable_bpb": "bpb__uncheatable_source",
-    "table9_macro_bpb": "bpb__obe_easy_source",
 }
 SEEDS = ["data_seed", "trainer_seed"]
-# Weights behind each panel's recorded Uncheatable aggregate; the frozen registry's builder checked them to 3e-6.
-AGGREGATE_VERSION = {"delphi_3e18_39bucket": "fixed_20260927", "60m_39bucket": "legacy", "300m_39bucket": "legacy"}
+# The panel whose recorded Uncheatable aggregates use the paper's fixed byte shares, which the frozen registry's builder
+# checked to 3e-6; the Llama panels' use the archived swarms' legacy weights. Every panel records the OlmoBaseEval Easy
+# mean.
+FIXED_RULE_PANEL = "delphi_3e18_39bucket"
 # These launches ran after the evaluator moved to BPB schema 2 (about 12 September 2026). Their recorded Uncheatable
 # aggregate is its pooled one, 0.008 to 0.011 BPB above the fixed weighting of the same runs' components
 # (two_phase_many/uncheatable_objective.py); the expanded registry copied it unchecked.
 POOLED_SOURCES = ("validation::path_midpoints", "validation::regmix_reference")
-POOLED_VERSION = "pooled_schema2"
+# The one run whose only Uncheatable value is a recorded aggregate under the legacy weights: an archived two-phase
+# Llama 160M run that the registry scores on Uncheatable alone, without components. Its aggregates stay null.
+LEGACY_AGGREGATE_ONLY = "baseline_power_ridge_single_constant_mix-170469"
 # Result folders of the validation launches in the expanded cohort, from the launch registry of
 # collect_delphi_3e18_validation_results_20260906.py, which the expanded registry's builder read.
 VALIDATION_LAUNCHES = {
@@ -244,7 +251,15 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     ]
     unimax8 = (out.proposal_objective == "none") & (out.mixture_id == _unimax8_mixture())
     out.loc[unimax8, "epoch_cap"] = UNIMAX8_EPOCH_CAP
-    out["aggregate_version"] = runs.panel.map(AGGREGATE_VERSION).mask(runs.source.isin(POOLED_SOURCES), POOLED_VERSION)
     out = out.join(_components(ctx, runs).reindex(runs.row_id).reset_index(drop=True))
-    out = tables.add_aggregates(out, ctx.weights)  # NaN where components are missing; the manifest records coverage
+    out["components_available"] = out[[f"bpb__{t}" for t in ctx.tasks]].notna().all(axis=1)
+    recorded = pd.DataFrame({"uncheatable": runs.uncheatable_bpb, "obe_easy": runs.table9_macro_bpb})
+    fixed_rule = pd.DataFrame(
+        {"uncheatable": (runs.panel == FIXED_RULE_PANEL) & ~runs.source.isin(POOLED_SOURCES), "obe_easy": True}
+    )
+    without_components = out[[f"bpb__{t}" for t in ctx.weights["uncheatable"]]].isna().any(axis=1)
+    legacy_only = without_components & recorded.uncheatable.notna() & ~fixed_rule.uncheatable
+    assert run_keys[legacy_only].tolist() == [LEGACY_AGGREGATE_ONLY], f"legacy-only: {run_keys[legacy_only].tolist()}"
+    recorded.loc[legacy_only, "uncheatable"] = np.nan
+    out = tables.add_aggregates(out, ctx.weights, recorded, fixed_rule)  # null where neither exists
     return {"heldout": tables.order_columns(out, ctx.buckets, ctx.tasks)}

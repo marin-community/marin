@@ -20,6 +20,10 @@ or `pattern:value` entries (glob patterns over candidate ids) for a launch whose
 Objectives take their public names (`naming.objective_public`): `obe_easy` for the results' `table9`, and `none` for
 the UniMax-8 baseline, which optimizes no objective. `epoch_cap` gives the cap of a launch whose results record none
 (UniMax-8's 8); an empty cell keeps the results' `epoch_cap`.
+
+Aggregates follow `tables.add_aggregates`: recomputed from a run's components where it has them all, else the
+aggregate its results record, which every launch but POOLED_LAUNCHES scored with the fixed rule. UniMax-8 trainer
+seeds 1 and 2 have recorded aggregates only.
 """
 
 import fnmatch
@@ -33,19 +37,17 @@ from experiments.domain_phase_mix.release.context import ExportContext
 
 TABLE = "validation_3e18"
 MANIFEST = paths.REPO / "experiments/domain_phase_mix/release/validation_manifest.csv"
-AGGREGATE_VERSION = "fixed_20260927"
 # These launches recorded the BPB-schema-2 pooled Uncheatable aggregate, 0.008 to 0.011 BPB above the fixed weighting of
-# the same runs' components; `heldout` labels the same runs the same way.
+# the same runs' components; `heldout` treats the same runs the same way.
 POOLED_LAUNCHES = ("path_midpoints", "regmix_reference")
-POOLED_VERSION = "pooled_schema2"
 SEEDS = ["data_seed", "trainer_seed"]
 UNCHEATABLE_TASKS = [t for t in naming.TASKS if t.startswith("uncheatable/")]
 RESULT_META = {
     "candidate_id": "variant",
     "target": "proposal_objective",
     "epoch_cap": "epoch_cap",
-    "uncheatable_bpb": "bpb__uncheatable_source",
-    "table9_macro_bpb": "bpb__obe_easy_source",
+    "uncheatable_bpb": "recorded_uncheatable",
+    "table9_macro_bpb": "recorded_obe_easy",
 }
 RESULT_META.update(
     {
@@ -192,9 +194,10 @@ def export_launches(ctx: ExportContext, manifest: pd.DataFrame) -> pd.DataFrame:
         keys.exposure_id(dict(zip(ctx.buckets, row, strict=True)), pf, paths.PARTITION_REVISION)
         for row in out[wcols].to_numpy()
     ]
-    out["aggregate_version"] = AGGREGATE_VERSION
-    out.loc[out.launch.isin(POOLED_LAUNCHES), "aggregate_version"] = POOLED_VERSION
-    out = tables.add_aggregates(out, ctx.weights)  # NaN for runs without per-task values
+    out["components_available"] = out[[f"bpb__{t}" for t in ctx.tasks]].notna().all(axis=1)
+    recorded = pd.DataFrame({objective: out.pop(f"recorded_{objective}") for objective in ctx.weights})
+    fixed_rule = pd.DataFrame({"uncheatable": ~out.launch.isin(POOLED_LAUNCHES), "obe_easy": True})
+    out = tables.add_aggregates(out, ctx.weights, recorded, fixed_rule)
     return tables.order_columns(out, ctx.buckets, ctx.tasks)
 
 

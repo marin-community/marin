@@ -16,6 +16,9 @@ baseline), whose native evaluations the parity panel carries. The panel, and the
 the 200M proportional run's targets by the mean of 11 proportional runs: the ten repeats here and the two-phase swarm's
 proportional run, which no table holds yet. Uncheatable components are W&B endpoints that a builder froze after
 checking each run's aggregate.
+
+The sources record each run's Uncheatable aggregate under the archived swarms' legacy corpus weights, so every row's
+aggregates are recomputed from its components (`tables.add_aggregates`), which every row has.
 """
 
 import re
@@ -168,10 +171,11 @@ def _rows(
     weights: pd.DataFrame,
     uncheatable: pd.DataFrame,
     obe: pd.DataFrame,
-    uncheatable_source: pd.Series,
-    obe_source: pd.Series,
+    recorded_uncheatable: pd.Series,
+    recorded_obe_easy: pd.Series,
 ) -> pd.DataFrame:
-    """Rows keyed on hashed training run names (`run_name`); every argument is indexed alike."""
+    """Rows keyed on hashed training run names (`run_name`), with each run's recorded aggregates, which `_finish`
+    consumes; every argument is indexed alike."""
     meta = pd.DataFrame(
         {
             "observation_id": run_name.map(ctx.registry.id_for),
@@ -184,8 +188,8 @@ def _rows(
     )
     table = pd.concat([meta, weights, uncheatable, obe], axis=1)
     assert len(table) == len(meta), "row parts must share one index"
-    table["bpb__uncheatable_source"] = uncheatable_source
-    table["bpb__obe_easy_source"] = obe_source
+    table["recorded_uncheatable"] = recorded_uncheatable
+    table["recorded_obe_easy"] = recorded_obe_easy
     return table
 
 
@@ -206,9 +210,11 @@ def _finish(table: pd.DataFrame, name: str, ctx: ExportContext) -> pd.DataFrame:
     mixtures = [dict(zip(ctx.buckets, row, strict=True)) for row in table[[f"w__{b}" for b in ctx.buckets]].to_numpy()]
     table["mixture_id"] = [keys.mixture_id(w) for w in mixtures]
     table["exposure_id"] = [keys.exposure_id(w, pool_fractions, paths.PARTITION_REVISION) for w in mixtures]
-    table["aggregate_version"] = "legacy"  # both swarms' source Uncheatable aggregates use the legacy weights
     table["components_available"] = table[[f"bpb__{t}" for t in ctx.tasks]].notna().all(axis=1)
-    table = tables.add_aggregates(table, ctx.weights)  # NaN wherever a component is missing
+    recorded = pd.DataFrame({objective: table.pop(f"recorded_{objective}") for objective in ctx.weights})
+    # A legacy-weighted Uncheatable value is never used: a row without its components raises.
+    fixed_rule = pd.DataFrame({"uncheatable": False, "obe_easy": True}, index=table.index)
+    table = tables.add_aggregates(table, ctx.weights, recorded, fixed_rule)
     return tables.order_columns(table, ctx.buckets, ctx.tasks)
 
 
@@ -248,8 +254,8 @@ def _fit_160(ctx: ExportContext) -> pd.DataFrame:
         weights=_single_phase_weights(fit, ctx),
         uncheatable=_uncheatable(unch, ctx),
         obe=obe,
-        uncheatable_source=fit.uncheatable_bpb,
-        obe_source=fit.table9_macro_bpb,
+        recorded_uncheatable=fit.uncheatable_bpb,
+        recorded_obe_easy=fit.table9_macro_bpb,
     )
 
 
@@ -278,8 +284,8 @@ def _deletions_160(ctx: ExportContext, native: pd.DataFrame, proportional: pd.Se
         weights=weights,
         uncheatable=_uncheatable(unch, ctx),
         obe=obe,
-        uncheatable_source=deletions.uncheatable_bpb,
-        obe_source=deletions.table9_macro_bpb,
+        recorded_uncheatable=deletions.uncheatable_bpb,
+        recorded_obe_easy=deletions.table9_macro_bpb,
     )
 
 
@@ -309,8 +315,8 @@ def _repeats_160(ctx: ExportContext, native: pd.DataFrame, proportional: pd.Seri
         weights=weights,
         uncheatable=_uncheatable(endpoints, ctx),
         obe=obe,
-        uncheatable_source=repeats.uncheatable_bpb,
-        obe_source=repeats.table9_macro_bpb,
+        recorded_uncheatable=repeats.uncheatable_bpb,
+        recorded_obe_easy=repeats.table9_macro_bpb,
     )
 
 
@@ -351,12 +357,12 @@ def _fit_200(ctx: ExportContext) -> pd.DataFrame:
     assert len(references) == 11 and np.allclose(replaced_macro, references.table9_macro_bpb.mean(), rtol=0, atol=1e-12)
     # Native evaluations: the wide file's for the 240 trained runs, the panel's for the 40 reused ones.
     obe = pd.concat([native_obe, panel_obe[~trained]]).loc[panel.index]
-    obe_source = pd.concat([native.native_table9_macro_bpb, panel.table9_macro_bpb[~trained]]).loc[panel.index]
+    recorded_obe = pd.concat([native.native_table9_macro_bpb, panel.table9_macro_bpb[~trained]]).loc[panel.index]
 
     packet = _join(row_id, tables.read_csv(paths.require(PACKET / "300m_one_phase_fit.csv")), "row_id", "200M packet")
     own = panel.run_name != PROPORTIONAL_200
     assert np.allclose(packet.uncheatable_bpb[own], unch[UNCH_POOLED][own], rtol=0, atol=1e-12)
-    assert np.allclose(packet.table9_macro_bpb[own], obe_source[own], rtol=0, atol=1e-12)
+    assert np.allclose(packet.table9_macro_bpb[own], recorded_obe[own], rtol=0, atol=1e-12)
 
     # The stratified baseline's two-phase launch left no manifest in the sources, so its seeds stay null.
     launches = pd.concat([tables.read_csv(paths.require(LAUNCH_200)), tables.read_csv(paths.require(DELETIONS_200))])
@@ -373,8 +379,8 @@ def _fit_200(ctx: ExportContext) -> pd.DataFrame:
         weights=weights,
         uncheatable=_uncheatable(unch, ctx),
         obe=obe,
-        uncheatable_source=unch[UNCH_POOLED],
-        obe_source=obe_source,
+        recorded_uncheatable=unch[UNCH_POOLED],
+        recorded_obe_easy=recorded_obe,
     )
 
 
@@ -398,6 +404,6 @@ def _repeats_200(ctx: ExportContext, proportional: pd.Series) -> pd.DataFrame:
         weights=weights,
         uncheatable=_uncheatable(endpoints, ctx),
         obe=_metrics(repeats, [c for c in repeats if c.startswith(OBE_200)], ctx.tasks[7:]),
-        uncheatable_source=endpoints[UNCH_POOLED],
-        obe_source=repeats.table9_macro_bpb,
+        recorded_uncheatable=endpoints[UNCH_POOLED],
+        recorded_obe_easy=repeats.table9_macro_bpb,
     )

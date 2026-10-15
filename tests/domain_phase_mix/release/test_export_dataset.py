@@ -8,7 +8,7 @@ import re
 import pandas as pd
 import pytest
 
-from experiments.domain_phase_mix.release import context, export_dataset, paths, tables
+from experiments.domain_phase_mix.release import context, export_dataset, naming, paths, tables
 
 pytestmark = pytest.mark.skipif(not paths.MIXSEL.exists(), reason="sources absent")
 CONFIGS = {
@@ -36,6 +36,15 @@ INTERNAL = [
     re.compile(r"\w-[0-9a-f]{6}(?![0-9a-z])"),
 ]
 SPECIAL_CONFIGS = {"deferred", "constant", "untraced"}  # figures_tables.csv entries that name no config
+# The tables with one row per training run, which carry the 58 per-task BPB columns and the two aggregates.
+RUN_TABLES = {
+    "swarm_qwen3_360m_1p6b",
+    "swarm_llama_160m_1p2b",
+    "swarm_llama_200m_6b",
+    "heldout",
+    "validation_3e18",
+    "ladder",
+}
 
 
 @pytest.fixture(scope="module")
@@ -70,6 +79,12 @@ def test_full_export_writes_every_config(build, manifest):
         "starcoder_dense_grid",
         "starcoder_trajectories",
     }
+    # One aggregate scheme: a run table's BPB columns are the 58 tasks, bpb__uncheatable and bpb__obe_easy.
+    run_tables = {t["table"]: t["columns"] for t in manifest["tables"] if "components_available" in t["columns"]}
+    assert set(run_tables) == RUN_TABLES
+    bpb = [*(f"bpb__{task}" for task in naming.TASKS), "bpb__uncheatable", "bpb__obe_easy"]
+    for name, columns in run_tables.items():
+        assert [c for c in columns if c.startswith("bpb__")] == bpb, name
     assert (out / "figures_tables.csv").read_bytes() == export_dataset.FIGURES_TABLES.read_bytes()
     # The run-name map and the absolute source paths stay in the private directory, never in the upload.
     assert (build / "private/observation_map.csv").exists()

@@ -23,7 +23,6 @@ REPEAT_SEEDS = (
 )
 UNCH_POOLED = "eval/uncheatable_eval/bpb"
 REPEAT_RUN = r"^proportional_noise_3e18_(?P<letter>[a-j])_3e18-[0-9a-f]{6}$"
-AGGREGATE_VERSION = "fixed_20260927"
 META = ["observation_id", "run_label", "design_kind", "fit_inclusion", "data_seed", "trainer_seed"]
 # The packet's candidate_kind separates the 238 newly trained designs from the 42 phase-constant designs whose
 # checkpoints are the two-phase swarm's runs; the design name separates the 3 baselines from the 39 deletions.
@@ -72,8 +71,8 @@ def _finish(df: pd.DataFrame, ctx: ExportContext) -> pd.DataFrame:
         keys.exposure_id(dict(zip(ctx.buckets, row, strict=True)), pf, paths.PARTITION_REVISION)
         for row in df[wcols].to_numpy()
     ]
-    df["aggregate_version"] = AGGREGATE_VERSION
-    df = tables.add_aggregates(df, ctx.weights)
+    df["components_available"] = df[[f"bpb__{t}" for t in ctx.tasks]].notna().all(axis=1)
+    df = tables.add_aggregates(df, ctx.weights)  # every run has all 58 components; `export` asserts it
     return tables.order_columns(df, ctx.buckets, ctx.tasks)
 
 
@@ -110,8 +109,6 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     fit = fit[columns]
     repeats = _repeats(ctx, proportional=fit[fit.run_label == "baseline_proportional"])
     table = pd.concat([fit, repeats[columns]], ignore_index=True)
-    unch_weights = pd.Series(ctx.weights["uncheatable_fixed"]).reindex(ctx.tasks[:7]).to_numpy()
-    table["bpb__uncheatable_source"] = table[[f"bpb__{t}" for t in ctx.tasks[:7]]].to_numpy() @ unch_weights
     out = _finish(table, ctx)
     assert out.notna().all().all(), f"missing values in {out.columns[out.isna().any()].tolist()}"
     return {TABLE: out}

@@ -61,15 +61,16 @@ def test_repeats_pair_obe_and_uncheatable_rows_by_run_letter(table):
     obe = panel.table9_macro_bpb.reindex(letters).to_numpy()
     assert np.allclose(repeats.bpb__obe_easy.to_numpy(), obe, rtol=0, atol=1e-12)
     uncheatable = panel.uncheatable_bpb.reindex(letters).to_numpy()
-    assert np.allclose(repeats.bpb__uncheatable_fixed.to_numpy(), uncheatable, rtol=0, atol=1e-6)
+    assert np.allclose(repeats.bpb__uncheatable.to_numpy(), uncheatable, rtol=0, atol=1e-6)
 
 
 def test_aggregates_recomputed_with_fixed_weights(table):
-    weights = naming.task_weights()["uncheatable_fixed"]
+    assert table.components_available.all()
+    weights = naming.task_weights()["uncheatable"]
     manual = sum(table[f"bpb__{t}"] * w for t, w in weights.items())
-    assert np.allclose(table.bpb__uncheatable_fixed, manual, atol=1e-12)
-    assert np.allclose(table.bpb__obe_easy, table[[f"bpb__{t}" for t in naming.TASKS[7:]]].mean(axis=1), atol=1e-12)
-    assert (table.aggregate_version == "fixed_20260927").all()
+    assert np.allclose(table.bpb__uncheatable, manual, rtol=0, atol=1e-12)
+    obe_mean = table[[f"bpb__{t}" for t in naming.TASKS[7:]]].mean(axis=1)
+    assert np.allclose(table.bpb__obe_easy, obe_mean, rtol=0, atol=1e-12)
 
 
 def test_no_internal_strings(table):

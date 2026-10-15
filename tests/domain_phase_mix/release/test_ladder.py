@@ -22,6 +22,9 @@ RUN_SPECS_3E18 = paths.RO / "delphi_frozen_procedure_validation_3e18_20260908/la
 # The figure's proportional point at 3e18 averages the June run with the swarm's ten repeats; this file holds the
 # Uncheatable components of all eleven.
 PROPORTIONAL_UNCHEATABLE = paths.RO / "table9_reliability_20260905/proportional_uncheatable_components.csv"
+# The figure and the compute-equivalence fits average the runs' recorded aggregates. The table recomputes Uncheatable
+# from the components, within 2e-6 of every fixed-rule record, and OlmoBaseEval Easy (a plain mean) to rounding.
+RECOMPUTED_TOLERANCE = {"uncheatable": 2e-6, "obe_easy": 1e-12}
 
 
 @pytest.fixture(scope="module")
@@ -59,14 +62,11 @@ def test_every_plotted_point_is_reproduced(plotted, flops):
     label = {"MARINER": "mariner", "Olmix": "olmix", "Proportional": "proportional", "UniMax-8": "unimax8"}
     for p in points.itertuples(index=False):
         rows = t[(t.method == label[p.label]) & (t.compute_flops == p.flops)]
-        if p.target == "table9":
-            rows = rows[rows.proposal_objective.isin(["obe_easy", "none"])]
-            values = rows.bpb__obe_easy_source
-        else:
-            rows = rows[rows.proposal_objective.isin(["uncheatable", "none"])]
-            values = rows.bpb__uncheatable_source
+        objective = "obe_easy" if p.target == "table9" else "uncheatable"
+        rows = rows[rows.proposal_objective.isin([objective, "none"])]
         assert len(rows) == p.n, (p.label, p.flops, p.target, len(rows))
-        assert np.isclose(values.mean(), p.mean, rtol=0, atol=1e-12), (p.label, p.flops, p.target)
+        mean = rows[f"bpb__{objective}"].mean()
+        assert np.isclose(mean, p.mean, rtol=0, atol=RECOMPUTED_TOLERANCE[objective]), (p.label, p.flops, p.target)
 
 
 def _power_law(e: float, a: float, alpha: float, compute: np.ndarray) -> np.ndarray:
@@ -77,18 +77,18 @@ def test_compute_equivalence_rests_on_the_ladder(out, plotted):
     # The multiples come from laws fitted to the baselines' rung means and from MARINER's rung means, all ladder runs.
     equivalence = out["ladder_compute_equivalence"]
     assert len(equivalence) == 24  # two objectives, three baselines, four MARINER rungs
-    column = {"uncheatable": "bpb__uncheatable_source", "obe_easy": "bpb__obe_easy_source"}
     for (objective, baseline), rows in equivalence.groupby(["objective", "baseline"]):
+        tolerance = RECOMPUTED_TOLERANCE[objective]
         means = {
             method: plotted[(plotted.method == method) & plotted.proposal_objective.isin([objective, "none"])]
-            .groupby("compute_flops")[column[objective]]
+            .groupby("compute_flops")[f"bpb__{objective}"]
             .mean()
             for method in ("mariner", baseline)
         }
-        assert np.allclose(rows.mariner_bpb, means["mariner"].loc[rows.compute_flops], rtol=0, atol=1e-12)
+        assert np.allclose(rows.mariner_bpb, means["mariner"].loc[rows.compute_flops], rtol=0, atol=tolerance)
         e, a, alpha, rmse = rows[["law_e", "law_a", "law_alpha", "law_rmse"]].iloc[0]
         residual = _power_law(e, a, alpha, means[baseline].index.to_numpy()) - means[baseline].to_numpy()
-        assert np.isclose(np.sqrt(np.mean(residual**2)), rmse, rtol=0, atol=1e-12)
+        assert np.isclose(np.sqrt(np.mean(residual**2)), rmse, rtol=0, atol=tolerance)
         reached = _power_law(e, a, alpha, rows.baseline_compute_to_match.to_numpy())
         assert np.allclose(reached, rows.mariner_bpb, rtol=0, atol=1e-9)
 
@@ -137,11 +137,7 @@ def test_3e18_rows_copy_their_runs(plotted, validation_table, swarm_table):
         pd.testing.assert_frame_equal(rung.loc[ids, shared], source.loc[ids, shared], check_dtype=False)
         copied += len(ids)
     assert copied == len(rung) - 1  # all but the June run
-    # The swarm table records no OlmoBaseEval Easy source aggregate; its copies take their components' mean.
-    repeats = rung.loc[rung.index.intersection(swarm_table.observation_id)]
-    components = repeats[[f"bpb__{task}" for task in naming.TASKS[7:]]]
-    assert len(repeats) == 10 and np.allclose(repeats.bpb__obe_easy_source, components.mean(axis=1), rtol=0, atol=0)
-    # UniMax-8 trainer seeds 1 and 2 carry aggregates only.
+    # UniMax-8 trainer seeds 1 and 2 carry recorded aggregates only.
     assert rung.components_available.sum() == len(rung) - 2
 
 
@@ -188,7 +184,25 @@ def test_runs_match_their_launch_records(out):
     assert size == (spec["total_trainable_params"], spec["non_embedding_params"], spec["realized_train_tokens"])
 
 
-def test_components_cover_every_run_but_the_mid_ladder_baselines(out):
+def _recorded_aggregates(ctx) -> pd.DataFrame:
+    """Each ladder source run's recorded aggregates, indexed by observation id: the audited MARINER and Olmix runs and
+    the June baselines' W&B export."""
+    audited = pd.concat([tables.read_csv(folder / ladder.AUDIT_FILE) for folder in ladder.AUDITED])
+    audited = audited[audited.status == "measured"]
+    wandb = tables.read_csv(ladder.PROGRESS)
+    wandb = wandb[wandb.mixture.isin(ladder.BASELINES)]
+    recorded = pd.DataFrame(
+        {
+            "uncheatable": [*audited.uncheatable_bpb, *wandb.eval_uncheatable_eval_bpb],
+            "obe_easy": [*audited.table9_macro_bpb, *wandb.olmo_base_easy_table9_51_component_macro_bpb],
+        },
+        index=[ctx.registry.id_for(name) for name in [*audited.run_name, *wandb.wandb_name]],
+    )
+    assert recorded.index.is_unique
+    return recorded
+
+
+def test_components_cover_every_run_but_the_mid_ladder_baselines(ctx, out):
     t = out["ladder"]
     obe = t[[f"bpb__{task}" for task in naming.TASKS[7:]]]
     assert t[[f"bpb__{task}" for task in naming.TASKS[:7]]].notna().all().all()
@@ -202,10 +216,12 @@ def test_components_cover_every_run_but_the_mid_ladder_baselines(out):
     ]
     assert obe[~t.components_available].isna().all().all() and obe[t.components_available].notna().all().all()
     # Each run's components reproduce its recorded aggregates: Uncheatable within the 1e-7 by which legacy payloads
-    # differ from the fixed weighting, OlmoBaseEval Easy (a plain mean) to rounding.
-    assert np.allclose(t.bpb__uncheatable_fixed, t.bpb__uncheatable_source, rtol=0, atol=1e-7)
-    complete = t[t.components_available]
-    assert np.allclose(complete.bpb__obe_easy, complete.bpb__obe_easy_source, rtol=0, atol=1e-12)
+    # differ from the fixed weighting, OlmoBaseEval Easy (a plain mean) to rounding. The four runs without OlmoBaseEval
+    # Easy components keep the recorded mean.
+    recorded = _recorded_aggregates(ctx).reindex(t.observation_id).set_axis(t.index)
+    assert np.allclose(t.bpb__uncheatable, recorded.uncheatable, rtol=0, atol=1e-7)
+    assert np.allclose(t.bpb__obe_easy, recorded.obe_easy, rtol=0, atol=1e-12)
+    assert t.bpb__obe_easy[~t.components_available].equals(recorded.obe_easy[~t.components_available])
 
 
 def test_accuracy_rows_are_the_1e21_ladder_runs(out):

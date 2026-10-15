@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from experiments.domain_phase_mix.release import context, naming, paths
+from experiments.domain_phase_mix.release import context, naming, paths, tables
 from experiments.domain_phase_mix.release.configs import heldout, ladder, validation
 
 pytestmark = pytest.mark.skipif(
@@ -41,7 +41,7 @@ def test_headline_numbers(table):
     assert mariner.bpb__obe_easy.mean() == pytest.approx(1.067779, abs=5e-6)
     assert mariner.bpb__obe_easy.std(ddof=1) == pytest.approx(0.005174, abs=5e-6)
     unch = table[(table.launch == "frozen_procedure") & (table.variant == "lwspu_u_snc_cap06")]
-    assert unch.bpb__uncheatable_fixed.iloc[0] == pytest.approx(0.981424, abs=5e-6)
+    assert unch.bpb__uncheatable.iloc[0] == pytest.approx(0.981424, abs=5e-6)
 
 
 def test_every_row_has_weights_and_components(table):
@@ -53,8 +53,8 @@ def test_every_row_has_weights_and_components(table):
     missing = components.isna().any(axis=1)
     unimax = sorted(zip(table.variant[missing], table.trainer_seed[missing], strict=True))
     assert unimax == [("unimax8", 1), ("unimax8", 2)]
-    assert components[missing].isna().all().all()
-    assert table[["bpb__uncheatable_source", "bpb__obe_easy_source"]].notna().all().all()
+    assert components[missing].isna().all().all() and table.components_available.equals(~missing)
+    assert table[["bpb__uncheatable", "bpb__obe_easy"]].notna().all().all()
 
 
 def test_seeds_come_from_run_directories(table):
@@ -114,27 +114,48 @@ def test_runs_shared_with_heldout_keep_their_ids_and_values(ctx, table):
     assert len(expanded) == 116 and expanded.observation_id.isin(table.observation_id).all()
     shared = held.merge(table, on="observation_id", suffixes=("_heldout", "_validation"), validate="one_to_one")
     assert len(shared) == 117 and set(shared.cohort) == {"expanded", "frozen"}
-    for column in ["mixture_id", "exposure_id", "aggregate_version", "proposal_objective"]:
+    for column in ["mixture_id", "exposure_id", "proposal_objective", "components_available"]:
         assert (shared[f"{column}_heldout"] == shared[f"{column}_validation"]).all()
     pd.testing.assert_series_equal(shared.epoch_cap_heldout, shared.epoch_cap_validation, check_names=False)
-    aggregates = ["bpb__uncheatable_source", "bpb__obe_easy_source", "bpb__uncheatable_fixed", "bpb__obe_easy"]
-    for column in [f"bpb__{t}" for t in naming.TASKS] + aggregates:
+    for column in [f"bpb__{t}" for t in naming.TASKS] + ["bpb__uncheatable", "bpb__obe_easy"]:
         values = shared[[f"{column}_heldout", f"{column}_validation"]].dropna()
         assert np.allclose(values.iloc[:, 0], values.iloc[:, 1], rtol=0, atol=1e-12)
 
 
-def test_aggregates_are_versioned(table):
+def _recorded_aggregates() -> pd.DataFrame:
+    """Each measured run's launch, candidate and recorded aggregates, in the order of the manifest and its results."""
+    parts = []
+    for launch in pd.read_csv(validation.MANIFEST).itertuples(index=False):
+        results = tables.read_csv(paths.REPO / launch.results_csv)
+        if "status" in results:
+            results = results[results.status == "measured"]
+        candidate = results.candidate_id if "candidate_id" in results else None
+        parts.append(
+            pd.DataFrame(
+                {
+                    "launch": launch.launch,
+                    "candidate": candidate,
+                    "uncheatable": results.uncheatable_bpb,
+                    "obe_easy": results.table9_macro_bpb,
+                }
+            )
+        )
+    return pd.concat(parts, ignore_index=True)
+
+
+def test_aggregates_recompute_the_recorded_values(table):
     # path_midpoints and regmix_reference recorded the BPB-schema-2 pooled Uncheatable aggregate, about 0.01 BPB above
-    # the fixed weighting of the same components; every other launch recorded the fixed weighting.
-    pooled = table[table.aggregate_version == "pooled_schema2"]
-    assert len(pooled) == 14 and set(pooled.launch) == {"path_midpoints", "regmix_reference"}
-    assert (pooled.bpb__uncheatable_source - pooled.bpb__uncheatable_fixed).between(0.005, 0.013).all()
-    fixed = table[(table.aggregate_version == "fixed_20260927") & table.bpb__uncheatable_fixed.notna()]
-    assert len(fixed) == 202  # every fixed-version run except UniMax-8 trainer seeds 1 and 2
-    assert np.allclose(fixed.bpb__uncheatable_fixed, fixed.bpb__uncheatable_source, rtol=0, atol=2e-6)
+    # the fixed weighting of the same components; every other launch recorded the fixed weighting, which the table
+    # keeps for UniMax-8 trainer seeds 1 and 2, the runs without components.
+    recorded = _recorded_aggregates()
+    assert recorded.launch.equals(table.launch)
+    assert (recorded.candidate.isna() | (recorded.candidate == table.variant)).all()
+    pooled = table.launch.isin(validation.POOLED_LAUNCHES)
+    assert pooled.sum() == 14 and table.components_available[pooled].all()
+    assert (recorded.uncheatable - table.bpb__uncheatable)[pooled].between(0.005, 0.013).all()
+    assert np.allclose(table.bpb__uncheatable[~pooled], recorded.uncheatable[~pooled], rtol=0, atol=2e-6)
     # OlmoBaseEval Easy is a plain mean, so it checks that each run, seed by seed, got its own components.
-    obe = table[table.bpb__obe_easy.notna()]
-    assert np.allclose(obe.bpb__obe_easy, obe.bpb__obe_easy_source, rtol=0, atol=1e-12)
+    assert np.allclose(table.bpb__obe_easy, recorded.obe_easy, rtol=0, atol=1e-12)
 
 
 def test_unimax8_weights_are_the_trained_mixture():
