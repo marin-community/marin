@@ -51,7 +51,7 @@ DESCRIPTIONS_VERSION = "2026.10.15.1"
 INSTRUCTION_TEXTS_VERSION = "2026.10.15.1"
 EMBEDDINGS_VERSION = "2026.10.15.2"
 CURRICULUM_EMBEDDINGS_VERSION = "2026.10.15.2"
-ALIGNMENT_VERSION = "2026.10.14.4"
+ALIGNMENT_VERSION = "2026.10.15.1"
 PUBLICATION_VERSION = "2026.10.14.1"
 
 
@@ -198,7 +198,6 @@ def _align(
     task_vectors_root: str,
     curriculum_vectors_root: str,
     spec: EmbeddingSpec,
-    cache_root: str,
     output_root: str,
 ) -> SemanticArtifact:
     task_spec = EmbeddingSpec.model_validate_json((StoragePath(task_vectors_root) / "embedding_spec.json").read_text())
@@ -226,9 +225,9 @@ def _align(
         runtime.context,
         input_paths=SemanticArtifact.raw_load(inputs_root).paths,
         description_paths=SemanticArtifact.raw_load(descriptions_root).paths,
+        vector_paths=SemanticArtifact.raw_load(task_vectors_root).paths,
         curriculum=curriculum,
         curriculum_key=curriculum_key,
-        cache_root=cache_root,
         spec=spec,
         output_root=output_root,
     )
@@ -423,7 +422,6 @@ def curation_embedding_pipeline(
             task_vectors_root=vectors,
             curriculum_vectors_root=anchors,
             spec=spec,
-            cache_root=str(StoragePath(cache_root) / "vectors"),
             output_root=OUT,
         )
     )

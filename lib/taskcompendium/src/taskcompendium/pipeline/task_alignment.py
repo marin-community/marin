@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Join task descriptions and cached vectors into streaming curriculum assignments."""
+"""Score vector Parquet batches and join curriculum assignments to task instances."""
 
 import json
 from collections.abc import Iterator, Sequence
@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from functools import partial
 
 import numpy as np
-from finestore.reader import ReadView
+import pyarrow as pa
 from finestore.rl.curriculum import EmbeddingSpec
 from finestore.schema import arrow_schema
 from pydantic import BaseModel
@@ -26,8 +26,8 @@ from taskcompendium.pipeline.curriculum_alignment import (
     TaskMatches,
     rank_task_batch,
 )
-from taskcompendium.pipeline.semantics import DescriptionStatus
-from taskcompendium.pipeline.task_embeddings import embedding_cache_partition, embedding_cache_path, text_record
+from taskcompendium.pipeline.semantics import DescriptionStatus, TaskDescription
+from taskcompendium.pipeline.task_embeddings import text_record
 
 PREVIEW_CHARACTERS = 8192
 
@@ -74,68 +74,74 @@ def _described_tasks(content_hash: str, records: Iterator[dict]) -> Iterator[dic
         yield {**row, **description}
 
 
-def _align_batches(
+def _rank_batches(
     batches: Iterator[list[dict]],
     _shard: ShardInfo,
     *,
     shared_key: str,
-    cache_root: str,
-    spec: EmbeddingSpec,
 ) -> Iterator[dict]:
     curriculum: CurriculumVectors = zephyr_worker_ctx().get_shared(shared_key)
-    views: dict[int, ReadView] = {}
     for batch in batches:
-        ready = [row for row in batch if row["status"] == DescriptionStatus.READY]
-        requests = [text_record(row["description"], spec)["embedding_key"] for row in ready]
-        partitions: dict[int, list[str]] = {}
-        for key in requests:
-            partitions.setdefault(embedding_cache_partition(key), []).append(key)
-        cached = {}
-        for partition, keys in partitions.items():
-            if partition not in views:
-                views[partition] = ReadView(embedding_cache_path(cache_root, partition))
-            cached.update(views[partition].read_blobs(keys))
-        missing = set(requests) - set(cached)
-        if missing:
-            raise ValueError(f"Alignment is missing {len(missing)} cached task vectors")
-        rankings = iter(
-            rank_task_batch(
-                curriculum,
-                np.stack([np.frombuffer(cached[key], dtype="<f4") for key in requests]),
+        rankings = rank_task_batch(curriculum, np.asarray([row["embedding"] for row in batch], dtype=np.float32))
+        for row, matches in zip(batch, rankings, strict=True):
+            counters.current_stage().update_counter("alignment/scored_embeddings", 1)
+            yield {"embedding_key": row["embedding_key"], "matches": matches.model_dump(mode="json")}
+
+
+def _description_records(source: _JoinInput, *, spec: EmbeddingSpec) -> Iterator[dict]:
+    for row in load_parquet(source.path):
+        if source.kind == "alignment":
+            key = row["embedding_key"]
+        elif row["status"] == DescriptionStatus.READY:
+            key = text_record(row["description"], spec)["embedding_key"]
+        else:
+            key = f"unavailable:{row['content_hash']}"
+        yield {"embedding_key": key, "kind": source.kind, "payload": json.dumps(row, ensure_ascii=False)}
+
+
+def _matched_descriptions(embedding_key: str, records: Iterator[dict]) -> Iterator[dict]:
+    matches = None
+    for record in records:
+        row = json.loads(record["payload"])
+        if record["kind"] == "alignment":
+            if matches is not None:
+                raise ValueError(f"Multiple alignments for embedding key {embedding_key}")
+            matches = row["matches"]
+            continue
+        if row["status"] == DescriptionStatus.READY and matches is None:
+            raise ValueError(f"Alignment is missing task vector {embedding_key}")
+        yield {**row, "matches": matches}
+
+
+def _task_alignment(row: dict) -> dict:
+    public = json.loads(row["public_input"])
+    instructions = format_conversation(ConversationInput.model_validate(public["context"]).events)
+    result = TaskAlignment(
+        **{
+            name: row[name]
+            for name in (
+                "source_id",
+                "source_key",
+                "task_id",
+                "task_hash",
+                "content_hash",
+                "intended_use",
+                "population",
+                "reason",
+                "description",
+                "matches",
             )
-            if ready
-            else []
-        )
-        for row in batch:
-            assigned = next(rankings) if row["status"] == DescriptionStatus.READY else None
-            public = json.loads(row["public_input"])
-            instructions = format_conversation(ConversationInput.model_validate(public["context"]).events)
-            result = TaskAlignment(
-                **{
-                    name: row[name]
-                    for name in (
-                        "source_id",
-                        "source_key",
-                        "task_id",
-                        "task_hash",
-                        "content_hash",
-                        "intended_use",
-                        "population",
-                        "reason",
-                    )
-                },
-                description_status=row["status"],
-                description=row["description"],
-                task_preview=instructions[:PREVIEW_CHARACTERS],
-                instruction_characters=len(instructions),
-                preview_truncated=len(instructions) > PREVIEW_CHARACTERS,
-                matches=assigned,
-            )
-            counters.current_stage().update_counter("alignment/tasks", 1)
-            counters.current_stage().update_counter(
-                "alignment/subject_matches", len(assigned.subjects) if assigned else 0
-            )
-            yield result.model_dump(mode="json")
+        },
+        description_status=row["status"],
+        task_preview=instructions[:PREVIEW_CHARACTERS],
+        instruction_characters=len(instructions),
+        preview_truncated=len(instructions) > PREVIEW_CHARACTERS,
+    )
+    counters.current_stage().update_counter("alignment/tasks", 1)
+    counters.current_stage().update_counter(
+        "alignment/subject_matches", len(result.matches.subjects) if result.matches else 0
+    )
+    return result.model_dump(mode="json")
 
 
 def align_tasks(
@@ -143,33 +149,55 @@ def align_tasks(
     *,
     input_paths: Sequence[str],
     description_paths: Sequence[str],
+    vector_paths: Sequence[str],
     curriculum: CurriculumVectors,
     curriculum_key: str,
-    cache_root: str,
     spec: EmbeddingSpec,
     output_root: str,
     batch_size: int = 256,
 ) -> list[str]:
-    """Preserve all task instances while joining descriptions by public-input hash."""
+    """Score each task vector once, then join scores to descriptions and task instances."""
     shared_key = f"curriculum-{curriculum_key}"
     context.put(shared_key, curriculum)
+    matches_type = arrow_schema(TaskAlignment).field("matches").type
+    rankings = context.execute(
+        Dataset.from_list(vector_paths)
+        .load_parquet()
+        .window(batch_size)
+        .map_shard(partial(_rank_batches, shared_key=shared_key))
+        .write_parquet(
+            str(StoragePath(output_root) / "rankings/part-{shard:05d}.parquet"),
+            schema=pa.schema([("embedding_key", pa.string()), ("matches", matches_type)]),
+        ),
+        name="score-task-vectors",
+    )
+    description_inputs = [
+        *(_JoinInput(path, "alignment") for path in rankings.results),
+        *(_JoinInput(path, "description") for path in description_paths),
+    ]
+    descriptions = context.execute(
+        Dataset.from_list(description_inputs)
+        .flat_map(partial(_description_records, spec=spec))
+        .group_by(
+            key=lambda row: row["embedding_key"],
+            sort_by=lambda row: row["kind"],
+            reducer=_matched_descriptions,
+        )
+        .write_parquet(
+            str(StoragePath(output_root) / "matched-descriptions/part-{shard:05d}.parquet"),
+            schema=pa.schema([("content_hash", pa.string()), *arrow_schema(TaskDescription), ("matches", matches_type)]),
+        ),
+        name="join-description-scores",
+    )
     inputs = [
         *(_JoinInput(path, "task") for path in input_paths),
-        *(_JoinInput(path, "description") for path in description_paths),
+        *(_JoinInput(path, "description") for path in descriptions.results),
     ]
     result = context.execute(
         Dataset.from_list(inputs)
         .flat_map(_join_records)
         .group_by(key=lambda row: row["content_hash"], sort_by=lambda row: row["kind"], reducer=_described_tasks)
-        .window(batch_size)
-        .map_shard(
-            partial(
-                _align_batches,
-                shared_key=shared_key,
-                cache_root=cache_root,
-                spec=spec,
-            )
-        )
+        .map(_task_alignment)
         .write_parquet(
             str(StoragePath(output_root) / "assignments/part-{shard:05d}.parquet"), schema=arrow_schema(TaskAlignment)
         ),

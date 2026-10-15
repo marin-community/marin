@@ -278,8 +278,11 @@ normalization. FineStore stores vectors by rendered-text/specification hash in
 1,024 fixed partitions, independent of worker count. Zephyr routes each embedding
 partition to one writer, avoiding shared-manifest contention. Reads and writes
 are batched. A curriculum edit reuses task descriptions and vectors.
-Assignment workers read the persistent vector cache in bounded batches. Parquet
-outputs preserve each embedding stage's vectors and provenance.
+Assignment workers load the curriculum matrix once per shard and score batches
+streamed from the task-vector Parquet outputs. Scoring uses the embedding keys
+deduplicated by the embedding pass. Zephyr joins those scores to descriptions and
+task instances, producing assignment records for the Atlas export. Alignment
+does not read the inference cache.
 
 All stages use the driver's shared `--max-workers`, `--worker-cpu`,
 `--worker-memory` and `--coordinator-memory` options. Embedding defaults to four

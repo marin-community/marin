@@ -248,7 +248,12 @@ def test_instruction_projection_excludes_private_contract_and_ignores_source_ide
 def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reuse_cache(context, tmp_path, spec):
     raw = tmp_path / "tasks.parquet"
     long_prompt = "Public context details. " * 600 + "Count two apples."
-    tasks = [task("a", prompt=long_prompt), task("b", prompt=long_prompt), task("c", prompt="UNSPECIFIED_OPERATION")]
+    tasks = [
+        task("a", prompt=long_prompt),
+        task("b", prompt=long_prompt),
+        task("c", prompt="UNSPECIFIED_OPERATION"),
+        task("d", prompt="Count three apples."),
+    ]
     pq.write_table(
         pa.Table.from_pylist([{"task_json": item.model_dump_json()} for item in tasks] + [{"task_json": None}]), raw
     )
@@ -269,10 +274,10 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
         cache_root=description_cache,
         output_root=str(tmp_path / "descriptions"),
     )
-    assert len(rows(inputs)) == 3
-    assert len(rows(descriptions)) == 2
+    assert len(rows(inputs)) == 4
+    assert len(rows(descriptions)) == 3
     requests = [json.loads(line) for line in Path(transport.calls).read_text().splitlines()]
-    assert len(requests) == 3
+    assert len(requests) == 5
     public_inputs = [json.loads(request["body"]["messages"][1]["content"]) for request in requests]
     assert any(item["context"]["events"][0]["content"] == long_prompt for item in public_inputs)
     assert any("failed schema validation" in request["body"]["messages"][-1]["content"] for request in requests)
@@ -287,7 +292,7 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
     assert sorted(rows(replay), key=lambda row: row["content_hash"]) == sorted(
         rows(descriptions), key=lambda row: row["content_hash"]
     )
-    assert len(Path(transport.calls).read_text().splitlines()) == 3
+    assert len(Path(transport.calls).read_text().splitlines()) == 5
 
     provider = EmbeddingProvider(str(tmp_path / "embeddings-called.jsonl"))
     texts = [text for row in rows(descriptions) for text in task_text_records(row, spec)]
@@ -334,20 +339,24 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
     reference = CurriculumVectors(
         anchors, np.asarray([anchor_by_key[row["embedding_key"]] for row in anchor_texts], dtype=np.float32)
     )
+    parked_cache = tmp_path / "parked-vector-cache"
+    Path(vector_cache).rename(parked_cache)
     assigned = align_tasks(
         context,
         input_paths=inputs,
         description_paths=descriptions,
+        vector_paths=vectors,
         curriculum=reference,
         curriculum_key="fixture",
-        cache_root=vector_cache,
         spec=spec,
         output_root=str(tmp_path / "aligned"),
     )
+    parked_cache.rename(vector_cache)
     output = {row["task_id"]: row for row in rows(assigned)}
-    assert set(output) == {"a", "b", "c"}
+    assert set(output) == {"a", "b", "c", "d"}
     assert output["a"]["description"] == "Elementary arithmetic: count apples."
     assert output["a"]["matches"] == output["b"]["matches"]
+    assert output["a"]["matches"] == output["d"]["matches"]
     assert output["a"]["matches"]["subjects"][0]["membership_similarity"] == pytest.approx(1.0)
     assert output["a"]["preview_truncated"]
     assert output["a"]["instruction_characters"] > len(output["a"]["task_preview"])
@@ -357,10 +366,10 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
     publication = publish_alignments(
         context, input_paths=inputs, alignment_paths=assigned, output_root=str(tmp_path / "release")
     )
-    assert publication.sources[0].task_count == 3
-    assert publication.sources[0].ready_count == 2
+    assert publication.sources[0].task_count == 4
+    assert publication.sources[0].ready_count == 3
     assert publication.sources[0].insufficient_context_count == 1
-    assert publication.unique_content_count == 2
+    assert publication.unique_content_count == 3
     assert publication.unique_embedding_count == 1
     corrupt = tmp_path / "corrupt.parquet"
     pq.write_table(pa.Table.from_pylist([output["a"], output["a"], output["c"]]), corrupt)
