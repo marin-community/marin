@@ -1,0 +1,62 @@
+{
+  "scope": "In-flight native trainer-log observation, not final checkpoint control or qualification proof. Four complete small native Ray worker logs retained byte-exact in the original bucket and read back with fullSHA. Native trainer reports successful learner/trainer/rollout state loading at5; actual sampler restoration/new applied updates/evaluation-skip and final all-rank controls remain pending.",
+  "run_id": "sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce",
+  "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+  "configuration_sha256": "9651656a94a0997b8c36bbf53d69bb42c7cd1054ab02b310db9a1e0ecb440eab",
+  "native_observation_at": "2026-10-15T23:04:24.577753+00:00",
+  "retention_verified_at": "2026-10-15T23:06:33.583230+00:00",
+  "reported_restored_learner_step": 5,
+  "new_applied_updates_verified": false,
+  "phase_qualification_complete": false,
+  "native_trainer_events": [
+    "2026-10-15 22:48:08.147 | INFO     | skyrl_train.trainer:load_checkpoints:3298 - Loading checkpoint from: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5",
+    "2026-10-15 22:48:08.148 | INFO     | skyrl_train.trainer:load_checkpoints:3304 - Resuming from global_step: 5",
+    "2026-10-15 22:48:08.525 | INFO     | skyrl_train.trainer:load_checkpoints:3337 - Successfully loaded trainer state",
+    "2026-10-15 22:48:08.793 | INFO     | skyrl_train.trainer:load_checkpoints:3348 - Successfully loaded rollout state",
+    "2026-10-15 23:00:34.077 | INFO     | skyrl_train.trainer:load_checkpoints:3370 - Successfully loaded policy checkpoint",
+    "2026-10-15 23:00:34.077 | INFO     | skyrl_train.trainer:load_checkpoints:3385 - Successfully loaded complete checkpoint state from global_step_5",
+    "2026-10-15 23:00:34.078 | INFO     | skyrl_train.trainer:_initialize_training_state:1366 - Resumed training from global_step 5"
+  ],
+  "native_log_files": [
+    {
+      "key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/ray-logs/rank0-g1cc352/session_latest/worker-0f9a947711b9f6e001ab5289a203f92d309901c8b41cd63cdb5a2163-06000000-14090.err",
+      "bytes": 50540,
+      "etag": "\"44c9819ab9db18dcf6fb7e4a69fe946a\"",
+      "modified": "2026-10-15T23:04:16+00:00",
+      "sha256": "459e570fcd0f460e112c8c76de00d619a96f2e957065c41eaf34644b8ebd0c36",
+      "retained_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/qualification-observations/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/snowball173-restore5-live-log-readback-20261015T230423/snowball173-restore5-live-20261015T230423-worker-0f9a947711b9f6e001ab5289a203f92d309901c8b41cd63cdb5a2163-06000000-14090.err",
+      "retained_etag": "\"44c9819ab9db18dcf6fb7e4a69fe946a\"",
+      "full_bytes_read_back_verified": true
+    },
+    {
+      "key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/ray-logs/rank0-g1cc352/session_latest/worker-1aadd3207ca81c9710a88af149fd030f32872d0c36263a4dd7a016af-06000000-14797.err",
+      "bytes": 5815,
+      "etag": "\"b6c644400b6a6603356770bc1afcfdd7\"",
+      "modified": "2026-10-15T23:04:15+00:00",
+      "sha256": "bbff1781a546b52807f003a35ba3086ad94b77f6c6fe917aef7c8a44aa380e44",
+      "retained_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/qualification-observations/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/snowball173-restore5-live-log-readback-20261015T230423/snowball173-restore5-live-20261015T230423-worker-1aadd3207ca81c9710a88af149fd030f32872d0c36263a4dd7a016af-06000000-14797.err",
+      "retained_etag": "\"b6c644400b6a6603356770bc1afcfdd7\"",
+      "full_bytes_read_back_verified": true
+    },
+    {
+      "key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/ray-logs/rank0-g1cc352/session_latest/worker-e27ccf16bba9f558cc390d7451394aa6bd46c9ecab09272c28431c03-06000000-17001.out",
+      "bytes": 3133,
+      "etag": "\"de8b9e7915030e43207739b541d677a2\"",
+      "modified": "2026-10-15T23:04:22+00:00",
+      "sha256": "c73f2ed6a39e9afd10b6c867df5b8aaa87f5391358c071d12a1d513c438da949",
+      "retained_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/qualification-observations/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/snowball173-restore5-live-log-readback-20261015T230423/snowball173-restore5-live-20261015T230423-worker-e27ccf16bba9f558cc390d7451394aa6bd46c9ecab09272c28431c03-06000000-17001.out",
+      "retained_etag": "\"de8b9e7915030e43207739b541d677a2\"",
+      "full_bytes_read_back_verified": true
+    },
+    {
+      "key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/ray-logs/rank0-g1cc352/session_latest/worker-15418a7bc7ebd6a21e0bfa69ee3cbac299e1be9b21a6f3d53ba7b9b0-06000000-16652.out",
+      "bytes": 3438,
+      "etag": "\"8c3da915f83d753ffb4e788088c9205e\"",
+      "modified": "2026-10-15T23:04:22+00:00",
+      "sha256": "f12d35128319c9082308225b79bb259ddac9e033a86a323697c020443225a6d8",
+      "retained_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/qualification-observations/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/snowball173-restore5-live-log-readback-20261015T230423/snowball173-restore5-live-20261015T230423-worker-15418a7bc7ebd6a21e0bfa69ee3cbac299e1be9b21a6f3d53ba7b9b0-06000000-16652.out",
+      "retained_etag": "\"8c3da915f83d753ffb4e788088c9205e\"",
+      "full_bytes_read_back_verified": true
+    }
+  ]
+}

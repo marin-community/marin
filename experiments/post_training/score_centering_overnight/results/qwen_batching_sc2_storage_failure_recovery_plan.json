@@ -13,7 +13,7 @@
   "prepare_configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v2/batching-sc-s2-prepare.yaml",
   "all_scientific_fields_unchanged": true,
   "actual_changes": "Fresh run-owned ID and output/archive/group/Ray namespaces only; same frozen source,seed2,model,data,noise,loss,optimizer,batching,capture and1200-update horizon.",
-  "status": "Replacement namespace now has actual native learning: physical2 running both ranks,19 updates observed20:29UTC with finite gradient and zero retention timeouts/write errors. Physical0/1 were priority preempted. Same frozen0212 recipe remains full1200; no scientific endpoint yet.",
+  "status": "Same-source0212 replacement is running on physical7 with0published updates at the latest observation. All seven earlier replacement allocations were priority preempted, including219surviving updates on physical2. Exact export/nativearchive/controller snapshots are retained; raw2/3/4 is copying and raw5/6 waits behind it. Native full1200 endpoint remains pending. No source, recipe, grader or checkpoint-cadence change.",
   "submission_confirmed": true,
   "old_retention_ledger": {
     "present": false
@@ -112,33 +112,36 @@
   "resource_board_id": 1057,
   "native_submission_log_sha256": "f3b487961042f39124bd7ee575836074d49f0b5e975641b282af8027efcab33c",
   "controller_confirmation_observed_at": "2026-10-15T18:28:51.405269+00:00",
-  "current_controller_attempt": 2,
+  "current_controller_attempt": 7,
   "current_native_progress": {
     "run": "sc-qwen-transfer-batching-sc-s2-main-rno-a3-01a126ce",
     "cluster": "cw-rno2a",
     "priority": "batch",
     "planned_updates": 1200,
-    "controller_attempt": 2,
+    "controller_attempt": 7,
     "task_states": [
       "3",
       "3"
     ],
-    "started_at_ms": 1792094965450,
-    "published_updates": 19,
-    "evaluations": [
-      "eval-00000000.json"
-    ],
-    "last_metrics": {
-      "trainer/global_step": 19,
-      "policy/raw_grad_norm": 0.8132752776145935,
-      "generate/trajectory_retention/publish_timeouts": 0.0,
-      "generate/trajectory_retention/write_errors": 0.0,
-      "timing/step_wall/group_admission": 9.096001380123198
-    }
+    "started_at_ms": 1792104653674,
+    "published_updates": 0,
+    "evaluations": []
   },
-  "current_progress_observation": "2026-10-15T20:29:23.481811+00:00",
-  "additional_terminal_preemption_h100_hours": 4.474284444444445,
-  "latest_preemption_controller_evidence": "new_terminal_controller_retention_20261015T2025.json.gz",
-  "latest_preemption_raw_retention_complete": true,
-  "latest_preemption_raw_report": "new_terminal_runtime_20261015T2025.json.gz"
+  "current_progress_observation": "2026-10-15T23:05:56.307537+00:00",
+  "additional_terminal_preemption_h100_hours": 40.557317777777776,
+  "latest_preemption_controller_evidence": "new_terminal_allocations_20261015T2301.json.gz",
+  "latest_preemption_raw_retention_complete": false,
+  "latest_preemption_raw_report": null,
+  "replacement_terminal_preemption_h100_hours": 43.06866888888889,
+  "surviving_interrupted_partial": {
+    "controller_attempt": 2,
+    "published_updates": 219,
+    "export_and_native_archive_inventory_evidence": "new_terminal_allocations_20261015T2229.json.gz",
+    "bulk_raw_retention_complete": false,
+    "scope": "Exact interrupted allocation only; not a final1200 endpoint."
+  },
+  "pending_raw_retention_batches": [
+    "new_terminal_runtime_20261015T2229.json.gz",
+    "new_terminal_runtime_20261015T2301.json.gz"
+  ]
 }
