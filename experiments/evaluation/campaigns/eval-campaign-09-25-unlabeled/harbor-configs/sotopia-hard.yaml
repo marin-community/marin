@@ -42,7 +42,7 @@ agents:
     OPENAI_API_KEY: ${TOGETHER_API_KEY}
 datasets:
 - name: hf://open-athena/sotopia-hard-harbor
-  ref: a2b6358ef66318841045b3c68c89a84f5f1923a5
+  ref: 539ee305186e0231be4e6c0b30a2a5629284dc28
 verifier:
   override_timeout_sec: 300
   env:
