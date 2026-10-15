@@ -1,7 +1,7 @@
 {
   "scope": "Bounded real-GPU engineering qualification; no scientific comparison endpoint or new main-source qualification.",
   "source_branch": "experiments/score-centering-resume-eval-01a126ce",
-  "status": "Actual save2 and noisy periodic restore2-to5 native/optimizer/loader/sampler/head/full-response replay gates pass. Final trained-sampler restore5-to7 is prepared and remains unsubmitted.",
+  "status": "All3 bounded actual GPU save/restore phases pass full native state/behavior and all3584original-grader replay gates. Separate exact-head five-node Snowball qualification is next; no scientific main source promoted.",
   "geometry": {
     "cluster": "cw-rno2a",
     "priority": "batch",
@@ -166,12 +166,77 @@
       "checkpoint_root": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-periodic3-restore5-noise005-sc-s0-rno-a0-01a126ce/checkpoints",
       "first_new_sampler_completed_updates": 3,
       "final_saved_sampler_completed_updates": 6,
-      "controller_confirmed": false,
+      "controller_confirmed": true,
       "submission_gate": "Previous phase must complete with full native checkpoint/optimizer/loader and frozen-sampler identity audit before this phase may submit.",
       "prepared_configuration_sha256": "c7042bb323865e5e3e857bf9d7271c348c9e579a74a89ad180d9c277d511a4d4",
       "prior_phase_gate_passed": true,
       "prepared_detach_configuration": "qwen_checkpoint_periodic_recovery_v1/restore5-detach.yaml",
-      "detach_configuration_sha256": "28b68f20a55b49e6967a2473a883dec3e386ef5b550f68ed98150af08bd86ddf"
+      "detach_configuration_sha256": "28b68f20a55b49e6967a2473a883dec3e386ef5b550f68ed98150af08bd86ddf",
+      "controller_job": {
+        "job_id": "/romain/sc-qwen-checkpoint-periodic3-restore5-noise005-sc-s0-rno-a0-01a126ce",
+        "state": "3",
+        "num_tasks": "2",
+        "priority_band": "3",
+        "bundle_id": "563bab7b05b04c069eec6075f57ce39113a6cc90ecedabc6ea3c27601b79d828",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "initial_task_attempts": [
+        {
+          "task_id": "/romain/sc-qwen-checkpoint-periodic3-restore5-noise005-sc-s0-rno-a0-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "cca1889e3ba77230",
+          "state": "3",
+          "exit_code": "",
+          "started_at_ms": "1792076108756",
+          "finished_at_ms": "",
+          "node_name": "gb960f0",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-checkpoint-periodic3-restore5-noise005-sc-s0-rno-a0-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "fe4d56b96b53bc20",
+          "state": "3",
+          "exit_code": "",
+          "started_at_ms": "1792076124667",
+          "finished_at_ms": "",
+          "node_name": "gb97250",
+          "terminal_reason": ""
+        }
+      ],
+      "submitted_configuration": "qwen_checkpoint_periodic_recovery_v1/restore5-detach.yaml",
+      "configuration_sha256": "28b68f20a55b49e6967a2473a883dec3e386ef5b550f68ed98150af08bd86ddf",
+      "controller_completed": true,
+      "completed_updates": 7,
+      "new_completed_update_count": 2,
+      "native_restore_phase_passed": true,
+      "native_restore_audit": "results/qwen_periodic_checkpoint_restore7_native_audit.json.gz",
+      "full_response_grade_replays": 1024,
+      "final_task_attempts": [
+        {
+          "task_id": "/romain/sc-qwen-checkpoint-periodic3-restore5-noise005-sc-s0-rno-a0-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "cca1889e3ba77230",
+          "state": "4",
+          "exit_code": "0",
+          "started_at_ms": "1792076108756",
+          "finished_at_ms": "1792076791377",
+          "node_name": "gb960f0",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-checkpoint-periodic3-restore5-noise005-sc-s0-rno-a0-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "fe4d56b96b53bc20",
+          "state": "4",
+          "exit_code": "0",
+          "started_at_ms": "1792076124667",
+          "finished_at_ms": "1792076801083",
+          "node_name": "gb97250",
+          "terminal_reason": ""
+        }
+      ]
     }
   ],
   "required_evidence": [
@@ -201,5 +266,6 @@
     "skyrl-gym/skyrl_gym/envs/aime/utils.py": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
     "uv.lock": "c9ff3b70074681e62f2683acd7b4b9487c9dc222d6065f61198c6e5e5d9ae891"
   },
-  "continuation_source_change_reason": "Preserve the actual native parser failure repair and prevent resumed before-training evaluation from overwriting an already scheduled evaluation. The new evaluation option defaults to legacy behavior; these continuations explicitly opt out. The 85 affected CPU tests pass. Actual GPU state and behavior qualification remains required before any scientific-source promotion."
+  "continuation_source_change_reason": "Preserve the actual native parser failure repair and prevent resumed before-training evaluation from overwriting an already scheduled evaluation. The new evaluation option defaults to legacy behavior; these continuations explicitly opt out. The 85 affected CPU tests pass. Actual GPU state and behavior qualification remains required before any scientific-source promotion.",
+  "all_phases_passed": true
 }

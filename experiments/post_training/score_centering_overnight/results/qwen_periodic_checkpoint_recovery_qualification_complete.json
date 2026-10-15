@@ -1,0 +1,50 @@
+{
+  "scope": "Bounded actual Qwen engineering qualification across original save2, restore2-to5 and trained-sampler restore5-to7. This does not replace any300/1200/130 scientific comparison or five-node Snowball restart qualification.",
+  "initial_save_source": "afbe6cc3633f596c29459a052040d5c2cd23e74f",
+  "continuation_source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+  "phases": [
+    {
+      "run_id": "sc-qwen-checkpoint-periodic3-save-noise005-sc-s0-rno-a0-01a126ce",
+      "source": "afbe6cc3633f596c29459a052040d5c2cd23e74f",
+      "completed_updates": 2,
+      "sampler_state": {
+        "completed_updates": 0,
+        "checkpoint_path": null
+      },
+      "original_grade_replays": 1024,
+      "record_payloads_sha256": "516d05db6510efdf4be7afa499f4752eab0cf03688cb8ededeb88aab269bdc82",
+      "allocated_h100_hours": 2.3611355555555558
+    },
+    {
+      "run_id": "sc-qwen-checkpoint-periodic3-restore2-noise005-sc-s0-rno-a0-01a126ce",
+      "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+      "completed_updates": 5,
+      "sampler_state": {
+        "completed_updates": 3,
+        "checkpoint_path": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-periodic3-restore2-noise005-sc-s0-rno-a0-01a126ce/checkpoints/global_step_3/policy"
+      },
+      "original_grade_replays": 1536,
+      "record_payloads_sha256": "927c38d79d502c03d8608be44b0f44c9923ff12976362dc086ad5376830f7f1b",
+      "allocated_h100_hours": 3.207717777777778
+    },
+    {
+      "run_id": "sc-qwen-checkpoint-periodic3-restore5-noise005-sc-s0-rno-a0-01a126ce",
+      "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+      "completed_updates": 7,
+      "sampler_state": {
+        "completed_updates": 6,
+        "checkpoint_path": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-periodic3-restore5-noise005-sc-s0-rno-a0-01a126ce/checkpoints/global_step_6/policy"
+      },
+      "original_grade_replays": 1024,
+      "record_payloads_sha256": "fa7e9b83100063a559671aea24df1b88283c32aef252e080d73a49fc52dcedf1",
+      "allocated_h100_hours": 3.0200822222222223
+    }
+  ],
+  "actual_full_response_grade_replays": 3584,
+  "native_failures": 0,
+  "grade_discrepancies": 0,
+  "all_distinct_prompt_groups": 448,
+  "all_phases_passed": true,
+  "allocated_h100_hours": 8.588935555555556,
+  "next_required_gate": "Exact173f626e6 five-node Snowball save5/restore7/restore9 qualification; all configs remain unsubmitted until actual submit/controller confirmation."
+}

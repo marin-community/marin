@@ -2893,7 +2893,24 @@
       "priority_band": 3,
       "bundle_id": "3279c979a43fbd8ea5c92a27ee7980b81ddbb8045151a63e78d25f2806df290b",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-qwen-checkpoint-periodic3-restore5-noise005-sc-s0-rno-a0-01a126ce",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "h100_nodes": 2,
+      "h100_per_node": 8,
+      "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_checkpoint_periodic_recovery_v1/restore5-detach.yaml",
+      "configuration_sha256": "28b68f20a55b49e6967a2473a883dec3e386ef5b550f68ed98150af08bd86ddf",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-periodic3-restore5-noise005-sc-s0-rno-a0-01a126ce",
+      "controller_state": 4,
+      "status": "terminal",
+      "priority_band": 3,
+      "bundle_id": "563bab7b05b04c069eec6075f57ce39113a6cc90ecedabc6ea3c27601b79d828",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-15T14:46:23.792181+00:00"
+  "observed_at": "2026-10-15T15:16:26.697639+00:00"
 }
