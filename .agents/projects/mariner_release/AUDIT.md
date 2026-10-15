@@ -4,12 +4,12 @@
 with the dataset build. The registry `experiments/domain_phase_mix/release/paper_cells.csv` maps each number to a query
 over the build tables. The audit reports differences and never edits the LaTeX.
 
-Result on 2026-10-15, after the paper corrected two cells of `tab:a-unimax-cap`: the 20 tables print 1,768 numbers
-that need a check (1,758 outside the row-label column, plus the ten registered row labels of `tab:a-heteroskedastic`).
-1,677 are traced to the build, and all of them match at the paper's printed decimals. 88 are registered skips: 54
-configuration constants and 34 numbers of the two deferred two-phase tables. Three numbers of `tab:a-unimax-cap` are
-untraced: the Uncheatable values of the UniMax cap sweep's cap-1, cap-4 and cap-12 runs, whose evaluation logs are on
-GCS only. The audit therefore exits 1 under `--fail-on-untraced`, on those three numbers alone.
+Result on 2026-10-15, after the paper corrected two cells of `tab:a-unimax-cap` and the build gained the Uncheatable
+components of the UniMax cap sweep's runs: the 20 tables print 1,768 numbers that need a check (1,758 outside the
+row-label column, plus the ten registered row labels of `tab:a-heteroskedastic`). 1,680 are traced to the build, and all
+of them match at the paper's printed decimals. The other 88 are registered skips: 54 configuration constants and 34
+numbers of the two deferred two-phase tables. No number is untraced, so the audit exits 0 under `--fail-on-untraced
+--allow-registered-skips`.
 
 ## Run
 
@@ -19,14 +19,15 @@ uv run python -m experiments.domain_phase_mix.release.verify_paper_numbers --bui
   --sections "<paper folder>/sections" --fail-on-untraced --allow-registered-skips
 ```
 
-- Build: 35 tables, MANIFEST.json `commit` fbe103a76f, built 2026-10-15T22:33Z, 0 consistency problems.
+- Build: 35 tables, MANIFEST.json `commit` 772b1a5be9, built 2026-10-15T23:19Z, 0 consistency problems.
 - Paper: `sections/` of the paper folder on Google Drive. The tables are in `results.tex` (modified 2026-10-12 20:13,
   SHA-256 prefix e2a47c370e100b1e), `surrogate.tex` (2026-10-13 02:17, 81cc91596e2a38ea), `appendix.tex` (2026-10-15
   14:15, a6b17d4f7fffadd1) and `appendix_analysis.tex` (2026-10-14 01:25, 61aeead7375b3d31), local times.
-- Output: `0 differences, 3 untraced cells, 88 registered skips`, exit code 1: `--allow-registered-skips` accepts the
-  constant and deferred two-phase cells, and the three untraced cells fail `--fail-on-untraced`.
+- Output: `0 differences, 0 untraced cells, 88 registered skips`, exit code 0: `--allow-registered-skips` accepts the
+  constant and deferred two-phase cells, the only skips.
 - `tests/domain_phase_mix/release/test_verify_paper_numbers.py::test_registry_checks_every_number_of_the_paper` runs
-  the same audit and expects no differences (`KNOWN_DIFFERENCES` is empty) and no unregistered numbers.
+  the same audit and expects no differences (`KNOWN_DIFFERENCES` is empty) and no skips other than constants and
+  deferred two-phase numbers.
 
 ## Per table
 
@@ -48,14 +49,14 @@ another value than the paper prints.
 | tab:a-hyperparameters | 53 | 24 | 29 | | | 0 | ladder, swarm_*, heldout |
 | tab:a-scaling-configurations | 16 | 16 | | | | 0 | ladder |
 | tab:a-olmix-cap-kl | 92 | 92 | | | | 0 | validation_3e18 |
-| tab:a-unimax-cap | 40 | 37 | | | 3 | 0 | ladder, ladder_unimax_cap_sweep, tasks |
+| tab:a-unimax-cap | 40 | 40 | | | | 0 | ladder, ladder_unimax_cap_sweep, tasks |
 | tab:a-regmix-argmin | 32 | 32 | | | | 0 | validation_3e18, fits_proposal_predictions |
 | tab:a-kl-ablation | 38 | 38 | | | | 0 | validation_3e18, fits_proposal_predictions |
 | tab:a-ablations-full | 193 | 168 | 25 | | | 0 | fits_surrogate_benchmark |
 | tab:a-baseline-validation | 84 | 84 | | | | 0 | validation_3e18, swarm_qwen3_360m_1p6b |
 | tab:a-compute-equivalence | 72 | 72 | | | | 0 | ladder_compute_equivalence |
 | tab:a-accuracy-components | 459 | 459 | | | | 0 | ladder_accuracy |
-| Total | 1,768 | 1,677 | 54 | 34 | 3 | 0 | |
+| Total | 1,768 | 1,680 | 54 | 34 | 0 | 0 | |
 
 ## Differences (corrected in the paper on 2026-10-15; the audit now reports 0 differences)
 
@@ -69,9 +70,9 @@ which prints the same two values. The README's source, `table9_results.json`, gi
 | Cap 12 (r4 c4) | 0.936 | 0.935454 | 0.935 | `ladder_unimax_cap_sweep[epoch_cap==12].mean_of(...)` |
 
 Both printed values match rounding a four-decimal intermediate (1.0985, 0.9355) half up, so the README likely rounded
-twice. The other 35 traced numbers of the table, including the 20 other OlmoBaseEval Easy numbers of the sweep's runs,
-match. With both corrections, caps 8 and 12 print 0.935 in that column (0.935380 and 0.935454 at full precision); the
-bold mark on cap 8, the lowest entry, stays correct.
+twice. The table's other 38 numbers, including the other 20 OlmoBaseEval Easy numbers and the three Uncheatable
+numbers of the sweep's runs, match. With both corrections, caps 8 and 12 print 0.935 in that column (0.935380 and
+0.935454 at full precision); the bold mark on cap 8, the lowest entry, stays correct.
 
 ## Registered skips
 
@@ -89,11 +90,6 @@ Constants (54). The registry rows have an empty query and the note `constant`.
 
 Deferred two-phase numbers (34), note `deferred_two_phase`: all of `tab:a-matched-swarms` (18) and
 `tab:a-phase-fiber` (16). This release omits the two-phase swarms.
-
-Untraced numbers (3), note `untraced: ...`: the Uncheatable values (1.036, 1.024, 1.025) of the cap-1, cap-4 and cap-12
-runs of `tab:a-unimax-cap`. They exist only in the README's table and in each run's `checkpoints/eval_metrics.jsonl`
-on GCS, under `gs://marin-us-east5/.../delphi_baseline_mixtures_issue6607_20260623/<run>-<hash>/`. To trace them, pull
-the three runs' final Uncheatable components and add them to `ladder_unimax_cap_sweep`.
 
 ## Tables added to the build
 
@@ -115,16 +111,22 @@ The audit needed four sources that no build table held. Each was added to an exi
   comparators bit for bit. Earlier runs of the additive response, Olmix and the linear model, and the first two
   2026-09-16 runs of the two convex per-bucket models, report other values; the paper uses the third, `20260916c`.
 - `ladder_unimax_cap_sweep` (own config folder, 3 rows): the UniMax cap sweep's runs at caps 1, 4 and 12, from
-  `.agents/projects/unimax_cap_sweep_20260922/table9_results.json` and the launch's `run_specs.json` and
-  `summary.json` under `RO/delphi_baseline_mixtures_issue6607_20260623/`. Per run: cap, seeds, the 51 OlmoBaseEval Easy
-  components and their mean, which equals the recorded mean to 1e-12. The exporter checks each run's model size and
-  token count against the ladder's 3e18 rung. The table has no observation ids, because the runs' hashed names appear
-  only in the README; the cross-table consistency check now skips tables without ids. The test checks the three caps
-  and that the same results file scores the ladder's UniMax-8 seed-0 run with the ladder's components (to 1e-15).
+  `.agents/projects/unimax_cap_sweep_20260922/table9_results.json`, the launch's `run_specs.json` and `summary.json`
+  under `RO/delphi_baseline_mixtures_issue6607_20260623/`, and the runs' W&B summaries and configs, read once on
+  2026-10-15 and frozen in
+  `experiments/domain_phase_mix/release/configs/unimax_cap_sweep_wandb_components_20261015.csv`. Per run: cap, seeds,
+  the 58 components, `components_available` and both aggregates. The OlmoBaseEval Easy mean equals the recorded mean to
+  1e-12. The fixed byte shares of the seven pulled Uncheatable components give 1.036420, 1.023785 and 1.025084; the
+  sweep's README, which weighted each run's evaluation log, prints 1.0364, 1.0238 and 1.0251. The exporter joins each
+  pulled run to its run spec by name (the W&B id is the run name with its hash), requires one pulled run per spec, no
+  unused pull and the spec's data seed, and checks each run's model size and token count against the ladder's 3e18 rung.
+  The table has no observation ids, because its three runs appear in no other table; the cross-table consistency check
+  skips tables without ids. The tests check the three caps, that the same results file scores the ladder's UniMax-8
+  seed-0 run with the ladder's components (to 1e-15), that each cap's row holds its pulled run's components and data
+  seed, and that its Uncheatable aggregate rounds to the README's value.
 
 `figures_tables.csv` lists every config that each table's registry queries read; a test in
-`test_verify_paper_numbers.py` enforces this. The Params column of `tab:a-ablations-full` adds `constant`, and
-`tab:a-unimax-cap` keeps `untraced` for its three Uncheatable values.
+`test_verify_paper_numbers.py` enforces this. The Params column of `tab:a-ablations-full` adds `constant`.
 
 ## Strength of the checks
 
@@ -147,9 +149,12 @@ The audit needed four sources that no build table held. Each was added to an exi
   retrains in `validation_3e18` (`table5_repeats`, trainer seeds 1 and 2, the same data seed).
 - The total share of `tab:a-buckets` (100.00) is a sum over itself and cannot differ.
 - Bold, italics and daggers are not checked.
-- A perturbation check (every float of the build scaled by 1.03 and shifted by 0.01) makes 1,427 of the 1,677 traced
-  numbers differ. The other 250 read integer columns, which the check left alone, or are standard deviations,
-  standard errors, paired differences and ratios whose printed digits survive the change.
+- A perturbation check (every float of the build scaled by 1.03 and shifted by 0.01, each query selecting its rows on
+  the unperturbed tables) makes 1,422 of the 1,680 traced numbers differ, the cap sweep's three Uncheatable numbers
+  among them. The other 258 read integer columns, which the check leaves alone (example counts, pool tokens, parameter
+  and token counts, run counts), or are standard deviations, standard errors, differences, and five small values
+  printed to one decimal, whose printed digits survive the change. The earlier record, 1,427 of 1,677, came from a
+  variant of the check that it does not describe; the check above gives 1,419 of 1,677 on the build at fbe103a76f.
 
 ## Maintaining the registry
 
@@ -164,12 +169,14 @@ reported as untraced. After the paper is corrected, remove the fixed cells from 
 
 ## Update 2026-10-15
 
-Both tab:a-unimax-cap cells were corrected in sections/appendix.tex (1.099 -> 1.098; 0.936 -> 0.935); the audit now
-reports `0 differences, 3 untraced cells, 88 registered skips`. With `--fail-on-untraced --allow-registered-skips` it
-exits 1, because the second flag accepts only the constant and deferred two-phase cells and the three untraced cells
-remain; without `--fail-on-untraced` it exits 0.
+Both tab:a-unimax-cap cells were corrected in sections/appendix.tex (1.099 -> 1.098; 0.936 -> 0.935), and the audit
+reported 0 differences.
 
 The build at 3681ab32b3 replaces `aggregate_version` and the `_source` and `_fixed` aggregate columns with
-`bpb__uncheatable` and `bpb__obe_easy` under one rule, and the registry queries those two columns. The audit of that
-build reports the same `0 differences, 3 untraced cells, 88 registered skips`; the tab:scaling-main values, which now
-read the ladder's computed aggregates, moved by at most 7.7e-8.
+`bpb__uncheatable` and `bpb__obe_easy` under one rule, and the registry queries those two columns. The tab:scaling-main
+values, which now read the ladder's computed aggregates, moved by at most 7.7e-8.
+
+The build at 772b1a5be9 adds the seven Uncheatable components of the cap sweep's cap-1, cap-4 and cap-12 runs, frozen
+from their W&B run summaries, and the registry traces the table's three Uncheatable cells, the audit's last untraced
+numbers. The other 34 tables are byte-identical to the build at fbe103a76f. The audit reports `0 differences, 0
+untraced cells, 88 registered skips` and exits 0 under `--fail-on-untraced --allow-registered-skips`.
