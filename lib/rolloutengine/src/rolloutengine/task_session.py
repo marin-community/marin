@@ -101,14 +101,18 @@ def session_start(
 class _ShellToolSession:
     """Serve the built-in shell tool as a ``ToolProviderSession`` that runs commands on the task machine."""
 
-    def __init__(self, machine: Machine, tool: BoundShellTool, command_timeout: float | None):
+    def __init__(self, machine: Machine, tool: BoundShellTool, command_timeout: float | None, spill_bytes: int | None):
         self.machine = machine
         self.tool = tool
         self.command_timeout = command_timeout
+        self.spill_bytes = spill_bytes
 
     async def call(self, name: str, arguments: dict[str, JsonValue]) -> ToolCallResult:
         call = FunctionCall(name=name, arguments=arguments)
-        return ToolCallResult(await run_shell_call(self.machine, call, self.tool, timeout=self.command_timeout))
+        observation = await run_shell_call(
+            self.machine, call, self.tool, timeout=self.command_timeout, spill_bytes=self.spill_bytes
+        )
+        return ToolCallResult(observation)
 
     async def close(self) -> None:
         pass
@@ -129,7 +133,10 @@ class _ShellboxTaskSession:
 
     async def prepare(self) -> SessionStart:
         if self.machine is not None and self.shell_tool is not None:
-            shell = _ShellToolSession(self.machine, self.shell_tool, self.lowered.session.command_timeout)
+            limits = self.lowered.session
+            shell = _ShellToolSession(
+                self.machine, self.shell_tool, limits.command_timeout, limits.tool_output_spill_bytes
+            )
             self.tools[self.shell_tool.definition.name] = shell
         for name, bound in self.provider_tools.items():
             if bound.requirement_name not in self.provider_sessions:
