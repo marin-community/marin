@@ -61,9 +61,10 @@ constructs `iac.gcp.cloud_run.CloudRunService` with Grafana's image, runtime
 configuration, and dependencies.
 
 A small internal web app (a browser UI over a database or an API, used by the
-team) does not need its own project at all: add it as an app under
-`infra/marina/apps/` and the `marin-marina` stack deploys it with the others
-on one Cloud Run service (see `infra/marina/README.md`).
+team) does not need its own project at all: keep its source under
+`infra/marina/apps/` or `infra/marina/applets/` and release its package with
+`marina release`. The `marin-marina` stack deploys the shared base runtime; it
+does not publish application code (see `infra/marina/README.md`).
 
 Use a bespoke program only when a shared component cannot express the
 deployment. `infra/loom` is one example: it builds an image, writes the image

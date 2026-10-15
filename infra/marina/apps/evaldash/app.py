@@ -65,12 +65,13 @@ from marina.mcp import OperationRisk, operation_extension
 from pydantic import BaseModel
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.server_auth import get_verified_identity
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import review, samples
+from .db_migrations import apply_migrations
 from .metrics import (
     RUN_FACETS,
     build_comparison,
@@ -87,7 +88,6 @@ from .results_db import (
     fetch_archived_models,
     fetch_snapshot,
     mark_prefix_failed,
-    migrate_schema,
     prefix_statuses,
     prune_untracked_records,
     reconcile_prefix,
@@ -1441,7 +1441,7 @@ def create_api(services: Services) -> RegisteredApi:
     """The kernel's entry point for the JSON API mounted at ``/evaldash/api/``.
 
     Configuration is resolved from the environment once, here. Nothing in this path writes to the
-    database: ``marina migrate`` has already applied the schema when the deploy reaches this point.
+    database: package release has already applied the schema before selecting this revision.
     """
     config = EvaldashConfig.from_env(os.environ)
     gateway: ClusterGatewayLike
@@ -1460,6 +1460,6 @@ def create_api(services: Services) -> RegisteredApi:
     return build_api(create_store(services, config), gateway, config, trigger_ingest)
 
 
-def migrate(engine: Engine) -> None:
-    """Bring the app's schema up to this build, under an advisory lock. Run by ``marina migrate``."""
-    migrate_schema(engine)
+def migrate(connection: Connection) -> None:
+    """Apply schema changes within the locked package release transaction."""
+    apply_migrations(connection)

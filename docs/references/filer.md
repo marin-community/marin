@@ -51,20 +51,41 @@ Filer does not query entire datasets or modify storage. A displayed total for a
 truncated text table counts the retained preview rows. Parquet totals come from
 its footer. Reads may cross regions, but opening a file does not copy a dataset.
 
-## Publish and operate
+## Preview, release and operate
 
 Sources live in `infra/marina/applets/filer/`. The applet UUID is
-`7f536ce3-0562-40f1-b209-e6110d8ab4e8`. Validation and publication both run the manifest’s frontend build command.
-Validate, then obtain the current revision number before publishing:
+`7f536ce3-0562-40f1-b209-e6110d8ab4e8`. Run these commands from the repository root.
+Preview branch work, including uncommitted edits, with Docker running:
+
+```bash
+uv run marina release infra/marina/applets/filer --local
+```
+
+This builds the package, starts disposable Postgres and Marina, and prints a local
+revision URL. It does not require main or a clean checkout and does not update the
+live applet. Stop it with Ctrl-C. Use `--dry-run` instead for build/import validation
+without starting the local stack.
+
+The local backend uses your shell's storage credentials, not Marina's deployed
+service account. Configure GCS ADC or the relevant S3 credentials as described in
+[fsutil](fsutil.md). Filer reads real objects with those permissions; it exposes
+no storage writes.
+
+For a production release, validate and inspect the current revision first:
 
 ```bash
 uv run marina validate infra/marina/applets/filer
+uv run marina release-status infra/marina/applets/filer --json
 uv run marina applets versions 7f536ce3-0562-40f1-b209-e6110d8ab4e8 --json
-uv run marina publish infra/marina/applets/filer \
-  --update 7f536ce3-0562-40f1-b209-e6110d8ab4e8 --base-version <current>
+uv run marina release infra/marina/applets/filer --base-version <current>
 ```
 
 Replace `<current>` with the current version reported by `marina applets versions`.
+Production release defaults to a clean checkout at the current remote main.
+`applet.toml` declares this directory's stable UUID; a default release records the source commit and
+subtree hash. `release-status` compares that tree with the local checkout.
+Use `--allow-dirty` to release branch or uncommitted source without verified Git
+provenance; `release-status` then reports `unrecorded` from a clean checkout.
 
 Keep the applet private: its backend uses Marina's storage credentials. Backend
 code runs as a trusted plugin in Marina's process. It needs no database tables or
@@ -77,7 +98,7 @@ and is resolved on each request, independently of the serving Cloud Run revision
 The deployment migration preserves the existing Filer binding. Applet operators
 can change it with `uv run marina applets hosts bind <hostname> <applet-id>`.
 The named host redirects its root to the current applet revision at `/v/<revision>/`.
-Publishing selects a new current revision for new visits; existing revision URLs
+Release selects a new current revision for new visits; existing revision URLs
 continue to serve that revision while it is retained.
 It uses the existing Marina IAP authentication. Production rollouts load the DNS
 token from Secret Manager through `marin-deploy marina rollout`.
