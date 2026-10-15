@@ -464,21 +464,31 @@ def test_structured_histogram_exact_large_counts_duplicate_loss_and_reset(
     assert [row["value"] for row in summary if row["metric"] == "ttft_observations"] == [expected_count]
 
 
-def test_structured_histogram_bound_change_keeps_means_and_withholds_mixed_schema_tails() -> None:
+@pytest.mark.parametrize("legacy_prefix", [False, True])
+def test_structured_histogram_bound_change_keeps_means_and_withholds_mixed_schema_tails(legacy_prefix: bool) -> None:
     database = _vllm_projection_database()
-    attributes = json.dumps(
-        {
-            "engine": "engine-a",
-            "engine_index": "0",
-            "metric_source": "vllm",
-            "source_kind": "histogram",
-            "source_temporality": "cumulative_snapshot",
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    scalar_attributes = {
+        "engine": "engine-a",
+        "engine_index": "0",
+        "metric_source": "vllm",
+        "source_kind": "histogram",
+        "source_temporality": "cumulative_snapshot",
+    }
+    attributes = json.dumps(scalar_attributes, sort_keys=True, separators=(",", ":"))
     rows = []
+    scalar_rows = []
     for sequence, (bound, count, total) in enumerate(((0.1, 0, 0.0), (0.1, 2, 0.2), (0.2, 3, 0.3), (0.2, 5, 0.7))):
+        if legacy_prefix and sequence < 2:
+            for component, value, labels in (
+                ("bucket", count, {**scalar_attributes, "le": str(bound)}),
+                ("bucket", count, {**scalar_attributes, "le": "+Inf"}),
+                ("count", count, scalar_attributes),
+                ("sum", total, scalar_attributes),
+            ):
+                scalar_rows.append(
+                    (f"time_to_first_token_seconds_{component}", value, json.dumps(labels), sequence * 15_000, sequence)
+                )
+            continue
         body = {
             "encoding": "explicit_bucket_v1",
             "aggregation_temporality": "cumulative",
@@ -498,6 +508,14 @@ def test_structured_histogram_bound_change_keeps_means_and_withholds_mixed_schem
                    'histogram', NULL, ?, '{}', ?, ?, ?)""",
         rows,
     )
+    if scalar_rows:
+        database.executemany(
+            """INSERT INTO "telemetry_v1.marinskyrl"
+               (cluster, service, job_id, name, kind, value, body_json,
+                resource_attributes_json, attributes_json, timestamp_ms, seq)
+               VALUES ('cw-a', 'marinskyrl', '/schema-change', ?, 'gauge', ?, NULL, '{}', ?, ?, ?)""",
+            scalar_rows,
+        )
     overview = vllm_overview_query(VllmIdentityField.JOB_ID, "/schema-change", 0, 60_000, 15_000)
     series = database.execute(overview.samples_sql).fetch_arrow_table()
     result = vllm_overview_table(overview, series, nullcontext(), max_rows=10_000).to_pylist()

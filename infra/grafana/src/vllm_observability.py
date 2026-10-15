@@ -342,7 +342,7 @@ histogram_component_counts AS (
                AS consistent_component
     FROM histogram_components
     WINDOW family_series AS (
-        PARTITION BY origin_cluster, service, resource_attributes_json, attributes_json, source_family
+        PARTITION BY origin_cluster, service, resource_attributes_json, attributes_json, source_family, is_structured
     ), component_publication AS (
         PARTITION BY {publication_key}, component, upper_bound
     )
@@ -690,11 +690,18 @@ WITH base AS MATERIALIZED (
            bucket_count,
            MAX(bucket_count) OVER (PARTITION BY family) AS total_count
     FROM histogram_buckets
-), histogram_schema_counts AS (
-    SELECT family, COUNT(DISTINCT schema_key) AS versions
+), histogram_publication_schemas AS (
+    SELECT family, origin_cluster, service, resource_attributes_json, attributes_json,
+           source_family, producer_identity, timestamp_ms,
+           STRING_AGG(DISTINCT CAST(CAST(upper_bound AS DOUBLE) AS VARCHAR), ','
+                      ORDER BY CAST(CAST(upper_bound AS DOUBLE) AS VARCHAR)) AS bounds
     FROM coherent_histogram_increments
-    WHERE schema_key IS NOT NULL
-    GROUP BY family
+    WHERE component = 'bucket' AND upper_bound NOT IN ('+Inf', 'Inf')
+    GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
+), histogram_schema_counts AS (
+    SELECT family, COUNT(DISTINCT bounds) AS versions
+    FROM histogram_publication_schemas
+    GROUP BY 1
 ), output_length_distribution AS (
     SELECT upper_bound,
            bucket_count - COALESCE(LAG(bucket_count) OVER (
