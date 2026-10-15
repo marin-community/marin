@@ -103,8 +103,9 @@
       "eval_every": 20,
       "legacy_eval_on_train_end": true,
       "native_prepared": true,
-      "submitted": false,
-      "configuration_sha256": "690600ac4a22948069f63ffaa5fa4059f12bac4d569a89ea1e2f1dd85b665590"
+      "submitted": true,
+      "configuration_sha256": "690600ac4a22948069f63ffaa5fa4059f12bac4d569a89ea1e2f1dd85b665590",
+      "controller_confirmed": true
     },
     {
       "run_id": "sc-snowball-main-fresh-noise000-sc-s1-a2-01a126ce",
@@ -122,8 +123,9 @@
       "eval_every": 20,
       "legacy_eval_on_train_end": true,
       "native_prepared": true,
-      "submitted": false,
-      "configuration_sha256": "5aa84245a4b2e6d43213f9c31dd4da3f36aee4c1d7166e9b95225584b8feeb38"
+      "submitted": true,
+      "configuration_sha256": "5aa84245a4b2e6d43213f9c31dd4da3f36aee4c1d7166e9b95225584b8feeb38",
+      "controller_confirmed": true
     },
     {
       "run_id": "sc-snowball-main-fresh-noise000-tis-s1-a2-01a126ce",
@@ -141,8 +143,9 @@
       "eval_every": 20,
       "legacy_eval_on_train_end": true,
       "native_prepared": true,
-      "submitted": false,
-      "configuration_sha256": "69d8c6f926a85212ea32b50f6dcc13f3388f41ccd8b87a588be5dfad6b1ecab6"
+      "submitted": true,
+      "configuration_sha256": "69d8c6f926a85212ea32b50f6dcc13f3388f41ccd8b87a588be5dfad6b1ecab6",
+      "controller_confirmed": true
     },
     {
       "run_id": "sc-snowball-main-fresh-noise000-sc-s2-a2-01a126ce",
@@ -160,8 +163,9 @@
       "eval_every": 20,
       "legacy_eval_on_train_end": true,
       "native_prepared": true,
-      "submitted": false,
-      "configuration_sha256": "2e69f4b880a85cf732bdfa7e978db02ee7ffcd830d4ece06e68994ff78645c1c"
+      "submitted": true,
+      "configuration_sha256": "2e69f4b880a85cf732bdfa7e978db02ee7ffcd830d4ece06e68994ff78645c1c",
+      "controller_confirmed": true
     },
     {
       "run_id": "sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce",
@@ -179,15 +183,413 @@
       "eval_every": 20,
       "legacy_eval_on_train_end": true,
       "native_prepared": true,
-      "submitted": false,
-      "configuration_sha256": "6d9fc36965814563a115f1ef95d0f830b3352c8cfd81e77347f79d77bfedbe1f"
+      "submitted": true,
+      "configuration_sha256": "6d9fc36965814563a115f1ef95d0f830b3352c8cfd81e77347f79d77bfedbe1f",
+      "controller_confirmed": true
     }
   ],
   "fresh_matrix_total": "Three paired seeds0,1,2 \u00d7TIS/SC \u00d71200updates; freshSCseed0 alreadyrunning, five remaining controls admitted.",
   "actual_native_callback_behavior": "Legacy callbacks constructed from native composed config, checkpoint fires at1200 and evaluation every20; checked behavior at20,40,600,1199,1200. Eval-on-train-end legacy defaulttrue retained, not silently changed.",
   "quality_endpoint": "Declared full1200 native clean-policy endpoint with complete raw response replays required. Neither first2 updates nor submissions satisfy completion.",
-  "status": "admitted and prepared; remaining five not submitted yet",
+  "status": "All five remaining controls submitted and confirmed by east controller, each five-node BATCH. Full1200 scientific endpoints pending.",
   "resource_board": 938,
   "same_source_five_node_native_qualification": "results/snowball0212_qualification.json.gz",
-  "same_source_both_pp_stages_cuda_flashattention_proof": "results/snowball0212_attention_proof.json"
+  "same_source_both_pp_stages_cuda_flashattention_proof": "results/snowball0212_attention_proof.json",
+  "controller_confirmed_submissions": [
+    {
+      "run_id": "sc-snowball-main-fresh-noise000-tis-s0-a2-01a126ce",
+      "job_id": "/romain/sc-snowball-main-fresh-noise000-tis-s0-a2-01a126ce",
+      "config_sha256": "690600ac4a22948069f63ffaa5fa4059f12bac4d569a89ea1e2f1dd85b665590",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "h100_nodes": 5,
+      "planned_updates": 1200,
+      "submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-snowball-main-fresh-noise000-tis-s0-a2-01a126ce-submission.log",
+      "launcher_reported_submitted": true,
+      "controller_confirmation_pending": false,
+      "controller_job": {
+        "job_id": "/romain/sc-snowball-main-fresh-noise000-tis-s0-a2-01a126ce",
+        "state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "60530775180c823b871119b2d626dbea317d970c69009c66246c8a0fcf33c79e",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "controller_tasks": [
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-tis-s0-a2-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "a9efebef8fad6876",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-tis-s0-a2-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "0b35eb1652844ca9",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-tis-s0-a2-01a126ce/2",
+          "attempt_id": "0",
+          "attempt_uid": "d49776e71e110c2a",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-tis-s0-a2-01a126ce/3",
+          "attempt_id": "0",
+          "attempt_uid": "f9216036ef04da25",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-tis-s0-a2-01a126ce/4",
+          "attempt_id": "0",
+          "attempt_uid": "eb168afd6fd42dea",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        }
+      ]
+    },
+    {
+      "run_id": "sc-snowball-main-fresh-noise000-sc-s1-a2-01a126ce",
+      "job_id": "/romain/sc-snowball-main-fresh-noise000-sc-s1-a2-01a126ce",
+      "config_sha256": "5aa84245a4b2e6d43213f9c31dd4da3f36aee4c1d7166e9b95225584b8feeb38",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "h100_nodes": 5,
+      "planned_updates": 1200,
+      "submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-snowball-main-fresh-noise000-sc-s1-a2-01a126ce-submission.log",
+      "launcher_reported_submitted": true,
+      "controller_confirmation_pending": false,
+      "controller_job": {
+        "job_id": "/romain/sc-snowball-main-fresh-noise000-sc-s1-a2-01a126ce",
+        "state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "8ab0345fd7ff1488e2122917319f1347df32ae52192e030431429fe093efa086",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "controller_tasks": [
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-sc-s1-a2-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "439b6f81721d8e98",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-sc-s1-a2-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "127f411938247949",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-sc-s1-a2-01a126ce/2",
+          "attempt_id": "0",
+          "attempt_uid": "75e0aa0ce2f1bed8",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-sc-s1-a2-01a126ce/3",
+          "attempt_id": "0",
+          "attempt_uid": "35cd1eb3e5330b3b",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-sc-s1-a2-01a126ce/4",
+          "attempt_id": "0",
+          "attempt_uid": "fc7a1902cc8f724d",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        }
+      ]
+    },
+    {
+      "run_id": "sc-snowball-main-fresh-noise000-tis-s1-a2-01a126ce",
+      "job_id": "/romain/sc-snowball-main-fresh-noise000-tis-s1-a2-01a126ce",
+      "config_sha256": "69d8c6f926a85212ea32b50f6dcc13f3388f41ccd8b87a588be5dfad6b1ecab6",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "h100_nodes": 5,
+      "planned_updates": 1200,
+      "submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-snowball-main-fresh-noise000-tis-s1-a2-01a126ce-submission.log",
+      "launcher_reported_submitted": true,
+      "controller_confirmation_pending": false,
+      "controller_job": {
+        "job_id": "/romain/sc-snowball-main-fresh-noise000-tis-s1-a2-01a126ce",
+        "state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "67bea058be7917d4663542e5cc53388fc0b028d9814c0a96abdff68560bbd3f8",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "controller_tasks": [
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-tis-s1-a2-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "7f77c0396629a5dc",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-tis-s1-a2-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "89cd3e6f3a9aeca9",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-tis-s1-a2-01a126ce/2",
+          "attempt_id": "0",
+          "attempt_uid": "e61c49551e63e9f8",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-tis-s1-a2-01a126ce/3",
+          "attempt_id": "0",
+          "attempt_uid": "df38e9a4d1c404ef",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-tis-s1-a2-01a126ce/4",
+          "attempt_id": "0",
+          "attempt_uid": "a60fa922e781ee0b",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        }
+      ]
+    },
+    {
+      "run_id": "sc-snowball-main-fresh-noise000-sc-s2-a2-01a126ce",
+      "job_id": "/romain/sc-snowball-main-fresh-noise000-sc-s2-a2-01a126ce",
+      "config_sha256": "2e69f4b880a85cf732bdfa7e978db02ee7ffcd830d4ece06e68994ff78645c1c",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "h100_nodes": 5,
+      "planned_updates": 1200,
+      "submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-snowball-main-fresh-noise000-sc-s2-a2-01a126ce-submission.log",
+      "launcher_reported_submitted": true,
+      "controller_confirmation_pending": false,
+      "controller_job": {
+        "job_id": "/romain/sc-snowball-main-fresh-noise000-sc-s2-a2-01a126ce",
+        "state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "0ccfacbe9ef762212d4aa8974a6dcc9b9a604b6af57ad5ccf1e031836f564e35",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "controller_tasks": [
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-sc-s2-a2-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "e4483b4f08654901",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-sc-s2-a2-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "ea38aa042df243d8",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-sc-s2-a2-01a126ce/2",
+          "attempt_id": "0",
+          "attempt_uid": "3ae71089c67dacf9",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-sc-s2-a2-01a126ce/3",
+          "attempt_id": "0",
+          "attempt_uid": "1df19314d984b857",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-sc-s2-a2-01a126ce/4",
+          "attempt_id": "0",
+          "attempt_uid": "7bd74cbd97bbd7e5",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        }
+      ]
+    },
+    {
+      "run_id": "sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce",
+      "job_id": "/romain/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce",
+      "config_sha256": "6d9fc36965814563a115f1ef95d0f830b3352c8cfd81e77347f79d77bfedbe1f",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "h100_nodes": 5,
+      "planned_updates": 1200,
+      "submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce-submission.log",
+      "launcher_reported_submitted": true,
+      "controller_confirmation_pending": false,
+      "controller_job": {
+        "job_id": "/romain/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce",
+        "state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "92bdacd5462c520f08316df4bb7ab5c537db929c18fa54aab624cdbeaf9578c9",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "controller_tasks": [
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "dd29041d1d89163a",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "2ae31add14de965a",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce/2",
+          "attempt_id": "0",
+          "attempt_uid": "1faeaeac8386bbc6",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce/3",
+          "attempt_id": "0",
+          "attempt_uid": "7d2d860fa8ae5bdb",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce/4",
+          "attempt_id": "0",
+          "attempt_uid": "f31002be8be8488f",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        }
+      ]
+    }
+  ]
 }
