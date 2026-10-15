@@ -60,8 +60,10 @@ EXPORTER = {
     "domain_sweeps": domain_sweeps,
     "fits": fits,
 }
-# A source's per-run file names begin with the run's name, which ends in a six-hex-digit hash; the manifest shows `*`.
+# The public manifest shows `*` for the run name that begins a per-run file name (it ends in a six-hex-digit hash) and
+# for a folder named by a 64-hex content hash.
 RUN_NAME_IN_FILE = re.compile(r"(?<=/)[^/]+-[0-9a-f]{6}(?=_[^/]+$)")
+HASH_FOLDER = re.compile(r"(?<=/)[0-9a-f]{64}(?=/)")
 MIXSEL_PREFIX = "mixture-selection/"
 
 NO_IDS = "The table has no observation ids."
@@ -188,7 +190,7 @@ RELEASE_NOTES = [
     "shares, which bpb__uncheatable_fixed applies to every run with components), legacy (the archived swarms' "
     "weights) or pooled_schema2 (BPB schema 2's pooled bytes).",
     "Source paths are relative to the marin repository's root, those under mixture-selection/ to the "
-    "mixture-selection repository's; `*` stands for the run names that begin per-run file names.",
+    "mixture-selection repository's; `*` stands for a run name that begins a file name or a hash that names a folder.",
     "figures_tables.csv lists the paper's 26 figures and 20 tables with their builders (paths in the paper folder, or "
     "in the repository under experiments/ and .agents/) and the configs they read: deferred marks two-phase data "
     "this release omits, constant configuration constants typed into the paper, and untraced numbers whose inputs "
@@ -232,14 +234,14 @@ def _add(tables: dict[str, pd.DataFrame], exported: dict[str, pd.DataFrame]) -> 
 
 
 def public_source(path: Path) -> str:
-    """A source's path relative to its repository, with the run name of a per-run file replaced by `*`."""
+    """A source's path relative to its repository, with run names and hash-named folders replaced by `*`."""
     if path.is_relative_to(paths.REPO):
         relative = path.relative_to(paths.REPO).as_posix()
     elif path.is_relative_to(paths.MIXSEL):
         relative = MIXSEL_PREFIX + path.relative_to(paths.MIXSEL).as_posix()
     else:
         raise ValueError(f"a source outside the marin and mixture-selection repositories: {path}")
-    return RUN_NAME_IN_FILE.sub("*", relative)
+    return HASH_FOLDER.sub("*", RUN_NAME_IN_FILE.sub("*", relative))
 
 
 def _sources(table: str) -> list[Path]:

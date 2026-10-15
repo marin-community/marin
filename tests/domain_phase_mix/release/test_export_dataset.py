@@ -97,9 +97,10 @@ def test_manifest_and_figure_index_name_nothing_internal(build, manifest):
     text = json.dumps(public) + (build / "build/figures_tables.csv").read_text()
     for pattern in INTERNAL:
         assert not pattern.search(text), pattern.search(text)
-    # Source paths are relative to a repository and replace the run names that begin per-run file names by `*`.
+    # Source paths are relative to a repository and replace run names and hash-named folders by `*`.
     for source in [s for t in manifest["tables"] for s in t["sources"]]:
-        assert not source.startswith(("/", "~")) and "calvinxu" not in source and not INTERNAL[-1].search(source)
+        assert not source.startswith(("/", "~")) and "calvinxu" not in source
+        assert not INTERNAL[2].search(source) and not INTERNAL[-1].search(source), source
 
 
 def test_figures_tables_lists_every_figure_and_table_of_the_paper(manifest):
