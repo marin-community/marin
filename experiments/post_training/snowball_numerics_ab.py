@@ -137,7 +137,7 @@ def numerics_ab_config(
     generator["engine_init_kwargs"]["enable_return_routed_experts"] = replay
     generator["eval_sampling_params"] = dict(EVAL_SAMPLING)
     # GSM8K rows earn reward only for a completed response whose last line is "#### <number>", as their prompt asks.
-    config["environment"]["skyrl_gym"] = {"gsm8k": {"reward_method": "final_line"}}
+    config["environment"]["task_sessions"] = {"gsm8k": {"reward_method": "final_line"}}
     # Seeded passes over the training rows in a fresh trainer.seed order each pass.
     config["data"]["shuffle"] = True
     config["data"]["sampling"] = {"kind": None}
