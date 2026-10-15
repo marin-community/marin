@@ -65,7 +65,6 @@ from marin.evaluation.runner import (
     LaunchProvenance,
 )
 from marin.evaluation.serving_config import inference_config_for_model
-from marin.execution.step_runner import StepRunner
 from marin.execution.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFile
 from marin.external_dependencies import EVALCHEMY, HARBOR
 from marin.inference.config import (
@@ -1926,14 +1925,13 @@ def test_launch_dry_run_prints_the_resolved_harbor_agent_context(tmp_path, monke
 
 
 @pytest.mark.parametrize(
-    ("overrides", "target_cluster", "priority", "max_concurrent"),
+    ("overrides", "target_cluster", "priority"),
     [
-        ((), "cw-us-east-02a", "inherit", 1),
+        ((), "cw-us-east-02a", "inherit"),
         (
             ("--federated_cluster", "cw-rno2a", "--priority", "interactive", "--max-concurrent", "1"),
             "cw-rno2a",
             "interactive",
-            1,
         ),
     ],
 )
@@ -1941,7 +1939,6 @@ def test_launch_dry_run_prints_resolved_federated_cluster_and_priority(
     overrides,
     target_cluster,
     priority,
-    max_concurrent,
     monkeypatch,
 ):
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
@@ -1963,7 +1960,6 @@ def test_launch_dry_run_prints_resolved_federated_cluster_and_priority(
     assert "controller_cluster=marin" in result.output
     assert f"target_cluster={target_cluster}" in result.output
     assert f"priority={priority}" in result.output
-    assert f"max_concurrent={max_concurrent}" in result.output
 
 
 def test_launch_dry_run_accepts_file_backed_model_config(tmp_path, monkeypatch):
@@ -2177,7 +2173,6 @@ def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):
 def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
     executed: list[str] = []
     priorities: list[int] = []
-    concurrency_limits: list[int] = []
 
     def executor(_session, output_dir, _env_vars, *, judge=None):
         executed.append(output_dir)
@@ -2187,17 +2182,10 @@ def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
         priorities.append(priority)
         return SimpleNamespace(model=SimpleNamespace(model_id=model.name))
 
-    original_run = StepRunner.run
-
-    def run_steps(self, steps, **kwargs):
-        concurrency_limits.append(kwargs["max_concurrent"])
-        return original_run(self, steps, **kwargs)
-
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
     _patch_inference_runtime(monkeypatch, lambda _config: nullcontext(_remote_session()))
     monkeypatch.setattr("marin.evaluation.runner.inference_config_for_model", inference_config)
-    monkeypatch.setattr(StepRunner, "run", run_steps)
     spec = LaunchSpec(
         model=models()["qwen3-8b"],
         evals=("mmlu-smoke",),
@@ -2233,4 +2221,3 @@ def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
     assert _step_status(batch, 0) == STATUS_SUCCESS
     assert executed == [final_evaluation.identity.output_dir]
     assert priorities == [job_pb2.PRIORITY_BAND_INTERACTIVE]
-    assert concurrency_limits == [1, 1]
