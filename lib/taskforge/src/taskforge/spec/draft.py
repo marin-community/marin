@@ -249,6 +249,9 @@ def session(
         attempt_timeout=attempt_timeout,
         verifier_timeout=verifier_timeout,
         cleanup_timeout=cleanup_timeout,
+        # No per-attempt token budget on trials: a trial is bounded by its deadlines and its turn budget,
+        # and a cap here would end an attempt the evidence needs whole.
+        max_total_tokens=None,
     )
 
 
