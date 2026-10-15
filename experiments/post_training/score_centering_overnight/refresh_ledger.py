@@ -16,6 +16,8 @@ from analysis_json import read_json, write_json
 
 
 def stage(job_id: str) -> str:
+    if "sc-qwen-checkpoint" in job_id:
+        return "Qwen checkpoint qualification"
     if "sc-snowball-main-noise" in job_id:
         return "Snowball noise main"
     if "sc-snowball-main-fresh" in job_id:

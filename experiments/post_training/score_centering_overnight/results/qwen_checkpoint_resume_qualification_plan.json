@@ -1,6 +1,6 @@
 {
   "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-  "status": "Save phase submitted and confirmed in RNO controller; restore phase unsubmitted.",
+  "status": "Clean save2 completed with native control gate passed; clean restore2\u21925 submitted and controller-confirmed queued on2RNO BATCH nodes. Final restore evidence pending.",
   "reason": "Two separate five-node Snowball controlled-noise long attempts were preempted after48 and24 updates with resume disabled and no intermediate committed checkpoint. Qualify native optimizer/model/dataloader continuation cheaply before proposing any long-run recovery change. Initial prepare validation confirmed fixed-noise resume is separately forbidden by objective_spec.py; this initial diagnostic therefore uses noise0 and cannot qualify the noisy main path.",
   "geometry": {
     "cluster": "cw-rno2a",
@@ -16,7 +16,10 @@
         2
       ],
       "resume_mode": "none",
-      "committed_checkpoint": 2
+      "committed_checkpoint": 2,
+      "completed": true,
+      "native_control_audit": "qwen_clean_checkpoint_save2_control_audit.json",
+      "allocated_h100_hours": 2.301546666666667
     },
     {
       "run_id": "sc-qwen-checkpoint-resume-qual-sc-s0-rno-a0-01a126ce",
@@ -29,7 +32,44 @@
       "from_run": "sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce",
       "from_checkpoint": 2,
       "committed_checkpoint": 5,
-      "submission_gate": "Save phase must complete and its full model/optimizer/DCP metadata, trainer global step and serialized rollout loader state must be audited first."
+      "submission_gate": "Save phase must complete and its full model/optimizer/DCP metadata, trainer global step and serialized rollout loader state must be audited first.",
+      "gate_passed": true,
+      "controller_confirmed": true,
+      "controller_job": {
+        "job_id": "/romain/sc-qwen-checkpoint-resume-qual-sc-s0-rno-a0-01a126ce",
+        "state": "3",
+        "num_tasks": "2",
+        "priority_band": "3",
+        "bundle_id": "45e76774a60f2a271afaf9375430bd8e74ad67e0d41ceec1ccf978f197c0ccc7",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "initial_task_attempts": [
+        {
+          "task_id": "/romain/sc-qwen-checkpoint-resume-qual-sc-s0-rno-a0-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "c26faa100e9d40c4",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-checkpoint-resume-qual-sc-s0-rno-a0-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "821405ce18b96964",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        }
+      ],
+      "submitted_configuration": "qwen_checkpoint_resume_qualification_v1/resume-detach.yaml",
+      "configuration_sha256": "440d5bc495a27e640eedae3b6c4b9d9aa395aeed2e58358ddac0586ea5f1e4f2"
     }
   ],
   "retained_recipe": "Frozen0212 Qwen AdamW optimizer pilot with explicit clean sampler noise0.0, fresh sampler refresh1, full512-response batches, naturalK128 and TIS2+SC. Short diagnostic horizons, checkpoint/evaluation cadence, placement/priority, paths and native resume are declared changes. The constant scheduler has no changed annealing horizon.",

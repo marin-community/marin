@@ -6,7 +6,7 @@ run:
   submission: prepare
   export_hf: false
 runtime:
-  launcher_commit: afbe6cc3633f596c29459a052040d5c2cd23e74f
+  launcher_commit: a1c31f04da2295cca2eaef0e82262c4f493304c5
   profile: megatron
 iris:
   cluster: cw-rno2a

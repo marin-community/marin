@@ -1,0 +1,151 @@
+{
+  "scope": "Observed failed1200-update Snowball TIS seed1 attempt, partial2updates only. Native math-parser failure is preserved and separated from preemption and offline replay.",
+  "observed_at": "2026-10-15T12:23:50.809162+00:00",
+  "run_id": "sc-snowball-main-noise005-tis-s1-a2-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "controller_attempt": 0,
+  "planned_updates": 1200,
+  "published_updates": 2,
+  "initial_evaluation_published": true,
+  "physical_rank_attempts": [
+    {
+      "task_id": "/romain/sc-snowball-main-noise005-tis-s1-a2-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "7838c8ca236d30d3",
+      "state": "5",
+      "exit_code": "1",
+      "started_at_ms": "1792061259375",
+      "finished_at_ms": "1792064342485",
+      "node_name": "g83b4e8",
+      "terminal_reason": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n    +------------------------------------\n2026-10-15 11:38:22.437 | E"
+    },
+    {
+      "task_id": "/romain/sc-snowball-main-noise005-tis-s1-a2-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "0f44e81bec150321",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792061259375",
+      "finished_at_ms": "1792064342485",
+      "node_name": "g856b8a",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-main-noise005-tis-s1-a2-01a126ce/2",
+      "attempt_id": "0",
+      "attempt_uid": "7fa3d3171f7cf585",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792061259375",
+      "finished_at_ms": "1792064342485",
+      "node_name": "g8247ba",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-main-noise005-tis-s1-a2-01a126ce/3",
+      "attempt_id": "0",
+      "attempt_uid": "77ea6037fe94f7fa",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792061259375",
+      "finished_at_ms": "1792064342485",
+      "node_name": "g83bf4c",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-main-noise005-tis-s1-a2-01a126ce/4",
+      "attempt_id": "0",
+      "attempt_uid": "99a0eb7871bda4c3",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792061259375",
+      "finished_at_ms": "1792064342485",
+      "node_name": "g845f76",
+      "terminal_reason": ""
+    }
+  ],
+  "allocated_h100_hours": 34.25677777777778,
+  "observed_failure": {
+    "operation": "Native AIME/curriculum grading through AnswerTaskSession.advance and call_bounded(general_math_answer_reward, ground_truth, normalized_candidate, timeout=10).",
+    "underlying_exception_type": "TypeError",
+    "message_prefix": "invalid input: ",
+    "invalid_candidate_length": 10718,
+    "candidate_description": "0. followed by10716 zero characters",
+    "candidate_sha256": "bfb2c060ea886f7c57fcb2cc4bd6ab71899d9fa13e834bd704ba2cf1853f6ff6",
+    "native_exception_objects": [
+      {
+        "source_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-main-noise005-tis-s1-a2-01a126ce/rendezvous/debug_artifacts/rank0-g83b4e8/outcomes/skyrl-entrypoint-driver.g83b4e8.9678.1792064302436422302.exception.json",
+        "source_etag": "\"1ad78db6a1e41f9e10ac724313934cc8\"",
+        "source_bytes": 74586,
+        "sha256": "923ffc3823fa2615a44f15092394368e63774d10b50f2abcdb38dbd6fc5e05fe",
+        "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-tis1-application-failure-20261015T1200/native-tail-14.log",
+        "outer_exception_type": "ray.exceptions.RayTaskError(ExceptionGroup)",
+        "underlying_type": "TypeError"
+      },
+      {
+        "source_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-main-noise005-tis-s1-a2-01a126ce/rendezvous/debug_artifacts/rank0-g83b4e8/outcomes/skyrl-trainer.g83b4e8.13908.1792064241316219963.exception.json",
+        "source_etag": "\"9f6e2472d9e1b91efda1075926793136\"",
+        "source_bytes": 46039,
+        "sha256": "98b8c0a9a2665aa2e431ad4576e286cedc0dc44539591841157be3c82cba1093",
+        "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-tis1-application-failure-20261015T1200/native-tail-15.log",
+        "outer_exception_type": "ray.exceptions.RayTaskError(ExceptionGroup)",
+        "underlying_type": "TypeError"
+      }
+    ],
+    "selected_source_behavior": "Task worker re-raises TypeError as a programming failure, so this candidate-specific parser rejection terminated the allocation.",
+    "native_learner_failure": "Not established. Last published update2 is finite with0 trajectory publication timeouts/write errors.",
+    "original_full_response_and_reference": "Not yet located; neither reconstructed nor claimed as replayed."
+  },
+  "isolated_reproduction": {
+    "scope": "Three isolated original10-second grader calls using the exact invalid parser input from the native Snowball exception and synthetic reference1. Original full response and original reference are not asserted or invented.",
+    "source": "/home/romain/work/marin-community/MarinSkyRL/score-centering-grader-error-01a126ce/skyrl-gym/skyrl_gym/envs/aime/utils.py",
+    "source_sha256": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+    "candidate_sha256": "bfb2c060ea886f7c57fcb2cc4bd6ab71899d9fa13e834bd704ba2cf1853f6ff6",
+    "candidate_length": 10718,
+    "synthetic_reference": "1",
+    "timeout_seconds": 10,
+    "attempts": [
+      {
+        "attempt": 1,
+        "exception_type": "TypeError",
+        "message_prefix": "invalid input: 0.000",
+        "message_sha256": "100cdac3d4c5abcab3a77ead12ddf49e2ed2e8a4558594c3cf597435c975e52b",
+        "traceback_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-tis1-application-failure-20261015T1200/synthetic-reference-invalid-candidate-repetition-1.traceback.txt",
+        "elapsed_seconds": 1.1616007280535996
+      },
+      {
+        "attempt": 2,
+        "exception_type": "TypeError",
+        "message_prefix": "invalid input: 0.000",
+        "message_sha256": "100cdac3d4c5abcab3a77ead12ddf49e2ed2e8a4558594c3cf597435c975e52b",
+        "traceback_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-tis1-application-failure-20261015T1200/synthetic-reference-invalid-candidate-repetition-2.traceback.txt",
+        "elapsed_seconds": 1.1822050949558616
+      },
+      {
+        "attempt": 3,
+        "exception_type": "TypeError",
+        "message_prefix": "invalid input: 0.000",
+        "message_sha256": "100cdac3d4c5abcab3a77ead12ddf49e2ed2e8a4558594c3cf597435c975e52b",
+        "traceback_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-tis1-application-failure-20261015T1200/synthetic-reference-invalid-candidate-repetition-3.traceback.txt",
+        "elapsed_seconds": 1.0955413850024343
+      }
+    ]
+  },
+  "engineering_change": {
+    "status": "Committed and pushed; CPU-qualified, pending real-GPU qualification.",
+    "base": "afbe6cc3633f596c29459a052040d5c2cd23e74f",
+    "worktree": "/home/romain/work/marin-community/MarinSkyRL/score-centering-grader-error-01a126ce",
+    "behavior": "AIME verifier translates only SymPy invalid-input TypeError into existing verifyit NumericCandidateError. The native rollout records the failure, masks its training credit, preserves its original cause type and retains the graded peer.",
+    "original_grader_and_deadline": "Frozen grading utility bytes and the10-second deadline are unchanged.",
+    "cpu_regression": "Original known TypeError fails both whole-task and step-task end-to-end rollout regressions before the fix. The corrected fixture supplies the required teacher-route metadata.15 focused and179 affected tests pass in separate invocations; failed rollout has no correctness score, is masked and retains its graded peer and original TypeError cause. Existing programming-error failures still propagate.",
+    "gpu_qualification": "pending",
+    "source": "a1c31f04da2295cca2eaef0e82262c4f493304c5",
+    "branch": "https://github.com/marin-community/MarinSkyRL/tree/experiments/score-centering-grader-error-01a126ce",
+    "affected_suite_tests_passed": 179,
+    "mechanical_checks": "Ruff check/format pass",
+    "original_grader_utility_sha256": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+    "frozen_lock_sha256": "c9ff3b70074681e62f2683acd7b4b9487c9dc222d6065f61198c6e5e5d9ae891"
+  },
+  "raw_retention": "Controller logs/events for all5ranks and exact original exception bytes retained. Broader same-bucket partial exports/native archive/runtime promotion planned after the current bounded2IO retainer completes; no retained-runtime completion claim.",
+  "scientific_endpoint": false
+}

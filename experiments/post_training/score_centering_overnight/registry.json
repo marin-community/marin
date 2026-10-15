@@ -2423,8 +2423,8 @@
       "configuration_sha256": "8d788f92385f7462bb85d1674f67f7313253be689e9652f5707531455d1338c9",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-main-noise005-tis-s1-a2-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 5,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "fa98ce9ea6aeaad3b7d0396cf2bbc0289e1c3eb9d4df1506f4430089990357e9",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
@@ -2750,8 +2750,8 @@
       "configuration_sha256": "3c019ffb82ec593d21b19a0e7bf6e67a94b881f2f0c16df86ee2c80e6a2c7c9a",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "2afc5ea562094f4f927503fc482fb8f60d262a0ef8db53554664303b7c41491e",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
@@ -2840,7 +2840,24 @@
       "priority_band": 3,
       "bundle_id": "92bdacd5462c520f08316df4bb7ab5c537db929c18fa54aab624cdbeaf9578c9",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-qwen-checkpoint-periodic3-save-noise005-sc-s0-rno-a0-01a126ce",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "h100_nodes": 2,
+      "h100_per_node": 8,
+      "source": "afbe6cc3633f596c29459a052040d5c2cd23e74f",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_checkpoint_periodic_recovery_v1/save-detach.yaml",
+      "configuration_sha256": "04e8a019e58c19249334f8eea551548411d89757b9170b828508be3fc21176e5",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-periodic3-save-noise005-sc-s0-rno-a0-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "67acb9503004362b1572b5348d365fd553e6b19a8c002fca19c26f8ca26dbaac",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-15T11:08:17.888402+00:00"
+  "observed_at": "2026-10-15T12:05:11.348316+00:00"
 }

@@ -1,0 +1,269 @@
+{
+  "scope": "Actual native checkpoint control-state and all-rank DCP inventory audit. Rank tensor bytes remain remote; native optimizer step is read from its actual serialized DCP range. This alone does not prove a second process loaded the checkpoint.",
+  "run_id": "sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "configuration_sha256": "3c019ffb82ec593d21b19a0e7bf6e67a94b881f2f0c16df86ee2c80e6a2c7c9a",
+  "completed_updates": 2,
+  "latest_marker": 2,
+  "trainer_global_step": 2,
+  "scheduler_num_steps": 2,
+  "optimizer_steps": {
+    "optimizer.distributed.dp_group_idx_0.optimizer/shard_0_1.0.param_groups.0.step": 2
+  },
+  "fp32_moment_entries": [
+    "optimizer.distributed.dp_group_idx_0.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "optimizer.distributed.dp_group_idx_0.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq"
+  ],
+  "rng_present": true,
+  "sampler_state": null,
+  "rollout_state": {
+    "type": "TrainingContextState",
+    "order": {
+      "epoch": 0,
+      "position": 128
+    },
+    "retry_count": 0,
+    "ready_group_count": 0,
+    "retry_uids": [],
+    "ready_uids": [],
+    "object_store_root": "s3://marin-us-east-02a/tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/groups"
+  },
+  "rank_shards": [
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/__0_0.distcp",
+      "bytes": 1205685822,
+      "etag": "\"61f8cee6b4bb729bc8a83d5e2aa9f8c1-18\"",
+      "last_modified_ms": 1792064082025
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/__1_0.distcp",
+      "bytes": 1020146878,
+      "etag": "\"c7d78f8727a49cd1ed95550331b6e932-16\"",
+      "last_modified_ms": 1792064081890
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/__2_0.distcp",
+      "bytes": 1020175008,
+      "etag": "\"e16d9616cad12f82960dd2167e1e9f18-16\"",
+      "last_modified_ms": 1792064081778
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/__3_0.distcp",
+      "bytes": 1020165546,
+      "etag": "\"4fa132c603a1c7414ea36fba1b170220-16\"",
+      "last_modified_ms": 1792064081952
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/__4_0.distcp",
+      "bytes": 1020165546,
+      "etag": "\"f08075b0cefa5d0bd402e05b93523afd-16\"",
+      "last_modified_ms": 1792064081426
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/__5_0.distcp",
+      "bytes": 1020151353,
+      "etag": "\"56c340f0fd8a2dfcd1d71e328ded1b79-16\"",
+      "last_modified_ms": 1792064081838
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/__6_0.distcp",
+      "bytes": 1019985768,
+      "etag": "\"a0b5f11a4d4125e620a7f7bfe7053483-16\"",
+      "last_modified_ms": 1792064082018
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/__7_0.distcp",
+      "bytes": 1019985768,
+      "etag": "\"6079f85a56ae600ebb1ea54294921831-16\"",
+      "last_modified_ms": 1792064081862
+    }
+  ],
+  "checkpoint_objects": [
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/data.pt",
+      "bytes": 1645,
+      "etag": "\"21a0e5c9a968a94ad97c9ee18438896a\"",
+      "last_modified_ms": 1792064084819
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/.metadata",
+      "bytes": 164740,
+      "etag": "\"9c2ce796f12ca26c6b1e9eda0de1952e\"",
+      "last_modified_ms": 1792064083038
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/__0_0.distcp",
+      "bytes": 1205685822,
+      "etag": "\"61f8cee6b4bb729bc8a83d5e2aa9f8c1-18\"",
+      "last_modified_ms": 1792064082025
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/__1_0.distcp",
+      "bytes": 1020146878,
+      "etag": "\"c7d78f8727a49cd1ed95550331b6e932-16\"",
+      "last_modified_ms": 1792064081890
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/__2_0.distcp",
+      "bytes": 1020175008,
+      "etag": "\"e16d9616cad12f82960dd2167e1e9f18-16\"",
+      "last_modified_ms": 1792064081778
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/__3_0.distcp",
+      "bytes": 1020165546,
+      "etag": "\"4fa132c603a1c7414ea36fba1b170220-16\"",
+      "last_modified_ms": 1792064081952
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/__4_0.distcp",
+      "bytes": 1020165546,
+      "etag": "\"f08075b0cefa5d0bd402e05b93523afd-16\"",
+      "last_modified_ms": 1792064081426
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/__5_0.distcp",
+      "bytes": 1020151353,
+      "etag": "\"56c340f0fd8a2dfcd1d71e328ded1b79-16\"",
+      "last_modified_ms": 1792064081838
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/__6_0.distcp",
+      "bytes": 1019985768,
+      "etag": "\"a0b5f11a4d4125e620a7f7bfe7053483-16\"",
+      "last_modified_ms": 1792064082018
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/__7_0.distcp",
+      "bytes": 1019985768,
+      "etag": "\"6079f85a56ae600ebb1ea54294921831-16\"",
+      "last_modified_ms": 1792064081862
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/common.pt",
+      "bytes": 14877,
+      "etag": "\"27968c218a4ccd09ae8be54b20a9a696\"",
+      "last_modified_ms": 1792064083832
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/extra_state.pt",
+      "bytes": 1261,
+      "etag": "\"8bcc7a1b6f1d63fa2c5fbbff6d195edb\"",
+      "last_modified_ms": 1792064083828
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/huggingface/chat_template.jinja",
+      "bytes": 4168,
+      "etag": "\"ae518d20e400c6e67716982491e5c37d\"",
+      "last_modified_ms": 1792064083825
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/huggingface/config.json",
+      "bytes": 1417,
+      "etag": "\"d853e3a5f4bfa541212d66658bb35849\"",
+      "last_modified_ms": 1792064083820
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/huggingface/generation_config.json",
+      "bytes": 214,
+      "etag": "\"41a7ca36db43daea0eee0045c5395968\"",
+      "last_modified_ms": 1792064083827
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/huggingface/tokenizer.json",
+      "bytes": 11422650,
+      "etag": "\"0fa489dfe491c3835067a33b4d7dea6e\"",
+      "last_modified_ms": 1792064083856
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/huggingface/tokenizer_config.json",
+      "bytes": 693,
+      "etag": "\"5afdf909fcd5e8959929e3e8cf215477\"",
+      "last_modified_ms": 1792064083847
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/metadata.json",
+      "bytes": 119,
+      "etag": "\"d102bc956936ac1a049d295fae8b9a18\"",
+      "last_modified_ms": 1792064083823
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/trainer_state.pt",
+      "bytes": 105965,
+      "etag": "\"77d96c56d710c2208d83589fa01e3043\"",
+      "last_modified_ms": 1792064084551
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/latest_ckpt_global_step.txt",
+      "bytes": 1,
+      "etag": "\"c81e728d9d4c2f636f067f89cc14862c\"",
+      "last_modified_ms": 1792064085093
+    }
+  ],
+  "retained_control_bytes": [
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/latest_ckpt_global_step.txt",
+      "bytes": 1,
+      "etag": "\"c81e728d9d4c2f636f067f89cc14862c\"",
+      "last_modified_ms": 1792064085093,
+      "read_bytes": 1,
+      "range": null,
+      "sha256_of_retained_bytes": "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-clean-save2-native-checkpoint-control-audit-native-control-bytes/latest_ckpt_global_step.txt"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/trainer_state.pt",
+      "bytes": 105965,
+      "etag": "\"77d96c56d710c2208d83589fa01e3043\"",
+      "last_modified_ms": 1792064084551,
+      "read_bytes": 105965,
+      "range": null,
+      "sha256_of_retained_bytes": "1dc88d36f120879aa469954ca071e6c8996f786c20c5cd22872a4c7038270b23",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-clean-save2-native-checkpoint-control-audit-native-control-bytes/global_step_2/trainer_state.pt"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/data.pt",
+      "bytes": 1645,
+      "etag": "\"21a0e5c9a968a94ad97c9ee18438896a\"",
+      "last_modified_ms": 1792064084819,
+      "read_bytes": 1645,
+      "range": null,
+      "sha256_of_retained_bytes": "ce8fcb4164db463d4b43dc012dd796689d4309f32ccc48eec1198938596d79c9",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-clean-save2-native-checkpoint-control-audit-native-control-bytes/global_step_2/data.pt"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/common.pt",
+      "bytes": 14877,
+      "etag": "\"27968c218a4ccd09ae8be54b20a9a696\"",
+      "last_modified_ms": 1792064083832,
+      "read_bytes": 14877,
+      "range": null,
+      "sha256_of_retained_bytes": "c442dd74482faca75dc729d3ecab28504eecb11bc6a2459e1f393efe0941d517",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-clean-save2-native-checkpoint-control-audit-native-control-bytes/global_step_2/policy/common.pt"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/.metadata",
+      "bytes": 164740,
+      "etag": "\"9c2ce796f12ca26c6b1e9eda0de1952e\"",
+      "last_modified_ms": 1792064083038,
+      "read_bytes": 164740,
+      "range": null,
+      "sha256_of_retained_bytes": "a311218ec08e69449d015fcf298cbb52b424a7da63355623a5f2c051beb3b6d6",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-clean-save2-native-checkpoint-control-audit-native-control-bytes/global_step_2/policy/.metadata"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2/policy/__0_0.distcp",
+      "bytes": 1205685822,
+      "etag": "\"61f8cee6b4bb729bc8a83d5e2aa9f8c1-18\"",
+      "last_modified_ms": 1792064082025,
+      "read_bytes": 1581,
+      "range": [
+        255697,
+        1581
+      ],
+      "sha256_of_retained_bytes": "22c69807e918aa95e12a7a2bbba02a03eb732e2b04b98aeed50e4f420183bd27",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-clean-save2-native-checkpoint-control-audit-native-control-bytes/global_step_2/policy/__0_0.distcp.range-255697-1581"
+    }
+  ],
+  "all_checks_passed": true
+}

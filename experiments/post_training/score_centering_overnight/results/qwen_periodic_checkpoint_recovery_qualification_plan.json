@@ -1,6 +1,5 @@
 {
   "scope": "Bounded real-GPU engineering qualification; no scientific comparison endpoint or new main-source qualification.",
-  "source": "afbe6cc3633f596c29459a052040d5c2cd23e74f",
   "source_branch": "experiments/score-centering-recovery-01a126ce",
   "status": "Initial save submitted/controller-confirmed queued on2RNO BATCH nodes; both restore phases remain unsubmitted behind prior-phase native checkpoint gates.",
   "geometry": {
@@ -67,7 +66,7 @@
     {
       "phase": "restore2",
       "run_id": "sc-qwen-checkpoint-periodic3-restore2-noise005-sc-s0-rno-a0-01a126ce",
-      "source": "afbe6cc3633f596c29459a052040d5c2cd23e74f",
+      "source": "a1c31f04da2295cca2eaef0e82262c4f493304c5",
       "new_completed_updates": [
         3,
         4,
@@ -79,12 +78,13 @@
       "first_new_sampler_completed_updates": 0,
       "final_saved_sampler_completed_updates": 3,
       "controller_confirmed": false,
-      "submission_gate": "Previous phase must complete with full native checkpoint/optimizer/loader and frozen-sampler identity audit before this phase may submit."
+      "submission_gate": "Previous phase must complete with full native checkpoint/optimizer/loader and frozen-sampler identity audit before this phase may submit.",
+      "prepared_configuration_sha256": "9579e1a4001dde79047d37b4bea9a3c46f2fd3dedc5a5ccef965d36812805107"
     },
     {
       "phase": "restore5",
       "run_id": "sc-qwen-checkpoint-periodic3-restore5-noise005-sc-s0-rno-a0-01a126ce",
-      "source": "afbe6cc3633f596c29459a052040d5c2cd23e74f",
+      "source": "a1c31f04da2295cca2eaef0e82262c4f493304c5",
       "new_completed_updates": [
         6,
         7
@@ -95,7 +95,8 @@
       "first_new_sampler_completed_updates": 3,
       "final_saved_sampler_completed_updates": 6,
       "controller_confirmed": false,
-      "submission_gate": "Previous phase must complete with full native checkpoint/optimizer/loader and frozen-sampler identity audit before this phase may submit."
+      "submission_gate": "Previous phase must complete with full native checkpoint/optimizer/loader and frozen-sampler identity audit before this phase may submit.",
+      "prepared_configuration_sha256": "58025e65a83c71f538e60e1fc94af65358aca79fcd50c613b1c1563bbbc9a95a"
     }
   ],
   "required_evidence": [
@@ -113,5 +114,18 @@
     "Any eventual resumed scientific main needs an explicit committed-checkpoint lineage and exact per-update selected segments, never naive pooled duplicate steps.",
     "Do not submit later phases merely because an observation command times out."
   ],
-  "clean_predecessor_disposition": "The earlier frozen0212 clean save2 diagnostic actually started on both ranks before the new queued periodic diagnostic was confirmed. It remains active; no cancellation of healthy work."
+  "clean_predecessor_disposition": "The earlier frozen0212 clean save2 diagnostic actually started on both ranks before the new queued periodic diagnostic was confirmed. It remains active; no cancellation of healthy work.",
+  "initial_save_source": "afbe6cc3633f596c29459a052040d5c2cd23e74f",
+  "continuation_source": "a1c31f04da2295cca2eaef0e82262c4f493304c5",
+  "source_policy": "Explicit per-phase revisions: the submitted initial save remains frozen on afbe6cc36; the two unsubmitted continuations use a1c31f04d, which adds the narrowly tested native math-parser failure classification. The recovery, noise, loss, grader utility and dependency lock bytes are identical.",
+  "source_compatibility_sha256": {
+    "skyrl-train/skyrl_train/trainer.py": "f41b55e80b5d87466c67c392f24411749273ea9d0ae1cbf701e17c136a47dff1",
+    "skyrl-train/skyrl_train/inference_engines/vllm/fixed_sampler_noise.py": "2e86d08aa514608890b342f43df85322a2f599461c6c152bc26be46f3c7c0bca",
+    "skyrl-train/skyrl_train/objective/score_centering.py": "bdfa50f95408da1e229eed83a15cac9bba3f8782516381ddf56d2877b6708871",
+    "skyrl-train/skyrl_train/rollouts/context.py": "22635bf4890631b2e837fa3f8b7ff7ca0ab1d247fc66dfd3e0b5ccbbf8e7aed3",
+    "skyrl-train/skyrl_train/distributed/megatron/megatron_strategy.py": "35a3570d48dd9796414f956861fd08e2c5530281f11963234b6a9cd78c07890f",
+    "skyrl-gym/skyrl_gym/envs/aime/utils.py": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+    "uv.lock": "c9ff3b70074681e62f2683acd7b4b9487c9dc222d6065f61198c6e5e5d9ae891"
+  },
+  "continuation_source_change_reason": "Actual Snowball TIS1 native math input TypeError reproduced3/3 with the original10-second deadline. The dedicated classification fix passes179 affected CPU tests. Qualify this current candidate through the two still-unsubmitted save/restore phases; preserve the already-submitted initial process and all raw evidence."
 }
