@@ -44,6 +44,7 @@ RUN_TABLES = {
     "heldout",
     "validation_3e18",
     "ladder",
+    "ladder_unimax_cap_sweep",
 }
 
 

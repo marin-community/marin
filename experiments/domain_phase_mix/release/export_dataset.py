@@ -172,8 +172,8 @@ NOTES = {
     ],
     "ladder_unimax_cap_sweep": [
         "The UniMax cap sweep's runs at caps 1, 4 and 12, at the 3e18 rung's model size and token count; its cap-8 "
-        "and proportional runs are ladder rows. Their Uncheatable values exist only in the runs' evaluation logs, so "
-        "the table holds the 51 OlmoBaseEval Easy components and their mean.",
+        "and proportional runs are ladder rows. The runs take their seven Uncheatable components from their W&B run "
+        "summaries; the data seed in each run's W&B config equals the one its launch recorded.",
     ],
     "domain_sweeps": [
         "These models use the TinyLlama tokenizer named in `tokenizer`, not the tokenizer of the tasks table, which "

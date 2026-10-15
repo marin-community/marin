@@ -37,9 +37,11 @@ the law reaches that loss, its multiple of MARINER's compute, the saving (one mi
 the loss improvement at matched compute (percent) and whether the match lies beyond the baseline's largest rung.
 
 `ladder_unimax_cap_sweep` holds the UniMax cap sweep's runs at caps 1, 4 and 12 (table tab:a-unimax-cap), one run each
-at the 3e18 rung's model size and token count: each run's cap, seeds, 51 OlmoBaseEval Easy components and their mean.
-The sweep's cap-8 and proportional runs are ladder rows. The three runs' Uncheatable values exist only in their
-evaluation logs on GCS, and their hashed run names only in the sweep's README, so the table has no observation ids.
+at the 3e18 rung's model size and token count: each run's cap, seeds, 58 components and both aggregates. The sweep's
+Table 9 results give the 51 OlmoBaseEval Easy components, whose mean reproduces each run's recorded mean. The runs' W&B
+summaries give the seven Uncheatable components (CAP_SWEEP_PULL): each W&B run id is a run name of the launch record
+with its hash, and the data seed of its W&B config must be the launch record's. The sweep's cap-8 and proportional runs
+are ladder rows; the other three appear in no other table, so the table has no observation ids.
 """
 
 import json
@@ -50,7 +52,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from experiments.domain_phase_mix.release import keys, naming, paths, run_names, tables
+from experiments.domain_phase_mix.release import keys, naming, paths, run_names, tables, wandb_pulls
 from experiments.domain_phase_mix.release.configs import partition_tasks
 from experiments.domain_phase_mix.release.context import ExportContext
 
@@ -78,6 +80,12 @@ CAP_SWEEP_PROPORTIONAL = "proportional_3e18"  # the sweep's key of that run
 CAP_SWEEP_TABLE = "ladder_unimax_cap_sweep"
 # The sweep's launch record: each run's mixture, seeds and size (run_specs.json) and each mixture's cap (summary.json).
 CAP_SWEEP_LAUNCH = paths.RO / "delphi_baseline_mixtures_issue6607_20260623"
+# The seven Uncheatable components of the sweep's runs, which their Table 9 results lack, and the data seeds of their W&B
+# configs, frozen from W&B (`wandb_pulls`). Each pull's pooled aggregate uses other weights than the fixed rule, so the
+# table computes bpb__uncheatable from the components.
+CAP_SWEEP_PULL = (
+    paths.REPO / "experiments/domain_phase_mix/release/configs/unimax_cap_sweep_wandb_components_20261015.csv"
+)
 # Every ladder source scored both aggregates with the fixed rule: the audits recorded the fixed weighting of each run's
 # components, and the June ladder's legacy-schema aggregates agree with it to 8e-8.
 FIXED_RULE = {"uncheatable": True, "obe_easy": True}
@@ -102,6 +110,7 @@ def required_sources() -> list[Path]:
         COMPUTE_EQUIVALENCE / "fits.json",
         CAP_SWEEP_LAUNCH / "run_specs.json",
         CAP_SWEEP_LAUNCH / "summary.json",
+        CAP_SWEEP_PULL,
     ]
 
 
@@ -370,8 +379,31 @@ def _compute_equivalence() -> pd.DataFrame:
     return table[[*columns, "multiplier", "compute_saved_pct", "loss_improvement_pct", "extrapolated"]]
 
 
+def _cap_sweep_uncheatable(specs: list[dict[str, Any]]) -> pd.DataFrame:
+    """The pulled Uncheatable components (`bpb__<task>`) of the runs of `specs` (run_specs.json), in their order.
+
+    Raises unless each run's name with a six-hex-digit hash names exactly one pulled run, every pulled run is one of
+    them, and each pulled data seed is the run's.
+    """
+    pulls = wandb_pulls.read(CAP_SWEEP_PULL)
+    names = {i: i.rsplit("-", 1)[0] for i in pulls.index if run_names.RUN_DIRECTORY.fullmatch(i)}
+    matched = []
+    for spec in specs:
+        ids = [i for i, name in names.items() if name == spec["run_name"]]
+        if len(ids) != 1:
+            raise ValueError(f"{spec['run_name']}: expected one pulled run of that name, found {ids}")
+        matched += ids
+    if sorted(matched) != sorted(pulls.index):
+        raise ValueError(f"the pulled runs {sorted(pulls.index)} are not the sweep's runs {matched}, one for one")
+    pull = pulls.loc[matched]
+    seeds = [spec["data_seed"] for spec in specs]
+    if pull.data_seed.tolist() != seeds:
+        raise ValueError(f"pulled data seeds {pull.data_seed.tolist()} differ from the launch record's {seeds}")
+    return pull[[f"bpb__{t}" for t in UNCHEATABLE_TASKS]].reset_index(drop=True)
+
+
 def _unimax_cap_sweep(ctx: ExportContext) -> pd.DataFrame:
-    """The cap sweep's runs that no other table holds, with their OlmoBaseEval Easy components and mean."""
+    """The cap sweep's runs that no other table holds, with their 58 components and both aggregates."""
     results = json.loads(paths.require(CAP_SWEEP_TABLE9).read_text())
     specs = json.loads(paths.require(CAP_SWEEP_LAUNCH / "run_specs.json").read_text())
     caps = json.loads(paths.require(CAP_SWEEP_LAUNCH / "summary.json").read_text())["unimax_epoch_caps"]
@@ -386,7 +418,9 @@ def _unimax_cap_sweep(ctx: ExportContext) -> pd.DataFrame:
             raise ValueError(f"{spec['run_name']} needs each of the 51 OlmoBaseEval Easy components once")
         seeds = {"data_seed": spec["data_seed"], "trainer_seed": spec["trainer_seed"]}
         rows.append({"epoch_cap": caps[spec["mixture"]], **seeds, **{f"bpb__{t}": components[t] for t in OBE_TASKS}})
-    table = tables.add_aggregates(pd.DataFrame(rows), {"obe_easy": ctx.weights["obe_easy"]})
+    table = pd.concat([pd.DataFrame(rows), _cap_sweep_uncheatable(specs)], axis=1)
+    table["components_available"] = table[[f"bpb__{t}" for t in ctx.tasks]].notna().all(axis=1)
+    table = tables.add_aggregates(table, ctx.weights)
     recorded = [results[spec["run_name"]]["macro"] for spec in specs]
     if not np.allclose(table.bpb__obe_easy, recorded, rtol=0, atol=1e-12):
         raise ValueError("a cap-sweep run's components do not reproduce its recorded OlmoBaseEval Easy mean")

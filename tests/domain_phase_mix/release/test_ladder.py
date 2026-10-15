@@ -26,6 +26,9 @@ PROPORTIONAL_UNCHEATABLE = paths.RO / "table9_reliability_20260905/proportional_
 # from the components, within the fixed-rule tolerance of every record, and OlmoBaseEval Easy (a plain mean) to
 # rounding.
 RECOMPUTED_TOLERANCE = {"uncheatable": tables.FIXED_RULE_TOLERANCE, "obe_easy": 1e-12}
+# The UniMax cap sweep's README gives each run's Uncheatable aggregate by epoch cap, to four decimals: the fixed byte
+# shares of the components in the run's evaluation log, computed on 2026-09-22 without the W&B pull.
+CAP_SWEEP_README_UNCHEATABLE = {1.0: 1.0364, 4.0: 1.0238, 12.0: 1.0251}
 
 
 @pytest.fixture(scope="module")
@@ -104,6 +107,25 @@ def test_unimax_cap_sweep_scores_runs_as_the_ladder_does(out, plotted):
     assert len(rung) == 1
     ladder_values = [rung.iloc[0][f"bpb__{task}"] for task in unimax8]
     assert np.allclose(ladder_values, list(unimax8.values()), rtol=0, atol=1e-15)
+
+
+def test_unimax_cap_sweep_takes_uncheatable_components_from_each_runs_pull(out):
+    # Each cap's run takes its seven Uncheatable components from the pulled W&B run of the same name with its hash,
+    # whose config gives the data seed of the launch record.
+    sweep = out["ladder_unimax_cap_sweep"].set_index("epoch_cap")
+    specs = json.loads((ladder.CAP_SWEEP_LAUNCH / "run_specs.json").read_text())
+    caps = json.loads((ladder.CAP_SWEEP_LAUNCH / "summary.json").read_text())["unimax_epoch_caps"]
+    pull = tables.read_csv(ladder.CAP_SWEEP_PULL, comment="#")
+    for spec in specs:
+        run = sweep.loc[caps[spec["mixture"]]]
+        pulled = pull[pull.training_wandb_run_id.str.rsplit("-", n=1).str[0] == spec["run_name"]]
+        values = pulled.set_index("metric").value
+        assert run.data_seed == spec["data_seed"] == values["data_seed"]
+        for task in naming.TASKS[:7]:
+            assert run[f"bpb__{task}"] == values[f"eval/uncheatable_eval/{task.removeprefix('uncheatable/')}/bpb"]
+    assert sweep.components_available.all()
+    # The fixed byte shares of the components give the README's values; the pulls' pooled aggregates do not.
+    assert sweep.bpb__uncheatable.to_dict() == pytest.approx(CAP_SWEEP_README_UNCHEATABLE, rel=0, abs=5e-5)
 
 
 def test_scale_constants_and_weights(out):

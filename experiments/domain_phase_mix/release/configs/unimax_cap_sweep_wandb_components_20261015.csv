@@ -1,0 +1,32 @@
+# Uncheatable components of the UniMax cap sweep's runs at caps 1, 4 and 12, frozen from W&B (entity marin-community,
+# project marin) on 2026-10-15 with one read-only call. The runs' Table 9 results hold no Uncheatable values.
+# eval/uncheatable_eval/bpb is the run's pooled aggregate (BPB schema 2), recorded for provenance only; data_seed is the
+# run's W&B config value, which ties each pull to the sweep's run_specs.json.
+training_wandb_run_id,metric,value,pulled_at
+unimax1_3e18-76174c,eval/uncheatable_eval/ao3_english/bpb,1.2391682863235474,2026-10-15
+unimax1_3e18-76174c,eval/uncheatable_eval/arxiv_computer_science/bpb,1.004025101661682,2026-10-15
+unimax1_3e18-76174c,eval/uncheatable_eval/arxiv_physics/bpb,1.0920644998550415,2026-10-15
+unimax1_3e18-76174c,eval/uncheatable_eval/bbc_news/bpb,1.0446375608444214,2026-10-15
+unimax1_3e18-76174c,eval/uncheatable_eval/github_cpp/bpb,0.8927470445632935,2026-10-15
+unimax1_3e18-76174c,eval/uncheatable_eval/github_python/bpb,0.8706324100494385,2026-10-15
+unimax1_3e18-76174c,eval/uncheatable_eval/wikipedia_english/bpb,1.1035585403442385,2026-10-15
+unimax1_3e18-76174c,eval/uncheatable_eval/bpb,1.0409665263227177,2026-10-15
+unimax1_3e18-76174c,data_seed,660730,2026-10-15
+unimax4_3e18-b8991a,eval/uncheatable_eval/ao3_english/bpb,1.270957589149475,2026-10-15
+unimax4_3e18-b8991a,eval/uncheatable_eval/arxiv_computer_science/bpb,1.0045944452285769,2026-10-15
+unimax4_3e18-b8991a,eval/uncheatable_eval/arxiv_physics/bpb,1.0727055072784424,2026-10-15
+unimax4_3e18-b8991a,eval/uncheatable_eval/bbc_news/bpb,1.0576797723770142,2026-10-15
+unimax4_3e18-b8991a,eval/uncheatable_eval/github_cpp/bpb,0.8526797294616699,2026-10-15
+unimax4_3e18-b8991a,eval/uncheatable_eval/github_python/bpb,0.7970192432403564,2026-10-15
+unimax4_3e18-b8991a,eval/uncheatable_eval/wikipedia_english/bpb,1.109386920928955,2026-10-15
+unimax4_3e18-b8991a,eval/uncheatable_eval/bpb,1.0299579507372971,2026-10-15
+unimax4_3e18-b8991a,data_seed,660731,2026-10-15
+unimax12_3e18-44b7a5,eval/uncheatable_eval/ao3_english/bpb,1.2787065505981443,2026-10-15
+unimax12_3e18-44b7a5,eval/uncheatable_eval/arxiv_computer_science/bpb,1.0062967538833618,2026-10-15
+unimax12_3e18-44b7a5,eval/uncheatable_eval/arxiv_physics/bpb,1.0687556266784668,2026-10-15
+unimax12_3e18-44b7a5,eval/uncheatable_eval/bbc_news/bpb,1.063782811164856,2026-10-15
+unimax12_3e18-44b7a5,eval/uncheatable_eval/github_cpp/bpb,0.8528010845184326,2026-10-15
+unimax12_3e18-44b7a5,eval/uncheatable_eval/github_python/bpb,0.7949073314666748,2026-10-15
+unimax12_3e18-44b7a5,eval/uncheatable_eval/wikipedia_english/bpb,1.1086409091949463,2026-10-15
+unimax12_3e18-44b7a5,eval/uncheatable_eval/bpb,1.0313038315535237,2026-10-15
+unimax12_3e18-44b7a5,data_seed,660732,2026-10-15
