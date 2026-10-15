@@ -188,6 +188,11 @@ NOTES = {
         "These models use the TinyLlama tokenizer named in `tokenizer`, not the tokenizer of the tasks table, which "
         "describes the paper's swarms.",
     ],
+    "fits_task_parameters": [
+        "The qwen3_360m_1p6b rows are the paper's reference fit; the llama_160m_1p2b and llama_200m_6b rows refit "
+        "MARINER with mixture-selection on those swarms' fit rows, with anchors from each swarm's ten proportional "
+        "repeats and the reference fit's inner-fold rule.",
+    ],
     "fits_swarm_predictions": [
         "In-sample fitted values of the reference fit, which trained on these runs. True out-of-fold predictions "
         "are not exported; fits_learning_curves and fits_reliability hold the out-of-fold metrics.",

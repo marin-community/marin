@@ -7,10 +7,12 @@ The orchestrator writes every table as Parquet. Runs are referenced by observati
 same runs; tasks by the paper's task ids (`naming.task_public`); objectives as `obe_easy` (OlmoBaseEval Easy) and
 `uncheatable`, and the subsets some proposals optimized as `obe_easy_qa15`, `obe_easy_snr5`, `uncheatable_worsened`, ...
 
-- `fits_task_parameters`: MARINER's reference fit to the Qwen3 360M/1.6B swarm, one row per objective and task: benefit
-  `rate` and `power`, harm `threshold`, `ridge`, the floor multiplier `kappa` (the paper's gamma), the `floor` and the
-  inner cross-validated RMSE (mixture-selection's `reference_task_fits.csv`). The archived swarms' fits exist in no
-  source; the release's mixture-selection regeneration fits and appends them.
+- `fits_task_parameters`: MARINER's fits to the three swarms, one row per swarm, objective and task: benefit `rate` and
+  `power`, harm `threshold`, `ridge`, the floor multiplier `kappa` (the paper's gamma), the `floor`, the inner
+  cross-validated RMSE and the rule behind its inner folds (`inner_folds`). The Qwen3 360M/1.6B rows are the reference
+  fit (mixture-selection's `reference_task_fits.csv`), whose fold table holds the folds that rule recomputes; no source
+  holds fits to the archived swarms, so `regenerate_mixture_selection_data.py` refits them with mixture-selection on
+  each swarm's fit rows, with anchors from its ten proportional repeats, and commits them as `archived_swarm_fits.csv`.
 - `fits_swarm_predictions`: the reference fit's per-task predictions at the swarm's 280 fit mixtures. The fit trained on
   these runs, so these are in-sample fitted values, not out-of-fold predictions: mixture-selection's self-test compares
   them with `fit.predict_tasks(swarm.weights)` of the full fit. The bundle names each run by its hash-less training run
@@ -60,6 +62,11 @@ import pandas as pd
 from experiments.domain_phase_mix.release import naming, paths, tables
 from experiments.domain_phase_mix.release.configs import heldout, validation
 from experiments.domain_phase_mix.release.context import ExportContext
+from experiments.domain_phase_mix.release.regenerate_mixture_selection_data import (
+    ARCHIVED_FITS,
+    INNER_FOLDS,
+    TASK_PARAMETERS,
+)
 
 SWARM = "qwen3_360m_1p6b"
 PANEL = {swarm: panel for panel, swarm in heldout.SWARM.items()}[SWARM]  # the held-out registry's name of the swarm
@@ -226,6 +233,7 @@ def required_sources() -> list[Path]:
     return sorted(
         {
             TASK_FITS,
+            ARCHIVED_FITS,
             SWARM_RUNS,
             *data,
             heldout.EXPANDED / "heldout_runs.csv",
@@ -250,7 +258,9 @@ def _task_parameters() -> pd.DataFrame:
     t["task_id"] = t.component.map(naming.task_public)
     t["objective"] = t.objective.map(naming.objective_public)
     t["swarm"] = SWARM
-    return t[["swarm", "objective", "task_id", "rate", "power", "threshold", "ridge", "kappa", "floor", "inner_cv_rmse"]]
+    t["inner_folds"] = INNER_FOLDS
+    archived = _csv(ARCHIVED_FITS, comment="#")
+    return pd.concat([t[TASK_PARAMETERS], archived[TASK_PARAMETERS]], ignore_index=True)
 
 
 def _long_tasks(wide: pd.DataFrame, key: str) -> pd.DataFrame:

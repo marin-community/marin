@@ -44,8 +44,9 @@ def _aggregate(predictions: pd.DataFrame, objective: str, weights: dict[str, flo
 
 def test_task_parameters(out):
     t = out["fits_task_parameters"]
-    assert len(t) == 58 and set(t.task_id) == set(naming.TASKS)
-    assert set(t.swarm) == {"qwen3_360m_1p6b"}
+    assert len(t) == 3 * 58
+    for swarm in ("qwen3_360m_1p6b", "llama_160m_1p2b", "llama_200m_6b"):
+        assert sorted(t[t.swarm == swarm].task_id) == sorted(naming.TASKS), swarm
     assert t.kappa.between(1, 6).all() and (t.ridge >= 0).all()
 
 

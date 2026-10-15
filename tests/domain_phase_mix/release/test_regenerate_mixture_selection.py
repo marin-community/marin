@@ -1,12 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""mixture-selection's bundled inputs rebuilt from the dataset build, and its self-test on them."""
+"""mixture-selection's bundled inputs rebuilt from the dataset build, its self-test on them, and the archived swarms'
+committed refits."""
 
 import filecmp
+import json
 import shutil
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from experiments.domain_phase_mix.release import paths, tables
@@ -58,3 +61,22 @@ def test_self_test_passes_on_the_regenerated_data(regenerated, tmp_path):
     shutil.copyfile(paths.MIXSEL / "mixture_selection.py", tmp_path / "mixture_selection.py")
     result = regen.run_mixture_selection(["mixture_selection.py", "self-test"], cwd=tmp_path)
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("swarm_table", regen.ARCHIVED_SWARMS)
+def test_committed_archived_fits_refit_from_the_build(swarm_table, tmp_path):
+    """mixture-selection's fit of each objective's first task, on the swarm's inputs written from the build and with
+    the inner folds recomputed, reproduces the committed parameters exactly."""
+    swarm = swarm_table.removeprefix("swarm_")
+    regen.write_archived(paths.BUILD, swarm_table, tmp_path)
+    objectives = tables.read_csv(tmp_path / "objectives.csv")
+    objectives.groupby("objective", sort=False).head(1).to_csv(tmp_path / "objectives.csv", index=False)
+    committed = tables.read_csv(regen.ARCHIVED_FITS, comment="#")
+    for objective in regen.OBJECTIVES.values():
+        out = tmp_path / f"fit_{objective}.json"
+        result = regen.run_mixture_selection(regen.fit_command(tmp_path, objective, out), cwd=tmp_path)
+        assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+        refit = regen.task_parameters(json.loads(out.read_text()), swarm, paths.BUILD)
+        expected = committed.merge(refit[["swarm", "objective", "task_id"]], how="inner")
+        pd.testing.assert_frame_equal(refit, expected, check_exact=True)
