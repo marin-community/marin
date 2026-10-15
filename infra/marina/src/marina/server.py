@@ -90,6 +90,7 @@ CANONICAL_ORIGIN_ENV = "MARINA_CANONICAL_ORIGIN"
 APPLET_ORIGIN_ENV = "MARINA_APPLET_ORIGIN"
 PUBLIC_APPLET_ORIGIN_ENV = "MARINA_PUBLIC_APPLET_ORIGIN"
 MARINA_SURFACE_ENV = "MARINA_SURFACE"
+APPLET_DOMAINS_ENV = "MARINA_APPLET_DOMAINS"
 APPLET_OPERATORS_ENV = "MARINA_APPLET_OPERATORS"
 AGENT_ORIGIN_ENV = "MARINA_AGENT_ORIGIN"
 DATA_PREFIX = "data/"
@@ -135,6 +136,7 @@ class MarinaConfig:
     # An unauthenticated origin that exposes GET/HEAD routes for public applets only.
     public_applet_origin: str | None = None
     surface: MarinaSurface = MarinaSurface.AUTHENTICATED
+    applet_domains: frozenset[str] = frozenset()
     applet_operators: frozenset[str] = frozenset()
     agent_panel: AgentPanelService | None = None
 
@@ -162,6 +164,11 @@ class MarinaConfig:
             applet_origin=(os.environ.get(APPLET_ORIGIN_ENV) or "").rstrip("/") or None,
             public_applet_origin=(os.environ.get(PUBLIC_APPLET_ORIGIN_ENV) or "").rstrip("/") or None,
             surface=surface,
+            applet_domains=frozenset(
+                normalize_hostname(host.strip())
+                for host in os.environ.get(APPLET_DOMAINS_ENV, "").split(",")
+                if host.strip()
+            ),
             applet_operators=frozenset(
                 item.strip() for item in os.environ.get(APPLET_OPERATORS_ENV, "").split(",") if item.strip()
             ),
@@ -185,7 +192,7 @@ def parse_host_mapping(spec: str, env_name: str) -> dict[str, str]:
     return result
 
 
-def named_applet_hosts(app: ASGIApp, store: AppletStore, reserved_hosts: set[str]) -> ASGIApp:
+def named_applet_hosts(app: ASGIApp, store: AppletStore, domains: frozenset[str]) -> ASGIApp:
     """Route each named host to one applet before route authentication runs."""
 
     async def serve(scope: Scope, receive: Receive, send: Send) -> None:
@@ -193,14 +200,14 @@ def named_applet_hosts(app: ASGIApp, store: AppletStore, reserved_hosts: set[str
             return await app(scope, receive, send)
         host_header = scope_headers(scope).get("host", "")
         hostname = host_header.split(":", 1)[0].lower().rstrip(".")
-        if hostname in reserved_hosts:
+        if hostname not in domains:
             return await app(scope, receive, send)
         try:
             applet_id = await run_in_threadpool(store.host_applet, hostname)
         except AppletNotFound:
             return await JSONResponse({"error": "not found"}, status_code=404)(scope, receive, send)
         if applet_id is None:
-            return await app(scope, receive, send)
+            return await JSONResponse({"error": "not found"}, status_code=404)(scope, receive, send)
         if scope["path"] == "/a" or scope["path"].startswith("/a/"):
             return await JSONResponse({"error": "not found"}, status_code=404)(scope, receive, send)
         prefix = f"/a/{applet_id}"
@@ -731,6 +738,8 @@ def create_app(config: MarinaConfig) -> ASGIApp:
     applet_store = AppletStore(config.database) if config.database is not None else None
     applet_runtime = AppletRuntime(applet_store) if applet_store is not None else None
     reserved_hosts = reserved_applet_hosts(config)
+    if reserved_hosts.intersection(config.applet_domains):
+        raise ValueError(f"{APPLET_DOMAINS_ENV} must not reuse a Marina or legacy app host")
 
     def request_identity(request: Request) -> VerifiedIdentity:
         try:
@@ -804,6 +813,8 @@ def create_app(config: MarinaConfig) -> ASGIApp:
             hostname = normalize_hostname(hostname)
             if hostname in reserved_hosts:
                 raise ValueError("hostname is reserved for Marina or a legacy app")
+            if hostname not in config.applet_domains:
+                raise ValueError("hostname has not been provisioned for applets")
             if not isinstance(body, dict) or not isinstance(body.get("applet_id"), str):
                 raise ValueError("body must contain an applet_id")
             applet_id = uuid.UUID(body["applet_id"])
@@ -822,6 +833,8 @@ def create_app(config: MarinaConfig) -> ASGIApp:
             await run_in_threadpool(store.unbind_host, hostname)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        except AppletNotFound as error:
+            raise HTTPException(status_code=404, detail="hostname binding not found") from error
         return Response(status_code=204)
 
     @api.get("/", include_in_schema=False)
@@ -1248,6 +1261,8 @@ def create_app(config: MarinaConfig) -> ASGIApp:
     authenticated = RouteAuthMiddleware(api, policy)
     if config.surface is MarinaSurface.PUBLIC_APPLETS:
         return public_applet_surface(authenticated)
-    if applet_store is not None and config.applet_origin is not None:
-        return named_applet_hosts(authenticated, applet_store, reserved_hosts)
+    if config.applet_domains:
+        if applet_store is None:
+            raise ValueError(f"{APPLET_DOMAINS_ENV} requires a database")
+        return named_applet_hosts(authenticated, applet_store, config.applet_domains)
     return authenticated

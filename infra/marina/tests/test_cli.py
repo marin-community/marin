@@ -84,6 +84,7 @@ def test_applet_host_commands_change_persisted_binding(tmp_path: Path, database_
         iap_audience=None,
         database=store.database,
         applet_operators=frozenset({"anonymous"}),
+        applet_domains=frozenset({"cli.example"}),
     )
     with running_kernel(config) as kernel:
         runner = CliRunner()

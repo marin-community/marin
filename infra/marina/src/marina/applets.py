@@ -467,10 +467,12 @@ class AppletStore:
     def unbind_host(self, hostname: str) -> None:
         """Disable routing while reserving the hostname's isolated applet origin."""
         with self.engine.begin() as connection:
-            connection.execute(
+            result = connection.execute(
                 text("UPDATE applet_hosts SET applet_id = NULL, updated_at = now() WHERE hostname = :hostname"),
                 {"hostname": normalize_hostname(hostname)},
             )
+            if result.rowcount == 0:
+                raise AppletNotFound(hostname)
 
     def publish(
         self,

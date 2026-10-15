@@ -350,6 +350,7 @@ def test_named_applet_host_pins_revisions_and_isolates_routes(tmp_path: Path, da
         iap_audience=None,
         database=store.database,
         applet_origin="https://applets.example",
+        applet_domains=frozenset({"zephyr.example"}),
     )
     named = TestClient(create_app(config), base_url="https://zephyr.example", client=("127.0.0.1", 40000))
     root = named.get("/", follow_redirects=False)
@@ -401,6 +402,7 @@ def test_named_applet_host_authenticates_rewritten_routes(
         iap_audience="test-audience",
         database=store.database,
         applet_origin="https://applets.example",
+        applet_domains=frozenset({"zephyr.example"}),
     )
     remote = TestClient(create_app(config), base_url="https://zephyr.example", client=("10.0.0.7", 40000))
     assert remote.request(method, path).status_code == 401
@@ -419,6 +421,7 @@ def test_host_binding_changes_reach_running_servers_and_require_operator(tmp_pat
         canonical_origin="https://marina.example",
         applet_origin="https://applets.example",
         applet_operators=frozenset({"anonymous"}),
+        applet_domains=frozenset({"live.example"}),
     )
     operator = TestClient(create_app(config), base_url="https://marina.example", client=("127.0.0.1", 40000))
     servers = [
@@ -426,6 +429,10 @@ def test_host_binding_changes_reach_running_servers_and_require_operator(tmp_pat
     ]
     binding_path = "/api/marina/applet-hosts/live.example"
     body = {"applet_id": first["id"]}
+    for server in servers:
+        assert server.get("/").status_code == 404
+        assert server.get("/api/marina/apps").status_code == 404
+    assert operator.delete(binding_path).status_code == 404
     assert publisher.put(binding_path, json=body).status_code == 403
     assert operator.put(binding_path, json=body).status_code == 200
     assert operator.get("/api/marina/applet-hosts").json()["hosts"]["live.example"] == first["id"]
@@ -441,6 +448,8 @@ def test_host_binding_changes_reach_running_servers_and_require_operator(tmp_pat
         assert server.get("/", follow_redirects=False).headers["location"] == "/v/2/"
     assert publisher.delete(binding_path).status_code == 403
     assert operator.put("/api/marina/applet-hosts/marina.example", json=body).status_code == 400
+    assert operator.put("/api/marina/applet-hosts/unprovisioned.example", json=body).status_code == 400
+    assert operator.delete("/api/marina/applet-hosts/typo.example").status_code == 404
     assert operator.delete(binding_path).status_code == 204
     for server in servers:
         assert server.get("/").status_code == 404

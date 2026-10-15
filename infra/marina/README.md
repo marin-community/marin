@@ -247,6 +247,11 @@ do not change DNS. Unbinding retains a disabled hostname record that returns 404
 so the hostname cannot expose Marina's control routes. Marina's canonical, shared
 applet, public applet, and legacy app hosts cannot be rebound through this API.
 
+Pulumi passes the provisioned hostname list as `MARINA_APPLET_DOMAINS`, without
+applet UUIDs. A listed hostname returns 404 until it has an enabled database
+binding. Other hosts bypass the registry lookup. Binding an unprovisioned
+hostname is rejected; unbinding an unknown binding returns 404.
+
 The deployment migration imports the existing Filer binding once, before the
 new service takes traffic. It leaves subsequent rebindings and deletions alone.
 Fresh databases without the production Filer applet start with no bindings.
