@@ -420,27 +420,6 @@ def test_evaluation_restart_skips_completed_step_without_serving(tmp_path, monke
     assert _step_status(batch, 0) == STATUS_SUCCESS
 
 
-def test_step_cache_skips_completed_eval(tmp_path, monkeypatch):
-    executions = 0
-
-    def executor(_session, _output_dir, _env_vars, *, judge=None):
-        nonlocal executions
-        executions += 1
-        return EvaluationOutcome(metrics={"task": {"accuracy": 0.5}})
-
-    evaluation = _evaluation(tmp_path, "finished", executor)
-    batch = replace(_hosted_judge_batch(tmp_path, (evaluation,)), judge=None)
-    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
-
-    first = _evaluate_with_session(batch, _remote_session(), orchestrator_job_id="/first")
-    second = _evaluate_with_session(batch, _remote_session(), orchestrator_job_id="/retry")
-
-    assert first == second
-    assert executions == 1
-    assert read_record(first[0]).jobs["orchestrator"] == "/first"
-    assert _step_status(batch, 0) == STATUS_SUCCESS
-
-
 def test_evaluation_restart_only_runs_unfinished_evals(tmp_path, monkeypatch):
     executed: list[str] = []
 
@@ -861,6 +840,65 @@ def test_speculative_pipeline_launch_selects_gpu(tmp_path, monkeypatch):
     assert submitted_batches[0].accelerator.platform is Platform.TPU
     assert submitted_batches[1].accelerator.platform is Platform.GPU
     assert all(batch.max_concurrent == 1 for batch in submitted_batches)
+
+
+@pytest.mark.parametrize(
+    ("version", "retry_limit", "reuse_completed"),
+    [("test", 1, True), ("dev", 1, False), ("test", 2, False)],
+)
+def test_pipeline_retry_preserves_completed_evaluations(tmp_path, monkeypatch, version, retry_limit, reuse_completed):
+    completed: list[str] = []
+    attempts: list[str] = []
+
+    def successful(session, output_dir, env_vars, *, judge=None):
+        completed.append(output_dir)
+        return _successful_evaluation(session, output_dir, env_vars, judge=judge)
+
+    def interrupted(session, output_dir, env_vars, *, judge=None):
+        attempts.append(output_dir)
+        if len(attempts) == 1:
+            raise EvaluationError("interrupted evaluation", status=RunStatus.INFRA_FAILED)
+        return _successful_evaluation(session, output_dir, env_vars, judge=judge)
+
+    def launch(batch, _client):
+        executions = (successful, interrupted)
+        evaluations = tuple(
+            replace(evaluation, executor=executor)
+            for evaluation, executor in zip(batch.evaluations, executions, strict=True)
+        )
+        _run_test_batch(replace(batch, evaluations=evaluations))
+        return SimpleNamespace(
+            group_id=batch.group_id,
+            records_prefix=batch.records_prefix,
+            evaluations=tuple(SimpleNamespace(run_id=evaluation.identity.run_id) for evaluation in evaluations),
+            job=SimpleNamespace(wait=lambda *, timeout: None),
+        )
+
+    monkeypatch.setattr("experiments.evaluation.launch.DEFAULT_RECORDS_PREFIX", str(tmp_path / "records"))
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    monkeypatch.setattr("experiments.evaluation.pipeline.iris_ctx", lambda: SimpleNamespace(client=object()))
+    monkeypatch.setattr("experiments.evaluation.pipeline.launch_group", launch)
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
+    _patch_inference_runtime(monkeypatch, lambda _config: nullcontext(_remote_session()))
+    config = EvalStepConfig(
+        model=models()["qwen3-8b"],
+        evals="smoke",
+        limit=1,
+        max_concurrent=1,
+        artifact_path=str(tmp_path / "pipeline"),
+        accelerator=None,
+        submission_cluster="marin",
+        federated_cluster=None,
+        version=version,
+    )
+
+    with pytest.raises(RuntimeError, match="1 step"):
+        run_eval_pipeline_step(config)
+    result = run_eval_pipeline_step(replace(config, limit=retry_limit))
+
+    assert len(completed) == (1 if reuse_completed else 2)
+    assert (attempts[0] == attempts[1]) == reuse_completed
+    assert len(result.run_ids) == 2
 
 
 def test_evalchemy_executor_classifies_missing_native_archive(tmp_path, monkeypatch):

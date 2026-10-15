@@ -481,8 +481,6 @@ def run_evaluation_steps(
     configure_coreweave_s3()
     if not batch.evaluations:
         raise ValueError("an evaluation batch requires at least one evaluation")
-    if batch.max_concurrent < 1:
-        raise ValueError("max_concurrent must be at least 1")
     if all(
         check_cache(prefix_join(batch.records_prefix, evaluation.identity.run_id)) for evaluation in batch.evaluations
     ):

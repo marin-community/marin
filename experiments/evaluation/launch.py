@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import getpass
+import json
 import logging
 import os
 import socket
@@ -34,7 +35,6 @@ from marin.evaluation.harbor.driver_config import (
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_RECORDS_PREFIX,
@@ -103,6 +103,8 @@ class LaunchSpec:
     seed: int | None = None
     version: str | None = None
     description: str | None = None
+    cache_key: str | None = None
+    """Reuse evaluation records for this key and the same resolved configuration."""
 
 
 def _git_sha() -> str:
@@ -120,12 +122,16 @@ def _launch_user() -> str:
     return os.environ.get("MARIN_EVAL_USER") or getpass.getuser()
 
 
-def _run_id(model_name: str, eval_key: str) -> str:
+def _run_id(model_name: str, eval_key: str, cache_key: str | None) -> str:
+    if cache_key is not None:
+        return f"pipeline-{model_name}-{eval_key}-{uuid.uuid5(uuid.NAMESPACE_URL, cache_key).hex}"
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     return f"{stamp}-{model_name}-{eval_key}-{uuid.uuid4().hex}"
 
 
-def _group_id(model_name: str) -> str:
+def _group_id(model_name: str, cache_key: str | None) -> str:
+    if cache_key is not None:
+        return f"pipeline-{model_name}-{uuid.uuid5(uuid.NAMESPACE_URL, cache_key).hex}"
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     return f"{stamp}-{model_name}-{uuid.uuid4().hex}"
 
@@ -303,7 +309,7 @@ def build_evaluation_batch(
     if judge is not None and any(isinstance(definition.executor, EvalchemyExecutor) for _, definition in definitions):
         raise ValueError("--judge-model serves Harbor verifiers only; remove it or drop the Evalchemy evaluations")
     records_prefix = records_prefix_for(accelerator, spec)
-    group_id = _group_id(model.name)
+    group_id = _group_id(model.name, spec.cache_key)
     created_at = datetime.now(UTC).isoformat()
     secret_env: dict[str, SecretSpec] = {}
     for _, definition in definitions:
@@ -314,7 +320,26 @@ def build_evaluation_batch(
 
     evaluations: list[Evaluation] = []
     for eval_key, definition in definitions:
-        run_id = _run_id(model.name, eval_key)
+        cache_key = (
+            json.dumps(
+                {
+                    "pipeline": spec.cache_key,
+                    "model": model_ref.model_dump(mode="json"),
+                    "evaluation": definition.record_ref.model_dump(mode="json"),
+                    "runtime": definition.runtime_descriptor,
+                    "judge": (
+                        ModelConfigRef.model_validate(asdict(judge.model)).model_dump(mode="json")
+                        if judge is not None
+                        else None
+                    ),
+                    "policy": spec.version,
+                },
+                sort_keys=True,
+            )
+            if spec.cache_key is not None
+            else None
+        )
+        run_id = _run_id(model.name, eval_key, cache_key)
         evaluations.append(
             Evaluation(
                 identity=EvaluationIdentity(
@@ -354,26 +379,12 @@ def build_evaluation_batch(
 
 def build_evaluation_steps(batch: EvaluationBatch, execute: EvaluationStep) -> tuple[StepSpec, ...]:
     """Build per-evaluation steps with the supplied execution function."""
-    model_config = ModelConfigRef.model_validate(asdict(batch.model))
-    judge_config = (
-        model_config_digest(ModelConfigRef.model_validate(asdict(batch.judge.model)))
-        if batch.judge is not None
-        else None
-    )
     return tuple(
         StepSpec(
             name=f"eval/{batch.model.name}/{evaluation.identity.eval_ref.name}",
             override_output_path=prefix_join(batch.records_prefix, evaluation.identity.run_id),
             fn=lambda output_path, evaluation=evaluation: execute(evaluation, output_path),
-            hash_attrs={
-                "run_id": evaluation.identity.run_id,
-                "group_id": batch.group_id,
-                "policy_version": batch.version,
-                "model_config": model_config_digest(model_config),
-                "evaluation": evaluation.identity.eval_ref.model_dump(mode="json"),
-                "eval_runtime": evaluation.identity.eval_runtime,
-                "judge_config": judge_config,
-            },
+            hash_attrs={"run_id": evaluation.identity.run_id},
         )
         for evaluation in batch.evaluations
     )
@@ -418,7 +429,7 @@ def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluat
         launch_env[name] = resolve_secret_spec(spec).value
     job = client.submit(
         entrypoint=Entrypoint.from_callable(run_evaluation_group, batch),
-        name=f"eval-{batch.group_id}",
+        name=f"eval-{batch.group_id}-{uuid.uuid4().hex[:8]}",
         resources=ResourceSpec(cpu=_ORCHESTRATOR_CPU, memory=_ORCHESTRATOR_MEMORY, disk=_ORCHESTRATOR_DISK),
         environment=EnvironmentSpec(env_vars=launch_env),
         constraints=constraints,

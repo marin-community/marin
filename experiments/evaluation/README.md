@@ -165,9 +165,9 @@ Normal results and startup failure records are written under each eval's step lo
 are cached, while failed steps remain retryable. A record written before the step reaches `SUCCESS`
 can be replaced on retry. An evaluator already launched before the first success may still share
 the same results directory, so inspect active child jobs before treating its archive as settled.
-Each new launch gets a new run directory, including repeat launches of the same benchmark. The
-step identity records the model configuration digest, resolved evaluator configuration, runtime
-revision, and policy label; those settings remain visible when diagnosing a cached step.
+Each CLI launch gets new run directories. Pipeline retries reuse run directories for the same
+artifact path and resolved model, evaluator, runtime, judge, and policy settings. Changing those
+settings creates new run directories. Pipelines with mutable `dev` versions always create new runs.
 
 For vLLM runs, `inference_metrics` contains the cumulative counter delta for that evaluator's server.
 It includes prompt tokens, generation tokens, elapsed time, and generation
@@ -202,10 +202,9 @@ same CPU orchestrator used by the CLI and writes eval outputs to the launcher's 
 its artifact path contains the pipeline cache record. The slice
 override is a runtime arg, so changing it does not change the artifact identity.
 
-The policy launcher calls the CLI directly. In a pipeline, the step is marked successful only after
-the whole orchestrator job finishes, so its cache does not cover an individual eval that completed
-before an orchestrator failure. Both launch paths execute each eval through a per-eval StepSpec inside
-the orchestrator.
+The policy launcher calls the CLI directly. Both launch paths execute each eval through a per-eval
+StepSpec inside the orchestrator. A pipeline retry reuses completed evals and retries unfinished ones;
+the pipeline artifact becomes successful only after the whole orchestrator finishes.
 
 For produced models, pass the producer handles in `deps` and resolve their locations in
 `resolve_model(ctx)`. Use `ArtifactStep.adopt` when a model already exists outside the graph.
