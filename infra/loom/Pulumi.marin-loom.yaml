@@ -157,9 +157,9 @@ config:
       allowedTools: []
       mcpAccess: *builtinMcpAccess
     pr-review:
-      agent: codex
+      agent: claude
       description: Review trusted Marin pull requests from immutable head commits
-      model: *codexModel
+      model: claude-opus-5-5
       effort: xhigh
       protocol: acp
       mode: auto
@@ -168,7 +168,7 @@ config:
       envClear: true
       ambientAllowlist: []
       idleArchiveSeconds: 60
-      maxConcurrent: 16
+      maxConcurrent: 8
       turnBudget: 200
       prelude: weaver
       instructionsFile: profiles/pr-review/AGENTS.md
@@ -181,7 +181,7 @@ config:
     pr-holistic-review:
       agent: claude
       description: Review large or agent-authored Marin pull requests as whole changes from immutable head commits
-      model: fable
+      model: claude-opus-5-5
       effort: xhigh
       protocol: acp
       mode: auto
@@ -190,7 +190,7 @@ config:
       envClear: true
       ambientAllowlist: []
       idleArchiveSeconds: 60
-      maxConcurrent: 4
+      maxConcurrent: 8
       turnBudget: 200
       prelude: weaver
       instructionsFile: profiles/pr-holistic-review/AGENTS.md

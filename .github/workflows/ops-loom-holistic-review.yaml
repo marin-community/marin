@@ -2,10 +2,8 @@ name: "Ops - Loom Holistic Review"
 
 # This workflow runs from the trusted default branch and never checks out or
 # executes pull-request code. It launches one whole-change review session for
-# a large pull request or one that adds a new abstraction, and launches again
-# after a push; the session itself skips small deltas since the last reviewed
-# head. The gate step reads the pull request's size and file patches through
-# the GitHub API without checking anything out.
+# a large pull request or one that adds a new abstraction, plus at most one
+# follow-up after a substantial commit. The gates use the GitHub API.
 on:
   pull_request_target:
     types: [opened, ready_for_review, reopened, synchronize]
@@ -16,6 +14,7 @@ concurrency:
 
 env:
   HOLISTIC_REVIEW_MIN_CHANGED_LINES: "250"
+  HOLISTIC_REVIEW_MIN_PARENT_CHANGED_LINES: "100"
 
 jobs:
   review:
@@ -54,11 +53,21 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT_ACTION: ${{ github.event.action }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           ADDITIONS: ${{ github.event.pull_request.additions }}
           DELETIONS: ${{ github.event.pull_request.deletions }}
         run: |
           set -euo pipefail
+          if [[ "$EVENT_ACTION" == "synchronize" ]]; then
+            parent_changed=$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA" --jq '.stats.total')
+            if (( parent_changed <= HOLISTIC_REVIEW_MIN_PARENT_CHANGED_LINES )); then
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              echo "gate: $parent_changed changed lines against parent; skipping"
+              exit 0
+            fi
+          fi
           changed=$((ADDITIONS + DELETIONS))
           if (( changed >= HOLISTIC_REVIEW_MIN_CHANGED_LINES )); then
             echo "run=true" >> "$GITHUB_OUTPUT"
@@ -86,11 +95,14 @@ jobs:
         uses: ./.github/actions/launch-loom-run
         with:
           profile: ${{ vars.LOOM_PR_HOLISTIC_REVIEW_PROFILE }}
-          idempotency-key: pr-holistic:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}
+          channel: pr-holistic:${{ github.event.pull_request.number }}
+          idempotency-key: pr-holistic:${{ github.event.pull_request.number }}:${{ github.event.action == 'synchronize' && 'followup' || 'initial' }}
           title: "Holistic review for #${{ github.event.pull_request.number }}"
           goal: >-
             Review pull request #${{ github.event.pull_request.number }} at head
-            ${{ github.event.pull_request.head.sha }} as a whole change. Remain
+            ${{ github.event.pull_request.head.sha }} as a whole change. If the
+            session worktree is at a different commit, fetch this exact SHA from
+            origin and check it out detached before reviewing. Remain
             read-only except for one GitHub comment. Run review-pr-holistic with
             --comment and publish a typed result.
           base: ${{ github.event.pull_request.head.sha }}
