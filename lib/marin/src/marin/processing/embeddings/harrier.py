@@ -8,19 +8,19 @@ from functools import cache
 from typing import Any, Literal
 
 import numpy as np
+from transformers import AutoModel, AutoTokenizer
 
-HARRIER_MODEL = "microsoft/harrier-oss-v1-0.6b"
+HARRIER_REPO = "microsoft/harrier-oss-v1-0.6b"
 HARRIER_REVISION = "f9b9dc8d367d443f2479d27aa5d8d2850c0774ee"
-HARRIER_DIMENSIONS = 1024
+HARRIER_DIM = 1024
 
 
 @cache
 def _harrier_model(
     model: str, revision: str, tokenizer_revision: str, compute_dtype: str, device: str
 ) -> tuple[Any, Any]:
-    # Auto factories select the model/tokenizer classes at runtime; keep inference dependencies optional.
+    # Auto factories select model/tokenizer classes at runtime.
     import torch  # noqa: PLC0415 - optional CPU/GPU inference dependency
-    from transformers import AutoModel, AutoTokenizer  # noqa: PLC0415 - optional inference dependency
 
     dtypes = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
     tokenizer = AutoTokenizer.from_pretrained(model, revision=tokenizer_revision, padding_side="right")
@@ -52,11 +52,12 @@ class HarrierEmbedder:
         tokenizer, model = _harrier_model(
             self.model, self.revision, self.tokenizer_revision, self.compute_dtype, self.device
         )
+        order = sorted(range(len(texts)), key=lambda index: len(texts[index]))
         vectors = []
         for start in range(0, len(texts), self.batch_size):
-            inputs = tokenizer(
-                texts[start : start + self.batch_size], padding=True, truncation=False, return_tensors="pt"
-            )
+            # Similar lengths avoid padding short instructions to an unrelated long task.
+            batch = [texts[index] for index in order[start : start + self.batch_size]]
+            inputs = tokenizer(batch, padding=True, truncation=False, return_tensors="pt")
             lengths = inputs["attention_mask"].sum(dim=1)
             if int(lengths.max()) > self.max_tokens:
                 raise ValueError(f"Harrier input exceeds the configured {self.max_tokens}-token limit")
@@ -69,4 +70,4 @@ class HarrierEmbedder:
         result = np.concatenate(vectors)
         if result.shape != (len(texts), self.dimensions):
             raise ValueError(f"Unexpected Harrier embedding shape: {result.shape}")
-        return result
+        return result[np.argsort(order)]

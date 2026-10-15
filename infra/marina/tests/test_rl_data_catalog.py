@@ -325,6 +325,7 @@ def test_curriculum_runtime_cutoffs_dedup_pagination_and_atomic_load(catalog_dat
             "subject_only": 1,
             "out_of_scope": 0,
             "insufficient_context": 1,
+            "skipped": 0,
         }
         assert first["cells"][0]["count"] == 3
         assert first["columns"][0]["denominator"] == 4

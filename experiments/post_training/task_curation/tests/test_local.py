@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
+from fray.types import ResourceConfig
 from taskcompendium.convert.answers import answer_task, exact_answer_task
 from taskcompendium.models import EnvironmentRequirements, TaskSpec, TextMessage, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.inputs import SourceFormat, required_grader_environment
@@ -52,6 +53,7 @@ def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, cach
         output_root,
         runtime=runtime,
         max_workers=max_workers,
+        worker_resources=ResourceConfig(cpu=1, ram="4g"),
         cache_dir=cache_dir,
         source_ids={name: source.info.id for name, source in sources.items()},
     )

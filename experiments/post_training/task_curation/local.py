@@ -56,6 +56,7 @@ def run_local_steps(
     *,
     runtime: CampaignRuntime,
     max_workers: int,
+    worker_resources: ResourceConfig,
     cache_dir: Path,
     source_ids: Mapping[str, str],
 ) -> tuple[SourceOutcome, ...]:
@@ -89,7 +90,7 @@ def run_local_steps(
                 ZephyrContext(
                     client=client,
                     max_workers=max_workers,
-                    resources=ResourceConfig(cpu=1, ram="4g"),
+                    resources=worker_resources,
                     chunk_storage_prefix=str(output_root / ".zephyr"),
                     name="task-curation-quick",
                 ) as context,

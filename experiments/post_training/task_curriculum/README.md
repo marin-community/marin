@@ -133,15 +133,14 @@ boundary and difficulty evidence; this workflow does not run model-training expe
 Task mapping uses a curriculum-independent description and two routing stages:
 
 ```text
-task instructions and public contract -> short core-work description -> one cached Harrier vector
+task instructions and public contract -> bounded instruction text -> one cached Harrier vector
 curriculum root scopes               -> cached anchor vectors       -> primary subject per facet
 curriculum capabilities              -> cached anchor vectors       -> ranked capabilities in that subject
 ```
 
-The description names the required knowledge or tool environment, then the decisive operation and object type in
-roughly 15–40 words. It preserves essential constraints and omits incidental story and submission details. Full task
-instructions reach the describer; the embedding token limit applies to the rendered short description. Groups never
-receive assignment anchors or task mappings.
+The shared embedding rubric asks for required knowledge and the decisive operation. Direct embedding uses
+bounded instruction excerpts. Optional model rewrites produce 15–40 words naming the environment and operation.
+Intermediate groups remain navigation nodes; root scopes supply subject membership anchors.
 
 The [curation embedding pipeline](../task_curation/README.md#task-and-curriculum-embeddings) owns task descriptions,
 task embeddings, curriculum anchor embeddings and assignment. The curriculum experiment supplies the immutable
@@ -151,7 +150,7 @@ The pipeline describes instructions and public answer/tool contracts without ope
 grading resources. It retains task identity separately from public-content identity, so repeated content shares
 inference across source populations. Task and curriculum texts use the same Harrier checkpoint, tokenizer, embedding
 instruction, last-token pooling and L2 normalization. Curriculum outcomes and includes provide capability anchors;
-root scopes provide subject membership anchors. Groups receive navigation rollups, not task assignments.
+root scopes provide subject membership anchors. Groups receive navigation rollups.
 
 FineStore caches validated description requests and content-addressed vectors. A curriculum edit renders and embeds
 changed anchors, then realigns cached task vectors. Changing the description prompt/model regenerates descriptions;

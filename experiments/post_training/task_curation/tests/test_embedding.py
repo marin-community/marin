@@ -12,7 +12,9 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from click.testing import CliRunner
 from marin.execution.lazy import ArtifactStep, run
+from marin.processing.embeddings.harrier import HarrierEmbedder
 from taskcompendium.convert.answers import numeric_answer_task
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.models import RawRow
@@ -22,11 +24,10 @@ from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
-from experiments.post_training.task_curation.curriculum import curriculum_anchors
+from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.embedding import DescriptionEndpoint, curation_embedding_pipeline
 from experiments.post_training.task_curation.local import local_artifact_prefix
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
-from experiments.post_training.task_curation.source_metadata import source_declaration
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
 
@@ -39,9 +40,7 @@ class DescriptionHandler(BaseHTTPRequestHandler):
         server = cast(DescriptionServer, self.server)
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         server.requests.append(request)
-        identifier = request["tools"][0]["function"]["parameters"]["properties"]["task_id"]["const"]
         description = {
-            "task_id": identifier,
             "status": "ready",
             "reason": "",
             "description": "Elementary arithmetic: add two integers.",
@@ -197,7 +196,7 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
                     sample_size=None,
                     seed=0,
                     inventory=[
-                        source_declaration(RlDataSource(info=SourceInfo(id="source", title="Fixture", origin="fixture")))
+                        RlDataSource(info=SourceInfo(id="source", title="Fixture", origin="fixture")).declaration
                     ],
                 )
             )
@@ -215,7 +214,7 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
         assert {row["task_id"] for row in rows} == {"a", "b"}
         assert all(row["matches"]["subjects"][0]["capability_id"] == "math.addition" for row in rows)
         batches = [json.loads(line) for line in Path(provider.calls).read_text().splitlines()]
-        expected = {text_record(anchor.text, spec)["text"] for anchor in curriculum_anchors(first_catalog)}
+        expected = {text_record(anchor.text, spec)["text"] for anchor in first_catalog.embedding_anchors()}
         assert expected <= {text for batch in batches for text in batch}
         texts_before = sum(map(len, batches))
         rebuilt = run(second.publication, max_concurrent=1)[0]
@@ -223,10 +222,69 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
         assert {row["task_id"] for path in rebuilt.paths for row in load_parquet(path)} == {"a", "b"}
         assert len(description_server.requests) == 1
         batches = [json.loads(line) for line in Path(provider.calls).read_text().splitlines()]
-        assert sum(map(len, batches)) == texts_before + 1
-    anchors = curriculum_anchors(first_catalog)
-    assert {anchor.capability_id for anchor in anchors if anchor.capability_id is not None} == {
-        "math.addition",
-        "math.comparison",
-    }
-    assert len(anchors) == 3
+    assert sum(map(len, batches)) == texts_before + 1
+
+
+@pytest.mark.parametrize("representation", ["direct", "rewrite"])
+def test_driver_converts_embeds_and_resumes_without_rereading_raw_inputs(
+    tmp_path, monkeypatch, description_server, representation
+):
+    # Keep model inference at its provider boundary; execute conversion, HTTP, caches and export.
+    monkeypatch.setattr(
+        HarrierEmbedder, "embed", lambda self, texts: np.ones((len(texts), self.dimensions), dtype=np.float32)
+    )
+    staged = tmp_path / "input/data"
+    staged.mkdir(parents=True)
+    raw_file = staged / "train-0000.parquet"
+    pq.write_table(pa.Table.from_pylist([{"problem": "Two plus three?", "answer": "5"}]), raw_file)
+    curriculum = tmp_path / "curriculum"
+    curriculum.mkdir()
+    (curriculum / "curriculum.json").write_text(catalog().model_dump_json())
+    output, cache = tmp_path / "output", tmp_path / "cache"
+    common = [
+        "--representation",
+        representation,
+        "--cache-dir",
+        str(cache),
+        "--embed",
+        "publication",
+        "--max-workers",
+        "1",
+        "--catalog-root",
+        str(curriculum),
+        "--model-revision",
+        "fixture",
+        "--base-url",
+        f"http://127.0.0.1:{description_server.server_port}/v1",
+    ]
+    runner = CliRunner()
+    converted = runner.invoke(
+        main,
+        [
+            *common,
+            "--mode",
+            "quick",
+            "--source",
+            "aime24",
+            "--input-root",
+            str(staged.parent),
+            "--output-root",
+            str(output),
+            "--run",
+        ],
+    )
+    assert converted.exit_code == 0, converted.output
+    corpus = output / "corpus.json"
+    assert json.loads(corpus.read_text())["sources"][0]["converted_rows"] == 1
+    raw_file.unlink()
+    resumed = runner.invoke(main, [*common, "--corpus", str(corpus), "--run"])
+    assert resumed.exit_code == 0, resumed.output
+    release_files = list((cache / "rl-semantics").glob("publication-*/2026.10.14.1/release.json"))
+    assert len(release_files) == 1
+    release = json.loads(release_files[0].read_text())
+    assert release["task_count"] == release["ready_count"] == 1
+    assert release["population"] == "converted"
+    assert len(description_server.requests) == int(representation == "rewrite")
+    tasks = [row for path in release["paths"] for row in load_parquet(path)]
+    assert len(tasks) == 1 and tasks[0]["intended_use"] == "eval"
+    assert tasks[0]["matches"]["subjects"][0]["subject_id"] == "D01"

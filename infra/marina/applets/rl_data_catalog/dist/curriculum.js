@@ -2,7 +2,7 @@
 const number = new Intl.NumberFormat('en-US');
 const compact = new Intl.NumberFormat('en-US', {notation: 'compact', maximumFractionDigits: 1});
 const percent = value => `${(100 * value).toFixed(1)}%`;
-const outcomes = {assigned: 'Capability match', subject_only: 'Subject only', out_of_scope: 'Outside cutoff', insufficient_context: 'Insufficient context'};
+const outcomes = {assigned: 'Capability match', subject_only: 'Subject only', out_of_scope: 'Outside cutoff', insufficient_context: 'Insufficient context', skipped: 'Embedding skipped'};
 const state = {data: null, parent: '', subject: '', nodes: new Map(), request: 0, taskRequest: 0, next: '', taskQuery: null};
 let searchTimer;
 
@@ -151,7 +151,7 @@ async function loadTasks() {
       const item = button('', 'task-row', () => openDetail(task));
       const source = state.data.sources.find(source => source.source_id === task.source_id);
       const identity = node('span', source?.name || task.source_id, 'task-source'); identity.append(node('span', task.task_id, 'task-id'));
-      item.append(identity, node('span', task.description || 'Instructions do not establish the requested operation.', 'task-description'), node('span', outcomes[task.outcome], 'task-outcome'));
+      item.append(identity, node('span', task.description || (task.outcome === 'skipped' ? 'Embedding skipped; open details for the failure.' : 'Instructions do not establish the requested operation.'), 'task-description'), node('span', outcomes[task.outcome], 'task-outcome'));
       $('task-list').append(item);
     }
     state.next = data.next_cursor; $('more-tasks').hidden = !state.next;

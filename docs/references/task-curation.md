@@ -83,7 +83,7 @@ directly. Atlas reads these facts without invoking or inspecting the callable.
 | `experiments/post_training/task_curation/images/` | `build.py`, which builds declared environments and records each as an artifact, and the build CLI |
 | `taskcompendium.runtime.local` | The uv environments that local graders run in on the Zephyr worker |
 | `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()` and `runnable_sources()` |
-| `experiments/post_training/task_curation/source.py`, `source_metadata.py` | Source declarations and inventory metadata |
+| `experiments/post_training/task_curation/source.py` | Source declarations and inventory metadata |
 | `experiments/post_training/task_curation/catalog_snapshot.py` | Published curation inventory, grades and archived evidence |
 | `experiments/post_training/task_curation/config.py` | Invocation options and concrete recipe settings; service binding belongs to `process_rows` |
 | `experiments/post_training/task_curation/pipeline.py` | `CurationRecipe`, `process_rows` and its `data/rl/<name>-<hash>` artifact |

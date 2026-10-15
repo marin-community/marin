@@ -63,6 +63,7 @@ def text_record(text: str, spec: EmbeddingSpec) -> dict:
 
 def task_text_records(row: dict, spec: EmbeddingSpec) -> Iterator[dict]:
     if row["status"] != DescriptionStatus.READY:
+        counters.current_stage().update_counter("embedding/skipped_embeddings", 1)
         return
     yield {"content_hash": row["content_hash"], **text_record(row["description"], spec)}
 

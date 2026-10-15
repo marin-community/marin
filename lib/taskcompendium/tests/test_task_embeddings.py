@@ -30,6 +30,7 @@ from taskcompendium.pipeline.review_requests import RequestObservation, RequestO
 from taskcompendium.pipeline.semantics import (
     DescriptionModel,
     TaskInputFile,
+    bounded_task_text,
     describe_tasks,
     prepare_semantic_inputs,
     task_semantic_input,
@@ -76,6 +77,7 @@ def task(identifier, prompt="Count two apples.", answer="817", dataset="private-
 @dataclass(frozen=True)
 class DescriptionTransport:
     calls: str
+    fail_prompts: tuple[str, ...] = ()
 
     def __call__(self, requests):
         observations = []
@@ -83,6 +85,14 @@ class DescriptionTransport:
             with Path(self.calls).open("a") as stream:
                 stream.write(json.dumps(request) + "\n")
             public = request["body"]["messages"][1]["content"]
+            if any(prompt in public for prompt in self.fail_prompts):
+                observations.append(
+                    RequestObservation(
+                        (request["custom_id"],),
+                        json.dumps({"custom_id": request["custom_id"], "error": {"code": "unavailable"}}),
+                    )
+                )
+                continue
             missing = "UNSPECIFIED_OPERATION" in public
             description = {
                 "status": "insufficient_context" if missing else "ready",
@@ -107,9 +117,7 @@ class DescriptionTransport:
                                             "type": "function",
                                             "function": {
                                                 "name": "describe_task",
-                                                "arguments": json.dumps(
-                                                    {"task_id": request["custom_id"], **description}
-                                                ),
+                                                "arguments": json.dumps(description),
                                             },
                                         }
                                     ],
@@ -136,6 +144,45 @@ class EmbeddingProvider:
 
 def rows(paths):
     return [row for path in paths for row in load_parquet(path)]
+
+
+def test_oversized_task_excerpts_preserve_operations_and_valid_utf8():
+    text = "BEGIN_OPERATION\n" + "é" * 50000 + "\nMIDDLE_OPERATION\n" + "🙂" * 25000 + "\nEND_OPERATION"
+    excerpt = bounded_task_text(text, 2048)
+    assert len(excerpt.encode("utf-8")) <= 2048
+    assert all(operation in excerpt for operation in ("BEGIN_OPERATION", "MIDDLE_OPERATION", "END_OPERATION"))
+    assert "omitted" in excerpt and "�" not in excerpt
+
+
+@pytest.mark.parametrize("failures", [1, 2])
+def test_description_failures_preserve_tasks_and_enforce_global_skip_limit(context, tmp_path, failures):
+    source = TaskInputFile("fixture", "revision", "unused", "train", "converted")
+    records = [
+        task_semantic_input(task(str(i), prompt=f"Count apples, case {i:02d}."), source).model_dump(mode="json")
+        for i in range(25)
+    ]
+    inputs = tmp_path / "inputs.parquet"
+    pq.write_table(pa.Table.from_pylist(records), inputs)
+    output = tmp_path / "descriptions"
+    transport = DescriptionTransport(str(tmp_path / "requests.jsonl"), tuple(f"case {i:02d}." for i in range(failures)))
+    arguments = dict(
+        input_paths=[str(inputs)],
+        model=DescriptionModel("fixture", "1"),
+        submit=transport,
+        cache_root=str(tmp_path / "cache"),
+        output_root=str(output),
+    )
+    if failures == 2:
+        with pytest.raises(RuntimeError, match="Skipped 2/25"):
+            describe_tasks(context, **arguments)
+    else:
+        paths = describe_tasks(context, **arguments)
+        descriptions = rows(paths)
+        assert len(descriptions) == 25
+        skipped = [row for row in descriptions if row["status"] == "skipped"]
+        assert len(skipped) == 1 and skipped[0]["reason"]
+    counters = json.loads((output / "manifest.json").read_text())["counters"]
+    assert counters["semantics/skipped_embeddings"] == failures
 
 
 def test_instruction_projection_excludes_private_contract_and_ignores_source_identity():
@@ -214,7 +261,6 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
 
     anchors = (
         CurriculumAnchor(
-            anchor_id="domain",
             kind=AnchorKind.SUBJECT,
             subject_id="math",
             capability_id=None,
@@ -222,7 +268,6 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
             text="Elementary arithmetic: count apples.",
         ),
         CurriculumAnchor(
-            anchor_id="count",
             kind=AnchorKind.CAPABILITY,
             subject_id="math",
             capability_id="math.count",
@@ -304,7 +349,6 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
 def test_exact_matching_preserves_primary_candidates_and_weak_scores():
     anchors = (
         CurriculumAnchor(
-            anchor_id="domain",
             kind="subject",
             subject_id="math",
             capability_id=None,
@@ -312,7 +356,6 @@ def test_exact_matching_preserves_primary_candidates_and_weak_scores():
             text="Math",
         ),
         CurriculumAnchor(
-            anchor_id="count",
             kind="capability",
             subject_id="math",
             capability_id="count",
@@ -320,7 +363,6 @@ def test_exact_matching_preserves_primary_candidates_and_weak_scores():
             text="Count",
         ),
         CurriculumAnchor(
-            anchor_id="compare",
             kind="capability",
             subject_id="math",
             capability_id="compare",
@@ -328,7 +370,6 @@ def test_exact_matching_preserves_primary_candidates_and_weak_scores():
             text="Compare",
         ),
         CurriculumAnchor(
-            anchor_id="mechanic",
             kind="subject",
             subject_id="practice",
             capability_id=None,
@@ -336,7 +377,6 @@ def test_exact_matching_preserves_primary_candidates_and_weak_scores():
             text="Calculation",
         ),
         CurriculumAnchor(
-            anchor_id="calculate",
             kind="capability",
             subject_id="practice",
             capability_id="calculate",
@@ -348,7 +388,6 @@ def test_exact_matching_preserves_primary_candidates_and_weak_scores():
     tasks = np.asarray([[0.6, 0, 0.8], [0.6, 0.6, 0.8], [0, 0, 1], [0, 0, -1]], dtype=np.float32)
     neighbor = tuple(
         CurriculumAnchor(
-            anchor_id=f"neighbor-{kind}",
             kind=kind,
             subject_id="neighbor",
             capability_id="neighbor.work" if kind == "capability" else None,

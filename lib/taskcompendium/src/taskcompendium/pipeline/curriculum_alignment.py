@@ -10,6 +10,7 @@ from functools import cached_property
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.task_embeddings import normalized_vectors
 
 TOP_K = 3
@@ -28,12 +29,15 @@ class AnchorKind(StrEnum):
 class CurriculumAnchor(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    anchor_id: str
     kind: AnchorKind
     subject_id: str
     capability_id: str | None
     facet: CurriculumFacet
     text: str
+
+    @cached_property
+    def anchor_id(self) -> str:
+        return canonical_sha256(self.model_dump(mode="json"))
 
 
 class CapabilityCandidate(BaseModel):

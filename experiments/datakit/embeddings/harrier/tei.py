@@ -22,10 +22,11 @@ from fray.types import Entrypoint, JobRequest, JobStatus, ResourceConfig, create
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.setup_scripts import default_setup_script
-from marin.processing.embeddings.tei import TEI_REQUEST_BATCH_SIZE
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rigging.timing import Deadline
+
+from experiments.datakit.embeddings.harrier.config import TEI_REQUEST_BATCH_SIZE
 
 logger = logging.getLogger(__name__)
 

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Validate instance coverage and count scored task populations with Zephyr."""
+"""Write Atlas task Parquet after checking every selected task has one alignment row."""
 
 import json
 from collections import Counter
@@ -84,7 +84,10 @@ def publish_alignments(
     alignment_paths: Sequence[str],
     output_root: str,
 ) -> PublicationData:
-    """Require one scored row for every input instance before publishing a release."""
+    """Join inputs to scores by source/task ID, reject gaps or duplicates, and write Parquet.
+
+    Returned paths and population counts form the Atlas release manifest.
+    """
     tagged = [*((path, "input") for path in input_paths), *((path, "match") for path in alignment_paths)]
     result = context.execute(
         Dataset.from_list(tagged)

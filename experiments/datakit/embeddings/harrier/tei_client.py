@@ -14,7 +14,8 @@ import numpy as np
 from iris.client.client import iris_ctx
 from rigging.timing import Deadline, ExponentialBackoff
 
-TEI_REQUEST_BATCH_SIZE = 8
+from experiments.datakit.embeddings.harrier.config import TEI_REQUEST_BATCH_SIZE
+
 REQUEST_CONCURRENCY = 16
 REQUEST_MAX_ATTEMPTS = 32
 ENDPOINT_READY_TIMEOUT = 600
@@ -25,10 +26,9 @@ RETRYABLE_HTTP_CODES = frozenset({429, 502, 503, 504})
 class TeiEmbeddingClient:
     """Submit embedding batches across an Iris endpoint pool."""
 
-    def __init__(self, endpoint_name: str, embedding_dim: int, *, truncate: bool) -> None:
+    def __init__(self, endpoint_name: str, embedding_dim: int) -> None:
         self.endpoint_name = endpoint_name
         self.embedding_dim = embedding_dim
-        self.truncate = truncate
 
     def _endpoint_urls(self) -> list[str]:
         deadline = Deadline.from_seconds(ENDPOINT_READY_TIMEOUT)
@@ -41,7 +41,7 @@ class TeiEmbeddingClient:
             time.sleep(ENDPOINT_POLL_DELAY)
 
     def _request(self, endpoint_urls: list[str], endpoint_index: int, texts: list[str]) -> list[list[float]]:
-        payload = json.dumps({"inputs": texts, "normalize": True, "truncate": self.truncate}, ensure_ascii=False).encode()
+        payload = json.dumps({"inputs": texts, "normalize": True, "truncate": True}, ensure_ascii=False).encode()
         backoff = ExponentialBackoff(initial=0.1, maximum=5, factor=2)
         last_error: Exception | None = None
         for attempt in range(REQUEST_MAX_ATTEMPTS):

@@ -29,6 +29,7 @@ from taskcompendium.pipeline.semantics import (
     DescriptionModel,
     TaskInputFile,
     describe_tasks,
+    prepare_instruction_texts,
     prepare_semantic_inputs,
 )
 from taskcompendium.pipeline.task_alignment import align_tasks
@@ -44,12 +45,13 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_REQUEST_TIMEOUT, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignRuntime
-from experiments.post_training.task_curation.curriculum import curriculum_anchors, curriculum_nodes
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
 INPUTS_VERSION = "2026.10.14.1"
-DESCRIPTIONS_VERSION = "2026.10.14.7"
+DESCRIPTIONS_VERSION = "2026.10.15.1"
+INSTRUCTION_TEXTS_VERSION = "2026.10.15.1"
 EMBEDDINGS_VERSION = "2026.10.14.4"
+CURRICULUM_EMBEDDINGS_VERSION = "2026.10.15.1"
 ALIGNMENT_VERSION = "2026.10.14.4"
 PUBLICATION_VERSION = "2026.10.14.1"
 
@@ -130,6 +132,13 @@ def _describe(
     return SemanticArtifact(path=output_root, paths=paths)
 
 
+def _instructions(runtime: CampaignRuntime, *, inputs_root: str, output_root: str) -> SemanticArtifact:
+    paths = prepare_instruction_texts(
+        runtime.context, input_paths=SemanticArtifact.raw_load(inputs_root).paths, output_root=output_root
+    )
+    return SemanticArtifact(path=output_root, paths=paths)
+
+
 def _embed_tasks(
     runtime: CampaignRuntime,
     embedder: TextEmbedder,
@@ -160,7 +169,7 @@ def _embed_curriculum(
     output_root: str,
 ) -> SemanticArtifact:
     catalog = CurriculumCatalog.model_validate_json((StoragePath(catalog_root) / "curriculum.json").read_text())
-    anchors = curriculum_anchors(catalog)
+    anchors = catalog.embedding_anchors()
     anchor_result = runtime.context.execute(
         Dataset.from_list([anchors])
         .flat_map(lambda batch: [anchor.model_dump(mode="json") for anchor in batch])
@@ -175,7 +184,9 @@ def _embed_curriculum(
         runtime.context, texts=texts, spec=spec, embedder=embedder, cache_root=cache_root, output_root=output_root
     )
     (StoragePath(output_root) / "curriculum.json").write_text(catalog.model_dump_json())
-    (StoragePath(output_root) / "nodes.json").write_text(json.dumps(curriculum_nodes(catalog), ensure_ascii=False))
+    (StoragePath(output_root) / "nodes.json").write_text(
+        json.dumps([node.model_dump(mode="json") for node in catalog.atlas_nodes()], ensure_ascii=False)
+    )
     (StoragePath(output_root) / "anchor_paths.json").write_text(json.dumps(anchor_result.results))
     return SemanticArtifact(path=output_root, paths=paths)
 
@@ -332,7 +343,7 @@ def curation_embedding_pipeline(
     curated: dict[str, ArtifactStep],
     curriculum: ArtifactStep,
     runtime: CampaignRuntime,
-    description_model: DescriptionModel,
+    description_model: DescriptionModel | None,
     endpoint: DescriptionEndpoint,
     spec: EmbeddingSpec,
     embedder: TextEmbedder,
@@ -368,6 +379,15 @@ def curation_embedding_pipeline(
             cache_root=str(StoragePath(cache_root) / "descriptions"),
             output_root=OUT,
         )
+        if description_model is not None
+        else apply(
+            "rl-semantics/instruction-texts",
+            partial(_instructions, runtime),
+            version=INSTRUCTION_TEXTS_VERSION,
+            artifact_type=SemanticArtifact,
+            inputs_root=inputs,
+            output_root=OUT,
+        )
     )
     vectors = _named(
         apply(
@@ -385,7 +405,7 @@ def curation_embedding_pipeline(
         apply(
             "rl-semantics/curriculum-embeddings",
             partial(_embed_curriculum, runtime, embedder),
-            version=EMBEDDINGS_VERSION,
+            version=CURRICULUM_EMBEDDINGS_VERSION,
             artifact_type=SemanticArtifact,
             catalog_root=curriculum,
             spec=spec,

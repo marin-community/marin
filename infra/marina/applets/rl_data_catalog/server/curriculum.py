@@ -91,6 +91,7 @@ WITH selected_sources AS (
 ), states AS (
     SELECT t.source_id, t.task_id, t.content_hash, CASE
         WHEN t.description_status='insufficient_context' THEN 'insufficient_context'
+        WHEN t.description_status='skipped' THEN 'skipped'
         WHEN COUNT(m.task_id) FILTER (
             WHERE m.membership_similarity >= 1 - CAST(:subject_distance AS DOUBLE PRECISION)
             AND m.capability_similarity >= 1 - CAST(:capability_distance AS DOUBLE PRECISION))>0 THEN 'assigned'
@@ -185,7 +186,8 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                     {count_expression('s', filters.count_mode)} FILTER (WHERE s.outcome='subject_only') AS subject_only,
                     {count_expression('s', filters.count_mode)} FILTER (WHERE s.outcome='out_of_scope') AS out_of_scope,
                     {count_expression('s', filters.count_mode)} FILTER (WHERE s.outcome='insufficient_context')
-                        AS insufficient_context
+                        AS insufficient_context,
+                    {count_expression('s', filters.count_mode)} FILTER (WHERE s.outcome='skipped') AS skipped
                 FROM states s
             """
                     ),
@@ -248,7 +250,7 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
         filters: Annotated[CoverageQuery, Depends(coverage_query)],
         subject_id: str = "",
         node_id: str = "",
-        outcome: Literal["all", "assigned", "subject_only", "out_of_scope", "insufficient_context"] = "all",
+        outcome: Literal["all", "assigned", "subject_only", "out_of_scope", "insufficient_context", "skipped"] = "all",
         cursor: str = "",
         limit: int = Query(50, ge=1, le=100),
     ) -> dict[str, Any]:

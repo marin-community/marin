@@ -22,11 +22,12 @@ review, grader execution, resource admission and deduplication. Outputs are
 `normalize/*.parquet`, `manifest.json` and `campaign.json`, with no admitted
 `final/` view. Failed sources are recorded while the rest continue.
 
-The driver requires `--mode quick`, `sample` or `full`. Omit `--run` to print a
-plan without downloading, converting or starting workers. QUICK requires named
-sources and preserves their request order, ignoring repeated names. SAMPLE/FULL
-select sources in catalog order; omitting `--source` selects the full catalog.
-QUICK needs no review model, controller, worker image or coordinator settings.
+Select `--mode quick`, `sample` or `full`, or resume with `--corpus` as described
+below. Omit `--run` to print a plan without downloading, converting or starting
+workers. QUICK preserves named sources in request order, ignoring repeated names.
+SAMPLE/FULL select sources in catalog order. Omitting `--source` selects every
+runnable source. Local QUICK needs no review model, controller, worker image or
+coordinator settings.
 
 Repeat `--source` for a cohort and use a fresh output root each pass. Downloads
 are cached under `~/.cache/marin` (`--cache-dir` overrides this).
@@ -221,109 +222,131 @@ explicit truncation; binary files retain hashes. Full runs discard archive bytes
 
 ## Task and curriculum embeddings
 
-The canonical embedding graph consumes existing curation outputs and the immutable
-task curriculum. It runs every data pass through Zephyr: instruction projection,
-cached semantic descriptions, task vectors, curriculum anchor vectors and exact
-faceted alignment. The old curriculum OpenAI embedding CLI and SQLite cache are
-removed.
+The curation driver embeds public task instructions and curriculum entries with
+Harrier, computes exact cosine matches, and exports an Atlas release through
+Zephyr. Both sides use the same retrieval rubric. Optional model rewrites support
+bounded comparisons. The curriculum has no separate embedding CLI or database.
 
-Start with a seeded sample from a local QUICK conversion. QUICK does not admit
-tasks, so select the `converted` population explicitly:
+Start with a local QUICK conversion and a seeded sample:
 
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' \
   --with-editable './lib/marin[cpu]' python \
-  -m experiments.post_training.task_curation.embed \
-  --curated 'Task Trove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2' \
-    /path/to/quick/tasktrove-nl2bash \
-  --cache-root /path/to/persistent/embedding-cache \
-  --population converted --sample-size 20 \
-  --model-revision YOUR_GLM_REVISION --base-url YOUR_GLM_ENDPOINT \
-  --embedding-backend cpu --compute-dtype float32
+  -m experiments.post_training.task_curation.driver \
+  --mode quick --source aime24 \
+  --output-root /path/to/quick --cache-dir /path/to/persistent/cache \
+  --embed publication --embedding-sample-size 20
 ```
 
-The command prints a plan. Add `--run` to execute; `GLM_BULK_TOKEN` supplies the
-description-model credential. Repeat `--curated SOURCE_ID ROOT` for more sources.
-For reviewed outputs, select `--population admitted`. Omit `--sample-size` to
-process complete selected populations. `--catalog-root` selects another immutable
-directory containing `curriculum.json`; otherwise the graph uses `TASK_CURRICULUM`.
-Use `--stage descriptions` or `--stage curriculum_embeddings` to run one branch
-and its dependencies while measuring the local loop.
+Add `--run` to execute. AIME24 downloads its pinned inputs automatically. Direct
+embedding needs no inference-service credential.
+`--embed STAGE` runs that embedding stage and its dependencies after conversion
+or curation. QUICK embeds converted tasks; SAMPLE/FULL embeds admitted tasks.
+Stages are `inputs`, `descriptions`, `task_embeddings`, `curriculum_embeddings`,
+`assignments` and `publication`. Omit `--embedding-sample-size` for all selected
+tasks. `--catalog-root` selects an immutable directory containing `curriculum.json`;
+otherwise the graph uses `TASK_CURRICULUM`.
 
-The annotator sees instructions and the public tool/answer contract. It does not
-read task files, source labels, private verifier resources or solutions. Tasks
-with the same public input share one description. Missing information about the
-requested operation produces `insufficient_context`.
+`--cache-dir` selects local workers and the local artifact cache. `--review-cache`
+holds GLM request/description caches and Harrier vectors in its `descriptions` and
+`vectors` subdirectories; it defaults to `<cache-dir>/review-cache` locally. Keep
+this inference cache when changing worker counts or resuming a corpus. Remote
+artifact outputs use the Iris job’s regional Marin prefix.
 
-The description names the required knowledge or tool environment and the core
-operation in roughly 15–40 words. Routine setup, output capture and submission
-details are omitted unless they are the main problem. Each ready task produces
-one vector. Full instructions go to the describer; `--max-tokens` limits the
-rendered embedding input, including its instruction prefix. It does not limit
-task instruction length. Overlong embedding inputs fail without truncation.
+Direct embedding uses instructions and the public answer/tool contract. It opens
+no task files, private verifier resources or solutions. Inputs are bounded to
+8 KiB of UTF-8, with beginning/middle/end excerpts and omission markers when
+needed. Public-content hashes cover the complete input before sampling, and
+identical rendered texts share vectors. Harrier accepts up to 16,384 tokens for
+direct inputs; this is independent of task instruction length.
 
-Tasks and curriculum anchors share one embedding instruction and the full Harrier
-embedding specification. FineStore stores vectors by rendered-text/specification
-hash, with batched reads and writes. A curriculum-only change reuses task
-descriptions and vectors. Keep the vector archive under a persistent retention
-policy: assignment workers read it in bounded batches. Independent Parquet vector
-outputs preserve each embedding stage's data and provenance.
+For a rewrite comparison, select `--representation rewrite --model MODEL
+--model-revision REVISION --base-url ENDPOINT` and supply `GLM_BULK_TOKEN`.
+The model receives at most 32 KiB of public input with the same excerpt strategy.
+It returns roughly 15–40 words naming the required knowledge or environment and
+core operation. Harrier's rewrite input limit is 512 tokens. A response carries
+no task hash: the transport identifies its request. Failed rewrites exhaust three
+attempts, retain a `skipped` row and increment `semantics/skipped_embeddings`;
+the pass fails only above a 5% failure rate across distinct public inputs.
+`insufficient_context` separately records that the shown input did not establish
+the requested operation. Skipped rows remain in Atlas denominators with their
+failure reason; no vector or match is guessed.
 
-`--max-workers`, `--worker-cpu` and `--worker-memory` select the Zephyr worker
-pool. Description and embedding deduplication distribute work across that pool,
-independently of source-file count. CPU inference limits PyTorch threads to the
-worker's requested CPU count. Run the same entrypoint inside Iris with a
-storage-region cache root. Use CPU workers for corpus scale-out.
+Tasks and curriculum anchors share the pinned Harrier checkpoint, embedding
+instruction, tokenizer, bfloat16 CPU inference, last-token pooling and L2
+normalization. FineStore stores vectors by rendered-text/specification hash, with
+batched reads and writes. A curriculum edit reuses task descriptions and vectors.
+Assignment workers read the persistent vector cache in bounded batches. Parquet
+outputs preserve each embedding stage's vectors and provenance.
 
-For a direct single-GPU baseline, select `--embedding-backend gpu --max-workers 1`
-inside a GPU-equipped Iris job. This runs local Zephyr workers in that job and
-keeps Harrier resident on its GPU. Compare against CPU using identical inputs and
-precision in separate cache roots before sharing vectors across backends.
+All stages use the driver's shared `--max-workers`, `--worker-cpu`,
+`--worker-memory` and `--coordinator-memory` options. Embedding defaults to four
+CPU cores and 8 GB per worker, with inference batches of 16. PyTorch threads
+follow the requested CPU count. Description and vector deduplication distribute
+work across the pool independently of source-file count.
 
-Matching selects the nearest subject within each declared curriculum routing
-facet and writes its membership score and nearest capability. The three
-highest-ranked subject and capability candidates, including the nearest match,
-retain their scores and winning anchors. Matching also saves the three nearest
-capabilities across all subjects, to expose candidates excluded by primary
-subject selection. Weak matches are retained too.
+The catalog declares subject-domain and task-mechanic routing facets. Matching
+selects one primary subject in each facet. It retains the three highest-ranked
+subjects per facet, three capabilities within each primary subject, and three
+capabilities across the whole catalog. Aggregation and display apply runtime
+distance cutoffs to stored scores. Adjust cutoffs in the Atlas coverage pane and press Apply; stored scores
+and embeddings are reused. Alignment does not
+change curation admission or train/eval use.
 
-Acceptance thresholds belong to aggregation and display. Changing a cutoff
-reuses the scored matches and embeddings; it does not rerun matching. Missing
-task meaning remains `insufficient_context`. This pass does not change curation
-admission or train/eval use.
-
-The default `publication` stage checks task IDs and lineage against selected
-inputs before writing `release.json`. It records instance, unique-public-input,
+The `publication` stage checks that every selected source/task ID has exactly one
+alignment row with matching lineage. It writes task Parquet and `release.json`
+for the Atlas loader. The manifest records source-instance, unique-public-input,
 unique-embedding-text and insufficient-context counts, the curriculum hierarchy,
-inventory and upstream artifact roots. Duplicate, missing or mismatched task
-rows fail publication. Full converted releases must cover each conversion
-manifest's converted-task count; sampled releases retain their sample size.
+source inventory and upstream artifact roots. Missing or duplicate task rows fail
+the export. Complete converted releases must cover each conversion manifest's
+converted-task count; sampled releases retain their sample size.
 
 ### Complete converted corpus
 
-Run complete pinned conversions with the existing campaign scheduler and Zephyr:
+Run the existing QUICK mode on Iris with region-local outputs:
 
 ```bash
-uv run python -m experiments.post_training.task_curation.convert_corpus \
-  --output-root /path/to/persistent/corpus --max-workers 8
+uv run iris --cluster=marin job run --target-cluster YOUR-CW-REGION \
+  --extra cpu --cpu 0.5 --memory 2GB --timeout 43200 \
+  -- python -m experiments.post_training.task_curation.driver \
+  --mode quick --output-root s3://YOUR-REGIONAL-BUCKET/corpus \
+  --max-workers 8 --worker-cpu 2 --worker-memory 16g \
+  --coordinator-memory 8g --concurrent-sources 4
 ```
 
-Add `--run` to execute. Repeat `--source NAME` with source invocation names from
-the registry; omit it for every runnable source. The command skips grading and admission, preserves
-converter rejections and writes `corpus.json` only after every selected source
-completes. Conversion outputs are keyed by the pinned acquisition graph and
-recipe version. The manifest records raw input rows, successfully converted
-TaskSpecs, rejections and immutable source-manifest hashes. It also includes the
-full registry inventory. Only `sources` lists completed conversions; unselected
-sources and sources without converters appear in `inventory` alone.
+Add `--run` to execute. List runnable source names with:
 
-In the embedding command above, replace `--curated` arguments with
-`--corpus /path/to/persistent/corpus/corpus.json --population converted`.
-The embedding entrypoint checks source
-manifest hashes before processing. Raw input rows, converted task instances,
-unique public inputs and unique embedding texts have separate counts; converter
-rejections never enter the embedding population. Neither converted counts nor
-embedding coverage imply that tasks passed curation admission.
+```bash
+uv run python -c 'from experiments.post_training.task_curation.sources import runnable_sources; print("\n".join(runnable_sources()))'
+```
+
+Repeat `--source NAME` to select sources; omit it for every runnable source. QUICK skips grading and admission, preserves
+converter rejections, and writes `corpus.json` after all selected sources finish.
+Conversion artifacts retain their pinned acquisition graph and recipe identities.
+The manifest includes completed source roots, immutable source-manifest hashes,
+conversion counts and the full registry inventory. Inventory entries without
+converters remain visible but have no converted tasks.
+
+Resume from that corpus with the same driver and shared model/cache options:
+
+```bash
+uv run iris --cluster=marin job run --target-cluster YOUR-CW-REGION \
+  --extra cpu --cpu 0.5 --memory 2GB --timeout 43200 \
+  -- python -m experiments.post_training.task_curation.driver \
+  --corpus s3://YOUR-REGIONAL-BUCKET/corpus/corpus.json \
+  --embed publication --review-cache s3://YOUR-REGIONAL-BUCKET/semantic-cache \
+  --max-workers 128 --worker-cpu 4 --worker-memory 8g --coordinator-memory 8g
+```
+
+For optional rewrites, pass the credential to the Iris job with
+`-e GLM_BULK_TOKEN VALUE` before `--`.
+The driver prints the final artifact `root` and `paths`; the Atlas manifest is
+`<root>/release.json` after publication. It checks source-manifest hashes before
+processing. The default `--representation direct` skips model rewrites. For rewrite
+comparisons, `--embed descriptions` stops before Harrier inference. Local resumes
+use `--cache-dir` to select a local artifact cache and local Zephyr workers.
+Converter rejections never enter the embedding population. Converted counts and
+embedding coverage do not establish curation admission.
 
 ## Declaring a dataset
 
