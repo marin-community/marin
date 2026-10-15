@@ -3,7 +3,6 @@ named_readers = ["eng-all@openathena.ai"]
 [required_apps]
 echo = "7082d9d8-6c10-4a6f-b544-c8cb825034f2"
 evaldash = "04ce4ca4-6904-4de8-8a78-e7e86f8de615"
-plantt = "c4f78e12-f219-4225-9a21-f7e5264db772"
 tasktrove = "fb17d8f5-7b28-49bc-b4be-6eec90711902"
 zephyr = "b4af3dbc-a72a-41e5-97d7-4d57b6dce630"
 

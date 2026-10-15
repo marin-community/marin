@@ -14,7 +14,7 @@ are capabilities of the same release mechanism. Maintained source under
 `infra/marina/apps/` and `infra/marina/applets/` follows the same workflow.
 
 Ordinary applets have stable `/a/<uuid>/` URLs on an isolated origin. Named apps such
-as Echo and Plantt retain `/echo/` and `/plantt/` on Marina. Initial named registration
+as Echo and EvalDash retain `/echo/` and `/evaldash/` on Marina. Initial named registration
 requires an operator. External storage URLs and job credentials need explicit base-runtime
 configuration; uploaded packages cannot allocate infrastructure or grant themselves
 new credentials.

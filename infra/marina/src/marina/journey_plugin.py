@@ -21,8 +21,7 @@ from marina.database_setup import ensure_applet_provisioning
 from marina.db import DATABASE_URL_ENV, DatabaseSpec, UrlDatabase
 from marina.journeys import Journey, Kernel, running_kernel
 from marina.preview import install_preview_sources
-from marina.scripted_loom import ScriptedLoom, ScriptedLoomServer
-from marina.server import AgentPanelService, MarinaConfig
+from marina.server import MarinaConfig
 from marina.testing import test_database
 
 JOURNEYS_DIR = "journeys"
@@ -64,22 +63,6 @@ def apps_dir_of(path: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
-def scripted_loom_server() -> Iterator[ScriptedLoomServer]:
-    server = ScriptedLoomServer()
-    server.start()
-    try:
-        yield server
-    finally:
-        server.stop()
-
-
-@pytest.fixture
-def scripted_loom(scripted_loom_server: ScriptedLoomServer) -> Iterator[ScriptedLoom]:
-    scripted_loom_server.controller.reset()
-    yield scripted_loom_server.controller
-
-
-@pytest.fixture(scope="session")
 def marina_database(request: pytest.FixtureRequest) -> Iterator[DatabaseSpec]:
     """Every browser journey uses one explicitly disposable package registry."""
     if not request.config.getoption(ENABLE_OPTION):
@@ -102,9 +85,7 @@ def marina_database(request: pytest.FixtureRequest) -> Iterator[DatabaseSpec]:
 
 
 @pytest.fixture(scope="session")
-def marina_kernel(
-    request: pytest.FixtureRequest, scripted_loom_server: ScriptedLoomServer, marina_database: DatabaseSpec
-) -> Iterator[Kernel]:
+def marina_kernel(request: pytest.FixtureRequest, marina_database: DatabaseSpec) -> Iterator[Kernel]:
     first = Path(str(request.session.items[0].path)) if request.session.items else Path.cwd()
     apps_dir = Path(request.config.getoption(APPS_DIR_OPTION) or apps_dir_of(first))
     data_root = request.config.getoption(DATA_ROOT_OPTION) or str(apps_dir.parent / ".data")
@@ -113,7 +94,6 @@ def marina_kernel(
         data_root=data_root,
         iap_audience=None,
         database=marina_database,
-        agent_panel=AgentPanelService(scripted_loom_server.origin),
     )
     with running_kernel(config) as kernel:
         yield kernel
@@ -135,7 +115,6 @@ def journey(request: pytest.FixtureRequest) -> Iterator[Journey]:
         pytest.skip(f"journeys run through `marina journey` or pytest {ENABLE_OPTION}")
     marina_kernel: Kernel = request.getfixturevalue("marina_kernel")
     marina_browser: Browser = request.getfixturevalue("marina_browser")
-    scripted_loom_server: ScriptedLoomServer = request.getfixturevalue("scripted_loom_server")
     app = app_of(Path(str(request.path)))
     shots_root = Path(request.config.getoption(SHOTS_OPTION) or DEFAULT_SHOTS_DIR)
     shots = shots_root / app
@@ -147,7 +126,6 @@ def journey(request: pytest.FixtureRequest) -> Iterator[Journey]:
         origin=marina_kernel.origin,
         app=app,
         shots=shots,
-        external_origins=(scripted_loom_server.origin,),
     )
     try:
         yield walk

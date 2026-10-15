@@ -45,7 +45,7 @@ and 2,000 regular files; large payloads belong in object storage.
 Most applets use `/a/<uuid>/` on the isolated authenticated applet origin. A manifest
 with `name = "echo"` registers the stable authenticated route `/echo/`. Initial named
 registration requires an operator, and names cannot change on later releases.
-Echo, EvalDash, Plantt, TaskTrove and Zephyr keep their existing names, UUID
+Echo, EvalDash, TaskTrove and Zephyr keep their existing names, UUID
 bindings in `release.toml`, data locations and database schemas.
 
 Named applications can declare an allowed `data_url`, scheduled jobs and an agent
@@ -96,7 +96,7 @@ for a disposable preview that leaves production unchanged.
 `current`, `different`, `modified`, or `unrecorded` for packages without provenance.
 Local edits take precedence: a dirty checkout reports `modified` even if the
 released package has no source metadata.
-Fetch main before assessing freshness. Declare repository-relative shared build inputs in `source_paths`; the five named
+Fetch main before assessing freshness. Declare repository-relative shared build inputs in `source_paths`; the four named
 apps include `infra/marina/web`. Runtime dependencies can also affect behavior.
 
 An ad hoc applet can use the same command without a Git repository or declaration:
@@ -139,7 +139,7 @@ To preview all maintained named source apps together:
 ```bash
 uv run marina build
 uv run marina dev
-uv run marina journey plantt
+uv run marina journey evaldash
 ```
 
 `dev` uses disposable Postgres and explicitly installs built source packages.
@@ -206,7 +206,7 @@ compatible with retained revisions and requests/jobs already running old code.
 
 Named applications adopt their existing schema in place on first release. Tables
 and their dependent sequences move to the applet role; data is neither copied nor
-reloaded. Existing reader grants on the five maintained schemas are retained.
+reloaded. Existing reader grants on the four maintained schemas are retained.
 Ordinary applets own `applet_<uuid-without-hyphens>`. Every application role inherits
 `marina_reader` for cross-application reads and writes only its own schema.
 
@@ -254,9 +254,10 @@ repository = "marin-community/marin"
 starters = ["What is on this page?"]
 ```
 
-`/api/marina/agent/config?app=plantt` reads the current released metadata. The base
-runtime supplies `MARINA_AGENT_ORIGIN`; the page supplies bounded, versioned context
-through the shared `AgentPanel` component. Its origin is added to that app's CSP.
+For an application named `my-app`, `/api/marina/agent/config?app=my-app` reads
+its current released metadata. The base runtime supplies `MARINA_AGENT_ORIGIN`;
+the page supplies bounded, versioned context through the shared `AgentPanel`
+component. `MARINA_AGENT_ORIGIN` is added to that app's CSP.
 
 ## Scheduled jobs
 
@@ -380,7 +381,7 @@ prerequisites while the existing service and workers still run:
   binding through the global `marin` IAM workflow before attempting bootstrap.
 - Copy the `user` value from `/api/marina/me` on the deployed authenticated
   service for `OWNER_ID`. The default operator list is empty: only that exact
-  publisher ID can update or archive the five named apps after bootstrap.
+  publisher ID can update or archive the four named apps after bootstrap.
   To share those operations, commit the intended verified user IDs in the stack's
   `applet_operators` configuration and apply that configuration during cutover.
 - Inspect schema and relation ownership through an administrative SQL connection.
@@ -390,7 +391,7 @@ prerequisites while the existing service and workers still run:
 ```sql
 WITH application_schemas AS (
     SELECT oid, nspname, nspowner FROM pg_namespace
-    WHERE nspname IN ('echo', 'evaldash', 'plantt', 'tasktrove', 'zephyr')
+    WHERE nspname IN ('echo', 'evaldash', 'tasktrove', 'zephyr')
 )
 SELECT nspname AS schema, 'schema' AS kind, nspname AS object,
        pg_get_userbyid(nspowner) AS owner
@@ -447,15 +448,13 @@ Inspect versions first if a previous attempt completed any releases:
 ```bash
 uv run marina release infra/marina/apps/echo --base-version 0 --url http://127.0.0.1:8080
 uv run marina release infra/marina/apps/evaldash --base-version 0 --url http://127.0.0.1:8080
-uv run marina release infra/marina/apps/plantt --base-version 0 --url http://127.0.0.1:8080
 uv run marina release infra/marina/apps/tasktrove --base-version 0 --url http://127.0.0.1:8080
 uv run marina release infra/marina/apps/zephyr --base-version 0 --url http://127.0.0.1:8080
 ```
 
-Verify existing records, named APIs, MCP discovery, Plantt's agent metadata and
-job-module imports. In the first terminal, stop the local kernel with Ctrl-C,
-then check registrations using its existing database environment and dispatch
-the main-branch runtime workflow:
+Verify existing records, named APIs, MCP discovery and job-module imports. In the
+first terminal, stop the local kernel with Ctrl-C, then check registrations using
+its existing database environment and dispatch the main-branch runtime workflow:
 
 ```bash
 uv run marina migrate --require-apps

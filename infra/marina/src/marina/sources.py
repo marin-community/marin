@@ -29,5 +29,5 @@ def discover_apps(apps_dir: Path) -> list[AppManifest]:
     return [
         load_manifest(child)
         for child in sorted(apps_dir.iterdir())
-        if child.is_dir() and not child.name.startswith(("_", "."))
+        if child.is_dir() and not child.name.startswith(("_", ".")) and (child / MANIFEST_FILE).is_file()
     ]

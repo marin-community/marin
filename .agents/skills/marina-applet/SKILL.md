@@ -79,7 +79,7 @@ Browser journeys use an explicitly installed Postgres-backed preview:
 ```bash
 uv run marina build
 uv run marina dev
-uv run marina journey plantt
+uv run marina journey evaldash
 uv run pytest infra/marina
 ```
 

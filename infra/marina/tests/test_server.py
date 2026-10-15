@@ -182,9 +182,11 @@ starters = ["What is on this page?"]
     assert manifest.agent.starters == ("What is on this page?",)
 
 
-def test_discovery_skips_underscore_dirs(tmp_path: Path) -> None:
+def test_discovery_skips_shared_directories_and_removed_apps_cached_output(tmp_path: Path) -> None:
     write_app(tmp_path, "tasktrove")
     (tmp_path / "_shared").mkdir()
+    (tmp_path / "removed-app" / "dist").mkdir(parents=True)
+    (tmp_path / "removed-app" / "dist" / "index.html").write_text("cached build")
     assert [app.name for app in discover_apps(tmp_path)] == ["tasktrove"]
 
 
