@@ -36,6 +36,12 @@ same runs; tasks by the paper's task ids (`naming.task_public`); objectives as `
   epoch-cap and KL sweep recorded Olmix's predictions at continuous optima only, and no folder records predictions for
   the native Olmix proposals, the QA-subset proposals (relative to MARINER only), the best swarm run or UniMax-8; those
   runs have no rows.
+- `fits_olmix_task_laws`: the matched Olmix baseline's per-task log-linear laws on the Qwen3 swarm, one row per
+  objective and task: BPB(w) = exp(log_c) + exp(sum over buckets b of coef__b * w_b), fitted to the 280 fit runs with
+  a Huber loss (delta 0.01; `huber_loss` is the fit's loss) (`delphi_matched_olmix_3e18_20260908/laws_*.json`). The
+  matched Olmix proposals minimized their aggregate under the `tasks` objective weights, and the held-out analysis
+  evaluates single laws at held-out mixtures for Olmix's per-task predictions. The JSON lists coefficients in the
+  folder's bucket order, which its `solutions.csv` records.
 """
 
 import json
@@ -123,7 +129,11 @@ MODEL_CODES = {
 FROZEN_MARINER = {"uncheatable": "lwspu_u_snc_cap06", "table9": "lwspu_t9_snc_cap08"}
 KL_ABLATION = paths.RO / "delphi_kl_ablation_3e18_20260908"
 KL_FILES = ("policy_summary.csv", "kl_ablation_summary.csv")
-MATCHED_OLMIX = paths.RO / "delphi_matched_olmix_3e18_20260908/summary.json"
+MATCHED_OLMIX_DIR = paths.RO / "delphi_matched_olmix_3e18_20260908"
+MATCHED_OLMIX = MATCHED_OLMIX_DIR / "summary.json"
+OLMIX_LAWS = [MATCHED_OLMIX_DIR / f"laws_{name}.json" for name in MIXSEL_OBJECTIVES]
+OLMIX_SOLUTIONS = MATCHED_OLMIX_DIR / "solutions.csv"  # bucket order of the laws' coefficients
+OLMIX_LAW_FIELDS = {"component", "log_c", "coefficients", "huber_loss"}
 OLMIX_SUBSET = paths.RO / "delphi_olmix_subset_optima_3e18_20260929/summary.json"
 REGMIX_ARGMIN = paths.RO / "regmix_tuned_argmin_3e18_20260930/summary.json"
 SNR_SUBSET = paths.RO / "delphi_table9_snr_subset_3e18_20260928/subset_validation.csv"
@@ -159,6 +169,8 @@ def required_sources() -> list[Path]:
         *(folder / name for folder in COMPARISONS for name in COMPARISON_FILES),
         *(KL_ABLATION / name for name in KL_FILES),
         MATCHED_OLMIX,
+        *OLMIX_LAWS,
+        OLMIX_SOLUTIONS,
         OLMIX_SUBSET,
         REGMIX_ARGMIN,
         SNR_SUBSET,
@@ -302,6 +314,38 @@ def _row(variant: str, objective: str, predictor: str, own: bool, predicted: flo
         "own_prediction": own,
         "predicted_bpb": predicted,
     }
+
+
+def _olmix_task_laws(ctx: ExportContext) -> pd.DataFrame:
+    """One row per objective and task; the producer wrote solutions.csv's bucket column from the bucket list that orders
+    the laws' coefficients."""
+    orders = (
+        _csv(OLMIX_SOLUTIONS, usecols=["candidate_id", "bucket"]).groupby("candidate_id", sort=False).bucket.agg(tuple)
+    )
+    if orders.nunique() != 1:
+        raise ValueError(f"{OLMIX_SOLUTIONS}: candidates list buckets in different orders")
+    buckets = [naming.bucket_public(b) for b in orders.iloc[0]]
+    if sorted(buckets) != sorted(ctx.buckets):
+        raise ValueError(f"{OLMIX_SOLUTIONS}: buckets differ from the partition's")
+    rows = []
+    for path, name in zip(OLMIX_LAWS, MIXSEL_OBJECTIVES, strict=True):
+        for law in _json(path):
+            if set(law) != OLMIX_LAW_FIELDS or len(law["coefficients"]) != len(buckets):
+                raise ValueError(f"{path}: unexpected law for {law.get('component')}")
+            coefficients = dict(zip((f"coef__{b}" for b in buckets), law["coefficients"], strict=True))
+            rows.append(
+                {
+                    "swarm": SWARM,
+                    "objective": _public_objective(name),
+                    "task_id": naming.task_public(law["component"]),
+                    "log_c": law["log_c"],
+                    "huber_loss": law["huber_loss"],
+                    **coefficients,
+                }
+            )
+    laws = pd.DataFrame(rows)
+    assert not laws.duplicated(["objective", "task_id"]).any(), "two laws for one task"
+    return laws[["swarm", "objective", "task_id", "log_c", "huber_loss", *(f"coef__{b}" for b in ctx.buckets)]]
 
 
 def _rows(variant, objective, predictor, own, predicted) -> pd.DataFrame:
@@ -524,4 +568,5 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
         "fits_reliability": _reliability(),
         "fits_learning_curves": _learning_curves(exposures),
         "fits_proposal_predictions": _proposal_predictions(validation.export(ctx)["validation_3e18"]),
+        "fits_olmix_task_laws": _olmix_task_laws(ctx),
     }

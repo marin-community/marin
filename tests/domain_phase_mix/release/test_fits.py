@@ -3,6 +3,7 @@
 
 import re
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -218,6 +219,29 @@ def test_proposal_predictions_reproduce_the_kl_and_regmix_tables(out):
     for (variant, objective), (trees, mariner) in printed.items():
         assert _predicted(p, variant, objective, "regmix") == {trees}
         assert _predicted(p, variant, objective, "mariner") == {mariner}
+
+
+def test_olmix_task_laws_reproduce_the_matched_olmix_predictions(ctx, out, validation_table):
+    laws = out["fits_olmix_task_laws"]
+    assert len(laws) == 58 and set(laws.task_id) == set(naming.TASKS)
+    assert laws.groupby("objective").size().to_dict() == {"obe_easy": 51, "uncheatable": 7}
+    coefficients = [f"coef__{b}" for b in naming.BUCKETS]
+    assert [c for c in laws.columns if c.startswith("coef__")] == coefficients
+    assert laws[coefficients].notna().all().all()
+    # Each law is BPB(w) = exp(log_c) + exp(sum_b coef__b * w_b). The matched Olmix folder records the objective each
+    # trained proposal was predicted to reach; the laws at that run's published weights must give it.
+    recorded = pd.read_json(paths.RO / "delphi_matched_olmix_3e18_20260908/summary.json", orient="index")
+    p = out["fits_proposal_predictions"]
+    for variant, row in recorded.iterrows():
+        run = validation_table[(validation_table.launch == "matched_olmix") & (validation_table.variant == variant)]
+        weights = run[[f"w__{b}" for b in naming.BUCKETS]].iloc[0].to_numpy()
+        objective = {"table9": "obe_easy", "uncheatable": "uncheatable"}[row.target]
+        task_laws = laws[laws.objective == objective].set_index("task_id")
+        per_task = np.exp(task_laws.log_c) + np.exp(task_laws[coefficients].to_numpy() @ weights)
+        predicted = (per_task * pd.Series(ctx.weights[AGGREGATES[objective]])).sum()
+        assert abs(predicted - row.predicted_runtime) <= 1e-9, variant
+        own = p[(p.observation_id.isin(run.observation_id)) & (p.predictor == "olmix") & (p.objective == objective)]
+        assert ((own.predicted_bpb - predicted).abs() <= 1e-9).all() and len(own) == len(run)
 
 
 def test_factorial_predictions_reproduce_the_predicted_effects(out):
