@@ -62,7 +62,6 @@ from marin.evaluation.runner import (
     EvaluationOutcome,
     HostedJudge,
     LaunchProvenance,
-    run_evaluation_steps,
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.step_runner import StepRunner
@@ -89,8 +88,8 @@ from experiments.evaluation.evals import (
 from experiments.evaluation.launch import (
     LaunchSpec,
     build_evaluation_batch,
-    build_evaluation_steps,
     launch_group,
+    run_evaluation_group,
 )
 from experiments.evaluation.models import models
 from experiments.evaluation.pipeline import (
@@ -321,12 +320,14 @@ def _hosted_judge_batch(tmp_path, evaluations: tuple[Evaluation, ...]) -> Evalua
 
 
 def _run_test_batch(batch: EvaluationBatch) -> list[str]:
-    run_evaluation_steps(build_evaluation_steps(batch), batch.max_concurrent)
+    run_evaluation_group(batch)
     return [record_path(batch.records_prefix, evaluation.identity.run_id) for evaluation in batch.evaluations]
 
 
 def _step_status(batch: EvaluationBatch, index: int) -> str | None:
-    return StatusFile(build_evaluation_steps(batch)[index].output_path, worker_id="test").status
+    return StatusFile(
+        str(Path(batch.records_prefix) / batch.evaluations[index].identity.run_id), worker_id="test"
+    ).status
 
 
 def _evaluate_with_session(
@@ -348,7 +349,7 @@ def _evaluate_with_session(
         return _run_test_batch(batch)
 
 
-def test_evaluation_steps_serve_each_evaluation_with_its_judge(tmp_path, monkeypatch):
+def test_evaluation_steps_share_candidate_and_judge(tmp_path, monkeypatch):
     opened_models: list[str] = []
     observed_candidates: list[RemoteInferenceSession] = []
     observed_judges: list[RemoteInferenceSession | None] = []
@@ -387,11 +388,11 @@ def test_evaluation_steps_serve_each_evaluation_with_its_judge(tmp_path, monkeyp
 
     _run_test_batch(batch)
 
-    assert sorted(opened_models) == ["candidate", "candidate", "judge", "judge"]
+    assert opened_models == ["candidate", "judge"]
     assert all(candidate.model.endpoint.base_url == "https://candidate.example/v1" for candidate in observed_candidates)
-    assert observed_candidates[0] is not observed_candidates[1]
+    assert observed_candidates[0] is observed_candidates[1]
     assert len(observed_judges) == 2
-    assert observed_judges[0] is not observed_judges[1]
+    assert observed_judges[0] is observed_judges[1]
     assert observed_judges[0] is not None
     assert observed_judges[0].model.endpoint.base_url == "https://judge.example/v1"
     record = read_record(str(tmp_path / "records" / "run-one" / "record.json"))
@@ -595,7 +596,7 @@ def test_run_evaluation_batch_records_every_eval_when_hosted_judge_fails_to_star
     batch = _hosted_judge_batch(tmp_path, evaluations)
     _patch_inference_runtime(monkeypatch, lambda config: InferenceContext(config.model.model_id))
 
-    with pytest.raises(RuntimeError, match=r"2 step\(s\) failed"):
+    with pytest.raises(RuntimeError, match=r"1 step\(s\) failed"):
         _run_test_batch(batch)
 
     assert opened_models == ["candidate", "judge"]
@@ -834,7 +835,8 @@ def test_evaluation_step_gates_transport_failure_coverage(tmp_path, monkeypatch,
     assert record.coverage["math500"].n_scored == n_scored
 
 
-def test_evaluation_step_persists_run_scoped_speculative_metrics(tmp_path, monkeypatch):
+@pytest.mark.parametrize("max_concurrent", [1, 2])
+def test_evaluation_step_persists_run_scoped_speculative_metrics(tmp_path, monkeypatch, max_concurrent):
     def scrape(prompt: int, generated: int, drafts: int, draft_tokens: int, accepted: int):
         return tuple(
             text_string_to_metric_families(
@@ -858,9 +860,8 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
         "marin.evaluation.inference_metrics.PrometheusScraper.scrape",
         lambda _self: scrapes.pop(0),
     )
-    # StepSpec times the enclosing run; the inference window spans the middle two reads.
-    clock = iter((0.0, 10.0, 12.0, 12.0))
-    monkeypatch.setattr("marin.evaluation.inference_metrics.time.monotonic", lambda: next(clock))
+    clock = iter((10.0, 12.0))
+    monkeypatch.setattr("marin.evaluation.inference_metrics.time", SimpleNamespace(monotonic=lambda: next(clock)))
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _row: None)
     monkeypatch.setattr(
         "marin.evaluation.runner.iris_ctx",
@@ -893,7 +894,7 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
         evaluations=(_evaluation(tmp_path, "measured", _successful_evaluation),),
         provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
         submission_cluster="marin",
-        max_concurrent=8,
+        max_concurrent=max_concurrent,
     )
     session = replace(_remote_session(), metrics_url="https://inference.example/metrics")
 
@@ -902,6 +903,10 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
     record = read_record(str(tmp_path / "records" / "run-measured" / "record.json"))
     assert record.model.config is not None
     assert record.model.config.identity == "target@2026.09.23:def456"
+    if max_concurrent > 1:
+        assert record.inference_metrics is None
+        assert len(scrapes) == 2
+        return
     assert record.inference_metrics is not None
     assert record.inference_metrics.prompt_tokens == 20
     assert record.inference_metrics.generation_tokens == 100
@@ -2168,7 +2173,7 @@ def test_launch_dry_run_prints_the_resolved_harbor_agent_context(tmp_path, monke
 @pytest.mark.parametrize(
     ("overrides", "target_cluster", "priority", "max_concurrent"),
     [
-        ((), "cw-us-east-02a", "inherit", 8),
+        ((), "cw-us-east-02a", "inherit", 1),
         (
             ("--federated_cluster", "cw-rno2a", "--priority", "interactive", "--max-concurrent", "1"),
             "cw-rno2a",
@@ -2491,7 +2496,6 @@ def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):
     assert batch.records_prefix == "gs://marin-eval-metadata/evals"
     evaluation = batch.evaluations[0]
     assert evaluation.identity.output_dir == f"{batch.records_prefix}/{evaluation.identity.run_id}/results"
-    assert build_evaluation_steps(batch)[0].output_path == f"{batch.records_prefix}/{evaluation.identity.run_id}"
 
 
 def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
@@ -2553,4 +2557,4 @@ def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
     assert _step_status(batch, 0) == STATUS_SUCCESS
     assert executed == [final_evaluation.identity.output_dir]
     assert priorities == [job_pb2.PRIORITY_BAND_INTERACTIVE]
-    assert concurrency_limits == [1]
+    assert concurrency_limits == [1, 1]

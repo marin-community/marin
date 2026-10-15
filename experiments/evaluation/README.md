@@ -3,19 +3,22 @@
 A one-command path from "model + eval suite" to recorded results. Pick a registered model or supply a
 catalog-schema model file, then select registered or file-backed evaluations. The launcher sizes a
 serving slice and submits one CPU orchestrator job for the whole launch. Each selected eval runs as
-an independent `StepSpec` with its own model server and durable `record.json`. StepRunner starts up
-to eight evals at once by default; `--max-concurrent` sets the serving limit for a launch. A suite
+an independent `StepSpec` with a durable `record.json`. Evaluations share one model server and run
+sequentially by default; `--max-concurrent` allows concurrent evaluators on that server. A suite
 fills in as results finish. Each eval has its own record, child
 jobs, logs, and parquet; the launch shares a `group_id`. Evaldash scans those records and step
 statuses into its Postgres query index.
 
 Each eval has its own `StepSpec` status and lock under `{records_prefix}/{run_id}/`.
 
-`marin.evaluation.runner` opens one candidate `remote_inference` session per eval and optionally
-one hosted-judge session for that eval. Evalchemy resolves the serving endpoint's direct address
+`marin.evaluation.runner` opens one candidate `remote_inference` session per launch and optionally
+one shared hosted-judge session. A group StepSpec locks ownership before either server starts.
+Evalchemy resolves the serving endpoint's direct address
 on its Iris cluster. Harbor keeps the minted capability URLs because its sandboxes reach the
 candidate and hosted judge from outside Iris. The orchestrator scrapes vLLM metrics through the
-direct address. Each step records its own evaluation or inference failure; other steps continue.
+direct address when evaluations run sequentially. Concurrent evaluations omit server-wide metrics
+because those cannot be attributed to one evaluator. Each step records its own evaluation failure;
+other steps continue. A server startup failure marks every pending evaluation as an infrastructure failure.
 This directory holds the model and suite catalogs, Marin fleet policy, and CLI choices.
 
 The user-facing [evaluation guide](../../docs/tutorials/run-lm-evals.md) contains model-specific
@@ -65,7 +68,7 @@ YAML/JSON file. `--evals` takes a suite name (`smoke`, `core`) or comma-separate
 (`gsm8k,mmlu-smoke`); repeatable `--evalchemy-config` and `--harbor-config` options add evaluator-native
 files; `--platform tpu|gpu` overrides the model's default; `--accelerator` overrides the sizing
 heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
-`--max-concurrent` caps simultaneous evaluation steps (each starts a candidate and optional judge);
+`--max-concurrent` caps simultaneous evaluators sharing one candidate and optional judge (default 1);
 `--seed` overrides the Evalchemy seed for every selected task in that launch and is stored in its record;
 `--judge-model` or `--judge-model-config` selects an optional managed judge for Harbor
 verifiers, and `--judge-accelerator` overrides its slice; the judge must colocate with the candidate;
@@ -83,7 +86,7 @@ launcher always submits through the `marin` Iris controller.
 Suites: `smoke` is a fast cluster check (capped mmlu cut + capped gsm8k). `core` is the comprehensive
 per-model benchmark set (`CORE_EVALS` in `evals.py`: mmlu, gsm8k, arc-challenge, hellaswag,
 winogrande, truthfulqa, boolq, piqa, openbookqa at OpenLLM-v1 shot counts, plus humaneval and
-math500): eleven independently served evals and eleven records — the dashboard
+math500): eleven evals sharing inference and eleven records — the dashboard
 shows the full model x task grid of runs.
 
 Before upgrading a store, run the non-destructive smoke command on its platform. This CoreWeave

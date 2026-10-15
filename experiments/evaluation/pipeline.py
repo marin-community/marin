@@ -6,7 +6,7 @@
 :func:`eval_step` wraps one launcher run (model x eval selection) as an :class:`ArtifactStep`, so
 evals compose into ``StepRunner`` pipelines and can be triggered programmatically -- e.g. right
 after a training pipeline exports a checkpoint, or fanned out over a model sweep. The step runs the
-same orchestration as the CLI (serve each evaluation, run against its endpoint, write
+same orchestration as the CLI (share inference across evaluations, write
 ``record.json`` + results + per-question parquet) to the shared eval output root. The step's artifact
 path holds its cache record and typed launch result: an identical (model, evals, limit, version)
 config is a cache hit.
@@ -132,7 +132,7 @@ def eval_step(
 
     Experiments declare producer dependencies and resolve their paths in ``resolve_model``.
     Checked-in models use ``model`` directly without a producer step.
-    ``max_concurrent`` caps evaluation steps serving at once.
+    ``max_concurrent`` caps concurrent evaluators sharing inference.
     """
 
     def build_config(ctx: StepContext) -> EvalStepConfig | EvalStepFingerprint:

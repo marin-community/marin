@@ -48,17 +48,19 @@ from marin.evaluation.runner import (
     Evaluation,
     EvaluationBatch,
     EvaluationIdentity,
+    EvaluationStep,
     HostedJudge,
     LaunchProvenance,
     SubmittedEvaluation,
     SubmittedEvaluationBatch,
-    run_evaluation_step,
     run_evaluation_steps,
 )
 from marin.evaluation.serving_config import resolved_serve_config
+from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.external_dependencies import EVALCHEMY
 from rigging.config_discovery import resolve_cluster_config
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import SecretSpec, resolve_secret_spec
 
@@ -72,7 +74,7 @@ from experiments.evaluation.evals import (
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 
 EVALUATION_CONTROLLER_CLUSTER = "marin"
-DEFAULT_EVAL_CONCURRENCY = 8
+DEFAULT_EVAL_CONCURRENCY = 1
 _ORCHESTRATOR_CPU = 4.0
 _ORCHESTRATOR_MEMORY = "16g"
 _ORCHESTRATOR_DISK = "16g"
@@ -140,7 +142,7 @@ def _capability_origin(cluster: str) -> str:
 def records_prefix_for(accel: AcceleratorChoice, spec: LaunchSpec) -> str:
     """Resolve the configured TPU or CoreWeave records store."""
     if spec.records_prefix:
-        return spec.records_prefix
+        return spec.records_prefix if "://" in spec.records_prefix else os.path.abspath(spec.records_prefix)
     if accel.target_cluster:
         return CW_RECORDS_PREFIX
     return DEFAULT_RECORDS_PREFIX
@@ -371,8 +373,8 @@ def build_evaluation_batch(
     )
 
 
-def build_evaluation_steps(batch: EvaluationBatch) -> tuple[StepSpec, ...]:
-    """Bind each evaluation to its final batch configuration after customization."""
+def build_evaluation_steps(batch: EvaluationBatch, execute: EvaluationStep) -> tuple[StepSpec, ...]:
+    """Build per-evaluation steps with the supplied execution function."""
     model_config = ModelConfigRef.model_validate(asdict(batch.model))
     judge_config = (
         model_config_digest(ModelConfigRef.model_validate(asdict(batch.judge.model)))
@@ -383,7 +385,7 @@ def build_evaluation_steps(batch: EvaluationBatch) -> tuple[StepSpec, ...]:
         StepSpec(
             name=f"eval/{batch.model.name}/{evaluation.identity.eval_ref.name}",
             override_output_path=prefix_join(batch.records_prefix, evaluation.identity.run_id),
-            fn=partial(run_evaluation_step, batch, evaluation),
+            fn=partial(execute, evaluation),
             hash_attrs={
                 "run_id": evaluation.identity.run_id,
                 "group_id": batch.group_id,
@@ -407,9 +409,20 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
     return build_evaluation_batch(spec, provenance, _launch_user())
 
 
+def run_evaluation_group(batch: EvaluationBatch) -> None:
+    """Run the group's evaluation steps under one shared-inference ownership lock."""
+    configure_coreweave_s3()
+    step = StepSpec(
+        name=f"eval-group/{batch.model.name}",
+        output_path_prefix=prefix_join(batch.records_prefix, f"groups/{batch.group_id}"),
+        fn=partial(run_evaluation_steps, batch, partial(build_evaluation_steps, batch)),
+        hash_attrs={"run_ids": tuple(evaluation.identity.run_id for evaluation in batch.evaluations)},
+    )
+    StepRunner().run((step,), max_concurrent=1)
+
+
 def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluationBatch:
     """Bind final evaluation steps and submit one CPU orchestrator."""
-    steps = build_evaluation_steps(batch)
     constraints = None
     if batch.accelerator.target_cluster and batch.accelerator.target_cluster != batch.submission_cluster:
         constraints = [
@@ -425,7 +438,7 @@ def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluat
     for name, spec in sorted(batch.secret_env.items()):
         launch_env[name] = resolve_secret_spec(spec).value
     job = client.submit(
-        entrypoint=Entrypoint.from_callable(run_evaluation_steps, steps, batch.max_concurrent),
+        entrypoint=Entrypoint.from_callable(run_evaluation_group, batch),
         name=f"eval-{batch.group_id}",
         resources=ResourceSpec(cpu=_ORCHESTRATOR_CPU, memory=_ORCHESTRATOR_MEMORY, disk=_ORCHESTRATOR_DISK),
         environment=EnvironmentSpec(env_vars=launch_env),

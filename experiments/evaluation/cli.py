@@ -194,7 +194,7 @@ def cli() -> None:
     type=click.IntRange(min=1),
     default=DEFAULT_EVAL_CONCURRENCY,
     show_default=True,
-    help="Maximum evaluations serving at the same time.",
+    help="Maximum concurrent evaluators sharing inference.",
 )
 @click.option("--seed", type=int, default=None, help="Override the Evalchemy sampling seed for this launch.")
 @click.option(
@@ -257,7 +257,7 @@ def launch(
     federated_cluster: str | None,
     priority: str | None,
 ) -> None:
-    """Submit one group of independently served evaluations for MODEL."""
+    """Submit evaluations sharing one inference server for MODEL."""
     selected_model = resolve_model_config(model, model_config)
     selected_judge = resolve_judge_model_config(judge_model, judge_model_config)
     resolved_platform = Platform(platform) if platform else default_platform(selected_model)
@@ -315,7 +315,7 @@ def launch(
     with open_iris_client(cluster_name=EVALUATION_CONTROLLER_CLUSTER, workspace=find_project_root()) as client:
         group = launch_group(batch, client)
         click.echo(
-            f"submitted group {group.group_id} ({len(group.evaluations)} independent evals) "
+            f"submitted group {group.group_id} ({len(group.evaluations)} evals sharing inference) "
             f"through cluster {EVALUATION_CONTROLLER_CLUSTER!r}"
         )
         for evaluation in group.evaluations:
