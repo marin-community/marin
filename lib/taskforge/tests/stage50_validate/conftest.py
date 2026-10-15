@@ -406,37 +406,3 @@ class Fakes:
 @pytest.fixture
 def fakes() -> Fakes:
     return Fakes()
-
-
-ROLE_IDS = {"system": 1, "user": 2, "assistant": 3, "tool": 4}
-
-
-def render_ids(messages) -> tuple[int, ...]:
-    """Render like a chat template: a role marker, then the turn's bytes."""
-    ids: list[int] = []
-    for message in messages:
-        ids.append(ROLE_IDS[message["role"]])
-        ids.extend(json.dumps({key: message[key] for key in ("content", "tool_calls") if key in message}).encode())
-    return tuple(ids)
-
-
-@dataclass
-class TemplateTokenizer:
-    """The server's chat template, deterministically; counts its calls and fails the first ``failures``
-    of them as a drained router."""
-
-    failures: int = 0
-    calls: int = 0
-
-    async def prompt_ids(self, messages, options):
-        self._count()
-        return (*render_ids(messages), ROLE_IDS["assistant"])
-
-    async def rendered_ids(self, messages, options):
-        self._count()
-        return render_ids(messages)
-
-    def _count(self) -> None:
-        self.calls += 1
-        if self.calls <= self.failures:
-            raise ModelUnavailable("router drained", ())

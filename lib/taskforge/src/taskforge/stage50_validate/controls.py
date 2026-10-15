@@ -10,21 +10,10 @@ the path and set its mode, run by the shell tool as the task machine's ``Machine
 after the setup commands), then a final reply (``WORKSPACE_REPLY``). The task's own grader then runs on that
 machine state. Grading is the engine's, unchanged.
 
-The engine accepts a turn only with exact token ids, so the scripted model gets them from the
-server's chat template through a ``Tokenize`` (``llm.rollout_model.ServerRenderer`` serves it). For
-each scripted turn it sends two ``max_tokens=1`` requests with ``return_token_ids``:
-
-1. ``Tokenize.prompt_ids``: the request's messages with the generation prompt; its
-   ``prompt_token_ids`` are the turn's prompt;
-2. ``Tokenize.rendered_ids``: the same messages plus the scripted assistant turn, without the
-   generation prompt; its ``prompt_token_ids`` extend the first, and the extension is the turn's
-   response.
-
-Cost per scripted turn: two requests, each one decoded token (discarded) plus a prefill of the
-whole conversation, most of which the server's prefix cache already holds from the previous turn.
-A typical control (one to three turns) costs two to six such requests. The response ids lack the
-stop token a sampled turn ends with; the next turn's prompt supplies it as an observation token.
-Responses carry no log probabilities.
+A control replays under the engine's messages trace (``TaskSessionSpec.trace = MESSAGES``): a scripted
+turn carries no token ids, the engine skips its prefix, evidence, log-probability and credit checks,
+and the attempt records no token evidence (an all-zero loss mask), which a control never needs.
+Solver trials keep the exact-token trace of ``lowered.session``.
 """
 
 import asyncio
@@ -32,11 +21,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Protocol, Self
+from typing import Any, Self
 
 from rigging.timing import ExponentialBackoff
-from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutContractError
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.contracts import ModelRequest, ModelTurn
+from rolloutengine.spec import LoweredTaskSpec, TraceMode
 from taskcompendium.models import AssistantToolCalls, TaskSpec, TextMessage
 
 from taskforge.ledger.records import Ledger
@@ -45,18 +34,6 @@ from taskforge.stage50_validate.outcome import Graded, Outcome, TrialKind
 from taskforge.stage50_validate.trials import Deadlines, EngineSettings, TrialPlan, run_trial
 
 WORKSPACE_REPLY = "The workspace is ready for grading."
-
-
-class Tokenize(Protocol):
-    """The served chat template's token ids for a conversation."""
-
-    async def prompt_ids(self, messages: Sequence[Mapping[str, Any]], options: Mapping[str, Any]) -> tuple[int, ...]:
-        """``messages`` rendered with the generation prompt, as a request for the next turn is."""
-        ...
-
-    async def rendered_ids(self, messages: Sequence[Mapping[str, Any]], options: Mapping[str, Any]) -> tuple[int, ...]:
-        """``messages`` rendered as a finished conversation, without the generation prompt."""
-        ...
 
 
 @dataclass(frozen=True)
@@ -69,7 +46,6 @@ class ScriptedModel:
 
     turns: tuple[dict[str, Any], ...]
     context_assistant_turns: int
-    tokenize: Tokenize
 
     def for_step(self, step: str) -> Self:
         """This model: a scripted turn makes no server call, so the attempt's step changes nothing."""
@@ -78,14 +54,10 @@ class ScriptedModel:
     async def __call__(self, request: ModelRequest) -> ModelTurn:
         served = sum(message["role"] == "assistant" for message in request.messages) - self.context_assistant_turns
         message = self.turns[served]
-        prompt = await self.tokenize.prompt_ids(request.messages, request.options)
-        rendered = await self.tokenize.rendered_ids((*request.messages, message), request.options)
-        if len(rendered) <= len(prompt) or rendered[: len(prompt)] != prompt:
-            raise RolloutContractError("The rendered scripted turn does not extend the rendered prompt")
         return ModelTurn(
             message=message,
-            prompt_token_ids=prompt,
-            response_token_ids=rendered[len(prompt) :],
+            prompt_token_ids=(),
+            response_token_ids=(),
             logprobs=None,
             stop_reason="tool_calls" if "tool_calls" in message else "stop",
             text=message["content"],
@@ -179,9 +151,10 @@ async def replay(
     controls: Sequence[Control],
     plan: ControlPlan,
     settings: EngineSettings,
-    tokenize: Tokenize,
 ) -> list[ControlOutcome]:
     """Replay every control concurrently as a ``CONTROL`` trial of ``lowered``, named by its id.
+
+    The trials run under the messages trace, so the scripted turns need no token ids.
 
     Raises:
         ValueError: ``check_replayable`` refuses ``controls``, or ``plan.first_attempts`` names a control not
@@ -193,14 +166,15 @@ async def replay(
     if unknown:
         raise ValueError(f"First attempts name controls {unknown} that are not replayed")
     context_turns = context_assistant_turns(task)
+    scripted = lowered.model_copy(update={"session": lowered.session.model_copy(update={"trace": TraceMode.MESSAGES})})
     async with asyncio.TaskGroup() as group:
         runs = [
             group.create_task(
                 run_trial(
-                    lowered,
+                    scripted,
                     plan.trial_plan(control.id),
                     settings,
-                    ScriptedModel(control_turns(control), context_turns, tokenize),
+                    ScriptedModel(control_turns(control), context_turns),
                     control.id,
                 )
             )

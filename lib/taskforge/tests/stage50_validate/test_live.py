@@ -26,7 +26,7 @@ from taskforge.ledger.records import EntryKind
 from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
-from taskforge.llm.rollout_model import GlmRolloutModel, ServerRenderer
+from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.spec.controls import Control
 from taskforge.stage50_validate.controls import ControlOutcome, ControlPlan, ControlVerdict, replay
 from taskforge.stage50_validate.evidence import Complete, Evidence, Incomplete
@@ -254,31 +254,14 @@ async def replay_controls(
     directory = check_dir(evidence_dir, check)
     workpiece_id = lowered.task.id
     started = time.monotonic()
-    tokenizer = CountingTokenizer(ServerRenderer(client, POLICY))
-    outcomes = await replay(lowered, controls, control_plan(directory, workpiece_id), settings(factories), tokenizer)
+    outcomes = await replay(lowered, controls, control_plan(directory, workpiece_id), settings(factories))
     write_summary(
         directory,
-        f"control replay on {workpiece_id}: scripted turns tokenized through the server, graded by the engine",
+        f"control replay on {workpiece_id}: scripted turns under the messages trace, graded by the engine",
         time.monotonic() - started,
-        {"controls": control_summary(outcomes), "tokenize_requests": tokenizer.calls},
+        {"controls": control_summary(outcomes)},
     )
     return outcomes
-
-
-@dataclass
-class CountingTokenizer:
-    tokenizer: ServerRenderer
-    calls: list[dict[str, object]] = field(default_factory=list)
-
-    async def prompt_ids(self, messages, options):
-        ids = await self.tokenizer.prompt_ids(messages, options)
-        self.calls.append({"messages": len(messages), "generation_prompt": True, "prompt_ids": len(ids)})
-        return ids
-
-    async def rendered_ids(self, messages, options):
-        ids = await self.tokenizer.rendered_ids(messages, options)
-        self.calls.append({"messages": len(messages), "generation_prompt": False, "prompt_ids": len(ids)})
-        return ids
 
 
 @pytest.mark.timeout(LIVE_TIMEOUT)
