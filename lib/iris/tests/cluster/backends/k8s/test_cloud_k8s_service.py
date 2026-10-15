@@ -3,6 +3,7 @@
 
 """Tests for CloudK8sService helpers and K8sResource enum path construction."""
 
+import json
 from contextlib import nullcontext
 from types import SimpleNamespace
 
@@ -105,7 +106,9 @@ class _FakeApiServer:
     """Paginating stand-in for one DynamicClient resource handle.
 
     Serves `pages` of item names, obeying the `continue` query param the way the API
-    server does, and records every request it received.
+    server does, and records every request it received. It answers only raw-response
+    requests (``serialize=False``): wrapping each item in DynamicClient ``ResourceField``
+    objects is the per-tick controller cost the service must not pay.
     """
 
     def __init__(self, pages: list[list[str]]):
@@ -115,27 +118,23 @@ class _FakeApiServer:
 
     def get(self, **kwargs):
         self.requests.append(kwargs)
+        assert kwargs.get("serialize") is False, "list must not deserialize items into ResourceFields"
         index = int(kwargs["_continue"]) if kwargs.get("_continue") else 0
-        names = self._pages[index]
         more = index + 1 < len(self._pages)
-        return _FakeListResponse(names, str(index + 1) if more else "")
+        return _raw_response(
+            {
+                "items": [{"metadata": {"name": name}} for name in self._pages[index]],
+                "metadata": {"continue": str(index + 1) if more else ""},
+            }
+        )
 
     def delete(self, **kwargs) -> None:
         self.deletes.append(kwargs)
 
 
-class _FakeListResponse:
-    def __init__(self, names: list[str], continue_token: str):
-        self.items = [_FakeItem({"metadata": {"name": n}}) for n in names]
-        self.metadata = {"continue": continue_token}
-
-
-class _FakeItem:
-    def __init__(self, body: dict):
-        self._body = body
-
-    def to_dict(self) -> dict:
-        return self._body
+def _raw_response(body: dict) -> SimpleNamespace:
+    """The urllib3 response a DynamicClient call returns under ``serialize=False``."""
+    return SimpleNamespace(data=json.dumps(body).encode())
 
 
 def _service_with_api(pages: list[list[str]]) -> tuple[CloudK8sService, _FakeApiServer]:

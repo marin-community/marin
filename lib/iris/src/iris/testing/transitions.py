@@ -3,7 +3,6 @@
 
 """Drivers for landing test task observations through the controller path."""
 
-from collections.abc import Iterable
 from dataclasses import dataclass, replace
 
 from rigging.timing import Timestamp
@@ -14,49 +13,17 @@ from iris.cluster.controller.ops.reconcile import apply_observation
 from iris.cluster.controller.ops.task import apply_reconcile_updates
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.effects import ControllerEffects
-from iris.cluster.controller.reconcile.loader import load_closed_snapshot
-from iris.cluster.controller.reconcile.snapshot import TaskUpdate, TransitionSnapshot
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.worker import (
     WorkerReconcilePlan,
     WorkerReconcileResult,
     task_updates_from_result,
 )
 from iris.cluster.controller.schema import task_attempts_table
+from iris.cluster.controller.transition_reader import TxTransitionReader
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2
-
-
-@dataclass(frozen=True)
-class CursorTransitionReader:
-    """A ``TransitionReader`` backed by an open write transaction.
-
-    Lets the test drivers author effects through ``apply_reconcile_updates``
-    while loading the snapshot from the very
-    transaction they commit into — same ``cur``, same explicit ``now``, no extra
-    ``Timestamp.now()`` and no second connection. This keeps frozen-clock replay
-    scenarios deterministic.
-    """
-
-    cur: Tx
-
-    def transition_snapshot(
-        self,
-        *,
-        now: Timestamp,
-        seed_worker_ids: Iterable[WorkerId] = (),
-        observation_uids: Iterable[AttemptUid] = (),
-        seed_task_ids: Iterable[JobName] = (),
-        extra_attempt_keys: Iterable[tuple[JobName, int]] = (),
-    ) -> TransitionSnapshot:
-        return load_closed_snapshot(
-            self.cur,
-            now=now,
-            seed_worker_ids=seed_worker_ids,
-            observation_uids=observation_uids,
-            seed_task_ids=seed_task_ids,
-            extra_attempt_keys=extra_attempt_keys,
-        )
 
 
 @dataclass(frozen=True)
@@ -80,7 +47,7 @@ def commit_reconcile(
     updates = [
         update for plan, result in plan_results for update in task_updates_from_result(plan, result, observed_at=now)
     ]
-    effects = apply_reconcile_updates(CursorTransitionReader(cur), updates, now=now)
+    effects = apply_reconcile_updates(TxTransitionReader(cur), updates, now=now)
     commit_effects(cur, effects)
     return effects
 
@@ -105,7 +72,7 @@ def commit_observed_dispatch_updates(
     *,
     now: Timestamp,
 ) -> ControllerEffects:
-    effects = apply_reconcile_updates(CursorTransitionReader(cur), observations, now=now)
+    effects = apply_reconcile_updates(TxTransitionReader(cur), observations, now=now)
     commit_effects(cur, effects)
     return effects
 
@@ -143,7 +110,7 @@ def apply_task_observations(
             )
 
     application = apply_observation(
-        CursorTransitionReader(cur),
+        TxTransitionReader(cur),
         observations,
         [],
         worker_health=health,

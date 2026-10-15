@@ -162,12 +162,3 @@ class ControllerEffects:
     health: WorkerHealthEffect = field(default_factory=WorkerHealthEffect)
     log_events: list[LogEvent] = field(default_factory=list)
     task_events: list[TaskActionEvent] = field(default_factory=list)
-
-    @property
-    def is_empty(self) -> bool:
-        """Whether this batch records no committable writes.
-
-        ``health.build_failed`` is excluded: the controller applies it to the
-        liveness tracker, and ``commit_effects`` never persists it.
-        """
-        return not (self.tasks or self.attempts or self.jobs or self.log_events or self.task_events)

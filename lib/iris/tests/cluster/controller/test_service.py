@@ -916,6 +916,34 @@ def test_launch_job_rejects_child_of_absent_parent(service):
     assert "absent" in exc_info.value.message.lower() or "not found" in exc_info.value.message.lower()
 
 
+def test_launch_job_rejects_child_when_parent_cancelled_after_admission(service, state, monkeypatch):
+    """A cancel that commits between admission and insert must still refuse the child (#10111).
+
+    Otherwise the child lands PENDING under a KILLED parent; nothing cascades to it
+    again, so it is dispatched and runs indefinitely.
+    """
+    service.launch_job(make_job_request("coordinator"), None)
+    real_store_launch_payload = jobs_module._store_launch_payload
+
+    def cancel_parent_then_store(dependencies, request):
+        service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id="/test-user/coordinator"), None)
+        return real_store_launch_payload(dependencies, request)
+
+    monkeypatch.setattr(jobs_module, "_store_launch_payload", cancel_parent_then_store)
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(make_job_request("/test-user/coordinator/shellbox"), None)
+
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+    with state._db.read_snapshot() as tx:
+        assert (
+            tx.execute(
+                jobs_table.select().where(jobs_table.c.job_id == JobName.from_wire("/test-user/coordinator/shellbox"))
+            ).first()
+            is None
+        )
+
+
 # =============================================================================
 # Job List Tests
 # =============================================================================

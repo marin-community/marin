@@ -60,6 +60,12 @@ RPC_PADDING_SECONDS = 60
 # How long ``close`` waits for admitted execs to end after it cancels the sandbox job.
 CLOSE_DRAIN_SECONDS = 60
 EXEC_SHED_BACKOFF = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0)
+# Every poll is a controller RPC, and a sandbox waits up to a control tick to start;
+# backing off keeps hundreds of starting sandboxes from crowding the controller.
+START_POLL_BACKOFF = ExponentialBackoff(initial=1.0, maximum=5.0, factor=1.5)
+# The line between the two base64 streams ``run`` frames in its exec output; no base64
+# line can equal it.
+FRAME_SEPARATOR = "."
 # How much of each stuck exec's command ``close`` quotes when the drain times out.
 STUCK_EXEC_PREVIEW_CHARS = 120
 
@@ -85,6 +91,49 @@ class ExecOutput:
     exit_code: int
     stdout: str
     stderr: str
+
+
+@dataclass(frozen=True)
+class RunFrame:
+    """What the exec behind one ``run`` reports: each stream's full size and its first bytes."""
+
+    stdout_size: int
+    stderr_size: int
+    stdout_head: bytes
+    stderr_head: bytes
+
+
+def _parse_run_frame(response: ExecOutput) -> RunFrame:
+    """Decode ``_framed_run_script`` output: both sizes, stdout's base64, the separator, stderr's base64."""
+    lines = response.stdout.split("\n")
+    try:
+        stdout_size, stderr_size = (int(size) for size in lines[0].split())
+        separator = lines.index(FRAME_SEPARATOR, 1)
+    except ValueError as error:
+        raise RuntimeError(f"Iris command output is not framed: {response.stderr or response.stdout[:200]}") from error
+    return RunFrame(
+        stdout_size,
+        stderr_size,
+        base64.b64decode("".join(lines[1:separator])),
+        base64.b64decode("".join(lines[separator + 1 :])),
+    )
+
+
+def _framed_run_script(body: str, stdin: str, stdout_path: str, stderr_path: str, inline: int, cleanup: str) -> str:
+    """Run ``body`` in a subshell whose streams go to files, then print the frame ``_parse_run_frame`` reads.
+
+    The script exits with ``body``'s status and runs ``cleanup`` once the frame is printed.
+    """
+    out, err = shlex.quote(stdout_path), shlex.quote(stderr_path)
+    return (
+        f"(\n{body}\n) < {stdin} > {out} 2> {err}\n"
+        "status=$?\n"
+        f"o=$(wc -c < {out}) && e=$(wc -c < {err}) || exit 1\n"
+        "echo $o $e\n"
+        f"head -c {inline} {out} | base64\necho {FRAME_SEPARATOR}\nhead -c {inline} {err} | base64\n"
+        f"{cleanup}\n"
+        'exit "$status"'
+    )
 
 
 class IrisMachine:
@@ -169,22 +218,25 @@ class IrisMachine:
         return response.stdout
 
     async def _upload_bytes(self, data: bytes, target: str) -> None:
+        """Write ``data`` to ``target`` in one exec per chunk; the first also creates the file and its parent."""
         quoted = shlex.quote(target)
-        await self._checked(f"mkdir -p {shlex.quote(str(PurePosixPath(target).parent))} && : > {quoted}")
-        for offset in range(0, len(data), TRANSFER_CHUNK_BYTES):
+        for offset in range(0, max(len(data), 1), TRANSFER_CHUNK_BYTES):
             encoded = base64.b64encode(data[offset : offset + TRANSFER_CHUNK_BYTES]).decode("ascii")
-            await self._checked(f"printf '%s' {encoded} | base64 -d >> {quoted}")
+            if offset == 0:
+                parent = shlex.quote(str(PurePosixPath(target).parent))
+                await self._checked(f"mkdir -p {parent} && printf '%s' {encoded} | base64 -d > {quoted}")
+            else:
+                await self._checked(f"printf '%s' {encoded} | base64 -d >> {quoted}")
 
-    async def _download_bytes(self, source: str, limit: int | None = None) -> tuple[bytes, bool]:
-        quoted = shlex.quote(source)
-        size = int((await self._checked(f"wc -c < {quoted}")).strip())
-        count = size if limit is None else min(size, limit)
+    async def _read_range(self, path: str, start: int, end: int) -> bytes:
+        """Bytes ``[start, end)`` of ``path``, one exec per transfer chunk."""
+        quoted = shlex.quote(path)
         chunks = []
-        for offset in range(0, count, TRANSFER_CHUNK_BYTES):
-            length = min(TRANSFER_CHUNK_BYTES, count - offset)
+        for offset in range(start, end, TRANSFER_CHUNK_BYTES):
+            length = min(TRANSFER_CHUNK_BYTES, end - offset)
             encoded = await self._checked(f"tail -c +{offset + 1} {quoted} | head -c {length} | base64")
             chunks.append(base64.b64decode(encoded))
-        return b"".join(chunks), size > count
+        return b"".join(chunks)
 
     async def _user_identity(self) -> tuple[str, str]:
         """The ``(uid, name)`` the container runs commands as; Iris exec cannot switch users."""
@@ -207,6 +259,7 @@ class IrisMachine:
             raise ValueError("Output limit must be nonnegative")
         prefix = f"/tmp/.shellbox-{uuid.uuid4().hex}"
         stdin_path, stdout_path, stderr_path = (f"{prefix}-{part}" for part in ("in", "out", "err"))
+        files = shlex.join((stdin_path, stdout_path, stderr_path))
         if command.stdin:
             await self._upload_bytes(command.stdin, stdin_path)
         exports = "\n".join(
@@ -214,16 +267,31 @@ class IrisMachine:
         )
         if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) for key in {**self.spec.env, **command.env}):
             raise ValueError("Environment variable names must be shell identifiers")
-        script = (
-            f"{exports}\ncd {shlex.quote(command.cwd or self.spec.workdir)} || exit 1\n"
-            f"{shlex.join(command.argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
-            f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
-        )
+        limit = command.output_limit_bytes
+        inline = min(limit, TRANSFER_CHUNK_BYTES)
+        # The exec returns each stream's first ``inline`` bytes. It removes the files unless
+        # a stream holds more within the limit, which further execs then read back.
+        cleanup = f"rm -f {files}"
+        if limit > inline:
+            cleanup = f'[ "$o" -gt {inline} ] || [ "$e" -gt {inline} ] || {cleanup}'
+        body = f"{exports}\ncd {shlex.quote(command.cwd or self.spec.workdir)} || exit 1\n{shlex.join(command.argv)}"
+        stdin = shlex.quote(stdin_path) if command.stdin else "/dev/null"
+        script = _framed_run_script(body, stdin, stdout_path, stderr_path, inline, cleanup)
+        removed = False
         try:
             response = await asyncio.wait_for(self._script(script), timeout=command.timeout)
-            stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
-            stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)
-            return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, ExitReason.EXITED)
+            frame = _parse_run_frame(response)
+            removed = max(min(frame.stdout_size, limit), min(frame.stderr_size, limit)) <= inline
+            stdout = frame.stdout_head + await self._read_range(stdout_path, inline, min(frame.stdout_size, limit))
+            stderr = frame.stderr_head + await self._read_range(stderr_path, inline, min(frame.stderr_size, limit))
+            return Result(
+                response.exit_code,
+                stdout,
+                stderr,
+                frame.stdout_size > limit,
+                frame.stderr_size > limit,
+                ExitReason.EXITED,
+            )
         except TimeoutError:
             await self.close()
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
@@ -231,45 +299,57 @@ class IrisMachine:
             await self.close()
             raise
         finally:
-            if not self._closed:
-                await self._script(
-                    f"rm -f {shlex.quote(stdin_path)} {shlex.quote(stdout_path)} {shlex.quote(stderr_path)}"
-                )
+            if not self._closed and not removed:
+                await self._script(f"rm -f {files}")
 
     async def upload(self, source: Path, target: str) -> None:
         if source.is_dir():
             with tempfile.NamedTemporaryFile(suffix=".tar.gz") as archive:
                 with tarfile.open(archive.name, "w:gz") as tar:
                     tar.add(source, arcname=".")
-                remote_archive = f"/tmp/.shellbox-{uuid.uuid4().hex}.tar.gz"
-                await self._upload_bytes(Path(archive.name).read_bytes(), remote_archive)
+                data = Path(archive.name).read_bytes()
+            quoted = shlex.quote(target)
+            if len(data) <= TRANSFER_CHUNK_BYTES:
+                encoded = base64.b64encode(data).decode("ascii")
+                await self._checked(f"mkdir -p {quoted} && printf '%s' {encoded} | base64 -d | tar xzf - -C {quoted}")
+                return
+            remote_archive = f"/tmp/.shellbox-{uuid.uuid4().hex}.tar.gz"
+            await self._upload_bytes(data, remote_archive)
             try:
-                await self._checked(
-                    f"mkdir -p {shlex.quote(target)} && tar xzf {shlex.quote(remote_archive)} -C {shlex.quote(target)}"
-                )
+                await self._checked(f"mkdir -p {quoted} && tar xzf {shlex.quote(remote_archive)} -C {quoted}")
             finally:
                 await self._script(f"rm -f {shlex.quote(remote_archive)}")
             return
         await self._upload_bytes(source.read_bytes(), target)
 
     async def download(self, source: str, target: Path) -> None:
-        probe = await self._script(f"test -d {shlex.quote(source)}")
-        if probe.exit_code == 0:
-            remote_archive = f"/tmp/.shellbox-{uuid.uuid4().hex}.tar.gz"
-            await self._checked(f"tar czf {shlex.quote(remote_archive)} -C {shlex.quote(source)} .")
-            try:
-                data, _ = await self._download_bytes(remote_archive)
-                target.mkdir(parents=True, exist_ok=True)
-                with tempfile.NamedTemporaryFile(suffix=".tar.gz") as archive:
-                    Path(archive.name).write_bytes(data)
-                    with tarfile.open(archive.name, "r:gz") as tar:
-                        tar.extractall(target, filter="data")
-            finally:
-                await self._script(f"rm -f {shlex.quote(remote_archive)}")
+        quoted = shlex.quote(source)
+        remote_archive = f"/tmp/.shellbox-{uuid.uuid4().hex}.tar.gz"
+        archive = shlex.quote(remote_archive)
+        # One exec reads a file source, or archives a directory source and reads the
+        # archive: it prints the kind, the size of what it read, and its first chunk.
+        kind, size, encoded = (
+            await self._checked(
+                f"if test -d {quoted}; then tar czf {archive} -C {quoted} . || exit 1; f={archive}; echo dir\n"
+                f"else f={quoted}; echo file; fi\n"
+                f'wc -c < "$f" && head -c {TRANSFER_CHUNK_BYTES} "$f" | base64'
+            )
+        ).split("\n", 2)
+        try:
+            head = base64.b64decode(encoded)
+            data = head + await self._read_range(remote_archive if kind == "dir" else source, len(head), int(size))
+        finally:
+            if kind == "dir":
+                await self._script(f"rm -f {archive}")
+        if kind == "file":
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
             return
-        data, _ = await self._download_bytes(source)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
+        target.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(suffix=".tar.gz") as local_archive:
+            Path(local_archive.name).write_bytes(data)
+            with tarfile.open(local_archive.name, "r:gz") as tar:
+                tar.extractall(target, filter="data")
 
     def _drain_in_flight(self) -> None:
         with self._admission:
@@ -383,19 +463,21 @@ class IrisMachineFactory:
                 max_retries_preemption=0,
             )
             deadline = time.monotonic() + self.scheduling_timeout
+            backoff = START_POLL_BACKOFF.copy()
             while time.monotonic() < deadline:
-                tasks = job.tasks()
-                if tasks:
-                    status = tasks[0].status()
+                # One ListTasks call per poll: its statuses carry the task state.
+                statuses = client.list_tasks(job.job_id)
+                if statuses:
+                    status = statuses[0]
                     if status.state == TaskState.RUNNING:
-                        machine = IrisMachine(endpoint, client, rpc, job, tasks[0], spec)
+                        machine = IrisMachine(endpoint, client, rpc, job, Task(client, status.task_id), spec)
                         created = machine._exec_sync(["mkdir", "-p", spec.workdir])
                         if created.exit_code:
                             raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
                         return machine
                     if status.state not in (TaskState.PENDING, TaskState.BUILDING, TaskState.ASSIGNED):
                         raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")
-                time.sleep(2)
+                time.sleep(min(backoff.next_interval(), max(deadline - time.monotonic(), 0)))
             raise TimeoutError(f"Iris sandbox did not start within {self.scheduling_timeout} seconds")
         except BaseException:
             try:

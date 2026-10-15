@@ -57,6 +57,7 @@ from iris.cluster.controller.backend import (
     BackendObservationRequest,
     BackendRecoveryRequest,
     DirectReconcileRequest,
+    ReconcileObservation,
     ReconcileRequest,
     RemoveCapacityRequest,
     ScheduleRequest,
@@ -92,7 +93,7 @@ from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.pruner import prune_old_data
-from iris.cluster.controller.reconcile import ControllerEffects, dispatch
+from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.dispatch import (
     DISPATCH_PROMOTION_RATE,
@@ -108,7 +109,7 @@ from iris.cluster.controller.scheduling.scheduler import (
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.tasks import PendingKick
-from iris.cluster.controller.transition_reader import DbTransitionReader
+from iris.cluster.controller.transition_reader import TxTransitionReader
 from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
 from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
 from iris.cluster.federation.availability import Promotion, QueuedCandidate
@@ -1061,22 +1062,12 @@ class Controller:
         if run_schedule and inputs.queued_federation:
             federation_promotions = self._federation.plan_federation(inputs.queued_federation)
 
-        recon_effects: ControllerEffects | None = None
-        reaped_workers: list[WorkerId] = []
+        observation: ReconcileObservation | None = None
         timeout_decisions: list[TerminalDecision] = []
         if run_reconcile:
             timeout_decisions = self._timeout_decisions(inputs.timeout_rows, now.epoch_ms())
             assert inputs.reconcile_request is not None
             observation = self.backend.reconcile(inputs.reconcile_request)
-            application = apply_observation(
-                DbTransitionReader(self._db),
-                observation.task_updates,
-                observation.worker_health_events,
-                worker_health=self._worker_health,
-                now=Timestamp.now(),
-            )
-            recon_effects = application.effects
-            reaped_workers = application.reaped_workers
 
         auto_result: AutoscaleResult | None = None
         if run_autoscale:
@@ -1085,10 +1076,10 @@ class Controller:
                 AutoscaleRequest(residual_demand=residual_demand, worker_status=inputs.worker_status)
             )
 
-        confirmed_promotions = self._commit_tick(
+        confirmed_promotions, reaped_workers = self._commit_tick(
             sched_result=sched_result,
             backend_pins=backend_pins,
-            recon_effects=recon_effects,
+            observation=observation,
             timeout_decisions=timeout_decisions,
             pending_kicks=pending_kicks,
             auto_result=auto_result,
@@ -1233,14 +1224,14 @@ class Controller:
         *,
         sched_result: ScheduleResult | None,
         backend_pins: list[tuple[JobName, str]],
-        recon_effects: ControllerEffects | None,
+        observation: ReconcileObservation | None,
         timeout_decisions: list[TerminalDecision],
         pending_kicks: list[PendingKick],
         auto_result: AutoscaleResult | None,
         federation_promotions: list[Promotion],
         expired_queued_federation: list[JobName],
         now: Timestamp,
-    ) -> list[Promotion]:
+    ) -> tuple[list[Promotion], list[WorkerId]]:
         """Apply this tick's decisions and authored effects in one write transaction.
 
         Order within the transaction: schedule decisions, queued-handoff timeout
@@ -1248,16 +1239,22 @@ class Controller:
         finalizations, administrative kicks, and autoscaler state.
         A no-op tick opens no transaction.
 
+        The backend's reconcile ``observation`` is folded into effects from a
+        snapshot read inside this transaction, so a concurrent write (e.g. a
+        ``TerminateJob`` cascade) is either visible to the fold or ordered after
+        the commit, never overwritten by deltas authored from a pre-cancel read.
+
         Returns the federation promotions whose conditional CAS actually committed (a
         concurrent cancel/terminalize between the tick's read and this write drops the
-        rest); the caller charges the reservation ledger for those.
+        rest), which the caller charges to the reservation ledger, and the workers
+        the observation's health events reaped.
         """
         autoscaler_state = auto_result.autoscaler_state if auto_result is not None else None
 
         has_sched = sched_result is not None and bool(
             sched_result.unschedulable or sched_result.assignments or sched_result.preemptions or backend_pins
         )
-        has_recon = recon_effects is not None and not recon_effects.is_empty
+        has_recon = observation is not None and bool(observation.task_updates or observation.worker_health_events)
         if not (
             has_sched
             or has_recon
@@ -1267,9 +1264,10 @@ class Controller:
             or federation_promotions
             or expired_queued_federation
         ):
-            return []
+            return [], []
 
         confirmed: list[Promotion] = []
+        reaped_workers: list[WorkerId] = []
         with self._db.transaction() as cur:
             if sched_result is not None:
                 self._commit_schedule_decisions(cur, sched_result, now, backend_pins)
@@ -1285,8 +1283,16 @@ class Controller:
             for promotion in federation_promotions:
                 if writes.promote_queued_handoff(cur, promotion.job_id, promotion.peer_id):
                     confirmed.append(promotion)
-            if has_recon and recon_effects is not None:
-                commit_effects(cur, recon_effects)
+            if has_recon and observation is not None:
+                application = apply_observation(
+                    TxTransitionReader(cur),
+                    observation.task_updates,
+                    observation.worker_health_events,
+                    worker_health=self._worker_health,
+                    now=Timestamp.now(),
+                )
+                commit_effects(cur, application.effects)
+                reaped_workers = application.reaped_workers
             if timeout_decisions:
                 finalize(cur, timeout_decisions, now=now)
             if pending_kicks:
@@ -1298,7 +1304,7 @@ class Controller:
                     logger.info("Admin kick: finalized %d task attempt(s)", len(kick_decisions))
             if autoscaler_state is not None:
                 persist_autoscaler_state(cur, autoscaler_state)
-        return confirmed
+        return confirmed, reaped_workers
 
     def _commit_schedule_decisions(
         self,

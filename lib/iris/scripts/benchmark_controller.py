@@ -101,6 +101,7 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.tasks import tasks_for_listing
+from iris.cluster.controller.transition_reader import TxTransitionReader
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.controller.workers import worker_roster
 from iris.cluster.types import USER_JOB_STATES, AttemptUid, JobName, UserBudgetDefaults, WorkerId
@@ -111,7 +112,6 @@ from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointSer
 from iris.rpc.worker_connect import WorkerService, WorkerServiceASGIApplication
 from iris.testing.controller import FakeProvider, worker_backend_descriptor
 from iris.testing.controller_state import ControllerTestState
-from iris.testing.transitions import CursorTransitionReader
 from iris.version import client_revision_date
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import func, select, text, update
@@ -492,7 +492,7 @@ def clone_db(source: ControllerDB) -> ControllerDB:
 
 
 def _apply_worker_results(
-    source: CursorTransitionReader,
+    source: TxTransitionReader,
     plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
     *,
     now: Timestamp,
@@ -1683,7 +1683,7 @@ def _run_apply_under_contention(
                 t0 = time.perf_counter()
                 with write_txns._db.transaction() as cur:
                     now = Timestamp.now()
-                    effects = _apply_worker_results(CursorTransitionReader(cur), plan_results, now=now)
+                    effects = _apply_worker_results(TxTransitionReader(cur), plan_results, now=now)
                     commit_effects(cur, effects)
                 victim_latencies.append((time.perf_counter() - t0) * 1000)
         except BaseException as e:
@@ -2652,7 +2652,7 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
     t3 = time.perf_counter()
     now = Timestamp.now()
     with state.txns._db.transaction() as cur:
-        effects = apply_reconcile_updates(CursorTransitionReader(cur), observation.task_updates, now=now)
+        effects = apply_reconcile_updates(TxTransitionReader(cur), observation.task_updates, now=now)
         commit_effects(cur, effects)
     t4 = time.perf_counter()
     return (t1 - t0) * 1000, (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000
