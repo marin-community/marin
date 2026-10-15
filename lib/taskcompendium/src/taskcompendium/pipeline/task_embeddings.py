@@ -5,7 +5,7 @@
 
 import json
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from functools import partial
 from typing import Protocol
 
@@ -13,7 +13,6 @@ import numpy as np
 import pyarrow as pa
 from finestore.layout import BlobTables
 from finestore.reader import ReadView
-from finestore.rl.curriculum import EmbeddingSpec
 from finestore.store import DataStore
 from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
@@ -22,6 +21,7 @@ from zephyr.dataset import Dataset, ShardInfo
 from zephyr.shard_keys import deterministic_hash
 
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.pipeline.curriculum_models import EmbeddingSpec
 from taskcompendium.pipeline.semantics import DescriptionStatus
 
 EMBEDDING_INSTRUCTION = (
@@ -79,7 +79,7 @@ def _embed_batches(
     shard: ShardInfo,
     *,
     spec: EmbeddingSpec,
-    embedder: TextEmbedder,
+    embedder_factory: Callable[[], TextEmbedder],
     cache_root: str,
 ) -> Iterator[dict]:
     cache_root = embedding_cache_path(cache_root, shard.shard_idx)
@@ -92,7 +92,9 @@ def _embed_batches(
             missing = [row for row in batch if row["embedding_key"] not in cached]
             started = time.monotonic()
             vectors = (
-                normalized_vectors(embedder.embed([row["text"] for row in missing]), len(missing), spec.dimensions)
+                normalized_vectors(
+                    embedder_factory().embed([row["text"] for row in missing]), len(missing), spec.dimensions
+                )
                 if missing
                 else np.empty((0, spec.dimensions), dtype=np.float32)
             )
@@ -123,7 +125,7 @@ def embed_texts(
     *,
     texts: Dataset,
     spec: EmbeddingSpec,
-    embedder: TextEmbedder,
+    embedder_factory: Callable[[], TextEmbedder],
     cache_root: str,
     output_root: str,
     batch_size: int = 256,
@@ -133,7 +135,7 @@ def embed_texts(
     result = context.execute(
         texts.deduplicate(key=lambda row: row["embedding_key"], num_output_shards=EMBEDDING_CACHE_SHARDS)
         .window(batch_size)
-        .map_shard(partial(_embed_batches, spec=spec, embedder=embedder, cache_root=cache_root))
+        .map_shard(partial(_embed_batches, spec=spec, embedder_factory=embedder_factory, cache_root=cache_root))
         .write_parquet(str(StoragePath(output_root) / "vectors/part-{shard:05d}.parquet"), schema=schema),
         name="semantic-embeddings",
     )

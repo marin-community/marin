@@ -13,12 +13,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from finestore.rl.curriculum import EmbeddingSpec
 from marin.execution.lazy import ArtifactStep, run
-from marin.processing.embeddings.harrier import HarrierEmbedder
 from taskcompendium.convert.answers import numeric_answer_task
-from taskcompendium.models import Source, TaskSpec
+from taskcompendium.models import Source
 from taskcompendium.pipeline import task_embeddings
+from taskcompendium.pipeline.curriculum_models import EmbeddingSpec
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.semantics import DescriptionModel
 from taskcompendium.pipeline.task_embeddings import text_record
@@ -28,7 +27,7 @@ from zephyr.readers import load_parquet
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.embedding import DescriptionEndpoint, curation_embedding_pipeline
-from experiments.post_training.task_curation.local import local_artifact_prefix
+from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
@@ -99,11 +98,14 @@ def description_server(monkeypatch):
 @dataclass(frozen=True)
 class EmbeddingEndpoint:
     calls: str
+    dimensions: int = 3
 
     def embed(self, texts):
         with Path(self.calls).open("a") as stream:
             stream.write(json.dumps(texts) + "\n")
-        return np.asarray([[1.0, 0.0, 0.0] for _ in texts], dtype=np.float32)
+        vectors = np.zeros((len(texts), self.dimensions), dtype=np.float32)
+        vectors[:, 0] = 1
+        return vectors
 
 
 def catalog():
@@ -166,7 +168,6 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
             tolerance_abs=0,
             tolerance_rel=0,
         )
-        assert isinstance(task, TaskSpec)
         tasks.append({"task_id": identifier, "task_json": task.model_dump_json()})
     pq.write_table(pa.Table.from_pylist(tasks), curated / "final/tasks.parquet")
     first_catalog = catalog()
@@ -180,7 +181,7 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
     )
     runtime = CampaignRuntime()
     with (
-        local_artifact_prefix(str(cache)),
+        artifact_prefix(str(cache)),
         ZephyrContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context,
         runtime.activate(context),
     ):
@@ -197,7 +198,7 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
                     description_model=DescriptionModel("fixture", "1"),
                     endpoint=DescriptionEndpoint(f"http://127.0.0.1:{description_server.server_port}/v1", "unused"),
                     spec=spec,
-                    embedder=provider,
+                    embedder_factory=lambda: provider,
                     cache_root=str(cache),
                     population="admitted",
                     sample_size=None,
@@ -216,7 +217,6 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
         built = run(first.publication, max_concurrent=1)[0]
         release = json.loads((Path(built.path) / "release.json").read_text())
         assert release["task_count"] == 2
-        assert release["unique_content_count"] == release["unique_embedding_count"] == 1
         rows = [row for path in built.paths for row in load_parquet(path)]
         assert {row["task_id"] for row in rows} == {"a", "b"}
         assert all(row["matches"]["subjects"][0]["capability_id"] == "math.addition" for row in rows)
@@ -238,7 +238,8 @@ def test_driver_converts_embeds_and_resumes_without_rereading_raw_inputs(
 ):
     # Keep model inference at its provider boundary; execute conversion, HTTP, caches and export.
     monkeypatch.setattr(
-        HarrierEmbedder, "embed", lambda self, texts: np.ones((len(texts), self.dimensions), dtype=np.float32)
+        "experiments.post_training.task_curation.driver.load_harrier",
+        lambda config: EmbeddingEndpoint(str(tmp_path / "embeddings.jsonl"), config.dimensions),
     )
     staged = tmp_path / "input/data"
     staged.mkdir(parents=True)

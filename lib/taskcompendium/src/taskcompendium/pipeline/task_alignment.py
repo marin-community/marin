@@ -4,13 +4,13 @@
 """Score vector Parquet batches and join curriculum assignments to task instances."""
 
 import json
+from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from functools import partial
 
 import numpy as np
 import pyarrow as pa
-from finestore.rl.curriculum import EmbeddingSpec
 from finestore.schema import arrow_schema
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath
@@ -26,6 +26,7 @@ from taskcompendium.pipeline.curriculum_alignment import (
     TaskMatches,
     rank_task_batch,
 )
+from taskcompendium.pipeline.curriculum_models import EmbeddingSpec
 from taskcompendium.pipeline.semantics import DescriptionStatus, TaskDescription
 from taskcompendium.pipeline.task_embeddings import text_record
 
@@ -47,6 +48,43 @@ class TaskAlignment(BaseModel):
     instruction_characters: int
     preview_truncated: bool
     matches: TaskMatches | None
+
+
+@dataclass(frozen=True)
+class AlignmentSourceCounts:
+    source_id: str
+    source_key: str
+    population: str
+    intended_use: str
+    task_count: int
+    ready_count: int
+    insufficient_context_count: int
+
+
+def _source_counts(source_id: str, records: Iterator[dict]) -> AlignmentSourceCounts:
+    row = next(records)
+    counts = Counter([row["description_status"]])
+    counts.update(record["description_status"] for record in records)
+    return AlignmentSourceCounts(
+        source_id=source_id,
+        source_key=row["source_key"],
+        population=row["population"],
+        intended_use=row["intended_use"],
+        task_count=counts.total(),
+        ready_count=counts["ready"],
+        insufficient_context_count=counts["insufficient_context"],
+    )
+
+
+def count_alignment_sources(context: ZephyrContext, *, paths: Sequence[str]) -> list[AlignmentSourceCounts]:
+    """Count task outcomes without reading instruction or match columns."""
+    result = context.execute(
+        Dataset.from_list(list(paths))
+        .load_parquet(columns=["source_id", "source_key", "population", "intended_use", "description_status"])
+        .group_by(key=lambda row: row["source_id"], reducer=_source_counts, num_output_shards=context.max_workers),
+        name="count-alignment-sources",
+    )
+    return result.results
 
 
 @dataclass(frozen=True)

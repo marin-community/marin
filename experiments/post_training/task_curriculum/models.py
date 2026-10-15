@@ -9,9 +9,9 @@ from collections.abc import Iterable
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from finestore.rl.curriculum import CurriculumNode as AtlasCurriculumNode
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from taskcompendium.pipeline.curriculum_alignment import AnchorKind, CurriculumAnchor, CurriculumFacet
+from taskcompendium.pipeline.curriculum_models import CurriculumNode as AtlasCurriculumNode
 
 
 class StrictModel(BaseModel):

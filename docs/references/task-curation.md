@@ -15,6 +15,95 @@ sources = all_sources()  # stable Atlas ID -> RlDataSource
 
 Building the catalog performs no downloads, inference or job submission.
 
+## Pipeline overview
+
+The driver runs each dataset's conversion graph, then binds the embedding graph
+to the completed source artifacts. QUICK converts without review; SAMPLE reviews
+a bounded panel; FULL expands accepted sources and verifies kept tasks.
+`--embed coverage` writes the Atlas export; a separate loader imports it into
+Postgres. `--corpus PATH/corpus.json --embed coverage` resumes from saved
+conversions after checking their manifest hashes. Converted and admitted
+populations remain distinct throughout the export.
+
+```mermaid
+flowchart TD
+    sources["Pinned dataset declarations"] --> conversion["Dataset-owned conversion graph"]
+    conversion --> quick["QUICK: converted TaskSpecs"]
+    conversion --> reviewed["SAMPLE/FULL: review, verify, admit"]
+    reviewed --> catalog["FineStore campaign catalog: results and evidence"]
+    quick --> text["Public task inputs → direct instruction text"]
+    reviewed --> text
+    text --> task_vectors["Harrier task embeddings"]
+    curriculum["Pinned curriculum → text anchors"] --> curriculum_vectors["Harrier curriculum embeddings"]
+    task_vectors -.-> cache["FineStore inference cache"]
+    curriculum_vectors -.-> cache
+    task_vectors -->|vector Parquet| alignment["Exact curriculum scoring + task joins"]
+    curriculum_vectors -->|vector Parquet| alignment
+    alignment --> release["Release manifest references assignments"]
+    release --> coverage["Coverage counts + bounded task samples"]
+    coverage --> loader["Explicit Atlas loader → Postgres"]
+    loader --> atlas["Atlas: By source / By curriculum"]
+    catalog --> grades["Separate curation-grade loader → Postgres"]
+    grades -->|curation grades view| atlas
+```
+
+Both embedding branches use the same model revision, embedding instruction
+(retrieval rubric), tokenization and normalization. Optional
+`--representation rewrite` replaces direct instruction
+text with a cached LLM description. Alignment reads vector Parquet, keeps the
+curriculum matrix in worker memory and scores batches exactly. A curriculum edit
+reuses task vectors. Atlas imports precomputed counts and samples; the full task
+release and vectors stay in object storage.
+
+| Part | Implementation and data models |
+|---|---|
+| Source selection and graph execution | [driver.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/driver.py), [pipeline.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/pipeline.py), [TaskSpec](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/models.py) |
+| Embedding, alignment and export graph | [embedding.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/embedding.py) |
+| Public input and text preparation | [semantics.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/semantics.py): `TaskSemanticInput`, `TaskDescription` |
+| Shared embedding pass and inference | [task_embeddings.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/task_embeddings.py), [HarrierEmbedder](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/processing/embeddings/harrier.py) |
+| Curriculum anchors, ranking and task joins | [curriculum models](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curriculum/models.py), [curriculum_alignment.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum_alignment.py): `CurriculumVectors`, `TaskMatches`; [task_alignment.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/task_alignment.py): `TaskAlignment` |
+| Full release and compact coverage | [embedding.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/embedding.py): release publication; [curriculum_coverage.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum_coverage.py); [EmbeddingSpec, AlignmentRelease, CurriculumCoverage](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum_models.py) |
+| Atlas import and serving | [curriculum loader](https://github.com/marin-community/marin/blob/main/infra/marina/applets/rl_data_catalog/load_curriculum.py), [grade loader](https://github.com/marin-community/marin/blob/main/infra/marina/applets/rl_data_catalog/load.py), [curriculum API](https://github.com/marin-community/marin/blob/main/infra/marina/applets/rl_data_catalog/server/curriculum.py), [Atlas reference](rl-data-atlas.md) |
+
+## Storage and publication
+
+The curation driver defaults to `s3://marin-us-east-02a/marin` on CoreWeave.
+`--artifact-root URL` selects another root explicitly and overrides the ambient
+`MARIN_PREFIX`. Local `--cache-dir PATH` takes precedence for local execution.
+`--output-root`, `--report-path` and `--review-cache` remain explicit locations;
+use the same CW bucket for retained remote runs and a new versioned output
+directory for each campaign.
+
+For remote QUICK runs, `--output-root` holds `campaign.json`, `corpus.json` and
+`catalog/`; reusable source artifacts live under `--artifact-root`. For reviewed
+runs, version the parent directory of `--report-path`. Shared content-addressed
+caches can be reused across campaigns.
+
+Artifacts retain their existing `<root>/<name>/<version>` paths. QUICK conversions
+use `rl-semantics/converted/<source>-<identity>/<version>`; reviewed sources use
+`data/rl/<name>-<identity>/<version>`. Completed fixed versions are reused. Changes
+to inputs or recipes require a new identity or version; `dev` is for disposable
+work. Source manifests and `corpus.json` record exact artifact locations and
+manifest hashes. Consumers should follow these references rather than list
+directories and infer the latest version.
+
+Each campaign has its own FineStore catalog beside its report; there is no
+global catalog selecting versions across all campaigns. Source records retain
+each run's result and artifact path. FineStore's conflict check covers one writer
+session; another writer can replace the same key. Catalog keys include run IDs
+to separate results, but these conventions do not enforce access control.
+Credentials with object write access can overwrite underlying files. Campaign
+reports and `corpus.json` are mutable, so a shared unversioned `--output-root`
+is unsuitable for publication.
+
+When building grader environments outside the driver, set `MARIN_PREFIX` to the
+same artifact root:
+
+```bash
+MARIN_PREFIX=s3://marin-us-east-02a/marin \
+  uv run python -m experiments.post_training.task_curation.images --all
+```
+
 ## Dataset-owned invocation
 
 `RlDataSource.pipeline` is one graph-building callable:
@@ -423,7 +512,7 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
 ```
 
 Build the [registered environments](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/images/README.md#building)
-first, with the same `MARIN_PREFIX`:
+first, with `MARIN_PREFIX` set to the driver's artifact root:
 
 ```bash
 uv run python -m experiments.post_training.task_curation.images --all

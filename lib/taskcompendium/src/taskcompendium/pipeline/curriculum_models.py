@@ -6,12 +6,16 @@
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from finestore.rl.curation import CatalogRecord, SourceDeclaration
+from finestore.rl.curation import SourceDeclaration
 
 
-class EmbeddingSpec(CatalogRecord):
+class _Record(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class EmbeddingSpec(_Record):
     """Numerical and text-rendering identity shared by tasks and curriculum anchors."""
 
     model: str
@@ -25,7 +29,7 @@ class EmbeddingSpec(CatalogRecord):
     storage_dtype: Literal["float32"] = "float32"
 
 
-class AlignmentSource(CatalogRecord):
+class AlignmentSource(_Record):
     source_id: str
     source_key: str
     population: Literal["converted", "admitted"]
@@ -33,14 +37,13 @@ class AlignmentSource(CatalogRecord):
     task_count: int
     ready_count: int
     insufficient_context_count: int
-    unique_content_count: int
     curation_root: str | None = None
     input_rows: int | None = None
     converted_rows: int | None = None
     rejections: dict[str, int] = Field(default_factory=dict)
 
 
-class CurriculumNode(CatalogRecord):
+class CurriculumNode(_Record):
     node_id: str
     subject_id: str
     parent_id: str | None
@@ -49,7 +52,7 @@ class CurriculumNode(CatalogRecord):
     description: str
 
 
-class AlignmentRelease(CatalogRecord):
+class AlignmentRelease(_Record):
     release_id: str
     created_at: str
     curriculum_key: str
@@ -58,8 +61,6 @@ class AlignmentRelease(CatalogRecord):
     task_count: int
     ready_count: int
     insufficient_context_count: int
-    unique_content_count: int
-    unique_embedding_count: int
     sources: list[AlignmentSource]
     inventory: list[SourceDeclaration]
     nodes: list[CurriculumNode]
@@ -79,7 +80,7 @@ class CoverageMetric(StrEnum):
     CAPABILITY = "capability"
 
 
-class CurriculumStatistic(CatalogRecord):
+class CurriculumStatistic(_Record):
     source_id: str
     metric: CoverageMetric
     subject_id: str
@@ -87,7 +88,7 @@ class CurriculumStatistic(CatalogRecord):
     instances: int
 
 
-class CurriculumCoverage(CatalogRecord):
+class CurriculumCoverage(_Record):
     coverage_id: str
     alignment_release_id: str
     curriculum_key: str

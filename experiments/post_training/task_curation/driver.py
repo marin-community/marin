@@ -13,14 +13,14 @@ from typing import cast
 
 import click
 from finestore.rl.curation import SourceDeclaration
-from finestore.rl.curriculum import EmbeddingSpec
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from iris.cluster.client.job_info import get_job_info
 from marin.execution.lazy import ArtifactStep, run
-from marin.processing.embeddings.harrier import HARRIER_DIM, HARRIER_REPO, HARRIER_REVISION, HarrierEmbedder
+from marin.processing.embeddings.harrier import HARRIER_DIM, HARRIER_REPO, HARRIER_REVISION, HarrierConfig, load_harrier
 from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import Backend, MachineFactory
@@ -28,6 +28,7 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.assessment import AssessmentSampling
 from taskcompendium.pipeline.assessment_review import ASSESSMENT_RUBRIC, AssessmentModel
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
+from taskcompendium.pipeline.curriculum_models import EmbeddingSpec
 from taskcompendium.pipeline.query_cache import compact_query_cache
 from taskcompendium.pipeline.semantics import DescriptionModel
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
@@ -61,7 +62,7 @@ from experiments.post_training.task_curation.embedding import (
     DescriptionEndpoint,
     curation_embedding_pipeline,
 )
-from experiments.post_training.task_curation.local import local_artifact_prefix, run_local_steps
+from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CampaignMachines
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
 from experiments.post_training.task_curation.sources import all_sources, runnable_sources
@@ -73,6 +74,7 @@ LOCAL_NORMALIZED_SHARDS = 4
 WORKER_CONTAINER_PROFILE = "CONTAINER_PROFILE_PRIVILEGED"
 IRIS_JOB_TTL = 1800
 CORPUS_CONVERSION_VERSION = "2026.10.14.1"
+CANONICAL_ARTIFACT_ROOT = "s3://marin-us-east-02a/marin"
 EMBEDDING_STAGES = (
     "inputs",
     "descriptions",
@@ -275,7 +277,7 @@ def _embedding_pass(
         max_tokens=16384 if model is None else 512,
         compute_dtype="bfloat16",
     )
-    embedder = HarrierEmbedder(
+    embedder = HarrierConfig(
         model=spec.model,
         revision=spec.revision,
         tokenizer_revision=spec.tokenizer_revision,
@@ -292,7 +294,7 @@ def _embedding_pass(
         description_model=model,
         endpoint=endpoint,
         spec=spec,
-        embedder=embedder,
+        embedder_factory=partial(load_harrier, embedder),
         cache_root=cache_root,
         population=population,
         sample_size=sample_size,
@@ -301,7 +303,7 @@ def _embedding_pass(
     )
     with ExitStack() as scope:
         if cache_dir is not None:
-            scope.enter_context(local_artifact_prefix(str(cache_dir)))
+            scope.enter_context(artifact_prefix(str(cache_dir)))
         click.echo(json.dumps({"stages": {name: getattr(stages, name).path() for name in EMBEDDING_STAGES}}, indent=2))
         if not do_run:
             return
@@ -424,6 +426,12 @@ def _embedding_pass(
     type=click.Path(file_okay=False, path_type=Path),
     help="Local artifact cache. Enables local SAMPLE/FULL execution; QUICK defaults to ~/.cache/marin.",
 )
+@click.option(
+    "--artifact-root",
+    default=CANONICAL_ARTIFACT_ROOT,
+    show_default=True,
+    help="Remote artifact root; overrides MARIN_PREFIX. Local --cache-dir takes precedence.",
+)
 @click.option("--run", "do_run", is_flag=True)
 def main(
     model: str,
@@ -466,6 +474,7 @@ def main(
     auxiliary: tuple[tuple[str, str], ...],
     output_root: str | None,
     cache_dir: Path | None,
+    artifact_root: str,
     do_run: bool,
 ) -> None:
     if corpus is not None and (mode is not None or sources or output_root is not None):
@@ -478,6 +487,8 @@ def main(
         raise click.UsageError("--corpus requires --embed")
     if corpus is not None and (input_root is not None or local_files or auxiliary):
         raise click.UsageError("--corpus uses completed conversions; omit local input overrides")
+    configure_coreweave_s3()
+    click.get_current_context().with_resource(artifact_prefix(artifact_root))
     processing_mode = SourceProcessingMode(mode) if mode else SourceProcessingMode.QUICK
     selected = _selected_sources(sources)
     runtime = CampaignRuntime()
@@ -655,7 +666,7 @@ def main(
         )
     with ExitStack() as scope:
         if cache_dir is not None:
-            scope.enter_context(local_artifact_prefix(str(cache_dir)))
+            scope.enter_context(artifact_prefix(str(cache_dir)))
             if report_path is None:
                 report_path = str(cache_dir / "campaigns/campaign.json")
         steps = [cast(CurationPipeline, source.pipeline)(source, options) for source in selected.values()]

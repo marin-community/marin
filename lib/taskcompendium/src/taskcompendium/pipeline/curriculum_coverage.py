@@ -8,12 +8,12 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from functools import partial
 
-from finestore.rl.curriculum import CurriculumNode, CurriculumStatistic
 from finestore.schema import arrow_schema
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 
+from taskcompendium.pipeline.curriculum_models import CurriculumNode, CurriculumStatistic
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 from taskcompendium.pipeline.task_alignment import TaskAlignment
 

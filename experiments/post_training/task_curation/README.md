@@ -29,6 +29,11 @@ SAMPLE/FULL select sources in catalog order. Omitting `--source` selects every
 runnable source. Local QUICK needs no review model, controller, worker image or
 coordinator settings.
 
+Remote artifacts default to `s3://marin-us-east-02a/marin` on CW, independently
+of the ambient `MARIN_PREFIX`. Use `--artifact-root URL` for an explicit override;
+local `--cache-dir` takes precedence. Keep each retained campaign's
+`--output-root` or `--report-path` in a new versioned directory in that bucket.
+
 Repeat `--source` for a cohort and use a fresh output root each pass. Downloads
 are cached under `~/.cache/marin` (`--cache-dir` overrides this).
 `--input-root PATH` uses already staged files from the declared revision;
@@ -227,106 +232,65 @@ Harrier, computes exact cosine matches, and exports an Atlas release through
 Zephyr. Both sides use the same retrieval rubric. Optional model rewrites support
 bounded comparisons. The curriculum has no separate embedding CLI or database.
 
-Start with a local QUICK conversion and a seeded sample:
+Start with a local conversion and a seeded sample from a selected source:
 
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' \
   --with-editable './lib/marin[cpu]' python \
   -m experiments.post_training.task_curation.driver \
-  --mode quick --source aime24 \
+  --mode quick --source SOURCE \
   --output-root /path/to/quick --cache-dir /path/to/persistent/cache \
   --embed coverage --embedding-sample-size 20
 ```
 
-Add `--run` to execute. AIME24 downloads its pinned inputs automatically. Direct
-embedding needs no inference-service credential.
-`--embed STAGE` runs that embedding stage and its dependencies after conversion
-or curation. QUICK embeds converted tasks; SAMPLE/FULL embeds admitted tasks.
-Stages are `inputs`, `descriptions`, `task_embeddings`, `curriculum_embeddings`,
-`assignments` and `publication`. Omit `--embedding-sample-size` for all selected
-tasks. `--catalog-root` selects an immutable directory containing `curriculum.json`;
+Add `--run` to execute. Omit `--embedding-sample-size` to embed every selected
+task. QUICK embeds converted tasks; SAMPLE/FULL embeds admitted tasks. Neither
+matching nor Atlas changes admission or train/eval use. `--embed coverage` runs
+through the compact export; other `--embed` values stop at intermediate stages.
+`--catalog-root` selects a pinned directory containing `curriculum.json`;
 otherwise the graph uses `TASK_CURRICULUM`.
 
-`--cache-dir` selects local workers and the local artifact cache. `--review-cache`
-holds GLM request/description caches and Harrier vectors in its `descriptions` and
-`vectors` subdirectories; it defaults to `<cache-dir>/review-cache` locally. Keep
-this inference cache when changing worker counts or resuming a corpus. Remote
-artifact outputs use the Iris job’s regional Marin prefix.
+Direct embedding needs no inference-service credential. It uses bounded public
+instructions and answer/tool requirements, excluding task files, solutions and
+private verifier resources. Task and curriculum text use the same Harrier
+checkpoint, retrieval instruction and normalization. `--worker-cpu` and
+`--worker-memory` size each CPU worker; `--max-workers` bounds the shared pool.
+The model loads inside workers when an embedding batch has cache misses.
 
-Direct embedding uses instructions and the public answer/tool contract. It opens
-no task files, private verifier resources or solutions. Inputs are bounded to
-8 KiB of UTF-8, with beginning/middle/end excerpts and omission markers when
-needed. Public-content hashes cover the complete input before sampling, and
-identical rendered texts share vectors. Harrier accepts up to 16,384 tokens for
-direct inputs; this is independent of task instruction length.
+`--cache-dir` selects local workers and artifacts. `--review-cache` selects the
+shared inference cache, defaulting locally to `<cache-dir>/review-cache`.
+Keep it across campaigns and worker-count changes. FineStore caches vectors by
+rendered text and embedding specification; Zephyr writes vector Parquet.
+Alignment reads that Parquet and keeps the curriculum matrix in worker memory.
+A curriculum edit reuses task vectors.
 
-For a rewrite comparison, select `--representation rewrite --model MODEL
---model-revision REVISION --base-url ENDPOINT` and supply `GLM_BULK_TOKEN`.
-The model receives at most 32 KiB of public input with the same excerpt strategy.
-It returns roughly 15–40 words naming the required knowledge or environment and
-core operation. Harrier's rewrite input limit is 512 tokens. A response carries
-no task hash: the transport identifies its request. Failed rewrites exhaust three
-attempts, retain a `skipped` row and increment `semantics/skipped_embeddings`;
-the pass fails only above a 5% failure rate across distinct public inputs.
-`insufficient_context` separately records that the shown input did not establish
-the requested operation. Skipped rows remain in Atlas denominators with their
-failure reason; no vector or match is guessed.
+Optional `--representation rewrite --model MODEL --model-revision REVISION
+--base-url ENDPOINT` uses an inference service to rewrite public inputs before
+embedding. Supply its credential through `GLM_BULK_TOKEN`. Failed rewrites retain
+`skipped` rows and counters after bounded retries; the pass fails above 5%
+failures across distinct public inputs. `insufficient_context` records an input
+that does not establish the requested operation. Both remain in Atlas counts.
 
-Tasks and curriculum anchors share the pinned Harrier checkpoint, embedding
-instruction, tokenizer, bfloat16 CPU inference, last-token pooling and L2
-normalization. FineStore stores vectors by rendered-text/specification hash in
-1,024 fixed partitions, independent of worker count. Zephyr routes each embedding
-partition to one writer, avoiding shared-manifest contention. Reads and writes
-are batched. A curriculum edit reuses task descriptions and vectors.
-Assignment workers load the curriculum matrix once per shard and score batches
-streamed from the task-vector Parquet outputs. Scoring uses the embedding keys
-deduplicated by the embedding pass. Zephyr joins those scores to descriptions and
-task instances, producing assignment records for the Atlas export. Alignment
-does not read the inference cache.
-Alignment and export shuffles use `--max-workers` for their output partition
-count, keeping the number of output files independent of the source-file count.
+Publication references the assignment Parquet and records source/population
+counts in `release.json`. Complete converted releases reconcile those counts
+against conversion manifests. Coverage exports full-population statistics and
+independent samples of up to 100 tasks per source and 10 per curriculum area.
+The [Atlas loader](../../../docs/references/rl-data-atlas.md#curriculum-coverage)
+imports those statistics, samples and curriculum entries into Postgres.
+Full task and vector outputs stay in object storage.
 
-All stages use the driver's shared `--max-workers`, `--worker-cpu`,
-`--worker-memory` and `--coordinator-memory` options. Embedding defaults to four
-CPU cores and 8 GB per worker. Inference batches contain at most 16 texts and
-16,384 padded tokens, sorted by token length. Vectors are checkpointed every 256
-texts so retries reuse completed work. After writing vectors, each partition
-compacts its checkpoint files for subsequent reads. PyTorch threads follow the
-requested CPU count. Description and vector deduplication distribute work across
-the pool independently of source-file count.
-
-The catalog declares subject-domain and task-mechanic routing facets. Matching
-selects one primary subject in each facet. It retains the three highest-ranked
-subjects per facet, three capabilities within each primary subject, and three
-capabilities across the whole catalog. The coverage export applies fixed
-maximum cosine distances of 0.45 for subjects and 0.25 for capabilities.
-Alignment does not change curation admission or train/eval use.
-
-The `publication` stage checks that every selected source/task ID has exactly one
-alignment row with matching lineage. It writes full task Parquet and
-`release.json`, preserving source inventory, population counts and upstream
-artifact roots. Complete converted releases cover each conversion manifest's
-converted-task count.
-
-The `coverage` stage reads those completed task outputs through Zephyr. Each
-shard counts task instances by source, outcome and curriculum node, then a
-small reduction combines the counts. A separate bounded sample keeps up to
-100 tasks per source and, independently, 10 per curriculum node (subject, group
-or capability). Their union is deduplicated by source/task identity. It writes statistics, sampled task Parquet
-and `coverage.json`. Atlas loads this compact dataset. The full task corpus,
-embeddings and assignments remain in object storage. Dataset and train/eval
-views sum the precomputed counts; browsing the heatmap does not aggregate task
-rows. Example lists show samples and retain full-population cell counts.
+See the [pipeline diagram and module links](../../../docs/references/task-curation.md#pipeline-overview)
+for the complete graph and implementation details.
 
 ### Complete converted corpus
 
-Run the existing QUICK mode on Iris with region-local outputs:
+Run the existing QUICK mode on Iris with CW us-east02a outputs:
 
 ```bash
 uv run iris --cluster=marin job run --target-cluster YOUR-CW-REGION \
   --extra cpu --cpu 0.5 --memory 2GB --timeout 43200 \
   -- python -m experiments.post_training.task_curation.driver \
-  --mode quick --output-root s3://YOUR-REGIONAL-BUCKET/corpus \
+  --mode quick --output-root s3://marin-us-east-02a/marin/rl-data/campaigns/YYYY-MM-DD-N \
   --max-workers 8 --worker-cpu 2 --worker-memory 16g \
   --coordinator-memory 8g --concurrent-sources 4
 ```
@@ -352,8 +316,8 @@ uv run iris --cluster=marin job run --target-cluster YOUR-CW-REGION \
   --extra cpu --cpu 0.5 --memory 2GB --timeout 43200 \
   -e HF_HUB_DISABLE_XET 1 \
   -- python -m experiments.post_training.task_curation.driver \
-  --corpus s3://YOUR-REGIONAL-BUCKET/corpus/corpus.json \
-  --embed coverage --review-cache s3://YOUR-REGIONAL-BUCKET/semantic-cache \
+  --corpus s3://marin-us-east-02a/marin/rl-data/campaigns/YYYY-MM-DD-N/corpus.json \
+  --embed coverage --review-cache s3://marin-us-east-02a/marin/rl-data/semantic-cache \
   --max-workers 128 --worker-cpu 4 --worker-memory 8g --coordinator-memory 8g
 ```
 

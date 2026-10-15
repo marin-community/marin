@@ -34,8 +34,8 @@ from experiments.post_training.task_curation.campaign import (
 
 
 @contextmanager
-def local_artifact_prefix(prefix: str) -> Iterator[None]:
-    """Bind planning and execution to a local cache for the entire campaign.
+def artifact_prefix(prefix: str) -> Iterator[None]:
+    """Bind planning and execution to one storage root for the entire campaign.
 
     MARIN_PREFIX is process global, so source threads share this enclosing scope.
     """
@@ -101,7 +101,7 @@ def run_local_steps(
                     outcomes[name] = SourceOutcome(name, path, OutcomeStatus.RUNNING)
                     report(CampaignStatus.RUNNING)
                     try:
-                        with local_artifact_prefix(str(cache_dir)):
+                        with artifact_prefix(str(cache_dir)):
                             # Mutable terminal versions rerun through the ordinary executor;
                             # dependency versions and cache addresses remain unchanged.
                             terminal = replace(step, version="dev")

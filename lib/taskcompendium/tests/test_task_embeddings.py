@@ -10,16 +10,14 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from finestore.reader import ReadView
-from finestore.rl.curriculum import EmbeddingSpec
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 from zephyr.stage_io import ZephyrWorkerError
 
 from taskcompendium.convert.answers import numeric_answer_task
-from taskcompendium.models import Source, TaskSpec
+from taskcompendium.models import Source
 from taskcompendium.pipeline import task_embeddings
-from taskcompendium.pipeline.alignment_publication import publish_alignments
 from taskcompendium.pipeline.curriculum_alignment import (
     AnchorKind,
     CurriculumAnchor,
@@ -27,6 +25,7 @@ from taskcompendium.pipeline.curriculum_alignment import (
     CurriculumVectors,
     rank_task_batch,
 )
+from taskcompendium.pipeline.curriculum_models import EmbeddingSpec
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.review_requests import RequestObservation, RequestOutput
 from taskcompendium.pipeline.semantics import (
@@ -37,7 +36,7 @@ from taskcompendium.pipeline.semantics import (
     prepare_semantic_inputs,
     task_semantic_input,
 )
-from taskcompendium.pipeline.task_alignment import align_tasks
+from taskcompendium.pipeline.task_alignment import align_tasks, count_alignment_sources
 from taskcompendium.pipeline.task_embeddings import (
     embed_texts,
     embedding_cache_partition,
@@ -83,7 +82,6 @@ def task(identifier, prompt="Count two apples.", answer="817", dataset="private-
         tolerance_rel=0,
         evidence={"private": "PRIVATE_EVIDENCE"},
     )
-    assert isinstance(result, TaskSpec)
     return result
 
 
@@ -176,12 +174,14 @@ def test_embedding_retry_reuses_completed_cache_batches(tmp_path, spec):
     arguments = dict(texts=Dataset.from_list(records), spec=spec, cache_root=cache)
     with ZephyrContext(max_workers=1, max_shard_failures=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
         with pytest.raises(ZephyrWorkerError):
-            embed_texts(context, **arguments, embedder=provider, output_root=str(tmp_path / "failed"))
+            embed_texts(context, **arguments, embedder_factory=lambda: provider, output_root=str(tmp_path / "failed"))
         successful = [json.loads(line) for line in Path(provider.calls).read_text().splitlines()]
         assert len(successful) == 256
     recovered = EmbeddingProvider(str(tmp_path / "recovered-calls.jsonl"))
     with ZephyrContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "recovery-chunks")) as context:
-        result = embed_texts(context, **arguments, embedder=recovered, output_root=str(tmp_path / "recovered"))
+        result = embed_texts(
+            context, **arguments, embedder_factory=lambda: recovered, output_root=str(tmp_path / "recovered")
+        )
     assert len(rows(result)) == 520
     retried = [json.loads(line) for line in Path(recovered.calls).read_text().splitlines()]
     assert len(retried) == 264
@@ -300,7 +300,7 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
         context,
         texts=Dataset.from_list(texts),
         spec=spec,
-        embedder=provider,
+        embedder_factory=lambda: provider,
         cache_root=vector_cache,
         output_root=str(tmp_path / "vectors"),
     )
@@ -329,7 +329,7 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
         context,
         texts=Dataset.from_list(anchor_texts),
         spec=spec,
-        embedder=provider,
+        embedder_factory=lambda: provider,
         cache_root=vector_cache,
         output_root=str(tmp_path / "anchors"),
     )
@@ -364,28 +364,17 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
     assert output["c"]["description_status"] == "insufficient_context"
     assert output["c"]["matches"] is None
 
-    publication = publish_alignments(
-        context, input_paths=inputs, alignment_paths=assigned, output_root=str(tmp_path / "release")
-    )
-    assert len(publication.paths) <= context.max_workers
-    assert publication.sources[0].task_count == 4
-    assert publication.sources[0].ready_count == 3
-    assert publication.sources[0].insufficient_context_count == 1
-    assert publication.unique_content_count == 3
-    assert publication.unique_embedding_count == 1
-    corrupt = tmp_path / "corrupt.parquet"
-    pq.write_table(pa.Table.from_pylist([output["a"], output["a"], output["c"]]), corrupt)
-    with pytest.raises(ZephyrWorkerError, match=r"Duplicate match|Incomplete alignment coverage"):
-        publish_alignments(
-            context, input_paths=inputs, alignment_paths=[str(corrupt)], output_root=str(tmp_path / "broken")
-        )
+    counts = count_alignment_sources(context, paths=assigned)
+    assert counts[0].task_count == 4
+    assert counts[0].ready_count == 3
+    assert counts[0].insufficient_context_count == 1
 
     changed_anchor = text_record("Count and compare items", spec)
     embed_texts(
         context,
         texts=Dataset.from_list([*texts, *anchor_texts, changed_anchor]),
         spec=spec,
-        embedder=provider,
+        embedder_factory=lambda: provider,
         cache_root=vector_cache,
         output_root=str(tmp_path / "curriculum-edit"),
     )
@@ -395,7 +384,7 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
         context,
         texts=Dataset.from_list([text_record("Count items", changed_spec)]),
         spec=changed_spec,
-        embedder=provider,
+        embedder_factory=lambda: provider,
         cache_root=vector_cache,
         output_root=str(tmp_path / "spec-edit"),
     )
@@ -486,7 +475,7 @@ def test_invalid_provider_vectors_never_enter_persistent_cache(context, tmp_path
             context,
             texts=Dataset.from_list([row]),
             spec=spec,
-            embedder=ZeroEmbeddingProvider(),
+            embedder_factory=ZeroEmbeddingProvider,
             cache_root=cache,
             output_root=str(tmp_path / "failed"),
         )

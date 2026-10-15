@@ -5,20 +5,20 @@
 
 import json
 import os
-from dataclasses import dataclass, replace
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import partial
 
 import numpy as np
-from finestore.rl.curation import CatalogRecord, SourceDeclaration
-from finestore.rl.curriculum import AlignmentRelease, AlignmentSource, CurriculumCoverage, EmbeddingSpec
+from finestore.rl.curation import SourceDeclaration
 from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.inference.openai_chat import OpenAIChatClient
+from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.pipeline.alignment_publication import publish_alignments
 from taskcompendium.pipeline.chat_requests import chat_output
 from taskcompendium.pipeline.curriculum_alignment import (
     CurriculumAnchor,
@@ -31,6 +31,12 @@ from taskcompendium.pipeline.curriculum_coverage import (
     SUBJECT_DISTANCE,
     build_curriculum_coverage,
 )
+from taskcompendium.pipeline.curriculum_models import (
+    AlignmentRelease,
+    AlignmentSource,
+    CurriculumCoverage,
+    EmbeddingSpec,
+)
 from taskcompendium.pipeline.semantics import (
     DESCRIPTION_PROMPT_VERSION,
     DescriptionModel,
@@ -39,7 +45,7 @@ from taskcompendium.pipeline.semantics import (
     prepare_instruction_texts,
     prepare_semantic_inputs,
 )
-from taskcompendium.pipeline.task_alignment import align_tasks
+from taskcompendium.pipeline.task_alignment import align_tasks, count_alignment_sources
 from taskcompendium.pipeline.task_embeddings import (
     TextEmbedder,
     embed_texts,
@@ -59,7 +65,7 @@ INSTRUCTION_TEXTS_VERSION = "2026.10.15.1"
 EMBEDDINGS_VERSION = "2026.10.15.2"
 CURRICULUM_EMBEDDINGS_VERSION = "2026.10.15.2"
 ALIGNMENT_VERSION = "2026.10.15.2"
-PUBLICATION_VERSION = "2026.10.15.1"
+PUBLICATION_VERSION = "2026.10.15.2"
 COVERAGE_VERSION = "2026.10.15.1"
 
 
@@ -67,7 +73,9 @@ class SemanticArtifact(Artifact):
     paths: list[str]
 
 
-class AlignmentManifest(CatalogRecord):
+class AlignmentManifest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     inputs_root: str
     descriptions_root: str
     task_vectors_root: str
@@ -159,7 +167,7 @@ def _instructions(runtime: CampaignRuntime, *, inputs_root: str, output_root: st
 
 def _embed_tasks(
     runtime: CampaignRuntime,
-    embedder: TextEmbedder,
+    embedder_factory: Callable[[], TextEmbedder],
     *,
     descriptions_root: str,
     spec: EmbeddingSpec,
@@ -172,14 +180,19 @@ def _embed_tasks(
         .flat_map(partial(task_text_records, spec=spec))
     )
     paths = embed_texts(
-        runtime.context, texts=texts, spec=spec, embedder=embedder, cache_root=cache_root, output_root=output_root
+        runtime.context,
+        texts=texts,
+        spec=spec,
+        embedder_factory=embedder_factory,
+        cache_root=cache_root,
+        output_root=output_root,
     )
     return SemanticArtifact(path=output_root, paths=paths)
 
 
 def _embed_curriculum(
     runtime: CampaignRuntime,
-    embedder: TextEmbedder,
+    embedder_factory: Callable[[], TextEmbedder],
     *,
     catalog_root: str,
     spec: EmbeddingSpec,
@@ -199,7 +212,12 @@ def _embed_curriculum(
     # a shard per anchor would force singleton model and cache requests.
     texts = Dataset.from_list([anchors]).flat_map(lambda batch: [text_record(anchor.text, spec) for anchor in batch])
     paths = embed_texts(
-        runtime.context, texts=texts, spec=spec, embedder=embedder, cache_root=cache_root, output_root=output_root
+        runtime.context,
+        texts=texts,
+        spec=spec,
+        embedder_factory=embedder_factory,
+        cache_root=cache_root,
+        output_root=output_root,
     )
     (StoragePath(output_root) / "curriculum.json").write_text(catalog.model_dump_json())
     (StoragePath(output_root) / "nodes.json").write_text(
@@ -278,13 +296,8 @@ def _publish(
     output_root: str,
 ) -> SemanticArtifact:
     alignment = AlignmentManifest.model_validate_json((StoragePath(alignment_root) / "alignment.json").read_text())
-    data = publish_alignments(
-        runtime.context,
-        input_paths=SemanticArtifact.raw_load(alignment.inputs_root).paths,
-        alignment_paths=SemanticArtifact.raw_load(alignment_root).paths,
-        output_root=output_root,
-    )
-    counts = {row.source_id: row for row in data.sources}
+    paths = SemanticArtifact.raw_load(alignment_root).paths
+    counts = {row.source_id: row for row in count_alignment_sources(runtime.context, paths=paths)}
     if set(counts) - curated_roots.keys():
         raise ValueError("Alignment contains sources outside the selected corpus")
     if curated_roots.keys() - {row.id for row in inventory}:
@@ -293,15 +306,19 @@ def _publish(
     for source_id, root in curated_roots.items():
         manifest = json.loads((StoragePath(root) / "manifest.json").read_text())
         source_key = canonical_sha256(manifest)
-        row = counts.get(source_id) or AlignmentSource(
-            source_id=source_id,
-            source_key=source_key,
-            population=population,
-            intended_use=manifest["intended_use"],
-            task_count=0,
-            ready_count=0,
-            insufficient_context_count=0,
-            unique_content_count=0,
+        counted = counts.get(source_id)
+        row = (
+            AlignmentSource(**asdict(counted))
+            if counted is not None
+            else AlignmentSource(
+                source_id=source_id,
+                source_key=source_key,
+                population=population,
+                intended_use=manifest["intended_use"],
+                task_count=0,
+                ready_count=0,
+                insufficient_context_count=0,
+            )
         )
         if (row.source_key, row.population, row.intended_use) != (source_key, population, manifest["intended_use"]):
             raise ValueError(f"Published source lineage differs from the selected manifest: {source_id}")
@@ -338,17 +355,15 @@ def _publish(
         task_count=sum(row.task_count for row in sources),
         ready_count=sum(row.ready_count for row in sources),
         insufficient_context_count=sum(row.insufficient_context_count for row in sources),
-        unique_content_count=data.unique_content_count,
-        unique_embedding_count=data.unique_embedding_count,
         sources=sources,
         inventory=inventory,
         nodes=json.loads((StoragePath(curriculum_root) / "nodes.json").read_text()),
-        paths=data.paths,
+        paths=paths,
         lineage=lineage,
         embedding_spec=alignment.spec,
     )
     (StoragePath(output_root) / "release.json").write_text(release.model_dump_json(indent=2))
-    return SemanticArtifact(path=output_root, paths=data.paths)
+    return SemanticArtifact(path=output_root, paths=paths)
 
 
 def _coverage(
@@ -406,7 +421,7 @@ def curation_embedding_pipeline(
     description_model: DescriptionModel | None,
     endpoint: DescriptionEndpoint,
     spec: EmbeddingSpec,
-    embedder: TextEmbedder,
+    embedder_factory: Callable[[], TextEmbedder],
     cache_root: str,
     population: str,
     sample_size: int | None,
@@ -452,7 +467,7 @@ def curation_embedding_pipeline(
     vectors = _named(
         apply(
             "rl-semantics/task-embeddings",
-            partial(_embed_tasks, runtime, embedder),
+            partial(_embed_tasks, runtime, embedder_factory),
             version=EMBEDDINGS_VERSION,
             artifact_type=SemanticArtifact,
             descriptions_root=descriptions,
@@ -464,7 +479,7 @@ def curation_embedding_pipeline(
     anchors = _named(
         apply(
             "rl-semantics/curriculum-embeddings",
-            partial(_embed_curriculum, runtime, embedder),
+            partial(_embed_curriculum, runtime, embedder_factory),
             version=CURRICULUM_EMBEDDINGS_VERSION,
             artifact_type=SemanticArtifact,
             catalog_root=curriculum,

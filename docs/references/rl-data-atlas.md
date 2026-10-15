@@ -25,7 +25,7 @@ flowchart LR
   T[Public TaskSpec instructions and contracts] --> E[Zephyr: bounded public text and cached CPU Harrier embeddings]
   H[Curriculum anchor embeddings] --> M[Zephyr: exact matches and scores]
   E --> M
-  M --> R[Zephyr: validate task coverage and publish release]
+  M --> R[Count source outcomes and publish release manifest]
   R --> CS[Zephyr: coverage statistics and review samples]
   CS --> CL[Compact curriculum loader]
   CL --> CA[Postgres: compact statistics, curriculum and samples]
@@ -111,7 +111,7 @@ with Ctrl-C when finished; its database is disposable.
 ## Curriculum coverage
 
 Open **Curriculum coverage** from the source inventory. The heatmap starts with
-subjects and source families. Open a subject or group to descend through the
+all curriculum domains and their topics. Open a subject or group to descend through the
 hierarchy, or search names and descriptions across the curriculum. Search returns
 at most 100 areas. Select a cell for its task instances and a task for its public
 instruction preview, embedding text, cosine scores and alternatives.
@@ -152,8 +152,8 @@ inventory; enable **Show sources without processed tasks** to show their striped
 columns.
 
 Run the embedding graph through `--embed coverage`. The `publication` stage
-checks every task in that release by source/task identity and lineage, then writes full task
-Parquet and `release.json`. The subsequent `coverage` stage writes aggregated
+counts assignment outcomes by source, reconciles complete converted populations
+against source manifests, and writes `release.json` referencing the assignment Parquet. The subsequent `coverage` stage writes aggregated
 statistics, bounded example Parquet and `coverage.json` without rerunning
 embeddings or matching. Load both manifests:
 

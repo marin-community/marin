@@ -28,7 +28,7 @@ from experiments.post_training.task_curation.campaign import CampaignFailed, Cam
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import prepare_blend
 from experiments.post_training.task_curation.datasets.tasktrove import calendar
-from experiments.post_training.task_curation.local import local_artifact_prefix, run_local_steps
+from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, planned_lock_url, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tasktrove.compare import source_file_path
@@ -106,7 +106,7 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
     grader = cast(VerifyitGrader, task.grader)
     assert verifyit_spec(grader) == ExactSpec(("two",), ignore_case=False)
     environment = cast(EnvironmentRequirements, grader.environment)
-    with local_artifact_prefix(str(tmp_path / "downloads")):
+    with artifact_prefix(str(tmp_path / "downloads")):
         assert environment.packages_lock == planned_lock_url(source.grader)
     catalog = ReadView(str(output / "catalog"))
     recorded = list(catalog.iter_rows("sources"))

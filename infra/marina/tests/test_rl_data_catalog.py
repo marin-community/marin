@@ -31,11 +31,11 @@ from finestore.rl.curation import (
     SourceDeclaration,
     register_catalog,
 )
-from finestore.rl.curriculum import AlignmentRelease, CurriculumCoverage
 from finestore.store import DataStore
 from marina.applets import AppletServices, validate_query
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
+from taskcompendium.pipeline.curriculum_models import AlignmentRelease, CurriculumCoverage
 
 from infra.marina.applets.rl_data_catalog.load import load_catalog
 from infra.marina.applets.rl_data_catalog.load_curriculum import load_curriculum
@@ -252,8 +252,6 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
         task_count=400,
         ready_count=300,
         insufficient_context_count=100 * int(unavailable_status == "insufficient_context"),
-        unique_content_count=3,
-        unique_embedding_count=2,
         sources=[
             {
                 "source_id": identifier,
@@ -263,7 +261,6 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
                 "task_count": count,
                 "ready_count": ready,
                 "insufficient_context_count": count - ready if unavailable_status == "insufficient_context" else 0,
-                "unique_content_count": count,
             }
             for identifier, count, ready in (("a", 300, 200), ("b", 100, 100))
         ],
