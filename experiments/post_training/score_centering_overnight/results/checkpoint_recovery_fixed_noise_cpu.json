@@ -1,0 +1,37 @@
+{
+  "scope": "CPU engineering checkpoint only. No GPU restart qualification or final scientific endpoint.",
+  "base_source": "2c77ce20ed19f4936925ae5ca572d7ea1e20ef39",
+  "recovery_source": "f738fbf54662c0d1898bf8469c10692e296e5331",
+  "recovery_branch": "https://github.com/marin-community/MarinSkyRL/tree/experiments/score-centering-recovery-01a126ce",
+  "frozen_live_gpu_source_unchanged": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "hypothesis": "Removing the fixed-noise resume guard with the previous restore order initializes delta from resumed learner weights instead of the configured initial model.",
+  "before_fix": {
+    "scope": "Simulated CPU policy/serving RPC boundaries using actual trainer restore, checkpoint metadata and fixed-noise implementation. The existing guard did not allow this resume in valid frozen-source launches.",
+    "noise005": "Expected regression failure:3/3 serving tensor elements differ; maximum absolute difference0.7571640014648438.",
+    "noise000": "Passes."
+  },
+  "change": "Initialize fixed sampler delta from original configured model before loading checkpoint weights; restore optimizer/loader state, then reuse that delta on the current sampler sync.",
+  "after_fix": {
+    "targeted_tests_passed": 32,
+    "checks": "Exact sampler tensor equality atzero tolerance for noise0/.05, serialized optimizer moments and rollout loader state; existing refresh/evaluation/overshoot/Megatron-offload checks.",
+    "gpu_restart_validation": "pending",
+    "periodic_sampler_resume": "still unsupported and rejected"
+  },
+  "existing_fixture_repair": {
+    "confirmed_base": "Three logging tests also fail on untouched2c77ce20 because a MagicMock export path is truthy after metric-file persistence was added.",
+    "repair": "Provide a real temporary export directory and assert the actual exported evaluation/training JSON in addition to existing log/telemetry checks.",
+    "baseline_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/checkpoint-existing-resume-fixture-baseline-2c77.log"
+  },
+  "evidence": {
+    "original_order_regression": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/checkpoint-noise-original-baseline-regression-before.log",
+    "targeted_after_fix": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/checkpoint-noise-original-baseline-regression-after-fixture-repair.log",
+    "mechanical_checks": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/checkpoint-recovery-fixed-noise-lint.log",
+    "initial_echo_work_log": 4644,
+    "shared_design": "https://echo.oa.dev/wiki/731"
+  },
+  "next_gates": [
+    "Recover the actual frozen sampler policy across periodic-stale restarts and preserve required anchor checkpoints.",
+    "Bounded exact-head Qwen GPU save/restore qualification before any broader recovery job.",
+    "Five-node Snowball PP2/EP8 qualification with actual noise/version/capture/finite/model/optimizer/loader evidence before changing long-run source or configuration."
+  ]
+}
