@@ -1,0 +1,60 @@
+{
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "status": "prepared; not submitted",
+  "reason": "Two separate five-node Snowball controlled-noise long attempts were preempted after48 and24 updates with resume disabled and no intermediate committed checkpoint. Qualify native optimizer/model/dataloader continuation cheaply before proposing any long-run recovery change. Initial prepare validation confirmed fixed-noise resume is separately forbidden by objective_spec.py; this initial diagnostic therefore uses noise0 and cannot qualify the noisy main path.",
+  "geometry": {
+    "cluster": "cw-rno2a",
+    "priority": "batch",
+    "nodes": 2,
+    "h100_per_node": 8
+  },
+  "phases": [
+    {
+      "run_id": "sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce",
+      "new_updates": [
+        1,
+        2
+      ],
+      "resume_mode": "none",
+      "committed_checkpoint": 2
+    },
+    {
+      "run_id": "sc-qwen-checkpoint-resume-qual-sc-s0-rno-a0-01a126ce",
+      "new_updates": [
+        3,
+        4,
+        5
+      ],
+      "resume_mode": "from_path",
+      "from_run": "sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce",
+      "from_checkpoint": 2,
+      "committed_checkpoint": 5,
+      "submission_gate": "Save phase must complete and its full model/optimizer/DCP metadata, trainer global step and serialized rollout loader state must be audited first."
+    }
+  ],
+  "retained_recipe": "Frozen0212 Qwen AdamW optimizer pilot with explicit clean sampler noise0.0, fresh sampler refresh1, full512-response batches, naturalK128 and TIS2+SC. Short diagnostic horizons, checkpoint/evaluation cadence, placement/priority, paths and native resume are declared changes. The constant scheduler has no changed annealing horizon.",
+  "pass_requirements": [
+    "Immutable full checkpoints2 and5 with all8 learner rank shards, optimizer state and rollout data state.",
+    "Second process loads checkpoint2 and reports first applied optimizer step3, then4 and5, without replaying1/2 or stopping at2.",
+    "Finite applied training updates, full512-response membership at each new step, aligned naturalK128/chosen-q/TIS2 evidence and actual generating-policy versions/ages.",
+    "Restored dataloader position/retries/ready payloads match the saved state; admitted fresh batches obey zero optimizer age.",
+    "Record all allocations and failures; this diagnostic yields no scientific comparison endpoint.",
+    "Noise remains0; actual initial sampler sync uses restored learner weights and each new step obeys refresh1."
+  ],
+  "limits": [
+    "Frozen0212 separately forbids fixed-noise resume. This zero-noise diagnostic cannot qualify noise0.05 long mains.",
+    "No Snowball PP2/EP8 restart qualification is established by this Qwen diagnostic.",
+    "Periodic65 sampler resume remains prohibited by frozen0212; no arbitrary stale-cycle resumption is authorized by this plan.",
+    "Current full1200 mains and full130 calibration configs remain immutable.",
+    "Any resumed main analysis requires declared committed checkpoint lineage and exact selected step segments; never pool uncommitted duplicate steps across attempts."
+  ],
+  "preflight_correction": {
+    "initial_noise_scale": 0.05,
+    "original_result": "save prepared; resume rejected before submission",
+    "exception": "ValueError: fixed-noise reproduction requires local disaggregated vLLM, fresh full batches and no resume",
+    "exact_source": "skyrl-train/skyrl_train/config/objective_spec.py:301-311 @0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "rejected_yaml_backup": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-checkpoint-noisy-preflight-rejection",
+    "corrected_noise_scale": 0.0,
+    "interpretation": "Native clean/fresh checkpoint continuation is the first engineering gate only. Neither controlled-noise nor periodic-stale resume is supported or newly qualified."
+  }
+}
