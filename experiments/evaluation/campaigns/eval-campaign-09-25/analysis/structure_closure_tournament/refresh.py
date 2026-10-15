@@ -20,11 +20,9 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER
 
-campaign = importlib.import_module(
-    "experiments.evaluation.campaigns.eval-campaign-09-25-unlabeled.structure_closure_tournament"
-)
+campaign = importlib.import_module("experiments.evaluation.campaigns.eval-campaign-09-25.structure_closure_tournament")
 pairwise = importlib.import_module(
-    "experiments.evaluation.campaigns.eval-campaign-09-25-unlabeled.analysis.snowball_tournament.pairwise"
+    "experiments.evaluation.campaigns.eval-campaign-09-25.analysis.snowball_tournament.pairwise"
 )
 
 

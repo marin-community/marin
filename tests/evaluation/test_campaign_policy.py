@@ -12,6 +12,7 @@ from marin.evaluation.campaign_policy import (
     OCTOBER_5_ORIGINAL_HARBOR_COMMIT,
     OCTOBER_5_VERSION,
     OCTOBER_6_VERSION,
+    OCTOBER_9_VERSION,
 )
 from marin.evaluation.eval_policy import policy_violations, runtime_violations
 from marin.evaluation.evalchemy.config import load_evalchemy_config
@@ -60,6 +61,7 @@ def _campaign_run(model_name: str, benchmark: str) -> tuple[ModelRef, EvalRef]:
             "open-athena-Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04",
         )
         for path in sorted((CAMPAIGN_ROOT / "evalchemy-configs").glob("*.yaml"))
+        if path.stem != "triviaqa"
     ]
     + [
         ("openai-gpt-oss-20b", "cruxeval"),
@@ -68,6 +70,12 @@ def _campaign_run(model_name: str, benchmark: str) -> tuple[ModelRef, EvalRef]:
 def test_campaign_accepts_effective_configs_including_native_thinking_translation(model_name, benchmark):
     model, evaluation = _campaign_run(model_name, benchmark)
     assert policy_violations(OCTOBER_5_VERSION, model, evaluation) == ()
+
+
+@pytest.mark.parametrize("version", [OCTOBER_5_VERSION, OCTOBER_6_VERSION, OCTOBER_9_VERSION])
+def test_frozen_campaign_rejects_updated_triviaqa_concurrency(version):
+    model, evaluation = _campaign_run("Qwen-Qwen3.6-35B-A3B", "triviaqa")
+    assert policy_violations(version, model, evaluation)
 
 
 @pytest.mark.parametrize(
