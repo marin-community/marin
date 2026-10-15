@@ -33,6 +33,9 @@ being skipped. `A diff: B` is A minus B. Extensions, each needed by a paper tabl
 - `<column>` may be `{<expression>}`, evaluated per row by `DataFrame.eval` (`{1 - mariner_mse / panel_sd**2}`), or
   `mean_of(<selection>)`, the row-wise mean of the `bpb__<task>` columns for the task ids that another selection,
   `<table>[<filter>].<column>`, returns (`mean_of(tasks[family=='Math'].task_id)`).
+- `concat(<selection>, <selection>, ...)` stacks selections, of one table or several, into one; a selection is
+  `<table>[<filter>].<column>` or a `concat`. `concat(swarm[...].bpb, validation[...].bpb).std` is the std of a
+  mixture's runs that two tables hold.
 - `paired(<selection>, <selection>, <key>).<agg>` aggregates the differences of two selections paired on a key
   column, which must hold the same values once each: `paired(a.bpb, b.bpb, trainer_seed).se` is the standard error of
   a mean paired difference.
@@ -361,6 +364,12 @@ class _Query:
         return agg
 
     def _selection(self, table: str) -> _Selection:
+        if table == "concat" and self._take("("):
+            parts = [self._selection(self._match(NAME))]
+            while self._take(","):
+                parts.append(self._selection(self._match(NAME)))
+            self._expect(")")
+            return _Selection(pd.concat([p.rows for p in parts]), pd.concat([p.values for p in parts]))
         if table not in self.tables:
             raise self._error(f"no build table {table!r}")
         self._space()

@@ -188,6 +188,11 @@ def test_evaluate_extensions():
     paired = "paired(runs[launch=='b'].bpb__x, runs[launch=='a'].bpb__x, trainer_seed)"
     assert v.evaluate(f"{paired}.mean", tables) == pytest.approx(0.0)
     assert v.evaluate(f"{paired}.se", tables) == pytest.approx(np.std([0.5, 0.0, -0.5], ddof=1) / np.sqrt(3))
+    # Selections of several tables combine into one, which can also be paired.
+    extra = "concat(tasks[task_id=='x'].snr, runs[launch=='a' & trainer_seed>0].bpb__x)"
+    assert v.evaluate(f"{extra}.std", tables) == pytest.approx(np.std([9.0, 2.0, 3.0], ddof=1))
+    combined = "concat(runs[launch=='a' & trainer_seed==0].bpb__x, runs[launch=='b' & trainer_seed>0].bpb__x)"
+    assert v.evaluate(f"paired({combined}, runs[launch=='a'].bpb__x, trainer_seed).sum", tables) == pytest.approx(-0.5)
     # A null is never averaged away.
     runs.loc[0, "bpb__x"] = np.nan
     with pytest.raises(ValueError, match="null"):
