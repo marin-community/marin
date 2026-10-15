@@ -66,7 +66,6 @@ def execute_jobs(store: AppletStore, runtime: RuntimeConfig, runner_name: str) -
             try:
                 result = subprocess.run(
                     [sys.executable, "-I", "-m", "marina.applet_job", str(root), job.module, *job.args],
-                    cwd=root,
                     env=environment,
                     timeout=job.timeout,
                     check=False,

@@ -17,6 +17,7 @@ from marina.db import UrlDatabase
 from marina.journeys import running_kernel
 from marina.server import MarinaConfig
 from marina.testing import isolated_database
+from rigging.filesystem.cluster_config import StoreType, store_config
 
 
 @pytest.fixture
@@ -175,6 +176,32 @@ def test_runner_uses_snapshot_when_an_earlier_job_releases_new_code(tmp_path: Pa
     second_run = runner.invoke(cli, args, env=env)
     assert second_run.exit_code == 0, second_run.output
     assert output.read_text() == "new"
+
+
+def test_released_job_resolves_runtime_storage_configuration(tmp_path: Path, job_registry) -> None:
+    store, url = job_registry
+    output = tmp_path / "storage-endpoint"
+    applet_id = release_job(
+        tmp_path,
+        store,
+        "alpha",
+        textwrap.dedent(
+            f"""\
+            from pathlib import Path
+            from rigging.filesystem.cluster_config import StoreType, store_config
+            endpoint = store_config(StoreType.COREWEAVE).endpoint
+            Path({str(output)!r}).write_text(endpoint)
+            """
+        ),
+    )
+    config = runner_config(tmp_path, {applet_id: ()})
+    result = CliRunner().invoke(
+        cli,
+        ["run", "hourly"],
+        env={"MARINA_DATABASE_URL": url, "MARINA_RUNTIME_CONFIG": str(config)},
+    )
+    assert result.exit_code == 0, result.output
+    assert output.read_text() == store_config(StoreType.COREWEAVE).endpoint
 
 
 def test_applet_host_commands_change_persisted_binding(tmp_path: Path, database_url: str) -> None:

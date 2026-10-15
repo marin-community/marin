@@ -286,6 +286,8 @@ statement, materializes them, and executes their modules in child processes.
 Each child receives only its declared runner secrets. Running jobs keep their
 snapshot through releases and revision pruning; the next execution selects the
 new revision. Jobs do not apply application migrations.
+Children retain Marina's working directory so shared libraries can find runtime
+configuration. Locate files bundled in the package relative to `__file__`.
 
 Echo's `sync.main` runs hourly; EvalDash's `ingest` runs every ten minutes.
 `ECHO_SYNC_JOB` and `EVALDASH_INGEST_JOB` still name their existing Cloud Run resources.
