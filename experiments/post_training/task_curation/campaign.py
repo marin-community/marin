@@ -108,7 +108,7 @@ class CampaignArtifact(Artifact):
     result: PipelineResult | None = None
 
 
-def campaign_plan(steps: Sequence[ArtifactStep[CampaignArtifact]], pool: CampaignPool) -> dict[str, object]:
+def campaign_plan(steps: Sequence[ArtifactStep[Artifact]], pool: CampaignPool) -> dict[str, object]:
     """Describe a campaign without resolving storage, creating clients, or starting workers."""
     return {
         "sources": [

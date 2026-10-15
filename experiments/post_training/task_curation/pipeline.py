@@ -246,7 +246,7 @@ class CurationRecipe:
     intended_use: IntendedUse
     rubric: str | None = None
     controls: Controls | None = None
-    inputs: Mapping[str, HfSource | UrlSource | HarborSource] = field(default_factory=dict)
+    inputs: Mapping[str, HfSource | UrlSource] = field(default_factory=dict)
     grader: Environment | None = None
     resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
 
@@ -637,15 +637,13 @@ def pipeline_identity(
 
 @dataclass(frozen=True)
 class DownloadRequest:
-    source: HfSource | UrlSource | HarborSource
+    source: HfSource | UrlSource
     output_path: str
 
 
 def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> None:
     """Stage a source's pinned files; a URL download must match its declared digest."""
     source = request.source
-    if isinstance(source, HarborSource):
-        raise ValueError("Harbor releases need exported task packages; supply --input-root (see datasets/skill2env)")
     if isinstance(source, HfSource):
         download = DownloadConfig(
             hf_dataset_id=source.repo,
@@ -678,11 +676,11 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
         raise ValueError(f"{source.url} has SHA-256 {digest.hexdigest()}; expected {source.sha256}")
 
 
-def _download_request(source: HfSource | UrlSource | HarborSource, ctx: StepContext) -> DownloadRequest:
+def _download_request(source: HfSource | UrlSource, ctx: StepContext) -> DownloadRequest:
     return DownloadRequest(source, ctx.output_path)
 
 
-def download_step(source: HfSource | UrlSource | HarborSource, campaign: CampaignRuntime) -> ArtifactStep[Artifact]:
+def download_step(source: HfSource | UrlSource, campaign: CampaignRuntime) -> ArtifactStep[Artifact]:
     """One shared artifact per distinct set of pinned bytes."""
     identity = hashlib.sha256(canonical_json(download_identity(source)).encode()).hexdigest()[:16]
     return ArtifactStep(
