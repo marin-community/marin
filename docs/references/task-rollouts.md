@@ -203,8 +203,7 @@ from the task machine once, for every grader kind including `SessionGrader`, and
 `RolloutData.outputs` maps each absolute file path to its bytes. Files outside `output_paths` are not returned.
 A task without a task machine or without output paths returns an empty mapping.
 Capture uses the budgets of `taskcompendium.runtime.output_capture`: at most 1,024 files and 16 MiB in total.
-The task grader that the engine supplies in `TaskSessionContext.task_grader` grades this capture and does not download the files again.
-It raises `RuntimeError` if a session calls it during the turn loop, before the capture.
+The engine passes this capture to the session's `grade()`, and the task grader in `TaskSessionContext.task_grader` grades the `outputs` it receives without downloading the files again.
 
 Capture runs inside the verifier deadline, as part of the final grading phase.
 A capture failure or expired deadline raises `RolloutInterrupted` with operation `grade`.
