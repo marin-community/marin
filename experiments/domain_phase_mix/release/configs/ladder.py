@@ -1,18 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The scaling ladder above 3e18 FLOPs and the per-task accuracies of its four 1e21 mixtures.
+"""The scaling ladder and the per-task accuracies of its four 1e21 mixtures.
 
-`ladder` has one row per training run of the six ladder mixtures at 2e19, 3e20 and 1e21 FLOPs: MARINER and Olmix,
-each proposed for Uncheatable and for OlmoBaseEval Easy, and the proportional and UniMax-8 baselines. These are the
-rungs above the swarm's scale in the paper's scaling figure (fig:r1) and table (tab:scaling-main); the figure's
-`plotted_points.csv` names its sources. The 3e18 rungs are validation runs, which `validation_3e18` holds.
+`ladder` has one row per training run of the six ladder mixtures at 3e18, 2e19, 3e20 and 1e21 FLOPs: MARINER and
+Olmix, each proposed for Uncheatable and for OlmoBaseEval Easy, and the proportional and UniMax-8 baselines. These are
+the points of the paper's scaling figure (fig:r1) and table (tab:scaling-main); the figure's `plotted_points.csv`
+names their sources. Above 3e18 each mixture has one run. At 3e18 the figure averages three trainer seeds of each
+mixture, which are validation runs (`validation_3e18`), and eleven proportional runs: the swarm's ten proportional
+repeats (`swarm_qwen3_360m_1p6b`) and the June ladder's run. `export` holds the June run, which no other table holds;
+`with_3e18_rows` adds copies of the other 3e18 runs' rows, which keep their observation ids.
 
 MARINER and Olmix runs come from the audited results of their scaling launches, with each run's 51 OlmoBaseEval Easy
 components from the Table 9 result saved beside them. The baselines come from the June ladder's W&B export, which
 records their seven Uncheatable components but no OlmoBaseEval Easy component. Their 1e21 components are those of the
-accuracy table, whose mean reproduces each run's recorded aggregate; their 2e19 and 3e20 components exist only on W&B,
-so those four rows have Uncheatable components only (`components_available` false).
+accuracy table, and the 3e18 proportional run's are those the UniMax cap sweep collected again beside its own runs;
+each set's mean reproduces the run's recorded aggregate. The 2e19 and 3e20 components exist only on W&B, so those four
+rows have Uncheatable components only (`components_available` false).
 
 Observation ids key on the hashed training run name: the audited `run_name` (the run directory in its evaluation
 metrics URI) and, for the baselines, the W&B run id, which is the same name. Data seeds are as the sources record them,
@@ -48,6 +52,9 @@ CANDIDATE_WEIGHTS = (
     paths.REPO / "experiments/domain_phase_mix/release/unimax8_weights.csv",
 )
 ACCURACY = paths.RO / "accuracy_component_table_20260922"  # components.csv and the appendix table's rows.tex
+# The UniMax cap sweep's Table 9 results, which hold the 51 components of the June proportional run at 3e18.
+CAP_SWEEP_TABLE9 = paths.AG / "unimax_cap_sweep_20260922/table9_results.json"
+CAP_SWEEP_PROPORTIONAL = "proportional_3e18"  # the sweep's key of that run
 # The audits recorded the fixed weighting of each run's components; the June ladder's legacy-schema aggregates agree
 # with it to 8e-8.
 AGGREGATE_VERSION = "fixed_20260927"
@@ -88,6 +95,16 @@ PROPORTIONAL = "proportional"
 BASELINES = ("proportional", "unimax8")
 # The mixtures whose 1e21 runs the accuracy table scores, in its column order; it names its columns by method.
 ACCURACY_POLICIES = ("proportional", "unimax8", "olmixq_t9_kl0p005_cap04", "lwspu_t9_snc_cap08")
+# The validation runs the scaling figure plots at 3e18 (plotted_points.csv `source_rows`), by launch: trainer seeds 0
+# to 2 of MARINER's frozen proposals and of the matched Olmix proposals, and the UniMax-8 repeats. The Olmix proposals'
+# other validation runs (the epoch-cap and KL sweep's) are not points of the figure.
+VALIDATION_3E18 = {
+    "frozen_procedure": ("lwspu_t9_snc_cap08", "lwspu_u_snc_cap06"),
+    "fairness_repeats": ("lwspu_t9_snc_cap08", "lwspu_u_snc_cap06"),
+    "matched_olmix": ("olmixq_t9_kl0p005_cap04", "olmixq_u_kl0p05_cap04"),
+    "unimax8_repeats": ("unimax8",),
+}
+SWARM_REPEATS = "repeat"  # the swarm table's design kind of its proportional repeats
 UNCHEATABLE_TASKS = [t for t in naming.TASKS if t.startswith("uncheatable/")]
 OBE_TASKS = [t for t in naming.TASKS if t not in UNCHEATABLE_TASKS]
 # A run name is `<name>[_seed<data seed>][_t<trainer seed>]-<six hex digits>`.
@@ -146,9 +163,22 @@ def _audited(folder: Path) -> pd.DataFrame:
     return pd.concat([runs, uncheatable.rename(columns=lambda c: f"bpb__{naming.task_public(c)}"), obe], axis=1)
 
 
+def _cap_sweep_components(run_name: str) -> np.ndarray:
+    """The 51 OlmoBaseEval Easy BPB of the June proportional run at 3e18 from the UniMax cap sweep's results, after
+    checking that they scored that run's checkpoint."""
+    record = json.loads(paths.require(CAP_SWEEP_TABLE9).read_text())[CAP_SWEEP_PROPORTIONAL]
+    if run_name not in record["checkpoint"].split("/"):
+        raise ValueError(f"{CAP_SWEEP_TABLE9.name}: {CAP_SWEEP_PROPORTIONAL} scored another run than {run_name}")
+    components = record["components"]
+    if sorted(components) != sorted(OBE_TASKS):
+        raise ValueError(f"{CAP_SWEEP_TABLE9.name}: {CAP_SWEEP_PROPORTIONAL} lacks the 51 OlmoBaseEval Easy tasks")
+    return np.array([components[t] for t in OBE_TASKS], dtype=float)
+
+
 def _baselines(accuracy: pd.DataFrame) -> pd.DataFrame:
-    """The June ladder's proportional and UniMax-8 runs with their Uncheatable components, and at 1e21 the
-    OlmoBaseEval Easy components of the accuracy table (`accuracy`, components.csv)."""
+    """The June ladder's proportional and UniMax-8 runs with their Uncheatable components, and the OlmoBaseEval Easy
+    components of the accuracy table (`accuracy`, components.csv) at 1e21 and of the UniMax cap sweep for the 3e18
+    proportional run."""
     wandb = tables.read_csv(paths.require(PROGRESS))
     wandb = wandb[wandb.mixture.isin(BASELINES)].reset_index(drop=True)
     assert wandb.is_completed.all() and set(wandb.mixture) == set(BASELINES)
@@ -171,6 +201,8 @@ def _baselines(accuracy: pd.DataFrame) -> pd.DataFrame:
     for policy in BASELINES:
         (row,) = runs.index[(runs.policy == policy) & (runs.compute_flops == ACCURACY_FLOPS)]
         obe.loc[row] = by_task[f"bpb_{POLICY[policy][0]}"].to_numpy()
+    (row,) = runs.index[(runs.policy == PROPORTIONAL) & (runs.compute_flops == SWARM_FLOPS)]
+    obe.loc[row] = _cap_sweep_components(runs.run_name[row])
     return pd.concat([runs, uncheatable.rename(columns=lambda c: f"bpb__{naming.task_public(c)}"), obe], axis=1)
 
 
@@ -198,10 +230,11 @@ def _ladder(ctx: ExportContext, runs: pd.DataFrame) -> pd.DataFrame:
     sizes = pd.DataFrame([SCALES[flops] for flops in runs.compute_flops])
     seeds = [_seeds(name, seed) for name, seed in zip(runs.run_name, runs.data_seed, strict=True)]
     table = pd.concat([ids, sizes, pd.DataFrame(seeds, columns=SEEDS)], axis=1)
-    expected = sorted((*POLICY[p], flops) for p in POLICY for flops in SCALES if flops > SWARM_FLOPS)
+    above = [(*POLICY[p], flops) for p in POLICY for flops in SCALES if flops > SWARM_FLOPS]
+    expected = sorted([*above, (*POLICY[PROPORTIONAL], SWARM_FLOPS)])
     found = sorted(zip(table.method, table.proposal_objective, table.compute_flops, strict=True))
     if found != expected:
-        raise ValueError(f"expected one run per ladder mixture and rung above 3e18, found {found}")
+        raise ValueError(f"expected one run per ladder mixture and rung above 3e18 and the June 3e18 run, found {found}")
     assert table.observation_id.is_unique
 
     weights = runs[["policy"]].merge(
@@ -272,7 +305,9 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     if sorted(accuracy.component) != sorted(OBE_TASKS):
         raise ValueError("components.csv must hold each of the 51 OlmoBaseEval Easy tasks once")
     runs = pd.concat([*(_audited(folder) for folder in AUDITED), _baselines(accuracy)], ignore_index=True)
-    runs = runs[runs.compute_flops > SWARM_FLOPS].reset_index(drop=True)
+    # Of the 3e18 runs, the June proportional run is in no other table; `with_3e18_rows` copies the others.
+    june = (runs.policy == PROPORTIONAL) & (runs.compute_flops == SWARM_FLOPS)
+    runs = runs[(runs.compute_flops > SWARM_FLOPS) | june].reset_index(drop=True)
     # The mean of a run's components is its recorded aggregate, which ties each component set to its run.
     obe = runs[[f"bpb__{t}" for t in OBE_TASKS]]
     complete = obe.notna().all(axis=1)
@@ -280,3 +315,39 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
         raise ValueError("a run's OlmoBaseEval Easy components do not reproduce its recorded aggregate")
     ladder_table = _ladder(ctx, runs)
     return {LADDER: ladder_table, ACCURACY_TABLE: _accuracy(accuracy, ladder_table)}
+
+
+def with_3e18_rows(
+    ladder_table: pd.DataFrame, validation_table: pd.DataFrame, swarm_table: pd.DataFrame
+) -> pd.DataFrame:
+    """The ladder with the rest of its 3e18 rung: copies of the `validation_3e18` rows of VALIDATION_3E18 and of the
+    proportional repeats of `swarm_qwen3_360m_1p6b`.
+
+    A copy keeps its run's observation id, weights, seeds and BPB, and takes the rung's model size and token count
+    (SCALES) and its mixture's method and objective (POLICY). The swarm table records no OlmoBaseEval Easy source
+    aggregate, so its copies take the mean of their 51 components, as every source computes it.
+    """
+    chosen = [
+        validation_table.launch.eq(launch) & validation_table.variant.isin(variants)
+        for launch, variants in VALIDATION_3E18.items()
+    ]
+    validated = validation_table[np.logical_or.reduce(chosen)].assign(policy=lambda t: t.variant)
+    seeds = validated.groupby("policy").trainer_seed.agg(sorted)
+    if sorted(seeds.index) != sorted(set(POLICY) - {PROPORTIONAL}) or any(s != [0, 1, 2] for s in seeds):
+        raise ValueError(f"expected trainer seeds 0 to 2 of each validated ladder mixture, found {seeds.to_dict()}")
+    repeats = swarm_table[swarm_table.design_kind == SWARM_REPEATS].assign(policy=PROPORTIONAL)
+    if len(repeats) != 10:
+        raise ValueError(f"expected the swarm's ten proportional repeats, found {len(repeats)}")
+    repeats["bpb__obe_easy_source"] = repeats[[f"bpb__{t}" for t in OBE_TASKS]].mean(axis=1)
+
+    rows = pd.concat([validated, repeats], ignore_index=True)
+    rows["method"] = [POLICY[p][0] for p in rows.policy]
+    rows["proposal_objective"] = [POLICY[p][1] for p in rows.policy]
+    rows["compute_flops"] = SWARM_FLOPS
+    for column, value in SCALES[SWARM_FLOPS].items():
+        rows[column] = value
+    rows["components_available"] = rows[[f"bpb__{t}" for t in naming.TASKS]].notna().all(axis=1)
+    ladder = pd.concat([ladder_table, rows[ladder_table.columns]], ignore_index=True)
+    if not ladder.observation_id.is_unique:
+        raise ValueError("a 3e18 run is already a ladder row")
+    return ladder.sort_values("compute_flops", kind="stable").reset_index(drop=True)

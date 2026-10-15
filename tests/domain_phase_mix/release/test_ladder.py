@@ -8,8 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from experiments.domain_phase_mix.release import context, naming, paths
-from experiments.domain_phase_mix.release.configs import ladder
+from experiments.domain_phase_mix.release import context, naming, paths, tables
+from experiments.domain_phase_mix.release.configs import ladder, swarm_qwen3, validation
 
 FIG = paths.RO / "frozen_scaling_update_20260913/figure/plotted_points.csv"
 pytestmark = pytest.mark.skipif(not FIG.exists(), reason="ladder sources absent")
@@ -19,6 +19,9 @@ LAUNCH_RECORDS = [
     paths.RO / "delphi_matched_olmix_scaling_v6e_20260910/launch_dry_run/run_manifest.json",
 ]
 RUN_SPECS_3E18 = paths.RO / "delphi_frozen_procedure_validation_3e18_20260908/launch_dry_run/table9/run_specs.json"
+# The figure's proportional point at 3e18 averages the June run with the swarm's ten repeats; this file holds the
+# Uncheatable components of all eleven.
+PROPORTIONAL_UNCHEATABLE = paths.RO / "table9_reliability_20260905/proportional_uncheatable_components.csv"
 
 
 @pytest.fixture(scope="module")
@@ -32,23 +35,30 @@ def out(ctx):
 
 
 @pytest.fixture(scope="module")
-def plotted(out):
-    # The scaling figure plots these rows and, at 3e18, validation runs, which with_3e18_rows appends.
-    return out["ladder"]
+def validation_table(ctx):
+    return validation.export(ctx)["validation_3e18"]
 
 
-@pytest.mark.parametrize(
-    "flops",
-    [pytest.param(3e18, marks=pytest.mark.xfail(strict=True, reason="3e18 rows come from Task 12")), 2e19, 3e20, 1e21],
-)
+@pytest.fixture(scope="module")
+def swarm_table(ctx):
+    return swarm_qwen3.export(ctx)["swarm_qwen3_360m_1p6b"]
+
+
+@pytest.fixture(scope="module")
+def plotted(out, validation_table, swarm_table):
+    # The scaling figure plots the ladder's rows and, at 3e18, validation and swarm runs, which with_3e18_rows copies.
+    return ladder.with_3e18_rows(out["ladder"], validation_table, swarm_table)
+
+
+@pytest.mark.parametrize("flops", [3e18, 2e19, 3e20, 1e21])
 def test_every_plotted_point_is_reproduced(plotted, flops):
-    points = pd.read_csv(FIG)
+    points = tables.read_csv(FIG)
     points = points[points.flops == flops]
     assert len(points) == 8  # four mixtures on each of the two objectives
     t = plotted
     label = {"MARINER": "mariner", "Olmix": "olmix", "Proportional": "proportional", "UniMax-8": "unimax8"}
     for p in points.itertuples(index=False):
-        rows = t[(t.method == label[p.label]) & np.isclose(t.compute_flops, p.flops)]
+        rows = t[(t.method == label[p.label]) & (t.compute_flops == p.flops)]
         if p.target == "table9":
             rows = rows[rows.proposal_objective.isin(["obe_easy", "none"])]
             values = rows.bpb__obe_easy_source
@@ -56,16 +66,58 @@ def test_every_plotted_point_is_reproduced(plotted, flops):
             rows = rows[rows.proposal_objective.isin(["uncheatable", "none"])]
             values = rows.bpb__uncheatable_source
         assert len(rows) == p.n, (p.label, p.flops, p.target, len(rows))
-        assert values.mean() == pytest.approx(p.mean, abs=1e-6)
+        assert np.isclose(values.mean(), p.mean, rtol=0, atol=1e-12), (p.label, p.flops, p.target)
 
 
 def test_scale_constants_and_weights(out):
     t = out["ladder"]
-    assert sorted(t.compute_flops.unique()) == [2e19, 3e20, 1e21]  # the 3e18 rungs join in Task 12 (with_3e18_rows)
+    assert sorted(t.compute_flops.unique()) == [3e18, 2e19, 3e20, 1e21]
+    # At 3e18 the export holds only the June proportional run, which no other table holds; with_3e18_rows adds the rest.
+    assert t.method[t.compute_flops == 3e18].tolist() == ["proportional"]
     assert t.groupby("compute_flops").total_parameters.nunique().eq(1).all()
     w = t[[f"w__{b}" for b in naming.BUCKETS]]
     assert np.allclose(w.sum(axis=1), 1.0, rtol=0, atol=1e-9)
     assert t.groupby(["method", "proposal_objective"]).mixture_id.nunique().eq(1).all()
+
+
+def test_3e18_rows_copy_their_runs(plotted, validation_table, swarm_table):
+    rung = plotted[plotted.compute_flops == 3e18].set_index("observation_id")
+    # Trainer seeds 0 to 2 of each validated mixture, and the June proportional run with the swarm's ten repeats.
+    assert rung.groupby(["method", "proposal_objective"]).size().to_dict() == {
+        ("mariner", "obe_easy"): 3,
+        ("mariner", "uncheatable"): 3,
+        ("olmix", "obe_easy"): 3,
+        ("olmix", "uncheatable"): 3,
+        ("proportional", "none"): 11,
+        ("unimax8", "none"): 3,
+    }
+    scale = pd.Series(ladder.SCALES[3e18])
+    assert (rung[scale.index] == scale).all().all()
+    copied = 0
+    for source in (validation_table, swarm_table):
+        source = source.set_index("observation_id")
+        ids = rung.index.intersection(source.index)
+        shared = [c for c in rung.columns if c in source.columns and c not in ("method", "proposal_objective")]
+        pd.testing.assert_frame_equal(rung.loc[ids, shared], source.loc[ids, shared], check_dtype=False)
+        copied += len(ids)
+    assert copied == len(rung) - 1  # all but the June run
+    # The swarm table records no OlmoBaseEval Easy source aggregate; its copies take their components' mean.
+    repeats = rung.loc[rung.index.intersection(swarm_table.observation_id)]
+    components = repeats[[f"bpb__{task}" for task in naming.TASKS[7:]]]
+    assert len(repeats) == 10 and np.allclose(repeats.bpb__obe_easy_source, components.mean(axis=1), rtol=0, atol=0)
+    # UniMax-8 trainer seeds 1 and 2 carry aggregates only.
+    assert rung.components_available.sum() == len(rung) - 2
+
+
+def test_june_proportional_run_has_the_figures_components(ctx, out):
+    t = out["ladder"]
+    june = t[t.compute_flops == 3e18].iloc[0]
+    assert june.components_available
+    # The figure's input lists the June run among the eleven proportional runs; its seven components are the run's.
+    source = tables.read_csv(PROPORTIONAL_UNCHEATABLE)
+    source = source.set_index(source.run.map(ctx.registry.id_for)).loc[june.observation_id]
+    for task in naming.TASKS[:7]:
+        assert june[f"bpb__{task}"] == source[f"eval/uncheatable_eval/{task.removeprefix('uncheatable/')}/bpb"]
 
 
 def test_accuracy_table(out):
