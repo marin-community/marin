@@ -125,6 +125,57 @@ Replace the generated data with your uploaded CSV to explore real results.
 print(frame.groupby("model").agg({"score": ["mean", "std"], "latency_ms": "mean"}))
 `;
 
+const storage = `from pathlib import Path
+import json
+import os
+from importlib.metadata import version
+from rigging.fsutil.parquet import parquet_lines
+
+# marina's installed marin-rigging and PyArrow are available by default.
+# filesystem_for() inside parquet_lines() routes gs:// and s3:// URLs and
+# reads inherited credentials. Never copy keys into config.json or reports.
+config = json.loads(Path("config.json").read_text())
+rows = config["preview_rows"]
+assert 1 <= rows <= 20
+preview = "\\n".join(parquet_lines(config["url"], rows=rows))
+
+pairs = {
+    "CoreWeave": ("CW_KEY_ID", "CW_KEY_SECRET"),
+    "R2": ("R2_KEY_ID", "R2_KEY_SECRET"),
+    "AWS": ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"),
+}
+credentials = [f"| {backend} | {'Available' if all(os.environ.get(key) for key in keys) else 'Not configured'} |"
+               for backend, keys in pairs.items()]
+report = f"""# Object storage preview
+
+Source: {config["url"]}
+
+Read with **marin-rigging {version("marin-rigging")}** and **PyArrow {version("pyarrow")}**.
+The preview reads the Parquet footer and up to {rows} rows from its first row group.
+The reader skips rows when the first row group exceeds its preview budget.
+
+## Inherited credential sources
+
+Only availability is shown; secret values remain in the process environment.
+GCS URLs use the host's application default credentials.
+
+| Backend | Key pair |
+| --- | --- |
+""" + "\\n".join(credentials) + """
+
+## Schema and rows
+
+\x60\x60\x60text
+""" + preview + """
+\x60\x60\x60
+
+[Download the text preview](preview.txt)
+"""
+Path("output/index.md").write_text(report)
+Path("output/preview.txt").write_text(preview)
+print(f"Previewed {config['url']}")
+`;
+
 export const examples = {
   bayesian: {
     title: "Bayesian eval",
@@ -155,6 +206,26 @@ export const examples = {
     entrypoint: "main.py",
     packages: "numpy\npandas\nseaborn\nmatplotlib",
     files: [{ path: "main.py", content: seaborn, encoding: "utf-8" }],
+  },
+  storage: {
+    title: "Object storage preview",
+    entrypoint: "main.py",
+    packages: "",
+    files: [
+      { path: "main.py", content: storage, encoding: "utf-8" },
+      {
+        path: "config.json",
+        content: JSON.stringify(
+          {
+            url: "s3://marin-us-east-02a/marin/data/rl/data/rl/gretel_text_to_sql-56330d3f5621db60/2026.10.07.1/final/part-00000.parquet",
+            preview_rows: 5,
+          },
+          null,
+          2,
+        ),
+        encoding: "utf-8",
+      },
+    ],
   },
   blank: {
     title: "Untitled project",

@@ -279,6 +279,7 @@ onBeforeUnmount(() => {
         <select id="new-example" v-model="example" :disabled="creating">
           <option value="bayesian">Bayesian eval</option>
           <option value="seaborn">Seaborn report</option>
+          <option value="storage">Object storage preview</option>
         </select>
         <button @click="createProject(examples[example])" :disabled="creating">
           Create example

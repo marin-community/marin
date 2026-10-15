@@ -243,3 +243,22 @@ def test_compressed_zip_over_input_limit_is_rejected_without_saving(client):
     response = client.post("/projects/import", params={"title": "Oversized"}, content=payload.getvalue())
     assert response.status_code == 413
     assert client.get("/projects").json()["total"] == 0
+
+
+def test_default_rigging_runtime_reads_input_and_inherits_storage_credentials(client, monkeypatch):
+    monkeypatch.setenv("CW_KEY_ID", "test-key")
+    monkeypatch.setenv("CW_KEY_SECRET", "test-secret")
+    project = create_project(
+        client,
+        "from pathlib import Path\n"
+        "import os\n"
+        "from rigging.filesystem.buckets import filesystem_for\n"
+        "fs, path = filesystem_for('input.txt')\n"
+        "assert os.environ['CW_KEY_ID'] == 'test-key' and os.environ['CW_KEY_SECRET'] == 'test-secret'\n"
+        "with fs.open(path) as source:\n"
+        "    Path('output/index.md').write_bytes(source.read())\n",
+        extra_files=[{"path": "input.txt", "content": "# Runtime package available"}],
+    )
+    result = run_project(client, project)["result"]
+    assert result["exit_code"] == 0
+    assert base64.b64decode(result["artifacts"][0]["content"]) == b"# Runtime package available"

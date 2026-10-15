@@ -3,6 +3,9 @@ import { computed, onBeforeUnmount, ref, toRaw, watch } from "vue";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { examples } from "./examples";
+import ImageGallery from "./ImageGallery.vue";
+
+const OUTPUT_BASE = "https://output.invalid/";
 
 const props = defineProps({ record: { type: Object, required: true } });
 const emit = defineEmits(["back"]);
@@ -247,12 +250,12 @@ const report = computed(() => {
     const path = node.getAttribute(attr);
     if (!path) continue;
     // Resolve paths against output/index.md, including optional output/ prefixes.
-    const normalized = new URL(
-      path,
-      "https://output.invalid/",
-    ).pathname.replace(/^\/output\//, "/");
+    const normalized = new URL(path, OUTPUT_BASE).pathname.replace(
+      /^\/output\//,
+      "/",
+    );
     const artifact = artifacts.value.find(
-      (a) => new URL(a.path, "https://output.invalid/").pathname === normalized,
+      (a) => new URL(a.path, OUTPUT_BASE).pathname === normalized,
     );
     if (artifact && !/^[a-z]+:/i.test(path)) {
       node.setAttribute(
@@ -311,6 +314,7 @@ onBeforeUnmount(() => {
         ><select id="example" v-model="pendingExample" :disabled="running">
           <option value="bayesian">Bayesian eval</option>
           <option value="seaborn">Seaborn report</option>
+          <option value="storage">Object storage preview</option>
           <option value="blank">Blank project</option></select
         ><button @click="showReplace = true" :disabled="running">
           Load example
@@ -434,7 +438,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="packages">
             <label for="packages"
-              >PACKAGES <span>one requirement per line</span></label
+              >EXTRA PACKAGES <span>one requirement per line</span></label
             ><textarea
               id="packages"
               v-model="project.packages"
@@ -455,8 +459,9 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <p class="execution-note">
-          Packages install with uv. Runs stop after 120s. Trusted code runs with
-          the host's access.
+          Includes marin-rigging, PyArrow and FineStore from Marina. Extra
+          packages install with uv. Runs stop after 120s. Storage credentials
+          are inherited from the host.
         </p>
       </section>
       <section class="results">
@@ -522,29 +527,15 @@ onBeforeUnmount(() => {
               </p>
               <p class="subtle">Relative image links work automatically.</p>
             </div>
-            <div v-if="images.length" class="image-gallery">
-              <h3>All generated images</h3>
-              <figure v-for="image in images" :key="image.path">
-                <img :src="image.previewUrl" :alt="image.path" />
-                <figcaption>
-                  <a :href="image.url" :download="image.path"
-                    >{{ image.path }} ↓</a
-                  >
-                </figcaption>
-              </figure>
-            </div>
+            <ImageGallery v-if="images.length" :images="images"
+              ><h3>All generated images</h3></ImageGallery
+            >
           </template>
-          <div v-if="tab === 'images'" class="image-gallery">
-            <p v-if="!images.length" class="subtle">No generated images yet.</p>
-            <figure v-for="image in images" :key="image.path">
-              <img :src="image.previewUrl" :alt="image.path" />
-              <figcaption>
-                <a :href="image.url" :download="image.path"
-                  >{{ image.path }} ↓</a
-                >
-              </figcaption>
-            </figure>
-          </div>
+          <ImageGallery v-if="tab === 'images'" :images="images"
+            ><p v-if="!images.length" class="subtle">
+              No generated images yet.
+            </p></ImageGallery
+          >
           <div v-if="tab === 'files'" class="artifact-list">
             <p class="subtle" v-if="!artifacts.length">
               Generated files will appear here.

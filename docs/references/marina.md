@@ -251,3 +251,24 @@ Read-only discovery exposes listing and reading. Execution is an external-write
 operation because trusted Python can access the host's network and credentials.
 The binary ZIP endpoint is HTTP-only; MCP creation accepts the same source/input
 file records as the editor.
+
+### Storage example and default runtime packages
+
+Programs can import Marina's installed libraries, including `marin-rigging`,
+PyArrow and FineStore, without adding them to the extra package list. uv resolves
+extra requirements into its run environment first; Marina's installed packages
+are appended to Python's import path. Execution uses Marina's Python version so
+its installed native extensions remain compatible.
+
+Choose “Object storage preview” under “Create a new example”. It reads a small
+Parquet object through `rigging.fsutil.parquet.parquet_lines`, which uses the same
+bucket routing as `filesystem_for()`. Edit `config.json` to change the `gs://` or
+`s3://` object and preview row count. The report includes its schema and bounded
+row preview, plus a downloadable text file.
+
+The subprocess inherits the host environment, including `CW_KEY_ID` /
+`CW_KEY_SECRET`, `R2_KEY_ID` / `R2_KEY_SECRET`, standard AWS variables and GCS
+application default credentials when configured. Secrets are not added to project
+files, database rows or browser requests. The example reports only whether each
+key pair is available. A backend whose credentials are absent fails with the
+storage library's credential error; this app does not grant storage access.

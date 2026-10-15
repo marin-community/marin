@@ -7,10 +7,13 @@ import asyncio
 import base64
 import binascii
 import io
+import json
 import mimetypes
 import os
 import signal
 import stat
+import sys
+import sysconfig
 import tempfile
 import time
 import zipfile
@@ -24,6 +27,8 @@ from marina.applets import AppletServices
 from marina.apps import RegisteredApi, registered_api
 from marina.mcp import OperationRisk, operation_extension
 from pydantic import BaseModel, Field
+from rigging.config_discovery import find_project_root
+from rigging.filesystem.cluster_config import MARIN_CLUSTER_CONFIG_DIRS
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 from starlette.concurrency import run_in_threadpool
@@ -35,6 +40,23 @@ MAX_LOG_BYTES = 256 * 1024
 RUN_TIMEOUT = 120
 PAGE_SIZE = 25
 MAX_ARCHIVE_BYTES = MAX_INPUT_BYTES + 1024 * 1024
+
+# Explicit extra packages take precedence; then expose Marina's installed runtime and editable packages.
+RUNNER_BOOTSTRAP = """import json
+import runpy
+import site
+import sys
+from pathlib import Path
+
+site.addsitedir(sys.argv[1])
+from rigging.filesystem import cluster_config
+
+cluster_config.MARIN_CLUSTER_CONFIG_DIRS = tuple(json.loads(sys.argv[2]))
+entrypoint = sys.argv[3]
+sys.argv = sys.argv[3:]
+sys.path.insert(0, str(Path(entrypoint).resolve().parent))
+runpy.run_path(entrypoint, run_name="__main__")
+"""
 
 
 class ProjectFile(BaseModel):
@@ -114,6 +136,7 @@ def materialize_project(root: Path, request: RunRequest) -> None:
 
 
 async def capture_logs(stream: asyncio.StreamReader, buffer: bytearray) -> bool:
+    """Drain process output into the bounded buffer, returning whether it was truncated."""
     truncated = False
     while chunk := await stream.read(8192):
         available = MAX_LOG_BYTES - len(buffer)
@@ -158,10 +181,23 @@ async def execute_project(request: RunRequest) -> RunResult:
         materialize_project(root, request)
         output = root / "output"
         output.mkdir()
-        command = ["uv", "run", "--no-project", "--no-config"]
+        command = ["uv", "run", "--no-project", "--no-config", "--python", sys.executable]
         for package in request.packages:
             command.extend(["--with", package])
-        command.extend(["python", "-u", request.entrypoint])
+        config_root = find_project_root() or Path.cwd()
+        config_dirs = [Path(directory).expanduser() for directory in MARIN_CLUSTER_CONFIG_DIRS]
+        config_dirs = [path if path.is_absolute() else config_root / path for path in config_dirs]
+        command.extend(
+            [
+                "python",
+                "-u",
+                "-c",
+                RUNNER_BOOTSTRAP,
+                sysconfig.get_path("purelib"),
+                json.dumps([str(path) for path in config_dirs]),
+                request.entrypoint,
+            ]
+        )
         process = await asyncio.create_subprocess_exec(
             *command,
             cwd=root,
@@ -228,6 +264,31 @@ class ProjectRecord(BaseModel):
     created_at: datetime
     updated_at: datetime
     last_run_at: datetime | None
+
+
+class RunStatus(StrEnum):
+    NEVER = "never"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+
+
+class ProjectSummary(BaseModel):
+    id: UUID
+    title: str
+    entrypoint: str
+    file_count: int
+    revision: int
+    created_at: datetime
+    updated_at: datetime
+    last_run_at: datetime | None
+    status: RunStatus
+
+
+class ProjectPage(BaseModel):
+    items: list[ProjectSummary]
+    total: int
+    page_size: int
 
 
 class ProjectSort(StrEnum):
@@ -532,7 +593,7 @@ def create_api(services: AppletServices) -> RegisteredApi:
         sort: ProjectSort = ProjectSort.UPDATED,
         direction: SortDirection = SortDirection.DESC,
         offset: int = Query(default=0, ge=0),
-    ) -> dict[str, object]:
+    ) -> ProjectPage:
         with engine.connect() as connection:
             count = connection.execute(
                 text("SELECT count(*) FROM projects WHERE strpos(lower(title), lower(:query)) > 0"), {"query": query}
@@ -555,7 +616,9 @@ def create_api(services: AppletServices) -> RegisteredApi:
                 ),
                 {"query": query, "limit": PAGE_SIZE, "offset": offset},
             ).mappings()
-            return {"items": [dict(row) for row in rows], "total": count, "page_size": PAGE_SIZE}
+            return ProjectPage(
+                items=[ProjectSummary.model_validate(row) for row in rows], total=count, page_size=PAGE_SIZE
+            )
 
     @api.post(
         "/projects",
