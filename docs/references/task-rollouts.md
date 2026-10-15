@@ -232,11 +232,16 @@ Durations are wall-clock seconds.
 | `Graded` | After the session's `grade()` returns | `status`, `reward` |
 | `AttemptEnded` | After cleanup, when `run()` returns or raises `RolloutInterrupted` | `stop_reason`, or the interrupted `operation` |
 
-Sessions receive the observer as `TaskSessionContext.observer`; the built-in `shellbox` session emits `ToolCallCompleted`.
-The engine awaits each event inline, so observer time counts toward the enclosing deadline.
-An observer exception fails the attempt. When a session emits the event, the exception is the cause of a
-`RolloutInterrupted` for the `advance` operation. No end event is emitted when a token-contract error or
-cancellation propagates.
+Sessions emit their own events through `TaskSessionContext.events`, an `EventSink` whose `emit` never blocks; the built-in `shellbox` session emits `ToolCallCompleted`.
+The engine never awaits the observer.
+Each attempt queues its events, up to 1,024, and one task delivers them in order; a full queue drops new events.
+After the attempt releases its machines, the engine delivers the remaining events within `cleanup_timeout`.
+An observer exception is logged and ends delivery for that attempt.
+Neither a slow nor a failing observer changes the rollout's record, grade, or deadlines.
+`RolloutData.metrics` counts events the observer did not receive: `observer_dropped_events`, `observer_undelivered_events` and `observer_error_count` appear only when nonzero.
+Events still queued when the process dies are lost.
+Concurrent attempts deliver to a shared observer concurrently.
+No end event is emitted when a token-contract error or cancellation propagates.
 
 ## Deadlines and failures
 

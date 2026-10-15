@@ -36,7 +36,6 @@ from rolloutengine.contracts import (
     TaskSessionContext,
     ToolCallCompleted,
     Transition,
-    emit_event,
 )
 
 WORKSPACE_INSTRUCTION = (
@@ -86,7 +85,7 @@ class _ShellboxTaskSession:
         self.lowered = context.lowered
         self.machine = context.machine
         self.grader = context.require_task_grader()
-        self.observer = context.observer
+        self.events = context.events
         self.shell_tool = resolve_shell_tool(context.lowered.task, context.lowered.session.shell_tool)
 
     async def prepare(self) -> SessionStart:
@@ -117,8 +116,7 @@ class _ShellboxTaskSession:
                     self.shell_tool,
                     timeout=self.lowered.session.command_timeout,
                 )
-            await emit_event(
-                self.observer,
+            self.events.emit(
                 ToolCallCompleted(
                     self.lowered.task.id, call.name, len(observation.encode()), time.monotonic() - started
                 ),

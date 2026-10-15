@@ -1910,21 +1910,30 @@ async def test_observer_receives_interrupted_operation_after_grading_completed_t
     ]
 
 
-async def test_observer_failure_propagates_and_releases_machines():
-    class ObserverFailure(Exception):
-        pass
-
+async def test_observer_failure_leaves_the_rollout_unchanged():
     class FailingObserver:
         async def on_event(self, event: RolloutEvent) -> None:
             if isinstance(event, ModelTurnCompleted):
-                raise ObserverFailure
+                raise RuntimeError("telemetry sink unavailable")
 
-    factory = RecordingShellSimFactory()
-    model = ReplayModel([shell_call("echo 12 > /workspace/answer")])
-    with pytest.raises(ObserverFailure):
-        await RolloutEngine(model.complete, {"local": factory}, observer=FailingObserver()).run(
-            lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
-        )
-    assert len(factory.machines) == 1
-    with pytest.raises(RuntimeError):
-        await factory.machines[0].run(Command(("true",)))
+    model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
+    record = await RolloutEngine(model.complete, {"local": FixtureImageFactory()}, observer=FailingObserver()).run(
+        lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
+
+    assert (record.grade.status, record.grade.reward, record.stop_reason) == (Outcome.GRADED, 1.0, "stop")
+    assert record.metrics["observer_error_count"] == 1.0
+
+
+async def test_blocked_observer_does_not_hold_the_rollout():
+    class BlockedObserver:
+        async def on_event(self, event: RolloutEvent) -> None:
+            await asyncio.Event().wait()
+
+    model = ReplayModel([{"role": "assistant", "content": "12"}])
+    record = await RolloutEngine(model.complete, {}, observer=BlockedObserver()).run(
+        lowered(arithmetic_task(), attempt_timeout=5, cleanup_timeout=0.1)
+    )
+
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    assert record.metrics["observer_undelivered_events"] > 0

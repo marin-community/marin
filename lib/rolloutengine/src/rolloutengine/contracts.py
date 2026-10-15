@@ -225,14 +225,18 @@ RolloutEvent = (
 
 
 class RolloutObserver(Protocol):
-    """Receive rollout progress; an exception raised here fails the attempt."""
+    """Receive rollout progress in order, delivered off the rollout's path.
+
+    The engine never awaits delivery, so a slow or failing observer cannot change a rollout.
+    """
 
     async def on_event(self, event: RolloutEvent) -> None: ...
 
 
-async def emit_event(observer: RolloutObserver | None, event: RolloutEvent) -> None:
-    if observer is not None:
-        await observer.on_event(event)
+class EventSink(Protocol):
+    """Queue a rollout event for delivery; never blocks."""
+
+    def emit(self, event: RolloutEvent) -> None: ...
 
 
 class TaskGrader(Protocol):
@@ -243,13 +247,13 @@ class TaskGrader(Protocol):
 class TaskSessionContext:
     """Inputs for one task session; session-graded tasks have no task grader.
 
-    A session may report its own events, such as tool calls, to ``observer``.
+    A session may report its own events, such as tool calls, to ``events``.
     """
 
     lowered: LoweredTaskSpec
     machine: Machine | None
     task_grader: TaskGrader | None
-    observer: RolloutObserver | None = None
+    events: EventSink
 
     def require_task_grader(self) -> TaskGrader:
         """Return the task grader for a session that delegates final grading."""

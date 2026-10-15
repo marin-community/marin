@@ -40,8 +40,8 @@ from rolloutengine.contracts import (
     TaskSessionFactory,
     Transition,
     TransitionCompleted,
-    emit_event,
 )
+from rolloutengine.delivery import _EventDelivery
 from rolloutengine.grading import _grade_rollout
 from rolloutengine.lowering import SHELLBOX_SESSION, validate_lowered_task
 from rolloutengine.machines import _prepare_machine
@@ -82,9 +82,29 @@ class RolloutEngine:
         self.observer = observer
 
     async def run(self, lowered: LoweredTaskSpec) -> RolloutData:
-        """Run one attempt; release its resources outside the attempt deadline."""
+        """Run one attempt; release its resources outside the attempt deadline.
+
+        Queued events are delivered within the cleanup deadline after the attempt's resources are
+        released; events the observer did not receive are counted in ``RolloutData.metrics``.
+        """
         validate_lowered_task(lowered, factories=self.factories, sessions=self.sessions)
-        await emit_event(self.observer, AttemptStarted(lowered.task.id))
+        events = _EventDelivery(self.observer)
+        try:
+            events.emit(AttemptStarted(lowered.task.id))
+            record, operation, cause = await self._run_attempt(lowered, events)
+            events.emit(AttemptEnded(record.task_id, None if operation is not None else record.stop_reason, operation))
+            delivery = await events.close(lowered.session.cleanup_timeout)
+        finally:
+            events.cancel()
+        if delivery:
+            record = replace(record, metrics={**record.metrics, **delivery})
+        if operation is not None:
+            raise RolloutInterrupted(record, operation) from cause
+        return record
+
+    async def _run_attempt(
+        self, lowered: LoweredTaskSpec, events: _EventDelivery
+    ) -> tuple[RolloutData, RolloutOperation | None, BaseException | None]:
         deadline = asyncio.timeout(lowered.session.attempt_timeout)
         cleanup = _Cleanup(lowered.session.cleanup_timeout)
         operation = None
@@ -92,7 +112,7 @@ class RolloutEngine:
         async with AsyncExitStack() as resources:
             try:
                 async with deadline:
-                    record = await self._run_task(lowered, resources, cleanup, deadline)
+                    record = await self._run_task(lowered, resources, cleanup, deadline, events)
             except TimeoutError as error:
                 if not deadline.expired():
                     raise
@@ -113,16 +133,15 @@ class RolloutEngine:
                 ),
                 metrics={**record.metrics, "cleanup_error_count": float(len(cleanup.errors))},
             )
-        await emit_event(
-            self.observer,
-            AttemptEnded(record.task_id, None if operation is not None else record.stop_reason, operation),
-        )
-        if operation is not None:
-            raise RolloutInterrupted(record, operation) from cause
-        return record
+        return record, operation, cause
 
     async def _run_task(
-        self, lowered: LoweredTaskSpec, resources: AsyncExitStack, cleanup: _Cleanup, attempt: asyncio.Timeout
+        self,
+        lowered: LoweredTaskSpec,
+        resources: AsyncExitStack,
+        cleanup: _Cleanup,
+        attempt: asyncio.Timeout,
+        events: _EventDelivery,
     ) -> RolloutData:
         task = lowered.task
         started = time.monotonic()
@@ -138,7 +157,7 @@ class RolloutEngine:
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.START) from error
         if machine is not None:
-            await emit_event(self.observer, MachineReady(task.id, time.monotonic() - started))
+            events.emit(MachineReady(task.id, time.monotonic() - started))
 
         async def grade(messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult:
             return await _grade_rollout(
@@ -151,16 +170,16 @@ class RolloutEngine:
         }
         try:
             context = TaskSessionContext(
-                lowered, machine, None if isinstance(task.grader, SessionGrader) else grade, self.observer
+                lowered, machine, None if isinstance(task.grader, SessionGrader) else grade, events
             )
             session = session_factories[lowered.session.task_session](context)
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.PREPARE) from error
         resources.push_async_callback(cleanup.run, "session_close", session.close)
-        return await self._run_session(lowered, session, attempt)
+        return await self._run_session(lowered, session, attempt, events)
 
     async def _run_session(
-        self, lowered: LoweredTaskSpec, session: TaskSession, attempt: asyncio.Timeout
+        self, lowered: LoweredTaskSpec, session: TaskSession, attempt: asyncio.Timeout, events: _EventDelivery
     ) -> RolloutData:
         task = lowered.task
         limits = lowered.session
@@ -173,7 +192,7 @@ class RolloutEngine:
             start = await session.prepare()
         except Exception as error:
             raise RolloutInterrupted(completed, RolloutOperation.PREPARE) from error
-        await emit_event(self.observer, SessionPrepared(task.id, len(start.messages), time.monotonic() - started))
+        events.emit(SessionPrepared(task.id, len(start.messages), time.monotonic() - started))
         messages = list(start.messages)
         options = start.options
         replay_prompt_token_ids = start.prompt_token_ids
@@ -231,8 +250,7 @@ class RolloutEngine:
                         tokens = prompt
                     if turn.prompt_token_ids[: len(tokens)] != tokens:
                         raise RolloutContractError("Model transport changed the served token prefix")
-                    await emit_event(
-                        self.observer,
+                    events.emit(
                         ModelTurnCompleted(
                             task.id,
                             index,
@@ -284,8 +302,7 @@ class RolloutEngine:
                             raise RolloutContractError(
                                 "Transition rewards and credit must align with model response tokens"
                             )
-                    await emit_event(
-                        self.observer,
+                    events.emit(
                         TransitionCompleted(
                             task.id, index, transition.done, len(transition.observations), time.monotonic() - started
                         ),
@@ -357,7 +374,7 @@ class RolloutEngine:
             raise RolloutInterrupted(completed, RolloutOperation.GRADE) from error
         except Exception as error:
             raise RolloutInterrupted(completed, RolloutOperation.GRADE) from error
-        await emit_event(self.observer, Graded(task.id, grade.status, grade.reward))
+        events.emit(Graded(task.id, grade.status, grade.reward))
         completed = replace(completed, grade=grade, stop_reason=stop_reason)
         if model_error is not None:
             raise RolloutInterrupted(completed, RolloutOperation.MODEL) from model_error
