@@ -11,7 +11,7 @@ from marin.execution.lazy import StepContext
 from marin.rl.skyrl import _launcher_command as launcher_command_for_test
 
 from experiments.post_training import async_rl
-from experiments.post_training.curriculum_rl.launch import SNOWBALL_POLICY
+from experiments.post_training.curriculum_rl.launch import ARMS, SNOWBALL_POLICY, build_arms
 
 COMPOSE_LAUNCH = """
 import json
@@ -85,4 +85,49 @@ def test_launcher_composes_pinned_rollout_buffer_config(preset, training_type, s
         "entrypoint": "skyrl_train.entrypoints.main_base",
         "training_type": training_type,
         "batch_policy": "rolling",
+    }
+
+
+@pytest.mark.timeout(120)
+def test_snowball_curriculum_smoke_composes_separate_reference_allocation(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
+    step = build_arms(specs=(ARMS["naive"],), scale="snowball-smoke", policy=SNOWBALL_POLICY, version="2026.10.15")[
+        "naive"
+    ].rl
+    launch = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    path = tmp_path / "curriculum.yaml"
+    path.write_text(launch.launch_config_yaml)
+    command = launcher_command_for_test(str(path))
+    bootstrap = command[: command.index("marinskyrl")]
+    result = subprocess.run(
+        [
+            *bootstrap,
+            "python",
+            "-c",
+            """
+import json
+import sys
+from cloud.iris.launch_config import load_launch_config
+
+launch = load_launch_config(sys.argv[1])
+placement = launch.skyrl.trainer.placement
+assert launch.skyrl.trainer.strategy == "megatron"
+assert not placement.colocate_policy_ref
+print(json.dumps({
+    "policy_gpus": placement.policy_num_nodes * placement.policy_num_gpus_per_node,
+    "reference_gpus": placement.ref_num_nodes * placement.ref_num_gpus_per_node,
+    "allocated_gpus": launch.iris.allocation.num_nodes * launch.iris.allocation.gpus_per_node,
+}))
+""",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout.splitlines()[-1]) == {
+        "policy_gpus": 32,
+        "reference_gpus": 16,
+        "allocated_gpus": 56,
     }
