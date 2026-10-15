@@ -87,7 +87,7 @@ from taskforge.stage40_build.infrastructure import HOST_REJECTIONS, Infrastructu
 from taskforge.stage40_build.outputs import GradedCandidate, Grader
 from taskforge.stage40_build.run import TaskDraft, step_output
 from taskforge.stage40_build.sandbox_effects import grade_candidate
-from taskforge.stage40_build.sdk import grade_diagnostics
+from taskforge.stage40_build.sdk import grade_diagnostics, grading_language
 from taskforge.stage40_build.services import RLEnvBuildServices
 from taskforge.stage40_build.step_store import SDK_VERSION
 from taskforge.stage40_build.template import standard
@@ -163,9 +163,14 @@ and reads them.
 The loop: adapt `{PROGRAM_FILE}` with `edit_file`, check it with `run_loader`, run it with `run_build`, \
 read the failure, fix the step it names, and run it again. The step store reruns only the steps you changed \
 and the steps after them, so a rerun costs the edited steps alone. Once it builds, grade a wrong answer or \
-two against the built task with `run_grade_candidate`, then `submit` the program. Never rewrite the whole \
+two against the built task with `run_grade_candidate`, then `submit` the program. `{SDK_PATH}` lists every \
+name, keyword argument and field the program may use: read it instead of probing, since a step that raises \
+to print module names, fields or schemas spends a run and shows less than the reference. Never rewrite the whole \
 module in one call; edit the step you are fixing (`write_file` takes at most {WRITE_CHARS} characters). The \
 session ends only with `submit`: a reply without a tool call hands nothing in. You have {{turns}} turns.
+You write the solver instruction yourself as a string in the `instructions` step: it follows the \
+instruction rule above (format as requirements, never grader behaviour), and `run_build` reports one that \
+names the grading on its `instruction:` line; rewrite it before you submit.
 """
 SEED_NOTE = """\
 This is a fresh session continuing earlier work. The workspace holds `{program}` as last edited, \
@@ -452,6 +457,12 @@ PATH_ARGUMENT = {"type": "string", "description": "A path relative to the worksp
 
 def _instruction_words(draft: TaskDraft) -> int:
     return sum(len(e.content.split()) for e in draft.task.context.events if isinstance(e, TextMessage))
+
+
+def _grading_report(draft: TaskDraft) -> str:
+    text = "\n".join(e.content for e in draft.task.context.events if isinstance(e, TextMessage))
+    match = grading_language(text)
+    return "names no grading" if match is None else f"refers to grading ({match!r}): restate it as a format requirement"
 
 
 class AuthorSession:
@@ -809,7 +820,7 @@ class AuthorSession:
                 f"reference: {_prototyped(reference)}",
                 f"empty answer: {empty.status} reward {empty.reward} (graded by the library; ceiling "
                 f"{grader.rejection_ceiling})",
-                f"instruction: {_instruction_words(draft)} words",
+                f"instruction: {_instruction_words(draft)} words; {_grading_report(draft)}",
                 f"worker files: {[r.path for r in task.resources.worker]}",
             ]
         )

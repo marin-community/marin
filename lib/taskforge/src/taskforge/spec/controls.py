@@ -108,9 +108,9 @@ EXPECTED_STATUSES = frozenset({Outcome.GRADED, Outcome.SUBMISSION_FAILURE})
 class Expectation:
     """The grade a control must receive.
 
-    A graded expectation with only an upper bound is a no-credit expectation: a
-    submission failure, which scores zero, meets it as well as a graded reward
-    within the bound.
+    A graded expectation with only an upper bound, or with a lower bound of 0.0 that
+    every reward meets, is a no-credit expectation: a submission failure, which
+    scores zero, meets it as well as a graded reward within the bound.
     """
 
     status: Outcome
@@ -132,7 +132,7 @@ class Expectation:
     @property
     def no_credit(self) -> bool:
         """Whether the expectation asks only that the submission earn at most ``reward_max``."""
-        return self.status == Outcome.GRADED and self.reward_min is None and self.reward_max is not None
+        return self.status == Outcome.GRADED and self.reward_min in (None, 0.0) and self.reward_max is not None
 
     def met_by(self, grade: GradeResult) -> bool:
         """Whether ``grade`` meets this expectation."""

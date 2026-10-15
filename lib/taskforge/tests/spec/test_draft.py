@@ -384,6 +384,11 @@ def test_answer_grader_needs_an_environment_for_a_mode_that_does_not_grade_in_pr
     assert isinstance(package.grader, VerifyitGrader) and package.grader.environment is not None
 
 
+def test_answer_grader_refuses_the_grader_base_image_which_has_no_verifyit():
+    with pytest.raises(ValueError, match="no verifyit"):
+        answer_grader(PytestSpec(paths=("test_answer.py",)), environment=grader_environment(None))
+
+
 @pytest.mark.parametrize("host,backend", [(MachineHost.LAPTOP, Backend.DOCKER), (MachineHost.IRIS, Backend.GVISOR)])
 def test_docker_task_lowers_both_machines_onto_the_hosts_container_backend(host, backend):
     grader = docker_grader(

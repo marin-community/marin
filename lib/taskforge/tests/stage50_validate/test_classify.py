@@ -39,6 +39,7 @@ INVALID_REWARD_GRADER = """printf '%s' '{"reward": "nan?"}' > /logs/verifier/rew
 FAILING_GRADER = "exit 3\n"
 """Exits before writing its verdict; a verdict-file grade reads the missing file, not the exit code."""
 HANGING_GRADER = "# never finishes on HangingGraderFactory\n"
+TASK_IMAGE = "ghcr.io/example/task@sha256:" + "0" * 64
 
 
 @dataclass(frozen=True)
@@ -248,7 +249,7 @@ async def test_a_task_without_a_grader_is_verifier_skipped(math_task, relower, f
 )
 def test_candidate_code_error_is_a_graded_failed_attempt(math_task, grader, detail, unloaded):
     package = (
-        answer_grader(PytestSpec(paths=("tests/test_x.py",)), environment=grader_environment(None))
+        answer_grader(PytestSpec(paths=("tests/test_x.py",)), environment=grader_environment(TASK_IMAGE))
         if grader == "pytest"
         else answer_grader(ExactSpec(expected=("395",)))
     )

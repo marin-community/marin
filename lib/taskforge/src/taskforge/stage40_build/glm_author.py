@@ -29,8 +29,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field, TypeAdapter, field_validator
 from rigging.filesystem.atomic import atomic_rename
+from shellbox.machine import PackageSpec
 from taskcompendium import models as task_models
 from taskcompendium.runtime import resources
+from verifyit import spec as verifyit_spec
 
 from taskforge.llm.agent import shell_tool
 from taskforge.llm.client import Completion, ModelClient
@@ -84,11 +86,16 @@ itself. The grader step keeps every candidate it graded in `Grader.prototyped` (
 Validation writes the controls later and refuses one that repeats a prototyped candidate other than \
 the reference and the empty answer, so prototype wrong answers only on candidates you invent for \
 that purpose.
-- When the proposal lists research, the `sources` step calls `research(context, proposal, i)` for \
-every item and returns the findings in `Sources`; never catch its `BuildFailure`.
+- When the proposal lists research, the program needs a step named exactly `sources`, annotated \
+`-> Sources`, that calls `research(context, proposal, i)` for every item and returns the findings; \
+`run_build` refuses a program without it ("a build that researches its proposal needs a 'sources' step \
+returning Sources"), even when you already know the facts. Never catch its `BuildFailure`.
 - Prefer `draft.answer_grader` with a verifyit mode that grades in process (exact, numeric, mcq, math, \
 ifeval, json_schema, xml_elements, csv_columns, structured_exact, predicted_action) whenever the \
-answer fits one. Task-specific checks belong in a grader program in a separate verifier machine: \
+answer fits one. Every other verifyit mode, the LLM judge (`JudgeSpec`) included, runs `import verifyit` \
+in a verifier machine, and `GRADER_BASE_IMAGE` has no verifyit ("No module named 'verifyit'"); \
+`grade_candidate` calls no model, so a judge can never be prototyped. Task-specific checks, prose \
+included, belong in a deterministic grader program in a separate verifier machine: \
 `draft.python_grader(script, config, environment=draft.grader_environment(image), answer_path=..., \
 timeout=...)` runs `python3 /tests/grade.py` after the attempt, in the task image for a task with one \
 (`publish_image(context, DockerBuild(...))`), otherwise on Taskforge's grader-base image (CPython \
@@ -97,28 +104,46 @@ timeout=...)` runs `python3 /tests/grade.py` after the attempt, in the task imag
 private data under `/tests`, never stdin, and writes its verdict to `draft.GRADER_VERDICT_PATH`: \
 `{{"reward": r, "detail": {{"checks": [{{"name": ..., "passed": ..., "weight": ...}}, ...]}}}}`, one \
 check per independently gradable property, exiting 0 for every candidate. No grader runs in the \
-solver's machine.
+solver's machine. A private grader file must not have the same bytes as any solver-visible file: \
+`assemble` refuses it ("Private verifier file content is also agent-visible"). The verifier machine \
+already holds the solver-visible files at their own paths, so the grader reads them there; never copy \
+one into the grader's `files`.
 - ShellSim, the image-less task machine, has `sh`, coreutils, `awk`, `jq` and `python3` (CPython \
-3.13, standard library only), no pip and no network, a compute budget of a few seconds of Python per \
-machine and a virtual clock that advances only through `sleep`. A task whose solution needs more \
+3.13, standard library only; `base64` works, `sort -g` does not), no pip and no network, a compute \
+budget of a few seconds of Python per machine and a virtual clock that advances only through `sleep`. \
+A task whose solution needs more \
 computation than that, or a real clock, runs on `draft.requirements(image=GRADER_BASE_IMAGE, ...)`, \
 and one that needs PyPI packages but no system packages runs on `draft.requirements(image=None, \
 packages=("numpy", ...), ...)`: CPython 3.12 with those packages, installed from wheels when the \
 machine starts, with no image to build. Publish a task image only for apt packages or another base \
 image. Never ask the solver to compute by hand.
 - Data and fixtures go in workspace files. The instruction stays within 500 words, never inlines \
-tables or file contents, names every literal the grader checks, never describes how grading works, \
-and never contains an answer the grader checks. RolloutEngine adds the shell tool and the \
-submission instruction itself.
+tables or file contents, and never contains an answer the grader checks. It describes the deliverable and \
+its format, never the grading: no grader, checker, parser, autograder, evaluator, rubric or tests; nothing \
+about what is graded, scored, checked, read or ignored; no credit, weights or tolerances; never \
+"machine-checked". State a format as a requirement ("end with exactly this block", "give values to 3 \
+significant figures", "either sign convention, normalized so ..."), not as grader behaviour ("only the block \
+is graded", "answers within 1% are accepted", "prose outside is ignored"). Telling the solver how it is \
+scored leaks the reward surface and invites writing for the checker instead of doing the task. The \
+proposal's Task section may describe grading; do not carry that into the instruction. Every literal the \
+answer format requires (headings, field names, units) is in the instruction. RolloutEngine adds the \
+shell tool and the submission instruction itself.
 - A `TaskResource` holds a `path` and a `source`, an `InlineFile` whose `content_base64` holds the \
 bytes. Read the bytes with `resource_bytes(resource)`, or list files as text with `files_text`. \
 `EnvironmentRequirements` names a task image `docker_image`. The SDK reference below lists every \
-field of both types; use no other attribute.
+field of both types; use no other attribute. Build a task machine with `draft.requirements` alone: an \
+image, packages and a Docker build are exclusive ("mutually exclusive"), and a `DockerBuild` reaches a \
+machine only through the pinned reference `publish_image` returns.
 - Use model calls (`structured`, `structured_until`, `agent`) for content you cannot compute; compute \
 exact values in Python inside steps. When the host fails, the SDK raises \
 `BuildInfrastructureFailure`; let it propagate.
 - The program runs with restricted builtins (no `exec`, `eval`, `compile`, `open`, `globals`, \
-`vars`) and may import only from: {imports}. It may import steps from \
+`vars`) and may import only from: {imports}. Import a dotted module's names with `from <module> \
+import <name>`: `import taskcompendium.grader` is refused ("use 'from taskcompendium.grader import ...' \
+rather than 'import taskcompendium.grader'"), and so is every module outside that list (`inspect`, `os`, \
+`verifyit` and `verifyit.judge`, `shellbox`). The SDK constants (`GRADER_TIMEOUT`, `WORKDIR`, `WORKSPACE`, \
+`FULL_CREDIT`, ...) live in `taskforge.stage40_build.sdk`; `draft` has only the names its section of the \
+reference lists. Use only the names, keyword arguments and fields the reference shows. It may import steps from \
 `taskforge.stage40_build.template.standard` and pass them to `rl_env_build_program` unchanged.
 The template below is the standard program; adapt it to the proposal.
 """
@@ -181,6 +206,8 @@ def _describe(name: str, value: Any) -> list[str]:
     if not callable(value):
         return [f"{name} = {value!r}", ""]
     doc = inspect.getdoc(value) or ""
+    if inspect.isclass(value) and doc.startswith(f"{value.__name__}("):
+        doc = ""  # a dataclass without a docstring: the generated one repeats the signature
     head = f"{'class ' if inspect.isclass(value) else ''}{name}{inspect.signature(value)}"
     return [head, *(f"    {line}" for line in doc.splitlines()), ""]
 
@@ -256,6 +283,11 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
             "GRADER_VERDICT_PATH",
         ),
     ),
+    (
+        "Verifyit specs for `draft.answer_grader`",
+        verifyit_spec,
+        ("ExactSpec", "NumericSpec", "MathSpec", "McqSpec", "StructuredExactSpec", "JudgeSpec"),
+    ),
 )
 
 
@@ -270,6 +302,8 @@ def sdk_reference() -> str:
     lines += _describe("taskforge.llm.agent.shell_tool", shell_tool)
     lines += _describe("taskforge.sandbox.images.DockerBuild", DockerBuild)
     lines += _describe("taskforge.sandbox.images.GRADER_BASE_IMAGE", GRADER_BASE_IMAGE)
+    lines += ["`EnvironmentRequirements.package_spec` (built by `draft.requirements`; not importable):", ""]
+    lines += _describe("shellbox.machine.PackageSpec", PackageSpec)
     return "\n".join(lines)
 
 
