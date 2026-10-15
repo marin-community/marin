@@ -151,8 +151,8 @@ NOTES = {
     "heldout": [
         "The 39 Llama 160M single-bucket deletions are also fit rows of swarm_llama_160m_1p2b, and 117 Qwen3 runs "
         "(the 116 expanded-cohort validation runs and the UniMax-8 seed-0 run) are also rows of validation_3e18; each "
-        "such run has one observation id and equal BPB, weights and pool fractions in both tables (seeds and labels "
-        "may differ).",
+        "such run has one observation id and equal BPB, weights, pool fractions and seeds in both tables (labels may "
+        "differ).",
         "Ten frozen archive runs, in four exposure groups, are deterministic re-trainings: their aggregates are "
         "bit-identical within each group.",
         "628 of the 929 runs (455 Qwen3, 117 Llama 200M and 56 Llama 160M runs) have all 58 per-task values.",

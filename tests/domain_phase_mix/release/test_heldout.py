@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from experiments.domain_phase_mix.release import context, naming, paths
-from experiments.domain_phase_mix.release.configs import heldout
+from experiments.domain_phase_mix.release.configs import heldout, validation
 from experiments.domain_phase_mix.release.run_names import training_run_name_from_uri
 
 SRC = paths.RO / "single_phase_heldout_benchmark_expanded_20260913"
@@ -64,6 +64,18 @@ def test_frozen_rows_key_on_recorded_run_names(ctx, table):
     unnamed = (table.cohort == "frozen") & ~recorded
     assert (table.swarm[unnamed] == "llama_200m_6b").all() and unnamed.sum() == 134
     assert (table.observation_id[unnamed] == runs.row_id[unnamed].map(ctx.registry.id_for)).all()
+
+
+def test_runs_shared_with_validation_have_its_seeds(ctx, table):
+    # The registry records seeds for 42 of the 116 expanded runs. Like validation_3e18, heldout reads each validation
+    # run's seeds from the directory that holds it, and the UniMax-8 seed-0 run's (a frozen row) from its launch record.
+    expanded = table[table.cohort == "expanded"]
+    assert len(expanded) == 116 and expanded[["data_seed", "trainer_seed"]].notna().all().all()
+    validation_table = validation.export(ctx)["validation_3e18"]
+    shared = table.merge(validation_table, on="observation_id", suffixes=("", "_validation"), validate="one_to_one")
+    assert len(shared) == 117
+    for seed in ["data_seed", "trainer_seed"]:
+        assert (shared[seed] == shared[f"{seed}_validation"]).all(), seed
 
 
 def test_exposure_ids_split_what_mixture_ids_merge(table):

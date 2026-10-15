@@ -108,7 +108,7 @@ def test_validation_join_reports_unmatched_candidates(tmp_path):
 def test_runs_shared_with_heldout_keep_their_ids_and_values(ctx, table):
     # Both tables key a run on its hashed training run name, so the 116 validation runs of the expanded held-out
     # cohort and the ladder's UniMax-8 seed-0 run (a frozen archive row) get one id, one set of values and one
-    # objective and epoch cap. The seeds differ: `heldout` leaves them empty for 75 of these runs (a Task 4 follow-up).
+    # objective and epoch cap.
     held = heldout.export(ctx)["heldout"]
     expanded = held[(held.swarm == "qwen3_360m_1p6b") & (held.cohort == "expanded")]
     assert len(expanded) == 116 and expanded.observation_id.isin(table.observation_id).all()

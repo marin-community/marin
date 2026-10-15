@@ -6,7 +6,7 @@
 A physical training run has one observation id in every table that holds it: the 39 Llama 160M single-bucket deletions
 are rows of `swarm_llama_160m_1p2b` and of `heldout`, 117 validation runs are rows of `heldout`, and the ladder's
 3e18 rung copies validation and swarm rows. `consistency` checks that every copy of a run carries the same weights,
-pool fractions and BPB, and that every content id hashes its own row.
+pool fractions, BPB and seeds, and that every content id hashes its own row.
 """
 
 import numpy as np
@@ -16,6 +16,7 @@ from experiments.domain_phase_mix.release import keys, paths
 
 TOLERANCE = 1e-9
 SHARED_PREFIXES = ("bpb__", "w__", "pf__")
+SHARED_SEEDS = ("data_seed", "trainer_seed")
 SWARMS = ("swarm_qwen3_360m_1p6b", "swarm_llama_160m_1p2b", "swarm_llama_200m_6b")
 # Configs whose every run forms one set, whichever of their tables and id columns names it.
 RUN_GROUPS = ("starcoder", "domain_sweeps")
@@ -24,8 +25,9 @@ RUN_GROUPS = ("starcoder", "domain_sweeps")
 def consistency(tables: dict[str, pd.DataFrame]) -> list[str]:
     """Every problem as `<table>: <observation_id>: <column> = <value> but <other> has <value>`; empty when clean.
 
-    Two tables agree on a run's shared `bpb__`, `w__` and `pf__` columns within TOLERANCE wherever both have a value;
-    a value that one table lacks is no disagreement (`heldout` lacks components that the swarm tables have).
+    Two tables agree on a run's shared `bpb__`, `w__` and `pf__` columns, `data_seed` and `trainer_seed` within
+    TOLERANCE wherever both have a value; a value that one table lacks is no disagreement (`heldout` lacks components
+    that the swarm tables have, and seeds for some runs).
     """
     return _id_problems(tables) + _value_problems(tables)
 
@@ -58,7 +60,7 @@ def _value_problems(tables: dict[str, pd.DataFrame]) -> list[str]:
     """Each value of a run against the first value of that run and column, in the order of `tables`."""
     parts = []
     for name, df in tables.items():
-        columns = [c for c in df.columns if c.startswith(SHARED_PREFIXES)]
+        columns = [c for c in df.columns if c.startswith(SHARED_PREFIXES) or c in SHARED_SEEDS]
         if not columns or "observation_id" not in df:  # a table without ids shares no run with another table
             continue
         long = df[["observation_id", *columns]].melt(id_vars="observation_id", var_name="column").dropna()

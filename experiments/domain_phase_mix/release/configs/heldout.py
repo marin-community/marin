@@ -12,6 +12,11 @@ record no run name and key on the registry's `row_id`.
 
 Objectives take their public names (`naming.objective_public`): the registry's one baseline, the UniMax-8 run of the
 June ladder at 3e18, has objective `none` and, as in `validation_3e18`, its construction's epoch cap of 8.
+
+Seeds come from the launch records that `validation_3e18` reads, wherever they hold the run: each validation-launch
+run's from the directory that holds it (`run_names.seeds_from_uri`), and the UniMax-8 run's from the UniMax-8 repeats'
+record. They must agree with the registry's seeds, which it records for 42 of the 116 validation-launch runs. Every
+other run keeps the registry's seeds, which are null for the Llama runs and for some frozen Qwen3 runs.
 """
 
 from pathlib import Path
@@ -30,6 +35,8 @@ EXPANDED_FILES = ("heldout_runs.csv", "heldout_coordinate_components.csv")
 # No other baseline's cap is known.
 UNIMAX8_WEIGHTS = paths.REPO / "experiments/domain_phase_mix/release/unimax8_weights.csv"
 UNIMAX8_EPOCH_CAP = 8.0
+# The UniMax-8 repeats' launch record, which validation_3e18 also reads: it names the seed-0 run with its seeds.
+UNIMAX8_REPEATS = paths.RO / "delphi_unimax8_repeats_3e18_20260922/measured_results.csv"
 LAUNCH_FILES = ("measured_results.csv", "measured_table9_components.csv")  # in each validation launch's folder
 SWARM = {"delphi_3e18_39bucket": "qwen3_360m_1p6b", "60m_39bucket": "llama_160m_1p2b", "300m_39bucket": "llama_200m_6b"}
 META = {
@@ -43,6 +50,7 @@ META = {
     "uncheatable_bpb": "bpb__uncheatable_source",
     "table9_macro_bpb": "bpb__obe_easy_source",
 }
+SEEDS = ["data_seed", "trainer_seed"]
 # Weights behind each panel's recorded Uncheatable aggregate; the frozen registry's builder checked them to 3e-6.
 AGGREGATE_VERSION = {"delphi_3e18_39bucket": "fixed_20260927", "60m_39bucket": "legacy", "300m_39bucket": "legacy"}
 # These launches ran after the evaluator moved to BPB schema 2 (about 12 September 2026). Their recorded Uncheatable
@@ -75,7 +83,7 @@ VALIDATION_LAUNCHES = {
 def required_sources() -> list[Path]:
     launches = [paths.RO / folder / name for folder in VALIDATION_LAUNCHES.values() for name in LAUNCH_FILES]
     frozen = [FROZEN / name for name in FROZEN_FILES]
-    return [*frozen, *(EXPANDED / name for name in EXPANDED_FILES), *launches, UNIMAX8_WEIGHTS]
+    return [*frozen, *(EXPANDED / name for name in EXPANDED_FILES), *launches, UNIMAX8_WEIGHTS, UNIMAX8_REPEATS]
 
 
 def _unimax8_mixture() -> str:
@@ -125,10 +133,43 @@ def _validation_components(ctx: ExportContext) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+def _validation_uris() -> pd.Series:
+    """Evaluation-metrics URI of each validation run, indexed by the registry's row_id."""
+    uris = [_launch_results(launch, folder).eval_metrics_uri for launch, folder in VALIDATION_LAUNCHES.items()]
+    return pd.concat(uris)
+
+
 def _validation_run_names() -> pd.Series:
     """Training run name of each validation run, from its evaluation-metrics URI, indexed by the registry's row_id."""
-    uris = [_launch_results(launch, folder).eval_metrics_uri for launch, folder in VALIDATION_LAUNCHES.items()]
-    return pd.concat(uris).map(run_names.training_run_name_from_uri)
+    return _validation_uris().map(run_names.training_run_name_from_uri)
+
+
+def _launch_seeds() -> pd.DataFrame:
+    """Data and trainer seed of each run in a launch record, indexed by training run name.
+
+    A validation run's seeds come from the directory that holds it, as in `validation_3e18`; the UniMax-8 repeats'
+    record gives its three runs' seeds.
+    """
+    uris = _validation_uris()
+    names = uris.map(run_names.training_run_name_from_uri)
+    validation_seeds = pd.DataFrame([run_names.seeds_from_uri(uri) for uri in uris], index=names, columns=SEEDS)
+    repeats = tables.read_csv(paths.require(UNIMAX8_REPEATS)).set_index("run")[SEEDS]
+    seeds = pd.concat([validation_seeds, repeats])
+    assert seeds.index.is_unique, "a training run appears in two launch records"
+    return seeds
+
+
+def _seeds(runs: pd.DataFrame, run_keys: pd.Series) -> pd.DataFrame:
+    """Each run's seeds: the registry's, completed from the launch record that holds the run.
+
+    `run_keys` is `observation_keys(runs)`, which gives the training run name wherever one is known. Raises
+    AssertionError where the registry and the launch record give different seeds.
+    """
+    recorded = runs[SEEDS]
+    launched = _launch_seeds().reindex(run_keys).set_axis(runs.index)
+    agree = (recorded == launched) | recorded.isna() | launched.isna()
+    assert agree.all().all(), "the registry's seeds differ from the launch records'"
+    return recorded.fillna(launched)
 
 
 def _components(ctx: ExportContext, runs: pd.DataFrame) -> pd.DataFrame:
@@ -168,8 +209,10 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     assert runs.eligible.all() and runs.exclusion_reason.isna().all()
     assert set(runs.panel) == set(SWARM), f"panels {sorted(set(runs.panel))}"
     frozen_ids = set(tables.read_csv(paths.require(FROZEN / "heldout_runs.csv")).row_id)
+    run_keys = observation_keys(runs)
+    runs[SEEDS] = _seeds(runs, run_keys)
 
-    out = pd.DataFrame({"observation_id": observation_keys(runs).map(ctx.registry.id_for)})
+    out = pd.DataFrame({"observation_id": run_keys.map(ctx.registry.id_for)})
     out["swarm"] = runs.panel.map(SWARM)
     out["cohort"] = ["frozen" if r in frozen_ids else "expanded" for r in runs.row_id]
     for src, dst in META.items():

@@ -39,6 +39,24 @@ def test_a_value_missing_from_one_table_is_not_a_disagreement():
     assert checks.consistency(tables) == []
 
 
+@pytest.mark.parametrize(
+    "seed, problem",
+    [
+        ("data_seed", "heldout: obs_a: data_seed = 1.0 but validation_3e18 has 7.0"),
+        ("trainer_seed", "heldout: obs_a: trainer_seed = 1.0 but validation_3e18 has 0.0"),
+    ],
+    ids=["data_seed", "trainer_seed"],
+)
+def test_seeds_agree_where_both_tables_have_them(seed, problem):
+    seeds = {"data_seed": 7, "trainer_seed": 0}
+    tables = {
+        "validation_3e18": pd.DataFrame([_run("obs_a") | seeds, _run("obs_b") | seeds]),
+        # heldout records no seeds for obs_b, which is no disagreement.
+        "heldout": pd.DataFrame([_run("obs_a") | seeds | {seed: 1}, _run("obs_b") | dict.fromkeys(seeds)]),
+    }
+    assert checks.consistency(tables) == [problem]
+
+
 def test_content_ids_must_hash_the_row():
     wrong = pd.DataFrame([_run("obs_a", mixture_id="mix_wrong")])
     assert any("obs_a" in p and "mix_wrong" in p for p in checks.consistency({"validation_3e18": wrong}))
