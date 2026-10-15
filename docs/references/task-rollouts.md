@@ -35,7 +35,7 @@ Lowering preserves the task definition and adds these deployment settings:
 | --- | --- |
 | `MachineRuntimeSpec` | `backend`, `network`, `cpus`, `memory_mb`, `storage_mb`, `gpus`, `user`, `startup_timeout`, `cleanup_timeout` |
 | `TaskRuntimeSpec` | Optional `task_machine` and `verifier_machine` selections |
-| `TaskSessionSpec` | `task_session`, `shell_tool`, `max_turns`, `model_turn_timeout`, `command_timeout`, `tool_turn_timeout`, `total_turn_timeout`, `attempt_timeout`, `verifier_timeout`, `cleanup_timeout`, `trace` |
+| `TaskSessionSpec` | `task_session`, `shell_tool`, `max_turns`, `model_turn_timeout`, `command_timeout`, `tool_turn_timeout`, `total_turn_timeout`, `attempt_timeout`, `verifier_timeout`, `cleanup_timeout`, `trace`, `max_total_tokens`, `tool_output_spill_bytes` |
 | `LoweredTaskSpec` | `task: TaskSpec`, `runtime: TaskRuntimeSpec`, `session: TaskSessionSpec` |
 
 `rolloutengine.lowering.lower_task(task, runtime, session, factories=..., sessions=..., providers=...)` constructs and validates the lowered record.
@@ -46,6 +46,8 @@ and `trace`, which defaults to `TraceMode.EXACT_TOKENS`.
 Optional fields accept `None`.
 `TaskSessionSpec.cleanup_timeout` requires a finite, positive value.
 Other deadlines accept `None` or a finite, positive value.
+`max_total_tokens` accepts `None` or a positive integer.
+`tool_output_spill_bytes` accepts `None`, which turns spilling off, or a positive integer up to the default machine output limit.
 
 The engine resolves three registries by key:
 
@@ -247,9 +249,23 @@ flowchart LR
 ```
 
 RolloutEngine and curation share call decoding, execution, and JSON observations: stdout,
-stderr, exit code, reason, and separate stdout/stderr truncation flags. The episode runner
+stderr, exit code, reason, and separate stdout/stderr truncation flags. Each stream holds at most
+the machine output limit, 1 MiB in RolloutEngine; output past it is lost. The episode runner
 advertises the tools its environment supplies. Trajectories retain the chosen names and call
 IDs. Graders consume the resulting submission independently of the tool interface.
+
+Set `TaskSessionSpec.tool_output_spill_bytes` to keep large output in the task machine.
+Each shell command then writes its stdout and stderr to files under `/tmp/tool-output/`, with a
+fresh name for each call. A stream longer than the limit keeps its file. Its observation field holds
+the first `tool_output_spill_bytes` bytes, its truncation flag is true, and `stdout_path` or
+`stderr_path` names the file, so the model can read the rest with later commands. Shorter streams
+appear in full, their files are removed, and their path is `null`. A timed-out command reports both
+paths, because its files can hold output the machine did not return. The limit must not exceed 1 MiB. When the field is `None`, observations have no path fields and are unchanged.
+
+Each file keeps at most the first 64 MiB of its stream (`taskcompendium.runtime.shell.SPILL_FILE_BYTES`);
+the rest is read and discarded, so the command keeps running. Kept files stay until the attempt ends, so each
+spilled call can use up to 128 MiB of the task machine's storage. Choose a storage allocation with that in mind.
+Only the shell tool spills. Provider tools run on the host and return their observations in full, so a provider bounds its own output.
 
 The model receives only public context, answer-format instructions, tool definitions, and task observations.
 The serialized task and lowered record contain the grader and verifier resources. Do not send them to the model.
@@ -344,6 +360,21 @@ When these limits are finite, lowering requires the command limit to be less tha
 Configure the tool-turn deadline to allow the commands and backend cleanup within that turn.
 A timed-out shell command returns a `timed_out` tool observation. The model can continue the task.
 Expiration of the tool-turn deadline interrupts the transition.
+
+`max_total_tokens` sets a threshold for stopping model requests in one attempt.
+Each request charges its prompt tokens plus its response tokens. The prompt includes the served prefix of
+earlier turns, so a request charges the full prefix again; a conversation reset does not clear the total.
+If the model callable sets `ModelTurn.usage` (`TokenUsage(prompt_tokens, completion_tokens)`), the engine
+charges those counts. Otherwise it charges `len(prompt_token_ids) + len(response_token_ids)`.
+Without a conversation reset, the next prompt holds at least the previous request's prompt and response.
+After each response, the engine stops when the tokens spent plus that request's count reach `max_total_tokens`,
+so it never sends a request whose prompt alone reaches the budget. The last request sent may exceed it by its
+new observation and response tokens.
+The session handles the last response; the engine then sends no more model requests and starts grading with
+`stop_reason="budget_reached"`. The budget takes precedence when that request also uses the last permitted turn.
+With a budget set, a turn that reports neither `usage` nor prompt token IDs, which `TraceMode.MESSAGES` allows,
+raises `RolloutContractError` rather than charging nothing.
+Final grading receives the conversation through the last response, without its observations.
 
 `RolloutInterrupted` retains the failed operation, served token evidence, and original exception cause.
 Its `rollout` field contains the retained record. Its `operation` field identifies the failed operation.

@@ -15,11 +15,14 @@ default grader supplied by the engine.
 For text, number, JSON, and native-action answers, it adds the task's answer-format instruction and tools to the model request.
 For workspace-state tasks, this session adds shell and final-response instructions to the model request.
 Importers retain the task problem without these interface instructions.
-The engine owns model calls, conversation and token accumulation, deadlines, and resource cleanup.
+The engine owns model calls, conversation and token accumulation, deadlines, the optional
+`max_total_tokens` budget, and resource cleanup.
 An optional `RolloutObserver` passed as `RolloutEngine(..., observer=...)` receives typed progress events
 from `rolloutengine.contracts` while the attempt runs, so callers can log or trace a rollout before `run()` returns.
 Each event carries the `run_key` passed to `run()`, which defaults to the task id.
 The engine delivers events from a queue and never awaits the observer, so a slow or failing observer does not change the rollout.
+With `TaskSessionSpec.tool_output_spill_bytes` set, a shell stream longer than that limit is saved
+to a file in the task machine; the observation holds a preview of that size and the file path.
 
 `RolloutEngine.run(lowered)` accepts a `LoweredTaskSpec` and asynchronously returns one rollout.
 The lowered record preserves its `TaskSpec` and adds machine selections and session limits.

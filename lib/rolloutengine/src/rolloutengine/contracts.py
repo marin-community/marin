@@ -18,6 +18,7 @@ from rolloutengine.spec import LoweredTaskSpec
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"
 TOTAL_TURN_TIMEOUT_STOP_REASON = "total_turn_timeout"
+BUDGET_STOP_REASON = "budget_reached"
 
 
 @dataclass(frozen=True)
@@ -45,11 +46,22 @@ class SessionStart:
 
 
 @dataclass(frozen=True)
+class TokenUsage:
+    """Token counts that the model transport reports for one inference request."""
+
+    prompt_tokens: int
+    completion_tokens: int
+
+
+@dataclass(frozen=True)
 class ModelTurn:
     """Exact tokens and the parsed message from one inference request.
 
     Under ``TraceMode.MESSAGES`` the token fields may be empty and ``logprobs`` may be ``None``;
     the engine records reported token IDs without checking them.
+    ``usage`` overrides the token-ID counts when the engine charges this request
+    against ``TaskSessionSpec.max_total_tokens``. Transports that report usage but
+    not exact token IDs, such as chat endpoints, set it so the budget still counts.
     """
 
     message: dict[str, Any]
@@ -59,6 +71,14 @@ class ModelTurn:
     stop_reason: str
     text: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    usage: TokenUsage | None = None
+
+    @property
+    def request_tokens(self) -> int:
+        """Tokens this request spent: the reported ``usage``, else the prompt and response token-ID counts."""
+        if self.usage is not None:
+            return self.usage.prompt_tokens + self.usage.completion_tokens
+        return len(self.prompt_token_ids) + len(self.response_token_ids)
 
 
 class GenerationLimitReached(Exception):
