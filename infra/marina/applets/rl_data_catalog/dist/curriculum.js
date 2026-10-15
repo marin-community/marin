@@ -3,7 +3,7 @@ const number = new Intl.NumberFormat('en-US');
 const compact = new Intl.NumberFormat('en-US', {notation: 'compact', maximumFractionDigits: 1});
 const percent = value => `${(100 * value).toFixed(1)}%`;
 const outcomes = {assigned: 'Capability match', subject_only: 'Subject only', out_of_scope: 'Outside cutoff', insufficient_context: 'Insufficient context', skipped: 'Embedding skipped'};
-const state = {data: null, parent: '', subject: '', nodes: new Map(), request: 0, taskRequest: 0, next: '', taskQuery: null};
+const state = {view: 'map', data: null, parent: '', subject: '', nodes: new Map(), request: 0, taskRequest: 0, next: '', taskQuery: null};
 let searchTimer;
 
 function parameters() {
@@ -79,12 +79,11 @@ function renderCoverage() {
     const rejected = Object.values(selectedSource.rejections).reduce((a, b) => a + b, 0);
     $('source-ledger').textContent = `Complete source conversion: ${number.format(selectedSource.input_rows)} input rows → ${number.format(selectedSource.converted_rows)} converted tasks; ${number.format(rejected)} conversion rejections. This release contains ${number.format(selectedSource.task_count)} task instances from that source.`;
   }
-  $('population').textContent = `${data.sample_size ? 'Sampled ' : ''}${data.population} population`;
   renderBreadcrumbs();
   const scope = data.scope_summary;
   $('coverage-scope').hidden = !scope || !!$('search').value;
   if (scope) $('coverage-scope').textContent = `${labelFor(`subject:${state.subject}`, state.subject)} totals: ${number.format(scope.subject_members)} within the subject cutoff · ${number.format(scope.capability_matches)} with a capability match · ${number.format(scope.subject_members - scope.capability_matches)} subject-only. Group and capability cells count capability matches.`;
-  const mapView = $('view').value === 'map';
+  const mapView = state.view === 'map';
   const columns = data.columns.filter(column => $('include-empty').checked || column.processed_sources > 0);
   if (!mapView) {
     const head = node('tr'); head.append(node('th', $('search').value ? 'Search results' : state.parent ? 'Groups & capabilities' : 'Curriculum subject'));
@@ -136,7 +135,10 @@ function renderCoverage() {
   $('outcomes').replaceChildren(...Object.entries(outcomes).map(([value, text]) => {
     const item = button('', 'outcome-button', () => openTasks(null, null, value)); item.append(node('span', text), node('b', number.format(data.totals[value]))); return item;
   }));
-    const hash = parameters(); hash.set('view', $('view').value); hash.set('detail', $('map-detail').value); hash.set('parent_id', state.parent); hash.set('subject_id', state.subject);
+    for (const tab of document.querySelectorAll('[data-view]')) {
+      if (tab.dataset.view === state.view) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
+    }
+    const hash = parameters(); hash.set('view', state.view); hash.set('detail', $('map-detail').value); hash.set('parent_id', state.parent); hash.set('subject_id', state.subject);
     if ($('search').value) hash.set('search', $('search').value);
     history.replaceState(null, '', `#${hash}`);
 
@@ -290,14 +292,16 @@ function scoreTable(scores, target = $('detail-matches')) {
 
 $('controls').addEventListener('submit', event => { event.preventDefault(); loadCoverage(); });
 for (const id of ['source', 'use']) $(id).addEventListener('change', loadCoverage);
-for (const id of ['view', 'map-detail', 'include-empty']) $(id).addEventListener('change', renderCoverage);
+for (const id of ['map-detail', 'include-empty']) $(id).addEventListener('change', renderCoverage);
 $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadCoverage, 300); });
 $('more-tasks').addEventListener('click', loadTasks);
 $('close-tasks').addEventListener('click', () => { ++state.taskRequest; $('task-panel').hidden = true; });
 $('close-detail').addEventListener('click', () => $('task-detail').close());
-$('reset-view').addEventListener('click', () => { $('controls').reset(); $('search').value = ''; state.parent = ''; state.subject = ''; loadCoverage(); });
+for (const tab of document.querySelectorAll('[data-view]')) tab.addEventListener('click', event => { event.preventDefault(); state.view = tab.dataset.view; renderCoverage(); });
+$('reset-view').addEventListener('click', () => { $('controls').reset(); state.view = 'map'; $('search').value = ''; state.parent = ''; state.subject = ''; loadCoverage(); });
 const initial = new URLSearchParams(location.hash.slice(1));
-for (const [param, id] of Object.entries({view: 'view', detail: 'map-detail', intended_use: 'use', search: 'search'})) if (initial.has(param)) $(id).value = initial.get(param);
+if (initial.get('view') === 'sources') state.view = 'sources';
+for (const [param, id] of Object.entries({detail: 'map-detail', intended_use: 'use', search: 'search'})) if (initial.has(param)) $(id).value = initial.get(param);
 if (initial.get('source_id')) { const option = node('option', initial.get('source_id')); option.value = initial.get('source_id'); $('source').append(option); $('source').value = option.value; }
 state.parent = initial.get('parent_id') || ''; state.subject = initial.get('subject_id') || '';
 loadCoverage();

@@ -262,13 +262,13 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
         cursor: str = "",
         limit: int = Query(50, ge=1, le=100),
     ) -> dict[str, Any]:
-        after_source, after_task = "", ""
+        after_rank, after_source, after_task = 0, "", ""
         if cursor:
             try:
-                after_source, after_task = json.loads(base64.urlsafe_b64decode(cursor).decode())
+                after_rank, after_source, after_task = json.loads(base64.urlsafe_b64decode(cursor).decode())
             except (ValueError, TypeError, UnicodeError, binascii.Error) as error:
                 raise HTTPException(400, "Invalid task cursor") from error
-            if not isinstance(after_source, str) or not isinstance(after_task, str):
+            if not isinstance(after_rank, int) or not isinstance(after_source, str) or not isinstance(after_task, str):
                 raise HTTPException(400, "Invalid task cursor")
         with engine.connect() as connection:
             metadata = loaded_release(connection, filters.release)
@@ -278,6 +278,7 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                 "subject_id": subject_id,
                 "node_id": node_id,
                 "outcome": outcome,
+                "after_rank": after_rank,
                 "after_source": after_source,
                 "after_task": after_task,
                 "limit": limit + 1,
@@ -290,16 +291,20 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                     text(
                         SAMPLE_SQL
                         + """
+                , eligible AS (
                 SELECT t.source_id,t.task_id,t.content_hash,d.detail->>'task_preview' AS task_preview,
-                    t.description_status,s.outcome
+                    t.description_status,s.outcome,
+                    ROW_NUMBER() OVER (PARTITION BY t.source_id ORDER BY t.task_id) AS sample_rank
                 FROM selected_tasks t JOIN states s USING (source_id,task_id,content_hash)
                 JOIN curriculum_tasks d USING (load_id,source_id,task_id)
                 WHERE (:node_id='' OR EXISTS (SELECT 1 FROM placements p
                     WHERE p.source_id=t.source_id AND p.task_id=t.task_id
                         AND p.subject_id=:subject_id AND p.node_id=:node_id))
                     AND (:outcome='all' OR s.outcome=:outcome)
-                    AND (t.source_id,t.task_id)>(:after_source,:after_task)
-                ORDER BY t.source_id,t.task_id LIMIT :limit
+                )
+                SELECT * FROM eligible
+                WHERE (sample_rank,source_id,task_id)>(:after_rank,:after_source,:after_task)
+                ORDER BY sample_rank,source_id,task_id LIMIT :limit
             """
                     ),
                     params,
@@ -308,7 +313,9 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
         next_cursor = ""
         if len(rows) > limit:
             last = rows[limit - 1]
-            next_cursor = base64.urlsafe_b64encode(json.dumps([last["source_id"], last["task_id"]]).encode()).decode()
+            next_cursor = base64.urlsafe_b64encode(
+                json.dumps([last["sample_rank"], last["source_id"], last["task_id"]]).encode()
+            ).decode()
         return {"release_id": metadata["release_id"], "tasks": rows[:limit], "next_cursor": next_cursor}
 
     @api.get("/curriculum/task")

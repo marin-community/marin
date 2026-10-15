@@ -398,6 +398,15 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
             ("add", 100),
         }
         assert client.get("/curriculum", params={"intended_use": "eval"}).json()["totals"]["denominator"] == 0
+        diverse = client.get("/curriculum/tasks", params={"limit": 2}).json()
+        remainder = client.get("/curriculum/tasks", params={"limit": 2, "cursor": diverse["next_cursor"]}).json()
+        assert [(row["source_id"], row["task_id"]) for row in diverse["tasks"] + remainder["tasks"]] == [
+            ("a", "one"),
+            ("b", "one"),
+            ("a", "three"),
+            ("a", "two"),
+        ]
+        assert not remainder["next_cursor"]
         params = {"node_id": "add", "subject_id": "D01", "limit": 1}
         page = client.get("/curriculum/tasks", params=params).json()
         next_page = client.get("/curriculum/tasks", params={**params, "cursor": page["next_cursor"]}).json()

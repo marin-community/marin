@@ -5,9 +5,9 @@
   <title>RL Data Atlas</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="assessment.css"><script src="common.js" defer></script><script src="app.js" defer></script>
 </head>
 <body>
-<header class="masthead"><a class="brand" href="./">open athena / research tools</a><nav><a href="curriculum.html">Curriculum coverage</a> · <a href="archive.html">Historical reviews ↗</a></nav></header>
 <main>
-  <section class="hero"><div><p class="eyebrow">POST-TRAINING / CURATION CATALOG</p><h1>RL Data Atlas<span>.</span></h1><p class="intro">Source inventory, sampled task grades and executed controls.</p></div><div class="hero-actions"><button id="export" class="secondary">Export view</button></div></section>
+  <header class="atlas-header"><h1>RL Data Atlas</h1><div><a href="archive.html">Historical reviews</a><button id="export" class="secondary">Export view</button></div></header>
+  <nav class="atlas-tabs" aria-label="Atlas views"><a href="curriculum.html#view=sources">By source</a><a href="curriculum.html#view=map">By curriculum</a></nav>
   <section class="metrics" aria-label="Catalog totals">
     <div><span class="metric-label">SOURCES</span><strong id="source-count">—</strong><small id="assessment-count">Loading assessments</small></div>
     <div><span class="metric-label">GRADED SAMPLE ITEMS</span><strong id="sample-count">—</strong><small>Admitted tasks and excluded diagnostics</small></div>
