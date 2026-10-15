@@ -6,39 +6,54 @@
 `uv run python -m experiments.domain_phase_mix.release.scan_upload release_build` prints the first 200 hits and exits 1
 on any hit.
 
-Every file is read by its structure: a CSV cell by cell, header included; a Parquet file's column names and the cells of
-its non-numeric columns; a JSON file's keys and values; any other file line by line as UTF-8 text, so a binary or
-compressed file, whose strings no pattern could see, stops the scan. Each file's own path is scanned too. A few fields
-hold hex digests by design: `ALLOWED` exempts each of them from the hash pattern alone, so the same digest under any
-other field, or any other pattern in an allowed field, is still a hit.
+Every file is read by its structure: a CSV cell by cell, header included; a Parquet file's column names, the keys and
+values of its schema and field metadata, and the cells of its string columns, a stored index among them; a JSON file's
+keys and values; any other file line by line as UTF-8 text. Each file's own path is scanned too. Whatever would hide a
+string from the patterns stops the scan: a binary or compressed file, a ragged CSV row, a repeated JSON key, and a
+Parquet column of any type but string, number, boolean or time. A few fields hold hex digests by design: `ALLOWED`
+exempts each of them from the hash pattern alone, so the same digest under any other field, or any other pattern in an
+allowed field, is still a hit.
 """
 
 import argparse
+import collections
 import dataclasses
 import fnmatch
 import json
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 
-import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from experiments.domain_phase_mix.release import tables
 
 PATTERNS = {
-    "gcs_path": re.compile(r"gs://|marin-(?:us|eu)-(?:east|central|west)\d"),
+    # GCS paths and Marin's bucket names on GCS and S3-compatible stores (marin-us-east5, marin-us-east-02a, marin-na).
+    "bucket": re.compile(r"gs://|marin-(?:us|eu)-[a-z]+-?\d|marin-(?:na|eu|cw)\b"),
     # Not the bare word: a public source file name ends in `_wandb.csv`.
     "wandb": re.compile(r"wandb\.ai|wandb_url|wandb_run|wandb:", re.I),
     "home_path": re.compile(r"/Users/|/home/\w+/"),
-    # Fieldbook ids are ULIDs; a public exposure id (`exp_` and 16 hex digits) may begin `exp_01` but is too short.
-    "fieldbook": re.compile(r"(?:exp|run|job)_01[a-z0-9]{24}|(?i:fieldbook)"),
+    # Fieldbook ids are ULIDs after a lowercase prefix (`exp_`, `run_`, `note_`, ...); a public id continues its prefix
+    # with at most 16 characters and may begin `_01`, but it is too short.
+    "fieldbook": re.compile(r"(?<![a-z0-9])[a-z]+_01[a-z0-9]{24}(?![a-z0-9])|(?i:fieldbook)"),
     "checkpoint": re.compile(r"/checkpoints/|hf/step-"),
     "run_hash": re.compile(r"[A-Za-z0-9_]+-[0-9a-f]{6}(?![0-9A-Za-z])"),  # run names end in a six-hex-digit hash
     "long_hash": re.compile(r"[0-9a-f]{40,}"),  # git commits, SHA-256 digests, policy hashes
     "personal": re.compile(r"pinlin_calvin_xu|calvinxu", re.I),
     "email": re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"),
-    "url": re.compile(r"https?://", re.I),
+    "url": re.compile(r"\b[a-z][a-z0-9+.-]*://", re.I),  # any scheme: http, s3, gcs, ...
 }
+# Arrow types that cannot hold text; a string column is scanned, and a column of any other type raises.
+TEXTLESS = (
+    pa.types.is_null,
+    pa.types.is_boolean,
+    pa.types.is_integer,
+    pa.types.is_floating,
+    pa.types.is_decimal,
+    pa.types.is_temporal,
+)
 EXCERPT = 30  # characters of context on each side of a match
 SHOWN = 200  # hits the command prints
 
@@ -63,22 +78,23 @@ ALLOWED = (
 class Hit:
     """One pattern matching one string of a file.
 
-    `line_or_row` is the line of a text file, the row of a table (0 for the header, 1 for the first data row) or 0 in
-    a JSON file; `field` is the table column or the JSON key path (`$.tables[3].sha256`). A hit in the file's own path
-    has row 0 and an empty field.
+    `line_or_row` is the line of a text file, the row of a table (0 for the header and for Parquet metadata, 1 for the
+    first data row), 0 in a JSON file, or 0 for the file's own path. `field` is the table column, `schema metadata
+    <key>` or `<column> metadata <key>` in Parquet, or the JSON key path (`$.tables[3].sha256`); it is empty for a text
+    line and for the file's own path.
     """
 
     path: Path
     line_or_row: int
-    field: str
     pattern: str
     excerpt: str
+    field: str
 
 
 def scan(root: Path) -> list[Hit]:
     """Every hit in every file under `root`, file by file in path order.
 
-    A file the scan cannot parse (binary, compressed, a ragged CSV, invalid JSON) raises its parser's ValueError.
+    A file the scan cannot fully read raises a ValueError, its parser's or the scan's own.
     """
     if not root.is_dir():
         raise NotADirectoryError(f"no build tree to scan at {root}")
@@ -92,7 +108,7 @@ def scan(root: Path) -> list[Hit]:
             raise
         for rows, field, text in strings:
             for pattern, excerpt in _matches(text, _exempt(relative, field)):
-                hits.extend(Hit(path, row, field, pattern, excerpt) for row in rows)
+                hits.extend(Hit(path, row, pattern, excerpt, field) for row in rows)
     return hits
 
 
@@ -104,25 +120,52 @@ def _strings(path: Path) -> Iterator[tuple[Sequence[int], str, str]]:
         for column in frame:
             yield from _column_strings(frame[column], frame[column].iat[0], first_row=0)
     elif path.suffix == ".parquet":
-        frame = pd.read_parquet(path)
-        for column in frame:
-            yield (0,), str(column), str(column)
-            if not pd.api.types.is_numeric_dtype(frame[column]):
-                yield from _column_strings(frame[column], str(column), first_row=1)
+        yield from _parquet_strings(pq.read_table(path))
     elif path.suffix == ".json":
-        yield from _json_strings(json.loads(path.read_text(encoding="utf-8")), "$")
+        yield from _json_strings(json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_json_object), "$")
     else:
         for number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
             yield (number,), "", line
 
 
-def _column_strings(values: pd.Series, field: str, first_row: int) -> Iterator[tuple[Sequence[int], str, str]]:
+def _parquet_strings(table: pa.Table) -> Iterator[tuple[Sequence[int], str, str]]:
+    """Column names, schema and field metadata, and string cells; a stored pandas index is an ordinary column."""
+    yield from _metadata_strings(table.schema.metadata, "schema metadata")
+    for arrow_field, column in zip(table.schema, table.columns, strict=True):
+        name, type_ = arrow_field.name, arrow_field.type
+        yield (0,), name, name
+        yield from _metadata_strings(arrow_field.metadata, f"{name} metadata")
+        if pa.types.is_string(type_) or pa.types.is_large_string(type_):
+            yield from _column_strings(column.to_pylist(), name, first_row=1)
+        elif not any(is_type(type_) for is_type in TEXTLESS):
+            raise ValueError(f"column {name!r} has Arrow type {type_}, whose strings the scan cannot read")
+
+
+def _metadata_strings(metadata: dict[bytes, bytes] | None, label: str) -> Iterator[tuple[Sequence[int], str, str]]:
+    for key, value in (metadata or {}).items():
+        field = f"{label} {key.decode()}"
+        yield (0,), field, key.decode()
+        yield (0,), field, value.decode()
+
+
+def _column_strings(
+    values: Iterable[str | None], field: str, first_row: int
+) -> Iterator[tuple[Sequence[int], str, str]]:
     """Each distinct value of a column once, with the rows that hold it; the column's first value is `first_row`."""
     rows: dict[str, list[int]] = {}
-    for row, value in enumerate(values.astype(str), start=first_row):
-        rows.setdefault(value, []).append(row)
+    for row, value in enumerate(values, start=first_row):
+        if value is not None:
+            rows.setdefault(value, []).append(row)
     for value, value_rows in rows.items():
         yield value_rows, field, value
+
+
+def _json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """A JSON object; `json.loads` would keep only a repeated key's last value, so a repeated key raises."""
+    repeated = sorted(key for key, count in collections.Counter(key for key, _ in pairs).items() if count > 1)
+    if repeated:
+        raise ValueError(f"a JSON object repeats the keys {repeated}")
+    return dict(pairs)
 
 
 def _json_strings(value: object, field: str) -> Iterator[tuple[Sequence[int], str, str]]:

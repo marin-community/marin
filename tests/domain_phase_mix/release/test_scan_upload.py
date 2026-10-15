@@ -3,20 +3,26 @@
 
 import gzip
 import hashlib
+import io
 import json
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from experiments.domain_phase_mix.release import scan_upload
 
 LEAK = "gs://bucket/x"
-# One planted string per needle and the one pattern it must trip. Ids and hashes also fire when an identifier or a
-# file name continues them with `_`.
+# One planted string per needle and a pattern it must trip. Ids and hashes also fire when an identifier or a file name
+# continues them with `_`.
 PLANTS = [
-    ("gs://bucket/x", "gcs_path"),
-    ("bucket marin-eu-west4", "gcs_path"),
+    ("gs://bucket/x", "bucket"),
+    ("bucket marin-eu-west4", "bucket"),
+    ("s3://marin-us-east-02a/x", "bucket"),
+    ("s3://marin-na/x", "bucket"),
+    ("marin-us-west-04a", "bucket"),
     ("wandb.ai/marin/runs/abc", "wandb"),
     ("wandb_run_id", "wandb"),
     ("wandb_url", "wandb"),
@@ -25,6 +31,7 @@ PLANTS = [
     ("/home/someone/x", "home_path"),
     ("exp_01m4wyyvz7b90mkbr7c8y1fwgb", "fieldbook"),
     ("run_01m4wyyvz7b90mkbr7c8y1fwgb_notes.json", "fieldbook"),
+    ("note_01h2xk9m3p4q5r6s7t8v9w0y1z", "fieldbook"),
     ("see the Fieldbook entry", "fieldbook"),
     ("/checkpoints/step-1000", "checkpoint"),
     ("hf/step-1000", "checkpoint"),
@@ -36,9 +43,33 @@ PLANTS = [
     ("CalvinXu", "personal"),
     ("someone@example.com", "email"),
     ("http://example.org", "url"),
+    ("gcs://bucket/x", "url"),
 ]
 DIGEST = hashlib.sha256(b"table").hexdigest()  # 64 hex digits, like a file's SHA-256
 REVISION = hashlib.sha1(b"commit").hexdigest()  # 40 hex digits, like a git commit
+
+
+def _parquet_bytes(table: pa.Table) -> bytes:
+    sink = io.BytesIO()
+    pq.write_table(table, sink)
+    return sink.getvalue()
+
+
+# Files whose strings the scan cannot fully see, each with the file name it is written under.
+UNREADABLE = {
+    "compressed": ("table.csv.gz", gzip.compress(f"a\n{LEAK}\n".encode())),
+    "compressed-named-csv": ("table.csv", gzip.compress(f"a\n{LEAK}\n".encode())),
+    "ragged-csv": ("ragged.csv", f"a,b\n{LEAK},y,z\n".encode()),
+    "repeated-json-key": ("MANIFEST.json", f'{{"note": "{LEAK}", "note": "ok"}}'.encode()),
+    "parquet-list": ("t.parquet", _parquet_bytes(pa.table({"a": [["ok", LEAK]]}))),
+    "parquet-struct": ("t.parquet", _parquet_bytes(pa.table({"a": [{"b": LEAK}]}))),
+    "parquet-map": (
+        "t.parquet",
+        _parquet_bytes(pa.table({"a": pa.array([[("k", LEAK)]], type=pa.map_(pa.string(), pa.string()))})),
+    ),
+    "parquet-binary": ("t.parquet", _parquet_bytes(pa.table({"a": pa.array([LEAK.encode()], type=pa.binary())}))),
+    "parquet-dictionary": ("t.parquet", _parquet_bytes(pa.table({"a": pa.array([LEAK]).dictionary_encode()}))),
+}
 
 
 @pytest.fixture(autouse=True)
@@ -47,8 +78,9 @@ def release_sources():
 
 
 def _write_clean_tree(root: Path) -> dict:
-    """A build tree holding only public strings: the public id forms, an exposure id that begins `exp_01`, a source
-    file name ending in `_wandb.csv`, and hex digests in the fields that hold them by design. Returns the manifest."""
+    """A build tree holding only public strings: the public id forms (each continuing `_01`, like a Fieldbook id), an
+    exposure id that begins `exp_01`, `marin-` names that are no bucket, a source file name ending in `_wandb.csv`, and
+    hex digests in the fields that hold them by design. Returns the manifest."""
     (root / "data/heldout").mkdir(parents=True)
     (root / "data/tasks").mkdir(parents=True)
     pd.DataFrame(
@@ -61,7 +93,11 @@ def _write_clean_tree(root: Path) -> dict:
         }
     ).to_csv(root / "data/heldout/heldout.csv", index=False)
     pd.DataFrame(
-        {"task_id": ["arc_challenge"], "source_revision": [f"OLMo-Eval {REVISION}; HF revision unpinned"]}
+        {
+            "task_id": ["arc_challenge"],
+            "source_revision": [f"OLMo-Eval {REVISION}; HF revision unpinned"],
+            "tokenizer": ["meta-llama/Meta-Llama-3.1-8B (same vocabulary as marin-community/marin-tokenizer)"],
+        }
     ).to_csv(root / "data/tasks/tasks.csv", index=False)
     manifest = {
         "commit": REVISION,
@@ -81,22 +117,44 @@ def test_scan_covers_every_file(tmp_path):
     (tmp_path / "data/x").mkdir(parents=True)
     pd.DataFrame({"a": ["ok", LEAK]}).to_csv(tmp_path / "data/x/cell.csv", index=False)
     pd.DataFrame({LEAK: [1.0]}).to_csv(tmp_path / "data/x/header.csv", index=False)
+    pd.DataFrame({"a": ["ok", f"first line\nthen {LEAK}"]}).to_csv(tmp_path / "data/x/multiline.csv", index=False)
     pd.DataFrame({"a": [0.5, 0.25], "b": ["ok", LEAK]}).to_parquet(tmp_path / "data/x/cell.parquet", index=False)
     pd.DataFrame({LEAK: [0.5]}).to_parquet(tmp_path / "data/x/name.parquet", index=False)
     (tmp_path / "MANIFEST.json").write_text(json.dumps({"tables": [{"note": LEAK}], LEAK: 1}))
     (tmp_path / "README.md").write_text(f"# Card\n\nsee {LEAK}\n")
     (tmp_path / "data/x/notes-6c15f1.md").write_text("ok\n")  # a run name in the file's own name
     hits = scan_upload.scan(tmp_path)
-    # Each hit names its file, its line (text), data row (tables; 0 for the header) or 0 (JSON), and its field.
+    # Each hit names its file, its line (text), row (tables: 0 for the header, a quoted multi-line cell is one row) or
+    # 0 (JSON), and its field. pandas' own Parquet metadata repeats the column names.
     assert {(h.path.name, h.line_or_row, h.field) for h in hits} == {
         ("cell.csv", 2, "a"),
         ("header.csv", 0, LEAK),
+        ("multiline.csv", 2, "a"),
         ("cell.parquet", 2, "b"),
         ("name.parquet", 0, LEAK),
+        ("name.parquet", 0, "schema metadata pandas"),
         ("MANIFEST.json", 0, "$.tables[0].note"),
         ("MANIFEST.json", 0, f"$.{LEAK}"),
         ("README.md", 3, ""),
         ("notes-6c15f1.md", 0, ""),
+    }
+
+
+def test_scan_reads_parquet_index_and_metadata(tmp_path):
+    # pandas stores a string index as a column, and `attrs` in the schema metadata twice (under PANDAS_ATTRS and in
+    # its own `pandas` entry); Arrow fields carry metadata too.
+    pd.DataFrame({"a": [0.5]}, index=pd.Index([LEAK], name="run")).to_parquet(tmp_path / "index.parquet")
+    frame = pd.DataFrame({"a": [0.5]})
+    frame.attrs["source"] = LEAK
+    frame.to_parquet(tmp_path / "attrs.parquet", index=False)
+    schema = pa.schema([pa.field("a", pa.float64(), metadata={"note": LEAK})], metadata={LEAK: "key"})
+    pq.write_table(pa.table({"a": [0.5]}, schema=schema), tmp_path / "metadata.parquet")
+    assert {(h.path.name, h.line_or_row, h.field) for h in scan_upload.scan(tmp_path)} == {
+        ("index.parquet", 1, "run"),
+        ("attrs.parquet", 0, "schema metadata PANDAS_ATTRS"),
+        ("attrs.parquet", 0, "schema metadata pandas"),
+        ("metadata.parquet", 0, f"schema metadata {LEAK}"),
+        ("metadata.parquet", 0, "a metadata note"),
     }
 
 
@@ -108,19 +166,21 @@ def test_every_pattern_fires_and_clean_text_passes(tmp_path):
         (plants / f"f{i}.md").write_text(f"ok {plant} ok\n")
     hits = scan_upload.scan(plants)
     for i, (plant, pattern) in enumerate(PLANTS):
-        assert {h.pattern for h in hits if h.path.name == f"f{i}.md"} == {pattern}, plant
+        assert pattern in {h.pattern for h in hits if h.path.name == f"f{i}.md"}, plant
     clean = tmp_path / "clean"
     _write_clean_tree(clean)
     assert scan_upload.scan(clean) == []
 
 
 def test_allowance_exempts_only_its_field_and_pattern(tmp_path):
-    # An allowance names a file, a field and the hash pattern: the same digest under any other key, column or file is a
-    # hit, and so is any other pattern inside an allowed field.
+    # An allowance names a file relative to the root, a field and the hash pattern: the same digest under any other key,
+    # column or file (a nested MANIFEST.json included) is a hit, and so is any other pattern inside an allowed field.
     manifest = _write_clean_tree(tmp_path)
     manifest["tables"][0]["policy"] = DIGEST
     manifest["notes"] = {"sha256": DIGEST}
     (tmp_path / "MANIFEST.json").write_text(json.dumps(manifest, indent=1))
+    (tmp_path / "data/x").mkdir()
+    (tmp_path / "data/x/MANIFEST.json").write_text(json.dumps({"commit": REVISION, "tables": [{"sha256": DIGEST}]}))
     pd.DataFrame(
         {
             "task_id": ["arc_challenge"],
@@ -131,27 +191,23 @@ def test_allowance_exempts_only_its_field_and_pattern(tmp_path):
     pd.DataFrame({"observation_id": ["obs_0123456789ab"], "source_revision": [REVISION]}).to_csv(
         tmp_path / "data/heldout/heldout.csv", index=False
     )
-    assert {(h.path.name, h.field, h.pattern) for h in scan_upload.scan(tmp_path)} == {
+    hits = scan_upload.scan(tmp_path)
+    assert {(h.path.relative_to(tmp_path).as_posix(), h.field, h.pattern) for h in hits} == {
         ("MANIFEST.json", "$.tables[0].policy", "long_hash"),
         ("MANIFEST.json", "$.notes.sha256", "long_hash"),
-        ("tasks.csv", "source_revision", "email"),
-        ("tasks.csv", "upstream", "long_hash"),
-        ("heldout.csv", "source_revision", "long_hash"),
+        ("data/x/MANIFEST.json", "$.commit", "long_hash"),
+        ("data/x/MANIFEST.json", "$.tables[0].sha256", "long_hash"),
+        ("data/tasks/tasks.csv", "source_revision", "email"),
+        ("data/tasks/tasks.csv", "upstream", "long_hash"),
+        ("data/heldout/heldout.csv", "source_revision", "long_hash"),
     }
 
 
-@pytest.mark.parametrize(
-    "name, content",
-    [
-        ("table.csv.gz", gzip.compress(f"a\n{LEAK}\n".encode())),
-        ("table.csv", gzip.compress(f"a\n{LEAK}\n".encode())),
-        ("ragged.csv", f"a,b\n{LEAK},y,z\n".encode()),
-    ],
-    ids=["compressed", "compressed-named-csv", "ragged-csv"],
-)
+@pytest.mark.parametrize("name, content", list(UNREADABLE.values()), ids=list(UNREADABLE))
 def test_scan_refuses_a_file_it_cannot_read(tmp_path, name, content):
-    # Compression hides every string from the patterns, and pandas' default reader would take a ragged row's extra
-    # first field for the index, outside every column; such a file must stop the scan rather than pass it.
+    # Compression hides every string from the patterns; pandas' default reader would take a ragged row's extra first
+    # field for the index, outside every column; `json.loads` keeps only a repeated key's last value; and a nested,
+    # binary or dictionary Parquet column holds strings outside any string column. Each must stop the scan.
     (tmp_path / name).write_bytes(content)
     with pytest.raises(ValueError):
         scan_upload.scan(tmp_path)
