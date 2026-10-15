@@ -319,7 +319,7 @@ def test_scheduled_ingest_publishes_multiple_batches_without_loading_a_serving_s
     monkeypatch.setenv("RECORDS_PREFIXES", str(prefix))
     monkeypatch.setenv("MARINA_DATABASE_URL", str(engine.url))
     monkeypatch.setenv("EVALDASH_STORE", "postgres")
-    monkeypatch.setattr(ingest, "engine_for", lambda _database, _app: engine)
+    monkeypatch.setattr(ingest, "job_engine", lambda: engine)
 
     materialized_sizes = []
 

@@ -94,7 +94,7 @@ For a local preview, start disposable Marina and Postgres, then run the same
 loader against a local curation cache using the printed applet ID and origin:
 
 ```bash
-uv run marina publish infra/marina/applets/rl_data_catalog --local --json
+uv run marina release infra/marina/applets/rl_data_catalog --local --json
 uv run python infra/marina/applets/rl_data_catalog/load.py \
   --catalog-root ~/.cache/marin/rl-curation/campaigns/catalog \
   --applet-id PRINTED_ID --url PRINTED_ORIGIN

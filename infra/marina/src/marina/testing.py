@@ -21,7 +21,8 @@ TEST_DATABASE_URL_ENV = "MARINA_TEST_DATABASE_URL"
 
 
 @contextmanager
-def _fresh_database(server_url: str) -> Iterator[str]:
+def isolated_database(server_url: str) -> Iterator[str]:
+    """Create and remove one database on an existing local test server."""
     name = f"marina_test_{uuid.uuid4().hex[:8]}"
     admin = sqlalchemy.create_engine(server_url, isolation_level="AUTOCOMMIT")
     try:
@@ -45,7 +46,7 @@ def test_database() -> Iterator[str]:
     """
     given = os.environ.get(TEST_DATABASE_URL_ENV)
     if given:
-        with _fresh_database(given) as url:
+        with isolated_database(given) as url:
             yield url
         return
     with docker_database() as url:

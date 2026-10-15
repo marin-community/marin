@@ -19,6 +19,7 @@ from marina.db import UrlDatabase, grant_read
 from marina.releases import require_current_main
 from marina.server import MarinaConfig, MarinaSurface, create_app
 from marina.table_load import read_table, table_statements
+from marina.testing import isolated_database
 from requests import Response as RequestsResponse
 from sqlalchemy import text
 from starlette.testclient import TestClient
@@ -32,7 +33,9 @@ def release_checkout(tmp_path: Path, request: pytest.FixtureRequest) -> Path:
     app = repo / "demo"
     (app / "dist").mkdir(parents=True)
     (app / "dist/index.html").write_text("<h1>Released app</h1>")
-    (app / "release.toml").write_text('applet_id = "00000000-0000-0000-0000-000000000001"\n')
+    (app / "release.toml").write_text('applet_id = "00000000-0000-0000-0000-000000000001"\nsource_paths = ["shared"]\n')
+    (repo / "shared").mkdir()
+    (repo / "shared/component.js").write_text("export const version = 1")
     manifest = 'title = "Release test"\ndescription = "Test"\n'
     if request.param == "build":
         manifest += 'build_command = "python build.py"\n'
@@ -115,6 +118,12 @@ def test_release_records_source_and_status_ignores_unrelated_commits(
     assert report["state"] == "current"
     assert report["checkout"]["commit"] != report["released"]["commit"]
 
+    (release_checkout.parent / "shared/component.js").write_text("export const version = 2")
+    assert json.loads(runner.invoke(cli, status_args).output)["state"] == "modified"
+    for arguments in (["add", "."], ["commit", "-m", "shared component"]):
+        subprocess.run(["git", *arguments], cwd=release_checkout.parent, check=True, capture_output=True)
+    assert json.loads(runner.invoke(cli, status_args).output)["state"] == "different"
+
     (release_checkout / "applet.toml").write_text('title = "Changed"\ndescription = "New source"\n')
     status = runner.invoke(cli, status_args)
     assert json.loads(status.output)["state"] == "modified"
@@ -124,22 +133,11 @@ def test_release_records_source_and_status_ignores_unrelated_commits(
     assert json.loads(status.output)["state"] == "different"
 
 
-def test_publish_registered_applet_requires_release_and_keeps_dry_run(
-    release_checkout: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    requests = []
-
-    def http_request(method: str, url: str, **_kwargs: object) -> RequestsResponse:
-        requests.append((method, url))
-        return json_response({"path": "/a/id/v/8/"})
-
-    monkeypatch.setattr("marina.client.requests.request", http_request)
-    monkeypatch.setattr("marina.client.bearer_token", lambda: "test-token")
+def test_release_requires_expected_revision_and_supports_validation(release_checkout: Path) -> None:
     runner = CliRunner()
-    result = runner.invoke(cli, ["publish", str(release_checkout), "--update", str(uuid.uuid4()), "--base-version", "7"])
-    assert result.exit_code == 2
-    assert requests == []
-    preview = runner.invoke(cli, ["publish", str(release_checkout), "--dry-run", "--json"])
+    missing = runner.invoke(cli, ["release", str(release_checkout)])
+    assert missing.exit_code == 2
+    preview = runner.invoke(cli, ["release", str(release_checkout), "--dry-run", "--json"])
     assert preview.exit_code == 0, preview.output
     assert "package" in json.loads(preview.output)["checks"]
 
@@ -263,8 +261,41 @@ def applet_client_and_store(tmp_path: Path, database_url: str) -> tuple[TestClie
     store = AppletStore(database)
     ensure_applet_provisioning(store.engine)
     store.migrate()
-    config = MarinaConfig(apps_dir=apps_dir, data_root=str(tmp_path / "data"), iap_audience=None, database=database)
+    config = MarinaConfig(data_root=str(tmp_path / "data"), iap_audience=None, database=database)
     return TestClient(create_app(config), client=("127.0.0.1", 40000)), store
+
+
+def test_release_without_git_creates_and_updates_the_returned_uuid(
+    tmp_path: Path, database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "adhoc"
+    (source / "dist").mkdir(parents=True)
+    (source / "applet.toml").write_text('title = "Report"\ndescription = "One-off report"\n')
+    index = source / "dist/index.html"
+    index.write_text("first report")
+
+    with isolated_database(database_url) as local_url:
+        client, store = applet_client_and_store(tmp_path, local_url)
+
+        def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
+            response = client.request(method, url, params=kwargs.get("params"), content=kwargs.get("data"))
+            result = json_response(response.json())
+            result.status_code = response.status_code
+            return result
+
+        monkeypatch.setattr("marina.client.requests.request", http_request)
+        runner = CliRunner()
+        arguments = ["release", str(source), "--url", "http://localhost:8080", "--json"]
+        first = runner.invoke(cli, [*arguments, "--base-version", "0"])
+        assert first.exit_code == 0, first.output
+        selected = json.loads(first.output)
+        index.write_text("second report")
+        second = runner.invoke(cli, [*arguments, "--id", selected["id"], "--base-version", "1"])
+        assert second.exit_code == 0, second.output
+        assert json.loads(second.output)["id"] == selected["id"]
+        assert client.get(f"/a/{selected['id']}/").text == "second report"
+        assert client.get(f"/a/{selected['id']}/v/1/").text == "first report"
+        store.engine.dispose()
 
 
 def test_publish_demo_serves_files_schema_query_and_python_api(tmp_path: Path, database_url: str) -> None:
@@ -453,7 +484,6 @@ def test_update_keeps_old_files_and_routes_each_python_revision(tmp_path: Path, 
 def test_applet_host_exposes_only_applet_routes(tmp_path: Path, database_url: str) -> None:
     _client, store = applet_client_and_store(tmp_path, database_url)
     config = MarinaConfig(
-        apps_dir=tmp_path / "apps",
         data_root=str(tmp_path / "data"),
         iap_audience=None,
         database=store.database,
@@ -491,7 +521,6 @@ def test_applet_host_exposes_only_applet_routes(tmp_path: Path, database_url: st
 def test_public_applet_surface_serves_only_public_reads(tmp_path: Path, database_url: str) -> None:
     _publisher, store = applet_client_and_store(tmp_path, database_url)
     publisher_config = MarinaConfig(
-        apps_dir=tmp_path / "apps",
         data_root=str(tmp_path / "data"),
         iap_audience=None,
         database=store.database,
@@ -499,7 +528,6 @@ def test_public_applet_surface_serves_only_public_reads(tmp_path: Path, database
     )
     publisher = TestClient(create_app(publisher_config), client=("127.0.0.1", 40000))
     public_config = MarinaConfig(
-        apps_dir=tmp_path / "apps",
         data_root=str(tmp_path / "data"),
         iap_audience=None,
         database=store.database,
@@ -568,7 +596,6 @@ def test_named_applet_host_pins_revisions_and_isolates_routes(tmp_path: Path, da
     other = publisher.post("/api/marina/applets", content=package).json()
     applet_id = first["id"]
     config = MarinaConfig(
-        apps_dir=tmp_path / "apps",
         data_root=str(tmp_path / "data"),
         iap_audience=None,
         database=store.database,
@@ -616,7 +643,6 @@ def test_named_applet_host_authenticates_rewritten_routes(tmp_path: Path, method
     apps_dir = tmp_path / "apps"
     apps_dir.mkdir()
     config = MarinaConfig(
-        apps_dir=apps_dir,
         data_root=str(tmp_path / "data"),
         iap_audience="test-audience",
         applet_origin="https://applets.example",
@@ -833,8 +859,8 @@ def create_api(_services):
         assert schemas_after == schemas_before
 
 
-def test_publish_dry_run_reports_package_checks_and_runtime_omissions() -> None:
-    result = CliRunner().invoke(cli, ["publish", str(DEMO_APPLET), "--dry-run", "--json"])
+def test_release_dry_run_reports_checks_and_runtime_omissions() -> None:
+    result = CliRunner().invoke(cli, ["release", str(DEMO_APPLET), "--dry-run", "--json"])
     assert result.exit_code == 0, result.output
     report = json.loads(result.output)
     assert report["file_count"] == 5
@@ -845,16 +871,15 @@ def test_publish_dry_run_reports_package_checks_and_runtime_omissions() -> None:
         "server/__init__.py",
         "server/app.py",
     ]
-    assert report["checks"] == ["package", "inline_scripts"]
+    assert report["checks"] == ["package", "inline_scripts", "backend_import"]
     assert report["not_checked"] == [
-        "backend_import",
         "backend_factory_execution",
         "migration_execution",
         "browser",
     ]
 
 
-def test_publish_cli_sends_public_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_release_cli_sends_public_mode(release_checkout: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     requests: list[tuple[str, str, dict[str, object] | None]] = []
 
     def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
@@ -873,11 +898,27 @@ def test_publish_cli_sends_public_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("marina.client.requests.request", http_request)
     result = CliRunner().invoke(
         cli,
-        ["publish", str(DEMO_APPLET), "--url", "http://localhost:8080", "--mode", "public", "--json"],
+        [
+            "release",
+            str(release_checkout),
+            "--url",
+            "http://localhost:8080",
+            "--base-version",
+            "0",
+            "--mode",
+            "public",
+            "--json",
+        ],
     )
 
     assert result.exit_code == 0
-    assert requests == [("POST", "http://localhost:8080/api/marina/applets", {"mode": "public"})]
+    assert requests == [
+        (
+            "POST",
+            "http://localhost:8080/api/marina/applets/00000000-0000-0000-0000-000000000001",
+            {"base_version": 0, "mode": "public"},
+        )
+    ]
     assert json.loads(result.output)["mode"] == "public"
 
 

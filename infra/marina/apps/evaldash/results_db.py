@@ -232,7 +232,8 @@ class _CatalogSource:
 
 def migrate_schema(engine: Engine) -> None:
     """Upgrade the schema to what this EvalDash build requires, then check the result."""
-    apply_migrations(engine)
+    with engine.begin() as connection:
+        apply_migrations(connection)
     verify_schema(engine)
 
 

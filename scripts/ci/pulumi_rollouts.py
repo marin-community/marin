@@ -62,7 +62,7 @@ ROLLOUTS = (
             "lib/rigging",
         ),
         # Uploaded packages have their own per-applet release lifecycle.
-        deploy_excluded_roots=("infra/marina/applets", "infra/marina/examples"),
+        deploy_excluded_roots=("infra/marina/apps", "infra/marina/applets", "infra/marina/examples", "infra/marina/web"),
         test_path="infra/marina",
         timeout_minutes=90,
     ),

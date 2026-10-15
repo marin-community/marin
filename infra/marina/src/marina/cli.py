@@ -9,10 +9,11 @@ import subprocess
 import tempfile
 import threading
 from contextlib import nullcontext
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import click
 import pytest
@@ -28,23 +29,20 @@ from marina.applets import (
     read_applet_package,
     validate_backend_import,
 )
-from marina.apps import is_python_app, migration, services_for
-from marina.client import DEFAULT_MARINA_URL, LOCAL_HOSTS, MarinaRequestError, marina_request, publish_applet
-from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
+from marina.client import DEFAULT_MARINA_URL, MarinaRequestError, marina_request, publish_applet
+from marina.database_setup import ensure_applet_provisioning
 from marina.db import (
     DatabaseSpec,
     UrlDatabase,
     database_from_env,
-    deployment_runner_lock,
-    grant_read,
     migration_lock,
     runner_lock,
-    schema_name,
 )
+from marina.jobs import execute_jobs
 from marina.journey_plugin import DEFAULT_SHOTS_DIR, JOURNEYS_DIR
 from marina.journeys import running_kernel
 from marina.local_postgres import docker_database
-from marina.manifest import AppManifest, JobRunner, discover_apps, job_runners
+from marina.preview import install_preview_sources
 from marina.releases import (
     RELEASE_CONFIG,
     RELEASE_METADATA,
@@ -56,11 +54,13 @@ from marina.releases import (
     require_tracked_package,
     source_status,
 )
-from marina.server import APPS_DIR_ENV, MarinaConfig, create_app
+from marina.runtime import load_runtime_config
+from marina.server import MarinaConfig, create_app
+from marina.sources import discover_apps
 from marina.table_load import read_table, table_statements
 
-# The environment wins so the deployed image (MARINA_APPS_DIR=/app/apps) runs `marina migrate` unchanged.
-DEFAULT_APPS_DIR = Path(os.environ.get(APPS_DIR_ENV) or Path(__file__).resolve().parents[2] / "apps")
+# Source inspection and previews use this directory; production serving uses Postgres.
+DEFAULT_APPS_DIR = Path(__file__).resolve().parents[2] / "apps"
 # Where `marina dev` reads app data: one directory per app, mirroring the production bucket.
 DEFAULT_DATA_ROOT = Path(__file__).resolve().parents[2] / ".data"
 DEFAULT_PORT = 8080
@@ -114,96 +114,54 @@ def build(apps_dir: Path, only: tuple[str, ...]) -> None:
 
 
 @cli.command()
-@click.option("--apps-dir", type=click.Path(path_type=Path), default=DEFAULT_APPS_DIR, show_default=True)
-@click.option("--only", multiple=True, help="Migrate only these apps.")
-@click.option("--reader", help="Postgres role to grant read access on every schema migrated.")
-def migrate(apps_dir: Path, only: tuple[str, ...], reader: str | None) -> None:
-    """Run each Python app's migrate() against its schema on the database the environment names."""
+@click.option(
+    "--require-apps", is_flag=True, help="Require the explicitly released named applications before runtime cutover."
+)
+def migrate(require_apps: bool) -> None:
+    """Upgrade Marina's registry; application schemas migrate only during release."""
     database = database_from_env(os.environ)
     if database is None:
         raise click.UsageError("no database configured: set MARINA_DATABASE_URL or CLOUDSQL_CONNECTION")
-    _migrate_apps(discover_apps(apps_dir), database, only, reader)
-
-
-def _migrate_apps(apps: list[AppManifest], database: DatabaseSpec, only: tuple[str, ...], reader: str | None) -> None:
-    with migration_lock(database):
-        applet_store = AppletStore(database)
+    _migrate_registry(database)
+    if require_apps:
+        store = AppletStore(database)
         try:
-            ensure_applet_provisioning(applet_store.engine)
-            applet_store.migrate()
+            actual = {app.name: app.id for app in store.active_applets()}
+            load_runtime_config().require_registrations({name: applet_id for name, applet_id in actual.items() if name})
+        except RuntimeError as error:
+            raise click.ClickException(str(error)) from error
         finally:
-            applet_store.engine.dispose()
-        for app in apps:
-            if only and app.name not in only:
-                continue
-            if not is_python_app(app):
-                continue
-            run = migration(app)
-            if run is None:
-                continue
-            click.echo(f"== {app.name}: migrate")
-            engine = services_for(app, "", database).engine()
-            try:
-                run(engine)
-                grant_read(engine, schema_name(app.name), APPLET_READER_ROLE)
-                if reader:
-                    grant_read(engine, schema_name(app.name), reader)
-            finally:
-                engine.dispose()
+            store.engine.dispose()
 
 
-def _runner(runner_name: str, apps: list[AppManifest]) -> JobRunner:
-    for runner in job_runners(apps):
-        if runner.name == runner_name:
-            return runner
-    raise click.UsageError(f"unknown job runner {runner_name!r}")
+def _migrate_registry(database: DatabaseSpec) -> None:
+    with migration_lock(database):
+        store = AppletStore(database)
+        try:
+            ensure_applet_provisioning(store.engine)
+            store.migrate()
+        finally:
+            store.engine.dispose()
 
 
 @cli.command("run")
 @click.argument("runner_name")
-@click.option("--apps-dir", type=click.Path(path_type=Path), default=DEFAULT_APPS_DIR, show_default=True)
-@click.option("--reader", help="Postgres role to grant read access on every schema migrated.")
-@click.option("--migrate-only", is_flag=True, help="Apply migrations without running app jobs.")
-def run_jobs(runner_name: str, apps_dir: Path, reader: str | None, migrate_only: bool) -> None:
-    """Migrate, then execute every app job assigned to RUNNER_NAME."""
-    apps = discover_apps(apps_dir)
-    selected = _runner(runner_name, apps)
+def run_jobs(runner_name: str) -> None:
+    """Execute the current released modules assigned to a base-runtime runner."""
     database = database_from_env(os.environ)
     if database is None:
         raise click.UsageError("no database configured: set MARINA_DATABASE_URL or CLOUDSQL_CONNECTION")
-
-    lock = deployment_runner_lock(database, runner_name) if migrate_only else runner_lock(database, runner_name)
-    with lock as acquired:
+    with runner_lock(database, runner_name) as acquired:
         if not acquired:
             click.echo(f"runner {runner_name}: another execution holds the lease; skipping")
             return
-        _migrate_apps(apps, database, (), reader)
-        if migrate_only:
-            return
-
-        runner_secrets = {secret for bound in selected.jobs for secret in bound.job.secrets}
-        failures: list[str] = []
-        for bound in selected.jobs:
-            click.echo(f"== {bound.qualified_name}: {' '.join(bound.job.command)}")
-            child_env = dict(os.environ)
-            for secret in runner_secrets - set(bound.job.secrets):
-                child_env.pop(secret, None)
-            try:
-                completed = subprocess.run(
-                    bound.job.command,
-                    cwd=bound.app.root,
-                    env=child_env,
-                    timeout=bound.job.timeout,
-                    check=False,
-                )
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                click.echo(f"{bound.qualified_name}: {exc}", err=True)
-                failures.append(bound.qualified_name)
-                continue
-            if completed.returncode != 0:
-                failures.append(bound.qualified_name)
-        if failures:
-            raise click.ClickException(f"job failures: {', '.join(failures)}")
+        store = AppletStore(database)
+        try:
+            execute_jobs(store, load_runtime_config(), runner_name)
+        except (OSError, RuntimeError, ValueError) as error:
+            raise click.ClickException(str(error)) from error
+        finally:
+            store.engine.dispose()
 
 
 def _publish_package(
@@ -285,11 +243,11 @@ def _print_publish_result(result: dict[str, object], service_url: str, *, json_o
     click.echo(result["url"])
 
 
-def _serve_local_applet(payload: bytes, *, mode: AppletMode | None, json_output: bool) -> None:
+def _serve_local_applet(payload: bytes, *, applet_id: str, mode: AppletMode | None, json_output: bool) -> None:
     try:
         with docker_database() as database_url:
             database = UrlDatabase(database_url)
-            _migrate_apps([], database, (), None)
+            _migrate_registry(database)
             with tempfile.TemporaryDirectory(prefix="marina-local-applet-") as directory:
                 root = Path(directory)
                 apps_dir = root / "apps"
@@ -297,13 +255,19 @@ def _serve_local_applet(payload: bytes, *, mode: AppletMode | None, json_output:
                 apps_dir.mkdir()
                 data_root.mkdir()
                 config = MarinaConfig(
-                    apps_dir=apps_dir,
                     data_root=str(data_root),
                     iap_audience=None,
                     database=database,
+                    runtime=load_runtime_config(),
                 )
                 with running_kernel(config) as kernel:
-                    result = publish_applet(kernel.origin, payload, mode=mode.value if mode is not None else None)
+                    result = publish_applet(
+                        kernel.origin,
+                        payload,
+                        applet_id=applet_id,
+                        base_version=0,
+                        mode=mode.value if mode is not None else None,
+                    )
                     _print_publish_result(result, kernel.origin, json_output=json_output)
                     click.echo("Serving until Ctrl-C; Postgres and Marina will be removed on exit.", err=True)
                     try:
@@ -319,97 +283,79 @@ def _serve_local_applet(payload: bytes, *, mode: AppletMode | None, json_output:
 
 @cli.command()
 @click.argument("app_dir", type=click.Path(path_type=Path, file_okay=False, exists=True))
+@click.option("--base-version", type=int, help="Expected live revision; use 0 for the first release.")
+@click.option("--id", "explicit_id", help="Stable UUID for an applet without a release.toml declaration.")
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
-@click.option("--update", "applet_id", default=None, help="Applet UUID to update.")
-@click.option("--base-version", type=int, default=None, help="Current version required by an update.")
-@click.option(
-    "--mode",
-    type=click.Choice([mode.value for mode in AppletMode]),
-    default=None,
-    help="Access mode. New applets default to private; updates preserve the current mode when omitted.",
-)
-@click.option("--build/--no-build", default=True, help="Run a declared build_command before packaging.")
-@click.option("--local", is_flag=True, help="Run this applet against disposable Postgres and Marina.")
-@click.option("--dry-run", is_flag=True, help="Run package-only validation and print contents without publishing.")
-@click.option("--json", "json_output", is_flag=True, help="Print the publish result as JSON.")
-def publish(
+@click.option("--mode", type=click.Choice([mode.value for mode in AppletMode]), default=None)
+@click.option("--local", is_flag=True, help="Preview using disposable Postgres and Marina.")
+@click.option("--dry-run", is_flag=True, help="Build and validate without releasing.")
+@click.option("--json", "json_output", is_flag=True)
+def release(
     app_dir: Path,
-    service_url: str,
-    applet_id: str | None,
     base_version: int | None,
+    explicit_id: str | None,
+    service_url: str,
     mode: str | None,
-    build: bool,
     local: bool,
     dry_run: bool,
     json_output: bool,
 ) -> None:
-    """Publish a built applet directory and print its URL."""
-    if (
-        not local
-        and not dry_run
-        and urlparse(service_url).hostname not in LOCAL_HOSTS
-        and (app_dir / RELEASE_CONFIG).exists()
-    ):
-        raise click.UsageError("This applet has release.toml; use `marina release` for production updates.")
-    if local:
-        if dry_run:
-            raise click.UsageError("--local cannot be combined with --dry-run")
-        if applet_id is not None or base_version is not None:
-            raise click.UsageError("--local cannot be combined with --update or --base-version")
-    payload, package = _publish_package(app_dir, build=build)
-    if local:
-        _serve_local_applet(payload, mode=AppletMode(mode) if mode is not None else None, json_output=json_output)
-        return
-    if dry_run:
-        _print_validation_report(package, backend_import_checked=False, json_output=json_output)
-        return
-    if (applet_id is None) != (base_version is None):
-        raise click.UsageError("--update and --base-version must be supplied together")
+    """Build and release one application to its declared stable UUID."""
+    if local and dry_run:
+        raise click.UsageError("--local cannot be combined with --dry-run")
+    if not local and not dry_run and base_version is None:
+        raise click.UsageError("Supply --base-version; use 0 for the first release")
+    publishing = not local and not dry_run
+    registered = (app_dir / RELEASE_CONFIG).exists()
+    guarded = publishing and registered
     try:
-        result = publish_applet(
-            service_url,
-            payload,
-            applet_id=applet_id,
-            base_version=base_version,
-            mode=mode,
-        )
-    except RuntimeError as error:
-        raise click.ClickException(str(error)) from error
-    _print_publish_result(result, service_url, json_output=json_output)
-
-
-@cli.command()
-@click.argument("app_dir", type=click.Path(path_type=Path, file_okay=False, exists=True))
-@click.option("--base-version", required=True, type=int, help="The live revision inspected before this release.")
-@click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
-@click.option("--json", "json_output", is_flag=True)
-def release(app_dir: Path, base_version: int, service_url: str, json_output: bool) -> None:
-    """Release a registered applet from a clean, current main checkout."""
-    try:
-        applet_id = release_applet_id(app_dir)
-        require_current_main(app_dir)
-        source = release_source(app_dir)
+        source = release_source(app_dir) if guarded else None
+        if guarded:
+            require_current_main(app_dir)
         manifest = parse_applet_manifest((app_dir / APPLET_MANIFEST).read_bytes())
+        extra_files = {RELEASE_METADATA: json.dumps(asdict(source)).encode()} if source is not None else None
         build_context = clean_frontend_build(app_dir) if manifest.build_command is not None else nullcontext()
         with build_context:
-            payload, package = _publish_package(
-                app_dir, build=True, extra_files={RELEASE_METADATA: json.dumps(asdict(source)).encode()}
+            payload, package = _publish_package(app_dir, build=True, extra_files=extra_files)
+        if guarded:
+            require_tracked_package(
+                app_dir, package.files.keys() - {RELEASE_METADATA}, build_command=package.manifest.build_command
             )
-        require_tracked_package(
-            app_dir, package.files.keys() - {RELEASE_METADATA}, build_command=package.manifest.build_command
-        )
-        if package.manifest.python_entrypoint is not None:
+        if package.manifest.python_entrypoint is not None or package.manifest.jobs:
             validate_backend_import(package)
-        # Builds may change tracked files or take long enough for main to advance.
-        if require_current_main(app_dir) != source.commit:
+        if dry_run:
+            _print_validation_report(
+                package, backend_import_checked=package.manifest.python_entrypoint is not None, json_output=json_output
+            )
+            return
+        if local:
+            _serve_local_applet(
+                payload,
+                applet_id=release_applet_id(app_dir) if registered else str(uuid4()),
+                mode=AppletMode(mode) if mode is not None else None,
+                json_output=json_output,
+            )
+            return
+        if registered:
+            applet_id = release_applet_id(app_dir)
+            if explicit_id is not None and explicit_id != applet_id:
+                raise ValueError("--id differs from the source directory's release.toml")
+        elif explicit_id is not None:
+            applet_id = explicit_id
+        elif base_version == 0:
+            applet_id = str(uuid4())
+        else:
+            raise ValueError("Supply --id for updates, or commit a release.toml declaration")
+        if guarded and source is not None and require_current_main(app_dir) != source.commit:
             raise RuntimeError("The checkout changed while building; retry the release.")
-        result = publish_applet(service_url, payload, applet_id=applet_id, base_version=base_version)
+        result = publish_applet(service_url, payload, applet_id=applet_id, base_version=base_version, mode=mode)
     except subprocess.CalledProcessError as error:
         detail = error.stderr.decode(errors="replace").strip() if isinstance(error.stderr, bytes) else error.stderr
         raise click.ClickException(detail or str(error)) from error
     except (OSError, RuntimeError, ValueError) as error:
         raise click.ClickException(str(error)) from error
-    result["source"] = asdict(source)
+    if source is not None:
+        result["source"] = asdict(source)
     _print_publish_result(result, service_url, json_output=json_output)
 
 
@@ -632,10 +578,11 @@ def load_applet_table(applet_id: str, table_name: str, source: Path, replace: bo
 @click.option("--host", default="127.0.0.1", show_default=True)
 def dev(apps_dir: Path, data_root: str, port: int, host: str) -> None:
     """Serve the apps on loopback with the anonymous admin identity."""
-    config = MarinaConfig(
-        apps_dir=apps_dir, data_root=data_root, iap_audience=None, database=database_from_env(os.environ)
-    )
-    uvicorn.run(create_app(config), host=host, port=port)
+    with docker_database() as database_url:
+        database = UrlDatabase(database_url)
+        install_preview_sources(apps_dir, database)
+        config = MarinaConfig(data_root=data_root, iap_audience=None, database=database)
+        uvicorn.run(create_app(config), host=host, port=port)
 
 
 @cli.command()
@@ -679,14 +626,20 @@ def journey(
 
 
 @cli.command()
-def serve() -> None:
+@click.option("--host", default="0.0.0.0", show_default=True)
+@click.option("--local-publisher", help="Owner ID for one-time bootstrap through a loopback operator kernel.")
+def serve(host: str, local_publisher: str | None) -> None:
     """Serve for production: configuration from the environment, bound on all interfaces."""
-    config = MarinaConfig.from_env(DEFAULT_APPS_DIR)
+    config = MarinaConfig.from_env()
+    if local_publisher is not None:
+        if host != "127.0.0.1" or config.iap_audience is not None or os.environ.get("K_SERVICE"):
+            raise click.UsageError("--local-publisher requires --host 127.0.0.1 outside Cloud Run and IAP")
+        config = replace(config, local_publisher=local_publisher)
     click.echo(
-        f"marina: apps from {config.apps_dir}, data from {config.data_root}, "
+        f"marina: released packages from Postgres, data from {config.data_root}, "
         f"IAP audience {config.iap_audience or 'unset'}"
     )
-    uvicorn.run(create_app(config), host="0.0.0.0", port=int(os.environ.get("PORT", DEFAULT_PORT)))
+    uvicorn.run(create_app(config), host=host, port=int(os.environ.get("PORT", DEFAULT_PORT)))
 
 
 if __name__ == "__main__":

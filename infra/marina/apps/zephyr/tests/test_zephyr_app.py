@@ -22,8 +22,11 @@ from fastapi.testclient import TestClient
 from finelog.client import LogClient, StatsError
 from finelog.embedded import require_embedded_server
 from marina.apps import Services, create_api
-from marina.manifest import load_manifest
+from marina.db import UrlDatabase
+from marina.preview import install_preview_sources
 from marina.server import MarinaConfig, create_app
+from marina.sources import load_manifest
+from marina.testing import isolated_database
 
 APP = Path(__file__).resolve().parents[1]
 EXECUTION = "20260910-195311-32c9cebb"
@@ -205,16 +208,18 @@ def test_finelog_read_retries_after_log_client_invalidates_its_transport():
         finelog._client.close()
 
 
-def test_marina_mount_serves_zephyr_api(finelog, monkeypatch, tmp_path):
+def test_marina_mount_serves_zephyr_api(finelog, monkeypatch, tmp_path, database_url):
     monkeypatch.setenv("ZEPHYR_FINELOG_URL", finelog)
     apps_dir = tmp_path / "apps"
     apps_dir.mkdir()
     (apps_dir / "zephyr").symlink_to(APP, target_is_directory=True)
-    config = MarinaConfig(apps_dir=apps_dir, data_root=str(tmp_path / "data"), iap_audience=None)
-
-    with TestClient(create_app(config), client=("127.0.0.1", 40000)) as client:
-        assert client.get("/zephyr/api/health").json()["plan_records"] is True
-        assert client.get("/api/marina/apps").json()["apps"][0]["path"] == "/zephyr/"
+    with isolated_database(database_url) as local_url:
+        database = UrlDatabase(local_url)
+        install_preview_sources(apps_dir, database)
+        config = MarinaConfig(data_root=str(tmp_path / "data"), iap_audience=None, database=database)
+        with TestClient(create_app(config), client=("127.0.0.1", 40000)) as client:
+            assert client.get("/zephyr/api/health").json()["plan_records"] is True
+            assert client.get("/api/marina/apps").json()["apps"][0]["path"] == "/zephyr/"
 
 
 def test_executions_dedupe_by_execution_and_filter_by_root_job(api):

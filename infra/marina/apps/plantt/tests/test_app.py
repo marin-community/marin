@@ -25,8 +25,10 @@ class FakeServices(Services):
 
 def client() -> TestClient:
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    plantt.migrate(engine)
-    plantt.migrate(engine)
+    with engine.begin() as migration_connection:
+        plantt.migrate(migration_connection)
+    with engine.begin() as migration_connection:
+        plantt.migrate(migration_connection)
     api = cast(FastAPI, plantt.create_api(FakeServices(engine)).app)
     return TestClient(api)
 

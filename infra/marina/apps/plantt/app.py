@@ -14,7 +14,7 @@ from marina.mcp import OperationRisk, operation_extension
 from pydantic import BaseModel, ConfigDict
 from rigging.server_auth import get_verified_user
 from sqlalchemy import JSON, BigInteger, Column, DateTime, MetaData, String, Table, Uuid, delete, select, update
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
 CHART_TITLE_MAX_LENGTH = 300
@@ -78,9 +78,9 @@ class ChartSchema(BaseModel):
     milestone: dict[str, str]
 
 
-def migrate(engine: Engine) -> None:
+def migrate(connection: Connection) -> None:
     """Create the app-owned chart table."""
-    metadata.create_all(engine)
+    metadata.create_all(connection)
 
 
 def _validate_document(document: dict[str, Any]) -> None:

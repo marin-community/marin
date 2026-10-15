@@ -46,7 +46,8 @@ def test_an_unmigrated_schema_is_named_rather_than_failing_on_the_first_query(en
 
 
 def test_the_mounted_api_serves_what_the_reconciler_committed(engine, records, database_url, monkeypatch):
-    evaldash_app.migrate(engine)
+    with engine.begin() as migration_connection:
+        evaldash_app.migrate(migration_connection)
     monkeypatch.setenv("RECORDS_PREFIXES", records)
     monkeypatch.delenv("EVALDASH_STORE", raising=False)
     monkeypatch.setenv("EVALDASH_INGEST_JOB", "projects/hai-gcp-models/locations/us-central1/jobs/marina-evaldash")
@@ -83,7 +84,8 @@ def test_the_mounted_api_serves_what_the_reconciler_committed(engine, records, d
 
 
 def test_a_second_instance_serves_the_generation_the_first_committed(engine, records):
-    evaldash_app.migrate(engine)
+    with engine.begin() as migration_connection:
+        evaldash_app.migrate(migration_connection)
     config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": records})
     writer = evaldash_app.PgRecordStore(engine)
     now = [0.0]
@@ -110,7 +112,8 @@ def test_a_second_instance_serves_the_generation_the_first_committed(engine, rec
 
 
 def test_catalog_check_failure_serves_cached_snapshot_until_retry(engine, records, monkeypatch):
-    evaldash_app.migrate(engine)
+    with engine.begin() as migration_connection:
+        evaldash_app.migrate(migration_connection)
     config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": records})
     asyncio.run(
         evaldash_app.PostgresIngestor(

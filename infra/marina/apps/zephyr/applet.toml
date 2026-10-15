@@ -1,3 +1,5 @@
+name = "zephyr"
+python_entrypoint = "backend.app:create_api"
 title = "Zephyr"
 description = "Inspect Zephyr execution plans and live pipeline telemetry. Follow stage progress and investigate reducer workload and skew."
 connect_src = []

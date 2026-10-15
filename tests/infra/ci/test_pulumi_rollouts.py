@@ -18,7 +18,6 @@ from scripts.ci.pulumi_rollouts import (
 @pytest.mark.parametrize(
     "changed_path",
     [
-        "infra/marina/apps/evaldash/samples.py",
         "lib/finestore/src/finestore/reader.py",
         "lib/marin/src/marin/evaluation/archive.py",
         "lib/iris/src/iris/rpc/controller_connect.py",
@@ -37,9 +36,11 @@ def test_marina_rollout_ignores_marin_modules_outside_the_image() -> None:
 @pytest.mark.parametrize(
     "changed_path",
     [
+        "infra/marina/apps/evaldash/samples.py",
         "infra/marina/applets/rl_data_catalog/server/app.py",
         "infra/marina/applets/filer/dist/app.js",
         "infra/marina/examples/problem-set-applet/applet.toml",
+        "infra/marina/web/src/components/AppShell.vue",
     ],
 )
 def test_applet_changes_do_not_roll_out_the_shared_runtime(changed_path: str) -> None:

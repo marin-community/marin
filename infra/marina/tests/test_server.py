@@ -6,14 +6,26 @@ import gzip
 import sys
 from dataclasses import replace
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
+from marina.applet_mcp import ReleasedApplications
+from marina.applets import (
+    AppletConflict,
+    AppletForbidden,
+    AppletRuntime,
+    AppletStore,
+    package_applet,
+    read_applet_package,
+)
 from marina.apps import create_api as create_registered_api
 from marina.apps import services_for
-from marina.manifest import discover_apps, job_runners, load_manifest
+from marina.db import UrlDatabase
 from marina.mcp import marina_mcp
+from marina.preview import install_preview_sources
+from marina.runtime import JobPermission, JobRunner, RuntimeConfig
 from marina.server import (
     AGENT_ORIGIN_ENV,
     CANONICAL_ORIGIN_ENV,
@@ -27,8 +39,9 @@ from marina.server import (
     MarinaConfig,
     MarinaSurface,
     create_app,
-    serve_app_file,
 )
+from marina.sources import discover_apps, load_manifest
+from marina.testing import isolated_database
 from mcp_types import LATEST_PROTOCOL_VERSION
 from rigging.server_auth import ANONYMOUS_ADMIN, identity_scope
 from starlette.testclient import TestClient
@@ -44,7 +57,7 @@ build_command = "true"
 def write_app(apps_dir: Path, name: str, manifest: str = TASKTROVE_MANIFEST, built: bool = True) -> Path:
     root = apps_dir / name
     root.mkdir(parents=True)
-    (root / "app.toml").write_text(manifest)
+    (root / "applet.toml").write_text(f'name = "{name}"\n' + manifest)
     if built:
         (root / "dist" / "static").mkdir(parents=True)
         (root / "dist" / "index.html").write_text("<title>TaskTrove</title>")
@@ -59,6 +72,7 @@ def write_api_app(apps_dir: Path, name: str) -> Path:
     sys.modules.pop(name, None)
     root = write_app(apps_dir, name)
     (root / "__init__.py").write_text("")
+    (root / "applet.toml").write_text((root / "applet.toml").read_text() + 'python_entrypoint = "app:create_api"\n')
     (root / "app.py").write_text(
         """from fastapi import FastAPI, Request
 from marina.apps import RegisteredApi, Services, registered_api
@@ -118,17 +132,24 @@ def create_api(_services: Services) -> RegisteredApi:
     return root
 
 
-def config_for(tmp_path: Path) -> MarinaConfig:
+def config_for(tmp_path: Path, source_database: str) -> MarinaConfig:
     data_root = tmp_path / "data"
     (data_root / "tasktrove").mkdir(parents=True, exist_ok=True)
-    return MarinaConfig(apps_dir=tmp_path / "apps", data_root=str(data_root), iap_audience=None)
+    database = UrlDatabase(source_database)
+    install_preview_sources(tmp_path / "apps", database)
+    return MarinaConfig(data_root=str(data_root), iap_audience=None, database=database)
 
 
 @pytest.fixture
-def client(tmp_path: Path) -> TestClient:
+def source_database(database_url: str):
+    with isolated_database(database_url) as url:
+        yield url
+
+
+@pytest.fixture
+def client(tmp_path: Path, source_database: str) -> TestClient:
     write_app(tmp_path / "apps", "tasktrove")
-    write_app(tmp_path / "apps", "unbuilt", built=False)
-    config = config_for(tmp_path)
+    config = config_for(tmp_path, source_database)
     (tmp_path / "data" / "tasktrove" / "sources.json").write_text('[{"source": "a"}]')
     (tmp_path / "data" / "tasktrove" / "tasks.parquet").write_bytes(b"0123456789")
     with gzip.open(tmp_path / "data" / "tasktrove" / "labels.json.gz", "wt") as f:
@@ -163,78 +184,6 @@ starters = ["What is on this page?"]
     assert manifest.agent.starters == ("What is on this page?",)
 
 
-def test_manifest_groups_jobs_by_runner_in_stable_order(tmp_path: Path) -> None:
-    job = """
-[[jobs]]
-name = "refresh"
-runner = "hourly"
-schedule = "0 * * * *"
-command = ["python", "-m", "worker"]
-timeout = 60
-cpu = 2
-memory_gib = 3
-secrets = ["TOKEN"]
-"""
-    write_app(tmp_path, "zeta", manifest=TASKTROVE_MANIFEST + job)
-    alpha_job = (
-        job.replace('name = "refresh"', 'name = "sync"')
-        .replace("cpu = 2", "cpu = 1")
-        .replace("memory_gib = 3", "memory_gib = 1")
-    )
-    write_app(tmp_path, "alpha", manifest=TASKTROVE_MANIFEST + alpha_job)
-
-    (runner,) = job_runners(discover_apps(tmp_path))
-
-    assert runner.name == "hourly"
-    assert runner.schedule == "0 * * * *"
-    assert runner.timeout == 420
-    assert runner.cpu == 2
-    assert runner.memory_gib == 3
-    assert [bound.qualified_name for bound in runner.jobs] == ["alpha.sync", "zeta.refresh"]
-    assert [bound.resource_env for bound in runner.jobs] == ["ALPHA_SYNC_JOB", "ZETA_REFRESH_JOB"]
-
-
-@pytest.mark.parametrize(
-    "job",
-    [
-        'name = "bad_name"\nrunner = "hourly"\nschedule = "0 * * * *"\ncommand = ["x"]\n'
-        "timeout = 1\ncpu = 1\nmemory_gib = 1",
-        'name = "ok"\nrunner = "hourly"\nschedule = "hourly"\ncommand = ["x"]\n' "timeout = 1\ncpu = 1\nmemory_gib = 1",
-        'name = "ok"\nrunner = "hourly"\nschedule = "0 * * * *"\ncommand = []\n' "timeout = 1\ncpu = 1\nmemory_gib = 1",
-        'name = "ok"\nrunner = "hourly"\nschedule = "0 * * * *"\ncommand = ["x"]\n'
-        "timeout = 0\ncpu = 1\nmemory_gib = 1",
-        'name = "ok"\nrunner = "hourly"\nschedule = "0 * * * *"\ncommand = ["x"]\n'
-        "timeout = 1\ncpu = 0\nmemory_gib = 1",
-    ],
-)
-def test_manifest_rejects_invalid_jobs(tmp_path: Path, job: str) -> None:
-    root = write_app(tmp_path, "bad", manifest=TASKTROVE_MANIFEST + f"\n[[jobs]]\n{job}\n")
-    with pytest.raises(ValueError):
-        load_manifest(root)
-
-
-def test_runner_rejects_conflicting_schedules(tmp_path: Path) -> None:
-    first = (
-        TASKTROVE_MANIFEST
-        + """
-[[jobs]]
-name = "first"
-runner = "shared"
-schedule = "0 * * * *"
-command = ["x"]
-timeout = 1
-cpu = 1
-memory_gib = 1
-"""
-    )
-    second = first.replace('name = "first"', 'name = "second"').replace("0 * * * *", "30 * * * *")
-    write_app(tmp_path, "alpha", manifest=first)
-    write_app(tmp_path, "beta", manifest=second)
-
-    with pytest.raises(ValueError):
-        job_runners(discover_apps(tmp_path))
-
-
 def test_discovery_skips_underscore_dirs(tmp_path: Path) -> None:
     write_app(tmp_path, "tasktrove")
     (tmp_path / "_shared").mkdir()
@@ -243,12 +192,12 @@ def test_discovery_skips_underscore_dirs(tmp_path: Path) -> None:
 
 def test_app_directory_and_identity(client: TestClient) -> None:
     apps = client.get("/api/marina/apps").json()["apps"]
-    assert [app["path"] for app in apps] == ["/tasktrove/", "/unbuilt/"]
+    assert [app["path"] for app in apps] == ["/tasktrove/"]
     me = client.get("/api/marina/me").json()
     assert me == {"user": "anonymous", "role": "admin"}
 
 
-def test_agent_config_and_csp_are_enabled_by_app_manifest(tmp_path: Path) -> None:
+def test_agent_config_and_csp_are_enabled_by_app_manifest(tmp_path: Path, source_database: str) -> None:
     manifest = (
         TASKTROVE_MANIFEST
         + """
@@ -261,7 +210,7 @@ starters = ["What is on this page?"]
     write_app(tmp_path / "apps", "tasktrove", manifest=manifest)
     write_app(tmp_path / "apps", "plain")
     config = replace(
-        config_for(tmp_path),
+        config_for(tmp_path, source_database),
         agent_panel=AgentPanelService("https://loom.example"),
     )
 
@@ -278,9 +227,9 @@ starters = ["What is on this page?"]
         assert "https://loom.example" not in configured.get("/plain/").headers["content-security-policy"]
 
 
-def test_agent_origin_rejects_insecure_remote_service(tmp_path: Path) -> None:
+def test_agent_origin_rejects_insecure_remote_service(tmp_path: Path, source_database: str) -> None:
     write_app(tmp_path / "apps", "tasktrove")
-    config = replace(config_for(tmp_path), agent_panel=AgentPanelService("http://loom.example"))
+    config = replace(config_for(tmp_path, source_database), agent_panel=AgentPanelService("http://loom.example"))
 
     with pytest.raises(ValueError, match=AGENT_ORIGIN_ENV):
         create_app(config)
@@ -341,9 +290,9 @@ def test_registered_application_is_searchable_and_callable_over_mcp(tmp_path: Pa
     assert [tool["name"] for tool in found_read.data] == ["tasktrove_whoami"]
 
 
-def test_mcp_is_served_over_authenticated_streamable_http(tmp_path: Path) -> None:
+def test_mcp_is_served_over_authenticated_streamable_http(tmp_path: Path, source_database: str) -> None:
     write_api_app(tmp_path / "apps", "tasktrove")
-    with TestClient(create_app(config_for(tmp_path)), client=("127.0.0.1", 40000)) as client:
+    with TestClient(create_app(config_for(tmp_path, source_database)), client=("127.0.0.1", 40000)) as client:
         response = client.post(
             f"{MCP_PATH}/",
             headers={"accept": "application/json, text/event-stream"},
@@ -402,22 +351,12 @@ def test_static_file_and_spa_fallback(client: TestClient) -> None:
     assert client.get("/tasktrove", follow_redirects=False).headers["location"] == "/tasktrove/"
 
 
-def test_path_traversal_falls_back_to_index(tmp_path: Path) -> None:
-    app = load_manifest(write_app(tmp_path, "tasktrove"))
-    response = serve_app_file(app, "../app.toml")
-    assert Path(response.path) == app.dist / "index.html"
-
-
 def test_precompressed_file_served_with_encoding(client: TestClient) -> None:
     response = client.get("/tasktrove/labels.json")
     assert response.status_code == 200
     assert response.headers["content-encoding"] == "gzip"
     assert response.headers["content-type"] == "application/json"
     assert response.json() == {"a": 1}
-
-
-def test_unbuilt_app_reports_503(client: TestClient) -> None:
-    assert client.get("/unbuilt/").status_code == 503
 
 
 def test_data_files_come_from_the_data_root(client: TestClient) -> None:
@@ -430,7 +369,7 @@ def test_data_files_come_from_the_data_root(client: TestClient) -> None:
     assert client.get("/tasktrove/data/..%2Fother%2Fx").status_code == 404
 
 
-def test_data_files_come_from_the_manifest_url(tmp_path: Path) -> None:
+def test_data_files_come_from_the_manifest_url(tmp_path: Path, source_database: str) -> None:
     app_data = tmp_path / "release"
     app_data.mkdir()
     (app_data / "manifest.json").write_text('{"clean_tasks": 1450969}')
@@ -439,11 +378,7 @@ def test_data_files_come_from_the_manifest_url(tmp_path: Path) -> None:
         "tasktrove",
         manifest=TASKTROVE_MANIFEST + f'data_url = "{app_data}"\n',
     )
-    config = MarinaConfig(
-        apps_dir=tmp_path / "apps",
-        data_root=str(tmp_path / "unused"),
-        iap_audience=None,
-    )
+    config = replace(config_for(tmp_path, source_database), data_root=str(tmp_path / "unused"))
 
     with TestClient(create_app(config), client=("127.0.0.1", 40000)) as app_client:
         response = app_client.get("/tasktrove/data/manifest.json")
@@ -494,9 +429,9 @@ def test_data_file_range_uses_s3_compatible_arguments(client: TestClient, monkey
     assert response.content == b"2345"
 
 
-def test_non_loopback_without_iap_is_denied(tmp_path: Path) -> None:
+def test_non_loopback_without_iap_is_denied(tmp_path: Path, source_database: str) -> None:
     write_app(tmp_path / "apps", "tasktrove")
-    app = create_app(config_for(tmp_path))
+    app = create_app(config_for(tmp_path, source_database))
     remote = TestClient(app, client=("10.0.0.7", 1234))
     assert remote.get("/api/marina/me").status_code == 401
     assert remote.post(f"{MCP_PATH}/").status_code == 401
@@ -509,32 +444,32 @@ def test_public_applet_cloud_run_config_does_not_require_iap(tmp_path: Path, mon
     monkeypatch.setenv(MARINA_SURFACE_ENV, MarinaSurface.PUBLIC_APPLETS)
     monkeypatch.delenv(IAP_AUDIENCE_ENV, raising=False)
 
-    config = MarinaConfig.from_env(tmp_path / "apps")
+    config = MarinaConfig.from_env()
 
     assert config.iap_audience is None
     assert config.surface is MarinaSurface.PUBLIC_APPLETS
 
 
-def test_an_app_named_for_a_kernel_route_is_rejected(tmp_path: Path) -> None:
+def test_an_app_named_for_a_kernel_route_is_rejected(tmp_path: Path, source_database: str) -> None:
     # The kernel's routes are installed first and FastAPI keeps the first match, so such an
     # app would silently lose those paths rather than fail.
     write_app(tmp_path / "apps", "healthz")
     with pytest.raises(ValueError, match="healthz"):
-        create_app(config_for(tmp_path))
+        create_app(config_for(tmp_path, source_database))
 
 
-def aliased_client(tmp_path: Path) -> TestClient:
+def aliased_client(tmp_path: Path, source_database: str) -> TestClient:
     write_api_app(tmp_path / "apps", "tasktrove")
     config = replace(
-        config_for(tmp_path),
+        config_for(tmp_path, source_database),
         host_apps={"old.example": "tasktrove"},
         canonical_origin="https://marina.example",
     )
     return TestClient(create_app(config), client=("127.0.0.1", 40000))
 
 
-def test_aliased_host_redirects_into_its_app_on_the_canonical_origin(tmp_path: Path) -> None:
-    client = aliased_client(tmp_path)
+def test_aliased_host_redirects_into_its_app_on_the_canonical_origin(tmp_path: Path, source_database: str) -> None:
+    client = aliased_client(tmp_path, source_database)
     response = client.get("/wiki/59?x=1", headers={"host": "old.example"}, follow_redirects=False)
     assert response.status_code == 307
     assert response.headers["location"] == "https://marina.example/tasktrove/wiki/59?x=1"
@@ -542,24 +477,24 @@ def test_aliased_host_redirects_into_its_app_on_the_canonical_origin(tmp_path: P
     assert client.get("/", headers={"host": "other.example"}).status_code == 200
 
 
-def test_aliased_host_does_not_prefix_a_path_already_inside_its_app(tmp_path: Path) -> None:
+def test_aliased_host_does_not_prefix_a_path_already_inside_its_app(tmp_path: Path, source_database: str) -> None:
     # A link written or cached against the alias's own prefix must not collect a second copy.
-    client = aliased_client(tmp_path)
+    client = aliased_client(tmp_path, source_database)
     for path in ("/tasktrove", "/tasktrove/", "/tasktrove/wiki/59"):
         response = client.get(path, headers={"host": "old.example"}, follow_redirects=False)
         assert response.headers["location"] == f"https://marina.example{path}"
 
 
-def test_aliased_host_keeps_another_apps_name_inside_its_own_app(tmp_path: Path) -> None:
+def test_aliased_host_keeps_another_apps_name_inside_its_own_app(tmp_path: Path, source_database: str) -> None:
     # The alias belongs to one app, so a path is that app's even when it reads like another
     # app's name: an app could otherwise shadow a route the alias's own app serves.
-    client = aliased_client(tmp_path)
+    client = aliased_client(tmp_path, source_database)
     response = client.get("/notes/", headers={"host": "old.example"}, follow_redirects=False)
     assert response.headers["location"] == "https://marina.example/tasktrove/notes/"
 
 
-def test_aliased_host_serves_legacy_api_path_without_a_redirect(tmp_path: Path) -> None:
-    client = aliased_client(tmp_path)
+def test_aliased_host_serves_legacy_api_path_without_a_redirect(tmp_path: Path, source_database: str) -> None:
+    client = aliased_client(tmp_path, source_database)
     response = client.post(
         "/api/feedback?execution=17",
         headers={"host": "old.example", "x-request-id": "request-42"},
@@ -570,14 +505,150 @@ def test_aliased_host_serves_legacy_api_path_without_a_redirect(tmp_path: Path) 
     assert response.json() == {"body": {"grade": 10}, "query": "17", "request_id": "request-42"}
 
 
-def test_a_page_whose_path_merely_starts_with_an_app_still_redirects(tmp_path: Path) -> None:
-    client = aliased_client(tmp_path)
+def test_a_page_whose_path_merely_starts_with_an_app_still_redirects(tmp_path: Path, source_database: str) -> None:
+    client = aliased_client(tmp_path, source_database)
     response = client.get("/wiki/api/59", headers={"host": "old.example"}, follow_redirects=False)
     assert response.status_code == 307
 
 
-def test_aliased_hosts_need_a_canonical_origin(tmp_path: Path) -> None:
+def test_aliased_hosts_need_a_canonical_origin(tmp_path: Path, source_database: str) -> None:
     write_app(tmp_path / "apps", "tasktrove")
-    config = replace(config_for(tmp_path), host_apps={"old.example": "tasktrove"})
+    config = replace(config_for(tmp_path, source_database), host_apps={"old.example": "tasktrove"})
     with pytest.raises(ValueError, match=CANONICAL_ORIGIN_ENV):
         create_app(config)
+
+
+def test_named_release_updates_workers_and_mcp_without_restart(tmp_path: Path, source_database: str) -> None:
+    source = write_api_app(tmp_path / "apps", "tasktrove")
+    old_chunk = source / "dist/static/old.123.js"
+    old_chunk.write_text("old_chunk()")
+    config = config_for(tmp_path, source_database)
+    store = AppletStore(UrlDatabase(source_database))
+    selected = store.named_applet("tasktrove")
+    with (
+        TestClient(create_app(config), client=("127.0.0.1", 40000)) as first_worker,
+        TestClient(create_app(config), client=("127.0.0.1", 40000)) as second_worker,
+    ):
+        assert first_worker.get("/tasktrove/api/whoami").json() == {"user": "anonymous"}
+        runtime = AppletRuntime(store, config.data_root)
+        server = marina_mcp({}, providers=[ReleasedApplications(store, runtime, read_only=True)])
+
+        async def exercise_release():
+            async with Client(server) as mcp:
+                before = await mcp.call_tool("find_tool", {"query": "verified Marina caller"})
+                (source / "app.py").write_text(
+                    (source / "app.py")
+                    .read_text()
+                    .replace('operation_id="whoami"', 'operation_id="whoami_v2"')
+                    .replace(
+                        "IdentityResponse(user=get_verified_identity().user_id)", 'IdentityResponse(user="revision-two")'
+                    )
+                )
+                old_chunk.unlink()
+                (source / "dist/index.html").write_text("<h1>Revision two</h1>")
+                released = second_worker.post(
+                    f"/api/marina/applets/{selected.id}", params={"base_version": 1}, content=package_applet(source)
+                )
+                assert released.status_code == 201, released.text
+                after = await mcp.call_tool("find_tool", {"query": "verified Marina caller"})
+                called = await mcp.call_tool("call_tool", {"name": "tasktrove_whoami_v2", "arguments": {}})
+                return before.data, after.data, called.data
+
+        with identity_scope(ANONYMOUS_ADMIN):
+            before, after, called = asyncio.run(exercise_release())
+        assert [tool["name"] for tool in before] == ["tasktrove_whoami"]
+        assert [tool["name"] for tool in after] == ["tasktrove_whoami_v2"]
+        assert called == {"user": "revision-two"}
+        assert first_worker.get("/tasktrove/api/whoami").json() == {"user": "revision-two"}
+        assert first_worker.get("/tasktrove/static/old.123.js").text == "old_chunk()"
+        page = first_worker.get("/tasktrove/")
+        assert page.text == "<h1>Revision two</h1>"
+        assert page.headers["cache-control"] == "private, no-cache"
+        # Files on disk and an unrelated application release cannot select this app's revision.
+        (source / "app.py").write_text('raise RuntimeError("unreleased source")')
+        other = write_app(tmp_path / "other", "other")
+        store.publish(read_applet_package(package_applet(other)), "anonymous", operators=frozenset({"anonymous"}))
+        with TestClient(create_app(config), client=("127.0.0.1", 40000)) as restarted:
+            assert restarted.get("/tasktrove/api/whoami").json() == {"user": "revision-two"}
+            assert restarted.get("/tasktrove/").text == "<h1>Revision two</h1>"
+        assert store.current_version(selected.id) == 2
+    store.engine.dispose()
+
+
+def test_named_registration_is_explicit_unique_and_required_for_cutover(tmp_path: Path, source_database: str) -> None:
+    source = write_app(tmp_path / "apps", "tasktrove")
+    config = config_for(tmp_path, source_database)
+    store = AppletStore(UrlDatabase(source_database))
+    selected = store.named_applet("tasktrove")
+    runtime = RuntimeConfig(required_apps={"tasktrove": UUID(int=101)})
+    gated = replace(config, runtime=runtime, require_registered_apps=True)
+    with pytest.raises(RuntimeError, match="Release named applications"):
+        create_app(gated)
+    other = write_app(tmp_path / "other", "other")
+    with TestClient(create_app(replace(config, runtime=runtime)), client=("127.0.0.1", 40000)) as client:
+        attempted = client.post(
+            f"/api/marina/applets/{UUID(int=101)}", params={"base_version": 0}, content=package_applet(other)
+        )
+        assert attempted.status_code == 400
+    package = read_applet_package(package_applet(source))
+    with pytest.raises(AppletForbidden):
+        store.publish(package, "other", UUID(int=101), 0)
+    with pytest.raises(AppletConflict):
+        store.publish(package, "other", UUID(int=101), 0, frozenset({"other"}))
+    assert store.named_applet("tasktrove").id == selected.id
+    ready = replace(gated, runtime=RuntimeConfig(required_apps={"tasktrove": selected.id}))
+    with TestClient(create_app(ready), client=("127.0.0.1", 40000)) as client:
+        assert client.get("/tasktrove/").status_code == 200
+        response = client.put(f"/api/marina/applets/{selected.id}/mode", json={"mode": "public", "base_version": 1})
+        assert response.status_code == 400
+    store.engine.dispose()
+
+
+@pytest.mark.parametrize("capability", ["jobs", "data_url"])
+def test_release_rejects_capabilities_outside_app_permissions(
+    tmp_path: Path, source_database: str, capability: str
+) -> None:
+    source = write_app(tmp_path / "apps", "tasktrove")
+    config = config_for(tmp_path, source_database)
+    store = AppletStore(UrlDatabase(source_database))
+    selected = store.named_applet("tasktrove")
+    runtime = RuntimeConfig(
+        runners=(JobRunner("hourly", "0 * * * *", 60, 1, 1, ("TOKEN",)),),
+        job_permissions={UUID(int=999): JobPermission("hourly", ("TOKEN",))},
+        data_urls={"tasktrove": ("s3://allowed/tasks/",)},
+    )
+    declaration = 'data_url = "s3://elsewhere/private/"\n'
+    if capability == "jobs":
+        (source / "work.py").write_text("def main():\n    pass\n")
+        declaration = '[[jobs]]\nname = "work"\nmodule = "work"\nrunner = "hourly"\ntimeout = 10\nsecrets = ["TOKEN"]\n'
+    manifest = source / "applet.toml"
+    manifest.write_text(manifest.read_text() + declaration)
+    with TestClient(create_app(replace(config, runtime=runtime)), client=("127.0.0.1", 40000)) as client:
+        response = client.post(
+            f"/api/marina/applets/{selected.id}", params={"base_version": 1}, content=package_applet(source)
+        )
+        assert response.status_code == 400, response.text
+        assert store.current_version(selected.id) == 1
+    store.engine.dispose()
+
+
+def test_backend_factory_retries_after_transient_failure(tmp_path: Path, source_database: str) -> None:
+    source = write_api_app(tmp_path / "apps", "tasktrove")
+    marker = tmp_path / "database-ready"
+    (source / "app.py").write_text(
+        "from pathlib import Path\n"
+        + (source / "app.py")
+        .read_text()
+        .replace(
+            "    api = FastAPI()",
+            f"    if not Path({str(marker)!r}).exists():\n"
+            '        raise OSError("temporarily unavailable")\n    api = FastAPI()',
+        )
+    )
+    config = config_for(tmp_path, source_database)
+    with TestClient(create_app(config), client=("127.0.0.1", 40000)) as client:
+        assert client.get("/tasktrove/api/whoami").status_code == 503
+        marker.touch()
+        response = client.get("/tasktrove/api/whoami")
+        assert response.status_code == 200
+        assert response.json() == {"user": "anonymous"}

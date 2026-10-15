@@ -16,10 +16,14 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import Browser, sync_playwright
 
-from marina.db import database_from_env
+from marina.applets import AppletStore
+from marina.database_setup import ensure_applet_provisioning
+from marina.db import DATABASE_URL_ENV, DatabaseSpec, UrlDatabase
 from marina.journeys import Journey, Kernel, running_kernel
+from marina.preview import install_preview_sources
 from marina.scripted_loom import ScriptedLoom, ScriptedLoomServer
 from marina.server import AgentPanelService, MarinaConfig
+from marina.testing import test_database
 
 JOURNEYS_DIR = "journeys"
 DEFAULT_SHOTS_DIR = Path(__file__).resolve().parents[2] / "journeys-out"
@@ -76,15 +80,39 @@ def scripted_loom(scripted_loom_server: ScriptedLoomServer) -> Iterator[Scripted
 
 
 @pytest.fixture(scope="session")
-def marina_kernel(request: pytest.FixtureRequest, scripted_loom_server: ScriptedLoomServer) -> Iterator[Kernel]:
+def marina_database(request: pytest.FixtureRequest) -> Iterator[DatabaseSpec]:
+    """Every browser journey uses one explicitly disposable package registry."""
+    if not request.config.getoption(ENABLE_OPTION):
+        pytest.skip("browser journeys require --journeys")
+    previous = os.environ.get(DATABASE_URL_ENV)
+    with test_database() as url:
+        database = UrlDatabase(url)
+        store = AppletStore(database)
+        try:
+            ensure_applet_provisioning(store.engine)
+            store.migrate()
+            os.environ[DATABASE_URL_ENV] = url
+            yield database
+        finally:
+            store.engine.dispose()
+            if previous is None:
+                os.environ.pop(DATABASE_URL_ENV, None)
+            else:
+                os.environ[DATABASE_URL_ENV] = previous
+
+
+@pytest.fixture(scope="session")
+def marina_kernel(
+    request: pytest.FixtureRequest, scripted_loom_server: ScriptedLoomServer, marina_database: DatabaseSpec
+) -> Iterator[Kernel]:
     first = Path(str(request.session.items[0].path)) if request.session.items else Path.cwd()
     apps_dir = Path(request.config.getoption(APPS_DIR_OPTION) or apps_dir_of(first))
     data_root = request.config.getoption(DATA_ROOT_OPTION) or str(apps_dir.parent / ".data")
+    install_preview_sources(apps_dir, marina_database)
     config = MarinaConfig(
-        apps_dir=apps_dir,
         data_root=data_root,
         iap_audience=None,
-        database=database_from_env(os.environ),
+        database=marina_database,
         agent_panel=AgentPanelService(scripted_loom_server.origin),
     )
     with running_kernel(config) as kernel:

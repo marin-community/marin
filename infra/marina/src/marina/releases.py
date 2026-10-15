@@ -7,7 +7,7 @@ import tempfile
 import tomllib
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from uuid import UUID
@@ -56,6 +56,13 @@ class ReleaseSource:
     commit: str
     path: str
     tree: str
+    inputs: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ReleaseDeclaration:
+    applet_id: str
+    source_paths: tuple[str, ...]
 
 
 class ReleaseState(StrEnum):
@@ -74,13 +81,22 @@ class ReleaseStatus:
     checkout: ReleaseSource
 
 
-def release_applet_id(app_dir: Path) -> str:
-    """Read the existing applet UUID bound to this source directory."""
+def release_declaration(app_dir: Path) -> ReleaseDeclaration:
     with (app_dir / RELEASE_CONFIG).open("rb") as source:
         config = tomllib.load(source)
-    if set(config) != {"applet_id"}:
-        raise ValueError(f"{RELEASE_CONFIG} must contain only applet_id")
-    return str(UUID(config["applet_id"]))
+    if set(config) - {"applet_id", "source_paths"}:
+        raise ValueError(f"{RELEASE_CONFIG} accepts applet_id and optional source_paths")
+    paths = config.get("source_paths", [])
+    if not isinstance(paths, list) or any(
+        not isinstance(path, str) or Path(path).is_absolute() or ".." in Path(path).parts for path in paths
+    ):
+        raise ValueError("source_paths must be repository-relative paths")
+    return ReleaseDeclaration(str(UUID(config["applet_id"])), tuple(paths))
+
+
+def release_applet_id(app_dir: Path) -> str:
+    """Read the stable UUID bound to this source directory."""
+    return release_declaration(app_dir).applet_id
 
 
 def release_source(app_dir: Path) -> ReleaseSource:
@@ -89,17 +105,23 @@ def release_source(app_dir: Path) -> ReleaseSource:
     path = app_dir.resolve().relative_to(root).as_posix()
     commit = git_output(["rev-parse", "HEAD"], app_dir)
     tree = git_output(["rev-parse", f"{commit}:{path}"], app_dir)
-    return ReleaseSource(commit=commit, path=path, tree=tree)
+    inputs = {
+        source: git_output(["rev-parse", f"{commit}:{source}"], app_dir)
+        for source in release_declaration(app_dir).source_paths
+    }
+    return ReleaseSource(commit=commit, path=path, tree=tree, inputs=inputs)
 
 
 def source_status(app_dir: Path, applet_id: str, version: int, released: ReleaseSource | None) -> ReleaseStatus:
     """Compare a published source identity with this directory's committed source."""
     expected = release_source(app_dir)
-    if git_output(["status", "--porcelain", "--untracked-files=all", "--", "."], app_dir):
+    root = Path(git_output(["rev-parse", "--show-toplevel"], app_dir))
+    paths = [".", *(str(root / path) for path in expected.inputs)]
+    if git_output(["status", "--porcelain", "--untracked-files=all", "--", *paths], app_dir):
         state = ReleaseState.MODIFIED
     elif released is None:
         state = ReleaseState.UNRECORDED
-    elif released.tree == expected.tree and released.path == expected.path:
+    elif released.tree == expected.tree and released.path == expected.path and released.inputs == expected.inputs:
         state = ReleaseState.CURRENT
     else:
         state = ReleaseState.DIFFERENT

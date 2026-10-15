@@ -36,7 +36,7 @@ transaction. The lowest configured prefix priority wins duplicate run IDs, so a 
 record promotes its legacy copy without rereading it. The transaction advances
 `eval_catalog_state.generation`. Each serving instance checks that generation at most once every 10
 seconds and swaps its in-memory aggregate views only after a newer generation commits. A failed check
-serves the last good snapshot and retries after the same interval. `marina migrate` applies the
+serves the last good snapshot and retries after the same interval. `marina release infra/marina/apps/evaldash --base-version CURRENT_VERSION` applies the
 pending numbered migrations from `migrations/` under a
 PostgreSQL advisory lock and rejects a database whose migration ledger is newer than the running
 binary; mounting the app only verifies the schema, and never writes. The initial migration adopts the
@@ -248,9 +248,9 @@ tests/                  unit tests; journeys/ walks the app in a browser
 
 ## Develop
 
-Serve synthetic fixture records locally without a database or cloud credentials. Isolate
-EvalDash from other Marina apps, which may require a database. Live job and log panels show
-"unreachable".
+Serve synthetic fixture records locally without cloud credentials. The preview uses a
+disposable Postgres package registry, while EvalDash reads the local fixture records.
+Docker is required. Live job and log panels show "unreachable".
 
 Run from the repository root:
 
@@ -258,11 +258,9 @@ Run from the repository root:
 cd infra/marina
 uv run marina build --only evaldash
 preview_records=$(mktemp -d /tmp/evaldash-records.XXXXXX)
-preview_apps=$(mktemp -d /tmp/evaldash-apps.XXXXXX)
-ln -s "$PWD/apps/evaldash" "$preview_apps/evaldash"
 uv run python -m apps.evaldash.fixtures "$preview_records"
 EVALDASH_STORE=local RECORDS_PREFIXES="$preview_records" \
-  uv run marina dev --apps-dir "$preview_apps"
+  uv run marina release apps/evaldash --local
 # -> http://127.0.0.1:8080/evaldash/
 ```
 
@@ -272,13 +270,12 @@ runs, point `RECORDS_PREFIXES` at a local copy of their run directories. Keep de
 local to avoid production writes. After frontend edits, rerun `marina build --only evaldash`
 and reload the browser; this command does not hot-reload the frontend.
 
-For a Postgres-backed preview, generate fixtures as above, then run from `infra/marina`:
+For a Postgres-backed preview, generate fixtures as above, then run from `infra/marina`.
+Release installs the schema in the disposable database:
 
 ```bash
-export MARINA_DATABASE_URL=postgresql+pg8000://postgres:marina@127.0.0.1:5432/marina
-uv run marina migrate --only evaldash
 EVALDASH_STORE=postgres RECORDS_PREFIXES="$preview_records" \
-  uv run marina dev --apps-dir "$preview_apps"
+  uv run marina release apps/evaldash --local
 ```
 
 ## Test
@@ -286,9 +283,24 @@ EVALDASH_STORE=postgres RECORDS_PREFIXES="$preview_records" \
 ```bash
 cd infra/marina
 uv run pytest apps/evaldash                          # unit tests; starts a throwaway pgvector container
-MARINA_DATABASE_URL=... uv run marina journey evaldash   # the browser walk, screenshots under journeys-out/
+uv run marina journey evaldash                          # disposable DB; screenshots under journeys-out/
 ```
 
 The image needs more than the kernel: `marin.evaluation`'s four record and statistics modules, the
 generated `iris.rpc`/`finelog.rpc` packages, and `lib/finestore`. `infra/marina/Dockerfile` copies
 them and `Dockerfile.dockerignore` allows them into the build context.
+
+## Release
+
+EvalDash's frontend, backend and ingestion module are one Postgres package:
+
+```bash
+uv run marina release-status infra/marina/apps/evaldash --json
+uv run marina release infra/marina/apps/evaldash --base-version CURRENT_VERSION
+```
+
+Release from clean current main. The release transaction applies application
+migrations before selecting the package. `/evaldash/`, the `evaldash` schema and
+`EVALDASH_INGEST_JOB` stay stable. The scheduled base-image runner snapshots and
+executes the package's `ingest` module; running jobs keep their selected code.
+Marina deployment and restart do not publish EvalDash or run its migrations.

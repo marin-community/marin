@@ -1,15 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Python apps: what an app package may define and what the kernel hands it.
+"""Backend services and MCP projections, plus adapters for source-level unit tests.
 
-A Python app is a package at ``apps/<name>/`` (or ``apps/<name>/backend/`` when
-its URL name conflicts with an installed package). Its ``app`` module defines
-``create_api(services) -> RegisteredApi``. The kernel mounts its ASGI app
-at ``/<name>/api/`` behind the same authentication as every other route and generates
-MCP tools from its explicitly marked OpenAPI operations. The module may also define
-``migrate(engine)``, which ``marina migrate`` runs against the app's schema before a
-deploy serves traffic. A static app has no package and only a ``dist``.
+Production backends are loaded from immutable Postgres packages by AppletRuntime.
+Application migrations receive the release transaction's Connection.
 """
 
 import importlib
@@ -30,7 +25,6 @@ from marina.mcp import OperationRisk, mcp_for_api
 
 APP_MODULE = "app"
 CREATE_API = "create_api"
-MIGRATE = "migrate"
 
 
 @dataclass(frozen=True)
@@ -52,7 +46,7 @@ class Services:
 
 @dataclass(frozen=True)
 class RegisteredApi:
-    """A checked-in app's HTTP service and full and read-only MCP projections."""
+    """An application's HTTP service and full and read-only MCP projections."""
 
     app: ASGIApp
     mcp: FastMCP
@@ -67,10 +61,6 @@ def registered_api(api: FastAPI, *, mounted_app: ASGIApp | None = None) -> Regis
         mcp=mcp_for_api(api, app),
         read_mcp=mcp_for_api(api, app, frozenset({OperationRisk.READ})),
     )
-
-
-def is_python_app(manifest: AppManifest) -> bool:
-    return (manifest.root / "__init__.py").is_file() or (manifest.root / "backend" / "__init__.py").is_file()
 
 
 def _module(manifest: AppManifest):
@@ -106,10 +96,6 @@ def create_api(manifest: AppManifest, services: Services) -> RegisteredApi:
     if not isinstance(api, RegisteredApi):
         raise TypeError(f"{manifest.name}.{APP_MODULE}.{CREATE_API} must return RegisteredApi")
     return api
-
-
-def migration(manifest: AppManifest) -> Callable[[Engine], None] | None:
-    return getattr(_module(manifest), MIGRATE, None)
 
 
 def data_url_for(manifest: AppManifest, data_root: str) -> str:
