@@ -209,6 +209,20 @@ def _write_corpus(roots: dict[str, str], inventory: list[SourceDeclaration], rep
     (StoragePath(report_path).parent / "corpus.json").write_text(json.dumps(result, indent=2))
 
 
+def _corpus_sources(corpus: str) -> tuple[dict[str, str], list[SourceDeclaration], str]:
+    document = json.loads(StoragePath(corpus).read_text())
+    inventory = [SourceDeclaration.model_validate(row) for row in document["inventory"]]
+    roots = {}
+    for row in document["sources"]:
+        manifest = json.loads((StoragePath(row["root"]) / "manifest.json").read_text())
+        if canonical_sha256(manifest) != row["source_key"]:
+            raise ValueError(f"Corpus source manifest changed: {row['source_id']}")
+        if row["source_id"] in roots:
+            raise ValueError(f"Duplicate corpus source: {row['source_id']}")
+        roots[row["source_id"]] = row["root"]
+    return roots, inventory, document["population"]
+
+
 def _embedding_pass(
     roots: dict[str, str],
     *,
@@ -509,21 +523,12 @@ def main(
     )
     inventory = [source.declaration for source in {**all_sources(), **selected}.values()]
     if corpus is not None:
-        document = json.loads(StoragePath(corpus).read_text())
-        inventory = [SourceDeclaration.model_validate(row) for row in document["inventory"]]
-        roots = {}
-        for row in document["sources"]:
-            manifest = json.loads((StoragePath(row["root"]) / "manifest.json").read_text())
-            if canonical_sha256(manifest) != row["source_key"]:
-                raise ValueError(f"Corpus source manifest changed: {row['source_id']}")
-            if row["source_id"] in roots:
-                raise ValueError(f"Duplicate corpus source: {row['source_id']}")
-            roots[row["source_id"]] = row["root"]
+        roots, inventory, population = _corpus_sources(corpus)
         assert review_cache is not None and embed is not None
         _embedding_pass(
             roots,
             inventory=inventory,
-            population=document["population"],
+            population=population,
             catalog_root=catalog_root,
             runtime=runtime,
             model=description_model,
