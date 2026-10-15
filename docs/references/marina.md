@@ -285,7 +285,8 @@ Connection is best effort. Marina's runtime environment variable
 `MARINA_AGENT_ORIGIN` supplies the Loom URL; environments without it show an
 unavailable state. Browser connections require a Loom sign-in and Loom's
 `browser.allowed_origins` setting to permit the private applet origin
-(`https://applets.marina.oa.dev` in production). Operators manage that policy in
+(`https://applets.marina.oa.dev` in production). The production policy permits
+both the main Marina origin and its private applet origin. Operators manage it in
 `infra/loom/Pulumi.marin-loom.yaml`. The playground's `applet.toml` permits
 connections to `https://loom.oa.dev` through `connect_src`; a different Loom URL
 also requires updating that list.

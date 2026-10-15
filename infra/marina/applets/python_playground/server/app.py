@@ -592,11 +592,12 @@ def create_api(services: AppletServices) -> RegisteredApi:
     api = FastAPI(title="Python playground")
     engine = services.engine()
     capacity = asyncio.Semaphore(2)
+    origin = os.environ.get("MARINA_AGENT_ORIGIN")
+    agent_configuration = AgentConfiguration(enabled=bool(origin), origin=origin)
 
     @api.get("/agent/config")
     def agent_config() -> AgentConfiguration:
-        origin = os.environ.get("MARINA_AGENT_ORIGIN")
-        return AgentConfiguration(enabled=bool(origin), origin=origin)
+        return agent_configuration
 
     @api.get(
         "/projects",
