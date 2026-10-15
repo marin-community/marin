@@ -232,3 +232,50 @@ def test_cli_exits_nonzero_on_any_hit(tmp_path):
     with pytest.raises(SystemExit) as leaked:
         scan_upload.main([str(tmp_path)])
     assert (clean.value.code, leaked.value.code) == (0, 1)
+
+
+# Lines of a dataset card and the patterns each trips: a Markdown link to an allowed host trips nothing, every other URL
+# trips `url`, and an allowed link still trips every other pattern.
+CARD_LINES = [
+    ("The paper is [arXiv:XXXX.XXXXX](https://arxiv.org/abs/XXXX.XXXXX).", set()),
+    ("<https://huggingface.co/datasets/allenai/dolma3_pool>", set()),
+    ("| [Olmo 3](https://allenai.org/olmo) | [Marin](https://marin.community) |", set()),
+    ("[code](https://github.com/marin-community/marin)", set()),
+    ("see https://github.com/marin-community/marin", {"url"}),  # outside a Markdown link
+    ("[data](https://example.org/data)", {"url"}),  # a host outside the allowlist
+    ("[code](http://github.com/marin-community/marin)", {"url"}),  # not https
+    ("[x](https://github.com.example.org/x)", {"url"}),  # a host that only begins with an allowed one
+    ("[x](https://github.com:8443/x)", {"url"}),  # a port
+    ("[x](https://someone@github.com/x)", {"url", "email"}),  # credentials
+    ("[x](https://github.com/x?next=https://example.org)", {"url"}),  # a second URL inside an allowed link
+    ("[https://example.org](https://github.com/x)", {"url"}),  # a URL in a link's text
+    ("[x]: https://github.com/x", {"url"}),  # a reference definition, outside an inline link
+    ("[x](https://huggingface.co/pinlin_calvin_xu)", {"personal"}),  # other patterns inside an allowed link
+]
+
+
+def test_card_links_only_to_allowed_hosts(tmp_path):
+    (tmp_path / "README.md").write_text("\n".join(line for line, _ in CARD_LINES) + "\n")
+    tripped: dict[int, set[str]] = {}
+    for hit in scan_upload.scan(tmp_path):
+        tripped.setdefault(hit.line_or_row, set()).add(hit.pattern)
+    assert [tripped.get(line, set()) for line in range(1, len(CARD_LINES) + 1)] == [p for _, p in CARD_LINES]
+    # The allowance covers the card at the root only: the same link in any other file is a hit.
+    other = tmp_path / "other"
+    (other / "data").mkdir(parents=True)
+    for name in ("notes.md", "data/README.md"):
+        (other / name).write_text(CARD_LINES[0][0] + "\n")
+    assert {(h.path.relative_to(other).as_posix(), h.pattern) for h in scan_upload.scan(other)} == {
+        ("notes.md", "url"),
+        ("data/README.md", "url"),
+    }
+
+
+def test_scan_reads_only_the_included_files(tmp_path):
+    for name in ("data/x/table.md", "fits/inputs.md", "README.md"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(f"{LEAK}\n")
+    hits = scan_upload.scan(tmp_path, include=["data/x/table.md", "README.md"])
+    assert {h.path.relative_to(tmp_path).as_posix() for h in hits} == {"data/x/table.md", "README.md"}
+    with pytest.raises(FileNotFoundError):  # a file to scan that the tree lacks is never silently skipped
+        scan_upload.scan(tmp_path, include=["README.md", "MANIFEST.json"])

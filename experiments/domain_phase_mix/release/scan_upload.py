@@ -4,7 +4,7 @@
 """Recursive scan of a build tree for strings that must not leave the lab.
 
 `uv run python -m experiments.domain_phase_mix.release.scan_upload release_build` prints the first 200 hits and exits 1
-on any hit.
+on any hit. `scan(root, include)` reads only the files `include` names, so an upload scans exactly the files it sends.
 
 Every file is read by its structure: a CSV cell by cell, header included; a Parquet file's column names, the keys and
 values of its schema and field metadata, and the cells of its string columns, a stored index among them; a JSON file's
@@ -12,7 +12,9 @@ keys and values; any other file line by line as UTF-8 text. Each file's own path
 string from the patterns stops the scan: a binary or compressed file, a ragged CSV row, a repeated JSON key, and a
 Parquet column of any type but string, number, boolean or time. A few fields hold hex digests by design: `ALLOWED`
 exempts each of them from the hash pattern alone, so the same digest under any other field, or any other pattern in an
-allowed field, is still a hit.
+allowed field, is still a hit. `ALLOWED` also lets the dataset card at the root link to `LINK_HOSTS`: the `url` pattern
+skips the `https://` that begins an inline Markdown link or an autolink to one of them, so any other URL of the card,
+or any other pattern inside such a link, is still a hit.
 """
 
 import argparse
@@ -21,6 +23,7 @@ import dataclasses
 import fnmatch
 import json
 import re
+import urllib.parse
 from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 
@@ -56,6 +59,11 @@ TEXTLESS = (
 )
 EXCERPT = 30  # characters of context on each side of a match
 SHOWN = 200  # hits the command prints
+# Hosts the dataset card may link to: the paper, its code and data, and the sources of its evaluations and buckets.
+LINK_HOSTS = frozenset({"huggingface.co", "arxiv.org", "github.com", "allenai.org", "marin.community"})
+# An inline link `[text](url)` or an autolink `<url>`. A title, a bracket inside the text, or a space, parenthesis or
+# angle bracket inside the URL leaves a link unrecognized, so its URL stays a hit.
+MARKDOWN_LINK = re.compile(r"\[[^\[\]]*\]\((?P<inline>[^\s()<>]+)\)|<(?P<auto>[^\s<>]+)>")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -66,11 +74,35 @@ class Allowance:
     field: str  # a table column, or a JSON key path with `[*]` standing for every list position
     pattern: str
 
+    def exempts(self, relative: str, field: str, pattern: str, match: re.Match[str]) -> bool:
+        """Whether this allows `match`, a match of `pattern` in `field` of the file at `relative`."""
+        shape = re.sub(r"\[\d+\]", "[*]", field)
+        return (pattern, shape) == (self.pattern, self.field) and fnmatch.fnmatchcase(relative, self.path_glob)
+
+
+@dataclasses.dataclass(frozen=True)
+class LinkAllowance:
+    """Markdown links of a text file to `hosts`: the `url` pattern may match the `https://` that begins each one.
+
+    A link counts when it is an inline link `[text](url)` or an autolink `<url>` whose URL has the scheme https and one
+    of `hosts` as its whole network location, without a user, password or port.
+    """
+
+    path_glob: str  # the file, relative to the scanned root
+    hosts: frozenset[str]
+
+    def exempts(self, relative: str, field: str, pattern: str, match: re.Match[str]) -> bool:
+        """Whether this allows `match`, a match of `pattern` in `field` of the file at `relative`."""
+        if pattern != "url" or field or not fnmatch.fnmatchcase(relative, self.path_glob):
+            return False
+        return match.start() in _link_starts(match.string, self.hosts)
+
 
 ALLOWED = (
     Allowance("MANIFEST.json", "$.commit", "long_hash"),  # the git commit of the build
     Allowance("MANIFEST.json", "$.tables[*].sha256", "long_hash"),  # each file's SHA-256
     Allowance("data/tasks/tasks.csv", "source_revision", "long_hash"),  # the evaluations' upstream git revisions
+    LinkAllowance("README.md", LINK_HOSTS),  # the dataset card's links
 )
 
 
@@ -91,15 +123,20 @@ class Hit:
     field: str
 
 
-def scan(root: Path) -> list[Hit]:
-    """Every hit in every file under `root`, file by file in path order.
+def scan(root: Path, include: Iterable[str] | None = None) -> list[Hit]:
+    """Every hit in every file under `root`, or in the files `include` names relative to it, file by file in path order.
 
-    A file the scan cannot fully read raises a ValueError, its parser's or the scan's own.
+    A file `include` names that `root` lacks raises a FileNotFoundError. A file the scan cannot fully read raises a
+    ValueError, its parser's or the scan's own.
     """
     if not root.is_dir():
         raise NotADirectoryError(f"no build tree to scan at {root}")
+    if include is None:
+        files = sorted(p for p in root.rglob("*") if p.is_file())
+    else:
+        files = sorted({root / name for name in include})
     hits = []
-    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+    for path in files:
         relative = path.relative_to(root).as_posix()
         try:
             strings = [((0,), "", relative), *_strings(path)]
@@ -107,9 +144,15 @@ def scan(root: Path) -> list[Hit]:
             error.add_note(f"scan_upload cannot read {path}; its strings would leave unscanned")
             raise
         for rows, field, text in strings:
-            for pattern, excerpt in _matches(text, _exempt(relative, field)):
+            for pattern, excerpt in _matches(relative, field, text):
                 hits.extend(Hit(path, row, pattern, excerpt, field) for row in rows)
     return hits
+
+
+def hit_line(hit: Hit, root: Path) -> str:
+    """A hit as `<path relative to root>:<line or row> [<field>] <pattern>: <excerpt>`."""
+    field = f" [{hit.field}]" if hit.field else ""
+    return f"{hit.path.relative_to(root)}:{hit.line_or_row}{field} {hit.pattern}: {hit.excerpt}"
 
 
 def _strings(path: Path) -> Iterator[tuple[Sequence[int], str, str]]:
@@ -182,18 +225,24 @@ def _json_strings(value: object, field: str) -> Iterator[tuple[Sequence[int], st
         yield (0,), field, str(value)
 
 
-def _exempt(relative: str, field: str) -> frozenset[str]:
-    """The patterns `ALLOWED` lets this field of this file match."""
-    shape = re.sub(r"\[\d+\]", "[*]", field)
-    return frozenset(a.pattern for a in ALLOWED if a.field == shape and fnmatch.fnmatchcase(relative, a.path_glob))
+def _link_starts(text: str, hosts: frozenset[str]) -> set[int]:
+    """The offsets in `text` at which the https URL of a Markdown link to one of `hosts` begins."""
+    starts = set()
+    for link in MARKDOWN_LINK.finditer(text):
+        group = "inline" if link.group("inline") is not None else "auto"
+        parts = urllib.parse.urlsplit(link.group(group))
+        if parts.scheme == "https" and parts.netloc in hosts:
+            starts.add(link.start(group))
+    return starts
 
 
-def _matches(text: str, exempt: frozenset[str]) -> Iterator[tuple[str, str]]:
-    """(pattern, excerpt around its first match) for each pattern the text matches."""
+def _matches(relative: str, field: str, text: str) -> Iterator[tuple[str, str]]:
+    """(pattern, excerpt around its first match that no allowance exempts) for each pattern the text matches."""
     for name, pattern in PATTERNS.items():
-        match = None if name in exempt else pattern.search(text)
-        if match:
-            yield name, " ".join(text[max(0, match.start() - EXCERPT) : match.end() + EXCERPT].split())
+        for match in pattern.finditer(text):
+            if not any(allowance.exempts(relative, field, name, match) for allowance in ALLOWED):
+                yield name, " ".join(text[max(0, match.start() - EXCERPT) : match.end() + EXCERPT].split())
+                break
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -202,8 +251,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     hits = scan(args.root)
     for hit in hits[:SHOWN]:
-        field = f" [{hit.field}]" if hit.field else ""
-        print(f"{hit.path.relative_to(args.root)}:{hit.line_or_row}{field} {hit.pattern}: {hit.excerpt}")
+        print(hit_line(hit, args.root))
     print(f"{len(hits)} hits")
     raise SystemExit(1 if hits else 0)
 
