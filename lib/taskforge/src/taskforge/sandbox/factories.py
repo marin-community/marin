@@ -14,16 +14,21 @@ validation records a typed refusal with the factory's message instead of failing
 import logging
 import shutil
 import subprocess
+import threading
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import cache
+from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 import shellsim
 from rolloutengine.machines import _machine_spec
 from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
+from shellbox.backends.local.python_environment import resolve_python_environment
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, MachineFactory, UnsupportedMachineSpec
 from taskcompendium.models import EnvironmentRequirements, ScriptGrader, TaskSpec, VerifyitGrader
@@ -151,6 +156,47 @@ def machine_factories(where: MachineHost, controller_url: str | None) -> Mapping
     else:
         logger.warning("No %s machine factory: %s", Backend.DOCKER, docker)
     return {factory.backend.value: factory for factory in factories}
+
+
+@runtime_checkable
+class PythonEnvironmentFactory(Protocol):
+    """A factory that resolves ``PackageSpec`` machines into a cached Python environment, as the local one does."""
+
+    package_cache: Path
+    python_version: str
+
+
+WARM_THREAD = "warm-local-python"
+
+
+def warm_local_python(factories: Mapping[str, MachineFactory]) -> threading.Thread | None:
+    """Build the local backend's bare CPython environment in a background thread, before the first machine asks.
+
+    The local factory resolves a ``PackageSpec`` machine's environment once per cache (``uv`` installs the
+    interpreter, makes the venv and compiles the lock) and reuses it afterwards; the first wave of
+    machines in a fresh process queues on that build, about five seconds for the empty requirements of
+    ``draft.LOCAL_CPYTHON``, while later machines pay nothing. A coordinator calls this once after
+    ``machine_factories`` so the build overlaps its first model calls; the build children it starts share
+    the cache. Returns the thread, or ``None`` when ``factories`` has no local backend. The thread is a
+    daemon: a failure is logged and the first machine resolves the environment itself.
+    """
+    factory = factories.get(Backend.LOCAL.value)
+    if not isinstance(factory, PythonEnvironmentFactory):
+        return None
+    cache, version = factory.package_cache, factory.python_version
+
+    def warm() -> None:
+        started = time.monotonic()
+        try:
+            resolve_python_environment(cache, (), version)
+        except Exception:
+            logger.warning("Warming the local Python %s environment in %s failed", version, cache, exc_info=True)
+            return
+        logger.info("Warmed the local Python %s environment in %s in %.1fs", version, cache, time.monotonic() - started)
+
+    thread = threading.Thread(target=warm, name=WARM_THREAD, daemon=True)
+    thread.start()
+    return thread
 
 
 def _machine_refusal(
