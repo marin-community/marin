@@ -7,15 +7,24 @@
 import argparse
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
 
 SCORE_CELL = re.compile(r"([0-9.]+) \((s3://[^)]+)\)")
 BENCHMARKS = ("math500", "aime24", "olympiadbench", "financebench")
 EXPECTED_TRIALS = {"math500": 500, "aime24": 300, "olympiadbench": 300, "financebench": 50}
+
+
+@dataclass(frozen=True)
+class TrackerChange:
+    model: str
+    benchmark: str
+    replacement: str
 
 
 def read_result(uri: str) -> dict | None:
@@ -29,7 +38,7 @@ def read_result(uri: str) -> dict | None:
 
 def update_tracker(
     tracker: Path, sources: Path, output_prefix: str, benchmarks: tuple[str, ...] = BENCHMARKS
-) -> list[tuple[str, str, str]]:
+) -> list[TrackerChange]:
     """Apply verified replay links and scores while preserving every other cell."""
     manifest = yaml.safe_load(sources.read_text())["models"]
     by_model = {row["model"]: row["benchmarks"] for row in manifest}
@@ -52,7 +61,7 @@ def update_tracker(
         seen.add(model)
         for benchmark in benchmarks:
             source = by_model[model][benchmark]
-            uri = f"{output_prefix.rstrip('/')}/results/{benchmark}/{model.replace('/', '--')}.json"
+            uri = prefix_join(output_prefix, f"results/{benchmark}/{model.replace('/', '--')}.json")
             result = read_result(uri)
             if result is None:
                 continue
@@ -78,7 +87,7 @@ def update_tracker(
             replacement = f"{score:.3f} ({uri})"
             if replacement != cell:
                 parts[column] = f" {replacement} "
-                changed.append((model, benchmark, replacement))
+                changed.append(TrackerChange(model, benchmark, replacement))
         lines[line_index] = "|".join(parts) + ("\n" if line.endswith("\n") else "")
     if seen != set(by_model):
         raise ValueError("tracker omits source-manifest models")
@@ -97,8 +106,8 @@ def main() -> None:
     args = parser.parse_args()
     configure_coreweave_s3()
     changed = update_tracker(args.tracker, args.sources, args.output_prefix, tuple(args.benchmark or BENCHMARKS))
-    for model, benchmark, replacement in changed:
-        print(f"{model} {benchmark}: {replacement}")
+    for change in changed:
+        print(f"{change.model} {change.benchmark}: {change.replacement}")
     print(f"updated {len(changed)} tracker cells")
 
 

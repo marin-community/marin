@@ -6,7 +6,6 @@
 
 import argparse
 import hashlib
-import json
 import logging
 import tomllib
 from pathlib import Path
@@ -18,19 +17,11 @@ from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.serve import local_inference
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
 
 from . import regrade_financebench, regrade_olympiadbench
 
 LOGGER = logging.getLogger(__name__)
-
-
-def write_json(uri: str, payload: dict) -> None:
-    """Write one immutable replay result or provenance record."""
-    filesystem, key = filesystem_for(uri)
-    if filesystem.exists(key):
-        raise FileExistsError(uri)
-    with filesystem.open(key, "wb") as destination:
-        destination.write((json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode())
 
 
 def external_revision(path: Path, project: str) -> str:
@@ -80,7 +71,7 @@ def main() -> None:
     root = Path(__file__).resolve().parents[6]
     evalchemy_pin = external_revision(root / "config/external/evalchemy/pyproject.toml", "evalchemy")
     harbor_pin = external_revision(root / "config/external/harbor/pyproject.toml", "harbor")
-    prefix = args.output_prefix.rstrip("/")
+    prefix = args.output_prefix
     provenance = {
         "source_manifest_sha256": hashlib.sha256(args.sources.read_bytes()).hexdigest(),
         "source_manifest": args.sources.read_text(),
@@ -92,7 +83,7 @@ def main() -> None:
         "benchmarks": benchmarks,
         "prior_olympiad_prefix": args.prior_olympiad_prefix,
     }
-    write_json(f"{prefix}/provenance.json", provenance)
+    regrade_olympiadbench.write_json(prefix_join(prefix, "provenance.json"), provenance)
 
     accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8)
     inference = inference_config_for_model(
@@ -106,7 +97,7 @@ def main() -> None:
         base_url = session.model.endpoint.base_url
         for benchmark in benchmarks:
             for source in sources[benchmark]:
-                uri = f"{prefix}/results/{benchmark}/{source.model.replace('/', '--')}.json"
+                uri = prefix_join(prefix, f"results/{benchmark}/{source.model.replace('/', '--')}.json")
                 filesystem, key = filesystem_for(uri)
                 if filesystem.exists(key):
                     LOGGER.info("already regraded %s/%s", source.model, benchmark)
@@ -123,7 +114,7 @@ def main() -> None:
                     )
                 result["evalchemy_commit"] = evalchemy_pin
                 result["harbor_commit"] = harbor_pin
-                write_json(uri, result)
+                regrade_olympiadbench.write_json(uri, result)
                 LOGGER.info(
                     "%s/%s: %.3f -> %.3f",
                     source.model,

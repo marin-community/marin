@@ -70,5 +70,5 @@ def test_subset_replay_preserves_other_scores_and_rejects_incomplete_results(
 
     changed = updater.update_tracker(tracker, sources, "s3://replay", (benchmark,))
     replacement = f"0.500 (s3://replay/results/{benchmark}/org--target.json)"
-    assert changed == [("org/target", benchmark, replacement)]
+    assert changed == [updater.TrackerChange("org/target", benchmark, replacement)]
     assert tracker.read_text() == original.replace(source_cells[benchmark], replacement)

@@ -24,6 +24,7 @@ from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.serve import local_inference
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
 
 from ..olympiadbench_judge.regrade import (  # noqa: TID252
     JUDGE_EXTRA_BODY,
@@ -175,7 +176,7 @@ def regrade(source: Source, prior_prefix: str | None, base_url: str, judge_model
     prior = None
     prior_hash = None
     if prior_prefix is not None:
-        prior_uri = f"{prior_prefix.rstrip('/')}/results/{source.model.replace('/', '--')}.json"
+        prior_uri = prefix_join(prior_prefix, f"results/{source.model.replace('/', '--')}.json")
         prior, prior_hash = read_json(prior_uri)
         if prior["model"] != source.model or prior["source"] != source.uri or prior["num_trials"] != 300:
             raise ValueError(f"{source.model}: prior judge ablation does not match this source")
@@ -265,8 +266,8 @@ def main() -> None:
     judge = load_model_config(args.judge_config)
     if judge.serve.max_model_len != 131072 or judge.serve.tensor_parallel_size != 8:
         raise ValueError("replay requires the pinned 131072-token TP8 MiniMax config")
-    prefix = args.output_prefix.rstrip("/")
-    provenance_uri = f"{prefix}/provenance-olympiadbench.json"
+    prefix = args.output_prefix
+    provenance_uri = prefix_join(prefix, "provenance-olympiadbench.json")
     filesystem, key = filesystem_for(provenance_uri)
     if not filesystem.exists(key):
         write_json(
@@ -287,7 +288,7 @@ def main() -> None:
 
     def run_pending(base_url: str, allow_live: bool) -> None:
         for source in sources:
-            result_uri = f"{prefix}/results/olympiadbench/{source.model.replace('/', '--')}.json"
+            result_uri = prefix_join(prefix, f"results/olympiadbench/{source.model.replace('/', '--')}.json")
             filesystem, key = filesystem_for(result_uri)
             if filesystem.exists(key):
                 LOGGER.info("already regraded %s", source.model)
