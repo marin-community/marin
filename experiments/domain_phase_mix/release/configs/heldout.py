@@ -125,18 +125,27 @@ def _components(ctx: ExportContext, runs: pd.DataFrame) -> pd.DataFrame:
     return wide
 
 
-def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
-    runs = pd.read_csv(paths.require(EXPANDED / "heldout_runs.csv"))
-    assert runs.eligible.all() and runs.exclusion_reason.isna().all()
-    assert set(runs.panel) == set(SWARM), f"panels {sorted(set(runs.panel))}"
+def observation_keys(runs: pd.DataFrame) -> pd.Series:
+    """The string each held-out run's observation id hashes, aligned with `runs` (rows of heldout_runs.csv).
+
+    The training run name wherever one is known (the module docstring gives the sources), else the registry's row_id.
+    `fits` keys its held-out predictions with the same rule.
+    """
     frozen_ids = set(pd.read_csv(paths.require(FROZEN / "heldout_runs.csv")).row_id)
     names = _validation_run_names()
     assert set(runs.row_id) - frozen_ids <= set(names.index), "every expanded run needs its training run name"
     recorded = runs.training_wandb_run_id
     assert recorded.dropna().str.fullmatch(run_names.RUN_DIRECTORY.pattern).all(), "W&B run ids must be run names"
+    return runs.row_id.map(names).fillna(recorded).fillna(runs.row_id)
 
-    key = runs.row_id.map(names).fillna(recorded).fillna(runs.row_id)  # the training run name wherever one is known
-    out = pd.DataFrame({"observation_id": key.map(ctx.registry.id_for)})
+
+def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
+    runs = pd.read_csv(paths.require(EXPANDED / "heldout_runs.csv"))
+    assert runs.eligible.all() and runs.exclusion_reason.isna().all()
+    assert set(runs.panel) == set(SWARM), f"panels {sorted(set(runs.panel))}"
+    frozen_ids = set(pd.read_csv(paths.require(FROZEN / "heldout_runs.csv")).row_id)
+
+    out = pd.DataFrame({"observation_id": observation_keys(runs).map(ctx.registry.id_for)})
     out["swarm"] = runs.panel.map(SWARM)
     out["cohort"] = ["frozen" if r in frozen_ids else "expanded" for r in runs.row_id]
     for src, dst in META.items():
