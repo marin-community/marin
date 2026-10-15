@@ -249,7 +249,8 @@ class RolloutEvent:
 class RolloutObserver(Protocol):
     """Receive rollout progress in order, delivered off the rollout's path.
 
-    The engine never awaits delivery, so a slow or failing observer cannot change a rollout.
+    The attempt never waits on delivery, so a slow or failing observer cannot change a rollout. After the
+    attempt releases its resources, ``run`` waits up to ``cleanup_timeout`` for queued events.
     """
 
     async def on_event(self, event: RolloutEvent) -> None: ...
