@@ -85,7 +85,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [[ "$version" = eval-policy-2026-10-05-verified || "$version" = eval-policy-2026-10-06-verified ]]; then
+if [[ "$version" = eval-policy-2026-10-14-verified ]]; then
   read -r CAMPAIGN_SHA_HARBOR CAMPAIGN_SHA_EVALCHEMY HARBOR_RUNTIME_PROJECT < <(
     uv run --project "$MARIN_DIR" python -c '
 import sys
@@ -122,7 +122,7 @@ fi
 evalchemy_names=(
   math500 humanevalplus mbppplus olympiadbench gsm8k-0shot piqa winogrande
   boolq truthfulqa triviaqa aime24 mmlu-pro gpqa-diamond cruxeval
-  financebench ifbench mrcr nupa
+  financebench ifbench mrcr mrcr-32k mrcr-65k nupa
 )
 if [ "${#selected_evalchemy_names[@]}" -gt 0 ]; then
   for name in "${selected_evalchemy_names[@]}"; do
