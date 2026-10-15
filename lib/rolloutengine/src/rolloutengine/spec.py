@@ -50,7 +50,12 @@ class TaskRuntimeSpec(BaseModel):
 
 
 class TaskSessionSpec(BaseModel):
-    """Session selection and deadlines for one attempt."""
+    """Session selection, deadlines, and token budget for one attempt.
+
+    ``max_total_tokens`` stops model requests before one whose prompt alone would bring the
+    cumulative prompt plus response tokens to the threshold; the last request sent may exceed it
+    by its new observation and response tokens. ``None`` sets no threshold.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
@@ -65,6 +70,7 @@ class TaskSessionSpec(BaseModel):
     verifier_timeout: float | None = Field(gt=0)
     cleanup_timeout: float = Field(gt=0)
     trace: TraceMode = TraceMode.EXACT_TOKENS
+    max_total_tokens: int | None = Field(gt=0)
 
 
 class LoweredTaskSpec(BaseModel):

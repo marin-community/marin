@@ -35,7 +35,7 @@ Lowering preserves the task definition and adds these deployment settings:
 | --- | --- |
 | `MachineRuntimeSpec` | `backend`, `network`, `cpus`, `memory_mb`, `storage_mb`, `gpus`, `user`, `startup_timeout`, `cleanup_timeout` |
 | `TaskRuntimeSpec` | Optional `task_machine` and `verifier_machine` selections |
-| `TaskSessionSpec` | `task_session`, `shell_tool`, `max_turns`, `model_turn_timeout`, `command_timeout`, `tool_turn_timeout`, `total_turn_timeout`, `attempt_timeout`, `verifier_timeout`, `cleanup_timeout`, `trace` |
+| `TaskSessionSpec` | `task_session`, `shell_tool`, `max_turns`, `model_turn_timeout`, `command_timeout`, `tool_turn_timeout`, `total_turn_timeout`, `attempt_timeout`, `verifier_timeout`, `cleanup_timeout`, `trace`, `max_total_tokens` |
 | `LoweredTaskSpec` | `task: TaskSpec`, `runtime: TaskRuntimeSpec`, `session: TaskSessionSpec` |
 
 `rolloutengine.lowering.lower_task(task, runtime, session, factories=..., sessions=..., providers=...)` constructs and validates the lowered record.
@@ -46,6 +46,7 @@ and `trace`, which defaults to `TraceMode.EXACT_TOKENS`.
 Optional fields accept `None`.
 `TaskSessionSpec.cleanup_timeout` requires a finite, positive value.
 Other deadlines accept `None` or a finite, positive value.
+`max_total_tokens` accepts `None` or a positive integer.
 
 The engine resolves three registries by key:
 
@@ -344,6 +345,21 @@ When these limits are finite, lowering requires the command limit to be less tha
 Configure the tool-turn deadline to allow the commands and backend cleanup within that turn.
 A timed-out shell command returns a `timed_out` tool observation. The model can continue the task.
 Expiration of the tool-turn deadline interrupts the transition.
+
+`max_total_tokens` sets a threshold for stopping model requests in one attempt.
+Each request charges its prompt tokens plus its response tokens. The prompt includes the served prefix of
+earlier turns, so a request charges the full prefix again; a conversation reset does not clear the total.
+If the model callable sets `ModelTurn.usage` (`TokenUsage(prompt_tokens, completion_tokens)`), the engine
+charges those counts. Otherwise it charges `len(prompt_token_ids) + len(response_token_ids)`.
+Without a conversation reset, the next prompt holds at least the previous request's prompt and response.
+After each response, the engine stops when the tokens spent plus that request's count reach `max_total_tokens`,
+so it never sends a request whose prompt alone reaches the budget. The last request sent may exceed it by its
+new observation and response tokens.
+The session handles the last response; the engine then sends no more model requests and starts grading with
+`stop_reason="budget_reached"`. The budget takes precedence when that request also uses the last permitted turn.
+With a budget set, a turn that reports neither `usage` nor prompt token IDs, which `TraceMode.MESSAGES` allows,
+raises `RolloutContractError` rather than charging nothing.
+Final grading receives the conversation through the last response, without its observations.
 
 `RolloutInterrupted` retains the failed operation, served token evidence, and original exception cause.
 Its `rollout` field contains the retained record. Its `operation` field identifies the failed operation.

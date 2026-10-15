@@ -84,6 +84,7 @@ def lowered(task: TaskSpec, *, machine=None, verifier_machine=None, **limits) ->
                 "attempt_timeout": None,
                 "verifier_timeout": 5,
                 "cleanup_timeout": 5,
+                "max_total_tokens": None,
                 **limits,
             }
         ),

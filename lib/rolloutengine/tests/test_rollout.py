@@ -77,6 +77,7 @@ from rolloutengine.contracts import (
     RolloutOperation,
     SessionPrepared,
     SessionStart,
+    TokenUsage,
     ToolCallCompleted,
     ToolCallResult,
     ToolContext,
@@ -1371,6 +1372,93 @@ async def test_context_limit_keeps_served_evidence_and_grades_only_completed_ope
     )
     assert record.response_token_ids == ((20,) if completed_turns else ())
     assert record.loss_mask == ((1,) if completed_turns else ())
+
+
+@pytest.mark.parametrize(
+    "usage, budget, requests, stop_reason",
+    [
+        # Token IDs charge 3 tokens, then 6: the second request reaches the budget.
+        (None, 9, 2, "budget_reached"),
+        # Requests charge 2 each; after the third, 6 + 2 < 10, so only the turn limit stops the rollout.
+        (TokenUsage(prompt_tokens=1, completion_tokens=1), 10, 3, "max_turns"),
+        # The third and last permitted request leaves no room for another: the budget takes precedence.
+        (TokenUsage(prompt_tokens=1, completion_tokens=1), 8, 3, "budget_reached"),
+        # After two requests of 3, a third prompt holds at least 3 more tokens and would reach 9, so it is not sent.
+        (TokenUsage(prompt_tokens=2, completion_tokens=1), 9, 2, "budget_reached"),
+        (TokenUsage(prompt_tokens=8, completion_tokens=1), 9, 1, "budget_reached"),
+    ],
+)
+async def test_token_budget_stops_model_requests_and_grades_the_last_response(usage, budget, requests, stop_reason):
+    graded = []
+
+    class Session:
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Return 12."},), {})
+
+        async def advance(self, _turn):
+            return Transition(done=False, observations=({"role": "user", "content": "Continue."},))
+
+        async def grade(self, messages, *, stop_reason, outputs):
+            graded.append((messages[-1]["role"], stop_reason))
+            return GradeResult(Outcome.GRADED, 1.0)
+
+        async def close(self):
+            pass
+
+    class Model(ReplayModel):
+        async def complete(self, request):
+            return replace(await super().complete(request), usage=usage)
+
+    model = Model([{"role": "assistant", "content": "12"}] * 3)
+    record = await engine(model, sessions={"fixture": lambda _context: Session()}).run(
+        lowered(arithmetic_task(), task_session="fixture", max_total_tokens=budget)
+    )
+    assert len(model.requests) == requests
+    assert record.stop_reason == stop_reason
+    assert graded == [("assistant", stop_reason)]
+
+
+async def test_token_budget_skips_a_conversation_reset_and_grades_the_last_response():
+    graded = []
+
+    class Session:
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Return 12."},), {})
+
+        async def advance(self, _turn):
+            return Transition(done=False, reset_conversation=({"role": "user", "content": "Start again."},))
+
+        async def grade(self, messages, *, stop_reason, outputs):
+            graded.append((messages[-1]["role"], stop_reason))
+            return GradeResult(Outcome.GRADED, 1.0)
+
+        async def close(self):
+            pass
+
+    model = ReplayModel([{"role": "assistant", "content": "12"}] * 3)
+    # Each request after a reset charges 3 tokens; after the second, a third would reach the budget of 9.
+    record = await engine(model, sessions={"fixture": lambda _context: Session()}).run(
+        lowered(arithmetic_task(), task_session="fixture", max_total_tokens=9)
+    )
+    assert len(model.requests) == 2
+    assert record.stop_reason == "budget_reached"
+    assert graded == [("assistant", "budget_reached")]
+
+
+@pytest.mark.parametrize("usage", [None, TokenUsage(prompt_tokens=4, completion_tokens=1)])
+async def test_token_budget_under_messages_trace_needs_usage_or_token_ids(usage):
+    class UsageChatModel(ChatModel):
+        async def complete(self, request):
+            return replace(await super().complete(request), usage=usage)
+
+    model = UsageChatModel([{"role": "assistant", "content": "12"}])
+    run = engine(model).run(lowered(arithmetic_task(), trace=TraceMode.MESSAGES, max_total_tokens=100))
+    if usage is None:
+        with pytest.raises(RolloutContractError, match="token budget"):
+            await run
+        return
+    record = await run
+    assert (record.stop_reason, record.grade.reward) == ("stop", 1.0)
 
 
 @pytest.mark.parametrize("violation", ["prefix", "logprobs", "empty"])
