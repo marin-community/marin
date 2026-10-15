@@ -307,7 +307,7 @@ def read_applet_package(payload: bytes) -> AppletPackage:
 
 
 def package_applet(app_dir: Path, *, extra_files: dict[str, bytes] | None = None) -> bytes:
-    """Build the validated tarball sent by ``marina publish``."""
+    """Build a validated applet tarball, including optional generated files."""
     paths = [app_dir / APPLET_MANIFEST]
     for directory in (app_dir / "dist", app_dir / "server"):
         if directory.exists():

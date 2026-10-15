@@ -194,7 +194,7 @@ def launch_provenance() -> Provenance:
 
 
 def git_output(args: list[str], cwd: Path | None, *, check: bool = True, timeout: float | None = None) -> str:
-    """Run Git and return stdout, raising with stderr on failure."""
+    """Return Git stdout; checked failures raise with stderr."""
     try:
         result = subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd, timeout=timeout)
     except subprocess.TimeoutExpired as error:

@@ -58,8 +58,16 @@ def release_checkout(tmp_path: Path, request: pytest.FixtureRequest) -> Path:
     return app
 
 
+@pytest.mark.parametrize(
+    ("release_checkout", "expected_html"),
+    [
+        ("static", b"<h1>Released app</h1>"),
+        ("build", b"<h1>Built app</h1>"),
+    ],
+    indirect=["release_checkout"],
+)
 def test_release_records_source_and_status_ignores_unrelated_commits(
-    release_checkout: Path, monkeypatch: pytest.MonkeyPatch
+    release_checkout: Path, expected_html: bytes, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     metadata = None
 
@@ -71,7 +79,7 @@ def test_release_records_source_and_status_ignores_unrelated_commits(
             package = read_applet_package(kwargs["data"])
             assert "dist/stale.js" not in package.files
             metadata = json.loads(package.files["dist/marina-release.json"])
-            assert package.files["dist/index.html"] in {b"<h1>Released app</h1>", b"<h1>Built app</h1>"}
+            assert package.files["dist/index.html"] == expected_html
             return json_response({"id": "00000000-0000-0000-0000-000000000001", "version": 8, "path": "/a/id/v/8/"})
         if url.endswith("marina-release.json"):
             response = json_response(metadata if metadata is not None else {"detail": "applet file not found"})
@@ -121,7 +129,7 @@ def test_publish_registered_applet_requires_release_and_keeps_dry_run(
 ) -> None:
     requests = []
 
-    def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
+    def http_request(method: str, url: str, **_kwargs: object) -> RequestsResponse:
         requests.append((method, url))
         return json_response({"path": "/a/id/v/8/"})
 
@@ -142,26 +150,23 @@ def test_release_rejects_ignored_files_in_static_package(
 ) -> None:
     requests = []
 
-    def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
+    def http_request(method: str, url: str, **_kwargs: object) -> RequestsResponse:
         requests.append((method, url))
         return json_response({"path": "/a/id/v/8/"})
 
     monkeypatch.setattr("marina.client.requests.request", http_request)
     (release_checkout / ".gitignore").write_text("dist/extra.js\n")
-    # Static applets must account for every uploaded byte in Git.
-    manifest = release_checkout / "applet.toml"
-    manifest.write_text('title = "Static"\ndescription = "Test"\n')
     for arguments in (["add", "."], ["commit", "-m", "static"], ["push", "origin", "HEAD:main"]):
         subprocess.run(["git", *arguments], cwd=release_checkout, check=True, capture_output=True)
+    args = ["release", str(release_checkout), "--base-version", "7", "--url", "http://localhost:8080"]
+    clean = CliRunner().invoke(cli, args)
+    assert clean.exit_code == 0, clean.output
+    assert len(requests) == 1
+
     (release_checkout / "dist/extra.js").write_text("unreviewed()")
-
-    result = CliRunner().invoke(
-        cli, ["release", str(release_checkout), "--base-version", "7", "--url", "http://localhost:8080"]
-    )
-
+    result = CliRunner().invoke(cli, args)
     assert result.exit_code == 1
-    assert "absent from Git" in result.output
-    assert requests == []
+    assert len(requests) == 1
 
 
 @pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
