@@ -1,4 +1,12 @@
 :root {
+  color-scheme: light;
+  --ink: #263936;
+  --paper: #f2f4f1;
+  --panel: #fff;
+  --edge: #d6ded8;
+  --muted: #6a7f71;
+  --mark: #28634d;
+  --warn: #8a3324;
   font-family:
     Inter,
     ui-sans-serif,
@@ -884,4 +892,66 @@ a {
 .create-example span {
   font-size: 11px;
   color: #93a08d;
+}
+
+.playground-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.playground-content {
+  min-width: 0;
+}
+.playground-layout.with-agent {
+  grid-template-columns: minmax(0, 1fr) 380px;
+}
+.playground-agent.agent-panel,
+.agent-unavailable {
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+}
+.playground-agent .agent-header {
+  height: auto;
+  flex-shrink: 0;
+}
+.playground-agent .composer {
+  margin: 0;
+}
+.agent-scrim {
+  position: fixed;
+  inset: 0;
+  background: #142a2455;
+  border: 0;
+  border-radius: 0;
+  z-index: 39;
+}
+@media (max-width: 79.99rem) {
+  .playground-layout.with-agent {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .playground-agent.agent-panel,
+  .agent-unavailable {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: min(32rem, 100%);
+    height: 100dvh;
+  }
+}
+@media (min-width: 80rem) {
+  .with-agent .trusted {
+    display: none;
+  }
+  .with-agent .header-actions {
+    gap: 6px;
+  }
+  .with-agent main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.agent-unavailable {
+  background: var(--paper);
+  padding: 1rem;
+  z-index: 40;
 }

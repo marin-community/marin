@@ -272,3 +272,20 @@ application default credentials when configured. Secrets are not added to projec
 files, database rows or browser requests. The example reports only whether each
 key pair is available. A backend whose credentials are absent fails with the
 storage library's credential error; this app does not grant storage access.
+
+The “Ask Marina” button opens a Loom conversation beside the workspace, or as a
+drawer on smaller screens. Conversations and drafts are scoped to each project.
+The agent receives project identifiers, saved revision numbers, the selected file
+name, and whether edits are unsaved. It reads saved code and results through
+Marina's read-only MCP API; save editor changes before asking about them. The
+panel automatically selects Loom's `marina` profile, which permits inspection
+and advice.
+
+Connection is best effort. Marina's runtime environment variable
+`MARINA_AGENT_ORIGIN` supplies the Loom URL; environments without it show an
+unavailable state. Browser connections require a Loom sign-in and Loom's
+`browser.allowed_origins` setting to permit the private applet origin
+(`https://applets.marina.oa.dev` in production). Operators manage that policy in
+`infra/loom/Pulumi.marin-loom.yaml`. The playground's `applet.toml` permits
+connections to `https://loom.oa.dev` through `connect_src`; a different Loom URL
+also requires updating that list.

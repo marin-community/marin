@@ -7,8 +7,11 @@ import ImageGallery from "./ImageGallery.vue";
 
 const OUTPUT_BASE = "https://output.invalid/";
 
-const props = defineProps({ record: { type: Object, required: true } });
-const emit = defineEmits(["back"]);
+const props = defineProps({
+  record: { type: Object, required: true },
+  agentOpen: Boolean,
+});
+const emit = defineEmits(["back", "toggle-agent"]);
 const project = ref(structuredClone(toRaw(props.record.document)));
 const error = ref("");
 const saved = ref("Saved to Postgres");
@@ -96,7 +99,17 @@ function beforeUnload(event) {
   }
 }
 window.addEventListener("beforeunload", beforeUnload);
-defineExpose({ saveProject, running });
+const agentState = computed(() => ({
+  project_id: props.record.id,
+  revision: revision.value,
+  title: project.value.title,
+  entrypoint: project.value.entrypoint,
+  selected_file: selected.value || null,
+  file_count: project.value.files.length,
+  unsaved_changes: dirty.value,
+  result_revision: resultRevision.value,
+}));
+defineExpose({ saveProject, running, agentState });
 function validPath(path) {
   return (
     path &&
@@ -295,6 +308,14 @@ onBeforeUnmount(() => {
         </div>
       </a>
       <div class="header-actions">
+        <button
+          class="agent-toggle"
+          :aria-expanded="agentOpen"
+          aria-controls="playground-agent"
+          @click="emit('toggle-agent')"
+        >
+          Ask Marina
+        </button>
         <span class="trusted">Trusted workspace · CPython</span>
         <button @click="emit('back')" :disabled="running">← Projects</button>
         <button @click="saveProject" :disabled="running || !dirty">Save</button>

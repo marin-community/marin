@@ -576,11 +576,27 @@ def project_from_zip(payload: bytes, title: str, entrypoint: str, packages: list
     return ProjectDocument(title=title, entrypoint=entrypoint, packages=package_text, files=files)
 
 
+class AgentConfiguration(BaseModel):
+    enabled: bool
+    origin: str | None
+    profile: str = "marina"
+    repository: str = "marin-community/marin"
+    starters: tuple[str, ...] = (
+        "Explain this project's code and latest results.",
+        "What should I change to improve this analysis?",
+    )
+
+
 def create_api(services: AppletServices) -> RegisteredApi:
     """Create the shared project directory and trusted execution API."""
     api = FastAPI(title="Python playground")
     engine = services.engine()
     capacity = asyncio.Semaphore(2)
+
+    @api.get("/agent/config")
+    def agent_config() -> AgentConfiguration:
+        origin = os.environ.get("MARINA_AGENT_ORIGIN")
+        return AgentConfiguration(enabled=bool(origin), origin=origin)
 
     @api.get(
         "/projects",
