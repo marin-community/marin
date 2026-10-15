@@ -96,6 +96,7 @@ DATA_PREFIX = "data/"
 API_PREFIX = "/api"
 MCP_PATH = "/api/marina/mcp"
 MCP_READ_PATH = "/api/marina/mcp/read"
+NAMED_APPLET_HOST_STATE = "named_applet_host"
 # The first path segment the kernel answers itself. An app named for one of these would
 # register the same route and lose it: FastAPI keeps the first match, and the kernel's
 # routes are installed before any app's.
@@ -207,7 +208,7 @@ def named_applet_hosts(app: ASGIApp, store: AppletStore, reserved_hosts: set[str
             **scope,
             "path": prefix + scope["path"],
             "raw_path": prefix.encode() + scope.get("raw_path", scope["path"].encode()),
-            "state": {**scope.get("state", {}), "named_applet_host": True},
+            "state": {**scope.get("state", {}), NAMED_APPLET_HOST_STATE: True},
         }
 
         async def send_response(message: Message) -> None:
@@ -1190,7 +1191,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         async def isolate_applet_host(request: Request, call_next):
             host = request.headers.get("host", "").split(":", 1)[0].lower()
             path = request.url.path
-            if request.scope.get("state", {}).get("named_applet_host"):
+            if request.scope.get("state", {}).get(NAMED_APPLET_HOST_STATE):
                 return await call_next(request)
             is_applet_path = path == "/a" or path.startswith("/a/")
             if host == applet_host:
