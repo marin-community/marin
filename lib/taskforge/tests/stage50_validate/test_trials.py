@@ -349,6 +349,15 @@ def test_a_candidate_code_error_is_recorded_on_its_graded_attempt():
     assert (record["outcome"], record["reward"], record["candidate_code_error"]) == ("graded", 0.0, True)
 
 
+def test_captured_output_files_are_recorded_as_base64_on_the_attempt():
+    grade = GradeResult(Outcome.GRADED, 1.0)
+    rollout = RolloutData("task", (), (), (), (), None, grade, "stop", outputs={"/workspace/sum.txt": b"60\n\x00"})
+
+    record = json.loads(outcome_json(Graded(rollout, candidate_code_error=False)))
+
+    assert record["rollout"]["outputs"] == {"/workspace/sum.txt": "NjAKAA=="}
+
+
 async def test_token_contract_retries_stop_at_their_cap(tmp_path, file_task, fakes):
     model = ContractBreakingModel(fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done."), broken=100)
     trial_plan = plan(tmp_path, k=1, max_retries=5, token_contract_retries=1)

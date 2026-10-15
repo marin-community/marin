@@ -165,6 +165,22 @@ def _is_setup_failure(error: BaseException | None, operation: RolloutOperation) 
     return _matches_rolloutengine_setup_message(error)
 
 
+OUTPUT_CAPTURE_MESSAGE_PREFIXES = (
+    "Output capture exceeds",
+    "Downloaded files fall outside",
+    "Download contains an invalid or oversized file",
+    "Cannot inspect download path",
+    "Download archive",
+    "Invalid download",
+)
+"""Messages of the bare errors ``taskcompendium.runtime.output_capture`` and ``shellbox.transfer`` raise
+when the task's declared output paths cannot be captured: the budget, a file limit or a link."""
+
+
+def _is_output_capture_failure(error: BaseException | None) -> bool:
+    return isinstance(error, RuntimeError | ValueError) and str(error).startswith(OUTPUT_CAPTURE_MESSAGE_PREFIXES)
+
+
 def _interruption_cause(error: RolloutInterrupted) -> Cause:
     operation = error.operation
     if operation is RolloutOperation.ATTEMPT:
@@ -186,6 +202,8 @@ def _interruption_cause(error: RolloutInterrupted) -> Cause:
     if operation is RolloutOperation.ADVANCE:
         return Cause.TOOL_EXECUTION
     if operation is RolloutOperation.GRADE:
+        if _is_output_capture_failure(original):
+            return Cause.OUTPUT_CAPTURE
         return Cause.GRADER_TIMEOUT if timed_out else Cause.GRADER_RAISED
     return Cause.UNCLASSIFIED
 
