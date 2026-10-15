@@ -209,3 +209,206 @@ trials:
   settings:
     sconv_kernel: '8'
   commit: 23bd387bcc
+- variant: m2embed + learned per-gate scale on conv(e)
+  rung: d512
+  protocol: equal_steps
+  batch: X0218
+  date: '2026-10-15'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184629121
+  baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  steps: 2760
+  delta:
+  - -0.0067
+  - -0.0067
+  loss:
+  - 3.0202
+  - 3.0248
+  wandb:
+  - belay-X0218-m2embscale-s0
+  - belay-X0218-m2embscale-s1
+  settings:
+    attn_res_streams: '2'
+    attn_res_stream_kernels: '4'
+    attn_res_stream_mixer: 'false'
+    attn_res_stream_sources: embed
+    attn_res_embed_scale: 'true'
+  commit: 00b0b9d102
+- variant: embedding out of layer-gate softmax, added at weight 1
+  rung: d512
+  protocol: equal_steps
+  batch: X0218
+  date: '2026-10-15'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184629121
+  baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  steps: 2760
+  delta:
+  - 0.0122
+  - 0.0196
+  loss:
+  - 3.0391
+  - 3.0511
+  wandb:
+  - belay-X0218-embout-s0
+  - belay-X0218-embout-s1
+  settings:
+    attn_res_embed_out: 'true'
+  commit: 00b0b9d102
+- variant: embedding out of softmax + learned per-gate scale
+  rung: d512
+  protocol: equal_steps
+  batch: X0218
+  date: '2026-10-15'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184629121
+  baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  steps: 2760
+  delta:
+  - 0.0054
+  - 0.0104
+  loss:
+  - 3.0323
+  - 3.0419
+  wandb:
+  - belay-X0218-emboutscale-s0
+  - belay-X0218-emboutscale-s1
+  settings:
+    attn_res_embed_out: 'true'
+    attn_res_embed_scale: 'true'
+  commit: 00b0b9d102
+- variant: MLP-output SConv dropped
+  rung: d512
+  protocol: equal_steps
+  batch: X0218
+  date: '2026-10-15'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184629121
+  baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  steps: 2760
+  delta:
+  - 0.0043
+  - 0.0009
+  loss:
+  - 3.0312
+  - 3.0324
+  wandb:
+  - belay-X0218-nomlpconv-s0
+  - belay-X0218-nomlpconv-s1
+  settings:
+    sconv_sites: attn
+  commit: 00b0b9d102
+- variant: MLP-output SConv moved to MLP input
+  rung: d512
+  protocol: equal_steps
+  batch: X0218
+  date: '2026-10-15'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184629121
+  baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  steps: 2760
+  delta:
+  - 0.0022
+  - 0.0014
+  loss:
+  - 3.0291
+  - 3.0329
+  wandb:
+  - belay-X0218-mlpin-s0
+  - belay-X0218-mlpin-s1
+  settings:
+    sconv_sites: attn,mlp_in
+  commit: 00b0b9d102
+- variant: MLP-output SConv + routed latent-output conv
+  rung: d512
+  protocol: equal_steps
+  batch: X0218
+  date: '2026-10-15'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184629121
+  baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  steps: 2760
+  delta:
+  - -0.0004
+  - 0.0005
+  loss:
+  - 3.0265
+  - 3.032
+  wandb:
+  - belay-X0218-mlplatent-s0
+  - belay-X0218-mlplatent-s1
+  settings:
+    sconv_sites: attn,mlp,latent_out
+  commit: 33aa1753a8
+- variant: routed latent-output conv instead of MLP-output conv
+  rung: d512
+  protocol: equal_steps
+  batch: X0218
+  date: '2026-10-15'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184629121
+  baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  steps: 2760
+  delta:
+  - -0.0018
+  - -0.0007
+  loss:
+  - 3.0251
+  - 3.0308
+  wandb:
+  - belay-X0218-latent-s0
+  - belay-X0218-latent-s1
+  settings:
+    sconv_sites: attn,latent_out
+  commit: 33aa1753a8
+- variant: routed latent-output + shared-output convs
+  rung: d512
+  protocol: equal_steps
+  batch: X0218
+  date: '2026-10-15'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184629121
+  baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  steps: 2760
+  delta:
+  - -0.0032
+  - -0.0011
+  loss:
+  - 3.0237
+  - 3.0304
+  wandb:
+  - belay-X0218-latentshared-s0
+  - belay-X0218-latentshared-s1
+  settings:
+    sconv_sites: attn,latent_out,shared_out
+  commit: 33aa1753a8
+- variant: routed latent-input conv instead
+  rung: d512
+  protocol: equal_steps
+  batch: X0218
+  date: '2026-10-15'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184629121
+  baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  steps: 2760
+  delta:
+  - 0.0014
+  - 0.0031
+  loss:
+  - 3.0283
+  - 3.0346
+  wandb:
+  - belay-X0218-latentin-s0
+  - belay-X0218-latentin-s1
+  settings:
+    sconv_sites: attn,latent_in
+  commit: 33aa1753a8
+- variant: shared-input conv instead
+  rung: d512
+  protocol: equal_steps
+  batch: X0218
+  date: '2026-10-15'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184629121
+  baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  steps: 2760
+  delta:
+  - 0.0015
+  loss:
+  - 3.0284
+  wandb:
+  - belay-X0218-sharedin-s0
+  settings:
+    sconv_sites: attn,shared_in
+  commit: 33aa1753a8
+  note: seed 1 stopped at step 2758 without a final eval
