@@ -52,6 +52,7 @@ from taskcompendium.models import (
     TextMessage,
     VerifierArtifact,
 )
+from taskcompendium.runtime.output_capture import MAX_OUTPUT_FILES
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import ShellToolConfig
 from verifyit.grade import grade as verifyit_grade
@@ -401,6 +402,71 @@ async def test_session_graded_task_returns_and_grades_declared_outputs():
     ).run(lowered(task, machine=machine_runtime(), task_session="fixture"))
     assert record.outputs == {"/workspace/report.txt": b"ready\n"}
     assert record.grade.reward == 1.0
+
+
+class OutputWritingSession:
+    """Write ``command``'s files in the first transition, then grade only after ``grading`` is released."""
+
+    def __init__(self, context, command: str, grading: asyncio.Future | None = None):
+        self.machine = context.machine
+        self.command = command
+        self.grading = grading
+        self.entered = asyncio.Event()
+
+    async def prepare(self):
+        return SessionStart(({"role": "user", "content": "Write the report."},), {})
+
+    async def advance(self, turn):
+        assert (await self.machine.run(Command(("sh", "-c", self.command)))).exit_code == 0
+        return Transition(done=True)
+
+    async def grade(self, _messages, *, stop_reason, outputs):
+        self.entered.set()
+        if self.grading is not None:
+            await self.grading
+        return GradeResult(Outcome.GRADED, 1.0)
+
+    async def close(self):
+        pass
+
+
+@pytest.mark.parametrize("deadline", ["attempt_timeout", "verifier_timeout"])
+async def test_deadline_during_grading_keeps_captured_outputs(deadline):
+    task = file_task(grader=SessionGrader(), resources=ResourceGroups(), output_paths=("/workspace/report.txt",))
+    with pytest.raises(RolloutInterrupted) as caught:
+        await RolloutEngine(
+            ReplayModel([{"role": "assistant", "content": "ready"}]).complete,
+            {"local": RecordingShellSimFactory()},
+            sessions={
+                "fixture": lambda context: OutputWritingSession(
+                    context, "echo ready > /workspace/report.txt", asyncio.Future()
+                )
+            },
+        ).run(lowered(task, machine=machine_runtime(), task_session="fixture", **{deadline: 1.0}))
+    expected = RolloutOperation.ATTEMPT if deadline == "attempt_timeout" else RolloutOperation.GRADE
+    assert caught.value.operation == expected
+    assert caught.value.rollout.outputs == {"/workspace/report.txt": b"ready\n"}
+
+
+async def test_output_capture_over_the_file_budget_interrupts_grading():
+    sessions = []
+
+    def session(context):
+        command = f"mkdir -p /workspace/out && cd /workspace/out && touch $(seq {MAX_OUTPUT_FILES + 1})"
+        sessions.append(OutputWritingSession(context, command))
+        return sessions[-1]
+
+    task = file_task(grader=SessionGrader(), resources=ResourceGroups(), output_paths=("/workspace/out",))
+    with pytest.raises(RolloutInterrupted) as caught:
+        await RolloutEngine(
+            ReplayModel([{"role": "assistant", "content": "ready"}]).complete,
+            {"local": RecordingShellSimFactory()},
+            sessions={"fixture": session},
+        ).run(lowered(task, machine=machine_runtime(), task_session="fixture"))
+    assert caught.value.operation == RolloutOperation.GRADE
+    assert "file or byte budget" in str(caught.value.__cause__)
+    assert caught.value.rollout.outputs == {}
+    assert not sessions[0].entered.is_set()
 
 
 @pytest.mark.parametrize("compact", [False, True])
