@@ -5,15 +5,17 @@
 
 Every run trains the 67B-A2B Snowball SFT export on the E6.2 Snowball training selection with 64 prompts and eight
 answers per update, PPO with token-level truncated importance sampling at staleness 4, and the async launcher's
-optimizer, and it evaluates on the held-out MATH level 3-5 set. The MarinSkyRL commit that this branch pins decides
-the numerics; ``--routing replay`` replays vLLM's expert routes in the trainer. Only the RL stage is built: the in-run
-evaluation scores the held-out set.
+optimizer, and it evaluates on the held-out MATH level 3-5 set. ``--numerics`` sets ``trainer.numerics.mode``
+(``native``: each side's own kernels; ``exact``: decode-invariant vLLM engines and Grug trainer kernels that compute
+the engines' log-probabilities bit for bit); ``--routing replay`` replays vLLM's expert routes in the trainer. Every
+run checks the trainer's log-probabilities against the engines' every 10 weight syncs. Only the RL stage is built: the
+in-run evaluation scores the held-out set.
 
 Plan or run::
 
-    python -m experiments.post_training.snowball_numerics_ab --version 2026.10.02.1 --preset gate --routing native \\
-        --cluster cw-us-east-02a
-    python -m experiments.post_training.snowball_numerics_ab --version 2026.10.02.1 --preset full \\
+    python -m experiments.post_training.snowball_numerics_ab --version 2026.10.02.1 --preset gate --numerics exact \\
+        --routing native --cluster cw-us-east-02a
+    python -m experiments.post_training.snowball_numerics_ab --version 2026.10.02.1 --preset full --numerics native \\
         --routing replay --cluster cw-rno2a --run
 """
 
@@ -84,11 +86,22 @@ NUMERICS_AB_RECIPE = replace(
     ),
 )
 
-# 100 updates, evaluating every 10. 96 prompt groups in flight hold the default's 768 sequences.
-FULL = replace(DEFAULT, label="full", max_in_flight_groups=96)
+# 100 updates, evaluating every 10. 96 prompt groups generating at once hold 768 sequences.
+FULL = replace(DEFAULT, label="full", generation_workers=96)
 # The full run's settings for two updates.
 GATE = replace(FULL, label="gate", max_steps=2)
 PRESETS: Mapping[str, AsyncPreset] = MappingProxyType({preset.label: preset for preset in (GATE, FULL)})
+
+
+class Numerics(StrEnum):
+    """The ``trainer.numerics.mode`` of a run."""
+
+    NATIVE = "native"
+    EXACT = "exact"
+
+
+# Weight syncs between two exactness checks, in every arm.
+CHECK_EVERY_WEIGHT_SYNCS = 10
 
 
 class Routing(StrEnum):
@@ -98,12 +111,19 @@ class Routing(StrEnum):
     REPLAY = "replay"
 
 
-def numerics_ab_config(preset: AsyncPreset, routing: Routing, settings: tuple[str, ...] = ()) -> dict:
-    """Render the shared A/B config for one routing mode, then apply ``--set`` changes."""
+def numerics_ab_config(
+    preset: AsyncPreset, numerics: Numerics, routing: Routing, settings: tuple[str, ...] = ()
+) -> dict:
+    """Render the shared A/B config for one numerics and routing mode, then apply ``--set`` changes."""
     config = snowball_config(preset, NUMERICS_AB_RECIPE)
     trainer = config["trainer"]
     trainer["project_name"] = WANDB_PROJECT
     trainer["eval_batch_size"] = EVAL_BATCH_PROMPTS
+    # A failed check logs and the run continues, so native arms report their mismatch.
+    trainer["numerics"] = {
+        "mode": str(numerics),
+        "check": {"every_weight_syncs": CHECK_EVERY_WEIGHT_SYNCS, "on_failure": "log"},
+    }
     algorithm = trainer["algorithm"]
     # PPO's clipped ratio against the trainer's own old log-probabilities.
     algorithm["policy_loss_type"] = "regular"
@@ -124,29 +144,41 @@ def numerics_ab_config(preset: AsyncPreset, routing: Routing, settings: tuple[st
     return apply_settings(config, settings)
 
 
+def run_label(preset: AsyncPreset, numerics: Numerics, routing: Routing) -> str:
+    """The run's name: the MarinSkyRL commit, numerics, routing mode and preset."""
+    return f"skyrl-{MARIN_SKYRL.commit[:9]}-{numerics}-{routing}-{preset.label}"
+
+
 def build_run(
-    preset: AsyncPreset, routing: Routing, cluster: str, version: str | None, settings: tuple[str, ...] = ()
+    preset: AsyncPreset,
+    numerics: Numerics,
+    routing: Routing,
+    cluster: str,
+    version: str | None,
+    settings: tuple[str, ...] = (),
 ) -> ArtifactStep[SkyRLRun]:
-    """Assemble the RL step for one preset and routing mode on ``cluster`` under this branch's MarinSkyRL commit."""
+    """Assemble the RL step for one preset, numerics and routing mode on ``cluster`` under this branch's MarinSkyRL
+    commit."""
     recipe = NUMERICS_AB_RECIPE
     policy = SNOWBALL_POLICY
-    config = numerics_ab_config(preset, routing, settings)
+    config = numerics_ab_config(preset, numerics, routing, settings)
     train = ArtifactStep.adopt(
         user_owned_name(f"documents/{EXPERIMENT_NAME}/e62-snowball-train"), "2026.09.12", TRAIN_DATA_URI
     )
     heldout = ArtifactStep.adopt(
         user_owned_name(f"documents/{EXPERIMENT_NAME}/heldout-math-l345"), "2026.09.14", HELDOUT_DATA_URI
     )
-    # The run's address names the MarinSkyRL commit and routing mode; a --set run also carries a hash of its settings.
+    # The run's address names the MarinSkyRL commit, numerics and routing mode; a --set run also carries a hash of its
+    # settings.
     changes = "\n".join(settings)
     suffix = f"-set-{fingerprint_hash(changes)}" if settings else ""
-    base_name = f"checkpoints/{EXPERIMENT_NAME}/skyrl-{MARIN_SKYRL.commit[:9]}-{routing}-{preset.label}{suffix}"
+    base_name = f"checkpoints/{EXPERIMENT_NAME}/{run_label(preset, numerics, routing)}{suffix}"
     return skyrl_step(
         SkyRLSpec(
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
             config_yaml=yaml.safe_dump(config, sort_keys=False),
-            runtime=SkyRLRuntime(),
+            runtime=SkyRLRuntime(profile=recipe.profile),
             model=ArtifactHfModel(
                 step=SNOWBALL_MODEL,
                 tokenizer_uri=policy.tokenizer_uri,
@@ -186,6 +218,7 @@ def build_run(
 
 @click.command(help=__doc__)
 @click.option("--preset", type=click.Choice(sorted(PRESETS)), required=True)
+@click.option("--numerics", type=click.Choice([mode.value for mode in Numerics]), required=True)
 @click.option("--routing", type=click.Choice([mode.value for mode in Routing]), required=True)
 @click.option("--cluster", type=click.Choice(H100_CLUSTERS), required=True, help="H100 cluster that runs the job.")
 @click.option(
@@ -196,9 +229,12 @@ def build_run(
     help="Change one setting of the rendered RL config (dotted key; prefix + to add a new key).",
 )
 @rl_build_options
-def main(preset: str, routing: str, cluster: str, settings: tuple[str, ...]) -> dict[str, ArtifactStep]:
-    mode = Routing(routing)
-    return {f"skyrl-{MARIN_SKYRL.commit[:9]}-{mode}-{preset}": build_run(PRESETS[preset], mode, cluster, None, settings)}
+def main(
+    preset: str, numerics: str, routing: str, cluster: str, settings: tuple[str, ...]
+) -> dict[str, ArtifactStep]:
+    chosen = PRESETS[preset]
+    mode, route = Numerics(numerics), Routing(routing)
+    return {run_label(chosen, mode, route): build_run(chosen, mode, route, cluster, None, settings)}
 
 
 if __name__ == "__main__":
