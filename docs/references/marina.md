@@ -140,9 +140,3 @@ Applets default to private. Public mode exposes GET/HEAD only on the public appl
 origin and must contain only data and trusted handlers intended for unrestricted
 access. Named apps stay private. See the [reference](https://github.com/marin-community/marin/blob/main/infra/marina/README.md)
 for mode changes, query limits, deployment gates and recovery.
-
-## Python playground
-
-The [Python playground](https://github.com/marin-community/marin/blob/main/infra/marina/applets/python_playground/README.md)
-provides file editing, trusted CPython execution, saved projects and report previews.
-Its README covers local previews, storage limits, examples, agent access and the upload CLI.
