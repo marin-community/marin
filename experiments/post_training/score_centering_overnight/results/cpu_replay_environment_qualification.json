@@ -1,0 +1,120 @@
+{
+  "qualification_passed": true,
+  "scope": "CPU environment and source/S3 transport qualification only; no response-grade replay or scientific endpoint claim.",
+  "native_result": {
+    "archive_bytes_sha256": "2b0e893deedfa4cf4580d7b70ce1d61344c0d4324cb2e6408d24a02faf49dc7f",
+    "archive_record_entries": 6024,
+    "grader_hashes": {
+      "skyrl-gym/skyrl_gym/envs/aime/utils.py": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+      "skyrl-gym/skyrl_gym/envs/gsm8k/utils.py": "16680a223ba876ff0a51184db6863b1527c84ba87fc3cf19f92a376652394115",
+      "skyrl-gym/skyrl_gym/envs/nemotron_ultra/answer_extraction.py": "1d48e25122f452147e795eb6e8e21eea217654756ece9e918fe0a8ece2ab108e",
+      "skyrl-gym/skyrl_gym/envs/reasoning_gym/scoring.py": "8b9f61cf4ad560dff639e8c6425a838f04d94c4eb175b547efa0d20d1c884d3c"
+    },
+    "job_id": "/romain/score-grader-env-qwen-a1-01a126ce",
+    "own_immutable_s3_archive_read": true,
+    "probe_passed": true,
+    "requested_accelerators": 0,
+    "scope": "CPU environment and source/S3 transport qualification only; no response-grade replay or scientific endpoint claim.",
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "uv_lock_sha256": "c9ff3b70074681e62f2683acd7b4b9487c9dc222d6065f61198c6e5e5d9ae891",
+    "versions": {
+      "func-timeout": "4.3.5",
+      "math-verify": "0.9.0",
+      "numpy": "2.3.5",
+      "pandas": "2.3.3",
+      "pyarrow": "25.0.0",
+      "reasoning-gym": "0.1.25",
+      "sympy": "1.14.0",
+      "torch": "2.11.0+cpu",
+      "transformers": "5.16.1",
+      "verifyit": "0.1.0"
+    },
+    "visible_cuda_devices": 0
+  },
+  "result_provenance": {
+    "bucket": "marin-us-east-02a",
+    "key": "marin/users/romain/score-centering-overnight-01a123c0/offline-replays/environment-probes/score-grader-env-qwen-a1-01a126ce/result.json",
+    "etag": "\"980797a9ed083f9911c3a95f74bec09d\"",
+    "bytes": 1294,
+    "sha256": "dd27c6b2d223d441cf1b36d9a3ec58557d8e4bf20654e4b717e0f31c5e10a724"
+  },
+  "source_bundle": {
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "workspace": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/cpu-replay-frozen0212-runtime-workspace",
+    "git_archive_sha256": "bff68a7728937311e71b9414c50fda6b7a6209169112e2033d3cca69dd926630",
+    "uncompressed_source_bytes": 14298909,
+    "all_grader_and_lock_hashes_match": true,
+    "untracked_caches_and_credentials_excluded": true,
+    "native_iris_zip_bytes": 5639042,
+    "native_iris_zip_sha256": "4fffb6c137a017ea0a973316265f07bf1895deaa788f3185eabda7e3eb249efa"
+  },
+  "payload_sha256": "cf415e23b4efa395189bbaa18d0705010e2a42f1582baf6bebc905e4a7753a42",
+  "allocations": [
+    {
+      "job_id": "/romain/score-grader-env-qwen-a0-01a126ce",
+      "cluster": "cw-rno2a",
+      "task_attempt": {
+        "task_id": "/romain/score-grader-env-qwen-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "b12a0a290824d7d5",
+        "state": "4",
+        "exit_code": "0",
+        "started_at_ms": "1792079355300",
+        "finished_at_ms": "1792079371049",
+        "node_name": "gb95c40",
+        "terminal_reason": ""
+      },
+      "requested_cpu": 2,
+      "requested_memory": "8GB",
+      "requested_disk": "20GB",
+      "controller_accelerator_spec": {},
+      "allocated_cpu_hours": 0.008749444444444445,
+      "allocated_h100_hours": 0,
+      "role": "CPU environment and source transport probe",
+      "durable_output_attestation_passed": false,
+      "controller_resource_spec": {
+        "job_id": "/romain/score-grader-env-qwen-a0-01a126ce",
+        "state": "4",
+        "res_cpu_millicores": "2000",
+        "res_memory_bytes": "8589934592",
+        "res_disk_bytes": "21474836480",
+        "res_device_json": "{}",
+        "priority_band": "3"
+      }
+    },
+    {
+      "job_id": "/romain/score-grader-env-qwen-a1-01a126ce",
+      "cluster": "cw-rno2a",
+      "task_attempt": {
+        "task_id": "/romain/score-grader-env-qwen-a1-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "4149d3ff2682cc9b",
+        "state": "4",
+        "exit_code": "0",
+        "started_at_ms": "1792080694802",
+        "finished_at_ms": "1792080716756",
+        "node_name": "gb95c40",
+        "terminal_reason": ""
+      },
+      "requested_cpu": 2,
+      "requested_memory": "8GB",
+      "requested_disk": "20GB",
+      "controller_accelerator_spec": {},
+      "allocated_cpu_hours": 0.012196666666666666,
+      "allocated_h100_hours": 0,
+      "role": "CPU environment and source transport probe",
+      "durable_output_attestation_passed": true,
+      "controller_resource_spec": {
+        "job_id": "/romain/score-grader-env-qwen-a1-01a126ce",
+        "state": "4",
+        "res_cpu_millicores": "2000",
+        "res_memory_bytes": "8589934592",
+        "res_disk_bytes": "21474836480",
+        "res_device_json": "{}",
+        "priority_band": "3"
+      }
+    }
+  ],
+  "total_cpu_hours": 0.02094611111111111,
+  "total_h100_hours": 0
+}

@@ -1,0 +1,110 @@
+{
+  "scope": "Auxiliary zero-GPU jobs accounted separately from the H100 ledger",
+  "allocations": [
+    {
+      "job_id": "/romain/score-grader-env-qwen-a0-01a126ce",
+      "cluster": "cw-rno2a",
+      "task_attempt": {
+        "task_id": "/romain/score-grader-env-qwen-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "b12a0a290824d7d5",
+        "state": "4",
+        "exit_code": "0",
+        "started_at_ms": "1792079355300",
+        "finished_at_ms": "1792079371049",
+        "node_name": "gb95c40",
+        "terminal_reason": ""
+      },
+      "requested_cpu": 2,
+      "requested_memory": "8GB",
+      "requested_disk": "20GB",
+      "controller_accelerator_spec": {},
+      "allocated_cpu_hours": 0.008749444444444445,
+      "allocated_h100_hours": 0,
+      "role": "CPU environment and source transport probe",
+      "durable_output_attestation_passed": false,
+      "controller_resource_spec": {
+        "job_id": "/romain/score-grader-env-qwen-a0-01a126ce",
+        "state": "4",
+        "res_cpu_millicores": "2000",
+        "res_memory_bytes": "8589934592",
+        "res_disk_bytes": "21474836480",
+        "res_device_json": "{}",
+        "priority_band": "3"
+      }
+    },
+    {
+      "job_id": "/romain/score-grader-env-qwen-a1-01a126ce",
+      "cluster": "cw-rno2a",
+      "task_attempt": {
+        "task_id": "/romain/score-grader-env-qwen-a1-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "4149d3ff2682cc9b",
+        "state": "4",
+        "exit_code": "0",
+        "started_at_ms": "1792080694802",
+        "finished_at_ms": "1792080716756",
+        "node_name": "gb95c40",
+        "terminal_reason": ""
+      },
+      "requested_cpu": 2,
+      "requested_memory": "8GB",
+      "requested_disk": "20GB",
+      "controller_accelerator_spec": {},
+      "allocated_cpu_hours": 0.012196666666666666,
+      "allocated_h100_hours": 0,
+      "role": "CPU environment and source transport probe",
+      "durable_output_attestation_passed": true,
+      "controller_resource_spec": {
+        "job_id": "/romain/score-grader-env-qwen-a1-01a126ce",
+        "state": "4",
+        "res_cpu_millicores": "2000",
+        "res_memory_bytes": "8589934592",
+        "res_disk_bytes": "21474836480",
+        "res_device_json": "{}",
+        "priority_band": "3"
+      }
+    }
+  ],
+  "active_allocations": [
+    {
+      "job_id": "/romain/score-grader-qwen-curriculum-sc-s0-a0-01a126ce",
+      "cluster": "cw-rno2a",
+      "controller_row": {
+        "job_id": "/romain/score-grader-qwen-curriculum-sc-s0-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "27e20d973d47513ba60ce0ea08c71ea01146b4903a49d382bc528be9177d837c",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-curriculum-sc-s0-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "2f7c3c55607d5e61",
+        "task_state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792081964976",
+        "finished_at_ms": "",
+        "node_name": "gb95f20",
+        "terminal_reason": ""
+      },
+      "controller_resource_spec": {
+        "job_id": "/romain/score-grader-qwen-curriculum-sc-s0-a0-01a126ce",
+        "state": "3",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "priority_band": "3"
+      },
+      "requested_cpu": 32,
+      "requested_memory": "64GB",
+      "requested_disk": "50GB",
+      "allocated_h100_hours": 0,
+      "terminal_cost_pending": true,
+      "role": "Full audited Qwen curriculum SC seed0 response replay"
+    }
+  ],
+  "total_terminal_allocated_cpu_hours": 0.02094611111111111,
+  "total_allocated_h100_hours": 0
+}

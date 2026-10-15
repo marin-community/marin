@@ -1,7 +1,7 @@
 {
-  "scope": "Prepared, unsubmitted five-node engineering qualification for the current checkpoint-recovery candidate. It cannot replace scientific main1200 or stale calibration130.",
+  "scope": "Three-phase five-node engineering qualification for the checkpoint-recovery candidate. Initial save5 is submitted; both restore phases remain gated. It cannot replace scientific main1200 or stale calibration130.",
   "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
-  "status": "All Qwen periodic/noisy GPU save/restore and3584full-response replay prerequisite gates pass. All five-node phases remain prepared/unsubmitted until actual submission is confirmed.",
+  "status": "All Qwen3phase GPU/native/full3584replay prerequisites pass. Initial exact173five-node RNO save5 submitted and controller-confirmed; restore5-to7 and restore7-to9 remain unsubmitted behind each previous phase gate.",
   "prerequisite": "Complete bounded Qwen periodic/noisy save2, restore2-to5, restore5-to7 qualification with real native state and behavior evidence.",
   "geometry": {
     "cluster": "cw-rno2a",
@@ -40,9 +40,77 @@
         0,
         5
       ],
-      "controller_confirmed": false,
+      "controller_confirmed": true,
       "submission_gate": "All three Qwen periodic save/restore phases must pass actual native optimizer/loader/sampler/evidence gates before this five-node initial qualification may submit.",
-      "prepared_configuration_sha256": "22aad7abe7b6ecdbd4dbb87876e2e94a7cceeedb81cdc5e9b8db93a420bbfaea"
+      "prepared_configuration_sha256": "22aad7abe7b6ecdbd4dbb87876e2e94a7cceeedb81cdc5e9b8db93a420bbfaea",
+      "controller_job": {
+        "job_id": "/romain/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce",
+        "state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "40f2f7bb925080a897b683ea6e733b3fc0f00e4c52a5ae2907b2241cb7a71010",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "initial_task_attempts": [
+        {
+          "task_id": "/romain/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "1b04408ac948af70",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "d0914a42091b253f",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/2",
+          "attempt_id": "0",
+          "attempt_uid": "02a162cdef9bb7c9",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/3",
+          "attempt_id": "0",
+          "attempt_uid": "c0c5c34faf3a419e",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/4",
+          "attempt_id": "0",
+          "attempt_uid": "4cb842068f094ad1",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        }
+      ],
+      "submitted_configuration": "snowball_checkpoint_recovery_qualification_v1/save5-detach.yaml",
+      "configuration_sha256": "400b4cb3079fb8948e696e4159bc4f247816055eb796469b62f4c91b7c7952d1"
     },
     {
       "phase": "restore5",

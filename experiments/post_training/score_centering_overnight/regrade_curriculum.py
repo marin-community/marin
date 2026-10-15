@@ -126,7 +126,10 @@ def main() -> None:
     parser.add_argument("--validation-source", type=Path, required=True)
     parser.add_argument("--runtime-checkout", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--workers", type=int, default=4)
     args = parser.parse_args()
+    if args.workers < 1:
+        parser.error("--workers must be positive")
     config = yaml.safe_load(args.config.read_text())
     audited = read_json(args.audit)
     assert audited["audit_passed"] and audited["run_id"] == config["run"]["id"]
@@ -176,7 +179,7 @@ def main() -> None:
     discrepancies = []
     native_errors = []
     with ProcessPoolExecutor(
-        max_workers=4,
+        max_workers=args.workers,
         initializer=load_sources,
         initargs=(str(args.train_source), str(args.validation_source), preserve_full_response, eos_token_text),
     ) as executor:
