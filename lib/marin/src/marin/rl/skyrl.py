@@ -245,7 +245,7 @@ class TaskTroveDataSource:
 type SkyRLDataSource = ArtifactDataSource | TaskTroveDataSource
 
 
-_MARIN_POLICY = RecipePatch(trainer=Trainer(strategy="megatron"), generator=Generator(run_engines_locally=True))
+MARIN_RECIPE_POLICY = RecipePatch(trainer=Trainer(strategy="megatron"), generator=Generator(run_engines_locally=True))
 
 
 @dataclass(frozen=True)
@@ -263,7 +263,7 @@ class SkyRLSpec:
     seed: int
 
     def __post_init__(self) -> None:
-        recipe = SkyRLRecipe.combine(authored=self.recipe, marin=_MARIN_POLICY)
+        recipe = SkyRLRecipe.combine(authored=self.recipe, marin=MARIN_RECIPE_POLICY)
         object.__setattr__(self, "recipe", recipe)
         trainer, generator = recipe.trainer, recipe.generator
         placement = trainer.placement
