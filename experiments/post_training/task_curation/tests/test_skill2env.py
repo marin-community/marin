@@ -31,7 +31,6 @@ from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets.skill2env.conversion import RELEASE, convert_task
-from experiments.post_training.task_curation.datasets.skill2env.grade import component_reward
 
 
 def exported_row() -> RawRow:
@@ -140,16 +139,16 @@ def test_unbuilt_export_preserves_contexts_and_private_roles_but_cannot_execute(
 
 
 @pytest.mark.parametrize(
-    "files,components,score,passed",
+    "files,components,score",
     [
-        ({"answer.txt": b"correct", "checker.txt": b"original"}, {"answer": 1.0, "checker": 1.0}, 1.0, True),
-        ({"answer.txt": b"correct", "checker.txt": b"changed"}, {"answer": 1.0, "checker": 0.0}, 0.5, False),
-        ({"answer.txt": b"correct"}, {"answer": 1.0, "checker": 0.0}, 0.5, False),
-        ({}, {"answer": 0.0, "checker": 0.0}, 0.0, False),
+        ({"answer.txt": b"correct", "checker.txt": b"original"}, {"answer": 1.0, "checker": 1.0}, 1.0),
+        ({"answer.txt": b"correct", "checker.txt": b"changed"}, {"answer": 1.0, "checker": 0.0}, 0.5),
+        ({"answer.txt": b"correct"}, {"answer": 1.0, "checker": 0.0}, 0.5),
+        ({}, {"answer": 0.0, "checker": 0.0}, 0.0),
     ],
 )
 @pytest.mark.asyncio
-async def test_native_script_grades_captured_workspace_and_preserves_components(files, components, score, passed):
+async def test_native_script_grades_captured_workspace_and_preserves_components(files, components, score):
     task = convert_task(exported_row(), ConversionContext({}, None))
     assert isinstance(task, TaskSpec) and isinstance(task.grader, ScriptGrader)
     # The fixture uses only stdlib; use a real local sandbox at the machine boundary.
@@ -173,10 +172,4 @@ async def test_native_script_grades_captured_workspace_and_preserves_components(
         pytest.skip(str(error))
     result = await grade_in_sandbox(task, attempt, factory, MachineSpec(HostImage(), network=NetworkPolicy.DENY))
     assert result.status == Outcome.GRADED, result
-    assert (result.reward, result.passed, result.detail) == (score, passed, {"native_rewards": components})
-
-
-def test_component_full_pass_is_not_inferred_from_mean():
-    result = component_reward({"one": 1.0, "two": 1.0, "three": 1.0, "four": 1 - 2e-9})
-    assert result["reward"] > 1 - 1e-9
-    assert result["passed"] is False
+    assert (result.reward, result.passed, result.detail) == (score, None, {"native_rewards": components})

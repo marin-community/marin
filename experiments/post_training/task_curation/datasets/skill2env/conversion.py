@@ -146,7 +146,6 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
             timeout=config["verifier"]["timeout_sec"],
             reward=FileReward(
                 files=(RewardFile(path=str(grade.ADAPTED_REWARD), format=RewardFileFormat.JSON),),
-                passed_key="passed",
             ),
         ),
         tags=("agentic", "multi-turn", "native-harbor", "workspace-files"),

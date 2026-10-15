@@ -10,7 +10,6 @@ from pathlib import Path
 
 NATIVE_REWARD = Path("/logs/verifier/reward.json")
 ADAPTED_REWARD = Path("/logs/verifier/curation-reward.json")
-FULL_PASS_TOLERANCE = 1e-9
 
 
 def component_reward(rewards: dict[str, float]) -> dict:
@@ -23,7 +22,6 @@ def component_reward(rewards: dict[str, float]) -> dict:
         raise ValueError("Native reward components must be finite numbers in [0, 1]")
     return {
         "reward": math.fsum(rewards.values()) / len(rewards),
-        "passed": all(abs(value - 1.0) <= FULL_PASS_TOLERANCE for value in rewards.values()),
         "detail": {"native_rewards": rewards},
     }
 

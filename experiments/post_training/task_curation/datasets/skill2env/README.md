@@ -51,10 +51,10 @@ evidence about all 7,496 tasks.
 
 The grading definition invokes the unchanged `tests/test.sh` in a separate sandbox. Private
 tests and reference solutions are excluded from agent resources. It retains
-native components in grading details, reports their arithmetic mean, and marks
-full pass only when every component is within `1e-9` of one. These last two
-rules are curation conventions. The optional written LLM rubric is preserved
-but not executed.
+native components in grading details and reports their arithmetic mean, following
+the outcome-reward method in [the paper, section 3.2.2](https://www.alphaxiv.org/abs/2609.reinforcing-agents-collective-skills.pdf#page=6).
+It uses the existing scalar reward interface without a separate pass/fail verdict.
+The optional written LLM rubric is preserved but not executed.
 
 Workspace capture preserves file contents, including changes to preexisting
 files and deletions. It does not reproduce file modes, symlinks, empty

@@ -18,8 +18,8 @@ The grader receives the captured /workspace in a separate native image. Check wh
 outside that workspace, file modes, symlinks, empty directories, network access, or undeclared services. These
 contracts need additional runtime support; do not infer equivalence from a passing reference solution alone.
 
-The scalar reward is the arithmetic mean of native components; full pass requires every component to be one
-within 1e-9. The optional rubric.md reward is not executed. Distinguish curation opinions from executable rewards.
+The scalar reward is the arithmetic mean of native components, following the authors' outcome-reward method.
+The optional rubric.md reward is not executed. Distinguish curation opinions from executable rewards.
 """
 
 
@@ -43,7 +43,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             config=CurationRecipe(
                 name="skill2env",
                 source=HarborSource(name, revision),
-                version="3",
+                version="4",
                 convert=convert_task,
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
