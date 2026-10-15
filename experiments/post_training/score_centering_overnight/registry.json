@@ -2287,8 +2287,8 @@
       "configuration_sha256": "f156b6a522629b76e2d516a6e014e50fe7b8b357d7d65031d234661d084929e8",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-tis-s0-main-rno-a2-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 5,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "da1bb0c2c29f8a27ec1598e90e6024a3808a9c2cfe7e2d969ad1142492c503cb",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
@@ -2685,5 +2685,5 @@
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-15T01:16:54.478432+00:00"
+  "observed_at": "2026-10-15T02:48:12.723803+00:00"
 }

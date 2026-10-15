@@ -1,0 +1,39 @@
+{
+  "new_run": "sc-qwen-transfer-native-window-tis-s0-main-rno-a3-01a126ce",
+  "retired_run": "sc-qwen-transfer-native-window-tis-s0-main-rno-a2-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "scientific_updates": 1200,
+  "same_learning_recipe": true,
+  "config_sha256": "aaec98dcc4f6c3a325a19721a82fff2011ca147babf2fb66844ba3a1f7b4797e",
+  "preflight_passed": true,
+  "preflight_log_sha256": "5b2db5f3d6de30925ccaec6f1c6d0fb9314d2967081defc463cb8de395ceb69b",
+  "failed_attempt_number": 8,
+  "failed_attempt_rows": [
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-tis-s0-main-rno-a2-01a126ce/0",
+      "attempt_id": "8",
+      "attempt_uid": "3e44117d17bbd9a9",
+      "state": "5",
+      "exit_code": "1",
+      "started_at_ms": "1792030849166",
+      "finished_at_ms": "1792031702964",
+      "node_name": "gb95eb0",
+      "terminal_reason": "t, _LEDGER_NAME)\n  File \"/app/marinskyrl/skyrl-train/skyrl_train/trajectory_runners/trajectory_retention.py\", line 1071, in _raise_publication_error\n    raise TrajectoryRetentionPublicationTimeout(message)\nskyrl_train.trajectory_runners.trajectory_retention.TrajectoryRetentionPublicationTimeout: trajectory retention publication failed for _retention_ledger.json: storage operation exceeded 600 seconds\n2026-10-15 02:34:12.989 | ERROR    | skyrl_train.entrypoints.main_base:run_ray_driver:747 - Pres"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-tis-s0-main-rno-a2-01a126ce/1",
+      "attempt_id": "8",
+      "attempt_uid": "632e7f6fa66a8bd0",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792030844051",
+      "finished_at_ms": "1792031702964",
+      "node_name": "gb95f50",
+      "terminal_reason": ""
+    }
+  ],
+  "failed_attempt_allocated_h100_hours": 3.8060244444444447,
+  "basis": "Terminal retention-ledger600 storage deadline before any learning in final startup. Fresh namespace retains identical scientific/source/horizon/placement fields. Old439-update partial and all allocation intervals remain. Storage-stall root cause is unproved.",
+  "submitted": false,
+  "completion_claim": false
+}
