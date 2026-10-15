@@ -158,7 +158,8 @@ def _key_block_band(q_lower, q_start: int, block_q: int, block_k: int):
 
 
 def _band_mask(q_pos, q_lower, k_pos):
-    return (k_pos[None, :] <= q_pos[:, None]) & (k_pos[None, :] >= q_lower[:, None])
+    """Keys visible to each query: causal and at or above the query's lower bound; arguments broadcast."""
+    return (k_pos <= q_pos) & (k_pos >= q_lower)
 
 
 def _forward_kernel(q_ref, k_ref, v_ref, lower_ref, o_ref, lse_ref, *, scale: float, block_k: int, num_q_blocks: int):
@@ -177,7 +178,7 @@ def _forward_kernel(q_ref, k_ref, v_ref, lower_ref, o_ref, lse_ref, *, scale: fl
         s = plgpu.dot(q, k, trans_b=True) * qk_scale
         if masked:
             k_pos = kb * block_k + jnp.arange(block_k, dtype=jnp.int32)
-            s = jnp.where(_band_mask(q_pos, q_lower, k_pos), s, _MASK_VALUE)
+            s = jnp.where(_band_mask(q_pos[:, None], q_lower[:, None], k_pos[None, :]), s, _MASK_VALUE)
         m_next = jnp.maximum(m_prev, jnp.max(s, axis=1))
         correction = jnp.exp2(m_prev - m_next)
         p = jnp.exp2(s - m_next[:, None])
@@ -229,7 +230,7 @@ def _dq_kernel(
         s = plgpu.dot(q, k, trans_b=True) * qk_scale
         if masked:
             k_pos = kb * block_k + jnp.arange(block_k, dtype=jnp.int32)
-            s = jnp.where(_band_mask(q_pos, q_lower, k_pos), s, _MASK_VALUE)
+            s = jnp.where(_band_mask(q_pos[:, None], q_lower[:, None], k_pos[None, :]), s, _MASK_VALUE)
         p = jnp.exp2(s - lse[:, None])
         dp = plgpu.dot(do, v, trans_b=True)
         ds = p * (dp - delta[:, None])
@@ -286,8 +287,7 @@ def _dkv_kernel(
             if masked:
                 q_pos = qb * block_q + jnp.arange(block_q, dtype=jnp.int32)
                 q_lower = lower_ref[q_slice]
-                allowed = (k_pos[:, None] <= q_pos[None, :]) & (k_pos[:, None] >= q_lower[None, :])
-                s_t = jnp.where(allowed, s_t, _MASK_VALUE)
+                s_t = jnp.where(_band_mask(q_pos[None, :], q_lower[None, :], k_pos[:, None]), s_t, _MASK_VALUE)
             p_t = jnp.exp2(s_t - lse[None, :])
             dv = dv + plgpu.dot(p_t.astype(do.dtype), do)
             dp_t = plgpu.dot(v, do, trans_b=True)
