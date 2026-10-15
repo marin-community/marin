@@ -1,0 +1,25 @@
+{
+  "scope": "Both six-run curriculum300 and native-advantage300 raw runtime retention cohorts are complete. Conditional same-bucket source identity, cutoff, destination prefix, manifest SHA, object count and byte count verified. Full original response-grade replays remain separate and incomplete.",
+  "stages": [
+    {
+      "stage": "curriculum",
+      "runs": 6,
+      "objects": 159033,
+      "bytes": 325252083009,
+      "stage_report": "experiments/post_training/score_centering_overnight/results/qwen_curriculum300_completed_runtime_retention.json.gz",
+      "stage_report_sha256": "1cf92e8f6d979af9f783a512572b84ec9a0e7b4a62975dad045db8c66135fa43"
+    },
+    {
+      "stage": "advantages",
+      "runs": 6,
+      "objects": 143446,
+      "bytes": 296623471909,
+      "stage_report": "experiments/post_training/score_centering_overnight/results/qwen_advantages300_completed_runtime_retention.json.gz",
+      "stage_report_sha256": "75b5df09bee22217bb0ec32f58c1a81e5c46c6f675b953dc2057cbcbfcf2791b"
+    }
+  ],
+  "total_runs": 12,
+  "objects": 302479,
+  "bytes": 621875554918,
+  "all_raw_retention_checks_passed": true
+}

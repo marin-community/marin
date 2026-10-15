@@ -1,7 +1,7 @@
 {
   "scope": "Three-phase five-node engineering qualification for the checkpoint-recovery candidate. Initial save5 is submitted; both restore phases remain gated. It cannot replace scientific main1200 or stale calibration130.",
   "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
-  "status": "All Qwen3phase GPU/native/full3584replay prerequisites pass. Initial exact173five-node RNO save5 submitted and controller-confirmed; restore5-to7 and restore7-to9 remain unsubmitted behind each previous phase gate.",
+  "status": "All Qwen GPU/native/full3584replay prerequisites pass. Exact173 five-node save5 attempt0 was priority preempted; automatic attempt1 is queued. Neither restore phase is submitted; source promotion remains gated.",
   "prerequisite": "Complete bounded Qwen periodic/noisy save2, restore2-to5, restore5-to7 qualification with real native state and behavior evidence.",
   "geometry": {
     "cluster": "cw-rno2a",
@@ -110,7 +110,72 @@
         }
       ],
       "submitted_configuration": "snowball_checkpoint_recovery_qualification_v1/save5-detach.yaml",
-      "configuration_sha256": "400b4cb3079fb8948e696e4159bc4f247816055eb796469b62f4c91b7c7952d1"
+      "configuration_sha256": "400b4cb3079fb8948e696e4159bc4f247816055eb796469b62f4c91b7c7952d1",
+      "terminal_preemptions": [
+        {
+          "controller_attempt": 0,
+          "allocated_h100_hours": 9.917082222222223,
+          "outcome": "Priority preempted before qualification completed; automatic attempt1 queued; all allocated ranks costed separately."
+        }
+      ],
+      "latest_controller_attempt": 1,
+      "latest_task_attempts": [
+        {
+          "task_id": "/romain/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/0",
+          "attempt_id": "1",
+          "attempt_uid": "ba35a394e9b60fd3",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/1",
+          "attempt_id": "1",
+          "attempt_uid": "32ca0ddfec5f6487",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/2",
+          "attempt_id": "1",
+          "attempt_uid": "ff5f9ec4be6b6e78",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/3",
+          "attempt_id": "1",
+          "attempt_uid": "133d153ece88016c",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/4",
+          "attempt_id": "1",
+          "attempt_uid": "a2c7f9e25336b031",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        }
+      ]
     },
     {
       "phase": "restore5",
@@ -227,5 +292,6 @@
     "submitted": false
   },
   "qwen_prerequisite_passed": true,
-  "qwen_prerequisite_evidence": "results/qwen_periodic_checkpoint_recovery_qualification_complete.json"
+  "qwen_prerequisite_evidence": "results/qwen_periodic_checkpoint_recovery_qualification_complete.json",
+  "observed_controller_snapshot": "2026-10-15T17:00Z"
 }
