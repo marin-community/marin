@@ -1,3 +1,3 @@
 title = "RL Data Atlas"
-description = "Curation catalog, curriculum coverage, sampled task grades and executed controls."
+description = "Explore RL sources, curriculum coverage, curation assessments and sampled grades. Inspect executed controls and archived review evidence."
 python_entrypoint = "server.app:create_api"
