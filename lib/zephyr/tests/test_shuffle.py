@@ -38,7 +38,7 @@ from zephyr.shuffle import (
     _Sidecar,
     _write_scatter,
 )
-from zephyr.worker_context import InputProgress, _worker_ctx_var
+from zephyr.worker_context import _worker_ctx_var
 
 pytestmark = pytest.mark.usefixtures("worker_context")
 
@@ -92,7 +92,7 @@ def test_scatter_roundtrip(tmp_path):
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
 
 
-def test_shuffle_input_progress_uses_target_rows_and_waits_for_consumption(tmp_path, worker_context):
+def test_shuffle_reader_reports_target_row_total(tmp_path):
     items = [{"k": i % 4, "v": i} for i in range(40)]
     paths = _build_shard(tmp_path, items, num_output_shards=4)
     target = deterministic_hash(0) % 4
@@ -100,12 +100,9 @@ def test_shuffle_input_progress_uses_target_rows_and_waits_for_consumption(tmp_p
     merged = reader.merge_sorted_chunks(str(tmp_path / "sort"))
     first = next(merged)
     expected = [row for row in items if deterministic_hash(row["k"]) % 4 == target]
-    assert worker_context.get_runner_snapshot().input_progress == InputProgress(completed=0, total=len(expected))
+    assert merged.total_rows == len(expected)
     recovered = [first, *merged]
     assert sorted(recovered, key=lambda row: row["v"]) == expected
-    assert worker_context.get_runner_snapshot().input_progress == InputProgress(
-        completed=len(expected), total=len(expected)
-    )
 
 
 def test_scatter_streams_wide_items_before_consuming_input(tmp_path):

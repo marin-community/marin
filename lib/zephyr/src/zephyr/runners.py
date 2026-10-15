@@ -110,7 +110,6 @@ class _InProcessWorkerContext:
         self._shared_data_cache: dict[str, Any] = {}
         self._counters: dict[str, CounterEntry] = {}
         self._input_progress: InputProgress | None = None
-        self._active_input_progress: InputProgress | None = None
         self._generation = 0
         self.task_memory_bytes = task_memory_bytes
 
@@ -165,22 +164,14 @@ class _InProcessWorkerContext:
             generation=self._generation,
         )
 
-    @contextmanager
-    def track_input_progress(self, progress: InputProgress) -> Iterator[None]:
-        """Report the outer input and retain its final state after consumption."""
-        parent = self._active_input_progress
-        if parent is None:
-            self._input_progress = progress
-        self._active_input_progress = progress
-        try:
-            yield
-        finally:
-            self._active_input_progress = parent
+    def set_input_progress(self, progress: InputProgress) -> None:
+        self._input_progress = progress
 
     def get_runner_snapshot(self) -> RunnerSnapshot:
         progress = self._input_progress
+        # The task thread may add keys while a heartbeat samples these counters.
         return RunnerSnapshot(
-            counters={name: replace(entry) for name, entry in self._counters.items()},
+            counters={name: replace(entry) for name, entry in dict(self._counters).items()},
             input_progress=replace(progress) if progress is not None else None,
         )
 

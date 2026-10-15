@@ -15,12 +15,17 @@ shard IDs when a stage has more than 32 shards; the per-shard grid pages
 through exact IDs.
 
 Filter the grid by shard state to inspect the remaining running tasks. Running
-tiles fill as their current input is consumed: Parquet uses footer row counts
-for its selected row range and row groups, unfiltered Vortex uses its row range,
-and shuffle reducers use partition row counts from mapper metadata. Striped
-tiles have an unknown total. Progress advances after each row group or batch
-and resets per input file; a full input
-bar can still precede buffered mapping or output flushing.
+tiles estimate progress from emitted records: Parquet and Vortex use their
+input row-range totals, and shuffle reducers use partition row counts from
+mapper metadata. Filtering can make the estimate understate progress. Striped
+tiles have an unknown total. Counts reset per input file; a full input bar can
+still precede output flushing. Lookup reads opened inside a mapper leave the
+outer input's progress on the tile.
+
+File and shuffle readers expose a row total when it is cheap to obtain. The
+input operation updates both task progress and cumulative `records_in` counters
+as it consumes a reader. Direct reader calls inside a mapper do not contribute
+to either measurement.
 
 Select a shard for its input count, elapsed time, average reader-record rate
 over the whole shard, worker-task link, and heartbeat age. Heartbeats older than

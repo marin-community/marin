@@ -13,8 +13,10 @@ import pyarrow.parquet as pq
 import pytest
 import zstandard as zstd
 from zephyr import counters
+from zephyr.dataset import LoadFileOp
 from zephyr.expr import ColumnExpr, CompareExpr, LiteralExpr, col
 from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
+from zephyr.plan import compose_map
 from zephyr.readers import (
     SUPPORTED_EXTENSIONS,
     compute_parquet_splits,
@@ -51,7 +53,7 @@ def test_nested_lookup_reads_preserve_main_input_progress(tmp_path, worker_conte
     else:
         lookup_path.write_bytes(msgspec.json.encode(records[0]))
 
-    with closing(load_parquet(main_path)) as reader:
+    with closing(compose_map([LoadFileOp("parquet")])(iter([main_path]))) as reader:
         assert [row["id"] for row in itertools.islice(reader, 26)] == list(range(26))
         expected = InputProgress(completed=25, total=100)
         assert worker_context.get_runner_snapshot().input_progress == expected
@@ -62,63 +64,43 @@ def test_nested_lookup_reads_preserve_main_input_progress(tmp_path, worker_conte
         assert worker_context.get_runner_snapshot().input_progress == expected
         assert len(list(reader)) == 74
     assert worker_context.get_runner_snapshot().input_progress == InputProgress(completed=100, total=100)
+    assert worker_context.get_counters()[counters.RECORDS_IN] == 100
 
 
-@pytest.mark.parametrize("loader,first_group_items", [(load_parquet, 3), (load_parquet_batch, 1)])
-def test_parquet_progress_counts_selected_input_rows_after_consumption(
-    tmp_path, worker_context, loader, first_group_items
-):
+@pytest.mark.parametrize("loader", [load_parquet, load_parquet_batch])
+def test_parquet_reader_reports_cheap_row_range_total(tmp_path, loader):
     path = str(tmp_path / "progress.parquet")
     _write_test_parquet(path, [{"id": i} for i in range(12)], row_group_size=4)
-    spec = InputFileSpec(path=path, row_start=2, row_end=10, filter_expr=col("id") >= 5)
-    reader = loader(spec)
-    list(itertools.islice(reader, first_group_items))
-    # Footer pruning excludes group 0; groups 1 and 2 overlap six input rows.
-    assert worker_context.get_runner_snapshot().input_progress == InputProgress(completed=0, total=6)
-    next(reader)
-    assert worker_context.get_runner_snapshot().input_progress == InputProgress(completed=4, total=6)
-    list(reader)
-    assert worker_context.get_runner_snapshot().input_progress == InputProgress(completed=6, total=6)
-    assert worker_context.get_counters()[counters.RECORDS_IN] == 5
-
-    assert list(loader(InputFileSpec(path=path, filter_expr=col("id") > 100))) == []
-    assert worker_context.get_runner_snapshot().input_progress == InputProgress(completed=0, total=0)
+    reader = loader(InputFileSpec(path=path, row_start=2, row_end=10, filter_expr=col("id") >= 5))
+    rows = list(reader)
+    assert reader.total_rows == 8
+    if loader is load_parquet_batch:
+        rows = [row for batch in rows for row in batch.to_pylist()]
+    assert rows == [{"id": i} for i in range(5, 10)]
 
 
-@pytest.mark.parametrize("filter_expr,expected_total", [(None, 8), (col("id") >= 5, None)])
-def test_vortex_progress_uses_row_range_and_leaves_filtered_totals_unknown(
-    tmp_path, monkeypatch, worker_context, filter_expr, expected_total
-):
-    monkeypatch.setattr("zephyr.readers._VORTEX_READ_BATCH_ROWS", 4)
+@pytest.mark.parametrize("filter_expr", [None, col("id") >= 5])
+def test_vortex_reader_reports_row_range_total(tmp_path, filter_expr):
     path = str(tmp_path / "progress.vortex")
     write_vortex_file([{"id": i} for i in range(12)], path)
-    spec = InputFileSpec(path=path, row_start=2, row_end=10, filter_expr=filter_expr)
-    reader = load_vortex(spec)
-    first = next(reader)
-    assert worker_context.get_runner_snapshot().input_progress == InputProgress(completed=0, total=expected_total)
-    result = [first, *reader]
-    expected = [{"id": i} for i in range(2, 10) if filter_expr is None or i >= 5]
-    assert result == expected
-    assert worker_context.get_runner_snapshot().input_progress == InputProgress(
-        completed=len(expected), total=expected_total
-    )
+    reader = load_vortex(InputFileSpec(path=path, row_start=2, row_end=10, filter_expr=filter_expr))
+    assert list(reader) == [{"id": i} for i in range(2, 10) if filter_expr is None or i >= 5]
+    assert reader.total_rows == 8
 
 
-@pytest.mark.parametrize("loader,extension", [(load_jsonl, "jsonl"), (load_vortex, "vortex")])
-def test_unknown_input_counts_reset_between_files(tmp_path, worker_context, loader, extension):
+def test_input_progress_resets_between_jsonl_files(tmp_path, worker_context):
+    pipeline = compose_map([LoadFileOp("jsonl")])
+    paths = []
     for size in (5, 2):
-        records = [{"id": index} for index in range(size)]
-        path = tmp_path / f"input-{size}.{extension}"
-        if extension == "vortex":
-            write_vortex_file(records, str(path))
-        else:
-            path.write_bytes(b"\n".join(msgspec.json.encode(record) for record in records))
-        reader = loader(InputFileSpec(path=str(path), filter_expr=col("id") >= 1))
-        first = next(reader)
+        path = tmp_path / f"input-{size}.jsonl"
+        path.write_bytes(b"\n".join(msgspec.json.encode({"id": index}) for index in range(size)))
+        paths.append(str(path))
+    with closing(pipeline(iter(paths))) as reader:
+        assert [row["id"] for row in itertools.islice(reader, 6)] == [0, 1, 2, 3, 4, 0]
         assert worker_context.get_runner_snapshot().input_progress == InputProgress(completed=0, total=None)
-        assert [first, *reader] == records[1:]
-        assert worker_context.get_runner_snapshot().input_progress == InputProgress(completed=size - 1, total=None)
-    assert worker_context.get_counters()[counters.RECORDS_IN] == 5
+        assert list(reader) == [{"id": 1}]
+    assert worker_context.get_runner_snapshot().input_progress == InputProgress(completed=2, total=None)
+    assert worker_context.get_counters()[counters.RECORDS_IN] == 7
 
 
 def test_load_parquet_plain(tmp_path):

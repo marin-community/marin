@@ -687,7 +687,7 @@ function startDashboard() {
       controls.append(previous, next);
       if (!shardFilter) controls.append(jump, go);
     }
-    const note = element('p', 'Running tiles fill as the current input is consumed. Stripes mean the input size is unknown. Updates follow Parquet row groups or Vortex/shuffle batches; 100% input can still be mapping or writing. Counts reset for each input file.');
+    const note = element('p', 'Running tiles estimate current-input progress from records read. Filters may understate progress. Stripes mean the input size is unknown. Counts reset per input file; 100% input can still be mapping or writing.');
     note.className = 'muted';
     replaceContent(area, filter, range, grid, detail, key, note, controls);
   }

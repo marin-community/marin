@@ -5,8 +5,7 @@
 
 import enum
 import logging
-from collections.abc import Iterable, Iterator
-from contextlib import AbstractContextManager, contextmanager
+from collections.abc import Iterable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -150,22 +149,10 @@ class WorkerContext(Protocol):
     def set_aggregation(self, name: str, agg: Aggregation) -> None: ...
     def current_stage_name(self) -> str: ...
     def get_counter_snapshot(self) -> CounterSnapshot: ...
-    def track_input_progress(self, progress: InputProgress) -> AbstractContextManager[None]: ...
+    def set_input_progress(self, progress: InputProgress) -> None: ...
 
 
 _worker_ctx_var: ContextVar[WorkerContext | None] = ContextVar("zephyr_worker_ctx", default=None)
-
-
-@contextmanager
-def input_progress(total: int | None) -> Iterator[InputProgress]:
-    """Track the outer input, leaving nested lookup reads out of shard progress."""
-    progress = InputProgress(completed=0, total=total)
-    ctx = _worker_ctx_var.get()
-    if ctx is None:
-        yield progress
-        return
-    with ctx.track_input_progress(progress):
-        yield progress
 
 
 def zephyr_worker_ctx() -> WorkerContext:

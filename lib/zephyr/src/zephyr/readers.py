@@ -11,8 +11,9 @@ import io
 import logging
 import zipfile
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import replace
+from functools import partial
 from typing import BinaryIO, Literal
 
 import fsspec
@@ -25,10 +26,9 @@ import vortex
 import zstandard as zstd
 from rigging.filesystem.factory import open_url, url_to_fs
 
-from zephyr import counters
 from zephyr.expr import Expr, referenced_columns, to_pyarrow_expr
 from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
-from zephyr.worker_context import input_progress
+from zephyr.reader import Reader
 
 logger = logging.getLogger(__name__)
 
@@ -75,46 +75,35 @@ def iter_parquet_row_groups(
     start = 0 if row_start is None else row_start
     end = pf.metadata.num_rows if row_end is None else row_end
 
-    # Count only the selected row ranges/groups, using the already-loaded footer.
-    # Advance after yield so a fused mapper consuming the group is included.
-    selected_rows = 0
-    group_start = 0
+    cumulative_rows = 0
+
     for i in range(pf.metadata.num_row_groups):
-        group_end = group_start + pf.metadata.row_group(i).num_rows
-        if row_groups is None or i in row_groups:
-            selected_rows += max(0, min(group_end, end) - max(group_start, start))
-        group_start = group_end
-    with input_progress(selected_rows) as progress:
-        cumulative_rows = 0
+        rg_meta = pf.metadata.row_group(i)
+        rg_num_rows = rg_meta.num_rows
+        rg_start = cumulative_rows
+        rg_end = cumulative_rows + rg_num_rows
+        cumulative_rows = rg_end
 
-        for i in range(pf.metadata.num_row_groups):
-            rg_meta = pf.metadata.row_group(i)
-            rg_num_rows = rg_meta.num_rows
-            rg_start = cumulative_rows
-            rg_end = cumulative_rows + rg_num_rows
-            cumulative_rows = rg_end
-
-            if has_row_range:
-                if rg_end <= start:
-                    continue
-                if rg_start >= end:
-                    return
-
-            if row_groups is not None and i not in row_groups:
+        if has_row_range:
+            if rg_end <= start:
                 continue
+            if rg_start >= end:
+                return
 
-            table = pf.read_row_group(i, columns=columns)
+        if row_groups is not None and i not in row_groups:
+            continue
 
-            if has_row_range:
-                is_interior = rg_start >= start and rg_end <= end
-                if not is_interior:
-                    local_start = max(0, start - rg_start)
-                    local_end = min(rg_num_rows, end - rg_start)
-                    table = table.slice(local_start, local_end - local_start)
+        table = pf.read_row_group(i, columns=columns)
 
-            if len(table) > 0:
-                yield table
-                progress.completed += len(table)
+        if has_row_range:
+            is_interior = rg_start >= start and rg_end <= end
+            if not is_interior:
+                local_start = max(0, start - rg_start)
+                local_end = min(rg_num_rows, end - rg_start)
+                table = table.slice(local_start, local_end - local_start)
+
+        if len(table) > 0:
+            yield table
 
 
 # 16 MB read blocks with background prefetch for S3/remote reads.
@@ -273,7 +262,7 @@ def compute_parquet_splits(
     return splits
 
 
-def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
+def load_jsonl(source: str | InputFileSpec) -> Reader[dict]:
     """Load a JSONL file and yield parsed records as dictionaries.
 
     If the input file is compressed (.gz, .zst, .xz), it will be automatically
@@ -287,7 +276,7 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
             optional filter expression, and optional column projection.
             Supports: local paths, gs://, s3://, hf://datasets/{repo}@{rev}/{path}
 
-    Yields:
+    Returns:
         Parsed JSON records as dictionaries
 
     Example:
@@ -305,28 +294,28 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
         >>> ds = Dataset.from_list([hf_url]).flat_map(load_jsonl)
         >>> records = ctx.execute(ds).results
     """
-    spec = _as_spec(source)
+    return Reader(partial(_iter_jsonl, _as_spec(source)))
+
+
+def _iter_jsonl(spec: InputFileSpec, _reader: Reader[dict]):
     decoder = msgspec.json.Decoder()
     filter_fn = spec.filter_expr.evaluate if spec.filter_expr is not None else None
     columns = spec.columns
 
-    with input_progress(None) as progress:
-        with open_file(spec.path, "rt") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                record = decoder.decode(line)
-                if filter_fn is not None and not filter_fn(record):
-                    continue
-                if columns is not None:
-                    record = {k: record[k] for k in columns if k in record}
-                counters.pipeline.update_counter(counters.RECORDS_IN, 1)
-                yield record
-                progress.completed += 1
+    with open_file(spec.path, "rt") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            record = decoder.decode(line)
+            if filter_fn is not None and not filter_fn(record):
+                continue
+            if columns is not None:
+                record = {k: record[k] for k in columns if k in record}
+            yield record
 
 
-def load_parquet_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:
+def load_parquet_batch(source: str | InputFileSpec) -> Reader[pa.RecordBatch]:
     """Load a Parquet file and yield one ``pa.RecordBatch`` per row group.
 
     Applies the same column projection, row-range slicing, and filter pushdown
@@ -337,10 +326,13 @@ def load_parquet_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:
         source: Path to Parquet file or InputFileSpec containing the path, columns,
             row range, and filter expression.
 
-    Yields:
+    Returns:
         One ``pa.RecordBatch`` per qualifying row group.
     """
-    spec = _as_spec(source)
+    return Reader(partial(_iter_parquet_batch, _as_spec(source)), rows_per_item=len)
+
+
+def _iter_parquet_batch(spec: InputFileSpec, reader: Reader[pa.RecordBatch]):
     logger.info("Loading: %s", spec.path)
 
     pa_filter = None
@@ -360,6 +352,9 @@ def load_parquet_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:
     block_size = _PARQUET_READ_BLOCK_SIZE if spec.filter_expr is not None else _READ_BLOCK_SIZE
     with open_file(spec.path, "rb", block_size=block_size) as stream:
         parquet = pq.ParquetFile(stream)
+        start = spec.row_start or 0
+        end = min(spec.row_end, parquet.metadata.num_rows) if spec.row_end is not None else parquet.metadata.num_rows
+        reader.total_rows = max(0, end - start)
         matching = (
             _matching_row_groups(stream, parquet.schema_arrow, spec.filter_expr)
             if spec.filter_expr is not None
@@ -376,11 +371,10 @@ def load_parquet_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:
                 table = table.filter(pa_filter)
             if need_project:
                 table = table.select(spec.columns)
-            counters.pipeline.update_counter(counters.RECORDS_IN, len(table))
             yield from table.to_batches()
 
 
-def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
+def load_parquet(source: str | InputFileSpec) -> Reader[dict]:
     """Load Parquet file and yield records as dicts.
 
     When given an InputFileSpec with row_start or row_end, reads only the exact rows
@@ -393,7 +387,7 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
         source: Path to Parquet file or InputFileSpec containing the path, columns,
             row range, and filter expression.
 
-    Yields:
+    Returns:
         Records as dictionaries
 
     Example:
@@ -405,11 +399,18 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
         ... )
         >>> output_files = ctx.execute(ds).results
     """
-    for batch in load_parquet_batch(source):
-        yield from batch.to_pylist()
+    return Reader(partial(_iter_parquet, load_parquet_batch(source)))
 
 
-def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
+def _iter_parquet(batches: Reader[pa.RecordBatch], reader: Reader[dict]):
+    with closing(batches):
+        for batch in batches:
+            reader.total_rows = batches.total_rows
+            yield from batch.to_pylist()
+        reader.total_rows = batches.total_rows
+
+
+def load_vortex(source: str | InputFileSpec) -> Reader[dict]:
     """Load records from a Vortex file with optional pushdown.
 
     Uses Vortex's PyArrow Dataset interface for filter/column pushdown.
@@ -419,7 +420,7 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
         source: Path to .vortex file or InputFileSpec containing the path,
             columns, row range, and filter expression.
 
-    Yields:
+    Returns:
         Records as dictionaries
 
     Example:
@@ -431,7 +432,10 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
         ... )
         >>> output_files = ctx.execute(ds).results
     """
-    spec = _as_spec(source)
+    return Reader(partial(_iter_vortex, _as_spec(source)))
+
+
+def _iter_vortex(spec: InputFileSpec, reader: Reader[dict]):
     columns = spec.columns
 
     # Convert filter to PyArrow expression if provided
@@ -446,36 +450,33 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
     num_rows = dataset.count_rows()
     start = 0 if spec.row_start is None else spec.row_start
     end = num_rows if spec.row_end is None else min(spec.row_end, num_rows)
-    # Filtered output batches do not expose how many source rows were scanned.
-    with input_progress(max(0, end - start) if pa_filter is None else None) as progress:
-        # Schema-less empty files cannot be projected by Vortex.
-        if not dataset.schema.names and num_rows == 0:
-            return
+    reader.total_rows = max(0, end - start)
+    # Schema-less empty files cannot be projected by Vortex.
+    if not dataset.schema.names and num_rows == 0:
+        return
 
-        # Vortex rejects empty projections. Read one column to retain row counts,
-        # then drop it after applying the row range and filter.
-        empty_projection = columns == []
-        if empty_projection:
-            columns = [dataset.schema.names[0]]
+    # Vortex rejects empty projections. Read one column to retain row counts,
+    # then drop it after applying the row range and filter.
+    empty_projection = columns == []
+    if empty_projection:
+        columns = [dataset.schema.names[0]]
 
-        if spec.row_start is not None or spec.row_end is not None:
-            batches = (
-                dataset.take(
-                    pa.array(np.arange(batch_start, min(batch_start + _VORTEX_READ_BATCH_ROWS, end), dtype=np.uint64)),
-                    columns=columns,
-                    filter=pa_filter,
-                )
-                for batch_start in range(start, end, _VORTEX_READ_BATCH_ROWS)
+    if spec.row_start is not None or spec.row_end is not None:
+        batches = (
+            dataset.take(
+                pa.array(np.arange(batch_start, min(batch_start + _VORTEX_READ_BATCH_ROWS, end), dtype=np.uint64)),
+                columns=columns,
+                filter=pa_filter,
             )
-        else:
-            batches = dataset.to_batches(columns=columns, filter=pa_filter, batch_size=_VORTEX_READ_BATCH_ROWS)
+            for batch_start in range(start, end, _VORTEX_READ_BATCH_ROWS)
+        )
+    else:
+        batches = dataset.to_batches(columns=columns, filter=pa_filter, batch_size=_VORTEX_READ_BATCH_ROWS)
 
-        for batch in batches:
-            if empty_projection:
-                batch = batch.select([])
-            counters.pipeline.update_counter(counters.RECORDS_IN, len(batch))
-            yield from batch.to_pylist()
-            progress.completed += len(batch)
+    for batch in batches:
+        if empty_projection:
+            batch = batch.select([])
+        yield from batch.to_pylist()
 
 
 SUPPORTED_EXTENSIONS = tuple(
@@ -523,7 +524,7 @@ def load_file(
     source: str | InputFileSpec,
     include_file_paths: bool = False,
     file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
-) -> Iterator[dict]:
+) -> Reader[dict]:
     """Load records from file as JSONL, Parquet, or Vortex.
 
     The spec's ``format`` selects the reader; ``auto`` (the default for a bare
@@ -536,7 +537,7 @@ def load_file(
             under file_path_column.
         file_path_column: Key to add when include_file_paths is True.
 
-    Yields:
+    Returns:
         Parsed records as dictionaries
 
     Raises:
@@ -568,21 +569,26 @@ def load_file(
         records = load_jsonl(spec)
 
     if not include_file_paths:
-        yield from records
-        return
+        return records
+    return Reader(partial(_iter_file_with_paths, records, spec.path, file_path_column))
 
-    for record in records:
-        if file_path_column in record:
-            raise RuntimeError(f"Cannot add file path column '{file_path_column}': key already exists in record")
-        record[file_path_column] = spec.path
-        yield record
+
+def _iter_file_with_paths(records: Reader[dict], path: str, file_path_column: str, reader: Reader[dict]):
+    with closing(records):
+        for record in records:
+            reader.total_rows = records.total_rows
+            if file_path_column in record:
+                raise RuntimeError(f"Cannot add file path column '{file_path_column}': key already exists in record")
+            record[file_path_column] = path
+            yield record
+        reader.total_rows = records.total_rows
 
 
 def load_file_batch(
     source: str | InputFileSpec,
     include_file_paths: bool = False,
     file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
-) -> Iterator[pa.RecordBatch]:
+) -> Reader[pa.RecordBatch]:
     """Load a Parquet file and yield ``pa.RecordBatch`` objects.
 
     Only Parquet files are supported. Raises ``RuntimeError`` for any other
@@ -596,7 +602,7 @@ def load_file_batch(
             containing the source file path to each batch.
         file_path_column: Name of the column to add when include_file_paths is True.
 
-    Yields:
+    Returns:
         One ``pa.RecordBatch`` per qualifying row group.
 
     Raises:
@@ -611,20 +617,27 @@ def load_file_batch(
         raise RuntimeError(f"load_file_batch only supports Parquet files, got: {spec.path}")
     if include_file_paths and spec.columns is not None:
         spec = _strip_injected_file_path_column(spec, file_path_column)
-    for batch in load_parquet_batch(spec):
-        if include_file_paths:
+    batches = load_parquet_batch(spec)
+    if not include_file_paths:
+        return batches
+    return Reader(partial(_iter_batches_with_paths, batches, spec.path, file_path_column), rows_per_item=len)
+
+
+def _iter_batches_with_paths(
+    batches: Reader[pa.RecordBatch], path: str, file_path_column: str, reader: Reader[pa.RecordBatch]
+):
+    with closing(batches):
+        for batch in batches:
+            reader.total_rows = batches.total_rows
             if file_path_column in batch.schema.names:
                 raise RuntimeError(
                     f"Cannot add file path column '{file_path_column}': column already exists in batch schema"
                 )
-            batch = batch.append_column(
-                file_path_column,
-                pa.array([spec.path] * len(batch), type=pa.string()),
-            )
-        yield batch
+            yield batch.append_column(file_path_column, pa.array([path] * len(batch), type=pa.string()))
+        reader.total_rows = batches.total_rows
 
 
-def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterator[dict]:
+def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Reader[dict]:
     """Load zip members matching pattern, yielding filename and content.
 
     Opens zip file (supports fsspec paths like gs://), finds members matching
@@ -634,7 +647,7 @@ def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterato
         source: Path to zip file or InputFileSpec containing the path.
         pattern: Glob pattern to match member names (default: "*")
 
-    Yields:
+    Returns:
         Dicts with 'filename' (str) and 'content' (bytes)
 
     Example:
@@ -645,13 +658,15 @@ def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterato
         ... )
         >>> output_files = ctx.execute(ds).results
     """
-    spec = _as_spec(source)
+    return Reader(partial(_iter_zip_members, _as_spec(source), pattern))
+
+
+def _iter_zip_members(spec: InputFileSpec, pattern: str, _reader: Reader[dict]):
     with open_url(spec.path, "rb") as f:
         with zipfile.ZipFile(f) as zf:
             for member_name in zf.namelist():
                 if not member_name.endswith("/") and fnmatch.fnmatch(member_name, pattern):
                     with zf.open(member_name, "r") as member_file:
-                        counters.pipeline.update_counter(counters.RECORDS_IN, 1)
                         yield {
                             "filename": member_name,
                             "content": member_file.read(),
