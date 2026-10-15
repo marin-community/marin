@@ -17,6 +17,9 @@ from levanter.grug.attention import (
     token_validity_from_attention_mask,
 )
 
+# TPU's emulated f32 flash backward differs from the reference by about 1e-4 on values of order one.
+XLA_FLASH_GRADIENT_TOLERANCE = 1e-3
+
 
 def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 4, kv_heads: int = 2):
     key = jax.random.PRNGKey(0)
@@ -98,8 +101,9 @@ def test_attention_scan_uses_dynamic_bounds_for_windows_segments_and_padding(imp
 
     np.testing.assert_allclose(actual, expected, atol=1e-5, rtol=1e-5)
     np.testing.assert_array_equal(actual[:, :, -3:], 0)
+    gradient_tolerance = XLA_FLASH_GRADIENT_TOLERANCE if implementation == "xla_flash" else 1e-4
     for actual_grad, expected_grad in zip(actual_grads, expected_grads, strict=True):
-        np.testing.assert_allclose(actual_grad, expected_grad, atol=1e-4, rtol=1e-4)
+        np.testing.assert_allclose(actual_grad, expected_grad, atol=gradient_tolerance, rtol=gradient_tolerance)
 
 
 def test_splash_rejects_dynamic_bounds_instead_of_ignoring_local_windows():
@@ -266,9 +270,10 @@ def test_xla_flash_attention_gradients_match_reference():
         flash_grads = jax.grad(
             lambda q, k, v: loss(lambda *a: xla_flash_attention(*a, block_size=16), q, k, v), argnums=(0, 1, 2)
         )(q, k, v)
-    # TPU's emulated f32 backward differs from the reference by about 1e-4 on values of order one.
     for ref, flash in zip(ref_grads, flash_grads, strict=True):
-        np.testing.assert_allclose(np.asarray(flash), np.asarray(ref), rtol=1e-3, atol=1e-3)
+        np.testing.assert_allclose(
+            np.asarray(flash), np.asarray(ref), rtol=XLA_FLASH_GRADIENT_TOLERANCE, atol=XLA_FLASH_GRADIENT_TOLERANCE
+        )
 
 
 def test_xla_flash_attention_accepts_dense_boolean_mask():
