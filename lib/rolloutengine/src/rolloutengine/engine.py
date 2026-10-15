@@ -10,7 +10,7 @@ from contextlib import AsyncExitStack
 from dataclasses import asdict, replace
 from typing import Any
 
-from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, MachineFactory
+from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import SessionGrader, TaskSpec
 from taskcompendium.runtime.output_capture import captured_output_files
@@ -60,6 +60,18 @@ def _empty_rollout(task: TaskSpec) -> RolloutData:
         (),
         GradeResult(Outcome.UNAVAILABLE, None, "Execution has no final grade"),
         "error",
+    )
+
+
+async def _captured_outputs(lowered: LoweredTaskSpec, machine: Machine | None) -> dict[str, bytes]:
+    task = lowered.task
+    if machine is None or not task.output_paths:
+        return {}
+    return await captured_output_files(
+        machine,
+        task.output_paths,
+        timeout=lowered.session.verifier_timeout,
+        limit_bytes=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     )
 
 
@@ -162,25 +174,9 @@ class RolloutEngine:
         if machine is not None:
             events.emit(MachineReady(time.monotonic() - started))
 
-        outputs: dict[str, bytes] | None = None
-
-        async def capture() -> dict[str, bytes]:
-            nonlocal outputs
-            outputs = (
-                {}
-                if machine is None or not task.output_paths
-                else await captured_output_files(
-                    machine,
-                    task.output_paths,
-                    timeout=lowered.session.verifier_timeout,
-                    limit_bytes=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
-                )
-            )
-            return outputs
-
-        async def grade(messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult:
-            if outputs is None:
-                raise RuntimeError("The task grader runs only after the engine captures the run outputs")
+        async def grade(
+            messages: tuple[dict[str, Any], ...], *, stop_reason: str, outputs: dict[str, bytes]
+        ) -> GradeResult:
             return await _grade_rollout(
                 lowered, messages, outputs, machine, self.factories, cleanup, resources, stop_reason=stop_reason
             )
@@ -197,13 +193,13 @@ class RolloutEngine:
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.PREPARE) from error
         resources.push_async_callback(cleanup.run, "session_close", session.close)
-        return await self._run_session(lowered, session, capture, attempt, events)
+        return await self._run_session(lowered, session, machine, attempt, events)
 
     async def _run_session(
         self,
         lowered: LoweredTaskSpec,
         session: TaskSession,
-        capture: Callable[[], Awaitable[dict[str, bytes]]],
+        machine: Machine | None,
         attempt: asyncio.Timeout,
         events: _EventDelivery,
     ) -> RolloutData:
@@ -384,8 +380,9 @@ class RolloutEngine:
             messages = list(completed.messages)
         try:
             async with asyncio.timeout(limits.verifier_timeout):
-                completed = replace(completed, outputs=await capture())
-                grade = await session.grade(tuple(messages), stop_reason=stop_reason)
+                outputs = await _captured_outputs(lowered, machine)
+                completed = replace(completed, outputs=outputs)
+                grade = await session.grade(tuple(messages), stop_reason=stop_reason, outputs=outputs)
         except asyncio.CancelledError:
             if not attempt.expired() or owner.cancelling() > cancellation_count + 1:
                 raise

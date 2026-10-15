@@ -148,7 +148,11 @@ class TaskSession(Protocol):
 
     async def advance(self, turn: ModelTurn) -> Transition: ...
 
-    async def grade(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult: ...
+    async def grade(
+        self, messages: tuple[dict[str, Any], ...], *, stop_reason: str, outputs: dict[str, bytes]
+    ) -> GradeResult:
+        """Grade the attempt; ``outputs`` holds the run outputs the engine captured after the turn loop."""
+        ...
 
     async def close(self) -> None: ...
 
@@ -270,7 +274,9 @@ class EventSink(Protocol):
 
 
 class TaskGrader(Protocol):
-    async def __call__(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult: ...
+    async def __call__(
+        self, messages: tuple[dict[str, Any], ...], *, stop_reason: str, outputs: dict[str, bytes]
+    ) -> GradeResult: ...
 
 
 @dataclass(frozen=True)

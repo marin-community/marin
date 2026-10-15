@@ -109,8 +109,10 @@ class AgentTaskSession:
             next_prompt_token_ids=request.prompt_token_ids,
         )
 
-    async def grade(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult:
-        return await self.grader(messages, stop_reason=stop_reason)
+    async def grade(
+        self, messages: tuple[dict[str, Any], ...], *, stop_reason: str, outputs: dict[str, bytes]
+    ) -> GradeResult:
+        return await self.grader(messages, stop_reason=stop_reason, outputs=outputs)
 
     async def close(self) -> None:
         self.closed = True

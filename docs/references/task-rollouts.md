@@ -106,7 +106,7 @@ It calls these session methods:
 
 1. `prepare()` returns `SessionStart`: public messages, model options, and optionally exact initial prompt tokens.
 2. `advance(turn)` executes task operations and returns `Transition`: observations, completion, and optional per-turn grades or credit.
-3. `grade(messages, stop_reason=...)` returns the final `GradeResult`.
+3. `grade(messages, stop_reason=..., outputs=...)` returns the final `GradeResult`; `outputs` holds the captured run outputs.
 4. `close()` releases session resources before machine cleanup.
 
 The session is the task harness. It can assemble the system prompt and available tools
@@ -199,7 +199,7 @@ Oracle resources contain control inputs for task-curation checks. They do not en
 ## Run outputs
 
 After the turn loop and before `grade()`, the engine captures the regular files under `TaskSpec.output_paths`
-from the task machine once, for every grader kind including `SessionGrader`.
+from the task machine once, for every grader kind including `SessionGrader`, and passes them to the session's `grade()`.
 `RolloutData.outputs` maps each absolute file path to its bytes. Files outside `output_paths` are not returned.
 A task without a task machine or without output paths returns an empty mapping.
 Capture uses the budgets of `taskcompendium.runtime.output_capture`: at most 1,024 files and 16 MiB in total.
@@ -306,7 +306,7 @@ Thread-backed sessions retain their pending operations until session cleanup can
 
 ## Grading
 
-Sessions receive `grade(messages, stop_reason=...)`, including turn/token-limit endings.
+Sessions receive `grade(messages, stop_reason=..., outputs=...)`, including turn/token-limit endings.
 The Shellbox session carries that reason in `GradingAttempt.stop_reason`; sandboxed graders
 can read `TASKCOMPENDIUM_STOP_REASON`. The reason is context, not a prerequisite for grading.
 A reasoning-only final response becomes an empty answer in grading evidence; the raw provider
