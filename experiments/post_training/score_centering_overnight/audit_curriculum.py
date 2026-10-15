@@ -35,6 +35,7 @@ def audit(
     recorded_learner_steps: bool = False,
     ordinary_incumbent: bool = False,
     verified_record_reuse: dict | None = None,
+    first_training_step: int = 1,
 ) -> dict:
     uri = config["artifacts"]["attempts_root"].removesuffix("/attempts")
     prefix = urlparse(uri).path.lstrip("/").rstrip("/") + "/"
@@ -70,6 +71,14 @@ def audit(
     generator = resolved["skyrl"]["generator"]
     algorithm = trainer["algorithm"]
     updates = trainer["max_steps"]
+    assert 1 <= first_training_step <= updates
+    training_steps = range(first_training_step, updates + 1)
+    if first_training_step > 1:
+        assert trainer["resume_mode"] == "from_path" and trainer["restore_dataloader_state"]
+        assert not trainer["reset_global_step_on_resume"] and recorded_learner_steps
+        assert Path(urlparse(trainer["resume_path"]).path).name == f"global_step_{first_training_step - 1}"
+        evaluation_callbacks = [callback for callback in trainer["callbacks"] if callback["type"] == "evaluation"]
+        assert len(evaluation_callbacks) == 1 and evaluation_callbacks[0]["eval_on_resume"] is False
     refresh_period = generator.get("sampler_refresh_period", 1)
     group_size = generator["n_samples_per_prompt"]
     batch_size = trainer["train_batch_size"] * group_size
@@ -86,7 +95,7 @@ def audit(
         assert algorithm["score_centering_topk"] == 128
         assert algorithm["off_policy_correction_rules"] == [{"kind": "token", "action": "truncate", "high": 2.0}]
     evidence = []
-    for step in range(1, updates + 1):
+    for step in training_steps:
         metric_path = root / "exports/training_metrics" / f"train-{step:08d}.json"
         require_current_attempt(metric_path)
         metrics = json.loads(metric_path.read_text())
@@ -293,11 +302,15 @@ def audit(
     for (step, _), group in training_groups.items():
         if group["has_loss"]:
             retained_learner_rows[step] += group["rows"]
-    assert all(retained_learner_rows[step] == batch_size for step in range(1, updates + 1))
+    assert all(retained_learner_rows[step] == batch_size for step in training_steps)
+    if first_training_step > 1:
+        assert all(first_training_step <= step <= updates for phase, step in counts if phase == "train")
     interval = trainer["eval_interval"]
     expected_evaluations = list(range(0, updates + 1, interval))
+    if first_training_step > 1:
+        expected_evaluations = [step for step in expected_evaluations if step >= first_training_step]
     assert sorted(quality) == expected_evaluations
-    first = memberships[0]
+    first = memberships[expected_evaluations[0]]
     if "sc-snowball" in config["run"]["id"]:
         expected_members = 1199
     else:
@@ -318,7 +331,7 @@ def audit(
         for rows in evaluation_rows.values()
         for row in rows.values()
     )
-    return {
+    report = {
         "run_id": config["run"]["id"],
         "source": config["runtime"]["launcher_commit"],
         "completed_updates": updates,
@@ -334,7 +347,7 @@ def audit(
         "failure_response_note": (
             "Failed native turns can be replaced by masked placeholders; these are not original responses."
         ),
-        "graded_training_responses": {str(step): accepted[("train", step)] for step in range(1, updates + 1)},
+        "graded_training_responses": {str(step): accepted[("train", step)] for step in training_steps},
         "archive_after_ms": archive_after_ms,
         "verified_reused_records": list(reused.values()),
         "selected_archives": selected_archives,
@@ -352,6 +365,13 @@ def audit(
         "quality_basis": "native retained grader verdicts; independent response regrading remains required",
         "audit_passed": True,
     }
+    if first_training_step > 1:
+        report.update(
+            audit_scope="complete native resumed curriculum segment",
+            first_training_step=first_training_step,
+            new_training_updates=len(training_steps),
+        )
+    return report
 
 
 def main() -> None:
@@ -366,6 +386,7 @@ def main() -> None:
     parser.add_argument("--recorded-learner-steps", action="store_true")
     parser.add_argument("--ordinary-incumbent", action="store_true")
     parser.add_argument("--verified-record-reuse", type=Path)
+    parser.add_argument("--first-training-step", type=int, default=1)
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text())
     client = boto3.client(
@@ -389,6 +410,7 @@ def main() -> None:
         verified_record_reuse=(
             json.loads(args.verified_record_reuse.read_text()) if args.verified_record_reuse is not None else None
         ),
+        first_training_step=args.first_training_step,
     )
     checkpoint = urlparse(config["artifacts"]["checkpoint_root"])
     marker_object = client.get_object(

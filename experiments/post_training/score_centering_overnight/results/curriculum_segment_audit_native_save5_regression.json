@@ -1,0 +1,10 @@
+{
+  "run_id": "sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce",
+  "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+  "existing_full_native_audit_structurally_identical": true,
+  "native_training_updates": 5,
+  "native_train_responses": 2560,
+  "native_eval_responses": 9592,
+  "new_analysis_file_sha256": "e17d638fa3ab7b20b1963d95f0656a41540f9f96535486afe243aeb3c42c1a77",
+  "scope": "Regression on all actual saved native5 artifacts; restored-segment positive qualification still requires the pending real restore run."
+}
