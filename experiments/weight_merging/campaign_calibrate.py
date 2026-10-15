@@ -20,6 +20,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from transformers import AutoTokenizer
 
+from experiments.weight_merging.behavioral_residual import select_behavioral_residuals
 from experiments.weight_merging.calibrate import gpu_probe, token_examples
 from experiments.weight_merging.calibration_model import FrozenGrugBank
 from experiments.weight_merging.constrained_coefficients import train_supported_coefficients
@@ -29,10 +30,11 @@ ROUTED_EXPERT_COUNT = 256
 
 
 def routing_statistics(bank: FrozenGrugBank, examples: list) -> dict:
-    counts = {
-        domain: torch.zeros(bank.layer_count, ROUTED_EXPERT_COUNT, dtype=torch.int64) for domain in ("numeric", "tools")
-    }
-    current = "numeric"
+    domains = sorted({example.domain for example in examples})
+    if not domains:
+        raise ValueError("Routing calibration requires at least one domain")
+    counts = {domain: torch.zeros(bank.layer_count, ROUTED_EXPERT_COUNT, dtype=torch.int64) for domain in domains}
+    current = domains[0]
     handles = []
 
     def observer(layer):
@@ -61,6 +63,23 @@ def routing_statistics(bank: FrozenGrugBank, examples: list) -> dict:
         for handle in handles:
             handle.remove()
     return {"counts": {domain: value.tolist() for domain, value in counts.items()}, "examples": identities}
+
+
+def routing_only(recipe: dict, config: dict, examples: list, devices: tuple, write) -> None:
+    """Collect per-domain routing counts for each labeled checkpoint source."""
+    labels = recipe["source_labels"]
+    if len(labels) != len(recipe["sources"]) or len(labels) != len(set(labels)):
+        raise ValueError("Routing source labels must be unique and align with sources")
+    for source, label in zip(recipe["sources"], labels, strict=True):
+        bank = FrozenGrugBank([CheckpointSource(**source)], config, devices)
+        bank.enable_grouped_experts()
+        routing = routing_statistics(bank, examples)
+        routing.update(source=source, data_sha256=recipe["data_sha256"], complete=True)
+        write(f"routing-{label}.json", json.dumps(routing).encode())
+        del bank
+        gc.collect()
+        torch.cuda.empty_cache()
+    write("complete.json", json.dumps({"passed": True, "recipe": recipe}).encode())
 
 
 def supported_moments(bank: FrozenGrugBank, examples: list, support: list[dict], write) -> None:
@@ -186,10 +205,16 @@ def main() -> None:
     write("gpu-probe.json", json.dumps(gpu_probe()).encode())
     if recipe["mode"] == "foundation":
         foundation(recipe, config, examples, devices, write)
+    elif recipe["mode"] == "routing":
+        routing_only(recipe, config, examples, devices, write)
     elif recipe["mode"] == "coefficients":
         bank = FrozenGrugBank([CheckpointSource(**source) for source in recipe["sources"]], config, devices)
         bank.enable_grouped_experts()
         train_supported_coefficients(bank, examples, recipe, write)
+    elif recipe["mode"] == "behavioral_residual":
+        bank = FrozenGrugBank([CheckpointSource(**source) for source in recipe["sources"]], config, devices)
+        bank.enable_grouped_experts()
+        select_behavioral_residuals(bank, examples, recipe, write)
     else:
         raise ValueError(f"Unknown mode: {recipe['mode']}")
     write("timing.json", json.dumps({"elapsed_seconds": time.monotonic() - start}).encode())

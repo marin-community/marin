@@ -11,7 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
-from marin.merging.arithmetic import merge_tensor
+from marin.merging.arithmetic import MergeMethod, MergeParameters, RamParameters, merge_tensor
 from marin.merging.checkpoint import CheckpointReader, CheckpointSource
 from marin.merging.constrained import (
     TensorSupport,
@@ -21,8 +21,6 @@ from marin.merging.constrained import (
 )
 from marin.merging.isospectral import isospectral_merge
 from rigging.filesystem.buckets import filesystem_for
-
-from experiments.weight_merging.merge import merge_parameters
 
 
 def main() -> None:
@@ -35,14 +33,23 @@ def main() -> None:
     base = CheckpointReader(CheckpointSource(**recipe["base"]))
     donors = [CheckpointReader(CheckpointSource(**item)) for item in recipe["donors"]]
     support = tuple(TensorSupport(x["name"], None if x["rows"] is None else tuple(x["rows"])) for x in recipe["support"])
-    params = recipe["parameters"]
+    params = recipe["parameters"].copy()
     iso = params["method"] == "iso"
+    row_scaled = params["method"] == "row_scaled"
     if iso:
         parameters = None
         if not torch.cuda.is_available():
             raise ValueError("Campaign ISO conversion requires its reserved CUDA device")
+    elif row_scaled:
+        if len(donors) != 1:
+            raise ValueError("Row-scaled transfer requires exactly one donor")
+        parameters = None
     else:
-        parameters = merge_parameters(params)
+        params["method"] = MergeMethod(params["method"])
+        params["coefficients"] = tuple(params["coefficients"])
+        if params.get("ram") is not None:
+            params["ram"] = RamParameters(**params["ram"])
+        parameters = MergeParameters(**params)
     diagnostics = []
     measured_names = set()
     start = time.monotonic()
@@ -59,6 +66,14 @@ def main() -> None:
             donor_index = recipe["expert_assignment"][name][str(row)]
             donor = values[donor_index]
             fraction = recipe["transfer_fraction"]
+            if fraction == 1:
+                return donor
+            return (value.float() + fraction * (donor.float() - value.float())).to(value.dtype)
+        if row_scaled:
+            if row is None:
+                raise ValueError("Row-scaled transfer requires row support")
+            fraction = recipe["row_fractions"][name][str(row)]
+            donor = values[0]
             if fraction == 1:
                 return donor
             return (value.float() + fraction * (donor.float() - value.float())).to(value.dtype)
@@ -80,9 +95,16 @@ def main() -> None:
         assert parameters is not None
         return merge_tensor(value, values, parameters, tensor_name=f"{name}:{row}")
 
-    audit = export_constrained(base, recipe["output"], support, recipe["support_cap"], transform)
+    audit = export_constrained(
+        base,
+        recipe["output"],
+        support,
+        recipe["support_cap"],
+        recipe["change_cap"],
+        transform,
+    )
     audit["recipe"] = recipe
-    audit["parameters"] = params if iso else asdict(parameters)
+    audit["parameters"] = params if iso or row_scaled else asdict(parameters)
     audit["elapsed_seconds"] = time.monotonic() - start
     if iso:
         audit["iso_diagnostics"] = diagnostics

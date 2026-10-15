@@ -53,7 +53,14 @@ def main() -> None:
         if audit_fs.exists(audit_path):
             raise FileExistsError(stage["audit"])
         start = time.monotonic()
-        audit = export_constrained(original, output, support, recipe["support_cap"], transform)
+        audit = export_constrained(
+            original,
+            output,
+            support,
+            recipe["support_cap"],
+            recipe["change_cap"],
+            transform,
+        )
         audit.update(recipe=recipe, serial_stage=index + 1, elapsed_seconds=time.monotonic() - start)
         finalize_constrained_export(audit, stage["audit"], recipe["change_cap"])
         previous = CheckpointReader(CheckpointSource(output, f"{recipe['id']}:stage-{index+1}"))
