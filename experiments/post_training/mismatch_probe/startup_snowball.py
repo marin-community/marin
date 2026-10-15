@@ -52,6 +52,7 @@ def main(cluster, batch_size, prompt_count, samples_per_prompt):
         cache_mode="off",
         reuse_probe=None,
         resume_path=None,
+        extra_trainer_modes=("router_replay",),
     )
     config = yaml.safe_load(Path(__file__).with_name("startup_snowball_recipe.yaml").read_text())
     config = merge(config, probe_block(settings))
