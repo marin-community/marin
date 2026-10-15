@@ -476,7 +476,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  height: calc(100vh - 3.35rem);
+  height: 100%;
   background: var(--paper);
   border-left: 1px solid var(--edge);
   box-shadow: -12px 0 32px color-mix(in srgb, var(--ink) 10%, transparent);

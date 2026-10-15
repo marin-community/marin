@@ -142,8 +142,8 @@ consume the shared automation pool. The remaining GitHub agent workflows have
 individual federation mappings to the `github-automation` profile. Each mapping binds an exact workflow path on
 `main`; the shared profile does not make other workflows eligible. Deploy the
 Loom stack before the GitHub Pulumi stack so the latter can publish
-`LOOM_AGENTIC_LINT_PROFILE`, `LOOM_GITHUB_AUTOMATION_PROFILE`, and
-`LOOM_PROSE_CLEANUP_PROFILE`. Apply the
+`LOOM_AGENTIC_LINT_PROFILE`, `LOOM_GITHUB_AUTOMATION_PROFILE`,
+`LOOM_PR_HOLISTIC_REVIEW_PROFILE`, and `LOOM_PROSE_CLEANUP_PROFILE`. Apply the
 Loom stack before the GitHub Pulumi stack whenever these federations or profile
 variables change.
 
@@ -159,6 +159,9 @@ their federation mapping.
 
 The PR review workflow launches on open, ready-for-review, and reopen events.
 Reopen a PR to retry its latest head if a push invalidates an in-progress review.
+The `pr-holistic-review` mapping authorizes the whole-change review profile,
+which runs the `claude` agent with the `fable` model and also launches on
+pushes; its session skips small deltas since the last reviewed head.
 
 The `remoteMcps` declaration registers Marina's authenticated Streamable HTTP
 endpoints as the full `/marina/api` capability and the read-only

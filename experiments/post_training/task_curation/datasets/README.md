@@ -21,23 +21,16 @@ for declaration fields and artifact outputs.
    [skyrl/math.py](skyrl/math.py) is an example. Reuse
    `taskcompendium.convert` helpers where they fit. Inventory-only sources use
    `info.dataset=SourceReference(...)` and no pipeline. Use the `excluded` tag
-   when the entry should be hidden by default.
+   when the entry is deprecated or excluded from use.
 3. If adding a module, import it and include its `sources()` results in
    [all_sources()](../sources.py). Add a behavioral conversion test in the family
    test module, and run it with [test_catalog.py](../tests/test_catalog.py).
-4. Regenerate the Atlas JSON from the repository root:
+4. Run a SAMPLE or FULL campaign to publish the updated inventory. Any campaign
+   includes all source declarations; select the new source to also curate and
+   assess it. Inspect its records through `finestore.rl.curation.CurationCatalog`.
+   Commit the Python declarations. Update the dashboard with the
+   [Atlas loader](../../../../docs/references/rl-data-atlas.md#updating-atlas).
 
-   ```bash
-   uv run --with-editable './lib/taskcompendium[pipeline]' python \
-     -m experiments.post_training.task_curation.export_catalog \
-     --output infra/marina/applets/rl_data_catalog/dist/catalog.json
-   ```
-
-The export does not download data or run converters. Inspect the new row in the
-JSON; commit the Python declarations, not the generated file. The applet build
-regenerates this JSON automatically. To update the dashboard, follow
-[RL Data Atlas publishing](../../../../docs/references/rl-data-atlas.md).
-**Refresh sources** loads the published catalog; it does not rebuild it.
 See [offline parquet counts](../README.md#declaring-a-dataset) for count regeneration.
 
 ## Script graders
@@ -52,9 +45,9 @@ packages every grade script in the catalog imports, and use
 `required_grader_environment(context)` as its environment. A script that
 needs more declares its own `Environment` (see
 [environment.py](../environment.py)), such as `COMPILER_GRADER_PACKAGES`,
-which adds a C++ toolchain. The packages live in [grader.in](grader.in) and
-its compiled lock [grader.lock](grader.lock); regenerate the lock after
-changing `grader.in`. For a new buildable environment, follow the
+which adds a C++ toolchain. The pinned requirements live in
+[environments.py](environments.py), grouped by the scorers that need them; the
+build compiles them to a hash lock. For a new buildable environment, follow the
 [registration instruction](../images/README.md#building).
 
 A rubric and controls can come later: without a rubric rows are kept

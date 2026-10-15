@@ -10,6 +10,7 @@ from pathlib import Path
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.controls import GradingMachines
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
+from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_SAMPLE_SIZE
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB
@@ -24,12 +25,15 @@ class RecipeSettings:
     review: ReviewConfig | None = None
     review_cache: str | None = None
     base_url: str | None = None
+    api_key: str | None = None
     relay_job: str = DEFAULT_GLM_RELAY_JOB
     review_concurrency: int = MAX_DIRECT_CONCURRENT_REQUESTS
     normalized_shards: int | None = None
     machines: GradingMachines | None = None
     seed: int = 0
+    quality_sample_size: int = SOURCE_QUALITY_SAMPLE_SIZE
     verification_sample_size: int = 20
+    curation_attempt: int = 0
     execution: AuditExecution = field(default_factory=AuditExecution)
 
 

@@ -14,17 +14,20 @@ import re
 import shlex
 import tarfile
 import tempfile
-from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
-from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
+from shellbox.backends.qemu.bundle import IMAGE_METADATA_FILE
+from shellbox.backends.qemu.image import QemuAssets, load_qemu_bundle, stage_qemu_image
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, process_image_cache
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
+    LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
+    CommandSemantics,
+    ExecutionRequirements,
     ExitReason,
     MachineSpec,
     NetworkPolicy,
@@ -33,6 +36,7 @@ from shellbox.machine import (
     ShellStatus,
     ShellUpdate,
     UnsupportedMachineSpec,
+    check_execution_requirements,
 )
 
 REQUEST_CHUNK_BYTES = 2048
@@ -159,10 +163,9 @@ async def query_acceleration(socket: Path) -> Acceleration:
 class QemuMachine:
     """One microvm and its private writable disk."""
 
-    def __init__(self, spec: MachineSpec, acceleration: Acceleration):
-        assert isinstance(spec.source, QemuBundle)
+    def __init__(self, spec: MachineSpec, acceleration: Acceleration, *, bundle: QemuBundle):
         self.spec = spec
-        self.bundle = spec.source.path.resolve()
+        self.bundle = bundle.path.resolve()
         self.acceleration = acceleration
         self.active_acceleration: Acceleration | None = None
         self.process: asyncio.subprocess.Process | None = None
@@ -170,7 +173,7 @@ class QemuMachine:
         self._pty_socket: Path | None = None
         self._shell: QemuShellSession | None = None
         self._lock = asyncio.Lock()
-        metadata_path = self.bundle / "image.json"
+        metadata_path = self.bundle / IMAGE_METADATA_FILE
         self.metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
         self.image_env = dict(item.split("=", 1) for item in self.metadata.get("env", []))
         self.image_workdir = self.metadata.get("cwd", "/workspace")
@@ -493,32 +496,55 @@ class QemuMachineFactory:
         self.authfile = authfile
         self.policy = policy
 
-    async def create(self, spec: MachineSpec) -> QemuMachine:
+    def _check_spec(self, spec: MachineSpec) -> QemuBundle | PreparedImage | RegistryImage | DockerfileSource:
         if spec.storage_mb is not None or spec.gpus:
             raise UnsupportedMachineSpec("QEMU does not provide storage resizing or GPU allocation")
         if spec.network is not NetworkPolicy.DENY:
             raise UnsupportedMachineSpec("QEMU guest networking is unsupported")
         if spec.memory_mb is not None and spec.memory_mb <= 0:
             raise ValueError("memory_mb must be positive")
-        if isinstance(spec.source, (RegistryImage, DockerfileSource)):
-            if self.image_cache is None:
-                raise UnsupportedMachineSpec("Registry images and Dockerfiles require an image cache")
-            cache = process_image_cache(self.image_cache, self.authfile, self.policy)
-            image = await asyncio.to_thread(cache.prepare, spec.source)
-            spec = replace(spec, source=image)
-        if isinstance(spec.source, PreparedImage):
+        if not isinstance(spec.source, (QemuBundle, PreparedImage, RegistryImage, DockerfileSource)):
+            raise UnsupportedMachineSpec("QEMU requires a bundle or OCI image source")
+        if isinstance(spec.source, (RegistryImage, DockerfileSource)) and self.image_cache is None:
+            raise UnsupportedMachineSpec("Registry images and Dockerfiles require an image cache")
+        if isinstance(spec.source, (PreparedImage, RegistryImage, DockerfileSource)):
             if self.assets is None or self.bundle_cache is None:
-                raise UnsupportedMachineSpec("Prepared OCI images require QEMU assets and a bundle cache")
-            bundle = await asyncio.to_thread(stage_qemu_image, spec.source, self.assets, self.bundle_cache)
-            spec = replace(spec, source=QemuBundle(bundle))
-        if not isinstance(spec.source, QemuBundle):
-            raise UnsupportedMachineSpec("QEMU requires a QemuBundle source")
-        bundle = spec.source.path
+                raise UnsupportedMachineSpec("OCI images require QEMU assets and a bundle cache")
+        return spec.source
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        source = self._check_spec(spec)
+        source = source.source if isinstance(source, PreparedImage) else source
+        reference = (
+            source.reference
+            if isinstance(source, RegistryImage)
+            else (source.image_reference if isinstance(source, QemuBundle) else None)
+        )
+        check_execution_requirements(
+            requirements,
+            spec,
+            semantics=CommandSemantics.LINUX_PROCESS,
+            capabilities=LINUX_PROCESS_CAPABILITIES,
+            image_reference=reference,
+        )
+
+    async def create(self, spec: MachineSpec) -> QemuMachine:
+        source = self._check_spec(spec)
+        if isinstance(source, (RegistryImage, DockerfileSource)):
+            assert self.image_cache is not None
+            cache = process_image_cache(self.image_cache, self.authfile, self.policy)
+            source = await asyncio.to_thread(cache.prepare, source)
+        if isinstance(source, PreparedImage):
+            assert self.assets is not None and self.bundle_cache is not None
+            path = await asyncio.to_thread(stage_qemu_image, source, self.assets, self.bundle_cache)
+            source = load_qemu_bundle(path)
+        assert isinstance(source, QemuBundle)
+        bundle = source.path
         for name in ("qemu-system-x86_64", "vmlinuz", "initramfs.cpio.gz"):
             if not (bundle / name).is_file():
                 raise FileNotFoundError(bundle / name)
-        if (bundle / "image.json").exists() != (bundle / "rootfs.ext4").exists():
+        if (bundle / IMAGE_METADATA_FILE).exists() != (bundle / "rootfs.ext4").exists():
             raise ValueError("OCI guest bundle requires both image.json and rootfs.ext4")
-        machine = QemuMachine(spec, self.acceleration)
+        machine = QemuMachine(spec, self.acceleration, bundle=source)
         await machine.start()
         return machine

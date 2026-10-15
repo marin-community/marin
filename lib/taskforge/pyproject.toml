@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-taskforge"
+version = "0.1.0"
+description = "Task generation with GLM-5.3: the model client that writes TaskCompendium task programs"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "marin-taskcompendium",
+    "marin-rigging",
+    "httpx>=0.27,<1",
+    "openai",
+    "pydantic>=2.0",
+    # The capability experiment's driver, which runs in this package's environment on a pod, needs
+    # click for its CLI and marin-iris to resolve the GLM relay inside an Iris task.
+    "click",
+    "marin-iris",
+]
+
+[dependency-groups]
+test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/taskforge"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+timeout = 60
+addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual'"
+markers = [
+    "slow: long-running test",
+    "integration: external service",
+    "data_integration: external data",
+    "cluster: live cluster",
+    "requires_cluster: live cluster",
+    "docker: Docker daemon",
+    "manual: explicit validation",
+]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+[tool.ruff.lint.isort]
+known-first-party = ["taskforge"]
+
+[tool.pyrefly]
+disable-project-excludes-heuristics = true
+project-includes = ["src", "tests", "../../experiments/post_training/capability_driven_envs"]
+search-path = ["src", "../..", "../taskcompendium/src", "../rigging/src"]
+python-interpreter = "../../.venv/bin/python"

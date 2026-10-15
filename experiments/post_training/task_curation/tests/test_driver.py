@@ -1,23 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import json
 import os
 import shutil
 from dataclasses import replace
-from functools import partial
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from finestore.rl.curation import CurationCatalog
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
-from shellbox.machine import HostImage, NetworkPolicy
+from shellbox.machine import Command, HostImage, Mount, NetworkPolicy
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.local import LocalRuntime, local_runtime
@@ -25,7 +27,6 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation import pipeline as processor
-from experiments.post_training.task_curation.campaign import CampaignPool
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.environment import Environment
@@ -39,9 +40,11 @@ from experiments.post_training.task_curation.pipeline import (
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tests.image_builds import (
+    DATA_PATH,
     REPOSITORY,
+    REQUIREMENTS,
+    install_fake_archive,
     install_fake_build_tools,
-    tracked_lock,
 )
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
@@ -107,7 +110,11 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     install_fake_build_tools(tmp_path, monkeypatch)
     # The factory probes for a working bubblewrap; CI hosts cannot build sandboxes.
     monkeypatch.setattr("shellbox.backends.local.machine._working_bwrap", lambda candidates: Path("/usr/bin/bwrap"))
-    environment = Environment(lock=tracked_lock(tmp_path), data=("nltk:punkt_tab",))
+    environment = Environment(
+        requirements=REQUIREMENTS,
+        files={DATA_PATH: install_fake_archive(monkeypatch)},
+        env={"NLTK_DATA": "/srv/nltk_data"},
+    )
     (artifact,) = run(environment_artifact(environment, REPOSITORY))
     monkeypatch.setattr(LocalRuntime, "ensure_built", lambda self: self.root.mkdir(parents=True))
     machines = CampaignMachines()
@@ -116,14 +123,15 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     spec = prepare_machine_spec(requirements, factory, spec, {})
     runtime = local_runtime(artifact.lock_url)
     request.addfinalizer(lambda: shutil.rmtree(runtime.root, ignore_errors=True))
-    assert runtime.lock_sha256 == artifact.lock_sha256 and runtime.data == ("nltk:punkt_tab",)
     assert runtime.root.is_dir()
-    assert spec.source == HostImage(read_only=(runtime.root,), bin_dirs=(runtime.bin_dir,))
+    data = Mount(runtime.root / "files" / DATA_PATH.removeprefix("/"), PurePosixPath(DATA_PATH))
+    assert spec.source == HostImage(read_only=(runtime.root,), bin_dirs=(runtime.bin_dir,), mounts=(data,))
     assert spec.memory_mb is None and spec.network == NetworkPolicy.DENY and spec.workdir == "/app"
-    assert spec.env == {"NLTK_DATA": str(runtime.root / "share" / "nltk_data")}
+    assert spec.env == {"NLTK_DATA": "/srv/nltk_data"}
 
 
-def test_local_only_planning_does_not_require_a_controller(tmp_path, catalog):
+def test_local_only_planning_does_not_require_a_controller(tmp_path, catalog, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central2/rl-grading")
     result = CliRunner().invoke(main, arguments(tmp_path))
     assert result.exit_code == 0, result.output
     assert not (tmp_path / "report.json").exists()
@@ -146,7 +154,7 @@ def test_quick_cli_plans_then_converts_once_in_request_order(tmp_path, monkeypat
     options = {
         "--mode": "quick",
         "--output-root": str(output),
-        "--download-cache": str(cache),
+        "--cache-dir": str(cache),
         "--max-workers": "1",
     }
     args = [item for pair in options.items() for item in pair]
@@ -174,7 +182,7 @@ def test_quick_cli_plans_then_converts_once_in_request_order(tmp_path, monkeypat
         assert [row["source_row"] for row in rows] == [source_row]
 
 
-@pytest.mark.parametrize("option", ["--input-root", "--input-file", "--input", "--output-root", "--download-cache"])
+@pytest.mark.parametrize("option", ["--input-root", "--input-file", "--input", "--output-root"])
 def test_reviewed_cli_rejects_local_input_and_output_options(tmp_path, catalog, option):
     inputs = tmp_path / "inputs"
     inputs.mkdir()
@@ -185,7 +193,6 @@ def test_reviewed_cli_rejects_local_input_and_output_options(tmp_path, catalog, 
         "--input-file": ["fixture.jsonl", str(file)],
         "--input": ["answers", str(inputs)],
         "--output-root": [str(tmp_path / "output")],
-        "--download-cache": [str(tmp_path / "downloads")],
     }
     result = CliRunner().invoke(main, [*arguments(tmp_path), option, *values[option]])
     assert result.exit_code == 2
@@ -205,11 +212,11 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
     input_file.write_text("1\n2\n3\n")
     source = number_source(input_file)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
-    options = ["--mode", mode, "--source", source.name, "--max-workers", "1"]
+    options = ["--mode", mode, "--skip-assessment", "--source", source.name, "--max-workers", "1"]
     if mode == "quick":
         output_root = tmp_path / "output"
         report = output_root / "campaign.json"
-        options += ["--output-root", str(output_root), "--download-cache", str(tmp_path / "downloads")]
+        options += ["--output-root", str(output_root), "--cache-dir", str(tmp_path / "downloads")]
     else:
         report = tmp_path / "report.json"
         options += ["--coordinator-memory", "1g", "--worker-image", "fixture-image", "--report-path", str(report)]
@@ -231,7 +238,6 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
         evidence = json.loads(StoragePath(result["evidence"]["ingestion"]).read_text())
         assert evidence["mode"] == mode
         assert evidence["catalog_id"] == source.info.id
-        assert result["stages"] == ["ingest", "multiply"]
         if mode == "quick":
             # The generated pipeline really consumes its upstream artifact.
             ingested = list((tmp_path / "downloads").rglob("numbers.txt"))
@@ -252,10 +258,6 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
 def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path, monkeypatch, mode, rubric):
     monkeypatch.delenv(GLM_BULK_TOKEN_ENV, raising=False)
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
-    monkeypatch.setattr(
-        "experiments.post_training.task_curation.driver.CampaignPool",
-        partial(CampaignPool, chunk_storage_prefix=str(tmp_path / "chunks")),
-    )
     monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
     source = replace(
@@ -280,6 +282,7 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
     options = [
         "--mode",
         mode,
+        "--skip-assessment",
         "--max-workers",
         "1",
         "--coordinator-memory",
@@ -313,6 +316,191 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
             for row in load_parquet(str(shard))
         ]
         assert [row["source_row"] for row in rows] == ["rows.jsonl:0"]
-        assert result["stages"] == ["download", "normalize", "final"]
     finally:
         client.shutdown()
+
+
+def test_shell_only_campaign_does_not_load_ports_catalog(tmp_path):
+    machines = CampaignMachines(simulator_catalog=(tmp_path / "absent-catalog.json").as_uri())
+    factory, spec = machines.machine(EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR), 2048)
+
+    async def check():
+        machine = await factory.create(spec)
+        try:
+            result = await machine.run(Command(("sh", "-c", "echo hello > answer; cat answer")))
+            assert (result.exit_code, result.stdout) == (0, b"hello\n")
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
+
+
+def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, monkeypatch, review_server):
+    declared = next(source for source in skyrl_math.sources() if source.name == "math500")
+    source = replace(
+        declared,
+        config=replace(
+            math500(),
+            source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
+            controls=None,
+        ),
+    )
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
+    monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
+    staged = tmp_path / "input"
+    staged.mkdir()
+    (staged / "rows.jsonl").write_text(
+        "\n".join(json.dumps({"problem": f"What is {value} plus one?", "answer": str(value + 1)}) for value in range(6))
+    )
+    cache = tmp_path / "cache"
+    args = [
+        "--mode",
+        "sample",
+        "--cache-dir",
+        str(cache),
+        "--source",
+        source.name,
+        "--input-root",
+        str(staged),
+        "--quality-sample-size",
+        "2",
+        "--max-workers",
+        "1",
+        "--review-mode",
+        "chat",
+        "--review-concurrency",
+        "1",
+        "--model-revision",
+        "fixture",
+        "--base-url",
+        f"http://127.0.0.1:{review_server.server_address[1]}/v1",
+        "--run",
+    ]
+    runner = CliRunner()
+    first = runner.invoke(main, [*args, "--normalized-shards", "1"])
+    assert first.exit_code == 0, first.output
+    outcome = json.loads((cache / "campaigns/campaign.json").read_text())["sources"][0]
+    manifest = json.loads((StoragePath(outcome["path"]) / "manifest.json").read_text())
+    assert manifest["raw_population_count"] == 6 and manifest["raw_sample_count"] == 2
+    assert len(review_server.requests) == 2
+    assert (cache / "review-cache").exists()
+    repeated = runner.invoke(main, [*args, "--normalized-shards", "2"])
+    assert repeated.exit_code == 0, repeated.output
+    rebuilt = json.loads((cache / "campaigns/campaign.json").read_text())["sources"][0]
+    assert rebuilt["path"] != outcome["path"]
+    assert len(review_server.requests) == 2
+
+
+def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, review_server):
+    declared = next(source for source in skyrl_math.sources() if source.name == "math500")
+    source = replace(declared, config=replace(math500(), rubric=None, controls=None))
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
+    monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
+    staged = tmp_path / "input"
+    staged.mkdir()
+    (staged / "test.jsonl").write_text(
+        "\n".join(json.dumps({"problem": f"What is {value} plus one?", "answer": str(value + 1)}) for value in range(3))
+    )
+    cache = tmp_path / "cache"
+    args = [
+        "--mode",
+        "sample",
+        "--cache-dir",
+        str(cache),
+        "--source",
+        source.name,
+        "--input-root",
+        str(staged),
+        "--max-workers",
+        "1",
+        "--quality-sample-size",
+        "2",
+        "--assessment-sample-size",
+        "1",
+        "--review-mode",
+        "chat",
+        "--model-revision",
+        "fixture",
+        "--base-url",
+        f"http://127.0.0.1:{review_server.server_address[1]}/v1",
+        "--run",
+    ]
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    catalog = CurationCatalog(str(cache / "campaigns/catalog"))
+    row = next(row for row in catalog.sources(catalog.current().snapshot_id) if row.id == source.info.id)
+    assert row.assessment_key is None
+    assert review_server.requests == []
+
+    result = CliRunner().invoke(main, [*args, "--assess"])
+    assert result.exit_code == 0, result.output
+    catalog = CurationCatalog(str(cache / "campaigns/catalog"))
+    row = next(row for row in catalog.sources(catalog.current().snapshot_id) if row.id == source.info.id)
+    assessment = catalog.assessment(row.assessment_key)
+    items = list(catalog.items(row.assessment_key))
+    assert [(item.cohort, item.verdict) for item in items] == [("admitted", "good")]
+    assert {population.cohort: population.population for population in catalog.populations(row.assessment_key)} == {
+        "admitted": 2,
+        "excluded": 0,
+    }
+    assert assessment.scope == "sample"
+    assert len(review_server.requests) == 1
+
+
+def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_path, monkeypatch, review_server):
+    declared = next(source for source in skyrl_math.sources() if source.name == "math500")
+    source = replace(declared, config=replace(math500(), controls=None))
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
+    monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
+    review_server.review_available = False
+    staged = tmp_path / "input"
+    staged.mkdir()
+    (staged / "test.jsonl").write_text(
+        '{"problem":"One plus one?","answer":"2"}\n{"problem":"Two plus one?","answer":"3"}\n'
+    )
+    cache = tmp_path / "cache"
+    args = [
+        "--mode",
+        "full",
+        "--cache-dir",
+        str(cache),
+        "--input-root",
+        str(staged),
+        "--max-workers",
+        "1",
+        "--quality-sample-size",
+        "1",
+        "--review-mode",
+        "chat",
+        "--model-revision",
+        "fixture",
+        "--review-concurrency",
+        "1",
+        "--base-url",
+        f"http://127.0.0.1:{review_server.server_address[1]}/v1",
+        "--run",
+    ]
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code != 0
+    campaign = json.loads((cache / "campaigns/campaign.json").read_text())
+    outcome = campaign["sources"][0]
+    assert campaign["status"] == "failed" and outcome["status"] == "incomplete"
+    catalog = CurationCatalog(str(cache / "campaigns/catalog"))
+    catalog_source = next(
+        row for row in catalog.sources(catalog.current().snapshot_id) if row.declaration.name == "math500"
+    )
+    assert catalog_source.curation.status == "incomplete"
+    assert [(item.cohort, item.status) for item in catalog.items(catalog_source.assessment_key)] == [
+        ("excluded", "reviewed")
+    ]
+    requests = list(review_server.requests)
+    assert sum(request["tool_choice"]["function"]["name"] == "assess_task" for request in requests) == 1
+    repeated = CliRunner().invoke(main, args)
+    assert repeated.exit_code != 0
+    assert review_server.requests == requests
+    review_server.review_available = True
+    retried = CliRunner().invoke(main, [*args, "--curation-attempt", "1"])
+    assert retried.exit_code == 0, retried.output
+    recovered = json.loads((cache / "campaigns/campaign.json").read_text())
+    assert recovered["sources"][0]["status"] == "completed"
+    assert recovered["sources"][0]["path"] != outcome["path"]

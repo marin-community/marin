@@ -16,11 +16,13 @@ uv pip install --prerelease allow 'marin-shellbox[iris]'
 uv pip install 'marin-shellbox[gvisor]'
 ```
 
-The base wheel contains the Harbor adapter, machine API, and guest source. Harbor is the host application: install this wheel into an environment that already has the [Marin Harbor fork](../../config/external/harbor/pyproject.toml), whose `harbor==0.8.1` distribution is not published on PyPI. The machine API can be used without Harbor. The `shellsim` extra requires ShellSim 0.1.29 or newer within the 0.1 series. The `qemu` extra requires [quicksand-qemu](https://pypi.org/project/quicksand-qemu/) 0.5.12 or newer within the 0.5 series; it bundles QEMU and its shared libraries in a platform wheel. A QEMU guest bundle still needs a Linux amd64 kernel, static BusyBox, and `bios-microvm.bin`; OCI staging also needs Skopeo, `umoci`, `mkfs.ext4`, and `cpio`. These inputs are explicit until we have a portable, licensed guest-runtime wheel. The tested quicksand-qemu Linux wheel requires glibc 2.38 or newer; use a compatible host QEMU on older clusters.
+The base wheel contains the Harbor adapter, machine API, and guest source. Harbor is the host application: install this wheel into an environment that already has the [Marin Harbor fork](../../config/external/harbor/pyproject.toml), whose `harbor==0.8.1` distribution is not published on PyPI. The machine API can be used without Harbor. The `shellsim` extra requires ShellSim 0.1.37 or newer. The `qemu` extra requires [quicksand-qemu](https://pypi.org/project/quicksand-qemu/) 0.5.12 or newer within the 0.5 series; it bundles QEMU and its shared libraries in a platform wheel. A QEMU guest bundle still needs a Linux amd64 kernel, static BusyBox, and `bios-microvm.bin`; OCI staging also needs Skopeo, `umoci`, `mkfs.ext4`, and `cpio`. These inputs are explicit until we have a portable, licensed guest-runtime wheel. The tested quicksand-qemu Linux wheel requires glibc 2.38 or newer; use a compatible host QEMU on older clusters.
 
 ## Machine API
 
-The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`, and `LocalMachineFactory` only `HostImage()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
+`factory.check_environment(requirements, spec)` checks task semantics, capabilities and software support before acquisition. Factories retain the requested `MachineSpec`; prepared images and bundles are backend inputs. The check does not promise available capacity or installed executables.
+
+The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` and `LocalMachineFactory` accept `PackageSpec(pypi_packages=..., tools=...)`; the local factory also accepts `HostImage()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
 Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. QEMU and ShellSim have Harbor environment adapters. Docker, gVisor, Daytona, Iris, and local expose the machine API without a Harbor adapter or persistent Bash support.
 
@@ -81,10 +83,11 @@ Other factories do not apply `MachineSpec.startup_timeout`. Callers enforce the
 deadline for the complete create operation.
 
 ```python
-from shellbox.machine import Command, MachineSpec, QemuBundle
+from shellbox.backends.qemu.image import load_qemu_bundle
+from shellbox.machine import Command, MachineSpec
 from shellbox.backends.qemu.machine import QemuMachineFactory
 
-machine = await QemuMachineFactory().create(MachineSpec(source=QemuBundle(bundle_path)))
+machine = await QemuMachineFactory().create(MachineSpec(source=load_qemu_bundle(bundle_path)))
 try:
     result = await machine.run(Command(("/bin/sh", "-c", "echo hello")))
 finally:
@@ -184,7 +187,7 @@ finally:
     await machine.close()
 ```
 
-`HostImage(read_only=(environment.root,), bin_dirs=(environment.bin_dir,))` can also supply these paths for one machine. The factory combines them with its own mounts and puts the image's `bin_dirs` first on `PATH`; this lets a factory wrapper pass the runtime through `MachineSpec`.
+`HostImage(read_only=(environment.root,), bin_dirs=(environment.bin_dir,))` can also supply these paths for one machine. The factory combines them with its own mounts and puts the image's `bin_dirs` first on `PATH`; this lets a factory wrapper pass the runtime through `MachineSpec`. `HostImage(mounts=(Mount(host, guest),))` shows a host file or directory read-only at another guest path; the guest path must lie outside the host system directories, where bwrap cannot create a mount point.
 
 - Each machine has a root directory of its own, which `create` makes empty under the host's temporary directory and `close` removes. Commands see it as `/`, with the host's `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc`, `/opt`, `/sys` and `/run/systemd/resolve` mounted read-only over it, together with each directory in `read_only` at its own host path. Every other path, including `/app`, `/tests`, `/tmp` and `HOME`, is the machine's own, so paths that the host process uses, such as an Iris task's `/app`, are never touched. No other host file is visible.
 - Machines are independent, so a process may run any number of them at once.
@@ -204,7 +207,7 @@ The factory checks once, when it is created, that `bwrap` can build a sandbox, a
 
 ## ShellSim backend
 
-ShellSim requires no QEMU assets, Docker daemon, image pull, or build step. The `shellsim` extra accepts ShellSim releases from 0.1.29 to before 0.2. Select it in a Harbor job:
+Install the `shellsim` extra for Shellsim 0.1.37 or later. A Harbor worker shares its Context; each trial gets private files and process state:
 
 ```yaml
 environment:
@@ -216,11 +219,11 @@ agents:
       base_url: http://127.0.0.1:8000/v1
 ```
 
-The task's `docker_image` and `environment/Dockerfile` are ignored. Files already in `environment/` are copied to the simulated workdir, which defaults to `/workspace`; Dockerfile instructions are never applied. ShellSim's trusted import accepts regular files and rejects symlinks and special files. ShellSim provides its own command set and in-memory filesystem. Use this backend only for tasks whose setup, agent commands, and verifier use [supported ShellSim facilities](https://pypi.org/project/shellsim/). Unsupported commands fail visibly. For direct machine use, pass `MachineSpec(source=ShellSimBuiltins())` to `ShellSimMachineFactory.create()`.
+Default contexts load precompiled native code from Shellsim's public catalog when a compatible artifact is available. Configure catalog, cache, offline and precompiled trust policy on `shellsim.Context`; pass it to `ShellSimEnvironment` or `ShellSimMachineFactory`. Select packages and tools through the shared `shellbox.PackageSpec`, passed as `package_spec` to the Harbor adapter or as `MachineSpec.source`. Use `PackageSpec(pypi_packages=())` for CPython alone; `PackageSpec()` keeps a shell-only environment. A custom Harbor environment class can own the configured Context. Guest commands have no host filesystem or network access.
 
-`BashAgent` offers only `Bash` with ShellSim. Each action completes before returning; interactive input and interruption are unavailable. Cwd, exports, functions, and virtual files persist across Bash actions. ShellSim currently also carries shell functions and exports into Harbor setup and verifier actions on the same instance. This differs from QEMU's separate verifier shell and can affect rewards. [ShellSim issue #89](https://github.com/rjpower/shellsim/issues/89) tracks an isolated shell action that shares the virtual filesystem. Treat ShellSim verifier results as exploratory until that isolation is available. The backend has no host filesystem or network access from simulated commands; the trusted harness copies task files into the virtual filesystem.
+Agent shell state persists between Bash actions; setup and verifier commands use fresh shell state over the same filesystem. Actions complete before returning; interactive input and interruption are unavailable. Task images and Dockerfile instructions are not applied; regular files under `environment/` are copied to the workdir. Select tasks compatible with the WASI catalog and supported commands.
 
-The default ShellSim limits per trial are 10 billion CPU units, 256 MiB modeled memory, 256 MiB virtual disk, and 128 MiB cumulative output. `cpu_limit`, `memory_mb`, `disk_limit_bytes`, and `output_limit_bytes` configure them. An action that exhausts a ShellSim resource terminates the trial. These are ShellSim fuel and working-set limits, not host CPU or RSS limits. Tasks that request internet are rejected unless `network_policy: deny` explicitly runs them offline.
+The default ShellSim limits per trial are 10 billion CPU units, 2 GiB modeled memory, 512 MiB virtual disk, and 128 MiB cumulative output. `cpu_limit`, `memory_mb`, `disk_limit_bytes`, and `output_limit_bytes` configure them. An action that exhausts a ShellSim resource terminates the trial. These are ShellSim fuel and working-set limits, not host CPU or RSS limits. Tasks that request internet are rejected unless `network_policy: deny` explicitly runs them offline.
 
 Run the local Harbor smoke without QEMU:
 

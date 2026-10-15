@@ -6,19 +6,23 @@
 import asyncio
 import logging
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
+    LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
+    CommandSemantics,
     DockerImage,
+    ExecutionRequirements,
     ExitReason,
     MachineSpec,
     NetworkPolicy,
     Result,
     UnsupportedMachineSpec,
+    check_execution_requirements,
 )
 
 logger = logging.getLogger(__name__)
@@ -262,26 +266,43 @@ class DockerMachineFactory:
     def __init__(self, *, runtime: str | None = None):
         self.runtime = runtime
 
+    def _check_spec(self, spec: MachineSpec) -> DockerImage | RegistryImage | DockerfileSource:
+        if not isinstance(spec.source, (DockerImage, RegistryImage, DockerfileSource)):
+            raise UnsupportedMachineSpec("Docker requires a DockerImage, RegistryImage or DockerfileSource")
+        return spec.source
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        source = self._check_spec(spec)
+        reference = source.reference if isinstance(source, (DockerImage, RegistryImage)) else None
+        check_execution_requirements(
+            requirements,
+            spec,
+            semantics=CommandSemantics.LINUX_PROCESS,
+            capabilities=LINUX_PROCESS_CAPABILITIES,
+            image_reference=reference,
+        )
+
     async def create(self, spec: MachineSpec) -> DockerMachine:
+        source = self._check_spec(spec)
+        image = source
         pull = "never"
-        if isinstance(spec.source, RegistryImage):
+        if isinstance(source, RegistryImage):
             pull = "missing"
-            spec = replace(spec, source=DockerImage(spec.source.reference))
-        elif isinstance(spec.source, DockerfileSource):
+            image = DockerImage(source.reference)
+        elif isinstance(source, DockerfileSource):
             built = await docker(
                 "build",
                 "--quiet",
                 "--platform",
                 IMAGE_PLATFORM,
                 "-f",
-                str(spec.source.dockerfile),
-                str(spec.source.context),
+                str(source.dockerfile),
+                str(source.context),
             )
             if built.exit_code:
                 raise RuntimeError(built.stderr.decode(errors="replace"))
-            spec = replace(spec, source=DockerImage(built.stdout.decode().strip()))
-        if not isinstance(spec.source, DockerImage):
-            raise UnsupportedMachineSpec("Docker requires a DockerImage, RegistryImage or DockerfileSource")
+            image = DockerImage(built.stdout.decode().strip())
+        assert isinstance(image, DockerImage)
         name = f"harbor-machine-{uuid.uuid4().hex}"
         args = [
             "run",
@@ -308,7 +329,7 @@ class DockerMachineFactory:
             args.extend(("--runtime", self.runtime))
         for key, value in spec.env.items():
             args.extend(("-e", f"{key}={value}"))
-        args.extend(("--entrypoint", "/bin/sh", spec.source.reference, "-c", "while :; do sleep 3600; done"))
+        args.extend(("--entrypoint", "/bin/sh", image.reference, "-c", "while :; do sleep 3600; done"))
         try:
             result = await docker(*args)
             if result.exit_code:

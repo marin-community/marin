@@ -14,6 +14,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
+from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
     Backend,
@@ -22,11 +23,11 @@ from shellbox.machine import (
     ExitReason,
     HostImage,
     MachineSpec,
+    PackageSpec,
     Result,
-    ShellSimBuiltins,
     UnsupportedMachineSpec,
 )
-from verifyit.spec import ScriptSpec, render_spec, spec_from_table
+from verifyit.spec import RUBRIC_LABELS, JudgeSpec, ScriptSpec, render_spec, spec_from_table
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradingFailure, Outcome
@@ -43,6 +44,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     ExitCodeReward,
     FileReward,
+    FinalAction,
     FunctionCall,
     FunctionDefinition,
     GradingAttempt,
@@ -147,7 +149,7 @@ class FileMachine:
 
 
 @dataclass
-class FileMachines:
+class FileMachines(DockerMachineFactory):
     backend = Backend.DOCKER
     machines: list[FileMachine] = field(default_factory=list)
 
@@ -277,8 +279,8 @@ class LocalGradingMachine:
             if SPEC_PATH in command.argv:
                 spec_path = self.local(SPEC_PATH)
                 spec = spec_from_table(tomllib.loads(spec_path.read_text()))
-                assert isinstance(spec, ScriptSpec)
-                spec_path.write_text(render_spec(replace(spec, workspace=str(self.local("/app")))))
+                if isinstance(spec, ScriptSpec):
+                    spec_path.write_text(render_spec(replace(spec, workspace=str(self.local("/app")))))
                 argv.extend(("--logs-dir", str(self.local("/logs/verifier"))))
         else:
             assert program in {"bash", "sh"}, command.argv
@@ -294,7 +296,7 @@ class LocalGradingMachine:
 
 
 @dataclass
-class LocalGradingMachines:
+class LocalGradingMachines(DockerMachineFactory):
     root: Path
     remove_exit_code: int = 0
     machines: list[LocalGradingMachine] = field(default_factory=list)
@@ -411,6 +413,44 @@ def test_script_grader_scores_captured_files_in_sandbox_and_task_grading(
     assert all(machine.closed for machine in factory.machines)
 
 
+def test_native_action_judge_exact_gate_receives_the_semantic_action(shell_task):
+    candidate = '{"arguments":{"index":3},"name":"lookup","type":"function_call"}'
+    package = verifyit_package(
+        JudgeSpec(
+            references=("Use the lookup function.",),
+            rubric=RUBRIC_LABELS,
+            system_prompt="Grade the proposed action.",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+            exact_gate_answers=(candidate,),
+            exact_gate_label="PASS",
+        ),
+        environment=GRADER_ENVIRONMENT,
+    )
+    task = shell_task.model_copy(
+        update={
+            "context": ConversationInput(events=(TextMessage(role="user", content="Look up index 3."),)),
+            "final_tools": (FunctionDefinition(name="lookup", parameters={"type": "object"}),),
+            "answer_type": AnswerType.NATIVE_ACTION,
+            "answer_format": FinalAction(require_call=True, max_calls=1),
+            "grader": package.grader,
+            "resources": ResourceGroups(verifier=package.resources),
+            "output_paths": (),
+        }
+    )
+    action = AssistantToolCalls(
+        calls=(ConversationToolCall(call_id="transport-only", name="lookup", arguments={"index": 3}),)
+    )
+    attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, action)))
+
+    result = grade_task(
+        task,
+        attempt,
+    )
+
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+
+
 @pytest.mark.parametrize("state,reward", [('{"ready":true}', 1.0), ('{"ready":false}', 0.0)])
 def test_script_grader_reads_captured_state(tmp_path, script_grading_task, state, reward):
     task = script_grading_task.model_copy(update={"answer_type": AnswerType.STATE, "output_paths": ()})
@@ -423,7 +463,7 @@ def test_script_grader_reads_captured_state(tmp_path, script_grading_task, state
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
 
 
-class UnavailableMachines:
+class UnavailableMachines(DockerMachineFactory):
     backend = Backend.DOCKER
 
     async def create(self, spec):
@@ -455,7 +495,7 @@ async def test_shell_uploads_public_files_without_oracle_and_captures_submission
             )
         }
     )
-    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins()), {}, 1, 1024)
+    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(PackageSpec()), {}, 1, 1024)
     env = await factory.create(task)
     try:
         public = await env.machine.run(Command(("cat", "/workspace/people.csv")))
@@ -518,7 +558,7 @@ async def test_episode_provides_shell_tool_and_collects_nested_output(shell_task
             ),
         )
     )
-    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins()), {}, 1, 1024, shell_tool=binding)
+    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(PackageSpec()), {}, 1, 1024, shell_tool=binding)
     rollout = await run_episode(task, actor, factory, max_steps=2, control="fixture")
     assert rollout.termination == Termination.FINAL_MESSAGE
     assert rollout.evidence().files == {"/workspace/submission/nested/result": b"answer"}
@@ -573,6 +613,8 @@ async def test_local_shell_setup_preserves_host_user_and_task_directory(shell_ta
         update={
             "environment_requirements": requirements.model_copy(
                 update={
+                    "packages_lock": None,
+                    "package_spec": PackageSpec(tools=("sh",)),
                     "capabilities": ("shell", "filesystem"),
                     "working_directory": "/task",
                     "setup_commands": ("cp /workspace/people.csv prepared.csv",),
@@ -580,6 +622,7 @@ async def test_local_shell_setup_preserves_host_user_and_task_directory(shell_ta
             )
         }
     )
+    task = TaskSpec.model_validate_json(task.model_dump_json())
     factory = ShellFactory(machine_factory, MachineSpec(HostImage()), {}, 10, 1024)
     environment = await factory.create(task)
     try:
@@ -603,6 +646,7 @@ async def test_shell_commands_use_required_directory_and_variables(shell_task, m
                 update={
                     "docker_image": None,
                     "command_semantics": CommandSemantics.SHELL_SIMULATOR,
+                    "package_spec": PackageSpec(),
                     "working_directory": "/task",
                     "setup_commands": ("cp /workspace/people.csv prepared.csv",),
                     "environment_variables": {"SETTING": "${TASKCOMPENDIUM_TEST_SETTING}"},
@@ -610,9 +654,10 @@ async def test_shell_commands_use_required_directory_and_variables(shell_task, m
             )
         }
     )
+    task = TaskSpec.model_validate_json(task.model_dump_json())
     factory = ShellFactory(
         ShellSimMachineFactory(),
-        MachineSpec(ShellSimBuiltins(), workdir="/incoming", env={"SETTING": "incoming", "RETAINED": "kept"}),
+        MachineSpec(PackageSpec(), workdir="/incoming", env={"SETTING": "incoming", "RETAINED": "kept"}),
         {},
         1,
         1024,

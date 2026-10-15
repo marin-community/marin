@@ -4,6 +4,7 @@
 """Decode records from pinned source files staged by an acquisition artifact."""
 
 import csv
+import hashlib
 import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
@@ -25,8 +26,29 @@ PARQUET_SHARD_BYTES = 128 * 1024 * 1024
 PREPARED_SHARD_ROWS = 256
 
 
+def _binary_hash_identity(value: Any) -> dict[str, Any]:
+    if isinstance(value, bytes):
+        return {"binary_sha256": hashlib.sha256(value).hexdigest(), "size": len(value)}
+    raise TypeError(f"Unsupported raw source value: {type(value).__name__}")
+
+
+def canonical_source_json(data: dict[str, Any]) -> str:
+    """Encode original source data, representing binary values by digest and size."""
+    return json.dumps(
+        data, default=_binary_hash_identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
+
+
+def raw_input_sha256(data: dict[str, Any]) -> str:
+    return hashlib.sha256(canonical_source_json(data).encode()).hexdigest()
+
+
+def prepared_parquet_directory(file: StoragePath) -> StoragePath:
+    return file.parent / ".curation-parquet" / (file.name + ".parquet")
+
+
 def prepared_manifest_path(file: StoragePath) -> StoragePath:
-    return file.parent / ".curation-parquet" / (file.name + ".parquet") / "manifest.json"
+    return prepared_parquet_directory(file) / "manifest.json"
 
 
 def prepared_component_path(file: StoragePath, component: str) -> StoragePath:
