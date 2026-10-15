@@ -46,8 +46,6 @@ RESULT_META = {
     "epoch_cap": "epoch_cap",
     "uncheatable_bpb": "bpb__uncheatable_source",
     "table9_macro_bpb": "bpb__obe_easy_source",
-    "predicted_uncheatable_bpb": "predicted_bpb_uncheatable",
-    "predicted_table9_macro_bpb": "predicted_bpb_obe_easy",
 }
 RESULT_META.update(
     {
