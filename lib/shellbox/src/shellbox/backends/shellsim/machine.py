@@ -157,7 +157,10 @@ class ShellSimMachine:
             yield
 
     async def _drain_worker[T](self, worker: asyncio.Task[T], deadline: float) -> bool:
-        """Bound cleanup by one deadline, even when the waiter is cancelled repeatedly."""
+        """Return True once the worker finishes, or close the machine and return False on expiry.
+
+        Repeated waiter cancellation is deferred through this deadline, then re-raised.
+        """
         interrupted = False
         loop = asyncio.get_running_loop()
         while not worker.done():
@@ -201,7 +204,7 @@ class ShellSimMachine:
     async def _run_source_locked(
         self, source: str, stdin: bytes = b"", *, shell: shellsim.ShellSession | None = None
     ) -> shellsim.RunResult:
-        """Execute with the caller holding the machine lock through native cleanup."""
+        """Retain action ownership under the lock until cleanup completes or its grace expires."""
         runner = self.simulation.run if shell is None else shell.run
         cancellation = shellsim.CancellationToken()
         worker = asyncio.create_task(asyncio.to_thread(runner, source, stdin, cancellation=cancellation))
