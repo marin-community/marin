@@ -5,6 +5,7 @@
 
 
 import itertools
+from contextlib import closing
 
 import msgspec
 import pyarrow as pa
@@ -35,6 +36,32 @@ def _write_test_parquet(path: str, records: list[dict], row_group_size: int = 2)
 
 
 RECORDS = [{"id": i, "name": f"row{i}", "score": float(i * 10)} for i in range(10)]
+
+
+@pytest.mark.parametrize("loader,extension", [(load_parquet, "parquet"), (load_jsonl, "jsonl"), (load_vortex, "vortex")])
+def test_nested_lookup_reads_preserve_main_input_progress(tmp_path, worker_context, loader, extension):
+    main_path = str(tmp_path / "main.parquet")
+    _write_test_parquet(main_path, [{"id": i} for i in range(100)], row_group_size=25)
+    lookup_path = tmp_path / f"lookup.{extension}"
+    records = [{"id": 123}]
+    if extension == "parquet":
+        _write_test_parquet(str(lookup_path), records)
+    elif extension == "vortex":
+        write_vortex_file(records, str(lookup_path))
+    else:
+        lookup_path.write_bytes(msgspec.json.encode(records[0]))
+
+    with closing(load_parquet(main_path)) as reader:
+        assert [row["id"] for row in itertools.islice(reader, 26)] == list(range(26))
+        expected = InputProgress(completed=25, total=100)
+        assert worker_context.get_runner_snapshot().input_progress == expected
+        with closing(loader(str(lookup_path))) as lookup:
+            assert next(lookup) == records[0]
+            assert worker_context.get_runner_snapshot().input_progress == expected
+        assert list(loader(str(lookup_path))) == records
+        assert worker_context.get_runner_snapshot().input_progress == expected
+        assert len(list(reader)) == 74
+    assert worker_context.get_runner_snapshot().input_progress == InputProgress(completed=100, total=100)
 
 
 @pytest.mark.parametrize("loader,first_group_items", [(load_parquet, 3), (load_parquet_batch, 1)])

@@ -84,38 +84,37 @@ def iter_parquet_row_groups(
         if row_groups is None or i in row_groups:
             selected_rows += max(0, min(group_end, end) - max(group_start, start))
         group_start = group_end
-    progress = input_progress(selected_rows)
+    with input_progress(selected_rows) as progress:
+        cumulative_rows = 0
 
-    cumulative_rows = 0
+        for i in range(pf.metadata.num_row_groups):
+            rg_meta = pf.metadata.row_group(i)
+            rg_num_rows = rg_meta.num_rows
+            rg_start = cumulative_rows
+            rg_end = cumulative_rows + rg_num_rows
+            cumulative_rows = rg_end
 
-    for i in range(pf.metadata.num_row_groups):
-        rg_meta = pf.metadata.row_group(i)
-        rg_num_rows = rg_meta.num_rows
-        rg_start = cumulative_rows
-        rg_end = cumulative_rows + rg_num_rows
-        cumulative_rows = rg_end
+            if has_row_range:
+                if rg_end <= start:
+                    continue
+                if rg_start >= end:
+                    return
 
-        if has_row_range:
-            if rg_end <= start:
+            if row_groups is not None and i not in row_groups:
                 continue
-            if rg_start >= end:
-                return
 
-        if row_groups is not None and i not in row_groups:
-            continue
+            table = pf.read_row_group(i, columns=columns)
 
-        table = pf.read_row_group(i, columns=columns)
+            if has_row_range:
+                is_interior = rg_start >= start and rg_end <= end
+                if not is_interior:
+                    local_start = max(0, start - rg_start)
+                    local_end = min(rg_num_rows, end - rg_start)
+                    table = table.slice(local_start, local_end - local_start)
 
-        if has_row_range:
-            is_interior = rg_start >= start and rg_end <= end
-            if not is_interior:
-                local_start = max(0, start - rg_start)
-                local_end = min(rg_num_rows, end - rg_start)
-                table = table.slice(local_start, local_end - local_start)
-
-        if len(table) > 0:
-            yield table
-            progress.completed += len(table)
+            if len(table) > 0:
+                yield table
+                progress.completed += len(table)
 
 
 # 16 MB read blocks with background prefetch for S3/remote reads.
@@ -311,20 +310,20 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
     filter_fn = spec.filter_expr.evaluate if spec.filter_expr is not None else None
     columns = spec.columns
 
-    progress = input_progress(None)
-    with open_file(spec.path, "rt") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            record = decoder.decode(line)
-            if filter_fn is not None and not filter_fn(record):
-                continue
-            if columns is not None:
-                record = {k: record[k] for k in columns if k in record}
-            counters.pipeline.update_counter(counters.RECORDS_IN, 1)
-            yield record
-            progress.completed += 1
+    with input_progress(None) as progress:
+        with open_file(spec.path, "rt") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                record = decoder.decode(line)
+                if filter_fn is not None and not filter_fn(record):
+                    continue
+                if columns is not None:
+                    record = {k: record[k] for k in columns if k in record}
+                counters.pipeline.update_counter(counters.RECORDS_IN, 1)
+                yield record
+                progress.completed += 1
 
 
 def load_parquet_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:
@@ -448,36 +447,35 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
     start = 0 if spec.row_start is None else spec.row_start
     end = num_rows if spec.row_end is None else min(spec.row_end, num_rows)
     # Filtered output batches do not expose how many source rows were scanned.
-    progress = input_progress(max(0, end - start) if pa_filter is None else None)
+    with input_progress(max(0, end - start) if pa_filter is None else None) as progress:
+        # Schema-less empty files cannot be projected by Vortex.
+        if not dataset.schema.names and num_rows == 0:
+            return
 
-    # Schema-less empty files cannot be projected by Vortex.
-    if not dataset.schema.names and num_rows == 0:
-        return
-
-    # Vortex rejects empty projections. Read one column to retain row counts,
-    # then drop it after applying the row range and filter.
-    empty_projection = columns == []
-    if empty_projection:
-        columns = [dataset.schema.names[0]]
-
-    if spec.row_start is not None or spec.row_end is not None:
-        batches = (
-            dataset.take(
-                pa.array(np.arange(batch_start, min(batch_start + _VORTEX_READ_BATCH_ROWS, end), dtype=np.uint64)),
-                columns=columns,
-                filter=pa_filter,
-            )
-            for batch_start in range(start, end, _VORTEX_READ_BATCH_ROWS)
-        )
-    else:
-        batches = dataset.to_batches(columns=columns, filter=pa_filter, batch_size=_VORTEX_READ_BATCH_ROWS)
-
-    for batch in batches:
+        # Vortex rejects empty projections. Read one column to retain row counts,
+        # then drop it after applying the row range and filter.
+        empty_projection = columns == []
         if empty_projection:
-            batch = batch.select([])
-        counters.pipeline.update_counter(counters.RECORDS_IN, len(batch))
-        yield from batch.to_pylist()
-        progress.completed += len(batch)
+            columns = [dataset.schema.names[0]]
+
+        if spec.row_start is not None or spec.row_end is not None:
+            batches = (
+                dataset.take(
+                    pa.array(np.arange(batch_start, min(batch_start + _VORTEX_READ_BATCH_ROWS, end), dtype=np.uint64)),
+                    columns=columns,
+                    filter=pa_filter,
+                )
+                for batch_start in range(start, end, _VORTEX_READ_BATCH_ROWS)
+            )
+        else:
+            batches = dataset.to_batches(columns=columns, filter=pa_filter, batch_size=_VORTEX_READ_BATCH_ROWS)
+
+        for batch in batches:
+            if empty_projection:
+                batch = batch.select([])
+            counters.pipeline.update_counter(counters.RECORDS_IN, len(batch))
+            yield from batch.to_pylist()
+            progress.completed += len(batch)
 
 
 SUPPORTED_EXTENSIONS = tuple(

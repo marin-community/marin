@@ -587,8 +587,7 @@ class ScatterReader:
             Deserialized Python items in merged sort order.
         """
 
-        progress = input_progress(self.shard_payload_rows)
-        with pl.Config() as polars_config:
+        with input_progress(self.shard_payload_rows) as progress, pl.Config() as polars_config:
             polars_config.set_streaming_chunk_size(memory_budget.STREAMING_CHUNK_SIZE_ROWS)
 
             if self.total_chunks == 0:

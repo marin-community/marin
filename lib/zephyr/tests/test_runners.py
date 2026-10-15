@@ -117,7 +117,7 @@ def test_user_counters_propagate(local_client, tmp_path, runner_factory):
     assert outcome.counters.get("doubled_sum") == 30
 
 
-def test_input_progress_gauges_do_not_enter_pipeline_totals(local_client, tmp_path, runner_factory):
+def test_record_totals_across_parquet_and_jsonl_inputs(local_client, tmp_path, runner_factory):
     records = [{"id": index} for index in range(3)]
     parquet_path = tmp_path / "input.parquet"
     jsonl_path = tmp_path / "input.jsonl"
@@ -130,7 +130,6 @@ def test_input_progress_gauges_do_not_enter_pipeline_totals(local_client, tmp_pa
         ctx.shutdown()
     assert sorted(row["id"] for row in outcome.results) == [0, 0, 1, 1, 2, 2]
     assert outcome.counters[counters.RECORDS_IN] == 6
-    assert {"zephyr/input_rows_total", "zephyr/input_rows_completed"}.isdisjoint(outcome.counters)
 
 
 def test_runner_snapshots_keep_input_progress_separate_and_reset_between_tasks(tmp_path, runner_factory):

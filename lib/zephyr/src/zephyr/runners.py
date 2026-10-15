@@ -110,6 +110,7 @@ class _InProcessWorkerContext:
         self._shared_data_cache: dict[str, Any] = {}
         self._counters: dict[str, CounterEntry] = {}
         self._input_progress: InputProgress | None = None
+        self._active_input_progress: InputProgress | None = None
         self._generation = 0
         self.task_memory_bytes = task_memory_bytes
 
@@ -164,8 +165,17 @@ class _InProcessWorkerContext:
             generation=self._generation,
         )
 
-    def set_input_progress(self, progress: InputProgress) -> None:
-        self._input_progress = progress
+    @contextmanager
+    def track_input_progress(self, progress: InputProgress) -> Iterator[None]:
+        """Report the outer input and retain its final state after consumption."""
+        parent = self._active_input_progress
+        if parent is None:
+            self._input_progress = progress
+        self._active_input_progress = progress
+        try:
+            yield
+        finally:
+            self._active_input_progress = parent
 
     def get_runner_snapshot(self) -> RunnerSnapshot:
         progress = self._input_progress
