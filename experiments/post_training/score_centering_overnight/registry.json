@@ -2738,7 +2738,24 @@
       "priority_band": 2,
       "bundle_id": "f1b2a459b324fe1ba9a1e3cdbbfdd09ea85cecd34e4ccf9cd3df9b2b60be6e33",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "h100_nodes": 2,
+      "h100_per_node": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_checkpoint_resume_qualification_v1/save-detach.yaml",
+      "configuration_sha256": "3c019ffb82ec593d21b19a0e7bf6e67a94b881f2f0c16df86ee2c80e6a2c7c9a",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "2afc5ea562094f4f927503fc482fb8f60d262a0ef8db53554664303b7c41491e",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-15T08:29:19.251699+00:00"
+  "observed_at": "2026-10-15T08:33:03.917819+00:00"
 }

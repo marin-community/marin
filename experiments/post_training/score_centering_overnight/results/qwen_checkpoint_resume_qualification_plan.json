@@ -1,6 +1,6 @@
 {
   "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-  "status": "prepared; not submitted",
+  "status": "Save phase submitted and confirmed in RNO controller; restore phase unsubmitted.",
   "reason": "Two separate five-node Snowball controlled-noise long attempts were preempted after48 and24 updates with resume disabled and no intermediate committed checkpoint. Qualify native optimizer/model/dataloader continuation cheaply before proposing any long-run recovery change. Initial prepare validation confirmed fixed-noise resume is separately forbidden by objective_spec.py; this initial diagnostic therefore uses noise0 and cannot qualify the noisy main path.",
   "geometry": {
     "cluster": "cw-rno2a",
@@ -56,5 +56,41 @@
     "rejected_yaml_backup": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-checkpoint-noisy-preflight-rejection",
     "corrected_noise_scale": 0.0,
     "interpretation": "Native clean/fresh checkpoint continuation is the first engineering gate only. Neither controlled-noise nor periodic-stale resume is supported or newly qualified."
+  },
+  "save_controller_confirmation": {
+    "job": {
+      "job_id": "/romain/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce",
+      "state": "3",
+      "num_tasks": "2",
+      "priority_band": "3",
+      "bundle_id": "2afc5ea562094f4f927503fc482fb8f60d262a0ef8db53554664303b7c41491e",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+    },
+    "tasks": [
+      {
+        "task_id": "/romain/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "ffbb0970f7c68ea8",
+        "state": "2",
+        "exit_code": "",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      },
+      {
+        "task_id": "/romain/sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce/1",
+        "attempt_id": "0",
+        "attempt_uid": "e26d24b5892585fe",
+        "state": "2",
+        "exit_code": "",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      }
+    ],
+    "launcher_config_sha256": "3c019ffb82ec593d21b19a0e7bf6e67a94b881f2f0c16df86ee2c80e6a2c7c9a"
   }
 }

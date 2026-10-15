@@ -1,0 +1,175 @@
+{
+  "scope": "Provisional native-audited paired three-seed300-update Qwen transfer analyses. All18 runs have full native learner/evaluation and model/data/recipe/checkpoint300 audits. Full retained-response frozen-grader replays remain pending; this is not the final comparison report.",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "status": "provisional; full response replays pending",
+  "created_at": "2026-10-15T08:34:32.892578+00:00",
+  "retention": "Full analytical JSON, PNG and SVG bytes retained without trimming. SHA-addressed immutable-named objects in original campaign bucket; each upload downloaded and verified byte-identical.",
+  "cost_note": "Analytical files retain their own complete cost snapshot and recovery mappings. Live costs.json.gz continues to accrue all later failed/preempted/setup/redundant allocations; these dated files are not the current campaign cost total.",
+  "stages": [
+    {
+      "stage": "curriculum",
+      "three_seed_pairs": [
+        {
+          "seed": 0,
+          "tis": 0.4767596281540505,
+          "sc": 0.49867197875166,
+          "difference": 0.021912350597609542
+        },
+        {
+          "seed": 1,
+          "tis": 0.4948539176626826,
+          "sc": 0.4912018592297477,
+          "difference": -0.0036520584329349237
+        },
+        {
+          "seed": 2,
+          "tis": 0.42695883134130147,
+          "sc": 0.4797476759628154,
+          "difference": 0.05278884462151395
+        }
+      ],
+      "mean_difference_percentage_points": 2.3683045595396193,
+      "unbounded_paired_t_95_interval_percentage_points": [
+        -4.652386365117407,
+        9.388995484196645
+      ],
+      "interval_note": "Unbounded paired t interval, two degrees of freedom; no equivalence or acceptable-loss margin.",
+      "native_full300_audit_gate": "results/qwen_curriculum300_native_audit_gate.json",
+      "identity_checkpoint_crosscheck": "results/qwen_curriculum300_identity_checkpoint_crosscheck.json",
+      "full_new_response_grade_replays_complete": false,
+      "files": [
+        {
+          "name": "paired_curriculum_results.json.gz",
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen300-provisional-native-20261015T0835/curriculum/077a9aa74b789e22ab54d46cb4f82a6c20f04129678d07bd03de20007d262140/paired_curriculum_results.json.gz",
+          "bytes": 829560,
+          "sha256": "077a9aa74b789e22ab54d46cb4f82a6c20f04129678d07bd03de20007d262140",
+          "round_trip_exact_bytes": true
+        },
+        {
+          "name": "curriculum_quality_and_stability.png",
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen300-provisional-native-20261015T0835/curriculum/8d48c70c691cd7dcffba1a2195ec3cbeccbfd4b545e1cca95c0bfb1edc674a38/curriculum_quality_and_stability.png",
+          "bytes": 561298,
+          "sha256": "8d48c70c691cd7dcffba1a2195ec3cbeccbfd4b545e1cca95c0bfb1edc674a38",
+          "round_trip_exact_bytes": true
+        },
+        {
+          "name": "curriculum_quality_and_stability.svg",
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen300-provisional-native-20261015T0835/curriculum/c2ffc6f7b885eb6c554e7316dac9d7f1289388125ea50849f4f5b6a39bb3aa5a/curriculum_quality_and_stability.svg",
+          "bytes": 216575,
+          "sha256": "c2ffc6f7b885eb6c554e7316dac9d7f1289388125ea50849f4f5b6a39bb3aa5a",
+          "round_trip_exact_bytes": true
+        }
+      ]
+    },
+    {
+      "stage": "optimizer",
+      "three_seed_pairs": [
+        {
+          "seed": 0,
+          "tis": 0.5137782204515272,
+          "sc": 0.5139442231075697,
+          "difference": 0.00016600265604249653
+        },
+        {
+          "seed": 1,
+          "tis": 0.5131142098273572,
+          "sc": 0.4960159362549801,
+          "difference": -0.017098273572377143
+        },
+        {
+          "seed": 2,
+          "tis": 0.5001660026560425,
+          "sc": 0.5056440903054449,
+          "difference": 0.005478087649402386
+        }
+      ],
+      "mean_difference_percentage_points": -0.381806108897742,
+      "unbounded_paired_t_95_interval_percentage_points": [
+        -3.314010483588631,
+        2.550398265793147
+      ],
+      "interval_note": "Unbounded paired t interval, two degrees of freedom; no equivalence or acceptable-loss margin.",
+      "native_full300_audit_gate": "results/qwen_optimizer300_native_audit_gate.json",
+      "identity_checkpoint_crosscheck": "results/qwen_optimizer300_identity_checkpoint_crosscheck.json",
+      "full_new_response_grade_replays_complete": false,
+      "files": [
+        {
+          "name": "paired_curriculum_results.json.gz",
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen300-provisional-native-20261015T0835/optimizer/25e9a664eee059bb42c3093bd6842255222982c1cba46f474805122e979269bd/paired_curriculum_results.json.gz",
+          "bytes": 828076,
+          "sha256": "25e9a664eee059bb42c3093bd6842255222982c1cba46f474805122e979269bd",
+          "round_trip_exact_bytes": true
+        },
+        {
+          "name": "curriculum_quality_and_stability.png",
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen300-provisional-native-20261015T0835/optimizer/b160c445d35ecd6cf29d129544e63bea2e372fd8d767c19ee6d420b3220ef513/curriculum_quality_and_stability.png",
+          "bytes": 575770,
+          "sha256": "b160c445d35ecd6cf29d129544e63bea2e372fd8d767c19ee6d420b3220ef513",
+          "round_trip_exact_bytes": true
+        },
+        {
+          "name": "curriculum_quality_and_stability.svg",
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen300-provisional-native-20261015T0835/optimizer/b1d9d58741f58f5ab2c4cac7c39c2de46982dace58f97cd3435bd3ff255294bd/curriculum_quality_and_stability.svg",
+          "bytes": 220960,
+          "sha256": "b1d9d58741f58f5ab2c4cac7c39c2de46982dace58f97cd3435bd3ff255294bd",
+          "round_trip_exact_bytes": true
+        }
+      ]
+    },
+    {
+      "stage": "advantages",
+      "three_seed_pairs": [
+        {
+          "seed": 0,
+          "tis": 0.5137782204515272,
+          "sc": 0.5099601593625498,
+          "difference": -0.0038180610889774202
+        },
+        {
+          "seed": 1,
+          "tis": 0.525066401062417,
+          "sc": 0.49767596281540505,
+          "difference": -0.027390438247011928
+        },
+        {
+          "seed": 2,
+          "tis": 0.4913678618857902,
+          "sc": 0.5121181938911022,
+          "difference": 0.020750332005312067
+        }
+      ],
+      "mean_difference_percentage_points": -0.3486055776892427,
+      "unbounded_paired_t_95_interval_percentage_points": [
+        -6.328447298530842,
+        5.631236143152357
+      ],
+      "interval_note": "Unbounded paired t interval, two degrees of freedom; no equivalence or acceptable-loss margin.",
+      "native_full300_audit_gate": "results/qwen_advantages300_native_audit_gate.json",
+      "identity_checkpoint_crosscheck": "results/qwen_advantages300_identity_checkpoint_crosscheck.json",
+      "full_new_response_grade_replays_complete": false,
+      "files": [
+        {
+          "name": "paired_curriculum_results.json.gz",
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen300-provisional-native-20261015T0835/advantages/0df4713b9d14bf11c4e84742b2f84d0adc6147112a7a5d24bbed107f212fc1fb/paired_curriculum_results.json.gz",
+          "bytes": 827742,
+          "sha256": "0df4713b9d14bf11c4e84742b2f84d0adc6147112a7a5d24bbed107f212fc1fb",
+          "round_trip_exact_bytes": true
+        },
+        {
+          "name": "curriculum_quality_and_stability.png",
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen300-provisional-native-20261015T0835/advantages/a892fbae6230c91881b932cc8cbfcf8a7652d39f011e451cbae62b9a750a824a/curriculum_quality_and_stability.png",
+          "bytes": 548605,
+          "sha256": "a892fbae6230c91881b932cc8cbfcf8a7652d39f011e451cbae62b9a750a824a",
+          "round_trip_exact_bytes": true
+        },
+        {
+          "name": "curriculum_quality_and_stability.svg",
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen300-provisional-native-20261015T0835/advantages/f3cd2d511c2b339143e963585257619d5bacaafc9a1e241ef6e8523915f3af65/curriculum_quality_and_stability.svg",
+          "bytes": 220306,
+          "sha256": "f3cd2d511c2b339143e963585257619d5bacaafc9a1e241ef6e8523915f3af65",
+          "round_trip_exact_bytes": true
+        }
+      ]
+    }
+  ]
+}
