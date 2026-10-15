@@ -1,0 +1,8 @@
+id: X0218
+slug: multi-stream-attn-res
+name: Multi-Stream Attention Residuals (MSAR)
+category: Depth connections
+summary: 'Replace single-stream Block AttnRes with m=4 depth-attention streams: per-stream pseudo-queries over sources expanded
+  by causal depthwise token convolutions (kernels 4/8/12, zero-init), fused by a sigmoid mixer (arXiv 2610.13630).'
+source: maintainer
+status: approved
