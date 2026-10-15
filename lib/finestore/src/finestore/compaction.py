@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from functools import partial
 from itertools import chain
 from typing import Protocol
 
@@ -16,15 +17,18 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import rigging.filesystem.factory as factory
 from pyarrow.fs import FSSpecHandler, PyFileSystem
+from rigging.filesystem.s3_errors import is_transient_s3_error
+from rigging.timing import retry_with_backoff
 
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
-from finestore.layout import CommitToken, FineStoreLayout, Shard, SystemColumns
+from finestore.layout import BlobTables, CommitToken, FineStoreLayout, Shard, SystemColumns
 from finestore.reader import ReadView, iter_shard_rows, merge_deduplicated_rows
 from finestore.shard_writer import ShardWriter, table_row_groups
 
 logger = logging.getLogger(__name__)
 
 _COMPACTOR = "compactor"
+_CLOSE_COMPACTION_MAX_ATTEMPTS = 3
 
 
 class CompactionCoordinator(Protocol):
@@ -59,20 +63,71 @@ def compact_table(
     view = ReadView(root, snapshot)
     active_shards = view.list_shards(table)
     shards = active_shards if generation is None else tuple(s for s in active_shards if s.generation == generation)
+    return _compact_shards(root, table, shards, snapshot=snapshot, coordinator=commits)
+
+
+def compact_writer_tables(
+    root: str,
+    tables: Sequence[str],
+    *,
+    writer_id: str,
+    max_input_bytes: int,
+    max_input_rows: int,
+    coordinator: CompactionCoordinator,
+) -> None:
+    """Merge a writer's residual level-zero groups within an aggregate input budget."""
+    for table in sorted(tables, key=lambda name: (name != BlobTables.DESCRIPTORS, name)):
+        snapshot = retry_with_backoff(
+            coordinator.snapshot,
+            retryable=is_transient_s3_error,
+            max_attempts=_CLOSE_COMPACTION_MAX_ATTEMPTS,
+            operation=f"FineStore close snapshot at {root}",
+        )
+        shards = tuple(
+            shard
+            for shard in ReadView(root, snapshot).list_shards(table)
+            if shard.generation == 0 and shard.writer == writer_id
+        )
+        if len(shards) < 2:
+            continue
+        input_bytes = sum(shard.size_bytes for shard in shards)
+        input_rows = sum(shard.rows for shard in shards)
+        if input_bytes > max_input_bytes or input_rows > max_input_rows:
+            continue
+        # Filter the merge inputs, keeping the full publication base and unrelated shards.
+        retry_with_backoff(
+            partial(_compact_shards, root, table, shards, snapshot=snapshot, coordinator=coordinator),
+            retryable=is_transient_s3_error,
+            max_attempts=_CLOSE_COMPACTION_MAX_ATTEMPTS,
+            operation=f"FineStore close compaction at {root} table={table}",
+        )
+        max_input_bytes -= input_bytes
+        max_input_rows -= input_rows
+
+
+def _compact_shards(
+    root: str,
+    table: str,
+    shards: Sequence[Shard],
+    *,
+    snapshot: ArchiveSnapshot,
+    coordinator: CompactionCoordinator,
+) -> CompactionResult:
     if not shards:
         return CompactionResult(written=0)
     if len(shards) == 1 and shards[0].writer == _COMPACTOR:
         return CompactionResult(written=0)
-    primary_key = view.primary_key(table)
+    layout = FineStoreLayout(root)
+    primary_key = ReadView(root, snapshot).primary_key(table)
     next_generation = max(shard.generation for shard in shards) + 1
     input_rows = sum(shard.rows for shard in shards)
     input_bytes = sum(shard.size_bytes for shard in shards)
     logger.info(
-        "FineStore compacting %s table=%s input_generation=%s input_shards=%d input_rows=%d "
+        "FineStore compacting %s table=%s input_generations=%s input_shards=%d input_rows=%d "
         "input_bytes=%d output_generation=%d",
         root,
         table,
-        "all" if generation is None else generation,
+        sorted({shard.generation for shard in shards}),
         len(shards),
         input_rows,
         input_bytes,
@@ -127,7 +182,7 @@ def compact_table(
         primary_key_sorted=True,
     )
     try:
-        commits.commit(
+        coordinator.commit(
             CommitDelta(
                 replacements={
                     table: TableReplacement(
@@ -146,11 +201,11 @@ def compact_table(
         )
         return CompactionResult(written=0)
     logger.info(
-        "FineStore compacted %s table=%s input_generation=%s input_shards=%d output_shards=1 "
+        "FineStore compacted %s table=%s input_generations=%s input_shards=%d output_shards=1 "
         "output_generation=%d rows=%d superseded=%d",
         root,
         table,
-        "all" if generation is None else generation,
+        sorted({shard.generation for shard in shards}),
         len(shards),
         next_generation,
         written,

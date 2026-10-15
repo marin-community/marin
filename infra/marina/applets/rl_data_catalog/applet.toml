@@ -1,3 +1,5 @@
+applet_id = "fb11c931-5861-4878-8bb5-a964d652b45f"
+
 title = "RL Data Atlas"
-description = "Curation catalog, sampled task grades, executed controls and archived evidence."
+description = "Explore RL data sources, curation assessments, and sampled task grades. Inspect executed controls and the archived evidence behind each review."
 python_entrypoint = "server.app:create_api"

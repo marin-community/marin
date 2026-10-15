@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 import importlib
 from typing import Literal
 
@@ -149,29 +148,6 @@ def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
     ]
 
 
-@dataclasses.dataclass(frozen=True)
-class _FakeGpu:
-    device_kind: str
-    compute_capability: str | None = None
-
-
-@pytest.mark.parametrize(
-    "device, expected",
-    [
-        (_FakeGpu("AMD Instinct MI350X"), "tile_map"),
-        (_FakeGpu("AMD Instinct MI300X"), "tile_map"),
-        (_FakeGpu("NVIDIA H100 80GB HBM3", "9.0"), "group_grid"),
-        (_FakeGpu("NVIDIA B200", "10.0"), "group_grid"),
-    ],
-    ids=["mi350x", "mi300x", "h100", "b200"],
-)
-def test_triton_kernel_family_uses_tile_map_only_on_amd_instinct(monkeypatch, device, expected):
-    monkeypatch.setattr(ragged_dot_module.jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(ragged_dot_module.jax, "devices", lambda backend=None: [device])
-
-    assert ragged_dot_module._triton_kernel_family() == ragged_dot_module.TritonKernelFamily(expected)
-
-
 # Group sizes over 300 rows and 4 groups, chosen so that row tiles straddle group boundaries.
 _GROUP_SIZE_CASES = {
     "unaligned": [37, 101, 0, 162],
@@ -235,12 +211,9 @@ def _assert_close_to_reference(actual, expected, rtol):
 
 def _triton_f32_dots_use_tf32() -> bool:
     """Triton's dot defaults f32 inputs to TF32 on NVIDIA GPUs and on gfx942 (MI300X, MI325X), and to IEEE on gfx950."""
-    nvidia = (ragged_dot_module._GpuFamily.NVIDIA, ragged_dot_module._GpuFamily.NVIDIA_BLACKWELL)
-    if ragged_dot_module._gpu_family() in nvidia:
-        return True
-    # ROCm reports the gfx architecture name as the compute capability.
     device = jax.devices()[0]
-    return device.platform == "gpu" and device.compute_capability == "gfx942"
+    # ROCm reports the gfx architecture name as the compute capability.
+    return device.platform == "gpu" and ("NVIDIA" in device.device_kind or device.compute_capability == "gfx942")
 
 
 def _run_kernel_family(family: str, lhs, rhs, sizes, layout: str):
@@ -278,7 +251,12 @@ def test_triton_kernel_families_match_ragged_dot_general(family, layout, group_s
     _assert_close_to_reference(actual, expected, rtol)
 
 
-@pytest.mark.parametrize("group_sizes", [[512, 512, 512, 512], [5, 1000, 0, 1043]], ids=["balanced", "skewed"])
+# H100 picks its drhs blocks by rows per group, below and from 2048.
+@pytest.mark.parametrize(
+    "group_sizes",
+    [[512, 512, 512, 512], [5, 1000, 0, 1043], [2048, 2048, 2048, 2048]],
+    ids=["balanced", "skewed", "many_rows_per_group"],
+)
 def test_triton_ragged_dot_value_and_gradients_match_reference_with_device_blocks(group_sizes):
     _require_triton_gpu()
     rows, k, n = sum(group_sizes), 256, 384

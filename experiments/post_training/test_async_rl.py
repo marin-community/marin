@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import json
 import subprocess
-from pathlib import Path
 
 import pytest
 from marin.execution.lazy import StepContext
+from marin.rl.skyrl import _launcher_command as launcher_command_for_test
 
 from experiments.post_training import async_rl
 from experiments.post_training.curriculum_rl.launch import SNOWBALL_POLICY
@@ -56,25 +56,31 @@ def test_rollout_overrides_change_the_run_identity(monkeypatch) -> None:
 
 @pytest.mark.timeout(180)  # A cold cache must install the locked CPU-safe launcher dependencies.
 @pytest.mark.parametrize(
-    ("preset", "training_type"),
-    [(async_rl.DEFAULT, "async"), (async_rl.SMOKE_PRESET, "async"), (async_rl.ON_POLICY, "sync")],
-    ids=["default", "smoke", "on-policy"],
+    ("preset", "training_type", "settings"),
+    [
+        (async_rl.DEFAULT, "async", ()),
+        (async_rl.SMOKE_PRESET, "async", ()),
+        (async_rl.ON_POLICY, "sync", ()),
+        (async_rl.DEFAULT, "async", ("trainer.max_steps=3", "trainer.eval_interval=2")),
+    ],
+    ids=["default", "smoke", "on-policy", "off-boundary-terminal"],
 )
-def test_launcher_composes_pinned_rollout_buffer_config(preset, training_type, tmp_path, monkeypatch) -> None:
+def test_launcher_composes_pinned_rollout_buffer_config(preset, training_type, settings, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
     monkeypatch.setattr(async_rl, "username_segment", lambda: "alice")
-    run = async_rl.build_run(SNOWBALL_POLICY, preset, version="2026.09.18")
+    run = async_rl.build_run(SNOWBALL_POLICY, preset, version="2026.09.18", settings=settings)
     launch = run.rl.build_config(StepContext.for_fingerprint(run.rl.runtime_args, run.rl.deps))
     path = tmp_path / "launch.yaml"
     path.write_text(launch.launch_config_yaml)
-    project = Path(__file__).resolve().parents[2] / "config/external/MarinSkyRL"
-    # Use Marin's isolated lock so the test exercises the same SDK revision as the launcher.
+    command = launcher_command_for_test(str(path))
+    # Exercise the production bootstrap without invoking the job-submission CLI.
+    bootstrap = command[: command.index("marinskyrl")]
     result = subprocess.run(
-        ["uv", "run", "--frozen", "--project", str(project), "python", "-c", COMPOSE_LAUNCH, str(path)],
-        check=True,
+        [*bootstrap, "python", "-c", COMPOSE_LAUNCH, str(path)],
         capture_output=True,
         text=True,
     )
+    assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
         "entrypoint": "skyrl_train.entrypoints.main_base",
         "training_type": training_type,

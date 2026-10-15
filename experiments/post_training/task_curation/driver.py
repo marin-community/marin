@@ -4,6 +4,7 @@
 """Plan RL curation, then run source pipelines locally or on Iris."""
 
 import json
+import os
 from contextlib import ExitStack
 from pathlib import Path
 from typing import cast
@@ -25,7 +26,7 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.pipeline.source_quality import MAX_SOURCE_QUALITY_SAMPLE_SIZE, SOURCE_QUALITY_SAMPLE_SIZE
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
 
-from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_MODEL
+from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL
 from experiments.post_training.task_curation.assessment import (
     AssessmentSettings,
     assessment_paths,
@@ -311,6 +312,7 @@ def main(
         review=review,
         review_cache=review_cache or (str(cache_dir / "review-cache") if cache_dir else None),
         base_url=base_url,
+        api_key=os.environ.get(GLM_BULK_TOKEN_ENV),
         relay_job=relay_job,
         review_concurrency=review_concurrency,
         normalized_shards=(

@@ -73,7 +73,7 @@ def prepare_machine_spec(
     spec = bound_machine_spec(requirements, factory, spec)
     validate_machine_spec(requirements, factory, spec)
     required_variables = resolve_env_vars(requirements.environment_variables, host_environment)
-    variables = {}
+    variables: Mapping[str, str] = {}
     if requirements.packages_lock is not None:
         source = spec.source
         if not isinstance(source, HostImage):
@@ -85,9 +85,10 @@ def prepare_machine_spec(
             source=HostImage(
                 read_only=tuple(dict.fromkeys((*source.read_only, runtime.root))),
                 bin_dirs=tuple(dict.fromkeys((runtime.bin_dir, *source.bin_dirs))),
+                mounts=(*source.mounts, *runtime.mounts),
             ),
         )
-        variables = runtime.variables
+        variables = runtime.env
     return replace(
         spec,
         workdir=requirements.working_directory if requirements.working_directory is not None else spec.workdir,

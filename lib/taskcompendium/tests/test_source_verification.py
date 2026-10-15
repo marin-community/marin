@@ -291,10 +291,11 @@ def test_mixed_failure_infrastructure_trial_reexecutes_without_erasing_definite_
     [
         ({"backend": "qemu", "bundle_path": "/tmp/changeable"}, False),
         ({"network": "allow"}, False),
+        ({"judge_base_url": "http://judge.invalid/v1"}, False),
         ({"backend": "qemu", "worker_image": "image@sha256:" + "1" * 64}, True),
         (FixtureGradingMachines().identity(), True),
     ],
-    ids=["qemu_bundle_path", "network_allowed", "qemu_worker_image", "offline_machines"],
+    ids=["qemu_bundle_path", "network_allowed", "remote_judge", "qemu_worker_image", "offline_machines"],
 )
 def test_source_rerun_requires_immutable_offline_runtime(tmp_path, reusable_schema_row, runtime, reusable):
     suite = replace(control_suite(SCHEMA_CONTROLS, None), parameters=runtime)

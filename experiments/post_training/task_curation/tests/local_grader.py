@@ -3,8 +3,9 @@
 
 """Grade tasks in a locally built image of the grader packages, which stands in for every grader environment.
 
-A campaign grades most tasks in the worker, in a uv environment built from the grader lock; this image
-holds the same packages. Build it from the repository root with::
+A campaign grades most tasks in the worker, in a uv environment built from the lock compiled from the
+grader packages' requirements; this image holds the same packages and files. Build it from the repository
+root with::
 
     uv run python -c "from pathlib import Path; \\
     from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES; \\

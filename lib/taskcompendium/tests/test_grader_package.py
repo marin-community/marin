@@ -87,22 +87,17 @@ def test_json_schema_grader_reads_private_schema_and_scores_document():
     assert (bad.status, bad.reward) == (Outcome.GRADED, 0.0)
 
 
-STATE_GRADER = b"""import json
-import os
-
-config = '/tests/config.json'
-assert os.stat(config).st_mode & 0o777 == 0o600
-expected = json.load(open(config))['expected']
-actual = json.load(open('/app/state.json'))['value']
-with open('/logs/verifier/reward.json', 'w') as reward:
-    json.dump({'reward': float(actual == expected), 'detail': {'actual': actual}}, reward)
+STATE_GRADER = b"""expected=$(jq .expected /tests/config.json)
+jq --argjson expected "$expected" '{
+    reward: (if .value == $expected then 1 else 0 end), detail: {actual: .value}
+}' /app/state.json > /logs/verifier/reward.json
 """
 
 
 def _state_task(environment=GRADING_ENVIRONMENT):
     """A state-graded task whose script grader reads a private config and the captured state."""
     grader = ScriptGrader(
-        argv=("python3", "/tests/grade.py"),
+        argv=("sh", "/tests/grade.sh"),
         environment=environment,
         answer_path=None,
         reward=FileReward(
@@ -110,7 +105,7 @@ def _state_task(environment=GRADING_ENVIRONMENT):
         ),
     )
     config = inline_resource("config.json", b'{"expected": 3}').model_copy(update={"mode": "0600"})
-    return _task(GraderPackage(grader, (inline_resource("grade.py", STATE_GRADER), config)), AnswerType.STATE)
+    return _task(GraderPackage(grader, (inline_resource("grade.sh", STATE_GRADER), config)), AnswerType.STATE)
 
 
 class RecordingImageFactory(FixtureImageFactory):
@@ -203,14 +198,11 @@ def test_verifyit_verdict_file_maps_to_grade_outcome(spec, verdict, expected):
     assert (result.status, result.reward, result.error, result.failure) == expected
 
 
-NATIVE_ACTION_GRADER = b"""import json
-
-expected = {
-    'type': 'assistant_tool_calls',
-    'calls': [{'call_id': 'call-1', 'name': 'lookup', 'arguments': {'index': 3}}],
-    'content': 'A native action',
-}
-print(float(json.load(open('/app/answer.txt')) == expected))
+NATIVE_ACTION_GRADER = b"""jq 'if . == {
+    type: "assistant_tool_calls",
+    calls: [{call_id: "call-1", name: "lookup", arguments: {index: 3}}],
+    content: "A native action"
+} then 1 else 0 end' /app/answer.txt
 """
 
 
@@ -235,9 +227,9 @@ def _lookup(index, content="A native action"):
     ],
 )
 def test_native_action_script_grader_receives_the_final_message(answer_format, final, expected):
-    grader = ScriptGrader(argv=("python3", "/tests/grade.py"), environment=GRADING_ENVIRONMENT)
+    grader = ScriptGrader(argv=("sh", "/tests/grade.sh"), environment=GRADING_ENVIRONMENT)
     task = _task(
-        GraderPackage(grader, (inline_resource("grade.py", NATIVE_ACTION_GRADER),)),
+        GraderPackage(grader, (inline_resource("grade.sh", NATIVE_ACTION_GRADER),)),
         AnswerType.NATIVE_ACTION,
         answer_format,
         final_tools=(FunctionDefinition(name="lookup", parameters={"type": "object"}),),

@@ -5,14 +5,18 @@
 
 
 import itertools
+from contextlib import closing
 
 import msgspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import zstandard as zstd
+from zephyr import counters
+from zephyr.dataset import LoadFileOp
 from zephyr.expr import ColumnExpr, CompareExpr, LiteralExpr, col
 from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
+from zephyr.plan import compose_map
 from zephyr.readers import (
     SUPPORTED_EXTENSIONS,
     compute_parquet_splits,
@@ -21,7 +25,9 @@ from zephyr.readers import (
     load_jsonl,
     load_parquet,
     load_parquet_batch,
+    load_vortex,
 )
+from zephyr.worker_context import InputProgress
 from zephyr.writers import write_vortex_file
 
 
@@ -32,6 +38,69 @@ def _write_test_parquet(path: str, records: list[dict], row_group_size: int = 2)
 
 
 RECORDS = [{"id": i, "name": f"row{i}", "score": float(i * 10)} for i in range(10)]
+
+
+@pytest.mark.parametrize("loader,extension", [(load_parquet, "parquet"), (load_jsonl, "jsonl"), (load_vortex, "vortex")])
+def test_nested_lookup_reads_preserve_main_input_progress(tmp_path, worker_context, loader, extension):
+    main_path = str(tmp_path / "main.parquet")
+    _write_test_parquet(main_path, [{"id": i} for i in range(100)], row_group_size=25)
+    lookup_path = tmp_path / f"lookup.{extension}"
+    records = [{"id": 123}]
+    if extension == "parquet":
+        _write_test_parquet(str(lookup_path), records)
+    elif extension == "vortex":
+        write_vortex_file(records, str(lookup_path))
+    else:
+        lookup_path.write_bytes(msgspec.json.encode(records[0]))
+
+    with closing(compose_map([LoadFileOp("parquet")])(iter([main_path]))) as reader:
+        assert [row["id"] for row in itertools.islice(reader, 26)] == list(range(26))
+        expected = InputProgress(completed=25, total=100)
+        assert worker_context.get_runner_snapshot().input_progress == expected
+        with closing(loader(str(lookup_path))) as lookup:
+            assert next(lookup) == records[0]
+            assert worker_context.get_runner_snapshot().input_progress == expected
+        assert list(loader(str(lookup_path))) == records
+        assert worker_context.get_runner_snapshot().input_progress == expected
+        assert len(list(reader)) == 74
+    assert worker_context.get_runner_snapshot().input_progress == InputProgress(completed=100, total=100)
+    assert worker_context.get_counters()[counters.RECORDS_IN] == 100
+
+
+@pytest.mark.parametrize("loader", [load_parquet, load_parquet_batch])
+def test_parquet_reader_reports_cheap_row_range_total(tmp_path, loader):
+    path = str(tmp_path / "progress.parquet")
+    _write_test_parquet(path, [{"id": i} for i in range(12)], row_group_size=4)
+    reader = loader(InputFileSpec(path=path, row_start=2, row_end=10, filter_expr=col("id") >= 5))
+    rows = list(reader)
+    assert reader.total_rows == 8
+    if loader is load_parquet_batch:
+        rows = [row for batch in rows for row in batch.to_pylist()]
+    assert rows == [{"id": i} for i in range(5, 10)]
+
+
+@pytest.mark.parametrize("filter_expr", [None, col("id") >= 5])
+def test_vortex_reader_reports_row_range_total(tmp_path, filter_expr):
+    path = str(tmp_path / "progress.vortex")
+    write_vortex_file([{"id": i} for i in range(12)], path)
+    reader = load_vortex(InputFileSpec(path=path, row_start=2, row_end=10, filter_expr=filter_expr))
+    assert list(reader) == [{"id": i} for i in range(2, 10) if filter_expr is None or i >= 5]
+    assert reader.total_rows == 8
+
+
+def test_input_progress_resets_between_jsonl_files(tmp_path, worker_context):
+    pipeline = compose_map([LoadFileOp("jsonl")])
+    paths = []
+    for size in (5, 2):
+        path = tmp_path / f"input-{size}.jsonl"
+        path.write_bytes(b"\n".join(msgspec.json.encode({"id": index}) for index in range(size)))
+        paths.append(str(path))
+    with closing(pipeline(iter(paths))) as reader:
+        assert [row["id"] for row in itertools.islice(reader, 6)] == [0, 1, 2, 3, 4, 0]
+        assert worker_context.get_runner_snapshot().input_progress == InputProgress(completed=0, total=None)
+        assert list(reader) == [{"id": 1}]
+    assert worker_context.get_runner_snapshot().input_progress == InputProgress(completed=2, total=None)
+    assert worker_context.get_counters()[counters.RECORDS_IN] == 7
 
 
 def test_load_parquet_plain(tmp_path):

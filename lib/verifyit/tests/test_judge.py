@@ -249,16 +249,16 @@ def test_reference_exhausted_truncation_is_unscored_with_attempts(tmp_path, fake
     ]
 
 
-def test_missing_endpoint_configuration_is_an_infra_error(tmp_path, unconfigured_judge):
+def test_missing_endpoint_configuration_is_an_invalid_task(tmp_path, unconfigured_judge):
     spec = JudgeSpec(references=(REFERENCE,), exact_gate=False)
-    with pytest.raises(RuntimeError, match="VERIFYIT_JUDGE_BASE_URL"):
+    with pytest.raises(InvalidTask, match="VERIFYIT_JUDGE_BASE_URL"):
         grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "a paraphrase"))
 
 
-def test_missing_model_configuration_is_an_infra_error(tmp_path, fake_judge, monkeypatch):
+def test_missing_model_configuration_is_an_invalid_task(tmp_path, fake_judge, monkeypatch):
     monkeypatch.delenv("VERIFYIT_JUDGE_MODEL")
     spec = JudgeSpec(references=(REFERENCE,), exact_gate=False)
-    with pytest.raises(RuntimeError, match="VERIFYIT_JUDGE_MODEL"):
+    with pytest.raises(InvalidTask, match="VERIFYIT_JUDGE_MODEL"):
         grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "a paraphrase"))
 
 
@@ -472,6 +472,28 @@ def test_configured_judge_labels_on_real_http_boundary(tmp_path, fake_judge, rep
         {"role": "system", "content": "Compare reference answer against candidate {reference} for trusted question."},
         {"role": "user", "content": "A: reference answer\nB: candidate {reference}"},
     ]
+
+
+@pytest.mark.parametrize(
+    ("candidate", "final_answer"),
+    [
+        ("<think>hidden contradiction</think>visible answer", "visible answer"),
+        ("template reasoning</thinking>visible answer<|eot_id|>", "visible answer"),
+    ],
+)
+def test_label_judge_can_exclude_candidate_reasoning(tmp_path, fake_judge, candidate, final_answer):
+    fake_judge.replies = ["[[A=B]]"]
+    spec = _label_spec(strip_candidate_reasoning_blocks=True)
+    result = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, candidate))
+    assert result.reward == 1.0
+    assert fake_judge.prompts == [f"A: reference answer\nB: {final_answer}"]
+
+
+def test_unfinished_candidate_reasoning_is_an_empty_answer(tmp_path, fake_judge):
+    spec = _label_spec(strip_candidate_reasoning_blocks=True)
+    result = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "<think>unfinished"))
+    assert (result.reward, result.detail) == (0.0, {"reason": "no_output"})
+    assert fake_judge.requests == []
 
 
 @pytest.mark.parametrize("reason", ["length", "content_filter", "tool_calls", None])

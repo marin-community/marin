@@ -10,10 +10,10 @@ local experts and an expert weight ``[G, K, N]``:
     dlhs:  dout [M, N] x rhs [G, K, N]^T -> [M, K]
     drhs:  lhs [M, K]^T x dout [M, N]    -> [G, K, N]
 
-Each case is timed for both Triton kernel families (``tile_map``, used on AMD Instinct GPUs, and
-``group_grid``, used on every other GPU), for XLA's ``ragged_dot_general`` (in ``--xla-dtype``,
+Each case is timed for both Triton kernel families (``tile_map``, used on AMD Instinct and NVIDIA
+GPUs, and ``group_grid``, used on any other GPU), for XLA's ``ragged_dot_general`` (in ``--xla-dtype``,
 since hipBLASLt's grouped GEMM rejects bf16 on gfx950), and for a dense ``jnp.matmul`` with the
-same FLOPs. Tile-map blocks follow this device's entry in ``_TILE_MAP_CONFIGS``.
+same FLOPs. Tile-map blocks are the ones ``ragged_dot`` picks on this device.
 Each timing warms up for ``--warmup-seconds``, then reports the median of ``--repeats`` windows of
 back-to-back calls.
 
@@ -239,7 +239,7 @@ def describe_triton_config(case: Case, family: str) -> str:
         return "group_grid defaults"
     layout = ragged_dot_module.RaggedLayout(case.layout)
     m, k, n = triton_problem_dims(case)
-    return str(dataclasses.asdict(ragged_dot_module._tile_map_block_config(layout, m, k, n)))
+    return str(dataclasses.asdict(ragged_dot_module._tile_map_block_config(layout, m, k, n, case.groups)))
 
 
 def triton_problem_dims(case: Case) -> tuple[int, int, int]:

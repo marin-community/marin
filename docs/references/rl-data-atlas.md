@@ -62,16 +62,25 @@ Publish code when the schema or UI changes, then load data explicitly:
 
 ```bash
 uv run marina validate infra/marina/applets/rl_data_catalog
+uv run marina release-status infra/marina/applets/rl_data_catalog --json
 uv run marina applets versions fb11c931-5861-4878-8bb5-a964d652b45f --json
-uv run marina publish infra/marina/applets/rl_data_catalog \
-  --update fb11c931-5861-4878-8bb5-a964d652b45f --base-version CURRENT_VERSION
+uv run marina release infra/marina/applets/rl_data_catalog --base-version CURRENT_VERSION
 
 uv run python infra/marina/applets/rl_data_catalog/load.py \
   --catalog-root CATALOG_ROOT \
   --applet-id fb11c931-5861-4878-8bb5-a964d652b45f
 ```
 
-The first code update requires the applet's publisher. Run the loader in the
+`applet.toml` declares the existing applet's UUID. Releases require the
+applet's publisher or a configured operator. By default, source must be a clean
+checkout at the current remote main. A Marina image deployment does not publish Atlas. A
+default release records its source commit and subtree hash in the immutable package;
+`release-status` reports whether that tree matches this checkout.
+Use `--allow-dirty` to explicitly release branch or uncommitted source without
+verified Git provenance; `release-status` then reports `unrecorded` from a clean checkout.
+
+Coordinate the code release and data load: the new API returns 503 until a
+catalog has been selected. Run the loader in the
 catalog's storage region. It reads through `CurationCatalog`, sends byte-bounded
 SQL batches, checks sample and packet coverage, then selects the load with one
 UPDATE. An unchanged snapshot skips loading. One operator runs updates; concurrent
@@ -87,7 +96,7 @@ For a local preview, start disposable Marina and Postgres, then run the same
 loader against a local curation cache using the printed applet ID and origin:
 
 ```bash
-uv run marina publish infra/marina/applets/rl_data_catalog --local --json
+uv run marina release infra/marina/applets/rl_data_catalog --local --json
 uv run python infra/marina/applets/rl_data_catalog/load.py \
   --catalog-root ~/.cache/marin/rl-curation/campaigns/catalog \
   --applet-id PRINTED_ID --url PRINTED_ORIGIN

@@ -107,6 +107,8 @@ Delete or rewrite tests with negative value:
   and assert that construction raises. Keep one only for a reported regression
   or a compatibility-critical public contract.
 - Tests for Python language semantics.
+- Shellsim guest interpreter or ports acceptance tests. Keep that coverage in Shellsim;
+  Marin CI should exercise caller contracts with shell-only fixtures or existing machine fakes.
 - Registration tests: Tests that check that specific items are registered in global registries.
 - Configuration projections: assertions that a lowered or constructed field equals the same value
   supplied by the test or checked-in config. Test validation, merge conflicts, observable behavior,

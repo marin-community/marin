@@ -94,9 +94,10 @@ pass `PhaseTelemetry` to the writer to retain counters and the execution ID.
    access denied. Without controls the stage is skipped and sandbox graders
    stay unverified.
 
-   A source whose converted panel tasks are all graded by a verifyit judge is
-   not sampled, with or without controls: no judge control exists yet, so the
-   report records `skipped` with reason `judge grader; no control path yet`.
+   A judge-graded source runs its declared positive or negative control through the campaign's
+   explicit judge endpoint, outside the grader sandbox. Endpoint credentials are runtime-only and
+   are not recorded in task specifications, artifact identities or reports. Judge sources without
+   declared controls remain unverified.
 7. **Admit and export.** Each row gets an `admission`:
 
    | Admission | Meaning |
