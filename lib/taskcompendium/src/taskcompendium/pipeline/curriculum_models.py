@@ -6,9 +6,8 @@
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from finestore.rl.curation import SourceDeclaration
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class _Record(BaseModel):
