@@ -435,11 +435,14 @@ reward lies outside the grader's declared score range is `Ungraded(GRADER_REWARD
 
 `stage50_validate.preflight.preflight(task, host, factories, settings, deadlines)` lowers the task
 and, when its task machine lands on the local backend, runs the engine's own preparation once (machine
-start, resources, setup commands) with a probe that answers at once. A preparation failure moves the
-task machine alone to the container backend, the verifier and its grader requirements staying as first
-lowered, and the result carries a `BackendFallback` (backends, cause, detail) for the lower record;
-any other probe outcome keeps the first lowering, and the probe records no evidence. A verifier
-machine never falls back.
+start, resources, setup commands) with a probe that answers at once. A setup command that fails or a
+spec the backend refuses (`FALLBACK_CAUSES`) moves the task machine alone to the container backend,
+the verifier and its grader requirements staying as first lowered, and the result carries a
+`BackendFallback` (backends, cause, detail) for the lower record. A machine that did not start, or not
+in time, is as often the host's state as the task's, so the probe runs once more and a second such
+failure raises `BuildInfrastructureFailure` rather than moving the solver's machine. Any other probe
+outcome keeps the first lowering, and the probe records no evidence. A verifier machine never falls
+back.
 
 `stage50_validate.trials.run_trials(lowered, plan, settings, model)` runs k trials of a
 `LoweredTaskSpec` through `RolloutEngine`. Each attempt runs on

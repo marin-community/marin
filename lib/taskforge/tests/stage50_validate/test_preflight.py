@@ -3,8 +3,9 @@
 
 """The preflight probes a local task machine before any trial and falls back to a container when it cannot start."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachine
 from shellbox.machine import (
     Backend,
@@ -24,6 +25,8 @@ from taskforge.sandbox.factories import MachineHost, grading_environment
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import draft
 from taskforge.spec.draft import LOCAL_CPYTHON
+from taskforge.stage40_build_with_program.context import BuildInfrastructureFailure
+from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
 from taskforge.stage50_validate.outcome import Cause
 from taskforge.stage50_validate.preflight import preflight
 from taskforge.stage50_validate.trials import Deadlines, EngineSettings
@@ -67,6 +70,43 @@ class ReadOnlyLocalFactory:
         return ReadOnlyOptMachine(await PortlessShellSimFactory().create(MachineSpec(source=PackageSpec())))
 
 
+@dataclass
+class UnreachableIndexLocalFactory:
+    """The local backend on a host whose package index is unreachable for the first ``failures`` machine starts."""
+
+    failures: int
+    creates: int = 0
+    backend: Backend = Backend.LOCAL
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        """Accept every environment."""
+
+    async def create(self, spec: MachineSpec) -> ShellSimMachine:
+        self.creates += 1
+        if self.creates <= self.failures:
+            raise OSError("uv: failed to fetch https://pypi.org/simple/: network unreachable")
+        return await PortlessShellSimFactory().create(MachineSpec(source=PackageSpec()))
+
+
+@dataclass
+class CountingFactory:
+    """``inner``, counting the machines it creates."""
+
+    inner: MachineFactory = field(default_factory=FixtureImageFactory)
+    creates: int = 0
+
+    @property
+    def backend(self) -> Backend:
+        return self.inner.backend
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        self.inner.check_environment(requirements, spec)
+
+    async def create(self, spec: MachineSpec):
+        self.creates += 1
+        return await self.inner.create(spec)
+
+
 def file_grader() -> GraderPackage:
     """A grader program in a verifier machine on the grader base image."""
     return draft.python_grader(
@@ -91,10 +131,10 @@ def cpython_task(setup: tuple[str, ...], grader: GraderPackage | None = None) ->
     )
 
 
-def settings(local: ReadOnlyLocalFactory | None) -> EngineSettings:
+def settings(local: MachineFactory | None, container: MachineFactory | None = None) -> EngineSettings:
     factories: dict[str, MachineFactory] = {
         Backend.SHELLSIM.value: PortlessShellSimFactory(),
-        Backend.DOCKER.value: FixtureImageFactory(),
+        Backend.DOCKER.value: container or FixtureImageFactory(),
     }
     if local is not None:
         factories[Backend.LOCAL.value] = local
@@ -137,6 +177,33 @@ async def test_the_fallback_moves_the_task_machine_alone_and_keeps_the_verifier_
     assert result.lowered.task.environment_requirements.docker_image == GRADER_BASE_IMAGE
     grading = grading_environment(result.lowered.task)
     assert grading is not None and grading.docker_image is None and grading.package_spec == LOCAL_CPYTHON
+
+
+async def test_a_local_machine_the_host_failed_twice_is_the_hosts_failure_and_is_not_moved():
+    """A machine start the host can fail as readily as the task is probed again; a repeat fails as the host's."""
+    local, container = UnreachableIndexLocalFactory(failures=2), CountingFactory()
+    engine = settings(local, container)
+
+    with pytest.raises(BuildInfrastructureFailure) as failure:
+        await preflight(
+            cpython_task(("mkdir -p /workspace/out",)), MachineHost.LAPTOP, engine.factories, engine, DEADLINES
+        )
+
+    assert failure.value.cause == InfrastructureCause.MACHINE_CREATE_FAILED
+    assert (local.creates, container.creates) == (2, 0)
+
+
+async def test_a_local_machine_the_host_failed_once_keeps_the_local_backend():
+    local = UnreachableIndexLocalFactory(failures=1)
+    engine = settings(local)
+
+    result = await preflight(
+        cpython_task(("mkdir -p /workspace/out",)), MachineHost.LAPTOP, engine.factories, engine, DEADLINES
+    )
+
+    assert result.fallback is None and local.creates == 2
+    assert result.lowered.runtime.task_machine is not None
+    assert result.lowered.runtime.task_machine.backend == Backend.LOCAL.value
 
 
 async def test_a_task_whose_setup_runs_locally_keeps_the_local_backend():
