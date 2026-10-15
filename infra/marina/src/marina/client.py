@@ -18,6 +18,7 @@ from rigging.credentials import iap_edge_provider
 
 DEFAULT_MARINA_URL = "https://marina.oa.dev"
 DEFAULT_TIMEOUT = 60
+LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost"})
 
 
 class MarinaRequestError(RuntimeError):
@@ -64,7 +65,7 @@ def marina_request(
     if payload is not None:
         headers["Content-Type"] = "application/gzip"
     host = urlparse(service_url).hostname
-    if host not in {"127.0.0.1", "localhost"}:
+    if host not in LOCAL_HOSTS:
         headers["Authorization"] = f"Bearer {bearer_token()}"
     response = requests.request(
         method,

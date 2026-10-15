@@ -29,7 +29,7 @@ from marina.applets import (
     validate_backend_import,
 )
 from marina.apps import is_python_app, migration, services_for
-from marina.client import DEFAULT_MARINA_URL, MarinaRequestError, marina_request, publish_applet
+from marina.client import DEFAULT_MARINA_URL, LOCAL_HOSTS, MarinaRequestError, marina_request, publish_applet
 from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
 from marina.db import (
     DatabaseSpec,
@@ -49,10 +49,10 @@ from marina.releases import (
     RELEASE_CONFIG,
     RELEASE_METADATA,
     ReleaseSource,
-    git_output,
     release_applet_id,
     release_source,
     require_tracked_package,
+    source_status,
 )
 from marina.server import APPS_DIR_ENV, MarinaConfig, create_app
 from marina.table_load import read_table, table_statements
@@ -345,7 +345,7 @@ def publish(
     if (
         not local
         and not dry_run
-        and urlparse(service_url).hostname not in {"localhost", "127.0.0.1"}
+        and urlparse(service_url).hostname not in LOCAL_HOSTS
         and (app_dir / RELEASE_CONFIG).exists()
     ):
         raise click.UsageError("This applet has release.toml; use `marina release` for production updates.")
@@ -412,7 +412,6 @@ def release(app_dir: Path, base_version: int, service_url: str, json_output: boo
 def release_status(app_dir: Path, service_url: str, json_output: bool) -> None:
     """Compare an applet's live source tree with this checkout's committed source."""
     applet_id = release_applet_id(app_dir)
-    expected = release_source(app_dir)
     details = marina_request(service_url, "GET", f"/api/marina/applets/{applet_id}")
     assert isinstance(details, dict)
     version = details["current_version"]
@@ -427,25 +426,12 @@ def release_status(app_dir: Path, service_url: str, json_output: bool) -> None:
     if metadata is not None:
         assert isinstance(metadata, dict)
     actual = ReleaseSource(**metadata) if metadata is not None else None
-    if git_output(app_dir, "status", "--porcelain", "--untracked-files=all", "--", "."):
-        state = "modified"
-    elif actual is None:
-        state = "unrecorded"
-    elif actual.tree == expected.tree and actual.path == expected.path:
-        state = "current"
-    else:
-        state = "different"
-    result = {
-        "applet_id": applet_id,
-        "version": version,
-        "state": state,
-        "released": asdict(actual) if actual is not None else None,
-        "checkout": asdict(expected),
-    }
+    result = source_status(app_dir, applet_id, version, actual)
     if json_output:
-        click.echo(json.dumps(result, sort_keys=True))
+        click.echo(json.dumps(asdict(result), sort_keys=True))
     else:
-        click.echo(f"{applet_id} v{version}: {state}")
+        click.echo(f"{applet_id} v{version}: {result.state}")
+        expected = result.checkout
         click.echo(f"Checkout: {expected.commit} {expected.path} (tree {expected.tree})")
         if actual is not None:
             click.echo(f"Released: {actual.commit} {actual.path} (tree {actual.tree})")
