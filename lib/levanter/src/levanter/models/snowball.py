@@ -21,7 +21,7 @@ guards against drift.
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, Optional, Type
+from typing import Any, NamedTuple, Optional, Type
 
 import equinox as eqx
 import jax
@@ -49,8 +49,17 @@ from levanter.grug.attention import (
     apply_rotary_embedding,
     attention,
     ragged_paged_attention,
+    token_validity_from_attention_mask,
 )
-from levanter.grug.grug_moe import MoEExpertMlpPspecs, MoeImplementation, MoEExpertMlp
+from levanter.grug.grug_moe import (
+    MoEExpertMlpPspecs,
+    MoeImplementation,
+    MoEExpertMlp,
+    PreparedMoERouteCapture,
+    MoERouteCapture,
+    prepare_moe_route_capture,
+    validate_prepared_moe_route_capture,
+)
 from levanter.grug.sharding import (
     Pembed_vocab,
     Plm_head,
@@ -66,11 +75,9 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 
-
 silence_transformer_nag()
 from transformers import AutoConfig  # noqa: E402
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
-
 
 # --- Pinned recipe constants (June 67B A2B production choices) ---------------------------------
 
@@ -79,6 +86,15 @@ GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ATTENTION_MODE = "production"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
+
+
+class SnowballRouteCaptureBatch(NamedTuple):
+    """Public route captures bound to the exact packed token layout they came from."""
+
+    route_captures: tuple[PreparedMoERouteCapture, ...]
+    token_ids: jax.Array
+    segment_ids: tuple[jax.Array, jax.Array] | None
+
 
 # A published config.json carries exactly one spelling per field. ``from_hf_config`` deliberately
 # accepts more spellings than the exporter may write, so the two lists are not interchangeable:
@@ -627,18 +643,71 @@ class SnowballMoEMLP(eqx.Module):
             cfg=cfg,
         )
 
-    @named_call
-    def __call__(self, x: Float[Array, "B S D"], *, token_valid: jax.Array | None = None) -> Float[Array, "B S D"]:
+    def capture_routes(self, x: Float[Array, "B S D"], *, token_valid: Bool[Array, "T"]) -> PreparedMoERouteCapture:
+        """Capture this layer's route IDs and actual validity in flattened order."""
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
+        if token_valid.shape == (b, s):
+            token_valid = token_valid.reshape(b * s)
+        elif token_valid.shape != (b * s,):
+            raise ValueError("token_valid must match Snowball's flattened token order")
+        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+        topk_logits, selected_experts = jax.lax.top_k(
+            router_logits + unshard(self.router_bias), self.cfg.num_experts_per_token + 1
+        )
+        capture = MoERouteCapture(
+            selected_experts=jax.lax.stop_gradient(selected_experts[:, :-1].astype(jnp.int32)),
+            token_valid=jax.lax.stop_gradient(token_valid),
+            qb_alpha=jax.lax.stop_gradient(topk_logits[:, -1:]),
+        )
+        return prepare_moe_route_capture(
+            capture,
+            token_valid,
+            num_experts=self.cfg.num_experts,
+            num_experts_per_token=self.cfg.num_experts_per_token,
+        )
+
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        *,
+        token_valid: jax.Array | None = None,
+        route_capture: PreparedMoERouteCapture | None = None,
+    ) -> Float[Array, "B S D"]:
+        b, s, _ = x.shape
+        x_flat = rearrange(x, "b s d -> (b s) d")
+        if token_valid is None:
+            token_valid = jnp.ones((b * s,), dtype=jnp.bool_)
+        elif token_valid.shape == (b, s):
+            token_valid = token_valid.reshape(b * s)
+        elif token_valid.shape != (b * s,):
+            raise ValueError("token_valid must match Snowball's flattened token order")
+        if route_capture is not None and not isinstance(route_capture, PreparedMoERouteCapture):
+            raise TypeError("route_capture must be prepared with prepare_moe_route_capture")
+        capture_is_traced = route_capture is not None and any(
+            isinstance(leaf, jax.core.Tracer) for leaf in jax.tree_util.tree_leaves(route_capture)
+        )
+        if route_capture is not None and not capture_is_traced:
+            validate_prepared_moe_route_capture(
+                route_capture,
+                token_valid,
+                num_experts=self.cfg.num_experts,
+                num_experts_per_token=self.cfg.num_experts_per_token,
+            )
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         # router_bias is [E]; replicate it (like the norm weights) so the add keeps the expert axis
         # unsharded. A safetensors load auto-shards [E] over `data` when E % data == 0, which would
         # otherwise make router_logits + router_bias illegally sharded on multi-device meshes.
         biased_logits = router_logits + unshard(self.router_bias)
-        # Select top-(K+1) on biased logits; the (K+1)-th is only the QB threshold (unused at inference).
-        _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
-        selected_experts = selected_experts[:, :-1]
+        if route_capture is None:
+            # Select top-(K+1) on biased logits; the (K+1)-th is only the QB threshold (unused at inference).
+            _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
+            selected_experts = selected_experts[:, :-1]
+        else:
+            if route_capture.selected_experts.shape != (b * s, self.cfg.num_experts_per_token):
+                raise ValueError("route_capture must align with Snowball's flattened token order")
+            selected_experts = route_capture.selected_experts
         # Sigmoid combine weights on UNbiased logits for the selected experts, renormed to sum to 2.5.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         combine_weights_f = jax.nn.sigmoid(unbiased_topk)
@@ -689,6 +758,8 @@ class SnowballBlock(eqx.Module):
         short_mask: AttentionMask,
         long_mask: AttentionMask,
         use_long: Bool[Array, ""],
+        token_valid: Bool[Array, "T"],
+        route_capture: PreparedMoERouteCapture | None = None,
     ) -> Float[Array, "B S D"]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         # ``lax.cond`` keeps a uniform per-layer body so the transformer can scan the layers:
@@ -702,8 +773,29 @@ class SnowballBlock(eqx.Module):
         )
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out = self.mlp(mlp_in) + self.shared(mlp_in)
+        mlp_out = self.mlp(mlp_in, token_valid=token_valid, route_capture=route_capture) + self.shared(mlp_in)
         return x + mlp_out
+
+    def capture_routes(
+        self,
+        x: Float[Array, "B S D"],
+        short_mask: AttentionMask,
+        long_mask: AttentionMask,
+        use_long: bool,
+        token_valid: Bool[Array, "T"],
+    ) -> tuple[Float[Array, "B S D"], PreparedMoERouteCapture]:
+        """Run this block and capture routes from its actual normalized MLP input."""
+        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        attn_out = self.attn(
+            attn_in,
+            long_mask if use_long else short_mask,
+            disable_rope=use_long,
+        )
+        x = x + attn_out
+        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        capture = self.mlp.capture_routes(mlp_in, token_valid=token_valid)
+        mlp_out = self.mlp(mlp_in, token_valid=token_valid, route_capture=capture) + self.shared(mlp_in)
+        return x + mlp_out, capture
 
 
 def long_attention_layer_mask(num_layers: int) -> jnp.ndarray:
@@ -753,7 +845,13 @@ class SnowballTransformer(eqx.Module):
         )
 
     @named_call
-    def __call__(self, token_ids: Int[Array, "B S"], mask: Optional[AttentionMask] = None) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        token_ids: Int[Array, "B S"],
+        mask: Optional[AttentionMask] = None,
+        *,
+        route_captures: tuple[PreparedMoERouteCapture, ...] | None = None,
+    ) -> Float[Array, "B S D"]:
         cfg = self.config
         if mask is None:
             mask = AttentionMask.causal()
@@ -762,6 +860,9 @@ class SnowballTransformer(eqx.Module):
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
         token_ids = reshard(token_ids, P(_BATCH_AXES, _context_axis()))
+        token_valid = token_validity_from_attention_mask(
+            mask, batch_size=token_ids.shape[0], sequence_length=token_ids.shape[1]
+        ).reshape(-1)
         hidden = self.token_embed.at[token_ids].get(out_sharding=_activation_spec())
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
@@ -772,14 +873,67 @@ class SnowballTransformer(eqx.Module):
         num_blocks = len(self.blocks)
         stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.blocks)
         long_schedule = long_attention_layer_mask(num_blocks)
+        if route_captures is not None:
+            if len(route_captures) != num_blocks:
+                raise ValueError("route_captures must contain one capture per Snowball layer")
+            if not isinstance(token_valid, jax.core.Tracer):
+                for route_capture in route_captures:
+                    validate_prepared_moe_route_capture(
+                        route_capture,
+                        token_valid,
+                        num_experts=self.config.num_experts,
+                        num_experts_per_token=self.config.num_experts_per_token,
+                    )
+            stacked_captures = jax.tree_util.tree_map(lambda *captures: jnp.stack(captures), *route_captures)
+        else:
+            stacked_captures = None
 
-        def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag) -> tuple[Float[Array, "B S D"], None]:
-            layer, use_long = layer_and_flag
-            return layer(carry, short_mask, long_mask, use_long), None
+        def _scan_layer(carry: Float[Array, "B S D"], layer_inputs) -> tuple[Float[Array, "B S D"], None]:
+            if stacked_captures is None:
+                layer, use_long = layer_inputs
+                return layer(carry, short_mask, long_mask, use_long, token_valid), None
+            layer, use_long, route_capture = layer_inputs
+            return layer(carry, short_mask, long_mask, use_long, token_valid, route_capture), None
 
         # Bound routed-expert activation memory during the backward pass as well as forward.
-        hidden, _ = jax.lax.scan(jax.checkpoint(_scan_layer), hidden, (stacked, long_schedule))
+        scan_inputs = (
+            (stacked, long_schedule) if stacked_captures is None else (stacked, long_schedule, stacked_captures)
+        )
+        hidden, _ = jax.lax.scan(jax.checkpoint(_scan_layer), hidden, scan_inputs)
         return self.final_gated_norm(self.final_norm(hidden))
+
+    def capture_route_captures(
+        self, token_ids: Int[Array, "B S"], mask: Optional[AttentionMask] = None
+    ) -> tuple[PreparedMoERouteCapture, ...]:
+        """Capture one route batch per layer from an ordinary model forward.
+
+        This is an explicit host-side preparation entry point. The returned captures are
+        aligned to the flattened token IDs and mask supplied here; replay validates that
+        same alignment at the public adapter boundary.
+        """
+        if mask is None:
+            mask = AttentionMask.causal()
+        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        short_mask = AttentionMask(is_causal=True, sliding_window=self.config.sliding_window, segment_ids=segment_ids)
+        long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+        token_ids = reshard(token_ids, P(_BATCH_AXES, _context_axis()))
+        token_valid = token_validity_from_attention_mask(
+            mask, batch_size=token_ids.shape[0], sequence_length=token_ids.shape[1]
+        ).reshape(-1)
+        hidden = self.token_embed.at[token_ids].get(out_sharding=_activation_spec())
+        hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        captures = []
+        for layer_index, block in enumerate(self.blocks):
+            hidden, capture = block.capture_routes(
+                hidden,
+                short_mask,
+                long_mask,
+                layer_index % _LONG_ATTENTION_INTERVAL == _LONG_ATTENTION_INTERVAL - 1
+                or layer_index == len(self.blocks) - 1,
+                token_valid,
+            )
+            captures.append(capture)
+        return tuple(captures)
 
 
 # --- LmHeadModel adapter -----------------------------------------------------------------------
@@ -808,6 +962,44 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         cfg = config if Vocab.size == config.vocab_size else dataclasses.replace(config, vocab_size=Vocab.size)
         return SnowballLMHeadModel(SnowballTransformer.init(cfg, key=key), cfg)
 
+    @staticmethod
+    def _grug_mask(attn_mask: Optional[LmHeadAttentionMask | NamedArray]) -> Optional[AttentionMask]:
+        if attn_mask is None:
+            return None
+        if not isinstance(attn_mask, LmHeadAttentionMask):
+            raise ValueError("Snowball supports structured causal masks with optional packed segment IDs")
+        if attn_mask.explicit_mask is not None or attn_mask.bidirectional_window is not None:
+            raise ValueError("Snowball does not support explicit or bidirectional attention masks")
+        if attn_mask.causal_offset is not None:
+            raise ValueError("Snowball does not support attention-mask causal offsets")
+        segments = None
+        if attn_mask.segment_ids is not None:
+            segments = tuple(segment.array for segment in attn_mask.segment_ids)
+        return AttentionMask(
+            is_causal=attn_mask.is_causal,
+            sliding_window=attn_mask.sliding_window,
+            segment_ids=segments,
+        )
+
+    def capture_route_captures(
+        self,
+        input_ids: NamedArray,
+        attn_mask: Optional[LmHeadAttentionMask | NamedArray] = None,
+    ) -> SnowballRouteCaptureBatch:
+        """Capture actual per-layer routes for this public token/mask batch."""
+        raw = input_ids.array
+        lead = raw.shape[:-1]
+        sequence_length = raw.shape[-1]
+        batch_size = int(np.prod(lead)) if lead else 1
+        tokens = reshard(raw.reshape(batch_size, sequence_length), P(_BATCH_AXES, _context_axis()))
+        grug_mask = self._grug_mask(attn_mask)
+        segments = None if grug_mask is None else grug_mask.segment_ids
+        return SnowballRouteCaptureBatch(
+            self.transformer.capture_route_captures(tokens, grug_mask),
+            tokens,
+            segments,
+        )
+
     def activations(  # pyrefly: ignore[bad-override]  # narrows the MoE-optional aux return to a plain NamedArray
         self,
         input_ids: NamedArray,
@@ -815,19 +1007,86 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         *,
         key=None,
         pos_ids: NamedArray | None = None,
+        route_captures: SnowballRouteCaptureBatch | None = None,
     ) -> NamedArray:
-        # attn_mask is ignored: the pinned recipe builds its own per-layer short/long causal masks
-        # inside the transformer core. Segmented/packed inputs are a follow-up (see plan).
+        if pos_ids is not None:
+            raise ValueError("Snowball public replay requires the default contiguous position layout")
+        if route_captures is not None and not isinstance(route_captures, SnowballRouteCaptureBatch):
+            raise TypeError("public replay requires a bound SnowballRouteCaptureBatch")
         Pos = input_ids.resolve_axis(self.Pos.name)
         raw = input_ids.array
         lead = raw.shape[:-1]
         s = raw.shape[-1]
         b = int(np.prod(lead)) if lead else 1
-        tokens = reshard(raw.reshape(b, s), P(_BATCH_AXES, _context_axis()))
-        hidden = self.transformer(tokens)  # [B, S, D]
+        grug_mask = self._grug_mask(attn_mask)
+        captures = route_captures
+        if isinstance(route_captures, SnowballRouteCaptureBatch):
+            raw_tokens = raw.reshape(b, s)
+            expected_segments = None if grug_mask is None else grug_mask.segment_ids
+            captured_segments = route_captures.segment_ids
+            binding_is_traced = any(
+                isinstance(leaf, jax.core.Tracer)
+                for leaf in jax.tree_util.tree_leaves((raw_tokens, route_captures, expected_segments))
+            )
+            if binding_is_traced:
+                raw_tokens = eqx.error_if(
+                    raw_tokens,
+                    jnp.any(route_captures.token_ids != raw_tokens),
+                    "route captures are bound to different token IDs or packed order",
+                )
+            elif not np.array_equal(np.asarray(route_captures.token_ids), np.asarray(raw_tokens)):
+                raise ValueError("route captures are bound to different token IDs or packed order")
+            if (captured_segments is None) != (expected_segments is None):
+                raise ValueError("route captures are bound to different packed segment IDs")
+            if captured_segments is not None and expected_segments is not None:
+                if binding_is_traced:
+                    checked_segments = tuple(
+                        eqx.error_if(
+                            expected,
+                            jnp.any(captured != expected),
+                            "route captures are bound to different packed segment IDs",
+                        )
+                        for captured, expected in zip(captured_segments, expected_segments, strict=True)
+                    )
+                    grug_mask = AttentionMask(
+                        is_causal=grug_mask.is_causal,
+                        segment_ids=checked_segments,
+                        sliding_window=grug_mask.sliding_window,
+                        fa4_bounds=grug_mask.fa4_bounds,
+                    )
+                elif any(
+                    not np.array_equal(captured, expected)
+                    for captured, expected in zip(captured_segments, expected_segments, strict=True)
+                ):
+                    raise ValueError("route captures are bound to different packed segment IDs")
+            captures = route_captures.route_captures
+        tokens = reshard(
+            raw_tokens if isinstance(route_captures, SnowballRouteCaptureBatch) else raw.reshape(b, s),
+            P(_BATCH_AXES, _context_axis()),
+        )
+        hidden = self.transformer(tokens, grug_mask, route_captures=captures)  # [B, S, D]
         hidden = hidden.reshape(*lead, s, self.Embed.size) if lead else hidden.reshape(s, self.Embed.size)
         out_axes = (*input_ids.axes, self.Embed) if lead else (Pos, self.Embed)
         return hax.named(hidden, out_axes)
+
+    def __call__(
+        self,
+        input_ids: NamedArray,
+        attn_mask: Optional[LmHeadAttentionMask | NamedArray] = None,
+        *,
+        key=None,
+        pos_ids: NamedArray | None = None,
+        route_captures: SnowballRouteCaptureBatch | None = None,
+    ) -> NamedArray:
+        """Compute public LM logits, optionally replaying a prepared route batch."""
+        hidden = self.activations(
+            input_ids,
+            attn_mask,
+            key=key,
+            pos_ids=pos_ids,
+            route_captures=route_captures,
+        )
+        return hax.dot(hidden, self.get_lm_head(), axis=self.Embed)
 
     def get_lm_head(self) -> NamedArray:
         return hax.named(reshard(self.transformer.output_proj, P(None, "model")), (self.Embed, self.Vocab))

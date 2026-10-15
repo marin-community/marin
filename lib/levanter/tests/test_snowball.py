@@ -26,14 +26,20 @@ from haliax import Axis
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
 from safetensors.numpy import load_file
 
+from levanter.grug.grug_moe import PreparedMoERouteCapture
+from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmConfig
+from levanter.layers.attention import AttentionMask as LmAttentionMask
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
     GRUG_MOE_MODEL_TYPE,
     GrugMoeHfConfig,
     SnowballConfig,
     SnowballLMHeadModel,
+    SnowballMoEMLP,
+    SnowballRouteCaptureBatch,
+    SnowballTransformer,
     validate_single_name_config,
 )
 from levanter.testing.cpu_devices import run_on_cpu_devices
@@ -310,6 +316,121 @@ def test_snowball_forward_shapes_and_finite():
         logits = hax.named_jit(lambda m, x: m(x))(model, ids)
     assert logits.axes[-1].name == "vocab" and logits.axes[-1].size == cfg.vocab_size
     assert bool(jnp.all(jnp.isfinite(logits.array)))
+
+
+def test_snowball_moe_capture_replay_preserves_padding_and_gradients():
+    cfg = _tiny_config(num_layers=1, moe_implementation="scatter")
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        layer = SnowballMoEMLP.init(cfg, key=jax.random.key(17))
+        x = jax.random.normal(jax.random.key(18), (2, 4, cfg.hidden_dim))
+        token_valid = jnp.asarray([True, True, False, True, True, False, True, True])
+        capture = layer.capture_routes(x, token_valid=token_valid)
+        perturbed = eqx.tree_at(lambda m: m.router, layer, layer.router.at[:, 0].add(10.0))
+        replayed = perturbed(x, token_valid=token_valid, route_capture=capture)
+        fresh = perturbed(x, token_valid=token_valid)
+        replay_grad = eqx.filter_grad(lambda m: jnp.sum(m(x, token_valid=token_valid, route_capture=capture)))(
+            perturbed
+        )
+
+    assert not np.allclose(np.asarray(replayed), np.asarray(fresh))
+    # The routed branch excludes padding; the always-on shared expert remains part of the residual.
+    assert np.all(np.isfinite(np.asarray(replayed).reshape(-1, cfg.hidden_dim)[~np.asarray(token_valid)]))
+    assert float(jnp.max(jnp.abs(replay_grad.router))) > 0.0
+    assert float(jnp.max(jnp.abs(replay_grad.expert_mlp.w_gate))) > 0.0
+    assert isinstance(capture, PreparedMoERouteCapture)
+
+
+def test_snowball_transformer_replay_jit_and_grad_use_actual_packed_validity():
+    cfg = _tiny_config(num_layers=2, moe_implementation="scatter")
+    batch, seq = 2, 6
+    ids = jnp.arange(batch * seq, dtype=jnp.int32).reshape(batch, seq) % cfg.vocab_size
+    segments = jnp.asarray([[0, 0, -1, 1, 1, -1], [2, 2, 3, 3, -1, -1]], dtype=jnp.int32)
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballTransformer.init(cfg, key=jax.random.key(23))
+        mask = AttentionMask(segment_ids=(segments, segments))
+        ordinary = model(ids, mask)
+        captures = model.capture_route_captures(ids, mask)
+
+        def loss(current_model, segment_ids):
+            mask = AttentionMask(segment_ids=(segment_ids, segment_ids))
+            hidden = current_model(ids, mask, route_captures=captures)
+            return jnp.mean(hidden * hidden)
+
+        value, gradients = eqx.filter_jit(eqx.filter_value_and_grad(loss))(model, segments)
+        replayed = model(ids, mask, route_captures=captures)
+
+    np.testing.assert_array_equal(np.asarray(ordinary), np.asarray(replayed))
+    assert bool(jnp.isfinite(value))
+    assert float(jnp.max(jnp.abs(gradients.blocks[0].mlp.router))) > 0.0
+    assert float(jnp.max(jnp.abs(gradients.blocks[0].mlp.expert_mlp.w_gate))) > 0.0
+
+
+def test_snowball_public_capture_replay_binds_tokens_and_preserves_logits():
+    cfg = _tiny_config(num_layers=2, moe_implementation="scatter")
+    ids_a = hax.named(jnp.asarray([[2, 7, 0, 9, 3, 0], [4, 5, 6, 0, 8, 0]], dtype=jnp.int32), ("batch", "position"))
+    ids_b = hax.named(jnp.asarray([[11, 12, 0, 13, 14, 0], [15, 16, 17, 0, 18, 0]], dtype=jnp.int32), ids_a.axes)
+    q_segment_ids = hax.named(jnp.asarray([[0, 0, -1, 1, 1, -1], [2, 2, 3, -1, 3, -1]], dtype=jnp.int32), ids_a.axes)
+    kv_segment_ids = hax.named(jnp.asarray([[0, 0, -1, 1, 1, -1], [2, 2, 3, -1, 4, -1]], dtype=jnp.int32), ids_a.axes)
+    mask = LmAttentionMask.causal().with_segment_ids(q_segment_ids, kv_segment_ids)
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(31))
+        ordinary = model(ids_a, mask)
+        prepared = model.capture_route_captures(ids_a, mask)
+        assert isinstance(prepared, SnowballRouteCaptureBatch)
+        replayed = model(ids_a, mask, route_captures=prepared)
+        changed_block = eqx.tree_at(
+            lambda block: block.mlp.router,
+            model.transformer.blocks[0],
+            model.transformer.blocks[0].mlp.router.at[:, 0].add(0.01),
+        )
+        changed = eqx.tree_at(lambda current: current.transformer.blocks[0], model, changed_block)
+        changed_replay = changed(ids_a, mask, route_captures=prepared)
+        changed_grad = eqx.filter_grad(lambda current: jnp.sum(current(ids_a, mask, route_captures=prepared).array))(
+            changed
+        )
+
+    np.testing.assert_array_equal(np.asarray(ordinary.array), np.asarray(replayed.array))
+    assert not np.array_equal(np.asarray(changed_replay.array), np.asarray(ordinary.array))
+    assert float(jnp.max(jnp.abs(changed_grad.transformer.blocks[0].mlp.router))) > 0.0
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        with pytest.raises(TypeError, match="bound SnowballRouteCaptureBatch"):
+            model(ids_a, mask, route_captures=prepared.route_captures)
+        with pytest.raises(ValueError, match="different token IDs"):
+            model(ids_b, mask, route_captures=prepared)
+        changed_kv_array = kv_segment_ids.array.at[1, 4].set(3)
+        changed_kv_segment_ids = hax.named(changed_kv_array, kv_segment_ids.axes)
+        changed_kv_mask = LmAttentionMask.causal().with_segment_ids(q_segment_ids, changed_kv_segment_ids)
+        with pytest.raises(ValueError, match="different packed segment IDs"):
+            model(ids_a, changed_kv_mask, route_captures=prepared)
+
+
+def test_snowball_public_capture_replay_jit_binds_dynamic_tokens_and_segments():
+    cfg = _tiny_config(num_layers=1, moe_implementation="scatter")
+    ids = hax.named(jnp.asarray([[2, 7, 0, 9, 3, 0], [4, 5, 6, 0, 8, 0]], dtype=jnp.int32), ("batch", "position"))
+    q_segment_ids = hax.named(jnp.asarray([[0, 0, -1, 1, 1, -1], [2, 2, 3, -1, 3, -1]], dtype=jnp.int32), ids.axes)
+    kv_segment_ids = hax.named(jnp.asarray([[0, 0, -1, 1, 1, -1], [2, 2, 3, -1, 4, -1]], dtype=jnp.int32), ids.axes)
+    mask = LmAttentionMask.causal().with_segment_ids(q_segment_ids, kv_segment_ids)
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(32))
+        prepared = model.capture_route_captures(ids, mask)
+        ordinary = model(ids, mask)
+
+        def loss(current_model, token_array, q_array, kv_array, capture):
+            dynamic_ids = hax.named(token_array, ids.axes)
+            dynamic_q = hax.named(q_array, ids.axes)
+            dynamic_kv = hax.named(kv_array, ids.axes)
+            dynamic_mask = LmAttentionMask.causal().with_segment_ids(dynamic_q, dynamic_kv)
+            return jnp.sum(current_model(dynamic_ids, dynamic_mask, route_captures=capture).array)
+
+        replay_value, gradients = eqx.filter_jit(eqx.filter_value_and_grad(loss))(
+            model, ids.array, q_segment_ids.array, kv_segment_ids.array, prepared
+        )
+
+    np.testing.assert_allclose(np.asarray(replay_value), np.asarray(jnp.sum(ordinary.array)))
+    assert float(jnp.max(jnp.abs(gradients.transformer.blocks[0].mlp.router))) > 0.0
 
 
 @pytest.mark.parametrize(

@@ -52,13 +52,16 @@ from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,
+    MoERouteCapture,
     MoeImplementation,
+    QBRoutedMoE,
     _clip_receiver_group_sizes,
     _expert_granular_a2a_params,
     moe_mlp,
+    prepare_moe_route_capture,
+    validate_moe_route_capture,
 )
 from levanter.utils.activation import ActivationFunctionEnum
-
 
 _BF16_MOE_RELATIVE_TOLERANCE = 0.02
 _FP32_MOE_RELATIVE_TOLERANCE = 1e-4
@@ -1019,10 +1022,116 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
             implementation="sonic",
             pspecs=pspecs,
         )
-
     assert mlp.w_gate.sharding.spec == P(None, "data", "model")
     assert mlp.w_up.sharding.spec == P(None, "data", "model")
     assert mlp.w_down.sharding.spec == P(None, "model", "data")
+
+
+def test_route_capture_replay_keeps_ids_but_recomputes_current_gate_weights():
+    mesh = _make_dense_mesh()
+    key_x, key_router, key_expert = jax.random.split(jax.random.key(91), 3)
+    x = jax.random.normal(key_x, (6, 8), dtype=jnp.float32)
+    token_valid = jnp.asarray([True, True, False, True, False, True])
+    router = jax.random.normal(key_router, (8, 4), dtype=jnp.float32)
+    router_bias = jnp.zeros((4,), dtype=jnp.float32)
+    expert_mlp = MoEExpertMlp.init(
+        num_experts=4,
+        hidden_dim=8,
+        intermediate_dim=12,
+        initializer_std=0.1,
+        key=key_expert,
+        implementation="scatter",
+        pspecs=MoEExpertMlpPspecs(expert=None, hidden=None, intermediate=None),
+    )
+    routerer = QBRoutedMoE(num_experts_per_token=2, batch_axes=("data",))
+
+    with jax.set_mesh(mesh):
+        capture = routerer.capture_routes(x, token_valid, router=router, router_bias=router_bias)
+        validate_moe_route_capture(capture, num_experts=4, num_experts_per_token=2)
+        perturbed_router = router.at[:, 3].add(10.0)
+        perturbed_capture = routerer.capture_routes(x, token_valid, router=perturbed_router, router_bias=router_bias)
+        assert not np.array_equal(np.asarray(capture.selected_experts), np.asarray(perturbed_capture.selected_experts))
+        replayed, replay_stats = routerer(
+            x,
+            token_valid,
+            router=perturbed_router,
+            router_bias=router_bias,
+            expert_mlp=expert_mlp,
+            mesh=mesh,
+            report_capacity_overflow=False,
+            route_capture=capture,
+        )
+        fresh, _ = routerer(
+            x,
+            token_valid,
+            router=perturbed_router,
+            router_bias=router_bias,
+            expert_mlp=expert_mlp,
+            mesh=mesh,
+            report_capacity_overflow=False,
+        )
+        router_grad = jax.grad(
+            lambda current_router: jnp.sum(
+                routerer(
+                    x,
+                    token_valid,
+                    router=current_router,
+                    router_bias=router_bias,
+                    expert_mlp=expert_mlp,
+                    mesh=mesh,
+                    report_capacity_overflow=False,
+                    route_capture=capture,
+                )[0]
+            )
+        )(perturbed_router)
+    assert not np.allclose(np.asarray(replayed), np.asarray(fresh))
+    np.testing.assert_allclose(np.asarray(replayed)[~np.asarray(token_valid)], 0.0)
+    assert float(replay_stats["skipped_assignments"]) == 4.0
+    assert float(jnp.max(jnp.abs(router_grad))) > 0.0
+
+    raw_capture = MoERouteCapture(*capture)
+    with pytest.raises(TypeError, match="prepared"):
+        routerer(
+            x,
+            token_valid,
+            router=perturbed_router,
+            router_bias=router_bias,
+            expert_mlp=expert_mlp,
+            mesh=mesh,
+            report_capacity_overflow=False,
+            route_capture=raw_capture,
+        )
+    with pytest.raises(ValueError, match="does not match"):
+        routerer(
+            x,
+            token_valid.at[0].set(False),
+            router=perturbed_router,
+            router_bias=router_bias,
+            expert_mlp=expert_mlp,
+            mesh=mesh,
+            report_capacity_overflow=False,
+            route_capture=capture,
+        )
+
+
+def test_route_capture_validation_rejects_duplicate_experts():
+    capture = MoERouteCapture(
+        selected_experts=jnp.asarray([[1, 1], [0, 2]], dtype=jnp.int32),
+        token_valid=jnp.asarray([True, True]),
+        qb_alpha=jnp.zeros((2, 1), dtype=jnp.float32),
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        validate_moe_route_capture(capture, num_experts=3, num_experts_per_token=2)
+
+
+def test_route_capture_preparation_rejects_noncanonical_dtypes():
+    capture = MoERouteCapture(
+        selected_experts=jnp.asarray([[1.0, 2.0]], dtype=jnp.float32),
+        token_valid=jnp.asarray([True]),
+        qb_alpha=jnp.zeros((1, 1), dtype=jnp.float32),
+    )
+    with pytest.raises(TypeError, match="integer"):
+        prepare_moe_route_capture(capture, capture.token_valid, num_experts=3, num_experts_per_token=2)
 
 
 @pytest.mark.parametrize(
