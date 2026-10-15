@@ -42,11 +42,14 @@ def transform_row(
 
 
 def run(recipe: dict, device: torch.device) -> None:
+    stages = recipe["stages"]
+    if not stages or stages[-1]["output"] != recipe["output"] or stages[-1]["audit"] != recipe["audit"]:
+        raise ValueError("Serial final output does not match experiment recipe")
     original = CheckpointReader(CheckpointSource(**recipe["base"]))
     donor = CheckpointReader(CheckpointSource(**recipe["donors"][0]))
     support = tuple(TensorSupport(item["name"], tuple(item["rows"])) for item in recipe["support"])
     previous = original
-    for stage_index, stage in enumerate(recipe["stages"]):
+    for stage_index, stage in enumerate(stages):
         parameters = stage["parameters"]
         method = parameters["method"]
         arithmetic = None
@@ -56,8 +59,6 @@ def run(recipe: dict, device: torch.device) -> None:
         audit = materialize_serial_stage(original, recipe, stage, stage_index + 1, support, transform)
         previous = CheckpointReader(CheckpointSource(stage["output"], f"{recipe['id']}:stage-{stage_index + 1}"))
         logging.info("Verified serial stage %d: %.6f%% changed", stage_index + 1, audit["changed_percent"])
-    assert recipe["stages"][-1]["output"] == recipe["output"]
-    assert recipe["stages"][-1]["audit"] == recipe["audit"]
 
 
 def main() -> None:

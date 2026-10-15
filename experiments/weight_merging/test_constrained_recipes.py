@@ -244,6 +244,11 @@ def test_serial_iso_matches_two_stage_composition_and_preserves_original_base(tm
         "output": stages[-1]["output"],
         "audit": stages[-1]["audit"],
     }
+    invalid_recipe = {**recipe, "output": str(tmp_path / "unexpected-output")}
+    with pytest.raises(ValueError, match="Serial final output does not match"):
+        serial_iso_run(invalid_recipe, torch.device("cpu"))
+    assert not (tmp_path / "stage1").exists()
+
     serial_iso_run(recipe, torch.device("cpu"))
     expected = weights.clone()
     arithmetic = MergeParameters(**{**parameters, "method": MergeMethod.DARE_TIES, "coefficients": (1.0,)})
