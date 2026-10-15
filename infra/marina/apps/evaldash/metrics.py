@@ -47,17 +47,15 @@ from marin.evaluation.eval_stats import (
 )
 from marin.evaluation.model_identity import comparison_model_name
 from marin.evaluation.records import EvalRunRecord, RunStatus
+from marin.execution.step_status import STATUS_SUCCESS
 
 # Capped-instance launcher validation runs; kept out of the headline panel (they stay visible in the
 # runs list and history).
 SMOKE_SUFFIX = "-smoke"
-# Status-file wire value; the dashboard image does not vendor the execution package.
-_STEP_SUCCESS = "SUCCESS"
 
 # Presentation grouping of eval columns into suites for the dashboard's column tree. This mirrors the
-# launcher's suite membership (experiments/evaluation/evals.py), which evaldash cannot import: it ships
-# as a standalone image vendoring only the marin record contracts, and experiments depends on marin,
-# not the reverse. Membership drift is graceful -- an eval not listed here just falls into "Other".
+# launcher's suite membership (experiments/evaluation/evals.py). Experiment catalogs are not part of
+# applet releases. An eval not listed here falls into "Other".
 EVAL_SUITES: dict[str, tuple[str, ...]] = {
     "NLP": (
         "mmlu",
@@ -212,7 +210,7 @@ def _policy_rejections(
 
 def _gap_reason(record: EvalRunRecord) -> str:
     """Why a record contributes no cell, when the request did not reject it outright."""
-    if record.step_status not in (None, _STEP_SUCCESS):
+    if record.step_status not in (None, STATUS_SUCCESS):
         return f"step {record.step_status.lower()}"
     if record.status == RunStatus.SUCCEEDED:
         return declared_metric_gap(record) or "no metrics recorded"
@@ -221,7 +219,7 @@ def _gap_reason(record: EvalRunRecord) -> str:
 
 def display_status(record: EvalRunRecord) -> str:
     """Use the StepSpec state when its run has not completed successfully."""
-    if record.step_status is None or record.step_status == _STEP_SUCCESS:
+    if record.step_status is None or record.step_status == STATUS_SUCCESS:
         return record.status.value
     if record.step_status == "RUNNING":
         return "running"
@@ -230,7 +228,7 @@ def display_status(record: EvalRunRecord) -> str:
 
 def score_eligible(record: EvalRunRecord) -> bool:
     """Whether EvalDash can publish scores from this observed record."""
-    return record.step_status in (None, _STEP_SUCCESS)
+    return record.step_status in (None, STATUS_SUCCESS)
 
 
 def dashboard_measurements(records: Iterable[EvalRunRecord]) -> list[Measurement]:

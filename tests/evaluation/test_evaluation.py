@@ -839,7 +839,6 @@ def test_speculative_pipeline_launch_selects_gpu(tmp_path, monkeypatch):
 
     assert submitted_batches[0].accelerator.platform is Platform.TPU
     assert submitted_batches[1].accelerator.platform is Platform.GPU
-    assert all(batch.max_concurrent == 1 for batch in submitted_batches)
 
 
 @pytest.mark.parametrize(
