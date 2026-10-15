@@ -92,6 +92,8 @@ class AgentStop(StrEnum):
     """A reply without tool calls stayed cut off after ``LLMPolicy.max_continuations``; it is kept."""
     CONTEXT = "context"
     """The conversation filled the context window before the next reply; the turns so far are kept."""
+    STOPPED = "stopped"
+    """The caller's ``stop`` callback ended the run after a turn's tool calls ran; the turns so far are kept."""
 
 
 class ToolOutcome(StrEnum):
@@ -205,8 +207,10 @@ async def run_agent(
     max_turns: int,
     record: CallLedger,
     replay: ReasoningReplay = ReasoningReplay.KEEP,
+    stop: Callable[[AgentTurn], bool] | None = None,
 ) -> AgentRun:
-    """Run the tool loop until the model answers, a reply stays cut off, the context fills, or ``max_turns`` replies.
+    """Run the tool loop until the model answers, a reply stays cut off, the context fills, ``stop`` asks, or
+    ``max_turns`` replies.
 
     A turn that the client rejects with ``ContextExhausted`` ends the run with
     ``AgentStop.CONTEXT``; its ``LLM_CALL`` span carries the exception as ``cause``. The client sends
@@ -221,6 +225,8 @@ async def run_agent(
         max_turns: Model replies allowed; tool calls in the last reply still run.
         record: Ledger and span identity for the turn and tool-call entries.
         replay: Whether replayed assistant turns carry their reasoning; they do by default.
+        stop: Called with each turn that made tool calls, after they ran; ``True`` ends the run with
+            ``AgentStop.STOPPED``, for example once a tool has handed in the run's result.
     """
     by_name = {tool.name: tool for tool in tools}
     if len(by_name) != len(tools):
@@ -240,8 +246,8 @@ async def run_agent(
         conversation.append(assistant_message(completion, replay))
         if not completion.tool_calls:
             turns.append(AgentTurn(completion, ()))
-            stop = AgentStop.LENGTH if completion.finish_reason is FinishReason.LENGTH else AgentStop.ANSWERED
-            return AgentRun(tuple(conversation), tuple(turns), stop, usage)
+            ended = AgentStop.LENGTH if completion.finish_reason is FinishReason.LENGTH else AgentStop.ANSWERED
+            return AgentRun(tuple(conversation), tuple(turns), ended, usage)
         cut = completion.finish_reason is FinishReason.LENGTH
         last = len(completion.tool_calls) - 1
         results = []
@@ -250,6 +256,8 @@ async def run_agent(
             results.append(result)
             conversation.append({"role": "tool", "tool_call_id": call.id, "content": result.output})
         turns.append(AgentTurn(completion, tuple(results)))
+        if stop is not None and stop(turns[-1]):
+            return AgentRun(tuple(conversation), tuple(turns), AgentStop.STOPPED, usage)
     return AgentRun(tuple(conversation), tuple(turns), AgentStop.MAX_TURNS, usage)
 
 

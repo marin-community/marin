@@ -18,6 +18,7 @@ from taskforge.llm.agent import (
     AgentRun,
     AgentStop,
     AgentTool,
+    AgentTurn,
     ReasoningReplay,
     ToolOutcome,
     run_agent,
@@ -49,11 +50,11 @@ def echo_tool(calls: list[Mapping[str, object]]) -> AgentTool:
 def run(fake_glm, fast_provider: LLMProviderConfig, ledger):
     """Run ``run_agent`` on ``MESSAGES`` against ``fake_glm``, recording into ``ledger``."""
 
-    def go(tools, max_turns=8, policy=LLMPolicy(), replay=ReasoningReplay.KEEP) -> AgentRun:
+    def go(tools, max_turns=8, policy=LLMPolicy(), replay=ReasoningReplay.KEEP, stop=None) -> AgentRun:
         async def call() -> AgentRun:
             record = CallLedger(ledger=ledger, workpiece_id="item-1", round=0, step="author")
             async with GlmClient(fake_source(fake_glm), fast_provider) as client:
-                return await run_agent(client, policy, MESSAGES, tools, max_turns, record, replay)
+                return await run_agent(client, policy, MESSAGES, tools, max_turns, record, replay, stop)
 
         return asyncio.run(call())
 
@@ -200,6 +201,31 @@ def test_max_turns_stops_after_running_the_last_turns_tools(fake_glm, ledger, ru
     assert result.stop is AgentStop.MAX_TURNS
     assert calls == [{"text": "one"}, {"text": "two"}]
     assert result.messages[-1]["role"] == "tool"
+
+
+@pytest.mark.parametrize("stop_after", [None, 1], ids=["never-stops", "stops-after-first-call"])
+def test_run_agent_stop_callback_ends_the_loop_after_the_tool_calls(fake_glm, ledger, run, stop_after):
+    """``stop`` sees each turn that made tool calls after they ran; ``True`` ends the run with STOPPED."""
+    for text in ("0", "1", "2"):
+        fake_glm.stream(tool_calls=(("echo", json.dumps({"text": text})),), finish="tool_calls")
+    fake_glm.stream(content="done")
+    calls: list[Mapping[str, object]] = []
+    checked: list[int] = []
+
+    def stop(turn: AgentTurn) -> bool:
+        checked.append(len(turn.tool_results))
+        return stop_after is not None and len(calls) >= stop_after
+
+    result = run([echo_tool(calls)], stop=stop)
+
+    if stop_after is None:
+        assert result.stop is AgentStop.ANSWERED and len(result.turns) == 4 and checked == [1, 1, 1]
+        assert [c["text"] for c in calls] == ["0", "1", "2"]
+    else:
+        assert result.stop is AgentStop.STOPPED and len(result.turns) == 1 and checked == [1]
+        assert calls == [{"text": "0"}]
+        assert result.messages[-1] == {"role": "tool", "tool_call_id": "call-0", "content": "echo: 0"}
+        assert len(fake_glm.requests) == 1
 
 
 def test_tool_handler_exception_propagates_and_is_recorded(fake_glm, ledger, run):
