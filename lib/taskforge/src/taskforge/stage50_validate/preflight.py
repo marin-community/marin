@@ -135,7 +135,7 @@ def _task_machine_fallback(
         task_machine=container.runtime.task_machine, verifier_machine=lowered.runtime.verifier_machine
     )
     hosted = container.task.model_copy(update={"grader": lowered.task.grader})
-    return lower_task(hosted, runtime, lowered.session, factories=factories, sessions={})
+    return lower_task(hosted, runtime, lowered.session, factories=factories, sessions={}, providers={})
 
 
 async def _probe(lowered: LoweredTaskSpec, settings: EngineSettings, deadlines: Deadlines):
