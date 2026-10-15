@@ -36,4 +36,45 @@ trials:
     attn_res_stream_mixer: 'false'
   commit: 0e9cdc7460
   step_time_change: +18% (0.205 vs 0.174 s/step, 40-step probe)
-  note: mixer arms (m4, m2) diverged from an alpha/b gradient bug; rerun after fix
+  note: mixer arms first diverged from an XLA bf16 bitcast miscompile of alpha/b grads; rerun as m4b/m2b at 912bd13876
+- variant: m=4, kernels 4/8/12, sigmoid mixer
+  rung: d512
+  protocol: equal_steps
+  batch: X0218
+  date: '2026-10-15'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184629121
+  baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  steps: 2760
+  delta:
+  - -0.0104
+  - -0.0147
+  loss:
+  - 3.0164
+  - 3.0168
+  wandb:
+  - belay-X0218-m4b-s0
+  - belay-X0218-m4b-s1
+  settings:
+    attn_res_streams: '4'
+  commit: 912bd13876
+- variant: m=2, kernel 4, sigmoid mixer
+  rung: d512
+  protocol: equal_steps
+  batch: X0218
+  date: '2026-10-15'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184629121
+  baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  steps: 2760
+  delta:
+  - -0.0078
+  - -0.0141
+  loss:
+  - 3.0191
+  - 3.0174
+  wandb:
+  - belay-X0218-m2b-s0
+  - belay-X0218-m2b-s1
+  settings:
+    attn_res_streams: '2'
+    attn_res_stream_kernels: '4'
+  commit: 912bd13876
