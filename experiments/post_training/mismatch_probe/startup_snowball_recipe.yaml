@@ -5,9 +5,6 @@ context_budget:
   max_turns: 1
 environment:
   env_class: gsm8k
-  skyrl_gym:
-    gsm8k:
-      structured_chat: true
 trainer:
   strategy: megatron
   flash_attn: false
