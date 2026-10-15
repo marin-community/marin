@@ -40,6 +40,8 @@ trainer:
       context_parallel_size: 1
       expert_model_parallel_size: 8
       expert_tensor_parallel_size: 1
+    model:
+      remote_read_mode: prefetch
   ref:
     megatron_config:
       tensor_model_parallel_size: 1
@@ -47,6 +49,9 @@ trainer:
       context_parallel_size: 1
       expert_model_parallel_size: 8
       expert_tensor_parallel_size: 1
+  placement:
+    policy_strict_spread_pg: true
+    overlap_init: true
 generator:
   backend: vllm
   model_dtype: bfloat16
@@ -59,6 +64,7 @@ generator:
     name_or_path: /tmp/marinskyrl/model_metadata/ee39f1df5e1b55994ca349ea36776f518060e5a3704946f56b30ba752c80885f/chat_template.jinja
   engine_init_kwargs:
     moe_backend: triton
+    load_format: dummy
   trajectory_retention:
     enabled: false
     sample_fraction: 1.0
