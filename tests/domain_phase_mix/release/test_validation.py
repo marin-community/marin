@@ -49,11 +49,39 @@ def test_every_row_has_weights_and_components(table):
     assert w.notna().all().all() and np.allclose(w.sum(axis=1), 1.0, rtol=0, atol=1e-9)
     components = table[[f"bpb__{t}" for t in naming.TASKS]]
     assert components.notna().all(axis=1).mean() > 0.95
-    # A launch without a components file (the UniMax-8 repeats) carries aggregates only; every other row has all 58.
-    manifest = pd.read_csv(validation.MANIFEST)
-    aggregates_only = table.launch.isin(manifest.launch[manifest.components_csv.isna()])
-    assert components[aggregates_only].isna().all().all() and components[~aggregates_only].notna().all().all()
+    # Only UniMax-8 trainer seeds 1 and 2 lack per-task values (their components exist only on GCS); they lack all 58.
+    missing = components.isna().any(axis=1)
+    unimax = sorted(zip(table.variant[missing], table.trainer_seed[missing], strict=True))
+    assert unimax == [("unimax8", 1), ("unimax8", 2)]
+    assert components[missing].isna().all().all()
     assert table[["bpb__uncheatable_source", "bpb__obe_easy_source"]].notna().all().all()
+
+
+def test_seeds_come_from_run_directories(table):
+    # MARINER's three trainer seeds share one data seed; the frozen procedure's run sits in a group without `_t`.
+    mariner = table[(table.variant == "lwspu_t9_snc_cap08") & table.trainer_seed.isin([0, 1, 2])]
+    assert sorted(mariner.trainer_seed) == [0, 1, 2] and mariner.data_seed.nunique() == 1
+    assert set(mariner.launch) == {"frozen_procedure", "fairness_repeats"}
+    assert table[["data_seed", "trainer_seed"]].notna().all().all()
+
+
+def test_subset_proposals_name_their_objective(table):
+    subset = {
+        "lwspu_w3_snc_cap06": "uncheatable_worsened",
+        "olmixq_w3_kl0p05_cap04": "uncheatable_worsened",
+        "qa15_t9_cap04": "table9_qa15",
+        "olmixq_qa15_kl0p005_cap04": "table9_qa15",
+        "qa19_t9_cap05": "table9_qa19",
+        "snr5_t9_cap09": "table9_snr5",
+        "snr8_t9_cap07": "table9_snr8",
+    }
+    for variant, objective in subset.items():
+        rows = table[table.variant == variant]
+        assert len(rows) == 3 and (rows.proposal_objective == objective).all(), variant
+    # Every other proposal optimized a full objective, so these filters select full-objective runs only.
+    assert set(table.proposal_objective[~table.variant.isin(subset)].dropna()) == {"uncheatable", "table9"}
+    olmix_uncheatable = table[(table.method == "olmix") & (table.proposal_objective == "uncheatable")]
+    assert not olmix_uncheatable.variant.isin(subset).any()
 
 
 def test_validation_join_reports_unmatched_candidates(tmp_path):
@@ -69,7 +97,8 @@ def test_validation_join_reports_unmatched_candidates(tmp_path):
 
 def test_runs_shared_with_heldout_keep_their_ids_and_values(ctx, table):
     # Both tables key a run on its hashed training run name, so the 116 validation runs of the expanded held-out
-    # cohort and the ladder's UniMax-8 seed-0 run (a frozen archive row) get one id and one set of values.
+    # cohort and the ladder's UniMax-8 seed-0 run (a frozen archive row) get one id and one set of values. The seeds
+    # differ: `heldout` leaves them empty for 75 of these runs (a Task 4 follow-up).
     held = heldout.export(ctx)["heldout"]
     expanded = held[(held.swarm == "qwen3_360m_1p6b") & (held.cohort == "expanded")]
     assert len(expanded) == 116 and expanded.observation_id.isin(table.observation_id).all()
@@ -77,8 +106,8 @@ def test_runs_shared_with_heldout_keep_their_ids_and_values(ctx, table):
     assert len(shared) == 117 and set(shared.cohort) == {"expanded", "frozen"}
     for column in ["mixture_id", "exposure_id", "aggregate_version"]:
         assert (shared[f"{column}_heldout"] == shared[f"{column}_validation"]).all()
-    # The UniMax-8 run has no per-task values here, so its recorded aggregates are its only shared metrics.
-    for column in [f"bpb__{t}" for t in naming.TASKS] + ["bpb__uncheatable_source", "bpb__obe_easy_source"]:
+    aggregates = ["bpb__uncheatable_source", "bpb__obe_easy_source", "bpb__uncheatable_fixed", "bpb__obe_easy"]
+    for column in [f"bpb__{t}" for t in naming.TASKS] + aggregates:
         values = shared[[f"{column}_heldout", f"{column}_validation"]].dropna()
         assert np.allclose(values.iloc[:, 0], values.iloc[:, 1], rtol=0, atol=1e-12)
 
@@ -90,7 +119,7 @@ def test_aggregates_are_versioned(table):
     assert len(pooled) == 14 and set(pooled.launch) == {"path_midpoints", "regmix_reference"}
     assert (pooled.bpb__uncheatable_source - pooled.bpb__uncheatable_fixed).between(0.005, 0.013).all()
     fixed = table[(table.aggregate_version == "fixed_20260927") & table.bpb__uncheatable_fixed.notna()]
-    assert len(fixed) == 201
+    assert len(fixed) == 202  # every fixed-version run except UniMax-8 trainer seeds 1 and 2
     assert np.allclose(fixed.bpb__uncheatable_fixed, fixed.bpb__uncheatable_source, rtol=0, atol=2e-6)
     # OlmoBaseEval Easy is a plain mean, so it checks that each run, seed by seed, got its own components.
     obe = table[table.bpb__obe_easy.notna()]

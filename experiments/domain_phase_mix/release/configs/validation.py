@@ -3,16 +3,20 @@
 
 """Every trained proposal at 3e18, joined launch by launch through validation_manifest.csv.
 
-Each manifest row names one launch's measured results, its OlmoBaseEval Easy components and its candidate weight
-tables, as paths relative to the repository root; `;` separates several weight tables, and an empty components path
-marks a launch that kept aggregates only. The 24 launches of collect_delphi_3e18_validation_results_20260906.py name
-each run by candidate id. A grouped launch repeats candidates over (data seed, trainer seed) groups, and its components
-file keys each run `<candidate>@t<trainer seed>`. The UniMax-8 repeats train one policy at three trainer seeds and leave
-it unnamed in their results; unimax8_weights.csv holds the UniMax-8 construction of launch_delphi_baseline_mixtures.py.
+Each manifest row names one launch's measured results, its per-task components and its candidate weight tables, as
+paths relative to the repository root; `;` separates several weight tables. The 24 launches of
+collect_delphi_3e18_validation_results_20260906.py name each run by candidate id and keep the OlmoBaseEval Easy
+components in their own folder; a grouped launch repeats candidates over (data seed, trainer seed) groups. The UniMax-8
+repeats train one policy at three trainer seeds and leave it unnamed in their results; unimax8_weights.csv holds the
+UniMax-8 construction of launch_delphi_baseline_mixtures.py, and only the seed-0 run's components exist locally, in
+the frozen held-out registry. `components_key` formats each run's key in its components file from `{candidate}`,
+`{trainer_seed}` and `{run_name}`; `component_rows` counts the launch's runs with all 58 per-task values.
 
 Observation ids key on the training run name, as in `heldout`: the hashed run directory in each run's
-evaluation-metrics URI, or the `run` column where a launch records run names directly. The manifest's `method` is one
-method, or `pattern:method` entries (glob patterns over candidate ids) for a launch that mixes proposing methods.
+evaluation-metrics URI, or the `run` column where a launch records run names directly. Seeds come from the directory
+that holds each run, checked against any seeds the results record. `method` and `proposal_objective` are one value,
+or `pattern:value` entries (glob patterns over candidate ids) for a launch whose candidates differ; an empty
+`proposal_objective` keeps the results' `target`, and the manifest names the objective of each subset proposal.
 """
 
 import fnmatch
@@ -31,14 +35,12 @@ AGGREGATE_VERSION = "fixed_20260927"
 # the same runs' components; `heldout` labels the same runs the same way.
 POOLED_LAUNCHES = ("path_midpoints", "regmix_reference")
 POOLED_VERSION = "pooled_schema2"
+SEEDS = ["data_seed", "trainer_seed"]
 UNCHEATABLE_TASKS = [t for t in naming.TASKS if t.startswith("uncheatable/")]
-OBE_TASKS = [t for t in naming.TASKS if t not in UNCHEATABLE_TASKS]
 RESULT_META = {
     "candidate_id": "variant",
     "target": "proposal_objective",
     "epoch_cap": "epoch_cap",
-    "data_seed": "data_seed",
-    "trainer_seed": "trainer_seed",
     "uncheatable_bpb": "bpb__uncheatable_source",
     "table9_macro_bpb": "bpb__obe_easy_source",
     "predicted_uncheatable_bpb": "predicted_bpb_uncheatable",
@@ -65,11 +67,17 @@ def _weights(candidates: pd.DataFrame, ctx: ExportContext) -> pd.DataFrame:
 
 
 def _components(path: Path) -> pd.DataFrame:
-    """Per-run OlmoBaseEval Easy BPB from a long components file named by public task id, indexed by run key."""
+    """Per-run BPB by public task id from a long components file, indexed by each run's key in that file.
+
+    A launch's measured_table9_components.csv keys runs by `candidate_id` and names the 51 OlmoBaseEval Easy tasks by
+    public id; the frozen held-out registry's heldout_components.csv keys runs by `row_id` and names all 58 tasks by
+    internal metric.
+    """
     long = pd.read_csv(path)
-    assert set(long.component) == set(OBE_TASKS), f"{path}: unexpected OlmoBaseEval Easy components"
-    wide = long.pivot(index="candidate_id", columns="component", values="bpb")  # raises on a repeated pair
-    return wide[OBE_TASKS].add_prefix("bpb__")
+    public = {c: c if c in naming.TASKS else naming.task_public(c) for c in long.component.unique()}
+    long["task"] = long.component.map(public)
+    wide = long.pivot(index="row_id" if "row_id" in long else "candidate_id", columns="task", values="bpb")
+    return wide.add_prefix("bpb__")  # pivot raises on a repeated (run, task) pair
 
 
 def _training_run_names(results: pd.DataFrame) -> list[str]:
@@ -81,18 +89,28 @@ def _training_run_names(results: pd.DataFrame) -> list[str]:
     return names
 
 
-def _methods(spec: str, candidates: pd.Series) -> list[str]:
-    """Each run's method: the manifest's method, or that of the one `pattern:method` entry its candidate matches."""
+def _seeds(results: pd.DataFrame, launch: str) -> pd.DataFrame:
+    """Each run's data and trainer seed from the directory that holds it, or as recorded where no URI is kept."""
+    if "eval_metrics_uri" not in results:
+        return results[SEEDS].astype(int)
+    seeds = pd.DataFrame([run_names.seeds_from_uri(uri) for uri in results.eval_metrics_uri], columns=SEEDS)
+    if set(SEEDS) <= set(results) and not (results[SEEDS].to_numpy() == seeds.to_numpy()).all():
+        raise ValueError(f"launch {launch}: recorded seeds differ from the runs' seed directories")
+    return seeds
+
+
+def _per_candidate(spec: str, candidates: pd.Series) -> list[str]:
+    """A manifest value per run: the cell's value, or that of the one `pattern:value` entry its candidate matches."""
     if ":" not in spec:
         return [spec] * len(candidates)
     rules = [entry.split(":") for entry in spec.split(";")]
-    methods = []
+    values = []
     for candidate in candidates:
-        matched = [method for pattern, method in rules if fnmatch.fnmatchcase(candidate, pattern)]
+        matched = [value for pattern, value in rules if fnmatch.fnmatchcase(candidate, pattern)]
         if len(matched) != 1:
-            raise ValueError(f"candidate {candidate} matches {len(matched)} method patterns of {spec!r}")
-        methods.append(matched[0])
-    return methods
+            raise ValueError(f"candidate {candidate} matches {len(matched)} patterns of {spec!r}")
+        values.append(matched[0])
+    return values
 
 
 def _launch(ctx: ExportContext, launch: Any) -> pd.DataFrame:
@@ -111,30 +129,38 @@ def _launch(ctx: ExportContext, launch: Any) -> pd.DataFrame:
     if missing:
         raise ValueError(f"launch {launch.launch}: {len(missing)} measured candidates have no weights: {missing[:5]}")
 
+    names = _training_run_names(results)
+    seeds = _seeds(results, launch.launch)
     df = results[[c for c in RESULT_META if c in results]].rename(columns=RESULT_META)
-    df.insert(0, "observation_id", [ctx.registry.id_for(name) for name in _training_run_names(results)])
+    df.insert(0, "observation_id", [ctx.registry.id_for(name) for name in names])
     df.insert(1, "launch", launch.launch)
-    df.insert(2, "method", _methods(launch.method, candidates))
+    df.insert(2, "method", _per_candidate(launch.method, candidates))
+    if not pd.isna(launch.proposal_objective):  # the objective a subset proposal optimized
+        df["proposal_objective"] = _per_candidate(launch.proposal_objective, candidates)
+    df[SEEDS] = seeds
     run_weights = candidates.to_frame("candidate").merge(
         weights, left_on="candidate", right_index=True, how="left", validate="many_to_one"
     )
     assert run_weights.notna().all().all(), f"launch {launch.launch}: a candidate lacks a bucket weight"
     df = pd.concat([df, run_weights.drop(columns="candidate").reset_index(drop=True)], axis=1)
-    if not pd.isna(launch.components_csv):
-        runs = list(candidates)
-        if launch.grouped:
-            runs = [f"{c}@t{int(seed)}" for c, seed in zip(candidates, results.trainer_seed, strict=True)]
-        components = pd.DataFrame({"run": runs}).merge(
-            _components(paths.require(paths.REPO / launch.components_csv)),
-            left_on="run",
-            right_index=True,
-            how="left",
-            validate="one_to_one",
+
+    run_keys = [
+        launch.components_key.format(candidate=candidate, trainer_seed=trainer_seed, run_name=name)
+        for candidate, trainer_seed, name in zip(candidates, seeds.trainer_seed, names, strict=True)
+    ]
+    components = _components(paths.require(paths.REPO / launch.components_csv))
+    assert not set(components.columns) & set(df.columns), f"launch {launch.launch}: a task appears in two sources"
+    joined = pd.DataFrame({"run": run_keys}).merge(
+        components, left_on="run", right_index=True, how="left", validate="one_to_one"
+    )
+    df = pd.concat([df, joined.drop(columns="run").reset_index(drop=True)], axis=1)
+    values = df.reindex(columns=[f"bpb__{t}" for t in ctx.tasks]).notna()
+    complete = values.all(axis=1)
+    if (values.any(axis=1) & ~complete).any() or complete.sum() != launch.component_rows:
+        raise ValueError(
+            f"launch {launch.launch}: expected {launch.component_rows} runs with all per-task values, found "
+            f"{complete.sum()} and {(values.any(axis=1) & ~complete).sum()} with a partial set"
         )
-        unmatched = components.run[components.drop(columns="run").isna().any(axis=1)].tolist()
-        if unmatched:
-            raise ValueError(f"launch {launch.launch}: {len(unmatched)} runs have no components: {unmatched[:5]}")
-        df = pd.concat([df, components.drop(columns="run").reset_index(drop=True)], axis=1)
     if len(df) != launch.expected_rows:
         raise ValueError(f"launch {launch.launch}: expected {launch.expected_rows} rows, exported {len(df)}")
     return df
@@ -155,7 +181,7 @@ def export_launches(ctx: ExportContext, manifest: pd.DataFrame) -> pd.DataFrame:
     ]
     out["aggregate_version"] = AGGREGATE_VERSION
     out.loc[out.launch.isin(POOLED_LAUNCHES), "aggregate_version"] = POOLED_VERSION
-    out = tables.add_aggregates(out, ctx.weights)  # NaN for a launch that kept aggregates only
+    out = tables.add_aggregates(out, ctx.weights)  # NaN for runs without per-task values
     return tables.order_columns(out, ctx.buckets, ctx.tasks)
 
 
