@@ -4,18 +4,171 @@
 """Behavior checks for the simulated shell and verifier boundary."""
 
 import asyncio
+import threading
+from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("shellsim")
 
+import shellsim
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Command, ExitReason, MachineSpec, PackageSpec, ShellStatus
 from shellbox.transfer import download_files
 
 UNSUPPORTED_COMMAND = "unsupported-native-command-with-a-long-name-for-output-truncation-testing"
 UNSUPPORTED_OUTPUT_LIMIT_BYTES = 64
+
+
+class _ControlledAction:
+    """Hold the external simulator boundary open until native cleanup is released."""
+
+    def __init__(self):
+        self.loop = asyncio.get_running_loop()
+        self.started = asyncio.Event()
+        self.requested = asyncio.Event()
+        self.release = threading.Event()
+        self._cancelled = threading.Event()
+        self.result = shellsim.run(":")
+
+    def cancel(self):
+        self._cancelled.set()
+        self.loop.call_soon_threadsafe(self.requested.set)
+
+    @property
+    def cancelled(self):
+        return self._cancelled.is_set()
+
+    def run(self, source, stdin=b"", *, cancellation):
+        self.loop.call_soon_threadsafe(self.started.set)
+        self.release.wait()
+        interrupted = cancellation.cancelled
+        return replace(self.result, returncode=130 if interrupted else 0, interrupted=interrupted)
+
+
+@contextmanager
+def _controlled_action(monkeypatch, runner):
+    action = _ControlledAction()
+    with monkeypatch.context() as patch:
+        patch.setattr(shellsim, "CancellationToken", lambda: action)
+        patch.setattr(runner, "run", action.run)
+        try:
+            yield action
+        finally:
+            action.release.set()
+
+
+@pytest.mark.parametrize("interruption", ["timeout", "cancel"])
+def test_interrupted_command_waits_for_native_cleanup_and_preserves_machine(monkeypatch, tmp_path, interruption):
+    async def check():
+        machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
+        loop = asyncio.get_running_loop()
+        clock = [loop.time()]
+        monkeypatch.setattr(loop, "time", lambda: clock[0])
+        source = tmp_path / "after"
+        source.write_text("reused")
+        try:
+            with _controlled_action(monkeypatch, machine.simulation) as action:
+                running = asyncio.create_task(machine.run(Command(("fixture",), timeout=10)))
+                await action.started.wait()
+                if interruption == "timeout":
+                    clock[0] += 10
+                else:
+                    running.cancel()
+                await action.requested.wait()
+                queued_upload = asyncio.create_task(machine.upload(source, "/workspace/after"))
+                await asyncio.sleep(0)
+                assert not running.done()
+                assert not queued_upload.done()
+                if interruption == "cancel":
+                    # A second caller cancellation must not release the serialization lock.
+                    running.cancel()
+                    await asyncio.sleep(0)
+                    assert not queued_upload.done()
+                action.release.set()
+                if interruption == "timeout":
+                    result = await running
+                    assert result.reason is ExitReason.TIMED_OUT
+                else:
+                    with pytest.raises(asyncio.CancelledError):
+                        await running
+                await queued_upload
+            result = await machine.run(Command(("cat", "/workspace/after")))
+            assert (result.exit_code, result.stdout) == (0, b"reused")
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("interruption", ["interrupt", "deadline", "close"])
+def test_shell_interruption_and_machine_close_drain_active_work(monkeypatch, interruption):
+    async def check():
+        machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
+        shell = await machine.open_shell()
+        loop = asyncio.get_running_loop()
+        clock = [loop.time()]
+        monkeypatch.setattr(loop, "time", lambda: clock[0])
+        try:
+            with _controlled_action(monkeypatch, shell.shell) as action:
+                running = asyncio.create_task(shell.execute("fixture", wait=10, output_limit_bytes=4))
+                await action.started.wait()
+                if interruption == "deadline":
+                    clock[0] += 10
+                    stopping = running
+                else:
+                    stopping = asyncio.create_task(shell.interrupt() if interruption == "interrupt" else machine.close())
+                await action.requested.wait()
+                assert not stopping.done()
+                action.release.set()
+                await stopping
+                result = await running
+                assert (result.status, result.exit_code) == (ShellStatus.COMPLETED, 130)
+                if interruption == "deadline":
+                    assert len(result.output) == 4
+                    assert result.truncated
+            if interruption == "close":
+                with pytest.raises(RuntimeError):
+                    await machine.run(Command(("true",)))
+            else:
+                followup = await shell.execute("printf reusable")
+                assert (followup.exit_code, followup.output) == (0, b"reusable")
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
+
+
+def test_queued_timeout_and_shell_interrupt_leave_an_unrelated_command_running(monkeypatch):
+    async def check():
+        machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
+        shell = await machine.open_shell()
+        loop = asyncio.get_running_loop()
+        clock = [loop.time()]
+        monkeypatch.setattr(loop, "time", lambda: clock[0])
+        try:
+            with _controlled_action(monkeypatch, machine.simulation) as action:
+                running = asyncio.create_task(machine.run(Command(("fixture",))))
+                await action.started.wait()
+                await shell.interrupt()
+                queued = asyncio.create_task(machine.run(Command(("queued",), timeout=1)))
+                await asyncio.sleep(0)
+                clock[0] += 1
+                result = await queued
+                assert result.reason is ExitReason.TIMED_OUT
+                assert not action.requested.is_set()
+                assert not running.done()
+                action.release.set()
+                result = await running
+                assert (result.reason, result.exit_code) == (ExitReason.EXITED, 0)
+            result = await machine.run(Command(("printf", "usable")))
+            assert (result.exit_code, result.stdout) == (0, b"usable")
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
 
 
 @pytest.mark.parametrize(

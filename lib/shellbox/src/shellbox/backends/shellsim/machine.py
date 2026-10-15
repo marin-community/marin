@@ -9,6 +9,7 @@ import re
 import shlex
 import tarfile
 import uuid
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 import shellsim
@@ -39,6 +40,29 @@ SIMULATOR_PANIC_EXIT_CODE = 1
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
+async def _await_worker[T](worker: asyncio.Task[T], cancellation: shellsim.CancellationToken | None = None) -> T:
+    """Keep the machine lock until native work exits, including during caller cancellation."""
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        if cancellation is not None:
+            cancellation.cancel()
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue
+        worker.result()
+        raise
+
+
+@dataclass(frozen=True)
+class _RunningAction:
+    cancellation: shellsim.CancellationToken
+    worker: asyncio.Task[shellsim.RunResult]
+    shell: shellsim.ShellSession | None
+
+
 class ShellSimShellSession:
     """One persistent simulated shell with complete, synchronous commands."""
 
@@ -52,7 +76,10 @@ class ShellSimShellSession:
         self, command: str, *, wait: float = 120, output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
     ) -> ShellUpdate:
         try:
-            result = await self.machine._run_source(command, shell=self.shell)
+            result = await asyncio.wait_for(self.machine._run_source(command, shell=self.shell), timeout=wait)
+        except TimeoutError:
+            output = b"ShellSim command timed out\n"
+            return ShellUpdate(output[:output_limit_bytes], ShellStatus.COMPLETED, 130, len(output) > output_limit_bytes)
         except shellsim.SimulationError as error:
             output = str(error).encode()
             return ShellUpdate(
@@ -78,10 +105,13 @@ class ShellSimShellSession:
         raise UnsupportedMachineSpec("ShellSim has no interactive stdin")
 
     async def interrupt(self) -> None:
-        raise UnsupportedMachineSpec("ShellSim has no live foreground action to interrupt")
+        action = self.machine._active
+        if action is not None and action.shell is self.shell:
+            action.cancellation.cancel()
+            await _await_worker(action.worker, action.cancellation)
 
     async def close(self) -> None:
-        return
+        await self.interrupt()
 
 
 class ShellSimMachine:
@@ -101,6 +131,7 @@ class ShellSimMachine:
         )
         self._lock = asyncio.Lock()
         self._closed = False
+        self._active: _RunningAction | None = None
         self._shell = ShellSimShellSession(self)
         self.simulation.mkdir(spec.workdir, parents=True)
         for log_dir in ("/logs/agent", "/logs/verifier", "/logs/artifacts"):
@@ -115,14 +146,26 @@ class ShellSimMachine:
     async def _run_source(
         self, source: str, stdin: bytes = b"", *, shell: shellsim.ShellSession | None = None
     ) -> shellsim.RunResult:
-        if self._closed:
-            raise RuntimeError("Machine is closed")
         async with self._lock:
-            runner = self.simulation.run if shell is None else shell.run
-            result = await asyncio.to_thread(runner, source, stdin)
+            if self._closed:
+                raise RuntimeError("Machine is closed")
+            return await self._run_source_locked(source, stdin, shell=shell)
+
+    async def _run_source_locked(
+        self, source: str, stdin: bytes = b"", *, shell: shellsim.ShellSession | None = None
+    ) -> shellsim.RunResult:
+        """Execute with the caller holding the machine lock through native cleanup."""
+        runner = self.simulation.run if shell is None else shell.run
+        cancellation = shellsim.CancellationToken()
+        worker = asyncio.create_task(asyncio.to_thread(runner, source, stdin, cancellation=cancellation))
+        self._active = _RunningAction(cancellation, worker, shell)
+        try:
+            result = await _await_worker(worker, cancellation)
             if self.simulation.terminated:
                 raise RuntimeError(f"ShellSim terminated: {result.stop_reason}")
             return result
+        finally:
+            self._active = None
 
     async def open_shell(self) -> ShellSimShellSession:
         if self._closed:
@@ -145,7 +188,6 @@ class ShellSimMachine:
         try:
             result = await asyncio.wait_for(self._run_source(source, command.stdin), timeout=command.timeout)
         except TimeoutError:
-            self._closed = True
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
         except shellsim.SimulationError as error:
             stderr = str(error).encode()
@@ -169,26 +211,26 @@ class ShellSimMachine:
         )
 
     async def upload(self, source: Path, target: str) -> None:
-        if self._closed:
-            raise RuntimeError("Machine is closed")
         async with self._lock:
+            if self._closed:
+                raise RuntimeError("Machine is closed")
             if source.is_dir():
-                await asyncio.to_thread(self.simulation.mount, source, target)
+                await _await_worker(asyncio.create_task(asyncio.to_thread(self.simulation.mount, source, target)))
                 return
             self.simulation.mkdir(str(PurePosixPath(target).parent), parents=True)
             self.simulation.write_file(target, source.read_bytes(), mode=source.stat().st_mode & 0o7777)
 
     async def download(self, source: str, target: Path) -> None:
-        if self._closed:
-            raise RuntimeError("Machine is closed")
         async with self._lock:
+            if self._closed:
+                raise RuntimeError("Machine is closed")
             if target.exists() and target.is_dir():
                 archive = f"/__harbor_download_{uuid.uuid4().hex}.tar"
                 command = f"tar -cf {shlex.quote(archive)} -C {shlex.quote(source)} ."
-                result = await asyncio.to_thread(self.simulation.run, command)
+                result = await self._run_source_locked(command)
                 result.check_returncode()
                 payload = self.simulation.read_file(archive)
-                self.simulation.run(f"rm -f {shlex.quote(archive)}")
+                await self._run_source_locked(f"rm -f {shlex.quote(archive)}")
                 with tarfile.open(fileobj=io.BytesIO(payload)) as contents:
                     contents.extractall(target, filter="data")
                 return
@@ -197,6 +239,10 @@ class ShellSimMachine:
 
     async def close(self) -> None:
         self._closed = True
+        if self._active is not None:
+            self._active.cancellation.cancel()
+        async with self._lock:
+            pass
 
 
 class ShellSimMachineFactory:
