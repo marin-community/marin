@@ -10,13 +10,14 @@ from functools import partial
 from pathlib import Path
 
 import torch
-from marin.merging.arithmetic import MergeMethod, MergeParameters, merge_tensor
+from marin.merging.arithmetic import MergeParameters, merge_tensor
 from marin.merging.checkpoint import CheckpointReader, CheckpointSource
 from marin.merging.constrained import (
     TensorSupport,
 )
 from marin.merging.isospectral import isospectral_merge
 
+from experiments.weight_merging.merge import merge_parameters
 from experiments.weight_merging.serial_merge import materialize_serial_stage
 
 
@@ -50,9 +51,7 @@ def run(recipe: dict, device: torch.device) -> None:
         method = parameters["method"]
         arithmetic = None
         if method != "iso":
-            arithmetic = MergeParameters(
-                **{**parameters, "method": MergeMethod(method), "coefficients": tuple(parameters["coefficients"])}
-            )
+            arithmetic = merge_parameters(parameters)
         transform = partial(transform_row, previous, donor, parameters, arithmetic, device)
         audit = materialize_serial_stage(original, recipe, stage, stage_index + 1, support, transform)
         previous = CheckpointReader(CheckpointSource(stage["output"], f"{recipe['id']}:stage-{stage_index + 1}"))

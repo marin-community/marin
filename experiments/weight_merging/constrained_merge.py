@@ -60,18 +60,16 @@ def main() -> None:
         values = [reader.tensor(name) for reader in donors]
         if row is not None:
             values = [tensor[row] for tensor in values]
-        if "expert_assignment" in recipe:
-            donor_index = recipe["expert_assignment"][name][str(row)]
-            donor = values[donor_index]
-            fraction = recipe["transfer_fraction"]
-            if fraction == 1:
-                return donor
-            return (value.float() + fraction * (donor.float() - value.float())).to(value.dtype)
-        if row_scaled:
+        if "expert_assignment" in recipe or row_scaled:
             if row is None:
-                raise ValueError("Row-scaled transfer requires row support")
-            fraction = recipe["row_fractions"][name][str(row)]
-            donor = values[0]
+                raise ValueError("Assigned transfers require row support")
+            if row_scaled:
+                donor_index = 0
+                fraction = recipe["row_fractions"][name][str(row)]
+            else:
+                donor_index = recipe["expert_assignment"][name][str(row)]
+                fraction = recipe["transfer_fraction"]
+            donor = values[donor_index]
             if fraction == 1:
                 return donor
             return (value.float() + fraction * (donor.float() - value.float())).to(value.dtype)
@@ -106,7 +104,7 @@ def main() -> None:
     audit["elapsed_seconds"] = time.monotonic() - start
     if iso:
         audit["iso_diagnostics"] = diagnostics
-    finalize_constrained_export(audit, recipe["audit"], recipe["change_cap"])
+    finalize_constrained_export(audit, recipe["audit"])
     logging.info("Completed policy audit: %s; changed %.6f%%", recipe["audit"], audit["changed_percent"])
 
 

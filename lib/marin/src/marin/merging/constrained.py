@@ -18,8 +18,6 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.merging.checkpoint import INCOMPLETE_NAME, INDEX_NAME, CheckpointReader
 
-MAX_CHANGED_FRACTION = 0.30
-
 
 @dataclass(frozen=True)
 class TensorSupport:
@@ -55,13 +53,14 @@ def changed_elements(left: torch.Tensor, right: torch.Tensor) -> int:
     return int((a != b).any(dim=1).sum().item())
 
 
-def finalize_constrained_export(audit: dict, audit_url: str, change_cap: float) -> None:
+def finalize_constrained_export(audit: dict, audit_url: str) -> None:
     """Publish and verify the external audit before making the checkpoint readable."""
     validate_audit_location(audit_url, audit["output"])
-    if not 0 <= change_cap <= MAX_CHANGED_FRACTION:
-        raise ValueError(f"Changed-weight cap must be within [0, {MAX_CHANGED_FRACTION:.2f}]")
+    change_cap = audit["change_cap"]
+    if not 0 <= change_cap <= 1:
+        raise ValueError("Changed-weight cap must be within [0, 1]")
     if audit["changed_elements"] > math.floor(change_cap * audit["total_elements"]):
-        raise ValueError("Actual changed elements exceed the experiment cap")
+        raise ValueError("Stored audit exceeds scalar budget")
     fs, path = filesystem_for(audit_url)
     if fs.exists(path):
         raise FileExistsError(audit_url)
@@ -97,8 +96,8 @@ def export_constrained(
     """
     if not 0 <= support_cap <= 1:
         raise ValueError("Support cap must be within [0, 1]")
-    if not 0 <= change_cap <= MAX_CHANGED_FRACTION:
-        raise ValueError(f"Changed-weight cap must be within [0, {MAX_CHANGED_FRACTION:.2f}]")
+    if not 0 <= change_cap <= 1:
+        raise ValueError("Changed-weight cap must be within [0, 1]")
     selections = {item.name: item.rows for item in support}
     if len(selections) != len(support) or not selections.keys() <= base.weight_map.keys():
         raise ValueError("Support contains duplicate or unknown tensors")

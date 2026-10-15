@@ -122,7 +122,7 @@ def main() -> None:
         transform,
     )
     audit.update(recipe=recipe, calibration_artifact_hashes=provenance, elapsed_seconds=time.monotonic() - start)
-    finalize_constrained_export(audit, recipe["audit"], recipe["change_cap"])
+    finalize_constrained_export(audit, recipe["audit"])
 
 
 if __name__ == "__main__":

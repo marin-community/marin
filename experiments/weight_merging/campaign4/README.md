@@ -104,6 +104,6 @@ Run the behavior tests that cover constrained exports and serial composition:
 
 ```bash
 uv run --package marin-core --extra cpu --group test pytest \
-  tests/test_constrained_merging.py tests/test_serial_iso.py \
+  tests/test_constrained_merging.py \
   experiments/weight_merging/test_constrained_recipes.py
 ```

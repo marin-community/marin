@@ -56,7 +56,7 @@ def materialize_serial_stage(
         transform,
     )
     audit.update(recipe=recipe, serial_stage=stage_number, elapsed_seconds=time.monotonic() - start)
-    finalize_constrained_export(audit, stage["audit"], recipe["change_cap"])
+    finalize_constrained_export(audit, stage["audit"])
     return audit
 
 

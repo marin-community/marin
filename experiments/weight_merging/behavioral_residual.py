@@ -15,8 +15,6 @@ from experiments.weight_merging.calibration_model import FrozenGrugBank, teacher
 
 logger = logging.getLogger(__name__)
 PROJECTIONS = ("down_proj", "gate_proj", "up_proj")
-TOTAL_ELEMENTS = 67_078_882_816
-ELEMENTS_PER_EXPERT_ROW_SET = 9_830_400
 
 
 @dataclass
@@ -93,17 +91,23 @@ def support(selected: list[set[int]]) -> list[dict]:
     return result
 
 
-def support_fraction(selected: list[set[int]]) -> float:
-    return sum(map(len, selected)) * ELEMENTS_PER_EXPERT_ROW_SET / TOTAL_ELEMENTS
+def support_fraction(bank: FrozenGrugBank, selected: list[set[int]]) -> float:
+    total_elements = sum(tensor.numel() for tensor in bank.states[0].values())
+    supported_elements = 0
+    for layer, rows in enumerate(selected):
+        for projection in PROJECTIONS:
+            name = f"model.layers.{layer}.mlp.experts.{projection}.weight"
+            supported_elements += len(rows) * bank.states[0][name][0].numel()
+    return supported_elements / total_elements
 
 
 def select_behavioral_residuals(bank: FrozenGrugBank, examples: list, recipe: dict, write) -> None:
+    rankings = recipe["rankings"]
     domains = {example.domain for example in examples}
-    expected = {"bfcl", "humanevalplus", "mbppplus"}
+    expected = set(rankings)
     if domains != expected:
         raise ValueError(f"Residual calibration domains differ: {domains}")
     cache = teacher_cache(bank, examples)
-    rankings = recipe["rankings"]
     completed = []
     for config in recipe["experiments"]:
         selected = [set() for _ in range(bank.layer_count)]
@@ -130,7 +134,7 @@ def select_behavioral_residuals(bank: FrozenGrugBank, examples: list, recipe: di
                 config["rows_per_round_per_layer"],
                 config["step_size"],
             )
-            fraction = support_fraction(selected)
+            fraction = support_fraction(bank, selected)
             if fraction > recipe["support_cap"]:
                 raise ValueError(f"{config['name']} exceeds support cap after round {round_index + 1}: {fraction}")
             entry = {
@@ -149,7 +153,7 @@ def select_behavioral_residuals(bank: FrozenGrugBank, examples: list, recipe: di
             "history": history,
             "final_residuals": final_residuals,
             "support": support(selected),
-            "support_fraction": support_fraction(selected),
+            "support_fraction": support_fraction(bank, selected),
             "complete": True,
         }
         write(f"{config['name']}.json", json.dumps(payload).encode())
