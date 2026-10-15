@@ -11,6 +11,7 @@ from typing import Protocol
 
 import numpy as np
 import pyarrow as pa
+from finestore.layout import BlobTables
 from finestore.reader import ReadView
 from finestore.rl.curriculum import EmbeddingSpec
 from finestore.store import DataStore
@@ -84,6 +85,7 @@ def _embed_batches(
     cache_root = embedding_cache_path(cache_root, shard.shard_idx)
     view = ReadView(cache_root)
     with DataStore.open(cache_root) as store:
+        wrote_vectors = False
         for batch in batches:
             keys = [row["embedding_key"] for row in batch]
             cached = view.read_blobs(keys)
@@ -99,6 +101,7 @@ def _embed_batches(
                 "embedding/input_bytes", sum(len(row["text"].encode()) for row in missing)
             )
             if missing:
+                wrote_vectors = True
                 with store.transaction() as transaction:
                     for row, vector in zip(missing, vectors, strict=True):
                         payload = vector.astype("<f4").tobytes()
@@ -111,6 +114,8 @@ def _embed_batches(
                 if vector.shape != (spec.dimensions,) or not np.isfinite(vector).all() or not np.any(vector):
                     raise ValueError(f"Invalid cached embedding {row['embedding_key']}")
                 yield {"embedding_key": row["embedding_key"], "embedding": vector.tolist()}
+        if wrote_vectors:
+            store.compact(BlobTables.DESCRIPTORS)
 
 
 def embed_texts(

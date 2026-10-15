@@ -285,9 +285,10 @@ All stages use the driver's shared `--max-workers`, `--worker-cpu`,
 `--worker-memory` and `--coordinator-memory` options. Embedding defaults to four
 CPU cores and 8 GB per worker. Inference batches contain at most 16 texts and
 16,384 padded tokens, sorted by token length. Vectors are checkpointed every 256
-texts so retries reuse completed work. PyTorch threads follow the requested CPU
-count. Description and vector deduplication distribute
-work across the pool independently of source-file count.
+texts so retries reuse completed work. After writing vectors, each partition
+compacts its checkpoint files for subsequent reads. PyTorch threads follow the
+requested CPU count. Description and vector deduplication distribute work across
+the pool independently of source-file count.
 
 The catalog declares subject-domain and task-mechanic routing facets. Matching
 selects one primary subject in each facet. It retains the three highest-ranked

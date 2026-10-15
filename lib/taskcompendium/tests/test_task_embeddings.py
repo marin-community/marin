@@ -186,6 +186,9 @@ def test_embedding_retry_reuses_completed_cache_batches(tmp_path, spec):
     retried = [json.loads(line) for line in Path(recovered.calls).read_text().splitlines()]
     assert len(retried) == 264
     assert not set(successful).intersection(retried)
+    view = ReadView(embedding_cache_path(cache, embedding_cache_partition(records[0]["embedding_key"])))
+    assert len(view.read_blobs([row["embedding_key"] for row in records])) == 520
+    assert view.read_diagnostics().selected_shards == 1
 
 
 def test_oversized_task_excerpts_preserve_operations_and_valid_utf8():
