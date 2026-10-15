@@ -16,6 +16,7 @@ from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
+    MARIN_RECIPE_POLICY,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
@@ -32,6 +33,7 @@ from marinskyrl.recipe_schema import (
     HFModelSaveCallback,
     InferenceStatsCallback,
     RecipePatch,
+    SkyRLRecipe,
     Trainer,
     TrajectoryRetention,
 )
@@ -163,7 +165,10 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
     model = MODELS[DEFAULT_MODEL].step
     download = model.build_config(StepContext.for_fingerprint(model.runtime_args, model.deps))
     adopted_model = ArtifactStep.adopt(model.name, model.version, QWEN_SOURCE, kind=model.artifact_type)
-    recipe_fingerprint = fingerprint_hash(canonical_json({"config": recipe.to_skyrl(), "data": data_identity}))
+    retention = SkyRLRetentionPolicy(resume_checkpoint_count=1)
+    identity_document = SkyRLRecipe.combine(authored=recipe, marin=MARIN_RECIPE_POLICY).to_skyrl()
+    identity_document["trainer"].update(seed=SEED, max_ckpts_to_keep=retention.resume_checkpoint_count)
+    recipe_fingerprint = fingerprint_hash(canonical_json({"config": identity_document, "data": data_identity}))
     run = skyrl_step(
         SkyRLSpec(
             name=user_owned_name(f"{RUN_NAME}/{mode}/{recipe_fingerprint}"),
@@ -178,7 +183,7 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
             train_data=(ArtifactDataSource(data, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(data, relative_path=VALIDATION_FILENAME),),
             hardware=SkyRLHardware(gpus_per_node=GPUS_PER_NODE, gpu_variant=GPU_VARIANT),
-            retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
+            retention=retention,
             seed=SEED,
         ),
         IrisSkyRLExecution(
