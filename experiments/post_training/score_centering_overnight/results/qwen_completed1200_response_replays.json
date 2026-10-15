@@ -1,0 +1,25 @@
+{
+  "scope": "Complete available-response original-grader replays for declared Qwen batching/native-window1200 mains. Separate from18 native300 mains; other full1200 comparisons remain required. Native failure placeholders are counted separately and never claimed as original grade calls.",
+  "planned_arms": 12,
+  "completed_arms": 1,
+  "physical_records": 222132,
+  "actual_original_grade_replays": 222132,
+  "native_failures_without_original_response": 0,
+  "grade_discrepancies": 0,
+  "runs": [
+    {
+      "run_id": "sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "completed_updates": 1200,
+      "physical_records": 222132,
+      "actual_original_grade_replays": 222132,
+      "native_failures_not_regraded": [],
+      "grade_discrepancies": 0,
+      "evaluation_points_crosschecked": 61,
+      "all_replayed_evaluations_match_native": true,
+      "record_payloads_sha256": "fec833761ae632250bcbe4a9638b24106c8bc1b1bb7b0df4e163ace6e1526784",
+      "report": "sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce-regrading.json.gz",
+      "report_sha256": "7b241447d3aaa288635dbe7e0f062b415af0c0a6f4838ff0d530527cbf527fb5"
+    }
+  ]
+}

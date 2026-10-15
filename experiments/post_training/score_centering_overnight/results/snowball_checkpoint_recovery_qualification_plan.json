@@ -1,7 +1,7 @@
 {
   "scope": "Three-phase five-node engineering qualification for the checkpoint-recovery candidate. Initial save5 is submitted; both restore phases remain gated. It cannot replace scientific main1200 or stale calibration130.",
   "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
-  "status": "Exact173 initial save5 passed all native and12152 original grades. Five-node RNO BATCH restore5-to7 physical0 is running from22:30:30.022UTC. Actual native trainer logs report complete learner checkpoint5 loaded at23:00:34.077UTC; four small source logs durably retained/fullSHA read back. Sampler restoration, new applied6/7, skipped restored eval5/eval7only and final control/Flash/noise/membership/grade gates remain pending. Third phase remains unsubmitted; no scientific173 promotion.",
+  "status": "Exact173 initial save5 passed all native and12152original grades. Five-node restore5-to7 physical0 failed at first resumed optimizer-state backload after complete learner checkpoint5 load;33.4704111111H100h,0published newtrainupdates. Full original CUDA OOM retained with fullSHA/readback. Memory root cause under investigation. Restore7-to9 remains unsubmitted; candidate173 has not passed five-node resume and scientific jobs remain0212.",
   "prerequisite": "Complete bounded Qwen periodic/noisy save2, restore2-to5, restore5-to7 qualification with real native state and behavior evidence.",
   "geometry": {
     "cluster": "cw-rno2a",
@@ -355,21 +355,21 @@
           "task_id": "/romain/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/0",
           "attempt_id": "0",
           "attempt_uid": "b993c1b593e932f6",
-          "state": "3",
-          "exit_code": "",
+          "state": "5",
+          "exit_code": "1",
           "started_at_ms": "1792103430022",
-          "finished_at_ms": "",
+          "finished_at_ms": "1792106442359",
           "node_name": "g1cc352",
-          "terminal_reason": ""
+          "terminal_reason": "allocated by PyTorch, and 1.78 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)\n2026-10-15 23:19:49.535 | ERROR    | skyrl_train.entrypoints.main_base:run_ray_driver:747 - Preserved original training-driver exception at /tmp/s"
         },
         {
           "task_id": "/romain/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/1",
           "attempt_id": "0",
           "attempt_uid": "7ad697c6726998af",
-          "state": "3",
+          "state": "11",
           "exit_code": "",
           "started_at_ms": "1792103430022",
-          "finished_at_ms": "",
+          "finished_at_ms": "1792106442359",
           "node_name": "gf62afe",
           "terminal_reason": ""
         },
@@ -377,10 +377,10 @@
           "task_id": "/romain/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/2",
           "attempt_id": "0",
           "attempt_uid": "7611f289aa6931e2",
-          "state": "3",
+          "state": "11",
           "exit_code": "",
           "started_at_ms": "1792103430022",
-          "finished_at_ms": "",
+          "finished_at_ms": "1792106442359",
           "node_name": "g530748",
           "terminal_reason": ""
         },
@@ -388,10 +388,10 @@
           "task_id": "/romain/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/3",
           "attempt_id": "0",
           "attempt_uid": "a98b6c00a99fa18d",
-          "state": "3",
+          "state": "11",
           "exit_code": "",
           "started_at_ms": "1792103430022",
-          "finished_at_ms": "",
+          "finished_at_ms": "1792106442359",
           "node_name": "g538100",
           "terminal_reason": ""
         },
@@ -399,16 +399,19 @@
           "task_id": "/romain/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/4",
           "attempt_id": "0",
           "attempt_uid": "ea7b540cfe983ec8",
-          "state": "3",
+          "state": "11",
           "exit_code": "",
           "started_at_ms": "1792103430022",
-          "finished_at_ms": "",
+          "finished_at_ms": "1792106442359",
           "node_name": "g8364ba",
           "terminal_reason": ""
         }
       ],
       "actual_allocation_started": "2026-10-15T22:30:30.022000+00:00",
-      "native_loading_observation": "results/snowball_checkpoint173_restore5_native_loading_observation.json"
+      "native_loading_observation": "results/snowball_checkpoint173_restore5_native_loading_observation.json",
+      "phase_qualification_complete": false,
+      "native_failure_evidence": "results/snowball_checkpoint173_restore5_optimizer_backload_oom.json",
+      "allocated_h100_hours": 33.47041111111111
     },
     {
       "phase": "restore7",
@@ -507,5 +510,5 @@
   },
   "qwen_prerequisite_passed": true,
   "qwen_prerequisite_evidence": "results/qwen_periodic_checkpoint_recovery_qualification_complete.json",
-  "observed_controller_snapshot": "2026-10-15T22:30:35Z"
+  "observed_controller_snapshot": "2026-10-15T23:30:40Z"
 }

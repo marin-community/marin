@@ -13,7 +13,7 @@
   "prepare_configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v2/batching-sc-s2-prepare.yaml",
   "all_scientific_fields_unchanged": true,
   "actual_changes": "Fresh run-owned ID and output/archive/group/Ray namespaces only; same frozen source,seed2,model,data,noise,loss,optimizer,batching,capture and1200-update horizon.",
-  "status": "Same-source0212 replacement is running on physical7 with0published updates at the latest observation. All seven earlier replacement allocations were priority preempted, including219surviving updates on physical2. Exact export/nativearchive/controller snapshots are retained; raw2/3/4 is copying and raw5/6 waits behind it. Native full1200 endpoint remains pending. No source, recipe, grader or checkpoint-cadence change.",
+  "status": "Latest recorded native progress was physical7 with0published updates at its23:06 observation;full1200 endpoint remains pending. Earlier physical2 retained219interrupted updates. Exact export/nativearchive/controller snapshots through6 are retained;bulk raw2/3/4 is now complete and raw5/6 is copying. All source/recipe/grader/checkpoint-cadence fields remain unchanged.",
   "submission_confirmed": true,
   "old_retention_ledger": {
     "present": false
@@ -137,11 +137,11 @@
     "controller_attempt": 2,
     "published_updates": 219,
     "export_and_native_archive_inventory_evidence": "new_terminal_allocations_20261015T2229.json.gz",
-    "bulk_raw_retention_complete": false,
-    "scope": "Exact interrupted allocation only; not a final1200 endpoint."
+    "bulk_raw_retention_complete": true,
+    "scope": "Exact interrupted allocation only; not a final1200 endpoint.",
+    "bulk_raw_retention_evidence": "new_terminal_runtime_20261015T2229.json.gz"
   },
   "pending_raw_retention_batches": [
-    "new_terminal_runtime_20261015T2229.json.gz",
     "new_terminal_runtime_20261015T2301.json.gz"
   ]
 }

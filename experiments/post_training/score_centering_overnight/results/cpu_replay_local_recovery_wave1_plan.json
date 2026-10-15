@@ -1,0 +1,158 @@
+{
+  "scope": "First staged pair after verified loss of both local managers and cleanup of their six idle orphans. Only unfinished optimizerSCseed1 native300 and advantagesSCseed0 native40 pilot; existing completed optimizerSC0/fourpilots excluded. All frozen original source/data/graders/lock/packages/qualified runner/deadlines unchanged. Prior local partial2discrepancies remain unresolved. No new training.",
+  "cases": [
+    {
+      "job_id": "/romain/score-grader-qwen-optimizer-sc-s1-a0-01a126ce",
+      "run_id": "sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce",
+      "arm": "sc-s1",
+      "cohort_kind": "main300",
+      "stage": "optimizer",
+      "workspace": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/score-grader-qwen-optimizer-sc-s1-a0-01a126ce-workspace",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "analysis_source": "213f2fed2a2954c50c973c742bfff998f9a2edef",
+      "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e",
+      "spec_sha256": "8f83e4ddfa694ed8289d8636d6f6d06e4b8ed1669a32a25177d285b471b62aa8",
+      "requested_cpu": 32,
+      "requested_memory": "64GB",
+      "requested_disk": "50GB",
+      "requested_accelerators": 0,
+      "cpu_workers": 32,
+      "io_workers": 2,
+      "timeout_seconds": 43200,
+      "failure_retries": 0,
+      "preemption_retries": 0,
+      "expected_records": 249984,
+      "selected_archives": 19217,
+      "native_archive_bytes": 719611338,
+      "output_prefix": "marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-optimizer-sc-s1-a0-01a126ce",
+      "local_input_validation_passed": true,
+      "bundle": {
+        "bytes": 8581615,
+        "sha256": "1324f2076e172464d2b9036ff9794bd2c4a787b6feec7343ded96c90e2097846",
+        "spec_sha256": "8f83e4ddfa694ed8289d8636d6f6d06e4b8ed1669a32a25177d285b471b62aa8",
+        "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e",
+        "all_input_files_verified": true
+      },
+      "native_bundle_validation_passed": true,
+      "native_submission_confirmed": true,
+      "retained_input_objects": {
+        "bundle": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-optimizer-sc-s1-a0-01a126ce/inputs/bundle.zip",
+          "bytes": 8581615,
+          "etag": "\"75804e28c1de50b60845912bd4931208\"",
+          "sha256": "1324f2076e172464d2b9036ff9794bd2c4a787b6feec7343ded96c90e2097846"
+        },
+        "spec": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-optimizer-sc-s1-a0-01a126ce/inputs/spec.json",
+          "bytes": 157758,
+          "etag": "\"c5ee527461dc05700962b386a0f6d209\"",
+          "sha256": "8f83e4ddfa694ed8289d8636d6f6d06e4b8ed1669a32a25177d285b471b62aa8"
+        }
+      },
+      "controller_row": {
+        "job_id": "/romain/score-grader-qwen-optimizer-sc-s1-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "1324f2076e172464d2b9036ff9794bd2c4a787b6feec7343ded96c90e2097846",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-optimizer-sc-s1-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "5957e1cfec8be562",
+        "task_state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792107961761",
+        "finished_at_ms": "",
+        "node_name": "g1cb6c2",
+        "terminal_reason": ""
+      },
+      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+    },
+    {
+      "job_id": "/romain/score-grader-qwen-pilot-advantages-sc-s0-a0-01a126ce",
+      "run_id": "sc-qwen-transfer-advantages-sc-s0-pilot-a4-01a126ce",
+      "arm": "sc-s0",
+      "cohort_kind": "pilot40",
+      "stage": "advantages",
+      "workspace": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/score-grader-qwen-pilot-advantages-sc-s0-a0-01a126ce-workspace",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "analysis_source": "213f2fed2a2954c50c973c742bfff998f9a2edef",
+      "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e",
+      "spec_sha256": "b1559b2d85fb13bef93ffdf33c0001f38669fa4dfb0acbd68b4d4a7e7e112c80",
+      "requested_cpu": 32,
+      "requested_memory": "64GB",
+      "requested_disk": "50GB",
+      "requested_accelerators": 0,
+      "cpu_workers": 32,
+      "io_workers": 2,
+      "timeout_seconds": 43200,
+      "failure_retries": 0,
+      "preemption_retries": 0,
+      "expected_records": 38552,
+      "selected_archives": 2563,
+      "native_archive_bytes": 113239825,
+      "output_prefix": "marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-pilot-advantages-sc-s0-a0-01a126ce",
+      "local_input_validation_passed": true,
+      "bundle": {
+        "bytes": 7286010,
+        "sha256": "7a3dba283d7be19075ea8094008c11865f57c8ed7c1d24435ff3b15115e7059f",
+        "spec_sha256": "b1559b2d85fb13bef93ffdf33c0001f38669fa4dfb0acbd68b4d4a7e7e112c80",
+        "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e",
+        "all_input_files_verified": true
+      },
+      "native_bundle_validation_passed": true,
+      "native_submission_confirmed": true,
+      "retained_input_objects": {
+        "bundle": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-pilot-advantages-sc-s0-a0-01a126ce/inputs/bundle.zip",
+          "bytes": 7286010,
+          "etag": "\"619ca75c86d63398e32f28ed87405bcf\"",
+          "sha256": "7a3dba283d7be19075ea8094008c11865f57c8ed7c1d24435ff3b15115e7059f"
+        },
+        "spec": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-pilot-advantages-sc-s0-a0-01a126ce/inputs/spec.json",
+          "bytes": 157763,
+          "etag": "\"05ac1697600359d9d1c0c6287d82a6fc\"",
+          "sha256": "b1559b2d85fb13bef93ffdf33c0001f38669fa4dfb0acbd68b4d4a7e7e112c80"
+        }
+      },
+      "controller_row": {
+        "job_id": "/romain/score-grader-qwen-pilot-advantages-sc-s0-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "7a3dba283d7be19075ea8094008c11865f57c8ed7c1d24435ff3b15115e7059f",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-pilot-advantages-sc-s0-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "7278ebf941a31313",
+        "task_state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792107967782",
+        "finished_at_ms": "",
+        "node_name": "g1cc6b2",
+        "terminal_reason": ""
+      },
+      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+    }
+  ],
+  "total_requested_cpu": 64,
+  "total_requested_memory_gib": 128,
+  "total_requested_gpu": 0,
+  "maximum_archive_io_workers": 4,
+  "native_bundle_validation_passed": true,
+  "local_manager_loss_evidence": "qwen_local_replay_manager_loss_20261015.json",
+  "status": "Both recovered local cohorts controller-running32CPU/64GiB/50GiB BATCH each,64hostCPU/zeroGPU total. OptimizerSCseed1 native300 requires249984records;advantagesSCseed0 native40pilot requires38552. Same qualified source0212/original data/graders/lock/packages/runner/deadlines. All native bundle/spec inputs durably retained/fullSHA read back. Full original-grade and native count/quality gates pending. Prior local2partial discrepancies remain unresolved; new qualified runner durably retains each discrepancy as found. Further waves follow bounded archive download gates.",
+  "resource_board_ids": [
+    1082,
+    1083
+  ]
+}

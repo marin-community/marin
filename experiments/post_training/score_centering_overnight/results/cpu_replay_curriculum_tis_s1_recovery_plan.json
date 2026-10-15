@@ -100,11 +100,13 @@
   "total_requested_memory_gib": 64,
   "total_requested_gpu": 0,
   "maximum_archive_io_workers": 2,
-  "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU,2archiveIO workers. Full249984-response native300 curriculumTISseed1 replay replaces a0 terminal state7/PodDeleted; a0 partial229376reported records and62.8377155556CPUh retained separately. All19216archives/713047323bytes, original frozen0212 source/data/graders/lock/packages/runner/deadlines and all scientific fields unchanged. Only run-owned output prefix differs. Native bundle/spec durably read back/fullSHA verified. Full original grades and all16 evaluation count/quality gates remain pending.",
+  "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU. All19216archives/713047323bytes downloaded and original source/spec/archive identities checked;2archiveIO released. Full249984-response original-grade and16evaluation gates remain pending. Original worker-failed a0 partial and actual62.8377155556CPUh remain separately retained.",
   "native_bundle_validation_passed": true,
   "resource_board_ids": [
     1079,
     1080
   ],
-  "fresh_before_submit_controller": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/cpu-waves-and-snowball-restore5-controller-20261015T231548.csv"
+  "fresh_before_submit_controller": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/cpu-waves-and-snowball-restore5-controller-20261015T231548.csv",
+  "archive_downloads_complete": true,
+  "archive_downloads_evidence": "cpu-wave-status-20261015T233600-curriculum-tis-s1-recovery.json"
 }

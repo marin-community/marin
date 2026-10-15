@@ -1,0 +1,209 @@
+{
+  "scope": "Two local replay managers absent,with six idle orphan ProcessPool workers. No termination exit status or cause established. Earlier21:53 health was real but is not current liveness. Prior completed reports remain valid; only unfinished cohorts will be reassigned,with no healthy grader duplication. All observed local GPU usage is0.",
+  "recorded_at": "2026-10-15T23:29:05.187916+00:00",
+  "last_verified_live": "2026-10-15T21:53:41Z",
+  "first_observed_managers_absent": "2026-10-15T23:23:00Z",
+  "missing_manager_pids": [
+    1166491,
+    1514532
+  ],
+  "termination_cause": "Unconfirmed; targeted kernel journal query returned no matching OOM/kill entries. Old native exec handles no longer exist.",
+  "orphan_cleanup": {
+    "observed_at": "2026-10-15T23:26:56.213443+00:00",
+    "missing_manager_pids": [
+      1166491,
+      1514532
+    ],
+    "kernel_journal_probe": "No matching OOM/kill entries returned for21:45..23:25UTC; termination cause not established.",
+    "workers": [
+      {
+        "pid": 2422523,
+        "original_parent": 1166491,
+        "current_parent": 1,
+        "start_ticks": 330589776,
+        "user_ticks": 2426,
+        "system_ticks": 433,
+        "reaped_child_user_ticks": 2834201,
+        "reaped_child_system_ticks": 254761,
+        "clock_ticks_per_second": 100,
+        "wchan": "futex_do_wait",
+        "children": [],
+        "command": "/home/romain/work/marin-community/MarinSkyRL/score-centering-resume-01a126ce/.venv/bin/python /home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/regrade-complete-qwen-mains-streaming.py "
+      },
+      {
+        "pid": 2422524,
+        "original_parent": 1166491,
+        "current_parent": 1,
+        "start_ticks": 330589777,
+        "user_ticks": 2446,
+        "system_ticks": 413,
+        "reaped_child_user_ticks": 2839812,
+        "reaped_child_system_ticks": 255627,
+        "clock_ticks_per_second": 100,
+        "wchan": "futex_do_wait",
+        "children": [],
+        "command": "/home/romain/work/marin-community/MarinSkyRL/score-centering-resume-01a126ce/.venv/bin/python /home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/regrade-complete-qwen-mains-streaming.py "
+      },
+      {
+        "pid": 2422525,
+        "original_parent": 1166491,
+        "current_parent": 1,
+        "start_ticks": 330589778,
+        "user_ticks": 2457,
+        "system_ticks": 430,
+        "reaped_child_user_ticks": 2854885,
+        "reaped_child_system_ticks": 256747,
+        "clock_ticks_per_second": 100,
+        "wchan": "anon_pipe_read",
+        "children": [],
+        "command": "/home/romain/work/marin-community/MarinSkyRL/score-centering-resume-01a126ce/.venv/bin/python /home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/regrade-complete-qwen-mains-streaming.py "
+      },
+      {
+        "pid": 2422526,
+        "original_parent": 1166491,
+        "current_parent": 1,
+        "start_ticks": 330589778,
+        "user_ticks": 2428,
+        "system_ticks": 425,
+        "reaped_child_user_ticks": 2829963,
+        "reaped_child_system_ticks": 254593,
+        "clock_ticks_per_second": 100,
+        "wchan": "futex_do_wait",
+        "children": [],
+        "command": "/home/romain/work/marin-community/MarinSkyRL/score-centering-resume-01a126ce/.venv/bin/python /home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/regrade-complete-qwen-mains-streaming.py "
+      },
+      {
+        "pid": 2681215,
+        "original_parent": 1514532,
+        "current_parent": 1,
+        "start_ticks": 332439797,
+        "user_ticks": 1166,
+        "system_ticks": 205,
+        "reaped_child_user_ticks": 1367713,
+        "reaped_child_system_ticks": 121659,
+        "clock_ticks_per_second": 100,
+        "wchan": "anon_pipe_read",
+        "children": [],
+        "command": "/home/romain/work/marin-community/MarinSkyRL/score-centering-resume-01a126ce/.venv/bin/python /home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/regrade-complete-qwen-pilots-streaming.py "
+      },
+      {
+        "pid": 2681216,
+        "original_parent": 1514532,
+        "current_parent": 1,
+        "start_ticks": 332439798,
+        "user_ticks": 1159,
+        "system_ticks": 257,
+        "reaped_child_user_ticks": 1367914,
+        "reaped_child_system_ticks": 121898,
+        "clock_ticks_per_second": 100,
+        "wchan": "futex_do_wait",
+        "children": [],
+        "command": "/home/romain/work/marin-community/MarinSkyRL/score-centering-resume-01a126ce/.venv/bin/python /home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/regrade-complete-qwen-pilots-streaming.py "
+      }
+    ],
+    "cleanup_action": "SIGTERM only to the six exact idle orphan worker PIDs, after unchanged CPU/start ticks and no children were rechecked. Both original managers were absent. No active manager, grading subprocess, remote task or GPU training process targeted.",
+    "cleanup_requested_at": "2026-10-15T23:27:17.886188+00:00",
+    "cleanup_verified_at": "2026-10-15T23:29:02.509307+00:00",
+    "worker_states_after_cleanup": {
+      "2422523": "absent",
+      "2422524": "absent",
+      "2422525": "absent",
+      "2422526": "absent",
+      "2681215": "absent",
+      "2681216": "absent"
+    }
+  },
+  "observed_pool_cpu_seconds_including_reaped_descendants": {
+    "1166491": 123920.47,
+    "1514532": 29819.71
+  },
+  "cpu_accounting_boundary": "Measured cumulative CPU from the six surviving pool workers and their reaped children at observation; excludes gone manager CPU and earlier completed-cohort worker pools. Not allocated CPU-hours and not an exact whole-local-run cost.",
+  "last_saved_partial_progress": [
+    {
+      "run_id": "sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce",
+      "reported_records": 147456,
+      "reported_discrepancies": 2,
+      "reported_native_failures": 1,
+      "full_report_exists": false,
+      "per_record_discrepancy_details_persisted": false,
+      "discrepancies_resolved": false
+    },
+    {
+      "run_id": "sc-qwen-transfer-advantages-sc-s0-pilot-a4-01a126ce",
+      "reported_records": 32768,
+      "reported_discrepancies": 0,
+      "reported_native_failures": 0,
+      "full_report_exists": false
+    }
+  ],
+  "unfinished_reassignment_scope": {
+    "optimizer300": 5,
+    "pilot40": 6,
+    "completed_optimizer_sc0_and_first_four_pilots_are_excluded": true,
+    "native_original_response_archives_remain_available": true
+  },
+  "pilot_membership_counts": {
+    "advantages_sc_and_tis_each": 38552,
+    "batching_sc_and_tis_each": 10316,
+    "native_window_sc_and_tis_each": 10352,
+    "basis": "Actual native audits and configuration counts; no fixed count assumed across all pilots."
+  },
+  "retained_evidence": [
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/local-manager-loss-20261015/qwen-optimizer300-full-response-replay.log",
+      "bytes": 3378,
+      "etag": "\"bc24e0fca175a224473f9ded7a3c96ab\"",
+      "sha256": "b625d7bcb78f7f897cc02e069d22d6f6f7a45088be4bd94e33f1a30c13335048",
+      "full_bytes_read_back_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/local-manager-loss-20261015/qwen-all-pilots-full-response-replay.log",
+      "bytes": 1908,
+      "etag": "\"187b9ab5946f5a571ac06ab4d417df43\"",
+      "sha256": "527556d5df9fab43aac05679bcbdc211a1d599bb64d9cb69444627f1f78dc903",
+      "full_bytes_read_back_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/local-manager-loss-20261015/regrade-complete-qwen-mains-streaming.py",
+      "bytes": 6413,
+      "etag": "\"58d67c7b7e456890e565d522475227c8\"",
+      "sha256": "db9903874eb9fada6d2710f50b9464af78bcb17918bfe53ffed3d803e6f7d472",
+      "full_bytes_read_back_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/local-manager-loss-20261015/regrade-complete-qwen-pilots-streaming.py",
+      "bytes": 1732,
+      "etag": "\"0dcbc2eb6d7880a77dbef201a1b923b7\"",
+      "sha256": "59b2cfd7e568291a1032e958ed33dab9de6a8f9c33a2c0921da255790562b0ea",
+      "full_bytes_read_back_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/local-manager-loss-20261015/local-grader-process-health-20261015T215341.txt",
+      "bytes": 3340,
+      "etag": "\"2789977d73c65bd092b31d2e9829d2d1\"",
+      "sha256": "d051765fb39b1debfe37225de9a683b6cb0d2b17da8e9250866c25d13ab59459",
+      "full_bytes_read_back_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/local-manager-loss-20261015/local-grader-process-health-20261015T232300.json",
+      "bytes": 184,
+      "etag": "\"9e7752d1278fa860824292204ab5b150\"",
+      "sha256": "c60ec79375787539cf100b8bfb30ed86a2b5afac57f453d1b19fdbc99a2eda6c",
+      "full_bytes_read_back_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/local-manager-loss-20261015/orphaned-local-grader-workers-before-cleanup.json",
+      "bytes": 3853,
+      "etag": "\"d2c6a1d4b01f9980b88b1e3f214105a5\"",
+      "sha256": "dcba897209286192fcaba0d32261034aa05430bdf51be60d24fda3e2ed03577e",
+      "full_bytes_read_back_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/local-manager-loss-20261015/orphaned-local-grader-workers-cleanup-receipt.json",
+      "bytes": 4428,
+      "etag": "\"4df15400d2e9b8f857875436563ba2ac\"",
+      "sha256": "fdcceb8df5bf04b1da9f72489f45d8ddb77a6bdab28ba206800e33578f91fe8e",
+      "full_bytes_read_back_verified": true
+    }
+  ]
+}

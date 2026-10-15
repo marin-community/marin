@@ -1,0 +1,90 @@
+{
+  "scope": "Failed exact173 five-node restore5-to7 qualification. Native complete learner checkpoint5 load succeeded; first resumed training attempt failed while backloading optimizer state toGPU. No new train6/7 metric was published; no phase completion, source promotion or third-phase submission. Allocation costs and original full error retained. Memory root cause remains under investigation.",
+  "run_id": "sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce",
+  "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+  "configuration_sha256": "9651656a94a0997b8c36bbf53d69bb42c7cd1054ab02b310db9a1e0ecb440eab",
+  "controller_snapshot": "20261015T233030",
+  "controller_attempt": 0,
+  "terminal_rows": [
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "b993c1b593e932f6",
+      "state": "5",
+      "exit_code": "1",
+      "started_at_ms": "1792103430022",
+      "finished_at_ms": "1792106442359",
+      "node_name": "g1cc352",
+      "terminal_reason": "allocated by PyTorch, and 1.78 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)\n2026-10-15 23:19:49.535 | ERROR    | skyrl_train.entrypoints.main_base:run_ray_driver:747 - Preserved original training-driver exception at /tmp/s"
+    },
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "7ad697c6726998af",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792103430022",
+      "finished_at_ms": "1792106442359",
+      "node_name": "gf62afe",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/2",
+      "attempt_id": "0",
+      "attempt_uid": "7611f289aa6931e2",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792103430022",
+      "finished_at_ms": "1792106442359",
+      "node_name": "g530748",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/3",
+      "attempt_id": "0",
+      "attempt_uid": "a98b6c00a99fa18d",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792103430022",
+      "finished_at_ms": "1792106442359",
+      "node_name": "g538100",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/4",
+      "attempt_id": "0",
+      "attempt_uid": "ea7b540cfe983ec8",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792103430022",
+      "finished_at_ms": "1792106442359",
+      "node_name": "g8364ba",
+      "terminal_reason": ""
+    }
+  ],
+  "allocated_h100_hours": 33.47041111111111,
+  "restored_learner_step_reported": 5,
+  "published_new_training_updates": [],
+  "failure_stage": "train_critic_and_policy -> policy_model.backload_to_gpu -> load_megatron_optimizer -> state[name].to(current CUDA device)",
+  "native_error": "torch.OutOfMemoryError:CUDA out of memory;tried26.00MiB,GPU0 capacity79.18GiB/free25.19MiB,process79.13GiB,PyTorch allocated60.47GiB/reserved-but-unallocated1.78GiB.",
+  "phase_qualification_complete": false,
+  "third_phase_submitted": false,
+  "raw_terminal_capture_in_progress": "new_terminal_allocations_20261015T233030.json.gz",
+  "raw_retention_complete": false,
+  "native_error_origin": {
+    "source_uri": "s3://marin-us-east-02a/tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/ray-logs/rank0-g1cc352/session_latest/worker-0f9a947711b9f6e001ab5289a203f92d309901c8b41cd63cdb5a2163-06000000-14090.err",
+    "bytes": 72003,
+    "etag": "\"875b180b09fc1bd154a584db04e3469c\"",
+    "sha256": "1ed4f1957fc45448b0fb92f244b020a7348363d07b06c3053fd9b0345611d5b1",
+    "modified": "2026-10-15T23:19:52+00:00",
+    "observed_at": "2026-10-15T23:33:00.795732+00:00"
+  },
+  "durable_original_error": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/qualification-observations/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/terminal-trainer-error.log",
+    "bytes": 72003,
+    "etag": "\"875b180b09fc1bd154a584db04e3469c\"",
+    "sha256": "1ed4f1957fc45448b0fb92f244b020a7348363d07b06c3053fd9b0345611d5b1",
+    "full_bytes_read_back_verified": true
+  },
+  "recorded_at": "2026-10-15T23:41:45.700947+00:00"
+}
