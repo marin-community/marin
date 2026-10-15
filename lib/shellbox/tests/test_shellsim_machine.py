@@ -41,7 +41,7 @@ class _ControlledAction:
     def cancelled(self):
         return self._cancelled.is_set()
 
-    def run(self, source, stdin=b"", *, cancellation):
+    def run(self, _source, _stdin=b"", *, cancellation):
         self.loop.call_soon_threadsafe(self.started.set)
         self.release.wait()
         interrupted = cancellation.cancelled
@@ -115,6 +115,9 @@ def test_shell_interruption_and_machine_close_drain_active_work(monkeypatch, int
             with _controlled_action(monkeypatch, shell.shell) as action:
                 running = asyncio.create_task(shell.execute("fixture", wait=10, output_limit_bytes=4))
                 await action.started.wait()
+                if interruption == "close":
+                    queued = asyncio.create_task(machine.run(Command(("touch", "/workspace/after-close"))))
+                    await asyncio.sleep(0)
                 if interruption == "deadline":
                     clock[0] += 10
                     stopping = running
@@ -131,7 +134,7 @@ def test_shell_interruption_and_machine_close_drain_active_work(monkeypatch, int
                     assert result.truncated
             if interruption == "close":
                 with pytest.raises(RuntimeError):
-                    await machine.run(Command(("true",)))
+                    await queued
             else:
                 followup = await shell.execute("printf reusable")
                 assert (followup.exit_code, followup.output) == (0, b"reusable")
