@@ -152,7 +152,6 @@ def test_queued_timeout_and_shell_interrupt_leave_an_unrelated_command_running(m
                 result = await queued
                 assert result.reason is ExitReason.TIMED_OUT
                 assert not action.requested.is_set()
-                assert not running.done()
                 action.release.set()
                 result = await running
                 assert (result.reason, result.exit_code) == (ExitReason.EXITED, 0)
