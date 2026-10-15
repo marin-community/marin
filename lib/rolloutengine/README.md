@@ -23,7 +23,9 @@ The engine delivers events from a queue and never awaits the observer, so a slow
 `RolloutEngine.run(lowered)` accepts a `LoweredTaskSpec` and asynchronously returns one rollout.
 The lowered record preserves its `TaskSpec` and adds machine selections and session limits.
 The supported scope is single-stage tasks with prebuilt, digest-pinned images, local package-lock environments, or the built-in ShellSim filesystem.
-After the turn loop, the default session grades an in-process `VerifyitGrader` on the host.
+After the turn loop, the engine captures the files under the task's `output_paths` from the task machine once
+and returns them in `RolloutData.outputs`; final grading uses that capture.
+The default session then grades an in-process `VerifyitGrader` on the host.
 A `ScriptGrader`, or a `VerifyitGrader` with an environment, grades in a separate verifier machine using its digest-pinned image or a local environment built from its package lock.
 A `SessionGrader` requires a registered task session. A `NoGrader` task receives an `unavailable` grade.
 See the [task rollout reference](../../docs/references/task-rollouts.md)

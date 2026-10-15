@@ -73,6 +73,12 @@ class RolloutFailure:
 
 @dataclass(frozen=True)
 class RolloutData:
+    """One attempt's conversation, token evidence, grade, and captured run outputs.
+
+    ``outputs`` maps each regular file under ``TaskSpec.output_paths`` on the task machine
+    to its bytes. The engine captures them once after the turn loop, before final grading.
+    """
+
     task_id: str
     messages: tuple[dict[str, Any], ...]
     prompt_token_ids: tuple[int, ...]
@@ -83,6 +89,7 @@ class RolloutData:
     stop_reason: str
     steps: tuple["RolloutStep", ...] = ()
     metrics: dict[str, Any] = field(default_factory=dict)
+    outputs: dict[str, bytes] = field(default_factory=dict)
     failure: RolloutFailure | None = None
 
 
@@ -141,7 +148,11 @@ class TaskSession(Protocol):
 
     async def advance(self, turn: ModelTurn) -> Transition: ...
 
-    async def grade(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult: ...
+    async def grade(
+        self, messages: tuple[dict[str, Any], ...], *, stop_reason: str, outputs: dict[str, bytes]
+    ) -> GradeResult:
+        """Grade the attempt; ``outputs`` holds the run outputs the engine captured after the turn loop."""
+        ...
 
     async def close(self) -> None: ...
 
@@ -263,7 +274,9 @@ class EventSink(Protocol):
 
 
 class TaskGrader(Protocol):
-    async def __call__(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult: ...
+    async def __call__(
+        self, messages: tuple[dict[str, Any], ...], *, stop_reason: str, outputs: dict[str, bytes]
+    ) -> GradeResult: ...
 
 
 @dataclass(frozen=True)

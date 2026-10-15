@@ -128,8 +128,10 @@ class _ShellboxTaskSession:
             )
         return Transition(done=False, observations=tuple(observations))
 
-    async def grade(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult:
-        return await self.grader(messages, stop_reason=stop_reason)
+    async def grade(
+        self, messages: tuple[dict[str, Any], ...], *, stop_reason: str, outputs: dict[str, bytes]
+    ) -> GradeResult:
+        return await self.grader(messages, stop_reason=stop_reason, outputs=outputs)
 
     async def close(self) -> None:
         pass

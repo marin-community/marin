@@ -99,14 +99,14 @@ When the execution user is set, the task machine runs an execution-user probe af
 An explicit command user overrides that default.
 The verifier machine uses its own configured default user.
 
-## Session lifecycle and grader files
+## Session lifecycle
 
 The engine installs `resources.all` and `resources.worker` on the task machine before session preparation.
 It calls these session methods:
 
 1. `prepare()` returns `SessionStart`: public messages, model options, and optionally exact initial prompt tokens.
 2. `advance(turn)` executes task operations and returns `Transition`: observations, completion, and optional per-turn grades or credit.
-3. `grade(messages, stop_reason=...)` returns the final `GradeResult`.
+3. `grade(messages, stop_reason=..., outputs=...)` returns the final `GradeResult`; `outputs` holds the captured run outputs.
 4. `close()` releases session resources before machine cleanup.
 
 The session is the task harness. It can assemble the system prompt and available tools
@@ -196,6 +196,23 @@ The model receives only public context, answer-format instructions, tool definit
 The serialized task and lowered record contain the grader and verifier resources. Do not send them to the model.
 Oracle resources contain control inputs for task-curation checks. They do not enter a rollout.
 
+## Run outputs
+
+After the turn loop and before `grade()`, the engine captures the regular files under `TaskSpec.output_paths`
+from the task machine once, for every grader kind including `SessionGrader`, and passes them to the session's `grade()`.
+`RolloutData.outputs` maps each absolute file path to its bytes. Files outside `output_paths` are not returned.
+A task without a task machine or without output paths returns an empty mapping.
+Capture uses the budgets of `taskcompendium.runtime.output_capture`: at most 1,024 files and 16 MiB in total.
+The engine passes this capture to the session's `grade()`, and the task grader in `TaskSessionContext.task_grader` grades the `outputs` it receives without downloading the files again.
+
+Capture runs inside the verifier deadline, as part of the final grading phase.
+A capture failure or expired deadline raises `RolloutInterrupted` with operation `grade`.
+A record interrupted before capture, during startup, preparation, a transition, or at an attempt deadline that expires before capture completes, has empty `outputs`.
+A record interrupted after capture, by a grading failure, a model failure, or an attempt deadline that expires during grading, retains `outputs`.
+Attempts that end before the first model response are not graded and have empty `outputs`.
+
+## Grader files
+
 When the grader has an environment, the Shellbox session stages grading inputs on the verifier machine after the turn loop.
 The verifier machine receives verifier resources under `/tests`, `resources.all`, `resources.worker`, captured `output_paths`, and the extracted answer.
 A `ScriptGrader`'s collect commands run as root on the task machine, then its artifacts are copied from the task machine.
@@ -255,7 +272,7 @@ No end event is emitted when a token-contract error or cancellation propagates.
 | `tool_turn_timeout` | One `advance` call, including its tool operations |
 | `total_turn_timeout` | The cumulative model-and-tool loop across all turns in one attempt |
 | `attempt_timeout` | Task startup, session preparation, turns, and final verification |
-| `verifier_timeout` | The full `grade` call, including separate verifier startup and artifact transfer |
+| `verifier_timeout` | Output capture and the full `grade` call, including separate verifier startup and artifact transfer |
 | Session `cleanup_timeout` | Each cleanup action, outside the attempt deadline |
 | Machine `cleanup_timeout` | Optional override for that machine's cleanup action |
 
@@ -288,7 +305,7 @@ Thread-backed sessions retain their pending operations until session cleanup can
 
 ## Grading
 
-Sessions receive `grade(messages, stop_reason=...)`, including turn/token-limit endings.
+Sessions receive `grade(messages, stop_reason=..., outputs=...)`, including turn/token-limit endings.
 The Shellbox session carries that reason in `GradingAttempt.stop_reason`; sandboxed graders
 can read `TASKCOMPENDIUM_STOP_REASON`. The reason is context, not a prerequisite for grading.
 A reasoning-only final response becomes an empty answer in grading evidence; the raw provider
@@ -350,7 +367,7 @@ Optional log probabilities align with response tokens.
 A continuation prompt preserves the full served prefix, including earlier response tokens.
 The engine rejects changed prefixes, empty response evidence, and misaligned log probabilities or token credit.
 
-`RolloutData` contains the conversation, token IDs, loss mask, optional log probabilities, grade, and per-step records.
+`RolloutData` contains the conversation, token IDs, loss mask, optional log probabilities, grade, per-step records, and run outputs.
 `prompt_token_ids` contains the initial prompt. `response_token_ids` contains subsequent model responses and intervening observation tokens.
 The loss mask and log probabilities align with `response_token_ids`, which excludes the initial prompt.
 Model tokens have loss mask 1. Observation tokens have mask 0 and log probability 0.

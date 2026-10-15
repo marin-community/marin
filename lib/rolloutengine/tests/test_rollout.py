@@ -52,6 +52,7 @@ from taskcompendium.models import (
     TextMessage,
     VerifierArtifact,
 )
+from taskcompendium.runtime.output_capture import MAX_OUTPUT_FILES
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import ShellToolConfig
 from verifyit.grade import grade as verifyit_grade
@@ -352,6 +353,122 @@ async def test_shell_rejects_nonobject_arguments_and_grades_repaired_file(argume
     assert json.loads(record.messages[2]["content"]) == {"error": "Tool arguments must be a JSON object"}
 
 
+async def test_declared_outputs_return_in_the_record_and_reach_the_grader():
+    task = file_task(
+        b"""test "$(cat /workspace/out/task.json)" = '{"id": 1}' && echo 1 || echo 0""",
+        output_paths=("/workspace/out",),
+        grader=workspace_grader(argv=("sh", "/tests/grade.sh")),
+    )
+    model = ReplayModel(
+        [
+            shell_call("""mkdir -p /workspace/out && echo '{"id": 1}' > /workspace/out/task.json"""),
+            shell_call("echo notes > /workspace/scratch.txt", call_id="scratch"),
+            {"role": "assistant", "content": "Done"},
+        ]
+    )
+    record = await RolloutEngine(model.complete, {"local": RecordingShellSimFactory()}).run(
+        lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
+    assert record.outputs == {"/workspace/out/task.json": b'{"id": 1}\n'}
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+
+
+async def test_session_graded_task_returns_and_grades_declared_outputs():
+    class Session:
+        def __init__(self, context):
+            self.machine = context.machine
+
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Write the report."},), {})
+
+        async def advance(self, turn):
+            written = await self.machine.run(
+                Command(("sh", "-c", f"echo {turn.message['content']} > /workspace/report.txt; echo x > /workspace/x"))
+            )
+            assert written.exit_code == 0
+            return Transition(done=True)
+
+        async def grade(self, _messages, *, stop_reason, outputs):
+            return GradeResult(Outcome.GRADED, float(outputs == {"/workspace/report.txt": b"ready\n"}))
+
+        async def close(self):
+            pass
+
+    task = file_task(grader=SessionGrader(), resources=ResourceGroups(), output_paths=("/workspace/report.txt",))
+    record = await RolloutEngine(
+        ReplayModel([{"role": "assistant", "content": "ready"}]).complete,
+        {"local": RecordingShellSimFactory()},
+        sessions={"fixture": Session},
+    ).run(lowered(task, machine=machine_runtime(), task_session="fixture"))
+    assert record.outputs == {"/workspace/report.txt": b"ready\n"}
+    assert record.grade.reward == 1.0
+
+
+class OutputWritingSession:
+    """Write ``command``'s files in the first transition, then grade only after ``grading`` is released."""
+
+    def __init__(self, context, command: str, grading: asyncio.Future | None = None):
+        self.machine = context.machine
+        self.command = command
+        self.grading = grading
+        self.entered = asyncio.Event()
+
+    async def prepare(self):
+        return SessionStart(({"role": "user", "content": "Write the report."},), {})
+
+    async def advance(self, turn):
+        assert (await self.machine.run(Command(("sh", "-c", self.command)))).exit_code == 0
+        return Transition(done=True)
+
+    async def grade(self, _messages, *, stop_reason, outputs):
+        self.entered.set()
+        if self.grading is not None:
+            await self.grading
+        return GradeResult(Outcome.GRADED, 1.0)
+
+    async def close(self):
+        pass
+
+
+@pytest.mark.parametrize("deadline", ["attempt_timeout", "verifier_timeout"])
+async def test_deadline_during_grading_keeps_captured_outputs(deadline):
+    task = file_task(grader=SessionGrader(), resources=ResourceGroups(), output_paths=("/workspace/report.txt",))
+    with pytest.raises(RolloutInterrupted) as caught:
+        await RolloutEngine(
+            ReplayModel([{"role": "assistant", "content": "ready"}]).complete,
+            {"local": RecordingShellSimFactory()},
+            sessions={
+                "fixture": lambda context: OutputWritingSession(
+                    context, "echo ready > /workspace/report.txt", asyncio.Future()
+                )
+            },
+        ).run(lowered(task, machine=machine_runtime(), task_session="fixture", **{deadline: 1.0}))
+    expected = RolloutOperation.ATTEMPT if deadline == "attempt_timeout" else RolloutOperation.GRADE
+    assert caught.value.operation == expected
+    assert caught.value.rollout.outputs == {"/workspace/report.txt": b"ready\n"}
+
+
+async def test_output_capture_over_the_file_budget_interrupts_grading():
+    sessions = []
+
+    def session(context):
+        command = f"mkdir -p /workspace/out && cd /workspace/out && touch $(seq {MAX_OUTPUT_FILES + 1})"
+        sessions.append(OutputWritingSession(context, command))
+        return sessions[-1]
+
+    task = file_task(grader=SessionGrader(), resources=ResourceGroups(), output_paths=("/workspace/out",))
+    with pytest.raises(RolloutInterrupted) as caught:
+        await RolloutEngine(
+            ReplayModel([{"role": "assistant", "content": "ready"}]).complete,
+            {"local": RecordingShellSimFactory()},
+            sessions={"fixture": session},
+        ).run(lowered(task, machine=machine_runtime(), task_session="fixture"))
+    assert caught.value.operation == RolloutOperation.GRADE
+    assert "file or byte budget" in str(caught.value.__cause__)
+    assert caught.value.rollout.outputs == {}
+    assert not sessions[0].entered.is_set()
+
+
 @pytest.mark.parametrize("compact", [False, True])
 async def test_agent_session_receives_engine_turns_and_controls_next_history(compact):
     first = ({"role": "user", "content": "Return 12."},)
@@ -369,7 +486,7 @@ async def test_agent_session_receives_engine_turns_and_controls_next_history(com
         received.append(await complete(SessionStart(history, options)))
         finished.set()
 
-    async def grade(messages, *, stop_reason):
+    async def grade(messages, *, stop_reason, outputs):
         assert finished.is_set()
         return GradeResult(Outcome.GRADED, float(messages[-1]["content"] == "12"))
 
@@ -402,7 +519,7 @@ async def test_agent_session_replays_exact_tokens_on_later_turns(compact):
         messages = ({"role": "user", "content": "Finish."},) if compact else (*first, turn.message, observation)
         await complete(SessionStart(messages, {}, prompt_token_ids=replay))
 
-    async def grade(messages, *, stop_reason):
+    async def grade(messages, *, stop_reason, outputs):
         return GradeResult(Outcome.GRADED, float(messages[-1]["content"] == "12"))
 
     async def model(request):
@@ -436,7 +553,7 @@ async def test_agent_session_is_cancelled_when_engine_generation_is_cancelled():
         model_entered.set()
         await asyncio.Future()
 
-    async def grade(_messages, *, stop_reason):
+    async def grade(_messages, *, stop_reason, outputs):
         raise AssertionError("Cancellation must not grade an unfinished model call")
 
     runner = RolloutEngine(model, {}, sessions={"agent": lambda _context: AgentTaskSession(agent, grade)})
@@ -453,7 +570,7 @@ async def test_agent_session_failure_retains_the_generated_turn():
         await complete(SessionStart(({"role": "user", "content": "Return 12."},), {}))
         raise RuntimeError("Agent failed after receiving its response")
 
-    async def grade(_messages, *, stop_reason):
+    async def grade(_messages, *, stop_reason, outputs):
         raise AssertionError("The agent failure must be reported before grading")
 
     runner = engine(
@@ -476,7 +593,7 @@ async def test_session_grader_uses_session_owned_grade():
         async def advance(self, _turn):
             return Transition(done=True)
 
-        async def grade(self, messages, *, stop_reason):
+        async def grade(self, messages, *, stop_reason, outputs):
             return GradeResult(Outcome.GRADED, float(messages[-1]["content"] == "12"))
 
         async def close(self):
@@ -510,7 +627,7 @@ async def test_session_replaces_model_options_after_conversation_reset(next_opti
                 return Transition(done=False, reset_conversation=revised_messages, next_options=next_options)
             return Transition(done=self.turns == 3)
 
-        async def grade(self, messages, *, stop_reason):
+        async def grade(self, messages, *, stop_reason, outputs):
             return GradeResult(Outcome.GRADED, float(messages[-1]["content"] == "12"))
 
         async def close(self):
@@ -538,7 +655,7 @@ async def test_session_replays_exact_initial_tokens_and_rejects_transport_change
         async def advance(self, _turn):
             return Transition(done=True)
 
-        async def grade(self, _messages, *, stop_reason):
+        async def grade(self, _messages, *, stop_reason, outputs):
             return GradeResult(Outcome.GRADED, 1.0)
 
         async def close(self):
@@ -721,7 +838,7 @@ async def test_machine_user_applies_to_custom_sessions_without_replacing_explici
         async def advance(self, turn):
             return Transition(done=True)
 
-        async def grade(self, messages, *, stop_reason):
+        async def grade(self, messages, *, stop_reason, outputs):
             return GradeResult(Outcome.GRADED, float(messages[0]["content"] == "learner:0"))
 
         async def close(self):
@@ -1224,7 +1341,7 @@ async def test_deadlines_keep_generated_tokens_and_close_sessions(phase, budget)
                 await asyncio.Future()
             return Transition(done=phase == "grade")
 
-        async def grade(self, messages, *, stop_reason):
+        async def grade(self, messages, *, stop_reason, outputs):
             if phase == "grade":
                 entered.set()
                 await asyncio.Future()
@@ -1291,7 +1408,7 @@ async def test_turn_budget_covers_all_turns_and_excludes_final_grading():
         async def advance(self, turn):
             return Transition(done=False, observations=({"role": "user", "content": "Continue."},))
 
-        async def grade(self, messages, *, stop_reason):
+        async def grade(self, messages, *, stop_reason, outputs):
             assert messages[-1]["role"] == "assistant"
             grading.set()
             await release_grade.wait()
@@ -1490,7 +1607,7 @@ async def test_external_cancellation_at_attempt_deadline_remains_cancellation(ph
                 await wait_for_deadline()
             return Transition(done=True)
 
-        async def grade(self, messages, *, stop_reason):
+        async def grade(self, messages, *, stop_reason, outputs):
             await wait_for_deadline()
 
         async def close(self):
@@ -1540,7 +1657,7 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
             assert (result.exit_code, result.stdout) == (0, b"learner")
             return Transition(done=True)
 
-        async def grade(self, messages, *, stop_reason):
+        async def grade(self, messages, *, stop_reason, outputs):
             return GradeResult(Outcome.GRADED, 1.0)
 
         async def close(self):
