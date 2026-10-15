@@ -1,0 +1,253 @@
+{
+  "submitted": true,
+  "completion_claim": false,
+  "scope": "One full1200 native-window pairedseed0 SC/TIS comparison on RNO, same exact source0212 and unchanged learning recipes.",
+  "replacements": [
+    {
+      "new_run": "sc-qwen-transfer-native-window-sc-s0-main-interactive-rno-a4-01a126ce",
+      "new_job_spec": {
+        "job_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-interactive-rno-a4-01a126ce",
+        "state": "3",
+        "num_tasks": "2",
+        "priority_band": "2",
+        "bundle_id": "efcd83dd2d7dcb3d612afa5be9c8c20576d9a26192bcc9ba62228719f547fdac",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "retired_run": "sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce",
+      "retired_current_queued_attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce/0",
+          "attempt_id": "3",
+          "attempt_uid": "fc57eaa920789dd0",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce/1",
+          "attempt_id": "3",
+          "attempt_uid": "ecdbcd9ef747ea24",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        }
+      ],
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "horizon": 1200,
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_long_interactive_rno_v1/native-window-sc-s0.yaml",
+      "config_sha256": "fc699c8e43536c6b0fa2020e20f86a6276fd10bd4ec5aa5aae3194a44c6c6fdc",
+      "confirmed_new_job_spec": {
+        "job_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-interactive-rno-a4-01a126ce",
+        "state": "3",
+        "num_tasks": "2",
+        "priority_band": "2",
+        "bundle_id": "efcd83dd2d7dcb3d612afa5be9c8c20576d9a26192bcc9ba62228719f547fdac",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "retired_terminal_job_spec": {
+        "job_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce",
+        "state": "6",
+        "num_tasks": "2",
+        "priority_band": "3",
+        "bundle_id": "712d02a19261fb3157a0a9d9711a61476ba79359acde716956b505d10f3a3098",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "retired_attempt_rows_after_cancellation": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "01ceda1e6624b20a",
+          "state": "10",
+          "exit_code": "137",
+          "started_at_ms": "1792028868688",
+          "finished_at_ms": "1792028906441",
+          "node_name": "gb99af0",
+          "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: c01a81b8-d255-46f5-a946-a328abfed567, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "1a1711fe9de2ecce",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1792028868688",
+          "finished_at_ms": "1792028906441",
+          "node_name": "gb97250",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce/0",
+          "attempt_id": "1",
+          "attempt_uid": "2aefbc24291f39ff",
+          "state": "10",
+          "exit_code": "137",
+          "started_at_ms": "1792031194267",
+          "finished_at_ms": "1792031542250",
+          "node_name": "g5ba762",
+          "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 2cb6bb4c-13ca-4f48-81ee-4bdc95dfe98c, JobUID: d5b7d8d1-7f2d-482e-b8f1-a627641f3e08) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce/1",
+          "attempt_id": "1",
+          "attempt_uid": "ce5c5f8537a42744",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1792031194267",
+          "finished_at_ms": "1792031542250",
+          "node_name": "g5c0474",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce/0",
+          "attempt_id": "2",
+          "attempt_uid": "3fc7b92ae1702fc6",
+          "state": "10",
+          "exit_code": "137",
+          "started_at_ms": "1792037171975",
+          "finished_at_ms": "1792037220142",
+          "node_name": "ga8afb0",
+          "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: f198134e-55a7-44de-92e5-2be1e168595b, JobUID: 2c5984fa-855c-47ff-a871-99fcdeb70894) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce/1",
+          "attempt_id": "2",
+          "attempt_uid": "108cb11ef9c4a284",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1792037171975",
+          "finished_at_ms": "1792037220142",
+          "node_name": "gaa0e72",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce/0",
+          "attempt_id": "3",
+          "attempt_uid": "fc57eaa920789dd0",
+          "state": "6",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "1792045127751",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce/1",
+          "attempt_id": "3",
+          "attempt_uid": "ecdbcd9ef747ea24",
+          "state": "6",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "1792045127751",
+          "node_name": "",
+          "terminal_reason": ""
+        }
+      ]
+    },
+    {
+      "new_run": "sc-qwen-transfer-native-window-tis-s0-main-interactive-rno-a4-01a126ce",
+      "new_job_spec": {
+        "job_id": "/romain/sc-qwen-transfer-native-window-tis-s0-main-interactive-rno-a4-01a126ce",
+        "state": "3",
+        "num_tasks": "2",
+        "priority_band": "2",
+        "bundle_id": "f1b2a459b324fe1ba9a1e3cdbbfdd09ea85cecd34e4ccf9cd3df9b2b60be6e33",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "retired_run": "sc-qwen-transfer-native-window-tis-s0-main-rno-a3-01a126ce",
+      "retired_current_queued_attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-tis-s0-main-rno-a3-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "880c01c36154cb16",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-tis-s0-main-rno-a3-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "51a801786a07df36",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        }
+      ],
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "horizon": 1200,
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_long_interactive_rno_v1/native-window-tis-s0.yaml",
+      "config_sha256": "2fa5d2ed77887cb18995ea7ab2a0f97e5fd8b4129eff9d88b71d8b69bcaecc71",
+      "confirmed_new_job_spec": {
+        "job_id": "/romain/sc-qwen-transfer-native-window-tis-s0-main-interactive-rno-a4-01a126ce",
+        "state": "3",
+        "num_tasks": "2",
+        "priority_band": "2",
+        "bundle_id": "f1b2a459b324fe1ba9a1e3cdbbfdd09ea85cecd34e4ccf9cd3df9b2b60be6e33",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "retired_terminal_job_spec": {
+        "job_id": "/romain/sc-qwen-transfer-native-window-tis-s0-main-rno-a3-01a126ce",
+        "state": "6",
+        "num_tasks": "2",
+        "priority_band": "3",
+        "bundle_id": "25d5c41dc5dae58a22b845bbf55dffca7b35c61fe2d7d16a879f0dc8a2795f4a",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "retired_attempt_rows_after_cancellation": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-tis-s0-main-rno-a3-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "880c01c36154cb16",
+          "state": "6",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "1792045127999",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-tis-s0-main-rno-a3-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "51a801786a07df36",
+          "state": "6",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "1792045127999",
+          "node_name": "",
+          "terminal_reason": ""
+        }
+      ]
+    }
+  ],
+  "global_campaign_interactive_nodes_including_queued": {
+    "east": 0,
+    "rno": 4
+  },
+  "original_plus_current_campaign_zero_interactive_before_submission_proof": "Owned 06:10 cap CSVs include both01a123c0 and01a126ce suffixes; both0.",
+  "native_admission_gates": [
+    "results/qwen_curriculum300_native_audit_gate.json",
+    "results/qwen_optimizer300_native_audit_gate.json",
+    "results/qwen_advantages300_native_audit_gate.json"
+  ],
+  "last_norm_masked_failure_scope": "Exact inspected6fullymasked trainfailures, zeroeval; all remaining checks unchanged.",
+  "full_frozen_grader_replays_pending": true,
+  "healthy_east_snowball_preserved": "/romain/sc-snowball-main-noise005-sc-s1-a2-01a126ce",
+  "predecessor_rule": "Both concrete replacements controllerconfirmed before cancelling two exact whollyqueued ownedRNOa3 predecessors, no prefix cancellation. All raw outputs and allocation intervals retained."
+}
