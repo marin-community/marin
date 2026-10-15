@@ -288,6 +288,14 @@ def test_no_run_names_or_internal_strings(out, heldout_table):
             assert not pattern.search(text), (name, pattern.pattern, pattern.search(text))
 
 
+def test_prebuilt_tables_give_the_same_export(ctx, out, heldout_table, validation_table):
+    # The orchestrator passes the held-out and validation tables it built instead of exporting them again.
+    prebuilt = fits.export(ctx, heldout_table=heldout_table, validation_table=validation_table)
+    assert prebuilt.keys() == out.keys()
+    for name, table in out.items():
+        pd.testing.assert_frame_equal(prebuilt[name], table, check_exact=True)
+
+
 def test_required_sources_are_the_files_the_export_reads(ctx, monkeypatch):
     # The skip guard above relies on this list. The export also runs the held-out and validation exporters, whose own
     # sources are theirs to list.

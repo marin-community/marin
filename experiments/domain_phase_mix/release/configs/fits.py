@@ -149,7 +149,7 @@ AGREEMENT = 1e-12  # two folders' predictions of one proposal by one model
 
 
 def required_sources() -> list[Path]:
-    """The files the export reads itself; it also runs the `heldout` and `validation` exporters on their sources."""
+    """The files the export reads itself; run on its own, it also runs the `heldout` and `validation` exporters."""
     data = [
         DATA / f"{stem}_{name}.csv" for stem in (SWARM_PREDICTIONS, BANK_PREDICTIONS, BANK) for name in MIXSEL_OBJECTIVES
     ]
@@ -538,8 +538,18 @@ def _proposal_predictions(validation_table: pd.DataFrame) -> pd.DataFrame:
     return out.drop(columns="mixture_id").reset_index(drop=True)
 
 
-def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
-    heldout_table = heldout.export(ctx)["heldout"]
+def export(
+    ctx: ExportContext,
+    *,
+    heldout_table: pd.DataFrame | None = None,
+    validation_table: pd.DataFrame | None = None,
+) -> dict[str, pd.DataFrame]:
+    """The derived tables, from the `heldout` and `validation_3e18` tables that the orchestrator passes in, or that
+    this export builds when run on its own."""
+    if heldout_table is None:
+        heldout_table = heldout.export(ctx)["heldout"]
+    if validation_table is None:
+        validation_table = validation.export(ctx)["validation_3e18"]
     runs = _heldout_runs(ctx, heldout_table)
     exposures = runs.drop_duplicates("coordinate_id").set_index("coordinate_id").exposure_id
     return {
@@ -548,6 +558,6 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
         "fits_heldout_predictions": _heldout_predictions(runs),
         "fits_reliability": _reliability(),
         "fits_learning_curves": _learning_curves(exposures),
-        "fits_proposal_predictions": _proposal_predictions(validation.export(ctx)["validation_3e18"]),
+        "fits_proposal_predictions": _proposal_predictions(validation_table),
         "fits_olmix_task_laws": _olmix_task_laws(ctx),
     }
