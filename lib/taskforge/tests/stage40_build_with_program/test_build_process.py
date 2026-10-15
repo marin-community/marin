@@ -27,13 +27,14 @@ from taskforge.stage40_build_with_program.build_process import (
     BuildServiceConfig,
     Built,
     Crashed,
+    Expired,
     Failed,
     HostFailed,
     Raised,
     image_builder,
     run_build_in_process,
 )
-from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure
+from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, BuildInfrastructureFailure, ExpiredClock
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
 from taskforge.stage40_build_with_program.run import ResearchRequirement, run_build
 from taskforge.stage40_build_with_program.step_store import CacheStatus
@@ -52,7 +53,10 @@ PROGRAM = (
     PLAIN_PROGRAM.replace("from dataclasses import dataclass\n", "from pydantic import BaseModel\n")
     .replace("@dataclass(frozen=True)\nclass Question:", "class Question(BaseModel):")
     .replace("import ANSWER_FORMAT", "import ANSWER_FORMAT, structured")
-    .replace("import RLEnvBuildContext", "import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext")
+    .replace(
+        "import RLEnvBuildContext",
+        "import BuildExpired, BuildFailure, BuildInfrastructureFailure, ExpiredClock, RLEnvBuildContext",
+    )
     .replace(QUESTION, ASKED)
 )
 
@@ -137,7 +141,7 @@ async def test_a_build_in_a_child_process_writes_the_draft_and_ledger_of_the_bui
     assert [entry.step for entry in entries if entry.kind == EntryKind.LLM_CALL] == ["question"]
 
 
-async def test_a_step_that_never_yields_is_killed_at_the_wall_clock_while_the_driver_loop_runs(make_request):
+async def test_a_step_that_never_yields_expires_at_the_wall_clock_while_the_driver_loop_runs(make_request):
     ticks = 0
 
     async def tick() -> None:
@@ -150,13 +154,13 @@ async def test_a_step_that_never_yields_is_killed_at_the_wall_clock_while_the_dr
     request = make_request(with_question('    print("spinning", flush=True)\n    while True:\n        pass'))
     started = time.monotonic()
 
-    with pytest.raises(BuildFailure) as failure:
+    with pytest.raises(BuildExpired) as expired:
         await run_build_in_process(request, wall_timeout=SPIN_TIMEOUT)
 
     elapsed = time.monotonic() - started
     ticker.cancel()
-    assert failure.value.step is None
-    assert str(failure.value) == f"the build ran for more than {SPIN_TIMEOUT:.0f} seconds"
+    assert (expired.value.clock, expired.value.step) == (ExpiredClock.WALL, None)
+    assert str(expired.value) == f"the build ran for more than {SPIN_TIMEOUT:.0f} seconds"
     assert "spinning" in (request.round_dir / LOG_FILE).read_text()
     assert elapsed < SPIN_TIMEOUT + 5
     assert ticks > SPIN_TIMEOUT / 0.05 / 2
@@ -181,6 +185,16 @@ async def test_a_host_failure_in_the_child_comes_back_with_its_cause(make_reques
         InfrastructureCause.HOST_UNREACHABLE,
         "the controller refused",
     )
+
+
+async def test_a_step_clock_expiry_in_the_child_comes_back_with_its_clock_and_step(make_request):
+    body = '    raise BuildExpired("ran for more than 1800 seconds without returning", ExpiredClock.STEP)'
+
+    with pytest.raises(BuildExpired) as expired:
+        await run_build_in_process(make_request(with_question(body)), wall_timeout=WALL_TIMEOUT)
+
+    assert (expired.value.clock, expired.value.step) == (ExpiredClock.STEP, "question")
+    assert str(expired.value) == "ran for more than 1800 seconds without returning"
 
 
 async def test_any_other_exception_in_the_child_comes_back_as_its_type_message_and_traceback(make_request):
@@ -208,6 +222,7 @@ def test_requests_and_results_round_trip_through_json(make_request, image_cluste
     results = (
         Built(),
         Failed("the question is ambiguous", "question"),
+        Expired(ExpiredClock.STEP, "question", "ran for more than 1800 seconds without returning"),
         HostFailed(InfrastructureCause.NO_FACTORY, "no docker"),
         Crashed(Raised.OS_ERROR, "OSError: disk full\n\nTraceback"),
     )

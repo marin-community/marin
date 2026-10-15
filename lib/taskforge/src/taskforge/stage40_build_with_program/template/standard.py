@@ -24,10 +24,11 @@ The steps, in run order:
    the step grades its reference answer and the empty answer with ``grade_candidate``. A reference below
    ``FULL_CREDIT``, a reward outside the grader's score range, or an empty answer above the grader's
    declared ``rejection_ceiling`` goes back to the model, and after ``ATTEMPTS`` requests the build
-   fails. A reference whose grader timed out fails the build at once: ``grade_candidate`` has already
-   graded it a second time on fresh machines, so the grader was slow twice, and a rewritten grader
-   would not tell the model why. The returned ``Grader`` holds the reference answer, the ceiling and
-   every graded candidate.
+   fails. A reference whose grader timed out raises ``BuildExpired`` at once: ``grade_candidate`` has
+   already graded it a second time on fresh machines, so the grader command was slow twice. Whether
+   the grader or Taskforge was slow is unknown until someone reads the record, so the item is held
+   rather than sent back for a rewritten grader. The returned ``Grader`` holds the reference answer,
+   the ceiling and every graded candidate.
 5. ``instructions`` writes the solver-facing prompt around the grader's answer contract and sends
    back one that leaks a graded answer, runs past ``INSTRUCTION_WORD_LIMIT`` words, copies file
    lines, or asks for work by hand.
@@ -46,7 +47,7 @@ from taskforge.spec import draft
 from taskforge.spec.verdict import grader_checks, reward_in_range
 from taskforge.stage10_proposal.model import Environment, TaskProposal
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
-from taskforge.stage40_build_with_program.context import BuildFailure, RLEnvBuildContext
+from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, ExpiredClock, RLEnvBuildContext
 from taskforge.stage40_build_with_program.outputs import Fixtures, GradedCandidate, Grader, Instructions, Sources
 from taskforge.stage40_build_with_program.sandbox_effects import grade_candidate, publish_image
 from taskforge.stage40_build_with_program.sdk import (
@@ -174,9 +175,10 @@ async def grader(
         except (ValueError, BuildFailure) as error:
             return str(error)
         if reference.status == Outcome.INFRA_ERROR and reference.failure is GradingFailure.TIMEOUT:
-            raise BuildFailure(
-                "the grader timed out on the reference answer twice, each time on fresh machines; it must finish "
-                f"within its timeout: {grade_diagnostics(reference)}"
+            raise BuildExpired(
+                "the grader command timed out on the reference answer twice, each time on fresh machines; the item "
+                f"is held for inspection: {grade_diagnostics(reference)}",
+                ExpiredClock.GRADER,
             )
         prototyped.append(graded_candidate(submitted.reference_reply, reference_files, reference))
         if reference.status == Outcome.GRADED and not reward_in_range(reference):

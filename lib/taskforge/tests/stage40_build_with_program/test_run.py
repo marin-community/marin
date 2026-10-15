@@ -36,7 +36,7 @@ from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.stage10_proposal.model import ResearchNeed, TaskProposal
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build_with_program import run as run_module
-from taskforge.stage40_build_with_program.context import BuildFailure, RLEnvBuildContext
+from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, ExpiredClock, RLEnvBuildContext
 from taskforge.stage40_build_with_program.outputs import ResearchFinding, Sources
 from taskforge.stage40_build_with_program.run import (
     DRAFT_DIR,
@@ -311,7 +311,7 @@ async def test_a_step_past_its_call_budget_fails_the_build_as_the_programs(
     assert len(fake_glm.requests) == 2
 
 
-async def test_a_step_that_never_returns_fails_the_build_as_the_programs(tmp_path, proposal, services, monkeypatch):
+async def test_a_step_that_never_returns_expires_on_the_step_clock(tmp_path, proposal, services, monkeypatch):
     monkeypatch.setattr(run_module, "STEP_TIMEOUT", 0.05)
 
     @rl_env_build_sink
@@ -319,11 +319,11 @@ async def test_a_step_that_never_returns_fails_the_build_as_the_programs(tmp_pat
         await asyncio.Event().wait()
         raise AssertionError("unreachable")
 
-    with pytest.raises(BuildFailure) as failure:
+    with pytest.raises(BuildExpired) as expired:
         await build(tmp_path, proposal, services, rl_env_build_program(numbers, sink=task))
 
-    assert failure.value.step == "task"
-    assert str(failure.value) == "task: ran for more than 0 seconds without returning"
+    assert (expired.value.clock, expired.value.step) == (ExpiredClock.STEP, "task")
+    assert str(expired.value) == "ran for more than 0 seconds without returning"
 
 
 @rl_env_build_step
