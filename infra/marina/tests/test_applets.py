@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
-from marina.applets import AppletForbidden, AppletMode, AppletStore, package_applet, read_applet_package
+from marina.applets import AppletStore, package_applet, read_applet_package
 from marina.cli import cli
 from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
 from marina.db import UrlDatabase, grant_read
@@ -809,38 +809,70 @@ def test_host_migration_preserves_filer_and_does_not_restore_changed_bindings(da
     assert "filer.marina.oa.dev" not in store.host_bindings()
 
 
-def test_store_rejects_non_owner_and_allows_operator(tmp_path: Path, database_url: str) -> None:
-    _client, store = applet_client_and_store(tmp_path, database_url)
-    package = read_applet_package(package_applet(DEMO_APPLET))
-    published = store.publish(package=package, owner="owner@example")
-    updated = store.publish(
-        package=package,
-        owner="owner@example",
-        applet_id=published.applet_id,
-        base_version=1,
-    )
-    assert updated.version == 2
-    with pytest.raises(AppletForbidden):
-        store.rollback(published.applet_id, 1, "other@example", 2)
-    with pytest.raises(AppletForbidden):
-        store.set_mode(published.applet_id, AppletMode.PUBLIC, "other@example", 2)
-    assert store.current_version(published.applet_id) == 2
-    store.set_mode(
-        published.applet_id,
-        AppletMode.PUBLIC,
-        "operator@example",
-        2,
-        frozenset({"operator@example"}),
-    )
-    assert store.access_mode(published.applet_id) is AppletMode.PUBLIC
-    store.rollback(
-        published.applet_id,
-        1,
-        "operator@example",
-        2,
-        frozenset({"operator@example"}),
-    )
-    assert store.current_version(published.applet_id) == 1
+@pytest.mark.parametrize("named", [False, True])
+def test_authenticated_users_share_applet_lifecycle(
+    tmp_path: Path, database_url: str, monkeypatch: pytest.MonkeyPatch, named: bool
+) -> None:
+    # Replace only external signature verification; exercise Marina's real auth
+    # middleware and mutation routes with a remote peer and distinct identities.
+    def verify_assertion(assertion: str, *_args: object, **_kwargs: object) -> dict[str, str]:
+        return {"email": assertion}
+
+    monkeypatch.setattr("google.oauth2.id_token.verify_token", verify_assertion)
+    with isolated_database(database_url) as local_url:
+        database = UrlDatabase(local_url)
+        store = AppletStore(database)
+        ensure_applet_provisioning(store.engine)
+        store.migrate()
+        config = MarinaConfig(
+            data_root=str(tmp_path / "data"),
+            iap_audience="test-audience",
+            database=database,
+            applet_operators=frozenset({"first@example"}),
+        )
+        client = TestClient(create_app(config), client=("10.0.0.7", 40000))
+        source = tmp_path / "shared"
+        shutil.copytree(DEMO_APPLET, source)
+        if named:
+            with (source / "applet.toml").open("a") as manifest:
+                manifest.write('\nname = "shared-test"\n')
+        package = package_applet(source)
+        applet_id = str(uuid.uuid4())
+        endpoint = f"/api/marina/applets/{applet_id}"
+        first = {"x-goog-iap-jwt-assertion": "first@example"}
+        second = {"x-goog-iap-jwt-assertion": "second@example"}
+        created = client.post(endpoint, params={"base_version": 0}, headers=first, content=package)
+        assert created.status_code == 201, created.text
+        updated = client.post(endpoint, params={"base_version": 1}, headers=second, content=package)
+        assert updated.status_code == 201, updated.text
+        assert updated.json()["version"] == 2
+        assert [item.published_by for item in store.versions(uuid.UUID(applet_id))] == [
+            "second@example",
+            "first@example",
+        ]
+        listed = client.get("/api/marina/apps", headers=first).json()["apps"]
+        assert listed[0]["published_by"] == "second@example"
+
+        mode = "private" if named else "public"
+        mutations = [
+            ("POST", endpoint, {"params": {"base_version": 1}, "content": package}),
+            ("PUT", f"{endpoint}/mode", {"json": {"mode": mode, "base_version": 1}}),
+            ("PUT", f"{endpoint}/current", {"json": {"version": 1, "base_version": 1}}),
+        ]
+        for method, path, arguments in mutations:
+            assert client.request(method, path, headers=second, **arguments).status_code == 409
+            assert client.request(method, path, **arguments).status_code == 401
+        assert client.delete(endpoint).status_code == 401
+        assert store.current_version(uuid.UUID(applet_id)) == 2
+        assert client.put(f"{endpoint}/mode", headers=second, json={"mode": mode, "base_version": 2}).status_code == 200
+        assert store.access_mode(uuid.UUID(applet_id)).value == mode
+        assert (
+            client.put(f"{endpoint}/current", headers=second, json={"version": 1, "base_version": 2}).status_code == 200
+        )
+        assert store.current_version(uuid.UUID(applet_id)) == 1
+        assert client.delete(endpoint, headers=second).status_code == 204
+        assert store.active_applets() == []
+        store.engine.dispose()
 
 
 def test_publish_rejects_archive_escape(tmp_path: Path, database_url: str) -> None:
@@ -918,7 +950,7 @@ def test_publish_prunes_old_revisions_and_allocates_after_rollback(tmp_path: Pat
         current = revision
     assert [item.version for item in store.versions(published.applet_id)] == [6, 5, 4, 3, 2]
 
-    store.rollback(published.applet_id, 2, "owner@example", 6)
+    store.rollback(published.applet_id, 2, 6)
     next_revision = store.publish(package, "owner@example", published.applet_id, 2)
     assert next_revision.version == 7
     assert [item.version for item in store.versions(published.applet_id)] == [7, 6, 5, 4, 3]
