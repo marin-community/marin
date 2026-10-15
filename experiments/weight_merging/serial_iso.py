@@ -6,7 +6,6 @@
 import argparse
 import json
 import logging
-import time
 from functools import partial
 from pathlib import Path
 
@@ -15,12 +14,10 @@ from marin.merging.arithmetic import MergeMethod, MergeParameters, merge_tensor
 from marin.merging.checkpoint import CheckpointReader, CheckpointSource
 from marin.merging.constrained import (
     TensorSupport,
-    export_constrained,
-    finalize_constrained_export,
-    validate_audit_location,
 )
 from marin.merging.isospectral import isospectral_merge
-from rigging.filesystem.buckets import filesystem_for
+
+from experiments.weight_merging.serial_merge import materialize_serial_stage
 
 
 def transform_row(
@@ -31,7 +28,7 @@ def transform_row(
     device: torch.device,
     name: str,
     row: int | None,
-    value: torch.Tensor,
+    _value: torch.Tensor,
 ) -> torch.Tensor:
     assert row is not None
     current = previous.tensor(name)[row]
@@ -56,24 +53,8 @@ def run(recipe: dict, device: torch.device) -> None:
             arithmetic = MergeParameters(
                 **{**parameters, "method": MergeMethod(method), "coefficients": tuple(parameters["coefficients"])}
             )
-        validate_audit_location(stage["audit"], stage["output"])
-        fs, path = filesystem_for(stage["audit"])
-        if fs.exists(path):
-            raise FileExistsError(stage["audit"])
-
         transform = partial(transform_row, previous, donor, parameters, arithmetic, device)
-
-        start = time.monotonic()
-        audit = export_constrained(
-            original,
-            stage["output"],
-            support,
-            recipe["support_cap"],
-            recipe["change_cap"],
-            transform,
-        )
-        audit.update(recipe=recipe, serial_stage=stage_index + 1, elapsed_seconds=time.monotonic() - start)
-        finalize_constrained_export(audit, stage["audit"], recipe["change_cap"])
+        audit = materialize_serial_stage(original, recipe, stage, stage_index + 1, support, transform)
         previous = CheckpointReader(CheckpointSource(stage["output"], f"{recipe['id']}:stage-{stage_index + 1}"))
         logging.info("Verified serial stage %d: %.6f%% changed", stage_index + 1, audit["changed_percent"])
     assert recipe["stages"][-1]["output"] == recipe["output"]

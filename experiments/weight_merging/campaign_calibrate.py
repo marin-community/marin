@@ -65,6 +65,14 @@ def routing_statistics(bank: FrozenGrugBank, examples: list) -> dict:
     return {"counts": {domain: value.tolist() for domain, value in counts.items()}, "examples": identities}
 
 
+def write_routing_artifact(
+    bank: FrozenGrugBank, examples: list, source: dict, label: str, data_sha256: str, write
+) -> None:
+    routing = routing_statistics(bank, examples)
+    routing.update(source=source, data_sha256=data_sha256, complete=True)
+    write(f"routing-{label}.json", json.dumps(routing).encode())
+
+
 def routing_only(recipe: dict, config: dict, examples: list, devices: tuple, write) -> None:
     """Collect per-domain routing counts for each labeled checkpoint source."""
     labels = recipe["source_labels"]
@@ -73,9 +81,7 @@ def routing_only(recipe: dict, config: dict, examples: list, devices: tuple, wri
     for source, label in zip(recipe["sources"], labels, strict=True):
         bank = FrozenGrugBank([CheckpointSource(**source)], config, devices)
         bank.enable_grouped_experts()
-        routing = routing_statistics(bank, examples)
-        routing.update(source=source, data_sha256=recipe["data_sha256"], complete=True)
-        write(f"routing-{label}.json", json.dumps(routing).encode())
+        write_routing_artifact(bank, examples, source, label, recipe["data_sha256"], write)
         del bank
         gc.collect()
         torch.cuda.empty_cache()
@@ -139,9 +145,7 @@ def foundation(recipe: dict, config: dict, examples: list, devices: tuple, write
         bank = FrozenGrugBank([CheckpointSource(**source)], config, devices)
         bank.enable_grouped_experts()
         label = ("base", "nupa", "bfcl")[i]
-        routing = routing_statistics(bank, examples)
-        routing.update(source=source, data_sha256=recipe["data_sha256"], complete=True)
-        write(f"routing-{label}.json", json.dumps(routing).encode())
+        write_routing_artifact(bank, examples, source, label, recipe["data_sha256"], write)
         if i:
             domain = "numeric" if i == 1 else "tools"
             supported_moments(

@@ -6,6 +6,7 @@
 import gc
 import json
 import logging
+from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
@@ -18,9 +19,16 @@ TOTAL_ELEMENTS = 67_078_882_816
 ELEMENTS_PER_EXPERT_ROW_SET = 9_830_400
 
 
+@dataclass
+class ResidualTotal:
+    logit_kl: float = 0.0
+    hidden_normalized_mse: float = 0.0
+    count: int = 0
+
+
 def residuals(bank: FrozenGrugBank, weights: dict, examples: list, cache: dict, hidden_weight: float) -> dict:
     domains = {example.domain for example in examples}
-    totals = {domain: {"logit_kl": 0.0, "hidden_normalized_mse": 0.0, "count": 0} for domain in domains}
+    totals = {domain: ResidualTotal() for domain in domains}
     with torch.no_grad():
         for example in examples:
             teacher_logits, teacher_hidden = cache[example.identity]
@@ -37,14 +45,14 @@ def residuals(bank: FrozenGrugBank, weights: dict, examples: list, cache: dict, 
                     hidden = hidden + layer_error.to(device)
                 hidden = hidden / len(output.hidden_states)
             entry = totals[example.domain]
-            entry["logit_kl"] += kl.item()
-            entry["hidden_normalized_mse"] += hidden.item()
-            entry["count"] += 1
+            entry.logit_kl += kl.item()
+            entry.hidden_normalized_mse += hidden.item()
+            entry.count += 1
             del output, student_log, teacher_log, kl, hidden
     return {
         domain: {
-            "logit_kl": values["logit_kl"] / values["count"],
-            "hidden_normalized_mse": values["hidden_normalized_mse"] / values["count"],
+            "logit_kl": values.logit_kl / values.count,
+            "hidden_normalized_mse": values.hidden_normalized_mse / values.count,
         }
         for domain, values in totals.items()
     }

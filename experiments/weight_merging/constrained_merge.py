@@ -11,7 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
-from marin.merging.arithmetic import MergeMethod, MergeParameters, RamParameters, merge_tensor
+from marin.merging.arithmetic import merge_tensor
 from marin.merging.checkpoint import CheckpointReader, CheckpointSource
 from marin.merging.constrained import (
     TensorSupport,
@@ -21,6 +21,8 @@ from marin.merging.constrained import (
 )
 from marin.merging.isospectral import isospectral_merge
 from rigging.filesystem.buckets import filesystem_for
+
+from experiments.weight_merging.merge import merge_parameters
 
 
 def main() -> None:
@@ -45,11 +47,7 @@ def main() -> None:
             raise ValueError("Row-scaled transfer requires exactly one donor")
         parameters = None
     else:
-        params["method"] = MergeMethod(params["method"])
-        params["coefficients"] = tuple(params["coefficients"])
-        if params.get("ram") is not None:
-            params["ram"] = RamParameters(**params["ram"])
-        parameters = MergeParameters(**params)
+        parameters = merge_parameters(params)
     diagnostics = []
     measured_names = set()
     start = time.monotonic()
