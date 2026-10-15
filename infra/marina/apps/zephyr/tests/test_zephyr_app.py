@@ -7,6 +7,7 @@ The fixture dataclasses carry only the columns the app queries.
 """
 
 import json
+import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -209,7 +210,10 @@ def test_marina_mount_serves_zephyr_api(finelog, monkeypatch, tmp_path, database
     monkeypatch.setenv("ZEPHYR_FINELOG_URL", finelog)
     apps_dir = tmp_path / "apps"
     apps_dir.mkdir()
-    (apps_dir / "zephyr").symlink_to(APP, target_is_directory=True)
+    source = apps_dir / "zephyr"
+    shutil.copytree(APP, source, ignore=shutil.ignore_patterns("web", "dist", "tests", "node_modules", "__pycache__"))
+    (source / "dist").mkdir()
+    (source / "dist/index.html").write_text("<h1>Zephyr</h1>")
     with isolated_database(database_url) as local_url:
         database = UrlDatabase(local_url)
         install_preview_sources(apps_dir, database)
