@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 
-from experiments.weight_merging.calibration_model import FrozenGrugBank, teacher_cache
+from experiments.weight_merging.calibration_model import CalibrationOutput, FrozenGrugBank, teacher_cache
 
 logger = logging.getLogger(__name__)
 PROJECTIONS = ("down_proj", "gate_proj", "up_proj")
@@ -24,22 +24,30 @@ class ResidualTotal:
     count: int = 0
 
 
-def residuals(bank: FrozenGrugBank, weights: dict, examples: list, cache: dict, hidden_weight: float) -> dict:
+def residuals(
+    bank: FrozenGrugBank,
+    weights: dict,
+    examples: list,
+    cache: dict[str, CalibrationOutput],
+    hidden_weight: float,
+) -> dict:
     domains = {example.domain for example in examples}
     totals = {domain: ResidualTotal() for domain in domains}
     with torch.no_grad():
         for example in examples:
-            teacher_logits, teacher_hidden = cache[example.identity]
+            teacher = cache[example.identity]
             output = bank.forward(weights, example.tokens, example.positions)
             device = output.logits.device
             student_log = F.log_softmax(output.logits.float(), dim=-1)
-            teacher_log = F.log_softmax(teacher_logits.to(device).float(), dim=-1)
+            teacher_log = F.log_softmax(teacher.logits.to(device).float(), dim=-1)
             kl = F.kl_div(student_log, teacher_log, reduction="sum", log_target=True) / example.positions.numel()
             hidden = torch.zeros((), device=device)
             if hidden_weight:
-                for student, teacher in zip(output.hidden_states, teacher_hidden, strict=True):
-                    teacher = teacher.to(student.device).float()
-                    layer_error = F.mse_loss(student.float(), teacher) / teacher.square().mean().clamp_min(1e-8)
+                for student, teacher_hidden in zip(output.hidden_states, teacher.hidden_states, strict=True):
+                    teacher_hidden = teacher_hidden.to(student.device).float()
+                    layer_error = F.mse_loss(student.float(), teacher_hidden) / teacher_hidden.square().mean().clamp_min(
+                        1e-8
+                    )
                     hidden = hidden + layer_error.to(device)
                 hidden = hidden / len(output.hidden_states)
             entry = totals[example.domain]

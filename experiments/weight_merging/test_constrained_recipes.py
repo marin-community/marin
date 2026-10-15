@@ -3,6 +3,8 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 import safetensors.torch
@@ -11,7 +13,8 @@ from marin.merging.arithmetic import MergeMethod, MergeParameters, merge_tensor
 from marin.merging.isospectral import isospectral_merge
 from marin.merging.learned import differentiable_weight_blend
 
-from experiments.weight_merging.calibration_model import allocate_chunk_counts
+from experiments.weight_merging.behavioral_residual import residuals
+from experiments.weight_merging.calibration_model import CalibrationOutput, FrozenGrugBank, allocate_chunk_counts
 from experiments.weight_merging.constrained_calibrated import blend_slice
 from experiments.weight_merging.constrained_merge import main as constrained_main
 from experiments.weight_merging.serial_iso import run as serial_iso_run
@@ -45,6 +48,31 @@ def test_export_slices_match_training_chunks_that_cross_expert_boundaries():
         [blend_slice(base[row], [d[row] for d in donors], coefficients, row * 12, 60) for row in range(5)]
     )
     torch.testing.assert_close(exported, trained, rtol=0, atol=0)
+
+
+def test_behavioral_residual_reads_cached_calibration_output():
+    class FixedBank:
+        def forward(self, weights, tokens, positions):
+            return CalibrationOutput(
+                logits=torch.tensor([[[2.0, -1.0]]]),
+                hidden_states=(torch.tensor([[[1.0, 2.0]]]),),
+            )
+
+    example = SimpleNamespace(
+        identity="example",
+        domain="bfcl",
+        tokens=torch.tensor([[1]]),
+        positions=torch.tensor([0]),
+    )
+    cached = CalibrationOutput(
+        logits=torch.tensor([[[2.0, -1.0]]]),
+        hidden_states=(torch.tensor([[[1.0, 2.0]]]),),
+    )
+
+    measured = residuals(cast(FrozenGrugBank, FixedBank()), {}, [example], {example.identity: cached}, hidden_weight=1.0)
+
+    assert measured["bfcl"]["logit_kl"] == pytest.approx(0.0, abs=1e-7)
+    assert measured["bfcl"]["hidden_normalized_mse"] == 0.0
 
 
 def test_component_and_activation_supports_obey_scalar_budget_and_nested_allocation():
