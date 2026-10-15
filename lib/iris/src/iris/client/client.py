@@ -21,7 +21,7 @@ import logging
 import re
 from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Event
 from typing import Protocol, TypeVar, cast
@@ -61,6 +61,7 @@ from iris.cluster.types import (
     CoschedulingConfig,
     EndpointAccess,
     Entrypoint,
+    EnvironmentInheritance,
     EnvironmentSpec,
     JobName,
     Namespace,
@@ -940,7 +941,9 @@ class IrisClient:
             entrypoint: Job entrypoint (callable + args/kwargs)
             name: Job name (cannot contain '/')
             resources: Resource requirements
-            environment: Environment configuration
+            environment: Environment configuration. Set
+                ``inheritance=EnvironmentInheritance.EXPLICIT`` to send only
+                ``env_vars`` from this spec, without parent or submitter variables.
             ports: Port names to allocate (e.g., ["actor", "metrics"])
             scheduling_timeout: Maximum time to wait for scheduling (None = no timeout)
             constraints: Constraints for filtering workers by attribute
@@ -1003,12 +1006,14 @@ class IrisClient:
         # from the parent. A child that specifies its own setup (explicit
         # setup_scripts, or builder inputs to rebuild the default) takes control of
         # its environment; one that specifies only env vars (or nothing) reuses the
-        # parent's setup so it lands in the same environment. A sandbox child
+        # parent's setup so it lands in the same environment. An EXPLICIT child
+        # keeps setup inheritance but not environment variables. A sandbox child
         # inherits neither; placement constraints still apply.
         sandboxed = container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
         if parent_job_id:
             job_info = get_job_info()
-            inherited = dict(job_info.env) if job_info and not sandboxed else {}
+            inherit_env = environment is None or environment.inheritance == EnvironmentInheritance.INHERIT
+            inherited = dict(job_info.env) if job_info and not sandboxed and inherit_env else {}
             child_env = {**inherited, **(environment.env_vars or {})} if environment else inherited
 
             parent_setup_scripts = job_info.setup_scripts if job_info and not sandboxed else None
@@ -1020,12 +1025,10 @@ class IrisClient:
                     or environment.pip_packages
                     or environment.sync_packages
                 )
-                environment = EnvironmentSpec(
-                    pip_packages=environment.pip_packages,
+                environment = replace(
+                    environment,
                     env_vars=child_env,
-                    extras=environment.extras,
                     setup_scripts=environment.setup_scripts if child_owns_setup else parent_setup_scripts,
-                    sync_packages=environment.sync_packages,
                 )
             else:
                 environment = EnvironmentSpec(env_vars=child_env, setup_scripts=parent_setup_scripts)

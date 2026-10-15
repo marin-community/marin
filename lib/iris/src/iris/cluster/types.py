@@ -721,11 +721,19 @@ except BaseException as exc:
 """
 
 
+class EnvironmentInheritance(StrEnum):
+    """Sources of variables for a submitted job."""
+
+    INHERIT = "inherit"
+    EXPLICIT = "explicit"
+
+
 @dataclass
 class EnvironmentSpec:
     """Environment specification for jobs.
 
-    Default environment variables (automatically set if not overridden):
+    With ``inheritance=INHERIT``, child jobs inherit the parent's submitted
+    variables and these submitter defaults (unless overridden):
     - HF_DATASETS_TRUST_REMOTE_CODE: "1" (allows custom dataset code)
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
     - HF_TOKEN: from os.environ (if set)
@@ -733,6 +741,9 @@ class EnvironmentSpec:
     - MARIN_PROVENANCE: the launch's ``rigging.provenance.Provenance`` as JSON, captured
       at submission (or forwarded from this process's own env when re-submitting inside
       a task), so tasks stamp artifacts with the submitter's git identity
+
+    ``inheritance=EXPLICIT`` sends only ``env_vars``. It skips parent variables
+    and submitter defaults, while preserving setup inheritance for child jobs.
 
     Setup:
     - ``setup_scripts=None`` builds the default uv-sync script. ``sync_packages``
@@ -754,6 +765,7 @@ class EnvironmentSpec:
     extras: Sequence[str] | None = None
     setup_scripts: Sequence[str] | None = None
     sync_packages: Sequence[str] | None = None
+    inheritance: EnvironmentInheritance = EnvironmentInheritance.INHERIT
 
     def to_proto(self) -> job_pb2.EnvironmentConfig:
         """Convert to wire format, resolving the user setup scripts.
@@ -762,27 +774,32 @@ class EnvironmentSpec:
         extras/pip/sync_packages; a list is used verbatim; ``[]`` is no setup. The
         wire carries only this user list.
         """
-        default_env_vars = {
-            "HF_DATASETS_TRUST_REMOTE_CODE": "1",
-            "TOKENIZERS_PARALLELISM": "false",
-            "HF_TOKEN": os.getenv("HF_TOKEN"),
-            "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
-            # Launch provenance: a task running from a git-less bundle inherits the
-            # submitter's identity via Provenance.capture(); transitive, since a task
-            # re-submitting captures this same env value.
-            LAUNCH_PROVENANCE_ENV: launch_provenance().to_json(),
-        }
-        if wants_gpu_extra(self.extras or ()):
-            default_env_vars.update(
-                {
-                    NCCL_RAS_ENABLE_ENV: "1",
-                    "NCCL_DEBUG": "INFO",
-                    "NCCL_DEBUG_SUBSYS": "INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS",
-                    "NCCL_DEBUG_TIMESTAMP": "[%F %T.%3f]",
-                }
-            )
+        if self.inheritance not in (EnvironmentInheritance.INHERIT, EnvironmentInheritance.EXPLICIT):
+            raise ValueError(f"Unknown environment inheritance: {self.inheritance!r}")
+        if self.inheritance == EnvironmentInheritance.EXPLICIT:
+            merged_env_vars = dict(self.env_vars or {})
+        else:
+            default_env_vars = {
+                "HF_DATASETS_TRUST_REMOTE_CODE": "1",
+                "TOKENIZERS_PARALLELISM": "false",
+                "HF_TOKEN": os.getenv("HF_TOKEN"),
+                "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
+                # Launch provenance: a task running from a git-less bundle inherits the
+                # submitter's identity via Provenance.capture(); transitive, since a task
+                # re-submitting captures this same env value.
+                LAUNCH_PROVENANCE_ENV: launch_provenance().to_json(),
+            }
+            if wants_gpu_extra(self.extras or ()):
+                default_env_vars.update(
+                    {
+                        NCCL_RAS_ENABLE_ENV: "1",
+                        "NCCL_DEBUG": "INFO",
+                        "NCCL_DEBUG_SUBSYS": "INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS",
+                        "NCCL_DEBUG_TIMESTAMP": "[%F %T.%3f]",
+                    }
+                )
 
-        merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
+            merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
         if self.setup_scripts is None:
             py_version = f"{sys.version_info.major}.{sys.version_info.minor}"

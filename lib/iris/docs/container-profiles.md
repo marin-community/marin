@@ -117,13 +117,42 @@ on Kubernetes the `iris-task-env` Secret holding the object-store keys), Iris
 itself (`IRIS_*` identity, the controller address, cache paths), and the job
 (`EnvironmentSpec.env_vars`, which by default also copies `HF_TOKEN` and
 `WANDB_API_KEY` from the submitting process, and in a child job the parent's
-variables). Under `SANDBOX` only the job's explicit `env_vars` and the Iris
-identity variables reach the task.
+variables). Under `SANDBOX` the task receives its explicit `env_vars` and Iris
+runtime variables needed to start the task, but no controller address or task
+token. Kubernetes service-link environment injection is disabled for these pods.
 
 The profile still supports `ExecInContainer`, which reaches the task through
 the worker or `kubectl exec`. The job cannot carry a workspace bundle, and
 the client rejects `extras`, `pip_packages` and `sync_packages`; setup scripts
 run verbatim and default to none.
+
+## Child job environments
+
+Non-sandbox children normally inherit the parent's submitted variables from
+`IRIS_JOB_ENV`. The parent environment is captured when its task starts, so
+removing a secret from `os.environ` later does not remove it from that snapshot.
+To submit a child with only the job variables you specify, use
+`EnvironmentInheritance.EXPLICIT`:
+
+```python
+from iris.cluster.types import EnvironmentInheritance, EnvironmentSpec
+
+client.submit(
+    entrypoint,
+    "child",
+    resources,
+    environment=EnvironmentSpec(
+        env_vars={"TASK_CONFIG": "value"},
+        inheritance=EnvironmentInheritance.EXPLICIT,
+    ),
+)
+```
+
+This also skips the usual variables copied from the submitting process,
+including `HF_TOKEN`, `WANDB_API_KEY`, and provenance. The child still inherits
+the parent's setup scripts and placement constraints. Cluster `task_env`,
+`inject_env`, and Iris runtime variables still reach non-sandbox tasks; use
+`CONTAINER_PROFILE_SANDBOX` when the task must be isolated from those inputs.
 
 ## Egress policy
 
