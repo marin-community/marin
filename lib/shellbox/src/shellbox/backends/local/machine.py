@@ -173,6 +173,11 @@ def _submounts(mountinfo: str, directories: Iterable[str]) -> tuple[str, ...]:
     return tuple(sorted(dict.fromkeys(points), key=lambda point: (point.count("/"), point)))
 
 
+def read_only_system_mounts() -> tuple[str, ...]:
+    """The paths the host mounts inside overlaid directories; copy-on-write machines keep them read-only."""
+    return _submounts(MOUNTINFO.read_text(), _overlaid_directories())
+
+
 def _sandbox_argv(
     bwrap: Path,
     *,
@@ -208,7 +213,7 @@ def _sandbox_argv(
             argv += ["--ro-bind-try", path, path]
     # An overlay shows only its directory's own filesystem, so files mounted inside it, such as the resolver
     # configuration a container runtime mounts at /etc/resolv.conf, are bound back read-only.
-    for point in _submounts(MOUNTINFO.read_text(), overlaid) if overlaid else ():
+    for point in read_only_system_mounts() if overlaid else ():
         argv += ["--ro-bind", point, point]
     argv += ["--dev", "/dev", "--tmpfs", SHARED_MEMORY, "--proc", "/proc"]
     for mount in mounts:
