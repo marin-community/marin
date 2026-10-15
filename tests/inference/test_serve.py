@@ -517,8 +517,8 @@ def test_validate_levanter_dtype_rejects_vllm_aliases():
 @pytest.mark.parametrize(
     ("num_chips", "tensor_parallel_size", "expected"),
     [
-        (8, 8, {"replica": 1, "data": 1, "model": 8}),  # the slice divides the head count: shard across it
-        (8, 2, {"replica": 1, "data": 4, "model": 2}),  # it does not: the leftover chips replicate
+        (8, 8, {"replica": 1, "data": 1, "model": 8, "expert": 1, "context": 1}),
+        (8, 2, {"replica": 1, "data": 4, "model": 2, "expert": 1, "context": 1}),
     ],
 )
 def test_inference_mesh_covers_every_chip(num_chips, tensor_parallel_size, expected):
@@ -1069,7 +1069,12 @@ def test_dashboard_html_is_self_contained():
     assert 'src="http' not in DASHBOARD_HTML
 
 
-def test_dashboard_serves_ui_and_reverse_proxies_streaming():
+@pytest.fixture
+def dashboard_ports(monkeypatch):
+    monkeypatch.setattr("marin.inference.dashboard_server.prepare_tool_runtime", lambda catalog: None)
+
+
+def test_dashboard_serves_ui_and_reverse_proxies_streaming(dashboard_ports):
     upstream_sock = bind_serving_socket("127.0.0.1", 0)
     upstream_port = upstream_sock.getsockname()[1]
     dashboard_sock = bind_serving_socket("127.0.0.1", 0)
@@ -1118,7 +1123,7 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
 
 
 @pytest.mark.parametrize("topology", ["direct", "brokered"])
-def test_dashboard_tokenization_preserves_backend_payload_and_errors(topology):
+def test_dashboard_tokenization_preserves_backend_payload_and_errors(dashboard_ports, topology):
     upstream_sock = bind_serving_socket("127.0.0.1", 0)
     upstream_port = upstream_sock.getsockname()[1]
     dashboard_sock = bind_serving_socket("127.0.0.1", 0)
@@ -1173,7 +1178,9 @@ def test_dashboard_tokenization_preserves_backend_payload_and_errors(topology):
         assert rejected.json() == {"error": {"type": "NotFoundError"}}
 
 
-def test_dashboard_health_reports_loading_when_upstream_down():
+def test_dashboard_health_reports_loading_when_upstream_down(
+    dashboard_ports,
+):
     dashboard_sock = bind_serving_socket("127.0.0.1", 0)
     dashboard_port = dashboard_sock.getsockname()[1]
     info = ServingInfo(

@@ -4,13 +4,23 @@
 """Exercise the Iris backend with a local subprocess exec provider and a scripted controller."""
 
 import asyncio
+import json
+import os
+import pwd
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+pytest.importorskip("iris")
+
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from iris.client.workload_codec import task_status_from_proto
 from iris.cluster.types import JobName
 from iris.resources.state import TaskState
 from iris.rpc import job_pb2
@@ -18,7 +28,7 @@ from rigging.timing import ExponentialBackoff
 from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy
+from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy, UnsupportedMachineSpec
 
 # Linux MAX_ARG_STRLEN: the worker passes the exec command as argv to `docker exec` or `kubectl exec`.
 LINUX_ARGUMENT_LIMIT_BYTES = 128 * 1024
@@ -71,11 +81,17 @@ class LocalTask:
 
 
 class LocalJob:
-    def __init__(self):
-        self.terminated = False
+    def __init__(self, task: LocalTask | None = None):
+        self.cancelled = False
+        self.killed = threading.Event()
+        self.task = task
 
-    def terminate(self):
-        self.terminated = True
+    def tasks(self):
+        return [] if self.task is None else [self.task]
+
+    def cancel(self):
+        self.cancelled = True
+        self.killed.set()
 
 
 class LocalClient:
@@ -96,6 +112,14 @@ class RecordingClient(LocalClient):
         raise SubmissionRecorded
 
 
+class TaskClient(LocalClient):
+    def __init__(self, job: LocalJob):
+        self.job = job
+
+    def submit(self, **kwargs):
+        return self.job
+
+
 class LocalEndpoint:
     url = "http://controller"
     credentials = None
@@ -104,8 +128,10 @@ class LocalEndpoint:
         pass
 
 
-def local_machine(tmp_path: Path, rpc=None, task: LocalTask | None = None) -> tuple[IrisMachine, LocalJob]:
-    job = LocalJob()
+def local_machine(
+    tmp_path: Path, rpc=None, task: LocalTask | None = None, job: LocalJob | None = None
+) -> tuple[IrisMachine, LocalJob]:
+    job = job or LocalJob()
     spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
     machine = IrisMachine(
         LocalEndpoint(),  # type: ignore[arg-type]
@@ -144,9 +170,53 @@ def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:
             assert target.read_bytes() == source.read_bytes()
         finally:
             await machine.close()
-        assert job.terminated
+        assert job.cancelled
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("private_credentials", [False, True])
+def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatch, caplog, private_credentials):
+    task_id = JobName.from_wire("/fixture/sandbox/0")
+    status = task_status_from_proto(job_pb2.TaskStatus(task_id=task_id.to_wire(), state=job_pb2.TASK_STATE_RUNNING))
+    job = LocalJob()
+    job.tasks = lambda: [SimpleNamespace(task_id=task_id, status=lambda: status)]
+    client = LocalClient()
+    submitted_environments = []
+
+    def submit(**kwargs):
+        submitted_environments.append(kwargs["environment"].env_vars)
+        return job
+
+    client.submit = submit
+    endpoint = LocalEndpoint()
+    endpoint.url = "http://fixture"
+    endpoint.credentials = None
+    monkeypatch.setattr("shellbox.backends.iris.machine.connect_controller", lambda **kwargs: endpoint)
+    monkeypatch.setattr("shellbox.backends.iris.machine.IrisClient.remote", lambda *args, **kwargs: client)
+    monkeypatch.setattr("shellbox.backends.iris.machine.ControllerServiceClientSync", lambda **kwargs: LocalRpc())
+    secret = "private-fixture-credential"
+    monkeypatch.setenv("SHELLBOX_TEST_PRIVATE_KEY", secret)
+    factory = IrisMachineFactory(
+        controller_url="http://fixture",
+        secret_env={"JUDGE_KEY": ("env:SHELLBOX_TEST_PRIVATE_KEY",)} if private_credentials else None,
+    )
+    spec = MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path), network=NetworkPolicy.ALLOW)
+
+    async def scenario():
+        machine = await factory.create(spec)
+        try:
+            assert secret not in json.dumps(asdict(machine.spec), default=str)
+            result = await machine.run(Command(("sh", "-c", "printf ready")))
+            assert result.stdout == b"ready"
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+    assert job.cancelled
+    assert submitted_environments == [{"JUDGE_KEY": secret} if private_credentials else {}]
+    assert secret not in json.dumps(asdict(spec), default=str)
+    assert secret not in caplog.text
 
 
 def test_file_larger_than_one_exec_argument_round_trips(tmp_path: Path) -> None:
@@ -201,6 +271,89 @@ def test_exec_failing_after_the_controller_accepted_it_is_not_repeated(tmp_path:
     assert rpc.sent("echo once") == 1
 
 
+class ClosingRpc(RefusingRpc):
+    """Refuses every exec for a full pool; during the first refusal another thread closes the machine."""
+
+    def __init__(self):
+        super().__init__(Code.RESOURCE_EXHAUSTED, refusals=1_000)
+        self.machine: IrisMachine | None = None
+        self.closer: threading.Thread | None = None
+
+    def exec_in_container(self, request, timeout_ms):
+        if self.closer is None:
+            machine = self.machine
+            assert machine is not None
+            closing = machine.close()
+            self.closer = threading.Thread(target=lambda: asyncio.run(closing))
+            self.closer.start()
+            assert machine.job.killed.wait(timeout=10)  # type: ignore[attr-defined]
+        return super().exec_in_container(request, timeout_ms)
+
+
+def test_exec_retry_stops_once_the_machine_is_closed(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001))
+    rpc = ClosingRpc()
+    machine, job = local_machine(tmp_path, rpc)
+    rpc.machine = machine
+
+    with pytest.raises(RuntimeError, match="Machine is closed"):
+        asyncio.run(machine.run(Command(("echo", "late"))))
+    assert rpc.closer is not None
+    rpc.closer.join(timeout=10)
+    assert not rpc.closer.is_alive()
+    assert job.cancelled
+    assert rpc.sent("echo late") == 1
+
+
+class HeldRpc:
+    """An exec the controller admitted, still running until ``release`` is set."""
+
+    def __init__(self, release: threading.Event):
+        self.release = release
+        self.admitted = threading.Event()
+        self.returned = threading.Event()
+
+    def exec_in_container(self, request, timeout_ms):
+        del request, timeout_ms
+        self.admitted.set()
+        assert self.release.wait(timeout=10)
+        self.returned.set()
+        return SimpleNamespace(exit_code=0, stdout="", stderr="", error="")
+
+
+def test_close_returns_only_after_admitted_execs_end(tmp_path: Path) -> None:
+    job = LocalJob()
+    # Terminating the sandbox ends the exec the controller already admitted.
+    rpc = HeldRpc(release=job.killed)
+    machine, _ = local_machine(tmp_path, rpc, job=job)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        exec_future = pool.submit(machine._exec_sync, ["true"])
+        assert rpc.admitted.wait(timeout=10)
+
+        asyncio.run(machine.close())
+
+        assert rpc.returned.is_set()
+        exec_future.result(timeout=10)
+
+
+def test_close_raises_when_an_admitted_exec_outlives_the_sandbox(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(iris_backend, "CLOSE_DRAIN_SECONDS", 0.01)
+    rpc = HeldRpc(release=threading.Event())
+    machine, job = local_machine(tmp_path, rpc)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        exec_future = pool.submit(machine._exec_sync, ["true"])
+        assert rpc.admitted.wait(timeout=10)
+
+        with pytest.raises(RuntimeError, match=r"1 Iris exec\(s\) still in flight .*: true$"):
+            asyncio.run(machine.close())
+
+        assert job.cancelled
+        rpc.release.set()
+        exec_future.result(timeout=10)
+
+
 @pytest.mark.parametrize(
     ("network", "egress"),
     [
@@ -220,3 +373,50 @@ def test_network_policy_selects_the_egress_policy(monkeypatch, network, egress):
 
     assert client.submitted["container_profile"] == job_pb2.CONTAINER_PROFILE_SANDBOX
     assert client.submitted["egress_policy"] == egress
+
+
+def test_factory_returns_a_running_machine(monkeypatch, tmp_path):
+    job = LocalJob(LocalTask(TaskState.RUNNING))
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+    factory = IrisMachineFactory(controller_url="http://controller")
+    workdir = tmp_path / "workspace"
+    spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(workdir))
+
+    async def scenario():
+        machine = await factory.create(spec)
+        try:
+            assert workdir.is_dir()
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path):
+    job = LocalJob(LocalTask(TaskState.FAILED))
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+    factory = IrisMachineFactory(controller_url="http://controller")
+    spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path / "workspace"))
+
+    with pytest.raises(RuntimeError, match="container exited"):
+        asyncio.run(factory.create(spec))
+    assert job.cancelled
+
+
+def test_commands_may_name_the_container_user_but_no_other(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        machine, _ = local_machine(tmp_path)
+        try:
+            by_uid = await machine.run(Command(("id", "-u"), user=str(os.getuid())))
+            by_name = await machine.run(Command(("id", "-u"), user=pwd.getpwuid(os.getuid()).pw_name))
+            assert by_uid.stdout.strip() == by_name.stdout.strip() == str(os.getuid()).encode()
+            with pytest.raises(UnsupportedMachineSpec, match="cannot run as 65534"):
+                await machine.run(Command(("id", "-u"), user="65534"))
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())

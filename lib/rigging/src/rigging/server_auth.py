@@ -67,6 +67,8 @@ class VerifiedIdentity:
     # the consuming service enforces that. None ⇒ a full identity (the default
     # for every non-scoped token and every non-JWT authenticator).
     audience: str | None = None
+    # Set only for an Iris task token: the wire name of the job that owns the token.
+    job_id: str | None = None
 
 
 # Identity granted to a credentialless caller admitted by ambient trust:

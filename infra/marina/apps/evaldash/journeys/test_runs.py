@@ -32,7 +32,8 @@ def test_the_shell_bar_carries_the_app_and_its_own_navigation(journey: Journey) 
     journey.visit("/runs")
     assert journey.api("/api/marina/me") == {"user": "anonymous", "role": "admin"}
     offers = journey.offers()
-    assert "a:EvalDash" in offers
+    expect(journey.page.get_by_role("banner").get_by_text("EvalDash", exact=True)).to_be_visible()
+    expect(journey.page.get_by_role("button", name="Open apps")).to_be_visible()
     assert {"a:Panel", "a:Runs", "a:Debug"} <= set(offers)
 
 

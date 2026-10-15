@@ -646,6 +646,31 @@ class KueueConfig(_Config):
     topologies: dict[str, KueueTopology] = Field(default_factory=dict)  # group_by -> topo
 
 
+class NodeStorageHealthConfig(_Config):
+    """S3 viability probe settings for the task storage path."""
+
+    scratch: str
+    environment_revision: str = ""  # populated by deployment from Secret revision and task literals
+    interval: float = Field(default=60, gt=0)
+    timeout: float = Field(default=15, gt=0)
+    failure_threshold: int = Field(default=3, ge=2)
+    minimum_healthy_nodes: int = Field(default=2, ge=1)
+
+    @field_validator("scratch")
+    @classmethod
+    def _s3_prefix(cls, value: str) -> str:
+        if not value.startswith("s3://") or not value.removeprefix("s3://").partition("/")[2].strip("/"):
+            raise ValueError("scratch must be an s3://bucket/prefix dedicated to health probes")
+        return value
+
+
+class NodeHealthConfig(_Config):
+    """Node-local checks and the shared automatic cordon budget."""
+
+    storage: NodeStorageHealthConfig | None = None
+    max_cordoned_nodes: int = Field(default=1, ge=0)
+
+
 class KubernetesProviderConfig(_Config):
     namespace: str = ""  # default: "iris"
     kubeconfig: str = ""  # empty = in-cluster auth
@@ -654,6 +679,7 @@ class KubernetesProviderConfig(_Config):
     host_network: bool = False
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
     cache_max_age: DurationField | None = None  # enables cache reclamation
+    node_health: NodeHealthConfig | None = None
     controller_address: str = ""  # injected into task pods
     # Service ClusterIP range. Only needed when it lies outside the private,
     # carrier-grade NAT and link-local ranges, which sandbox internet egress
