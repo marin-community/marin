@@ -59,6 +59,22 @@ class TestVortexReader:
         records = list(load_vortex(spec))
         assert [record["id"] for record in records] == list(range(100))[row_start:row_end]
 
+    def test_load_vortex_filter_and_projection_across_read_batches(self, tmp_path):
+        path = tmp_path / "large.vortex"
+        write_vortex_file(({"id": i, "score": i} for i in range(70_000)), str(path))
+
+        spec = InputFileSpec(
+            path=str(path),
+            columns=["id"],
+            row_start=0,
+            row_end=70_000,
+            filter_expr=col("score") >= 66_000,
+        )
+        expected = [{"id": i} for i in range(66_000, 70_000)]
+        assert list(load_vortex(spec)) == expected
+        whole_file = InputFileSpec(path=str(path), columns=["id"], filter_expr=col("score") >= 66_000)
+        assert list(load_vortex(whole_file)) == expected
+
     def test_load_vortex_empty_file(self, tmp_path):
         """Test loading an empty vortex file."""
         empty_path = tmp_path / "empty.vortex"
