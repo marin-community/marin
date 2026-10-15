@@ -68,7 +68,25 @@
         "node_name": "gb960a0",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending.",
+      "archive_downloads_complete": true,
+      "download_manifest": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-advantages-sc-s2-a0-01a126ce/download-manifest.json.gz",
+        "bytes": 1369442,
+        "etag": "\"bf7bbed7457fa412f7dc78d6146b2dfb\"",
+        "sha256": "45785ef43011d949c2cc94c7d2614a018c0880ca4348b2745287cc6132fb9b0d",
+        "modified": "2026-10-15T21:09:06+00:00"
+      },
+      "progress_at_download_release": {
+        "job_id": "/romain/score-grader-qwen-advantages-sc-s2-a0-01a126ce",
+        "started": true,
+        "archive_downloads_complete": true,
+        "records": 16384,
+        "discrepancies": 0,
+        "native_failures": 0,
+        "result_passed": null,
+        "failure_published": false
+      }
     },
     {
       "job_id": "/romain/score-grader-qwen-advantages-tis-s0-a0-01a126ce",
@@ -137,7 +155,25 @@
         "node_name": "g1cb6c2",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending.",
+      "archive_downloads_complete": true,
+      "download_manifest": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-advantages-tis-s0-a0-01a126ce/download-manifest.json.gz",
+        "bytes": 1369433,
+        "etag": "\"d6e845d7ff6bc708e881cdc9ddc5fa49\"",
+        "sha256": "1fa04eab0ab3aef315e516465d605a3164b4ba14b94823e42a6f2f76f1e046f1",
+        "modified": "2026-10-15T21:09:16+00:00"
+      },
+      "progress_at_download_release": {
+        "job_id": "/romain/score-grader-qwen-advantages-tis-s0-a0-01a126ce",
+        "started": true,
+        "archive_downloads_complete": true,
+        "records": 0,
+        "discrepancies": 0,
+        "native_failures": 0,
+        "result_passed": null,
+        "failure_published": false
+      }
     },
     {
       "job_id": "/romain/score-grader-qwen-advantages-tis-s1-a0-01a126ce",
@@ -206,7 +242,25 @@
         "node_name": "g1cc242",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending.",
+      "archive_downloads_complete": true,
+      "download_manifest": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-advantages-tis-s1-a0-01a126ce/download-manifest.json.gz",
+        "bytes": 1369608,
+        "etag": "\"3443189c553e0b5f94ef6bd1d895bfa3\"",
+        "sha256": "a817f9b5600cd19d530d41ebdf8d59e336e3238b4d9605c5f83280dc9a2c4bb6",
+        "modified": "2026-10-15T21:09:19+00:00"
+      },
+      "progress_at_download_release": {
+        "job_id": "/romain/score-grader-qwen-advantages-tis-s1-a0-01a126ce",
+        "started": true,
+        "archive_downloads_complete": true,
+        "records": 0,
+        "discrepancies": 0,
+        "native_failures": 0,
+        "result_passed": null,
+        "failure_published": false
+      }
     }
   ],
   "total_requested_cpu": 96,
@@ -214,7 +268,7 @@
   "total_requested_gpu": 0,
   "maximum_archive_io_workers": 6,
   "first_complete_cpu_replay_proof": "qwen_curriculum300_first_cpu_complete_response_replay.json",
-  "status": "All3 wave4 tasks controller-running: unstarted advantagesSCseed2 and TISseeds0/1.96CPU/192GiB/0GPU,6archiveIO workers; frozen input packages read back and fullSHA verified. Further waves wait for these downloads.",
+  "status": "All3 wave4 native archive downloads and input identities verified;6IO workers released. Original grades continue, SCseed2 at16384 physical records and TISseeds0/1 past download,zero reported discrepancies/native failures as observed21:15UTC. The last unstarted advantageTISseed2 CPU replay may submit.",
   "native_bundle_validation_passed": true,
   "resource_board_ids": [
     1070,

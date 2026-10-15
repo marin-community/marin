@@ -157,7 +157,35 @@
           "sha256": "2b26b115c06c304b50003fb5f83a7a55f6faba4c6df2d7811d3520a7b55c03ad",
           "etag": "\"ca22e923d555d8dae85b7624f5450506\""
         }
-      ]
+      ],
+      "full_response_replay_passed": true,
+      "status": "Controller exit0; full physical249984 cohort verified, available original responses graded and native failure placeholders retained separately.",
+      "terminal_controller": {
+        "job_id": "/romain/score-grader-qwen-curriculum-sc-s2-a0-01a126ce",
+        "job_state": "4",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "4b50bf5276488ca47edc40eeb6852fd625b87c1c47dfe9c3da3b147917ef9fe5",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-curriculum-sc-s2-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "03952e7cc6da0f55",
+        "task_state": "4",
+        "exit_code": "0",
+        "started_at_ms": "1792090177189",
+        "finished_at_ms": "1792097865692",
+        "node_name": "g8364ba",
+        "terminal_reason": ""
+      },
+      "allocated_cpu_hours": 68.34224888888889,
+      "physical_records": 249984,
+      "actual_original_grade_calls": 249980,
+      "native_failure_placeholders": 4,
+      "completed_report": "sc-qwen-transfer-curriculum-sc-s2-main-rno-a1-01a126ce-regrading.json.gz"
     },
     {
       "job_id": "/romain/score-grader-qwen-curriculum-tis-s0-a0-01a126ce",
@@ -256,7 +284,7 @@
   "total_requested_gpu": 0,
   "maximum_archive_io_workers": 6,
   "first_complete_cpu_replay_proof": "qwen_curriculum300_first_cpu_complete_response_replay.json",
-  "status": "SCseed1 andTISseed0 were controller-priority-preempted during download, not slow healthy downloads; partial outputs and actual CPU costs retained. SCseed2 is running with all archives downloaded and98304 responses graded without discrepancies as observed19:46UTC. Replacement jobs are not yet submitted.",
+  "status": "All wave1 tasks terminal. SCseed2 completed249984 physical records/249980 original grade calls,4 pre-existing native failure placeholders,zero discrepancies and all16 native evals matched;68.3422488889CPU-hours/0H100. SCseed1/TISseed0 priority-preempted downloads are separately costed and their unique replacements continue in wave2.",
   "native_bundle_validation_passed": true,
   "resource_board_ids": [
     1058,

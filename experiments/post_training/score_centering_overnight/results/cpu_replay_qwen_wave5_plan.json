@@ -1,0 +1,85 @@
+{
+  "scope": "Prepared unstarted full300 replay packages for wave5; no submission authority is inferred from local preparation. Actual prior download completion, controller absence, resource board announcement and sequential native submissions remain required. No healthy local optimizer/pilot or native replay duplicated.",
+  "cases": [
+    {
+      "job_id": "/romain/score-grader-qwen-advantages-tis-s2-a0-01a126ce",
+      "run_id": "sc-qwen-transfer-advantages-tis-s2-main-rno-a1-01a126ce",
+      "arm": "tis-s2",
+      "workspace": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/score-grader-qwen-advantages-tis-s2-a0-01a126ce-workspace",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "analysis_source": "213f2fed2a2954c50c973c742bfff998f9a2edef",
+      "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e",
+      "spec_sha256": "c87766d0f5a27cf45e7c4db858ebee9761e729c7c5b5fba5400f4f8f2c486231",
+      "requested_cpu": 32,
+      "requested_memory": "64GB",
+      "requested_disk": "50GB",
+      "requested_accelerators": 0,
+      "cpu_workers": 32,
+      "io_workers": 2,
+      "timeout_seconds": 43200,
+      "failure_retries": 0,
+      "preemption_retries": 0,
+      "expected_records": 249984,
+      "selected_archives": 19216,
+      "native_archive_bytes": 742246670,
+      "output_prefix": "marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-advantages-tis-s2-a0-01a126ce",
+      "local_input_validation_passed": true,
+      "bundle": {
+        "bytes": 8582047,
+        "sha256": "defcb5b833746cf913052665868bc45c4aa00527982c909299466cb912a81751",
+        "spec_sha256": "c87766d0f5a27cf45e7c4db858ebee9761e729c7c5b5fba5400f4f8f2c486231",
+        "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e",
+        "all_input_files_verified": true
+      },
+      "native_bundle_validation_passed": true,
+      "native_submission_confirmed": true,
+      "retained_input_objects": {
+        "bundle": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-advantages-tis-s2-a0-01a126ce/inputs/bundle.zip",
+          "bytes": 8582047,
+          "etag": "\"1f5a34c5cbb4c18a15e68af289184b17\"",
+          "sha256": "defcb5b833746cf913052665868bc45c4aa00527982c909299466cb912a81751"
+        },
+        "spec": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-advantages-tis-s2-a0-01a126ce/inputs/spec.json",
+          "bytes": 157762,
+          "etag": "\"ddd320c96822842200e25d69c7308b41\"",
+          "sha256": "c87766d0f5a27cf45e7c4db858ebee9761e729c7c5b5fba5400f4f8f2c486231"
+        }
+      },
+      "controller_row": {
+        "job_id": "/romain/score-grader-qwen-advantages-tis-s2-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "defcb5b833746cf913052665868bc45c4aa00527982c909299466cb912a81751",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-advantages-tis-s2-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "bb6c05fe326633d1",
+        "task_state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792099139466",
+        "finished_at_ms": "",
+        "node_name": "ge6b2c0",
+        "terminal_reason": ""
+      },
+      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+    }
+  ],
+  "total_requested_cpu": 32,
+  "total_requested_memory_gib": 64,
+  "total_requested_gpu": 0,
+  "maximum_archive_io_workers": 2,
+  "first_complete_cpu_replay_proof": "qwen_curriculum300_first_cpu_complete_response_replay.json",
+  "status": "Last wave5 advantageTISseed2 task controller-running32CPU/64GiB/50GiB,zeroGPU,2archiveIO workers. Frozen input package read back and fullSHA verified. All unstarted curriculum/advantage mains are now assigned; existing local optimizer/pilot graders remain healthy and unchanged.",
+  "native_bundle_validation_passed": true,
+  "resource_board_ids": [
+    1072,
+    1073
+  ]
+}

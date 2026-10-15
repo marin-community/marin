@@ -138,5 +138,7 @@
   },
   "current_progress_observation": "2026-10-15T20:29:23.481811+00:00",
   "additional_terminal_preemption_h100_hours": 4.474284444444445,
-  "latest_preemption_controller_evidence": "new_terminal_controller_retention_20261015T2025.json.gz"
+  "latest_preemption_controller_evidence": "new_terminal_controller_retention_20261015T2025.json.gz",
+  "latest_preemption_raw_retention_complete": true,
+  "latest_preemption_raw_report": "new_terminal_runtime_20261015T2025.json.gz"
 }
