@@ -443,7 +443,8 @@ def run_evaluation(
         if transport_failures and (resuming_archive or attempt_number > 0 or interrupted):
             # Evalchemy restores saved transport failures; replay cannot repair those requests.
             raise EvaluationError(
-                "saved transport failures cannot be safely resumed after an inference interruption",
+                f"saved transport failures in {output_dir} cannot be safely resumed; "
+                "remove this evaluation archive and retry to regenerate its requests",
                 status=RunStatus.INFRA_FAILED,
                 jobs=outcome.jobs,
                 coverage=outcome.coverage,
