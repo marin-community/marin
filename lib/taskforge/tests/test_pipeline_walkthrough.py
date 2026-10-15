@@ -409,7 +409,7 @@ async def test_a_name_error_in_a_step_reports_its_program_line_to_the_author(tmp
 
 
 async def test_an_os_error_raised_by_a_step_is_the_programs_failure(tmp_path):
-    """A step opening a file that is not there is a program bug, not the storage fault the OSError pass-through covers."""
+    """A step opening a missing file is a program bug, not the storage fault the OSError pass-through covers."""
     source = SOURCE.replace(NUMBERS_FILE, 'InlineFile(content_base64=open("/workspace/does-not-exist.txt").read())')
     assert source != SOURCE
     expected = (

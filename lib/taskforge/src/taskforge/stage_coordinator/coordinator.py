@@ -435,9 +435,7 @@ def _raised_in_program(error: BaseException, program: RLEnvBuildProgram) -> bool
     """Whether a traceback in ``error``'s chain passes through one of the program's own frames."""
     files = _program_files(program)
     return any(
-        frame.filename in files
-        for link in _exception_chain(error)
-        for frame in traceback.extract_tb(link.__traceback__)
+        frame.filename in files for link in _exception_chain(error) for frame in traceback.extract_tb(link.__traceback__)
     )
 
 
