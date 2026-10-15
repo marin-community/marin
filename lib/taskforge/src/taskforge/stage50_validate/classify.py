@@ -20,8 +20,9 @@ conversation up to the break; the ``TOKEN_CONTRACT`` outcome keeps it as ``Ungra
 
 Task setup failures are told apart from machine failures only by their message text
 (``_matches_rolloutengine_setup_message``), because the engine raises a bare ``RuntimeError`` or
-``TimeoutError`` for both. A machine that ended under the engine is typed (``MachineTerminated``)
-and is ``MACHINE_TERMINATED`` whichever operation it interrupted.
+``TimeoutError`` for both. A machine that ended under the engine (``MachineTerminated``, or the
+message prefixes ``sandbox.host_failures`` shares with the build) is ``MACHINE_TERMINATED`` whichever
+operation it interrupted.
 """
 
 import traceback
@@ -37,7 +38,7 @@ from rolloutengine.contracts import (
     RolloutInterrupted,
     RolloutOperation,
 )
-from shellbox.machine import MachineTerminated, UnsupportedMachineSpec
+from shellbox.machine import UnsupportedMachineSpec
 from taskcompendium.grading_result import GradeResult, GradingFailure
 from taskcompendium.grading_result import Outcome as GradeStatus
 from taskcompendium.models import NoGrader, TaskSpec, VerifyitGrader
@@ -45,6 +46,7 @@ from verifyit.spec import Mode
 
 from taskforge.llm.client import ContextExhausted, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.rollout_model import TokenContractBreak
+from taskforge.sandbox.host_failures import machine_lost
 from taskforge.spec.verdict import reward_in_range
 from taskforge.stage50_validate.outcome import GRADED_STATUSES, Cause, ContractBreak, Graded, Outcome, Ungraded
 
@@ -56,12 +58,10 @@ GRADING_FAILURES = {
     GradingFailure.EXECUTION: Cause.GRADER_EXECUTION,
 }
 ROLLOUTENGINE_SETUP_MESSAGE_PREFIXES = ("Environment setup command ",)
+"""Message prefixes of the errors RolloutEngine raises when a task's setup command fails or times out."""
 MACHINE_LOSS_RPC_CODES = frozenset({Code.DEADLINE_EXCEEDED, Code.UNAVAILABLE, Code.RESOURCE_EXHAUSTED})
 """Controller RPC codes that mean the machine host was lost under a running trial; a credential or
 permission code is not among them, so it stays unclassified."""
-MACHINE_LOSS_MESSAGE_PREFIXES = ("Machine is closed", "ShellSim terminated")
-"""Messages of the bare ``RuntimeError`` shellbox raises when a trial's machine is gone under it."""
-"""Message prefixes of the errors RolloutEngine raises when a task's setup command fails or times out."""
 CANDIDATE_CODE_REASONS = frozenset({"startup_error", "collection_error"})
 """The ``reason`` values in a verifyit pytest verdict's detail when the candidate's code did not load."""
 
@@ -139,11 +139,9 @@ def _exception_cause(error: BaseException) -> Cause:
         return Cause.MODEL_REJECTED
     if isinstance(error, UnsupportedMachineSpec):
         return Cause.MACHINE_UNSUPPORTED
-    if isinstance(error, MachineTerminated):
+    if machine_lost(error):
         return Cause.MACHINE_TERMINATED
     if isinstance(error, ConnectError) and error.code in MACHINE_LOSS_RPC_CODES:
-        return Cause.MACHINE_TERMINATED
-    if isinstance(error, RuntimeError) and str(error).startswith(MACHINE_LOSS_MESSAGE_PREFIXES):
         return Cause.MACHINE_TERMINATED
     if isinstance(error, RolloutInterrupted):
         return _interruption_cause(error)
