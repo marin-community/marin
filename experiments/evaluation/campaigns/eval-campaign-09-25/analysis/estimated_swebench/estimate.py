@@ -256,7 +256,7 @@ def main() -> None:
         f"Generated {timestamp} from live tracker `{args.tracker}`; temporary tracker SHA-256 `{tracker_hash}`.",
         f"Frozen source `TRACKER_SOURCE_SNAPSHOT.md` SHA-256 `{source_tracker_hash}`; "
         f"analysis script SHA-256 `{script_hash}` at "
-        "`experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/analysis/estimated_swebench/estimate.py` "
+        "`experiments/evaluation/campaigns/eval-campaign-09-25/analysis/estimated_swebench/estimate.py` "
         "in the Marin campaign worktree. "
         "The exact in-flight Harbor result.json files are copied in `source-job-results/` with hashes in "
         "`partial-swebench-provenance.json`.",

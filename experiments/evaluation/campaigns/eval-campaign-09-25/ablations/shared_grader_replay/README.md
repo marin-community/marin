@@ -9,8 +9,8 @@ MATH500 (500 trials per model) and AIME24 (30 problems × 10 trials) call their 
 Run the following from the Marin checkout with CoreWeave S3 credentials resolved by `common.sh`. The OlympiadBench command needs one `H100x8` Iris task in `cw-rno2a` with 64 CPUs, 512 GB RAM, and 600 GB disk; the script starts the local judge server using the checked-in YAML. The observed job was `/benfeuer/olympiadbench-fixed-grader-minimax-131k-20261009`. The MATH500 and AIME24 commands require no GPU.
 
 ```bash
-CAMPAIGN=experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled
-MODULE=experiments.evaluation.campaigns.eval-campaign-09-25-unlabeled.ablations.shared_grader_replay
+CAMPAIGN=experiments/evaluation/campaigns/eval-campaign-09-25
+MODULE=experiments.evaluation.campaigns.eval-campaign-09-25.ablations.shared_grader_replay
 SOURCES="$CAMPAIGN/ablations/shared_grader_replay/sources.yaml"
 OUTPUT=s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80
 PRIOR=s3://marin-us-east-02a/marin/evals/ablations/olympiadbench-minimax-m3-judge-20261009-guided-choice-thinking

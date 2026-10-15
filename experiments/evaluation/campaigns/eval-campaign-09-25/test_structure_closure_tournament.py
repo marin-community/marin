@@ -11,11 +11,9 @@ import json
 import pytest
 from marin.evaluation.records import TaskCoverage
 
-tournament = importlib.import_module(
-    "experiments.evaluation.campaigns.eval-campaign-09-25-unlabeled.structure_closure_tournament"
-)
+tournament = importlib.import_module("experiments.evaluation.campaigns.eval-campaign-09-25.structure_closure_tournament")
 refresh = importlib.import_module(
-    "experiments.evaluation.campaigns.eval-campaign-09-25-unlabeled.analysis.structure_closure_tournament.refresh"
+    "experiments.evaluation.campaigns.eval-campaign-09-25.analysis.structure_closure_tournament.refresh"
 )
 
 
