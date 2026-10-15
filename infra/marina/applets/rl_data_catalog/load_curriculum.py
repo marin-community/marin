@@ -3,9 +3,11 @@
 
 """Stream a complete scored curriculum release into the checked-in Atlas app."""
 
+import hashlib
 import json
 import time
 import uuid
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
 from typing import Any
 from urllib.parse import urlparse
@@ -16,8 +18,9 @@ from finestore.rl.curriculum import AlignmentRelease
 from marina.client import DEFAULT_MARINA_URL, marina_request
 from rigging.filesystem.storage_path import StoragePath
 
-from infra.marina.applets.rl_data_catalog.load import Query, insert_rows
+from infra.marina.applets.rl_data_catalog.load import Query, batches, insert_rows
 
+DELETE_BATCH_SIZE = 10_000
 TABLE_COLUMNS = {
     "sources": "source_id TEXT, declaration JSONB, family TEXT, alignment JSONB",
     "nodes": "subject_id TEXT, node_id TEXT, parent_id TEXT, kind TEXT, name TEXT, description TEXT",
@@ -80,13 +83,20 @@ def load_curriculum(release_uri: str, query: Query) -> dict[str, Any]:
     def insert(table: str, rows: Iterable[dict]) -> int:
         return insert_rows(execute, f"curriculum_{table}", TABLE_COLUMNS[table], load_id, rows)
 
-    for table in ("matches", "tasks", "ancestors", "nodes", "sources", "loads"):
-        execute(
-            f"DELETE FROM curriculum_{table} WHERE load_id NOT IN "
-            "(SELECT load_id FROM curriculum_current WHERE load_id IS NOT NULL UNION "
-            "SELECT previous_load_id FROM curriculum_current WHERE previous_load_id IS NOT NULL)",
-            {},
-        )
+    stale = execute(
+        "SELECT load_id FROM curriculum_loads WHERE load_id NOT IN "
+        "(SELECT load_id FROM curriculum_current WHERE load_id IS NOT NULL UNION "
+        "SELECT previous_load_id FROM curriculum_current WHERE previous_load_id IS NOT NULL)",
+        {},
+    )["rows"]
+    for row in stale:
+        for table in ("matches", "tasks", "ancestors", "nodes", "sources", "loads"):
+            while execute(
+                f"DELETE FROM curriculum_{table} WHERE ctid IN "
+                f"(SELECT ctid FROM curriculum_{table} WHERE load_id=:load_id LIMIT :limit)",
+                {"load_id": row["load_id"], "limit": DELETE_BATCH_SIZE},
+            )["row_count"]:
+                pass
     execute(
         "INSERT INTO curriculum_loads (load_id, release_id, release_uri, manifest) "
         "VALUES (:load_id, :release_id, :release_uri, CAST(:manifest AS JSONB))",
@@ -116,76 +126,78 @@ def load_curriculum(release_uri: str, query: Query) -> dict[str, Any]:
         ),
         "nodes": insert("nodes", nodes),
         "ancestors": insert("ancestors", ancestor_rows(nodes)),
-        "tasks": insert("tasks", release_tasks(release.paths)),
     }
-    execute(
-        """
-        INSERT INTO curriculum_matches
-            (load_id, source_id, task_id, subject_id, capability_id, facet, membership_similarity, capability_similarity)
-        SELECT t.load_id, t.source_id, t.task_id, m->>'subject_id', m->>'capability_id', m->>'facet',
-            (m->>'membership_similarity')::double precision, (m->'candidates'->0->>'similarity')::double precision
-        FROM curriculum_tasks t CROSS JOIN LATERAL jsonb_array_elements(t.detail->'matches'->'subjects') m
-        WHERE t.load_id = :load_id
-    """,
-        {"load_id": load_id},
-    )
-    invalid = execute(
-        """
-        SELECT t.source_id, t.task_id FROM curriculum_tasks t JOIN curriculum_sources s USING (load_id, source_id)
-        WHERE t.load_id = :load_id AND (
-            s.alignment IS NULL OR t.detail->>'source_key' IS DISTINCT FROM s.alignment->>'source_key'
-            OR t.detail->>'population' IS DISTINCT FROM s.alignment->>'population'
-            OR t.detail->>'intended_use' IS DISTINCT FROM s.alignment->>'intended_use'
-            OR (t.description_status = 'ready') IS DISTINCT FROM EXISTS (
-                SELECT 1 FROM curriculum_matches m WHERE m.load_id=t.load_id AND m.source_id=t.source_id
-                    AND m.task_id=t.task_id
+    node_kinds = {(row["subject_id"], row["node_id"]): row["kind"] for row in nodes}
+    source_counts: dict[str, Counter] = defaultdict(Counter)
+    source_content: dict[str, set[bytes]] = defaultdict(set)
+    content_hashes: set[bytes] = set()
+    embedding_texts: set[bytes] = set()
+
+    def checked_tasks() -> Iterator[dict]:
+        for row in release_tasks(release.paths):
+            detail = row["detail"]
+            expected = selected.get(row["source_id"])
+            subjects = (detail["matches"] or {}).get("subjects", [])
+            if (
+                expected is None
+                or any(detail[key] != expected[key] for key in ("source_key", "population", "intended_use"))
+                or (row["description_status"] == "ready") != bool(subjects)
+                or row["description_status"] not in ("ready", "insufficient_context", "skipped")
+            ):
+                raise ValueError(f"Loaded task lineage or readiness is inconsistent: {row['task_id']}")
+            for match in subjects:
+                subject_id = match["subject_id"]
+                if (
+                    node_kinds.get((subject_id, "subject:" + subject_id)) != "subject"
+                    or node_kinds.get((subject_id, match["capability_id"])) != "capability"
+                ):
+                    raise ValueError(f"Loaded task curriculum references are inconsistent: {row['task_id']}")
+            source = row["source_id"]
+            source_counts[source]["tasks"] += 1
+            source_counts[source][row["description_status"]] += 1
+            content = hashlib.sha256(row["content_hash"].encode()).digest()
+            source_content[source].add(content)
+            content_hashes.add(content)
+            if row["description_status"] == "ready":
+                embedding_texts.add(hashlib.sha256(row["description"].encode()).digest())
+            yield row
+
+    # Expand only this byte-bounded request, avoiding whole-release SQL scans.
+    counts["tasks"] = 0
+    counts["matches"] = 0
+    for body in batches(checked_tasks()):
+        inserted = execute(
+            f"""
+            WITH input AS MATERIALIZED (
+                SELECT * FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS row({TABLE_COLUMNS['tasks']})
+            ), tasks AS (
+                INSERT INTO curriculum_tasks
+                    (load_id, source_id, task_id, content_hash, description_status, description, detail)
+                SELECT :load_id, source_id, task_id, content_hash, description_status, description, detail FROM input
+                RETURNING source_id, task_id
             )
-        ) LIMIT 1
-    """,
-        {"load_id": load_id},
-    )["rows"]
-    unknown = execute(
-        """
-        SELECT m.task_id FROM curriculum_matches m
-        LEFT JOIN curriculum_nodes s ON s.load_id=m.load_id AND s.subject_id=m.subject_id
-            AND s.node_id='subject:' || m.subject_id AND s.kind='subject'
-        LEFT JOIN curriculum_nodes c ON c.load_id=m.load_id AND c.subject_id=m.subject_id
-            AND c.node_id=m.capability_id AND c.kind='capability'
-        WHERE m.load_id=:load_id AND (s.node_id IS NULL OR c.node_id IS NULL) LIMIT 1
-    """,
-        {"load_id": load_id},
-    )["rows"]
-    if invalid or unknown:
-        raise ValueError(
-            f"Loaded task lineage, readiness or curriculum references are inconsistent: {invalid or unknown}"
+            INSERT INTO curriculum_matches
+                (load_id, source_id, task_id, subject_id, capability_id, facet,
+                    membership_similarity, capability_similarity)
+            SELECT :load_id, i.source_id, i.task_id, m->>'subject_id', m->>'capability_id', m->>'facet',
+                (m->>'membership_similarity')::double precision, (m->'candidates'->0->>'similarity')::double precision
+            FROM input i JOIN tasks USING (source_id, task_id)
+            CROSS JOIN LATERAL jsonb_array_elements(i.detail->'matches'->'subjects') m
+            """,
+            {"load_id": load_id, "rows": body},
         )
-    actual = execute(
-        """
-        SELECT s.source_id, COUNT(t.task_id) AS tasks,
-            COUNT(DISTINCT t.content_hash) AS unique_content,
-            COUNT(t.task_id) FILTER (WHERE t.description_status='ready') AS ready,
-            COUNT(t.task_id) FILTER (WHERE t.description_status='insufficient_context') AS insufficient
-        FROM curriculum_sources s LEFT JOIN curriculum_tasks t USING (load_id, source_id)
-        WHERE s.load_id=:load_id AND s.alignment IS NOT NULL GROUP BY s.source_id
-    """,
-        {"load_id": load_id},
-    )["rows"]
-    for row in actual:
-        expected = selected[row["source_id"]]
-        if (row["tasks"], row["unique_content"], row["ready"], row["insufficient"]) != (
+        counts["matches"] += inserted["row_count"]
+    for source, expected in selected.items():
+        actual = source_counts[source]
+        if (actual["tasks"], len(source_content[source]), actual["ready"], actual["insufficient_context"]) != (
             expected["task_count"],
             expected["unique_content_count"],
             expected["ready_count"],
             expected["insufficient_context_count"],
         ):
-            raise ValueError(f"Loaded task counts differ from release: {row['source_id']}")
-    totals = execute(
-        "SELECT COUNT(*) AS tasks, COUNT(DISTINCT content_hash) AS unique_content, "
-        "COUNT(DISTINCT description) FILTER (WHERE description_status='ready') AS embedding_texts "
-        "FROM curriculum_tasks WHERE load_id=:load_id",
-        {"load_id": load_id},
-    )["rows"][0]
-    if (totals["tasks"], totals["unique_content"], totals["embedding_texts"]) != (
+            raise ValueError(f"Loaded task counts differ from release: {source}")
+    counts["tasks"] = sum(row["tasks"] for row in source_counts.values())
+    if (counts["tasks"], len(content_hashes), len(embedding_texts)) != (
         release.task_count,
         release.unique_content_count,
         release.unique_embedding_count,

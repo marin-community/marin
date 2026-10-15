@@ -171,7 +171,7 @@ class CatalogServices:
         return self.database_engine
 
 
-def curriculum_release(tmp_path: Path) -> Path:
+def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_context") -> Path:
     declarations = [
         SourceDeclaration(
             id=identifier,
@@ -210,7 +210,7 @@ def curriculum_release(tmp_path: Path) -> Path:
                 "content_hash": content,
                 "intended_use": "train",
                 "population": "converted",
-                "description_status": "ready" if capability_score is not None else "insufficient_context",
+                "description_status": "ready" if capability_score is not None else unavailable_status,
                 "description": content if capability_score is not None else "",
                 "reason": "",
                 "task_preview": "Count public objects.",
@@ -251,7 +251,7 @@ def curriculum_release(tmp_path: Path) -> Path:
         sample_size=None,
         task_count=4,
         ready_count=3,
-        insufficient_context_count=1,
+        insufficient_context_count=int(unavailable_status == "insufficient_context"),
         unique_content_count=3,
         unique_embedding_count=2,
         sources=[
@@ -262,7 +262,7 @@ def curriculum_release(tmp_path: Path) -> Path:
                 "intended_use": "train",
                 "task_count": count,
                 "ready_count": ready,
-                "insufficient_context_count": count - ready,
+                "insufficient_context_count": count - ready if unavailable_status == "insufficient_context" else 0,
                 "unique_content_count": count,
             }
             for identifier, count, ready in (("a", 3, 2), ("b", 1, 1))
@@ -303,7 +303,12 @@ def curriculum_release(tmp_path: Path) -> Path:
     return path
 
 
-def test_curriculum_runtime_cutoffs_dedup_pagination_and_atomic_load(catalog_database, tmp_path):
+@pytest.mark.parametrize("unavailable_status", ["insufficient_context", "skipped"])
+def test_curriculum_runtime_cutoffs_dedup_pagination_and_atomic_load(
+    catalog_database, tmp_path, monkeypatch, unavailable_status
+):
+    monkeypatch.setattr("infra.marina.applets.rl_data_catalog.load.MAX_BATCH_BYTES", 2500)
+    monkeypatch.setattr("infra.marina.applets.rl_data_catalog.load_curriculum.DELETE_BATCH_SIZE", 1)
     engine = catalog_database
 
     def query(sql, parameters):
@@ -314,7 +319,7 @@ def test_curriculum_runtime_cutoffs_dedup_pagination_and_atomic_load(catalog_dat
                 "row_count": result.rowcount,
             }
 
-    path = curriculum_release(tmp_path)
+    path = curriculum_release(tmp_path, unavailable_status)
     assert load_curriculum(str(path), query)["counts"]["tasks"] == 4
     assert load_curriculum(str(path), query)["changed"] is False
     with TestClient(create_api(cast(AppletServices, CatalogServices(engine)))) as client:
@@ -324,8 +329,8 @@ def test_curriculum_runtime_cutoffs_dedup_pagination_and_atomic_load(catalog_dat
             "assigned": 2,
             "subject_only": 1,
             "out_of_scope": 0,
-            "insufficient_context": 1,
-            "skipped": 0,
+            "insufficient_context": int(unavailable_status == "insufficient_context"),
+            "skipped": int(unavailable_status == "skipped"),
         }
         assert first["cells"][0]["count"] == 3
         assert first["columns"][0]["denominator"] == 4

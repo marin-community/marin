@@ -150,12 +150,17 @@ uv run python -m infra.marina.applets.rl_data_catalog.load_curriculum \
   --applet-id APPLET_ID --url MARINA_ORIGIN
 ```
 
-The loader streams Parquet in bounded batches, checks source keys, populations,
-curriculum references and per-source/global counts, then switches the selected
-release atomically. Failed loads preserve the selected release. The previous
-successful release remains available for requests already viewing it; abandoned
-and older staging loads are removed on the next update. An identical selected
-release skips loading. Run one curriculum loader per applet at a time.
+The loader streams Parquet in bounded batches and checks each task's source key,
+converted/admitted population, training/evaluation use and curriculum references.
+It compares per-source and global counts against the release manifest, then
+switches the selected release atomically. Each SQL request inserts tasks and
+expands their matches within the same byte-bounded batch. Compact hashes count
+distinct public inputs and embedding texts without a whole-release SQL scan.
+Failed loads preserve the selected release. The loader retains the selected
+release and its immediate predecessor; other abandoned or obsolete staged loads
+are removed in bounded batches at the next update. If the requested release is
+already selected, the loader skips loading. Run one curriculum loader per applet
+at a time.
 Curriculum-only updates do not require a grading-catalog reload. APIs read
 Postgres without cloud scans.
 
