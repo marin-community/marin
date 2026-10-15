@@ -6,8 +6,9 @@
 import time
 from _thread import LockType
 from collections import Counter, defaultdict, deque
-from collections.abc import Callable, Mapping, Sized
+from collections.abc import Callable, Iterable, Mapping, Sized
 from dataclasses import dataclass
+from itertools import islice
 from typing import Protocol
 
 from zephyr.dashboard.app import (
@@ -63,6 +64,10 @@ class DashboardExecution(Protocol):
     fatal_error: str | None
     terminal_error: Exception | None
     done: bool
+    stage_generation: int
+
+    @property
+    def task_attempts(self) -> Mapping[int, int]: ...
 
     @property
     def node_states(self) -> Mapping[str, PlanNodeState]: ...
@@ -113,6 +118,22 @@ class _DashboardWorkerSnapshot:
     last_seen_age_seconds: float
     assignments: tuple[tuple[str, int], ...]
     counters: dict[str, CounterEntry]
+
+
+def _shard_indices(run: DashboardExecution, state: ShardState | None, stopped: bool) -> tuple[Iterable[int], int]:
+    """Return matching shard IDs and their count before pagination."""
+    if state == ShardState.RUNNING:
+        return sorted(run.in_flight), len(run.in_flight)
+    if state == ShardState.SUCCEEDED:
+        return sorted(run.results), len(run.results)
+    if state is None:
+        return range(run.total_shards), run.total_shards
+    if (state == ShardState.STOPPED) != stopped:
+        return (), 0
+    return (
+        (index for index in range(run.total_shards) if index not in run.results and index not in run.in_flight),
+        run.total_shards - len(run.results) - len(run.in_flight),
+    )
 
 
 class CoordinatorDashboard:
@@ -266,22 +287,42 @@ class CoordinatorDashboard:
             pipelines.sort(key=lambda item: (item.status.started_at_ms, item.status.execution_id))
             return DashboardOverview(pipelines=tuple(pipelines))
 
-    def shards(self, execution_id: str, offset: int, limit: int) -> ShardPage:
+    def shards(self, execution_id: str, offset: int, limit: int, state: ShardState | None = None) -> ShardPage:
+        now = time.monotonic()
         with self._coordinator._lock:
             run = self._run_locked(execution_id)
             if run is None:
                 return ShardPage(shards=(), total=0, stage_name="")
             stopped = self._phase_locked(run) == PipelinePhase.FAILED
+            indices, matching = _shard_indices(run, state, stopped)
             shards = []
-            for index in range(offset, min(run.total_shards, offset + limit)):
+            for index in islice(indices, offset, offset + limit):
                 if index in run.results:
                     state = ShardState.SUCCEEDED
                 elif index in run.in_flight:
                     state = ShardState.RUNNING
                 else:
                     state = ShardState.STOPPED if stopped else ShardState.PENDING
-                shards.append(ShardStatus(index=index, state=state))
-            return ShardPage(shards=tuple(shards), total=run.total_shards, stage_name=run.stage_name)
+                entry = run.in_flight.get(index)
+                worker_id = entry.worker_id if entry is not None else ""
+                snapshot = self._coordinator._worker_counters.get((worker_id, run.execution_id))
+                progress = snapshot.shards.get(index) if snapshot is not None and entry is not None else None
+                if progress is not None and (
+                    progress.stage_generation != run.stage_generation or progress.attempt != run.task_attempts[index]
+                ):
+                    progress = None
+                last_seen = self._coordinator._last_seen.get(worker_id)
+                shards.append(
+                    ShardStatus(
+                        index=index,
+                        state=state,
+                        worker_id=worker_id,
+                        task_id=self._coordinator._worker_task_ids.get(worker_id, ""),
+                        last_seen_age_seconds=max(0, now - last_seen) if last_seen is not None else None,
+                        progress=progress,
+                    )
+                )
+            return ShardPage(shards=tuple(shards), total=run.total_shards, stage_name=run.stage_name, matching=matching)
 
     def metrics(self, execution_id: str, max_points: int) -> PipelineMetrics:
         with self._coordinator._lock:

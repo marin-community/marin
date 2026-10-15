@@ -178,7 +178,12 @@ class PersistentKvCache:
         with self._root_lock:
             if self._store is not None:
                 try:
-                    self._store.close()
+                    if timeout is None:
+                        self._store.close()
+                    else:
+                        # Drained cache batches are already committed. Further storage I/O
+                        # could outlive the exit drain window, so only signal the daemon.
+                        self._store.request_stop()
                 except Exception as exc:
                     logger.warning("FineStore cache writer failed while closing: %s", exc)
                 self._store = None

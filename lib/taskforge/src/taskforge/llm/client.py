@@ -8,7 +8,7 @@ A logical call returns a ``Completion``, which joins the call's continuation seg
 made up to that point.
 
 Callers go through ``ModelClient`` for free-text replies (``complete``) and for replies validated
-as a pydantic model (``complete_structured``, which also returns every completion the call took).
+against a pydantic output type (``complete_structured``, which also returns every completion the call took).
 ``taskforge.llm.glm_client.GlmClient`` implements it.
 """
 

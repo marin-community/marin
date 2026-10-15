@@ -6,7 +6,7 @@
 import asyncio
 import json
 import tarfile
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -42,6 +42,7 @@ from taskcompendium.models import (
     FunctionDefinition,
     JsonValueAnswer,
     NoGrader,
+    ProviderRequirement,
     ResourceGroups,
     RewardFile,
     RewardFileFormat,
@@ -52,6 +53,7 @@ from taskcompendium.models import (
     TextMessage,
     VerifierArtifact,
 )
+from taskcompendium.runtime.output_capture import MAX_OUTPUT_FILES
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import ShellToolConfig
 from verifyit.grade import grade as verifyit_grade
@@ -60,17 +62,32 @@ from verifyit.spec import FunctionCall, PredictedActionSpec, StructuredExactSpec
 from rolloutengine.agent_session import AgentTaskSession
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.contracts import (
+    AttemptEnded,
+    AttemptStarted,
     GenerationLimitReached,
+    Graded,
+    MachineReady,
+    ModelRequest,
     ModelTurn,
+    ModelTurnCompleted,
     RolloutContractError,
+    RolloutEvent,
+    RolloutEventPayload,
+    RolloutEventType,
     RolloutInterrupted,
     RolloutOperation,
+    SessionPrepared,
     SessionStart,
+    TokenUsage,
+    ToolCallCompleted,
+    ToolCallResult,
+    ToolContext,
     Transition,
+    TransitionCompleted,
 )
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.lowering import lower_task
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.spec import LoweredTaskSpec, TraceMode
 from rolloutengine.task_session import WORKSPACE_INSTRUCTION
 from rolloutengine.test_support import (
     TWELVE,
@@ -341,6 +358,122 @@ async def test_shell_rejects_nonobject_arguments_and_grades_repaired_file(argume
     assert json.loads(record.messages[2]["content"]) == {"error": "Tool arguments must be a JSON object"}
 
 
+async def test_declared_outputs_return_in_the_record_and_reach_the_grader():
+    task = file_task(
+        b"""test "$(cat /workspace/out/task.json)" = '{"id": 1}' && echo 1 || echo 0""",
+        output_paths=("/workspace/out",),
+        grader=workspace_grader(argv=("sh", "/tests/grade.sh")),
+    )
+    model = ReplayModel(
+        [
+            shell_call("""mkdir -p /workspace/out && echo '{"id": 1}' > /workspace/out/task.json"""),
+            shell_call("echo notes > /workspace/scratch.txt", call_id="scratch"),
+            {"role": "assistant", "content": "Done"},
+        ]
+    )
+    record = await RolloutEngine(model.complete, {"local": RecordingShellSimFactory()}).run(
+        lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
+    assert record.outputs == {"/workspace/out/task.json": b'{"id": 1}\n'}
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+
+
+async def test_session_graded_task_returns_and_grades_declared_outputs():
+    class Session:
+        def __init__(self, context):
+            self.machine = context.machine
+
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Write the report."},), {})
+
+        async def advance(self, turn):
+            written = await self.machine.run(
+                Command(("sh", "-c", f"echo {turn.message['content']} > /workspace/report.txt; echo x > /workspace/x"))
+            )
+            assert written.exit_code == 0
+            return Transition(done=True)
+
+        async def grade(self, _messages, *, stop_reason, outputs):
+            return GradeResult(Outcome.GRADED, float(outputs == {"/workspace/report.txt": b"ready\n"}))
+
+        async def close(self):
+            pass
+
+    task = file_task(grader=SessionGrader(), resources=ResourceGroups(), output_paths=("/workspace/report.txt",))
+    record = await RolloutEngine(
+        ReplayModel([{"role": "assistant", "content": "ready"}]).complete,
+        {"local": RecordingShellSimFactory()},
+        sessions={"fixture": Session},
+    ).run(lowered(task, machine=machine_runtime(), task_session="fixture"))
+    assert record.outputs == {"/workspace/report.txt": b"ready\n"}
+    assert record.grade.reward == 1.0
+
+
+class OutputWritingSession:
+    """Write ``command``'s files in the first transition, then grade only after ``grading`` is released."""
+
+    def __init__(self, context, command: str, grading: asyncio.Future | None = None):
+        self.machine = context.machine
+        self.command = command
+        self.grading = grading
+        self.entered = asyncio.Event()
+
+    async def prepare(self):
+        return SessionStart(({"role": "user", "content": "Write the report."},), {})
+
+    async def advance(self, turn):
+        assert (await self.machine.run(Command(("sh", "-c", self.command)))).exit_code == 0
+        return Transition(done=True)
+
+    async def grade(self, _messages, *, stop_reason, outputs):
+        self.entered.set()
+        if self.grading is not None:
+            await self.grading
+        return GradeResult(Outcome.GRADED, 1.0)
+
+    async def close(self):
+        pass
+
+
+@pytest.mark.parametrize("deadline", ["attempt_timeout", "verifier_timeout"])
+async def test_deadline_during_grading_keeps_captured_outputs(deadline):
+    task = file_task(grader=SessionGrader(), resources=ResourceGroups(), output_paths=("/workspace/report.txt",))
+    with pytest.raises(RolloutInterrupted) as caught:
+        await RolloutEngine(
+            ReplayModel([{"role": "assistant", "content": "ready"}]).complete,
+            {"local": RecordingShellSimFactory()},
+            sessions={
+                "fixture": lambda context: OutputWritingSession(
+                    context, "echo ready > /workspace/report.txt", asyncio.Future()
+                )
+            },
+        ).run(lowered(task, machine=machine_runtime(), task_session="fixture", **{deadline: 1.0}))
+    expected = RolloutOperation.ATTEMPT if deadline == "attempt_timeout" else RolloutOperation.GRADE
+    assert caught.value.operation == expected
+    assert caught.value.rollout.outputs == {"/workspace/report.txt": b"ready\n"}
+
+
+async def test_output_capture_over_the_file_budget_interrupts_grading():
+    sessions = []
+
+    def session(context):
+        command = f"mkdir -p /workspace/out && cd /workspace/out && touch $(seq {MAX_OUTPUT_FILES + 1})"
+        sessions.append(OutputWritingSession(context, command))
+        return sessions[-1]
+
+    task = file_task(grader=SessionGrader(), resources=ResourceGroups(), output_paths=("/workspace/out",))
+    with pytest.raises(RolloutInterrupted) as caught:
+        await RolloutEngine(
+            ReplayModel([{"role": "assistant", "content": "ready"}]).complete,
+            {"local": RecordingShellSimFactory()},
+            sessions={"fixture": session},
+        ).run(lowered(task, machine=machine_runtime(), task_session="fixture"))
+    assert caught.value.operation == RolloutOperation.GRADE
+    assert "file or byte budget" in str(caught.value.__cause__)
+    assert caught.value.rollout.outputs == {}
+    assert not sessions[0].entered.is_set()
+
+
 @pytest.mark.parametrize("compact", [False, True])
 async def test_agent_session_receives_engine_turns_and_controls_next_history(compact):
     first = ({"role": "user", "content": "Return 12."},)
@@ -358,7 +491,7 @@ async def test_agent_session_receives_engine_turns_and_controls_next_history(com
         received.append(await complete(SessionStart(history, options)))
         finished.set()
 
-    async def grade(messages, *, stop_reason):
+    async def grade(messages, *, stop_reason, outputs):
         assert finished.is_set()
         return GradeResult(Outcome.GRADED, float(messages[-1]["content"] == "12"))
 
@@ -391,7 +524,7 @@ async def test_agent_session_replays_exact_tokens_on_later_turns(compact):
         messages = ({"role": "user", "content": "Finish."},) if compact else (*first, turn.message, observation)
         await complete(SessionStart(messages, {}, prompt_token_ids=replay))
 
-    async def grade(messages, *, stop_reason):
+    async def grade(messages, *, stop_reason, outputs):
         return GradeResult(Outcome.GRADED, float(messages[-1]["content"] == "12"))
 
     async def model(request):
@@ -425,7 +558,7 @@ async def test_agent_session_is_cancelled_when_engine_generation_is_cancelled():
         model_entered.set()
         await asyncio.Future()
 
-    async def grade(_messages, *, stop_reason):
+    async def grade(_messages, *, stop_reason, outputs):
         raise AssertionError("Cancellation must not grade an unfinished model call")
 
     runner = RolloutEngine(model, {}, sessions={"agent": lambda _context: AgentTaskSession(agent, grade)})
@@ -442,7 +575,7 @@ async def test_agent_session_failure_retains_the_generated_turn():
         await complete(SessionStart(({"role": "user", "content": "Return 12."},), {}))
         raise RuntimeError("Agent failed after receiving its response")
 
-    async def grade(_messages, *, stop_reason):
+    async def grade(_messages, *, stop_reason, outputs):
         raise AssertionError("The agent failure must be reported before grading")
 
     runner = engine(
@@ -465,7 +598,7 @@ async def test_session_grader_uses_session_owned_grade():
         async def advance(self, _turn):
             return Transition(done=True)
 
-        async def grade(self, messages, *, stop_reason):
+        async def grade(self, messages, *, stop_reason, outputs):
             return GradeResult(Outcome.GRADED, float(messages[-1]["content"] == "12"))
 
         async def close(self):
@@ -499,7 +632,7 @@ async def test_session_replaces_model_options_after_conversation_reset(next_opti
                 return Transition(done=False, reset_conversation=revised_messages, next_options=next_options)
             return Transition(done=self.turns == 3)
 
-        async def grade(self, messages, *, stop_reason):
+        async def grade(self, messages, *, stop_reason, outputs):
             return GradeResult(Outcome.GRADED, float(messages[-1]["content"] == "12"))
 
         async def close(self):
@@ -516,8 +649,9 @@ async def test_session_replaces_model_options_after_conversation_reset(next_opti
     assert result.loss_mask == (1, 0, 0, 1)
 
 
+@pytest.mark.parametrize("trace", list(TraceMode))
 @pytest.mark.parametrize("alter_prefix", [False, True])
-async def test_session_replays_exact_initial_tokens_and_rejects_transport_changes(alter_prefix):
+async def test_session_replays_exact_initial_tokens_and_rejects_transport_changes(alter_prefix, trace):
     prefix = (128000, 42, 128005)
 
     class Session:
@@ -527,7 +661,7 @@ async def test_session_replays_exact_initial_tokens_and_rejects_transport_change
         async def advance(self, _turn):
             return Transition(done=True)
 
-        async def grade(self, _messages, *, stop_reason):
+        async def grade(self, _messages, *, stop_reason, outputs):
             return GradeResult(Outcome.GRADED, 1.0)
 
         async def close(self):
@@ -539,16 +673,18 @@ async def test_session_replays_exact_initial_tokens_and_rejects_transport_change
         return ModelTurn({"role": "assistant", "content": "done"}, served, (5, 6), (-0.1, -0.2), "stop")
 
     runner = RolloutEngine(model, {}, sessions={"fixture": lambda _context: Session()})
-    task = lowered(arithmetic_task(), task_session="fixture")
+    task = lowered(arithmetic_task(), task_session="fixture", trace=trace)
     if alter_prefix:
+        # A chat endpoint cannot serve pinned tokens either, so the replay check holds in every trace mode.
         with pytest.raises(RolloutContractError, match="replay token prefix"):
             await runner.run(task)
         return
     result = await runner.run(task)
-    assert result.prompt_token_ids == prefix
-    assert result.response_token_ids == (5, 6)
-    assert result.loss_mask == (1, 1)
-    assert result.logprobs == (-0.1, -0.2)
+    assert (result.prompt_token_ids, result.response_token_ids) == (prefix, (5, 6))
+    if trace == TraceMode.EXACT_TOKENS:
+        assert (result.loss_mask, result.logprobs) == ((1, 1), (-0.1, -0.2))
+    else:
+        assert (result.loss_mask, result.logprobs) == ((0, 0), None)
 
 
 @pytest.mark.parametrize("stop_reason", ["stop", "length"])
@@ -587,7 +723,14 @@ async def test_lowering_preserves_task_and_produces_private_grade_with_training_
     spec = lowered(task)
     model = ReplayModel([{"role": "assistant", "content": answer}])
     runner = engine(model)
-    selected = lower_task(task, spec.runtime, spec.session, factories=runner.factories, sessions=runner.sessions)
+    selected = lower_task(
+        task,
+        spec.runtime,
+        spec.session,
+        factories=runner.factories,
+        sessions=runner.sessions,
+        providers=runner.providers,
+    )
     reloaded = LoweredTaskSpec.model_validate_json(selected.model_dump_json())
 
     result = await runner.run(reloaded)
@@ -623,7 +766,12 @@ async def test_unresolved_recipe_rejected_before_fallback_machine_or_model_start
     with pytest.raises(UnsupportedMachineSpec):
         if entrypoint == "lower":
             lower_task(
-                reloaded.task, reloaded.runtime, reloaded.session, factories=runner.factories, sessions=runner.sessions
+                reloaded.task,
+                reloaded.runtime,
+                reloaded.session,
+                factories=runner.factories,
+                sessions=runner.sessions,
+                providers=runner.providers,
             )
         else:
             await runner.run(reloaded)
@@ -710,7 +858,7 @@ async def test_machine_user_applies_to_custom_sessions_without_replacing_explici
         async def advance(self, turn):
             return Transition(done=True)
 
-        async def grade(self, messages, *, stop_reason):
+        async def grade(self, messages, *, stop_reason, outputs):
             return GradeResult(Outcome.GRADED, float(messages[0]["content"] == "learner:0"))
 
         async def close(self):
@@ -803,6 +951,152 @@ async def test_shell_binding_collision_rejects_before_machine_or_model_start():
     assert model.requests == []
 
 
+CHECK_TOOL = FunctionDefinition(
+    name="check",
+    description="Read a workspace file and submit it.",
+    parameters={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+)
+CHECKER = ProviderRequirement(action_interface="checker:v1", initial_state={"attempts": 1})
+
+
+@dataclass
+class CheckSession:
+    context: ToolContext
+    state: dict
+    calls: list[tuple[str, dict]] = field(default_factory=list)
+    closed: bool = False
+
+    async def call(self, name, arguments):
+        self.calls.append((name, arguments))
+        if self.context.machine is None:
+            self.state["attempts"] += 1
+            return ToolCallResult(json.dumps(self.state))
+        result = await self.context.machine.run(Command(("cat", arguments["path"])))
+        return ToolCallResult(result.stdout.decode(), done=True)
+
+    async def close(self):
+        self.closed = True
+
+
+@dataclass
+class CheckProvider:
+    definition: FunctionDefinition = CHECK_TOOL
+    sessions: list[CheckSession] = field(default_factory=list)
+
+    def tools(self, requirement):
+        return (self.definition,)
+
+    async def open(self, context):
+        session = CheckSession(context, dict(context.requirement.initial_state))
+        self.sessions.append(session)
+        return session
+
+
+def tool_message(*calls: tuple[str, str, str]) -> dict:
+    return {
+        "role": "assistant",
+        "tool_calls": [
+            {"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}
+            for call_id, name, arguments in calls
+        ],
+    }
+
+
+async def test_shell_and_provider_calls_share_one_dispatch_and_a_done_result_ends_the_rollout():
+    task = file_task(
+        environment_requirements=file_task().environment_requirements.model_copy(
+            update={"tool_providers": {"checker": CHECKER}}
+        )
+    )
+    provider = CheckProvider()
+    model = ReplayModel(
+        [
+            tool_message(
+                ("write", "shell", json.dumps({"command": "echo 12 > /workspace/answer"})),
+                ("rejected", "check", '["/workspace/answer"]'),
+                ("missing", "lookup", "{}"),
+            ),
+            tool_message(("submit", "check", json.dumps({"path": "/workspace/answer"}))),
+            {"role": "assistant", "content": "Not requested."},
+        ]
+    )
+    observer = RecordingObserver()
+    record = await RolloutEngine(
+        model.complete, {"local": FixtureImageFactory()}, providers={"checker:v1": provider}, observer=observer
+    ).run(lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime()))
+
+    tool_events = [event.payload for event in observer.events if isinstance(event.payload, ToolCallCompleted)]
+    assert [(event.call_id, event.name, event.done) for event in tool_events] == [
+        ("write", "shell", False),
+        ("rejected", "check", False),
+        ("missing", "lookup", False),
+        ("submit", "check", True),
+    ]
+    transitions = [event.payload for event in observer.events if isinstance(event.payload, TransitionCompleted)]
+    assert transitions[-1].observations[-1] == {"role": "tool", "tool_call_id": "submit", "content": "12\n"}
+    assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["shell", "check"]
+    observations = model.requests[1].messages[-3:]
+    assert json.loads(observations[0]["content"])["exit_code"] == 0
+    assert json.loads(observations[1]["content"]) == {"error": "Tool arguments must be a JSON object"}
+    assert json.loads(observations[2]["content"]) == {"error": "Unknown tool: lookup"}
+    [session] = provider.sessions
+    assert (session.context.requirement, session.calls) == (CHECKER, [("check", {"path": "/workspace/answer"})])
+    assert session.closed
+    assert len(model.requests) == 2
+    assert record.steps[-1].transition.done
+    assert record.steps[-1].transition.observations[0]["content"] == "12\n"
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+
+
+async def test_provider_tools_run_on_the_host_without_a_task_machine():
+    task = arithmetic_task(environment_requirements=EnvironmentRequirements(tool_providers={"checker": CHECKER}))
+    provider = CheckProvider()
+    model = ReplayModel(
+        [
+            tool_message(("lookup", "check", json.dumps({"path": "/state"}))),
+            {"role": "assistant", "content": "12"},
+        ]
+    )
+    record = await engine(model, providers={"checker:v1": provider}).run(lowered(task))
+
+    assert provider.sessions[0].context.machine is None
+    assert json.loads(model.requests[1].messages[-1]["content"]) == {"attempts": 2}
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+
+
+async def test_each_attempt_opens_and_closes_its_own_provider_session():
+    task = arithmetic_task(environment_requirements=EnvironmentRequirements(tool_providers={"checker": CHECKER}))
+    provider = CheckProvider()
+    for _ in range(2):
+        model = ReplayModel(
+            [tool_message(("lookup", "check", json.dumps({"path": "/state"}))), {"role": "assistant", "content": "12"}]
+        )
+        await engine(model, providers={"checker:v1": provider}).run(lowered(task))
+        # State from the earlier attempt does not leak: each attempt starts from initial_state.
+        assert json.loads(model.requests[1].messages[-1]["content"]) == {"attempts": 2}
+
+    assert [session.closed for session in provider.sessions] == [True, True]
+
+
+@pytest.mark.parametrize("interface,tool_name", [("missing:v1", "check"), ("checker:v1", "shell")])
+async def test_unregistered_or_colliding_provider_rejects_before_machine_or_model_start(interface, tool_name):
+    requirement = ProviderRequirement(action_interface=interface, initial_state={})
+    task = file_task(
+        environment_requirements=file_task().environment_requirements.model_copy(
+            update={"tool_providers": {"checker": requirement}}
+        )
+    )
+    provider = CheckProvider(CHECK_TOOL.model_copy(update={"name": tool_name}))
+    factory = RecordingShellSimFactory()
+    model = ReplayModel([])
+    with pytest.raises(ValueError):
+        await engine(model, {"local": factory}, providers={"checker:v1": provider}).run(
+            lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+        )
+    assert factory.machines == []
+    assert model.requests == []
+
+
 async def test_command_timeouts_return_observations_and_allow_the_model_to_finish():
     class TimeoutMachine:
         def __init__(self, machine):
@@ -876,6 +1170,57 @@ async def test_tool_turn_cannot_preempt_command_timeout_feedback(tool_turn_timeo
         )
     assert factory.machines == []
     assert model.requests == []
+
+
+@pytest.mark.parametrize("spill_bytes", [None, 100])
+async def test_large_shell_output_spills_to_a_machine_file_only_when_enabled(spill_bytes):
+    full_output = "".join(f"{line}\n" for line in range(1, 2001))
+    model = ReplayModel([shell_call("seq 1 2000; echo warning >&2"), {"role": "assistant", "content": "Done."}])
+
+    @dataclass
+    class InspectingModel:
+        """Read the spilled file in a follow-up command, as an agent would."""
+
+        requests: list[ModelRequest] = field(default_factory=list)
+
+        async def complete(self, request: ModelRequest) -> ModelTurn:
+            self.requests.append(request)
+            if spill_bytes is not None and len(self.requests) == 2:
+                path = json.loads(request.messages[-1]["content"])["stdout_path"]
+                model.messages.insert(1, shell_call(f"wc -c < {path}; tail -n 1 {path}", call_id="read"))
+            return await model.complete(request)
+
+    inspecting = InspectingModel()
+    await engine(inspecting, {"local": FixtureImageFactory()}).run(
+        lowered(
+            file_task(),
+            machine=machine_runtime(),
+            verifier_machine=machine_runtime(),
+            tool_output_spill_bytes=spill_bytes,
+        )
+    )
+
+    observation = json.loads(model.requests[1].messages[-1]["content"])
+    if spill_bytes is None:
+        assert observation == {
+            "exit_code": 0,
+            "reason": "exited",
+            "stdout": full_output,
+            "stderr": "warning\n",
+            "stdout_truncated": False,
+            "stderr_truncated": False,
+        }
+        return
+    assert observation["stdout"] == full_output[:spill_bytes]
+    assert observation["stdout_truncated"] is True
+    assert observation["stdout_path"].startswith("/tmp/tool-output/")
+    assert (observation["stderr"], observation["stderr_truncated"], observation["stderr_path"]) == (
+        "warning\n",
+        False,
+        None,
+    )
+    read = json.loads(model.requests[2].messages[-1]["content"])
+    assert read["stdout"].split() == [str(len(full_output)), "2000"]
 
 
 async def test_answer_call_retains_submission_tool_and_finishes():
@@ -1091,6 +1436,99 @@ async def test_context_limit_keeps_served_evidence_and_grades_only_completed_ope
     assert record.loss_mask == ((1,) if completed_turns else ())
 
 
+@pytest.mark.parametrize(
+    "usage, budget, requests, stop_reason",
+    [
+        # Token IDs charge 3 tokens, then 6: the second request reaches the budget.
+        (None, 9, 2, "budget_reached"),
+        # Requests charge 2 each; after the third, 6 + 2 < 10, so only the turn limit stops the rollout.
+        (TokenUsage(prompt_tokens=1, completion_tokens=1), 10, 3, "max_turns"),
+        # The third and last permitted request leaves no room for another: the budget takes precedence.
+        (TokenUsage(prompt_tokens=1, completion_tokens=1), 8, 3, "budget_reached"),
+        # After two requests of 3, a third prompt holds at least 3 more tokens and would reach 9, so it is not sent.
+        (TokenUsage(prompt_tokens=2, completion_tokens=1), 9, 2, "budget_reached"),
+        (TokenUsage(prompt_tokens=8, completion_tokens=1), 9, 1, "budget_reached"),
+    ],
+)
+async def test_token_budget_stops_model_requests_and_grades_the_last_response(usage, budget, requests, stop_reason):
+    graded = []
+
+    class Session:
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Return 12."},), {})
+
+        async def advance(self, _turn):
+            return Transition(done=False, observations=({"role": "user", "content": "Continue."},))
+
+        async def grade(self, messages, *, stop_reason, outputs):
+            graded.append((messages[-1]["role"], stop_reason))
+            return GradeResult(Outcome.GRADED, 1.0)
+
+        async def close(self):
+            pass
+
+    class Model(ReplayModel):
+        async def complete(self, request):
+            return replace(await super().complete(request), usage=usage)
+
+    model = Model([{"role": "assistant", "content": "12"}] * 3)
+    record = await engine(model, sessions={"fixture": lambda _context: Session()}).run(
+        lowered(arithmetic_task(), task_session="fixture", max_total_tokens=budget)
+    )
+    assert len(model.requests) == requests
+    assert record.stop_reason == stop_reason
+    assert graded == [("assistant", stop_reason)]
+
+
+async def test_token_budget_skips_a_conversation_reset_and_grades_the_last_response():
+    graded = []
+
+    class Session:
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Return 12."},), {})
+
+        async def advance(self, _turn):
+            return Transition(done=False, reset_conversation=({"role": "user", "content": "Start again."},))
+
+        async def grade(self, messages, *, stop_reason, outputs):
+            graded.append((messages[-1]["role"], stop_reason))
+            return GradeResult(Outcome.GRADED, 1.0)
+
+        async def close(self):
+            pass
+
+    model = ReplayModel([{"role": "assistant", "content": "12"}] * 3)
+    # Each request after a reset charges 3 tokens; after the second, a third would reach the budget of 9.
+    observer = RecordingObserver()
+    record = await RolloutEngine(
+        model.complete, {}, sessions={"fixture": lambda _context: Session()}, observer=observer
+    ).run(lowered(arithmetic_task(), task_session="fixture", max_total_tokens=9))
+    assert len(model.requests) == 2
+    assert record.stop_reason == "budget_reached"
+    assert graded == [("assistant", "budget_reached")]
+    # Both transitions report the reset the session returned, including the one the budget skipped.
+    transitions = [event.payload for event in observer.events if isinstance(event.payload, TransitionCompleted)]
+    assert [transition.reset_conversation for transition in transitions] == [
+        ({"role": "user", "content": "Start again."},)
+    ] * 2
+
+
+@pytest.mark.parametrize("usage", [None, TokenUsage(prompt_tokens=4, completion_tokens=1)])
+async def test_token_budget_under_messages_trace_needs_usage_or_token_ids(usage):
+    class UsageChatModel(ChatModel):
+        async def complete(self, request):
+            return replace(await super().complete(request), usage=usage)
+
+    model = UsageChatModel([{"role": "assistant", "content": "12"}])
+    run = engine(model).run(lowered(arithmetic_task(), trace=TraceMode.MESSAGES, max_total_tokens=100))
+    if usage is None:
+        with pytest.raises(RolloutContractError, match="token budget"):
+            await run
+        return
+    record = await run
+    assert (record.stop_reason, record.grade.reward) == ("stop", 1.0)
+
+
 @pytest.mark.parametrize("violation", ["prefix", "logprobs", "empty"])
 async def test_model_transport_must_preserve_exact_token_evidence(violation):
     async def complete(request):
@@ -1107,6 +1545,75 @@ async def test_model_transport_must_preserve_exact_token_evidence(violation):
     runner = RolloutEngine(complete, {"local": FixtureImageFactory()})
     with pytest.raises(RolloutContractError):
         await runner.run(lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()))
+
+
+@dataclass
+class ChatModel:
+    """Return parsed messages without token evidence, as a hosted chat endpoint does."""
+
+    replies: list[dict]
+    requests: list = field(default_factory=list)
+
+    async def complete(self, request):
+        self.requests.append(request)
+        return ModelTurn(self.replies[len(self.requests) - 1], (), (), None, "stop")
+
+
+async def test_message_trace_runs_chat_models():
+    replies = [shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}]
+    spec = lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), trace=TraceMode.MESSAGES)
+    model = ChatModel(replies)
+
+    record = await engine(model, {"local": FixtureImageFactory()}).run(spec)
+
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    assert record.stop_reason == "stop"
+    assert record.messages[-1] == replies[-1]
+    assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
+    assert [request.prefix_token_ids for request in model.requests] == [(), ()]
+    assert len(record.steps) == 2
+    assert (record.prompt_token_ids, record.response_token_ids, record.loss_mask, record.logprobs) == ((), (), (), None)
+    assert record.metrics["trace"] == "messages"
+
+
+@dataclass
+class RetokenizingChatModel:
+    """Report token IDs whose later prompts do not extend the earlier sequence, as a re-tokenizing endpoint does."""
+
+    replies: list[dict]
+    requests: list = field(default_factory=list)
+
+    async def complete(self, request):
+        self.requests.append(request)
+        index = len(self.requests) - 1
+        prompt = (10, 11) if index == 0 else (10, 99, 98, 97)
+        return ModelTurn(self.replies[index], prompt, (20 + index,), (-0.5,), "stop")
+
+
+async def test_message_trace_keeps_reported_tokens_without_making_them_trainable():
+    replies = [shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}]
+    spec = lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), trace=TraceMode.MESSAGES)
+
+    record = await engine(RetokenizingChatModel(replies), {"local": FixtureImageFactory()}).run(spec)
+
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    # The last served sequence minus the first prompt's length: re-tokenization makes it informational only.
+    assert (record.prompt_token_ids, record.response_token_ids) == ((10, 11), (98, 97, 21))
+    assert (record.loss_mask, record.logprobs) == ((0, 0, 0), None)
+    assert record.metrics["trace"] == "messages"
+
+
+async def test_interrupted_message_trace_record_is_marked():
+    class UnavailableModel:
+        async def complete(self, request):
+            raise ConnectionError("chat endpoint unavailable")
+
+    spec = lowered(arithmetic_task(), trace=TraceMode.MESSAGES)
+    with pytest.raises(RolloutInterrupted) as interrupted:
+        await engine(UnavailableModel()).run(spec)
+
+    assert interrupted.value.operation == RolloutOperation.MODEL
+    assert interrupted.value.rollout.metrics["trace"] == "messages"
 
 
 @pytest.mark.parametrize(
@@ -1213,7 +1720,7 @@ async def test_deadlines_keep_generated_tokens_and_close_sessions(phase, budget)
                 await asyncio.Future()
             return Transition(done=phase == "grade")
 
-        async def grade(self, messages, *, stop_reason):
+        async def grade(self, messages, *, stop_reason, outputs):
             if phase == "grade":
                 entered.set()
                 await asyncio.Future()
@@ -1280,7 +1787,7 @@ async def test_turn_budget_covers_all_turns_and_excludes_final_grading():
         async def advance(self, turn):
             return Transition(done=False, observations=({"role": "user", "content": "Continue."},))
 
-        async def grade(self, messages, *, stop_reason):
+        async def grade(self, messages, *, stop_reason, outputs):
             assert messages[-1]["role"] == "assistant"
             grading.set()
             await release_grade.wait()
@@ -1479,7 +1986,7 @@ async def test_external_cancellation_at_attempt_deadline_remains_cancellation(ph
                 await wait_for_deadline()
             return Transition(done=True)
 
-        async def grade(self, messages, *, stop_reason):
+        async def grade(self, messages, *, stop_reason, outputs):
             await wait_for_deadline()
 
         async def close(self):
@@ -1529,7 +2036,7 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
             assert (result.exit_code, result.stdout) == (0, b"learner")
             return Transition(done=True)
 
-        async def grade(self, messages, *, stop_reason):
+        async def grade(self, messages, *, stop_reason, outputs):
             return GradeResult(Outcome.GRADED, 1.0)
 
         async def close(self):
@@ -1834,3 +2341,116 @@ async def test_separate_verifyit_grader_uses_typed_submissions_and_task_resource
     for machine in factory.machines:
         with pytest.raises(RuntimeError):
             await machine.run(Command(("true",)))
+
+
+@dataclass
+class RecordingObserver:
+    events: list[RolloutEvent] = field(default_factory=list)
+
+    async def on_event(self, event: RolloutEvent) -> None:
+        self.events.append(event)
+
+    def payloads(self, run_key: str) -> list[RolloutEventPayload]:
+        """The untimed payloads, after checking that every event belongs to ``run_key`` of the arithmetic task."""
+        assert {(event.run_key, event.task_id) for event in self.events} == {(run_key, "arithmetic")}
+        return [
+            (
+                replace(event.payload, duration=0.0)
+                if "duration" in {item.name for item in fields(event.payload)}
+                else event.payload
+            )
+            for event in self.events
+        ]
+
+
+def shell_turn_payloads(model: ReplayModel) -> list[RolloutEventPayload]:
+    """Payloads through the first turn of a rollout whose first response writes the answer file."""
+    observation = model.requests[1].messages[-1]
+    return [
+        AttemptStarted(),
+        MachineReady(0.0),
+        SessionPrepared(model.requests[0].messages, model.requests[0].options, 0.0),
+        ModelTurnCompleted(0, model.requests[1].messages[-2], "stop", 2, 1, None, {}, 0.0),
+        ToolCallCompleted("write", "shell", len(observation["content"].encode()), False, 0.0),
+        TransitionCompleted(0, False, (observation,), None, 0.0),
+    ]
+
+
+async def test_observer_receives_ordered_events_for_a_multi_turn_shell_rollout():
+    observer = RecordingObserver()
+    model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
+    record = await RolloutEngine(model.complete, {"local": FixtureImageFactory()}, observer=observer).run(
+        lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()), run_key="arithmetic/3"
+    )
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    assert observer.payloads("arithmetic/3") == [
+        *shell_turn_payloads(model),
+        ModelTurnCompleted(1, record.messages[-1], "stop", 5, 1, None, {}, 0.0),
+        TransitionCompleted(1, True, (), None, 0.0),
+        Graded(Outcome.GRADED, 1.0, None, None, 0.0),
+        AttemptEnded("stop", None, None, 0.0),
+    ]
+    assert asdict(observer.events[-1]) == {
+        "run_key": "arithmetic/3",
+        "task_id": "arithmetic",
+        "payload": {
+            "stop_reason": "stop",
+            "operation": None,
+            "error": None,
+            "duration": observer.events[-1].payload.duration,
+            "type": RolloutEventType.ATTEMPT_ENDED,
+        },
+    }
+
+
+async def test_observer_receives_interrupted_operation_after_grading_completed_turns():
+    class FailingModel(ReplayModel):
+        async def complete(self, request):
+            if self.requests:
+                self.requests.append(request)
+                raise ConnectionError("inference server unavailable")
+            return await super().complete(request)
+
+    observer = RecordingObserver()
+    model = FailingModel([shell_call("echo 12 > /workspace/answer")])
+    with pytest.raises(RolloutInterrupted) as interrupted:
+        await RolloutEngine(model.complete, {"local": FixtureImageFactory()}, observer=observer).run(
+            lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
+        )
+    assert interrupted.value.operation == RolloutOperation.MODEL
+    # Without a run key, events carry the task id.
+    assert observer.payloads("arithmetic") == [
+        *shell_turn_payloads(model),
+        Graded(Outcome.GRADED, 1.0, None, None, 0.0),
+        AttemptEnded(None, RolloutOperation.MODEL, repr(ConnectionError("inference server unavailable")), 0.0),
+    ]
+
+
+async def test_observer_failure_leaves_the_rollout_unchanged():
+    class FailingObserver:
+        async def on_event(self, event: RolloutEvent) -> None:
+            if event.payload.type == RolloutEventType.MODEL_TURN_COMPLETED:
+                raise RuntimeError("telemetry sink unavailable")
+
+    model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
+    record = await RolloutEngine(model.complete, {"local": FixtureImageFactory()}, observer=FailingObserver()).run(
+        lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
+
+    assert (record.grade.status, record.grade.reward, record.stop_reason) == (Outcome.GRADED, 1.0, "stop")
+    # Three events precede the failing first model turn; the six after it are never delivered.
+    assert (record.metrics["observer_error_count"], record.metrics["observer_undelivered_events"]) == (1.0, 6.0)
+
+
+async def test_blocked_observer_does_not_hold_the_rollout():
+    class BlockedObserver:
+        async def on_event(self, event: RolloutEvent) -> None:
+            await asyncio.Event().wait()
+
+    model = ReplayModel([{"role": "assistant", "content": "12"}])
+    record = await RolloutEngine(model.complete, {}, observer=BlockedObserver()).run(
+        lowered(arithmetic_task(), attempt_timeout=5, cleanup_timeout=0.1)
+    )
+
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    assert record.metrics["observer_undelivered_events"] > 0

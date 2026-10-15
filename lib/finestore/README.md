@@ -137,6 +137,26 @@ pass performs at most three compactions per table. `store.maintain()` exposes th
 operation for deterministic callers. `compact_table(root, table)` compacts all active shards
 for explicit materialization and sealing.
 
+`close()` also merges each registered table's remaining level-zero shards owned by
+that writer when there are at least two. It visits blob descriptors first, then other
+tables in name order, within an
+aggregate budget of 64 MiB stored input and 16,384 input rows, skipping groups that
+exceed the remaining budget. This consolidates small completed writes below the
+maintenance threshold without repeatedly rewriting earlier compacted data or merging
+other writers' inputs. Concurrent writers must use distinct writer IDs (the default
+IDs are unique). The pass retries classified transient storage failures with exponential
+backoff for up to three attempts per snapshot or merge before propagating them. Retries
+can repeat reads and writes of the selected inputs. The pass adds close latency after
+flushing; its input budget is not a wall-time or decoded-memory bound.
+
+`PersistentKvCache.close()` performs this pass during explicit shutdown. Its process-exit
+handler only requests maintenance shutdown after the bounded cache-write drain, so
+compaction or another flush cannot block interpreter exit.
+
+Close-time compaction does not repair archives left by terminated writers or guarantee
+one shard across repeated writer sessions. Ordinary leveled maintenance still handles
+larger groups; explicit compaction remains available for full materialization.
+
 Compaction pins a manifest, streams an ordered merge of its exact input shards, writes
 one shard at the next level, and replaces those paths through the same `HEAD` compare
 and swap. If another compactor removes an input first, the losing output remains

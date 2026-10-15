@@ -3,10 +3,25 @@
 
 """Serializable runtime configuration for one task attempt."""
 
+from enum import StrEnum
+
 from pydantic import BaseModel, ConfigDict, Field
-from shellbox.machine import NetworkPolicy
+from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, NetworkPolicy
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.shell import ShellToolConfig
+
+
+class TraceMode(StrEnum):
+    """The evidence a rollout records for each model turn."""
+
+    EXACT_TOKENS = "exact_tokens"
+    """Served token IDs, loss masks, and log probabilities under the exact-token contract."""
+    MESSAGES = "messages"
+    """Unchecked, informational token IDs with an all-zero loss mask; never train on these rollouts."""
+
+
+TRACE_METRIC = "trace"
+"""``RolloutData.metrics`` key that marks every ``TraceMode.MESSAGES`` record with the mode's value."""
 
 
 class MachineRuntimeSpec(BaseModel):
@@ -35,7 +50,12 @@ class TaskRuntimeSpec(BaseModel):
 
 
 class TaskSessionSpec(BaseModel):
-    """Session selection and deadlines for one attempt."""
+    """Session selection, deadlines, and token budget for one attempt.
+
+    ``max_total_tokens`` stops model requests before one whose prompt alone would bring the
+    cumulative prompt plus response tokens to the threshold; the last request sent may exceed it
+    by its new observation and response tokens. ``None`` sets no threshold.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
@@ -49,6 +69,9 @@ class TaskSessionSpec(BaseModel):
     attempt_timeout: float | None = Field(gt=0)
     verifier_timeout: float | None = Field(gt=0)
     cleanup_timeout: float = Field(gt=0)
+    trace: TraceMode = TraceMode.EXACT_TOKENS
+    max_total_tokens: int | None = Field(gt=0)
+    tool_output_spill_bytes: int | None = Field(gt=0, le=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES)
 
 
 class LoweredTaskSpec(BaseModel):

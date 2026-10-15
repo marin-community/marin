@@ -63,7 +63,7 @@ One Cloud Run service serves every app from one origin.
 - `GET /api/marina/me` answers `{"user", "role"}`. `user` is `"anonymous"` in
   local dev, and the shell shows no identity chip for it.
 - The kernel sends a Content-Security-Policy per app whose `connect-src` is
-  `'self'` plus that app's `connect_src` from its `app.toml`. A fetch to a host
+  `'self'` plus that app's `connect_src` from its `applet.toml`. A fetch to a host
   not on that list is refused by the browser.
 
 ## Title bar and app drawer
@@ -89,3 +89,7 @@ use `new URL('../../web', import.meta.url).pathname` for the shared kit.
 
 Keep uploaded applets on their own origin. Do not fetch the private directory
 from a public applet or add cross-origin access to the kernel API for navigation.
+
+Shared browser code is bundled into each application package at release time.
+Changes here require releasing consuming applications with `marina release`;
+a Marina runtime rollout does not replace their browser assets.
