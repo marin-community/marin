@@ -41,7 +41,7 @@ from rolloutengine.contracts import (
     Transition,
     TransitionCompleted,
 )
-from rolloutengine.delivery import _EventDelivery
+from rolloutengine.event_delivery import _EventDelivery
 from rolloutengine.grading import _grade_rollout
 from rolloutengine.lowering import SHELLBOX_SESSION, validate_lowered_task
 from rolloutengine.machines import _prepare_machine
