@@ -1,0 +1,192 @@
+{
+  "scope": "Admission of remaining five full1200 fresh-noise0 Snowball controls on frozen0212 after the first actual fresh main passes its first2 native/head/finite updates. All trials retain five8-H100 nodes at batch priority; no additional interactive nodes.",
+  "early_runtime_gate": "results/snowball_fresh1200_first_two_update_admission.json.gz",
+  "exact_geometry": "4learner nodes +1inference node; PP2/EP8/TP1/CP1/SP1",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "same_source_five_node_flashattention_qualification": "results/sc-snowball-runtime-qual-sc-s0-a3-01a126ce.json.gz",
+  "matched_noisy_vs_fresh_recipe": {
+    "pairs": [
+      {
+        "seed": 0,
+        "method": "sc",
+        "learning_diff": [
+          {
+            "key": "skyrl.generator.sampler_weight_noise_scale",
+            "noisy": 0.05,
+            "fresh": 0.0
+          }
+        ],
+        "exact_model_data_source_match": true,
+        "path_normalization": "Only each exact run identifier replaced by<RUN> in run-owned log/group/profiler paths. Missing sampler_refresh_period explicitly normalized to native default1."
+      },
+      {
+        "seed": 0,
+        "method": "tis",
+        "learning_diff": [
+          {
+            "key": "skyrl.generator.sampler_weight_noise_scale",
+            "noisy": 0.05,
+            "fresh": 0.0
+          }
+        ],
+        "exact_model_data_source_match": true,
+        "path_normalization": "Only each exact run identifier replaced by<RUN> in run-owned log/group/profiler paths. Missing sampler_refresh_period explicitly normalized to native default1."
+      },
+      {
+        "seed": 1,
+        "method": "sc",
+        "learning_diff": [
+          {
+            "key": "skyrl.generator.sampler_weight_noise_scale",
+            "noisy": 0.05,
+            "fresh": 0.0
+          }
+        ],
+        "exact_model_data_source_match": true,
+        "path_normalization": "Only each exact run identifier replaced by<RUN> in run-owned log/group/profiler paths. Missing sampler_refresh_period explicitly normalized to native default1."
+      },
+      {
+        "seed": 1,
+        "method": "tis",
+        "learning_diff": [
+          {
+            "key": "skyrl.generator.sampler_weight_noise_scale",
+            "noisy": 0.05,
+            "fresh": 0.0
+          }
+        ],
+        "exact_model_data_source_match": true,
+        "path_normalization": "Only each exact run identifier replaced by<RUN> in run-owned log/group/profiler paths. Missing sampler_refresh_period explicitly normalized to native default1."
+      },
+      {
+        "seed": 2,
+        "method": "sc",
+        "learning_diff": [
+          {
+            "key": "skyrl.generator.sampler_weight_noise_scale",
+            "noisy": 0.05,
+            "fresh": 0.0
+          }
+        ],
+        "exact_model_data_source_match": true,
+        "path_normalization": "Only each exact run identifier replaced by<RUN> in run-owned log/group/profiler paths. Missing sampler_refresh_period explicitly normalized to native default1."
+      },
+      {
+        "seed": 2,
+        "method": "tis",
+        "learning_diff": [
+          {
+            "key": "skyrl.generator.sampler_weight_noise_scale",
+            "noisy": 0.05,
+            "fresh": 0.0
+          }
+        ],
+        "exact_model_data_source_match": true,
+        "path_normalization": "Only each exact run identifier replaced by<RUN> in run-owned log/group/profiler paths. Missing sampler_refresh_period explicitly normalized to native default1."
+      }
+    ],
+    "all_passed": true
+  },
+  "remaining_five_controls": [
+    {
+      "run_id": "sc-snowball-main-fresh-noise000-tis-s0-a2-01a126ce",
+      "config": "experiments/post_training/score_centering_overnight/snowball_fresh_main_v3/tis-s0.yaml",
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-fresh1200-remaining-native-preflight/tis-s0.log",
+      "planned_updates": 1200,
+      "native_callback_behavior_checked_steps": [
+        20,
+        40,
+        600,
+        1199,
+        1200
+      ],
+      "checkpoint_every": 1200,
+      "eval_every": 20,
+      "legacy_eval_on_train_end": true,
+      "native_prepared": true,
+      "submitted": false,
+      "configuration_sha256": "690600ac4a22948069f63ffaa5fa4059f12bac4d569a89ea1e2f1dd85b665590"
+    },
+    {
+      "run_id": "sc-snowball-main-fresh-noise000-sc-s1-a2-01a126ce",
+      "config": "experiments/post_training/score_centering_overnight/snowball_fresh_main_v3/sc-s1.yaml",
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-fresh1200-remaining-native-preflight/sc-s1.log",
+      "planned_updates": 1200,
+      "native_callback_behavior_checked_steps": [
+        20,
+        40,
+        600,
+        1199,
+        1200
+      ],
+      "checkpoint_every": 1200,
+      "eval_every": 20,
+      "legacy_eval_on_train_end": true,
+      "native_prepared": true,
+      "submitted": false,
+      "configuration_sha256": "5aa84245a4b2e6d43213f9c31dd4da3f36aee4c1d7166e9b95225584b8feeb38"
+    },
+    {
+      "run_id": "sc-snowball-main-fresh-noise000-tis-s1-a2-01a126ce",
+      "config": "experiments/post_training/score_centering_overnight/snowball_fresh_main_v3/tis-s1.yaml",
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-fresh1200-remaining-native-preflight/tis-s1.log",
+      "planned_updates": 1200,
+      "native_callback_behavior_checked_steps": [
+        20,
+        40,
+        600,
+        1199,
+        1200
+      ],
+      "checkpoint_every": 1200,
+      "eval_every": 20,
+      "legacy_eval_on_train_end": true,
+      "native_prepared": true,
+      "submitted": false,
+      "configuration_sha256": "69d8c6f926a85212ea32b50f6dcc13f3388f41ccd8b87a588be5dfad6b1ecab6"
+    },
+    {
+      "run_id": "sc-snowball-main-fresh-noise000-sc-s2-a2-01a126ce",
+      "config": "experiments/post_training/score_centering_overnight/snowball_fresh_main_v3/sc-s2.yaml",
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-fresh1200-remaining-native-preflight/sc-s2.log",
+      "planned_updates": 1200,
+      "native_callback_behavior_checked_steps": [
+        20,
+        40,
+        600,
+        1199,
+        1200
+      ],
+      "checkpoint_every": 1200,
+      "eval_every": 20,
+      "legacy_eval_on_train_end": true,
+      "native_prepared": true,
+      "submitted": false,
+      "configuration_sha256": "2e69f4b880a85cf732bdfa7e978db02ee7ffcd830d4ece06e68994ff78645c1c"
+    },
+    {
+      "run_id": "sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce",
+      "config": "experiments/post_training/score_centering_overnight/snowball_fresh_main_v3/tis-s2.yaml",
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-fresh1200-remaining-native-preflight/tis-s2.log",
+      "planned_updates": 1200,
+      "native_callback_behavior_checked_steps": [
+        20,
+        40,
+        600,
+        1199,
+        1200
+      ],
+      "checkpoint_every": 1200,
+      "eval_every": 20,
+      "legacy_eval_on_train_end": true,
+      "native_prepared": true,
+      "submitted": false,
+      "configuration_sha256": "6d9fc36965814563a115f1ef95d0f830b3352c8cfd81e77347f79d77bfedbe1f"
+    }
+  ],
+  "fresh_matrix_total": "Three paired seeds0,1,2 \u00d7TIS/SC \u00d71200updates; freshSCseed0 alreadyrunning, five remaining controls admitted.",
+  "actual_native_callback_behavior": "Legacy callbacks constructed from native composed config, checkpoint fires at1200 and evaluation every20; checked behavior at20,40,600,1199,1200. Eval-on-train-end legacy defaulttrue retained, not silently changed.",
+  "quality_endpoint": "Declared full1200 native clean-policy endpoint with complete raw response replays required. Neither first2 updates nor submissions satisfy completion.",
+  "status": "admitted and prepared; remaining five not submitted yet",
+  "resource_board": 938
+}
