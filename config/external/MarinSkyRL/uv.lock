@@ -1645,7 +1645,7 @@ schema = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=atqamar%2Fstartup-quick-fixes#6709a2ff838a452e7191f5c33bdf75e54f688d79" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=atqamar%2Fstartup-quick-fixes#58fc0625c9750e51b771cac78643eb563586583c" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
