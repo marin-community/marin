@@ -30,7 +30,7 @@
     "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e",
     "all_input_files_verified": true
   },
-  "status": "Controller-confirmed running32CPU/0GPU; full response replay outcome pending",
+  "status": "Controller exit0; full249984 original response grades and all300 native training batches/16evals verified. Zero GPU resources and57.2156533333 allocated CPU-hours.",
   "controller_confirmation": {
     "job_id": "/romain/score-grader-qwen-curriculum-sc-s0-a0-01a126ce",
     "job_state": "3",
@@ -78,6 +78,31 @@
       "etag": "\"cecf2da61492d26a7b913b34d6bc84d9\""
     }
   ],
-  "replay_passed": null,
-  "scope": "Full300-update native cohort replay with frozen original grader functions; no independent-verifier or training endpoint claim before actual full result."
+  "replay_passed": true,
+  "scope": "Full300-update native cohort replay with frozen original grader functions; no independent-verifier or training endpoint claim before actual full result.",
+  "terminal_controller": {
+    "job_id": "/romain/score-grader-qwen-curriculum-sc-s0-a0-01a126ce",
+    "job_state": "4",
+    "num_tasks": "1",
+    "priority_band": "3",
+    "bundle_id": "27e20d973d47513ba60ce0ea08c71ea01146b4903a49d382bc528be9177d837c",
+    "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+    "res_cpu_millicores": "32000",
+    "res_memory_bytes": "68719476736",
+    "res_disk_bytes": "53687091200",
+    "res_device_json": "{}",
+    "task_id": "/romain/score-grader-qwen-curriculum-sc-s0-a0-01a126ce/0",
+    "attempt_id": "0",
+    "attempt_uid": "2f7c3c55607d5e61",
+    "task_state": "4",
+    "exit_code": "0",
+    "started_at_ms": "1792081964976",
+    "finished_at_ms": "1792088401737",
+    "node_name": "gb95f20",
+    "terminal_reason": ""
+  },
+  "allocated_cpu_hours": 57.215653333333336,
+  "allocated_h100_hours": 0,
+  "completed_replay_report": "sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce-regrading.json.gz",
+  "completed_replay_report_sha256": "0f8916c3f81cf2b33c174136693914eb431058aadafb07a8e57e7207fd5bc151"
 }

@@ -13,8 +13,8 @@
   "prepare_configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v2/batching-sc-s2-prepare.yaml",
   "all_scientific_fields_unchanged": true,
   "actual_changes": "Fresh run-owned ID and output/archive/group/Ray namespaces only; same frozen source,seed2,model,data,noise,loss,optimizer,batching,capture and1200-update horizon.",
-  "status": "Native preparation passed on the unchanged frozen0212 runtime; three fresh output prefixes were verified empty. Replacement remains unsubmitted pending publication and resource announcement.",
-  "submission_confirmed": false,
+  "status": "Native submitted and controller-confirmed2 BATCH8-H100 tasks; full1200-update replacement is pending. Fresh namespace avoids the prior archive reconstruction; successful new retention initialization and training remain to be observed.",
+  "submission_confirmed": true,
   "old_retention_ledger": {
     "present": false
   },
@@ -70,5 +70,46 @@
       "priority_band": "3",
       "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
     }
-  ]
+  ],
+  "controller_confirmation": [
+    {
+      "job_id": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a3-01a126ce",
+      "job_state": "3",
+      "num_tasks": "2",
+      "priority_band": "3",
+      "bundle_id": "0ae3587411c6924c6741f174c8b0b656ddf9d19fdb21f9bcfbdc0ef31ee03c9e",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a3-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "fb32e788c4d80ed7",
+      "task_state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a3-01a126ce",
+      "job_state": "3",
+      "num_tasks": "2",
+      "priority_band": "3",
+      "bundle_id": "0ae3587411c6924c6741f174c8b0b656ddf9d19fdb21f9bcfbdc0ef31ee03c9e",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a3-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "6f53c72ae7c1f51f",
+      "task_state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    }
+  ],
+  "resource_board_id": 1057,
+  "native_submission_log_sha256": "f3b487961042f39124bd7ee575836074d49f0b5e975641b282af8027efcab33c",
+  "controller_confirmation_observed_at": "2026-10-15T18:28:51.405269+00:00"
 }

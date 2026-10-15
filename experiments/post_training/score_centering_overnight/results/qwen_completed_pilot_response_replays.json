@@ -1,8 +1,8 @@
 {
-  "scope": "Completed per-arm40-update pilot replay gates only. Remaining7 pilot arm replays continue; n=1 pilot effects do not establish equivalence or a population effect.",
+  "scope": "Completed per-arm40-update pilot original-grader replay gates only. Remaining6 pilot arm replays continue; n=1 pilot effects do not establish equivalence or a population effect.",
   "planned_arms": 10,
-  "completed_arms": 3,
-  "actual_response_grade_replays": 115656,
+  "completed_arms": 4,
+  "actual_response_grade_replays": 154208,
   "discrepancies": 0,
   "runs": [
     {
@@ -82,6 +82,32 @@
       },
       "stage": "optimizer",
       "arm": "sc"
+    },
+    {
+      "run_id": "sc-qwen-transfer-optimizer-tis-s0-pilot-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "completed_updates": 40,
+      "physical_records": 38552,
+      "actual_response_grade_replays": 38552,
+      "native_failures_not_regraded": [],
+      "discrepancies": 0,
+      "evaluation_points_crosschecked": 3,
+      "all_replayed_evaluation_scores_match_native": true,
+      "record_payloads_sha256": "afa8d8953ec25d51e0ae3a30f3d704360cef775efc47dc2b73a44f2764b20a31",
+      "replay_report": "sc-qwen-transfer-optimizer-tis-s0-pilot-a4-01a126ce-regrading.json.gz",
+      "replay_report_sha256": "d6b239e9818c720088414f1bc1f353cbae7e9ccd9d5a49a652fc99164db32587",
+      "grader_files_sha256": {
+        "skyrl-gym/skyrl_gym/envs/aime/utils.py": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+        "skyrl-gym/skyrl_gym/envs/gsm8k/utils.py": "16680a223ba876ff0a51184db6863b1527c84ba87fc3cf19f92a376652394115",
+        "skyrl-gym/skyrl_gym/envs/reasoning_gym/scoring.py": "8b9f61cf4ad560dff639e8c6425a838f04d94c4eb175b547efa0d20d1c884d3c",
+        "skyrl-gym/skyrl_gym/envs/nemotron_ultra/answer_extraction.py": "1d48e25122f452147e795eb6e8e21eea217654756ece9e918fe0a8ece2ab108e"
+      },
+      "source_sha256": {
+        "train": "b0397b09bc4e8dd2b01b96cdf729268ade10c7839ab4193f94479b016b1400b1",
+        "eval": "e3b1ca83df0fb193413caad7396f35b4cd29d9f45f6f8561e761818e42e0f79b"
+      },
+      "stage": "optimizer",
+      "arm": "tis"
     }
   ]
 }
