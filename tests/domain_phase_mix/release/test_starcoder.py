@@ -24,6 +24,8 @@ RUN_RECORDS = {
     / "combined_discovery_observations.csv",
 }
 TRANSITION = paths.RO / "starcoder_wsd80_transition_transient_20261006"
+# The heteroskedasticity analysis's per-mixture summary of the repeat-noise panel, which the paper's table reports.
+NOISE_SUMMARY = paths.RO / "starcoder_heteroskedasticity_mechanisms_20260617/anchor_metric_noise_features.csv"
 
 
 @pytest.fixture(scope="module")
@@ -57,6 +59,19 @@ def test_trajectories_cover_the_switch_figure(out):
     assert {"run_label", "seed", "step", "train_loss"} <= set(traj.columns)
     assert traj.groupby(["run_label", "seed"]).step.max().ge(22608).all()
     assert traj.groupby(["run_label", "seed"]).size().ge(1000).all()
+
+
+def test_repeat_noise_panel_reproduces_the_analysis(out):
+    panel = out["starcoder_repeat_noise"]
+    assert len(panel) == 50 and panel.observation_id.is_unique and panel.data_seed.is_unique
+    mixtures = panel.groupby("mixture_label")
+    assert len(mixtures) == 10 and mixtures.size().eq(5).all()
+    assert mixtures[["phase_0_starcoder", "phase_1_starcoder"]].nunique().eq(1).all().all()
+    summary = pd.read_csv(NOISE_SUMMARY)
+    summary = summary[summary.metric == "eval/paloma/dolma_100_programing_languages/bpb"].set_index("anchor_id")
+    stats = mixtures.pl_bpb.agg(["mean", "std"])
+    for column in ("mean", "std"):
+        assert np.allclose(stats[column], summary.loc[stats.index, column], rtol=0, atol=1e-12)
 
 
 def test_no_internal_strings(out):

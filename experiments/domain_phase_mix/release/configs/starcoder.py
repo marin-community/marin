@@ -55,6 +55,10 @@ endpoint observation as `<that>@endpoint`; the export keys on `<name>`. These ru
 - `starcoder_trajectories`: the training loss at every logged step of the 50 runs whose seed means the switch-trace
   figure plots, re-pulled from W&B by `release/pull_switch_traces.py`, with the step of each run's switch; `run_label`
   is the series' label in `train_loss_jump`.
+- `starcoder_repeat_noise`: the repeat-noise panel behind the heteroskedasticity table, ten two-phase mixtures
+  (`mixture_label`, StarCoder shares `phase_0_starcoder` and `phase_1_starcoder`) each trained five times with
+  different data seeds on the 60M-parameter proxy for 1.0B tokens, with the final programming-languages and C4 BPB of
+  each run. The launch recorded no trainer seed.
 
 The transition tables and the trajectories key on training run names too (the gradient-conflict trajectory id, without
 its W&B prefix), so a run has one id across them: the 4x confirmation winners are both the `conf_m400_untied`
@@ -70,7 +74,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from experiments.domain_phase_mix.release import paths, tables
+from experiments.domain_phase_mix.release import paths, run_names, tables
 from experiments.domain_phase_mix.release.context import ExportContext
 
 ATLAS = paths.RO / "starcoder_all_tied_curves_canonical_dsp_20260902"
@@ -117,6 +121,15 @@ EVAL_HISTORY_METRICS = {
     "eval/paloma/dolma_100_programing_languages-llama3/bpb": "pl_bpb",
     "eval/paloma/c4_en-llama3/bpb": "c4_bpb",
 }
+# The repeat-noise panel: the per-run metrics its collector wrote and the launch's record of each run.
+REPEAT_NOISE = (
+    paths.REPO / "experiments/domain_phase_mix/exploratory/reference_outputs/starcoder_heteroskedastic_snr_20260523"
+)
+REPEAT_NOISE_METRICS = {
+    "eval/paloma/dolma_100_programing_languages/bpb": "pl_bpb",
+    "eval/paloma/c4_en/bpb": "c4_bpb",
+}
+REPEAT_NOISE_SHARES = ["phase_0_starcoder", "phase_1_starcoder", "total_starcoder_epochs"]
 RUN_NAME_COLUMNS = ("run_name", "trajectory_id")
 INTERNAL_COLUMNS = (
     "training_run_id",
@@ -158,7 +171,8 @@ def required_sources() -> list[Path]:
     confirmation = [MATCHED_CONFIRMATION / name for name in ("confirmation_pairs.csv", "confirmation_observations.csv")]
     designs = [INVENTORY, DENSE_DESIGN, COUPLED_DESIGN, *RAMP_DESIGNS]
     diagonal = [DIAGONAL / "observations.csv", DIAGONAL / "curve_summary.csv"]
-    return [*atlas, *fits, *designs, *diagonal, CURRICULA, MATCHED_OPTIMA, *confirmation, *transition]
+    repeat_noise = [REPEAT_NOISE / "collected_train_only_metrics_live.csv", REPEAT_NOISE / "training_manifest.csv"]
+    return [*atlas, *fits, *designs, *diagonal, CURRICULA, MATCHED_OPTIMA, *confirmation, *transition, *repeat_noise]
 
 
 def _curve_designs(curves: pd.DataFrame, dense: dict) -> pd.DataFrame:
@@ -332,6 +346,39 @@ def _ramp_designs(ctx: ExportContext) -> pd.DataFrame:
     return table
 
 
+def _repeat_noise(ctx: ExportContext) -> pd.DataFrame:
+    """The repeat-noise panel's runs, checked against the launch's record of each run's mixture and step count."""
+    runs = tables.read_csv(paths.require(REPEAT_NOISE / "collected_train_only_metrics_live.csv"))
+    launch = tables.read_csv(paths.require(REPEAT_NOISE / "training_manifest.csv"))
+    table = runs.merge(launch, on="run_name", how="left", validate="one_to_one", suffixes=("", "_launch"))
+    labels = (table.anchor_id == table.anchor_id_launch) & (table.repeat_index == table.repeat_index_launch)
+    launched = table[[f"{c}_launch" for c in REPEAT_NOISE_SHARES]].to_numpy()
+    # The collector kept 16 significant digits, so the two files differ by up to one ulp.
+    if not labels.all() or not np.allclose(table[REPEAT_NOISE_SHARES], launched, rtol=0, atol=1e-12):
+        raise ValueError("a repeat-noise run's metrics and its launch record disagree on its mixture")
+    if not (table.latest_step == table.num_train_steps - 1).all():
+        raise ValueError("a repeat-noise run's metrics are not from its final step")
+    names = table.checkpoint_root.map(run_names.training_run_name_from_uri)
+    if not (names.str.rsplit("-", n=1).str[0] == table.run_name).all():
+        raise ValueError("a repeat-noise run's checkpoint is not named after the run")
+    out = pd.DataFrame(
+        {
+            "observation_id": names.map(ctx.registry.id_for),
+            "mixture_label": table.anchor_id,
+            "repeat_index": table.repeat_index,
+            "data_seed": table.data_seed,
+            "phase_0_starcoder": table.phase_0_starcoder_launch,
+            "phase_1_starcoder": table.phase_1_starcoder_launch,
+            "total_starcoder_epochs": table.total_starcoder_epochs_launch,
+            "train_tokens": table.experiment_budget,
+            "train_steps": table.num_train_steps,
+        }
+    )
+    for metric, column in REPEAT_NOISE_METRICS.items():
+        out[column] = table[metric]
+    return out
+
+
 def _trajectories(ctx: ExportContext) -> pd.DataFrame:
     trajectories = pd.read_parquet(paths.require(TRANSITION / "trajectories.parquet"))
     ids = {name: ctx.registry.id_for(name) for name in trajectories.run_name.unique()}
@@ -369,6 +416,7 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
         "starcoder_transition": _transition(ctx),
         "starcoder_ramp_designs": _ramp_designs(ctx),
         "starcoder_trajectories": _trajectories(ctx),
+        "starcoder_repeat_noise": _repeat_noise(ctx),
     }
     for name, t in out.items():
         drop = [c for c in t.columns if c in INTERNAL_COLUMNS or c.endswith(("_url", "_uri"))]

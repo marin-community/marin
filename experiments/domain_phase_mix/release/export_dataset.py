@@ -106,6 +106,7 @@ KEYING = {
     "starcoder_trajectories": (
         "The training run name; for the gradient-conflict runs, the trajectory id without its W&B prefix."
     ),
+    "starcoder_repeat_noise": "The training run name with its six-hex-digit hash.",
     "domain_sweeps": "The training run name, to which these launches append no hash.",
     "domain_sweeps_olmix_fits": NO_IDS,
     "fits_task_parameters": NO_IDS,
