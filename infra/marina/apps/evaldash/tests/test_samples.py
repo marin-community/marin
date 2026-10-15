@@ -5,6 +5,7 @@ import json
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from evaldash.samples import fetch_artifact, fetch_samples, list_sample_tasks
 from finestore.eval import (
     SAMPLES_MERGE_KEY,
@@ -150,6 +151,48 @@ def test_mrcr_sample_scores_survive_export_and_repair_existing_rows(tmp_path) ->
     assert page.rows[0].grading is not None
     assert page.rows[0].grading.score == 0.25
     assert page.rows[0].correct is False
+
+
+@pytest.mark.parametrize("metric", ["accuracy", "accuracy,none"])
+def test_repeated_sample_scores_recover_grades_and_filters(tmp_path, metric) -> None:
+    root = str(tmp_path / "results")
+    with EvaluationStore.open(root, writer_id="evalchemy") as store:
+        for repeat, score in enumerate((1.0, 0.0, 1.0)):
+            store.add_sample(
+                EvalSample(
+                    task="gpqa-diamond",
+                    doc_id="0",
+                    kind=SampleKind.GENERATION,
+                    metrics={metric: score},
+                ),
+                trial_id=str(repeat),
+                extraction_filter="none",
+            )
+        store.add_sample(EvalSample(task="gpqa-diamond", doc_id="1", kind=SampleKind.GENERATION))
+        store.seal()
+
+    page = fetch_samples(root, "gpqa-diamond", offset=0, limit=10, correct="all", primary_metric_name="accuracy_avg")
+
+    assert page.primary_metric == metric
+    assert page.counts.model_dump() == {"all": 4, "correct": 2, "incorrect": 1, "ungraded": 1}
+    for row in page.rows:
+        if row.doc_id == "1":
+            assert row.correct is None
+            assert row.grading is None
+            continue
+        assert row.grading is not None
+        assert row.grading.method == "lm-eval:accuracy"
+        assert row.grading.metric == metric
+        assert row.grading.filter == "none"
+        assert row.grading.score == row.metrics[metric]
+        assert row.grading.passed == row.correct
+
+    for outcome, expected in (("correct", [True, True]), ("incorrect", [False]), ("ungraded", [None])):
+        filtered = fetch_samples(
+            root, "gpqa-diamond", offset=0, limit=10, correct=outcome, primary_metric_name="accuracy_avg"
+        )
+        assert filtered.total == len(expected)
+        assert [row.correct for row in filtered.rows] == expected
 
 
 def test_artifact_fetch_returns_run_local_object(tmp_path) -> None:
