@@ -120,10 +120,9 @@ The audit needed four sources that no build table held. Each was added to an exi
   sweep's README, which weighted each run's evaluation log, prints 1.0364, 1.0238 and 1.0251. The exporter joins each
   pulled run to its run spec by name (the W&B id is the run name with its hash), requires one pulled run per spec, no
   unused pull and the spec's data seed, and checks each run's model size and token count against the ladder's 3e18 rung.
-  The table has no observation ids, because its three runs appear in no other table; the cross-table consistency check
-  skips tables without ids. The tests check the three caps, that the same results file scores the ladder's UniMax-8
-  seed-0 run with the ladder's components (to 1e-15), that each cap's row holds its pulled run's components and data
-  seed, and that its Uncheatable aggregate rounds to the README's value.
+  The table has no observation ids; the cross-table consistency check skips tables without ids. The tests check the
+  three caps, that the same results file scores the ladder's UniMax-8 seed-0 run with the ladder's components (to
+  1e-15), and that each run's Uncheatable aggregate rounds to the README's value.
 
 `figures_tables.csv` lists every config that each table's registry queries read; a test in
 `test_verify_paper_numbers.py` enforces this. The Params column of `tab:a-ablations-full` adds `constant`.
@@ -171,6 +170,9 @@ reported as untraced. After the paper is corrected, remove the fixed cells from 
 
 Both tab:a-unimax-cap cells were corrected in sections/appendix.tex (1.099 -> 1.098; 0.936 -> 0.935), and the audit
 reported 0 differences.
+
+Until d366556f75 the audit also reported 3 untraced cells, the Uncheatable values of the cap-1, cap-4 and cap-12 runs;
+they have been traced through the frozen W&B pull since.
 
 The build at 3681ab32b3 replaces `aggregate_version` and the `_source` and `_fixed` aggregate columns with
 `bpb__uncheatable` and `bpb__obe_easy` under one rule, and the registry queries those two columns. The tab:scaling-main
