@@ -314,7 +314,7 @@ small reduction combines the counts. A separate bounded sample keeps up to
 100 tasks per source and, independently, 10 per curriculum node (subject, group
 or capability). Their union is deduplicated by source/task identity. It writes statistics, sampled task Parquet
 and `coverage.json`. Atlas loads this compact dataset. The full task corpus,
-embeddings and assignments remain in object storage. Source-family and train/eval
+embeddings and assignments remain in object storage. Dataset and train/eval
 views sum the precomputed counts; browsing the heatmap does not aggregate task
 rows. Example lists show samples and retain full-population cell counts.
 

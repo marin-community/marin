@@ -7,7 +7,7 @@ const state = {data: null, parent: '', subject: '', nodes: new Map(), request: 0
 let searchTimer;
 
 function parameters() {
-  return new URLSearchParams({group_by: $('group-by').value, intended_use: $('use').value, source_id: $('source').value});
+  return new URLSearchParams({intended_use: $('use').value, source_id: $('source').value});
 }
 function labelFor(id, subject) { return state.nodes.get(`${subject}/${id}`)?.name || id; }
 function button(text, className, action) { const item = node('button', text, className); item.type = 'button'; item.addEventListener('click', action); return item; }
@@ -21,7 +21,7 @@ async function loadCoverage() {
   params.set('parent_id', state.parent); params.set('subject_id', state.subject); params.set('search', $('search').value.trim());
   $('message').textContent = 'Loading precomputed coverage…';
   $('heatmap').setAttribute('aria-busy', 'true');
-  $('heatmap').inert = true; $('outcomes').inert = true;
+  $('heatmap').inert = true; $('curriculum-map').inert = true; $('outcomes').inert = true;
   try {
     const data = await json(`api/curriculum?${params}`);
     if (request !== state.request) return;
@@ -33,14 +33,13 @@ async function loadCoverage() {
     for (const source of data.sources) { const option = node('option', source.name); option.value = source.source_id; $('source').append(option); }
     $('source').value = selected;
     renderCoverage();
-    const hash = parameters(); hash.set('parent_id', state.parent); hash.set('subject_id', state.subject);
-    if ($('search').value) hash.set('search', $('search').value);
-    history.replaceState(null, '', `#${hash}`);
     const processed = data.sources.filter(source => source.alignment).length;
     $('message').textContent = `${data.sample_size ? `Sample: up to ${data.sample_size} tasks per source. ` : ''}${number.format(processed)} of ${number.format(data.sources.length)} inventory sources are in this release. Saved ${new Date(data.created_at).toLocaleString()}.`;
     $('provenance').textContent = JSON.stringify({release_id: data.release_id, curriculum_key: data.curriculum_key, population: data.population, sample_size: data.sample_size, lineage: data.lineage}, null, 2);
+    const area = state.nodes.get(`${state.subject}/${state.parent}`);
+    if (area) await showTasks(area, null);
   } catch (error) { if (request === state.request) $('message').textContent = `Coverage could not be loaded. ${error.message}`; }
-  finally { if (request === state.request) { $('heatmap').removeAttribute('aria-busy'); $('heatmap').inert = false; $('outcomes').inert = false; } }
+  finally { if (request === state.request) { $('heatmap').removeAttribute('aria-busy'); $('heatmap').inert = false; $('curriculum-map').inert = false; $('outcomes').inert = false; } }
 }
 
 function navigate(item) {
@@ -52,7 +51,7 @@ function renderBreadcrumbs() {
   const path = [];
   let current = state.nodes.get(`${state.subject}/${state.parent}`);
   while (current) { path.unshift(current); current = state.nodes.get(`${current.subject_id}/${current.parent_id}`); }
-  const root = button('All subjects', 'breadcrumb', () => navigate(null));
+  const root = button('All domains', 'breadcrumb', () => navigate(null));
   if (!path.length) root.setAttribute('aria-current', 'page');
   $('breadcrumbs').replaceChildren(root);
   for (const item of path) {
@@ -85,53 +84,150 @@ function renderCoverage() {
   const scope = data.scope_summary;
   $('coverage-scope').hidden = !scope || !!$('search').value;
   if (scope) $('coverage-scope').textContent = `${labelFor(`subject:${state.subject}`, state.subject)} totals: ${number.format(scope.subject_members)} within the subject cutoff · ${number.format(scope.capability_matches)} with a capability match · ${number.format(scope.subject_members - scope.capability_matches)} subject-only. Group and capability cells count capability matches.`;
+  const mapView = $('view').value === 'map';
   const columns = data.columns.filter(column => $('include-empty').checked || column.processed_sources > 0);
-  const head = node('tr'); head.append(node('th', $('search').value ? 'Search results' : state.parent ? 'Groups & capabilities' : 'Curriculum subject'));
-  for (const column of columns) {
-    const th = node('th'); th.scope = 'col';
-    const title = button(column.name, 'column-name', () => openTasks(null, column)); title.title = column.name;
-    th.append(title, node('span', `${number.format(column.denominator)} tasks · ${column.processed_sources}/${column.sources} sources`, 'column-meta'));
-    head.append(th);
-  }
-  $('matrix-head').replaceChildren(head);
-  const cells = new Map(data.cells.map(cell => [`${cell.subject_id}/${cell.node_id}/${cell.column_id}`, cell.count]));
-  const maximum = Math.max(1, ...data.cells.map(cell => cell.count));
-  $('heat-max').textContent = compact.format(maximum);
-  const rows = [];
-  const ordered = [...data.nodes].sort((a, b) => {
-    const count = area => columns.reduce((sum, column) => sum + (cells.get(`${area.subject_id}/${area.node_id}/${column.column_id}`) || 0), 0);
-    return count(b) - count(a) || a.name.localeCompare(b.name);
-  });
-  for (const area of ordered) {
-    const row = node('tr'), name = node('th'); name.scope = 'row';
-    const label = node('span'); label.append(node('span', area.name, 'area-label'), node('span', area.kind, 'area-kind'));
-    const action = button('', 'area-button', () => area.kind === 'capability' ? openTasks(area, null) : navigate(area));
-    action.title = area.description || area.name; action.append(label, node('span', area.kind === 'capability' ? '↗' : '›', 'area-arrow')); name.append(action); row.append(name);
+  if (!mapView) {
+    const head = node('tr'); head.append(node('th', $('search').value ? 'Search results' : state.parent ? 'Groups & capabilities' : 'Curriculum subject'));
     for (const column of columns) {
-      const count = cells.get(`${area.subject_id}/${area.node_id}/${column.column_id}`) || 0;
-      const td = node('td'), cell = button(number.format(count), 'heat-cell', () => openTasks(area, column));
-      const fraction = column.denominator ? percent(count / column.denominator) : '0.0%';
-      cell.title = `${area.name} · ${column.name}: ${number.format(count)} / ${number.format(column.denominator)} (${fraction}). ${column.processed_sources}/${column.sources} sources processed.`;
-      cell.setAttribute('aria-label', cell.title);
-      if (!column.processed_sources) { cell.classList.add('unprocessed'); cell.textContent = '—'; cell.disabled = true; cell.title = 'No processed tasks in this source group'; }
-      else if (!count) cell.classList.add('zero');
-      else { const intensity = Math.log1p(count) / Math.log1p(maximum); cell.style.backgroundColor = `hsl(148 28% ${94 - intensity * 62}%)`; cell.style.color = intensity > .62 ? '#fff' : '#244e36'; }
-      td.append(cell); row.append(td);
+      const th = node('th'); th.scope = 'col';
+      const title = button(column.name, 'column-name', () => openTasks(null, column)); title.title = column.name;
+      th.append(title, node('span', `${number.format(column.denominator)} tasks · ${column.processed_sources}/${column.sources} sources`, 'column-meta'));
+      head.append(th);
     }
-    rows.push(row);
+    $('matrix-head').replaceChildren(head);
+    const cells = new Map(data.cells.map(cell => [`${cell.subject_id}/${cell.node_id}/${cell.column_id}`, cell.count]));
+    const maximum = Math.max(1, ...data.cells.map(cell => cell.count));
+    $('heat-max').textContent = compact.format(maximum);
+    const rows = [];
+    const ordered = [...data.nodes].sort((a, b) => {
+      const count = area => columns.reduce((sum, column) => sum + (cells.get(`${area.subject_id}/${area.node_id}/${column.column_id}`) || 0), 0);
+      return count(b) - count(a) || a.name.localeCompare(b.name);
+    });
+    for (const area of ordered) {
+      const row = node('tr'), name = node('th'); name.scope = 'row';
+      const label = node('span'); label.append(node('span', area.name, 'area-label'), node('span', area.kind, 'area-kind'));
+      const action = button('', 'area-button', () => area.kind === 'capability' ? openTasks(area, null) : navigate(area));
+      action.title = area.description || area.name; action.append(label, node('span', area.kind === 'capability' ? '↗' : '›', 'area-arrow')); name.append(action); row.append(name);
+      for (const column of columns) {
+        const count = cells.get(`${area.subject_id}/${area.node_id}/${column.column_id}`) || 0;
+        const td = node('td'), cell = button(number.format(count), 'heat-cell', () => openTasks(area, column));
+        const fraction = column.denominator ? percent(count / column.denominator) : '0.0%';
+        cell.title = `${area.name} · ${column.name}: ${number.format(count)} / ${number.format(column.denominator)} (${fraction}). ${column.processed_sources}/${column.sources} sources processed.`;
+        cell.setAttribute('aria-label', cell.title);
+        if (!column.processed_sources) { cell.classList.add('unprocessed'); cell.textContent = '—'; cell.disabled = true; cell.title = 'No processed tasks in this source group'; }
+        else if (!count) cell.classList.add('zero');
+        else shade(cell, count, maximum);
+        td.append(cell); row.append(td);
+      }
+      rows.push(row);
+    }
+    $('matrix-body').replaceChildren(...rows);
+    $('empty').hidden = rows.length > 0;
   }
-  $('matrix-body').replaceChildren(...rows);
-  $('empty').hidden = rows.length > 0;
-  $('level-help').textContent = $('search').value ? 'Showing up to 100 matching areas. Open a group or select a cell.' : 'Subject cells count subject matches; group and capability cells count capability matches. Select a count to inspect samples.';
-  const scroller = $('matrix-body').parentElement.parentElement;
-  const scrolls = scroller.scrollHeight > scroller.clientHeight || scroller.scrollWidth > scroller.clientWidth;
-  $('matrix-summary').textContent = `Curriculum areas: ${data.nodes.length} · Source ${$('group-by').value === 'source' ? 'columns' : 'families'}: ${columns.length}${scrolls ? ' · Scroll within the table for more rows or columns' : ''}`;
+  $('curriculum-map').hidden = !mapView; $('source-matrix').hidden = mapView;
+  $('source-options').hidden = mapView; $('map-detail-control').hidden = !mapView || !!state.parent;
+  $('level-help').textContent = 'Domain totals include broad subject matches. Topics and skills count capability matches. Select a count to inspect samples.';
+  if (mapView) renderMap();
+  else {
+    const scroller = $('source-matrix');
+    const scrolls = scroller.scrollHeight > scroller.clientHeight || scroller.scrollWidth > scroller.clientWidth;
+    $('matrix-summary').textContent = `Curriculum areas: ${data.nodes.length} · Datasets: ${columns.length}${scrolls ? ' · Scroll within the table for more rows or columns' : ''}`;
+  }
   $('outcomes').replaceChildren(...Object.entries(outcomes).map(([value, text]) => {
     const item = button('', 'outcome-button', () => openTasks(null, null, value)); item.append(node('span', text), node('b', number.format(data.totals[value]))); return item;
   }));
+    const hash = parameters(); hash.set('view', $('view').value); hash.set('detail', $('map-detail').value); hash.set('parent_id', state.parent); hash.set('subject_id', state.subject);
+    if ($('search').value) hash.set('search', $('search').value);
+    history.replaceState(null, '', `#${hash}`);
+
 }
 
-async function openTasks(area, column, outcome = 'all') {
+function shade(element, count, maximum) {
+  if (!count) { element.classList.add('zero'); return; }
+  const intensity = Math.log1p(count) / Math.log1p(Math.max(1, maximum));
+  element.style.backgroundColor = `hsl(148 28% ${94 - intensity * 62}%)`;
+  element.style.color = intensity > .62 ? '#fff' : '#244e36';
+}
+
+function renderMap() {
+  const data = state.data;
+  const counts = new Map(data.area_counts.map(area => [`${area.subject_id}/${area.node_id}`, area.count]));
+  const children = new Map();
+  const key = area => `${area.subject_id}/${area.node_id}`;
+  for (const area of data.hierarchy) {
+    const parent = `${area.subject_id}/${area.parent_id}`;
+    if (!children.has(parent)) children.set(parent, []);
+    children.get(parent).push(area);
+  }
+  const query = $('search').value.trim().toLowerCase();
+  const matches = new Map();
+  function matching(area) {
+    if (!matches.has(key(area))) matches.set(key(area), !query || `${area.name} ${area.description}`.toLowerCase().includes(query) || (children.get(key(area)) || []).some(matching));
+    return matches.get(key(area));
+  }
+  const focused = state.nodes.get(`${state.subject}/${state.parent}`);
+  const roots = focused ? [focused] : data.hierarchy.filter(area => area.kind === 'subject');
+  const showSkills = !!focused || $('map-detail').value === 'capabilities';
+  const maximum = Math.max(1, ...counts.values());
+  $('heat-max').textContent = compact.format(maximum);
+
+  function areaRow(area) {
+    const count = counts.get(key(area)) || 0;
+    const row = node('div', '', 'map-area');
+    const name = button(area.name, 'map-area-name', () => area.kind === 'capability' ? openTasks(area, null) : navigate(area));
+    name.title = area.description || area.name;
+    const amount = button(number.format(count), 'map-area-count', () => openTasks(area, null));
+    amount.setAttribute('aria-label', `${area.name}: ${number.format(count)} tasks. View sampled tasks.`);
+    amount.title = `${number.format(count)} of ${number.format(data.totals.denominator)} task instances`;
+    row.append(name, amount); shade(row, count, maximum);
+    return row;
+  }
+  function branch(area, includeAll = false) {
+    if (query && !includeAll && !matching(area)) return null;
+    const section = node('section', '', `map-branch ${area.kind}`);
+    section.append(areaRow(area));
+    const descendants = children.get(key(area)) || [];
+    if ((showSkills || query) && descendants.length) {
+      const nested = node('div', '', 'map-children');
+      const includeChildren = includeAll || (query && `${area.name} ${area.description}`.toLowerCase().includes(query));
+      for (const child of descendants) { const item = branch(child, includeChildren); if (item) nested.append(item); }
+      section.append(nested);
+    }
+    return section;
+  }
+  const cards = [];
+  let topics = 0;
+  for (const area of roots.filter(matching)) {
+    const card = node('article', '', 'domain-card');
+    card.dataset.subject = area.subject_id;
+    const header = node('header', '', 'domain-header');
+    const title = node('h2'); title.append(button(area.name, 'domain-title', () => navigate(area)));
+    const count = counts.get(key(area)) || 0;
+    const amount = button(number.format(count), 'domain-count', () => openTasks(area, null));
+    amount.setAttribute('aria-label', `${area.name}: ${number.format(count)} tasks. View sampled tasks.`);
+    header.append(title, amount);
+    const descendants = children.get(key(area)) || [];
+    const body = node('div', '', 'map-topics');
+    const includeAll = !!query && `${area.name} ${area.description}`.toLowerCase().includes(query);
+    for (const child of descendants) { const item = branch(child, includeAll); if (item) { body.append(item); topics++; } }
+    card.append(header, node('p', `${descendants.length} ${area.kind === 'subject' ? 'topics' : 'skills'} · ${area.kind === 'subject' ? 'domain coverage' : 'capability matches'}`, 'domain-subtitle'));
+    if (focused) card.append(button('View task examples ↓', 'domain-examples text-button', () => openTasks(area, null)));
+    card.append(body);
+    cards.push(card);
+  }
+  $('curriculum-map').classList.toggle('focused', !!focused);
+  $('curriculum-map').replaceChildren(...cards);
+  if (!cards.length) $('curriculum-map').append(node('p', 'No matching curriculum areas.', 'empty'));
+  $('matrix-summary').textContent = focused ? `${focused.name} · ${topics} areas · all skills shown` : `${cards.length} domains · ${topics} topics · ${showSkills ? 'all skills shown' : 'open a domain to explore its skills'}`;
+}
+
+function openTasks(area, column, outcome = 'all') {
+  const loading = showTasks(area, column, outcome);
+  $('task-panel').scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start'});
+  return loading;
+}
+
+async function showTasks(area, column, outcome = 'all') {
   state.taskQuery = new URLSearchParams(state.data.filters); state.taskQuery.set('release', state.data.release_id);
   if (area) { state.taskQuery.set('node_id', area.node_id); state.taskQuery.set('subject_id', area.subject_id); }
   if (column) state.taskQuery.set('column', column.column_id);
@@ -139,7 +235,6 @@ async function openTasks(area, column, outcome = 'all') {
   state.next = ''; $('task-list').replaceChildren(); $('task-panel').hidden = false;
   $('task-heading').textContent = area?.name || (outcome === 'all' ? 'Tasks in this source group' : outcomes[outcome]);
   $('task-scope').textContent = `${column?.name || 'Selected sources'} · ${state.data.population} population · sampled task instances`;
-  $('task-panel').scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start'});
   await loadTasks();
 }
 async function loadTasks() {
@@ -157,7 +252,7 @@ async function loadTasks() {
       $('task-list').append(item);
     }
     state.next = data.next_cursor; $('more-tasks').hidden = !state.next;
-    $('task-message').textContent = `${number.format($('task-list').children.length)} sampled task instances shown${state.next ? '; more samples available.' : '. This is a bounded review sample.'}`;
+    $('task-message').textContent = $('task-list').children.length ? `${number.format($('task-list').children.length)} sampled task instances shown${state.next ? '; more samples available.' : '. This is a bounded review sample.'}` : 'No task examples are available in this area at the release cutoffs.';
   } catch (error) { if (request === state.taskRequest) $('task-message').textContent = `Tasks could not be loaded. ${error.message}`; }
 }
 async function openDetail(task) {
@@ -194,15 +289,15 @@ function scoreTable(scores, target = $('detail-matches')) {
 }
 
 $('controls').addEventListener('submit', event => { event.preventDefault(); loadCoverage(); });
-for (const id of ['source', 'use', 'group-by']) $(id).addEventListener('change', loadCoverage);
-$('include-empty').addEventListener('change', renderCoverage);
+for (const id of ['source', 'use']) $(id).addEventListener('change', loadCoverage);
+for (const id of ['view', 'map-detail', 'include-empty']) $(id).addEventListener('change', renderCoverage);
 $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadCoverage, 300); });
 $('more-tasks').addEventListener('click', loadTasks);
 $('close-tasks').addEventListener('click', () => { ++state.taskRequest; $('task-panel').hidden = true; });
 $('close-detail').addEventListener('click', () => $('task-detail').close());
 $('reset-view').addEventListener('click', () => { $('controls').reset(); $('search').value = ''; state.parent = ''; state.subject = ''; loadCoverage(); });
 const initial = new URLSearchParams(location.hash.slice(1));
-for (const [param, id] of Object.entries({group_by: 'group-by', intended_use: 'use', search: 'search'})) if (initial.has(param)) $(id).value = initial.get(param);
+for (const [param, id] of Object.entries({view: 'view', detail: 'map-detail', intended_use: 'use', search: 'search'})) if (initial.has(param)) $(id).value = initial.get(param);
 if (initial.get('source_id')) { const option = node('option', initial.get('source_id')); option.value = initial.get('source_id'); $('source').append(option); $('source').value = option.value; }
 state.parent = initial.get('parent_id') || ''; state.subject = initial.get('subject_id') || '';
 loadCoverage();

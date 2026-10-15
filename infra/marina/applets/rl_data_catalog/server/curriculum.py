@@ -18,7 +18,6 @@ TOTAL_METRICS = ("denominator", "assigned", "subject_only", "out_of_scope", "ins
 
 @dataclass(frozen=True)
 class CoverageQuery:
-    group_by: str
     intended_use: str
     source_id: str
     column: str
@@ -26,13 +25,12 @@ class CoverageQuery:
 
 
 def coverage_query(
-    group_by: Literal["family", "source"] = "family",
     intended_use: Literal["all", "train", "eval"] = "all",
     source_id: str = "",
     column: str = "",
     release: str = "",
 ) -> CoverageQuery:
-    return CoverageQuery(group_by, intended_use, source_id, column, release)
+    return CoverageQuery(intended_use, source_id, column, release)
 
 
 def loaded_release(connection: Connection, release_id: str) -> dict[str, Any]:
@@ -58,11 +56,11 @@ def loaded_release(connection: Connection, release_id: str) -> dict[str, Any]:
 
 SOURCES_SQL = """
 WITH selected_sources AS (
-    SELECT s.*, CASE WHEN :group_by='source' THEN s.source_id ELSE s.family END AS column_id
+    SELECT s.*, s.source_id AS column_id
     FROM curriculum_sources s WHERE s.load_id=:load_id
         AND (:source_id='' OR s.source_id=:source_id)
         AND (:intended_use='all' OR s.alignment IS NULL OR s.alignment->>'intended_use'=:intended_use)
-        AND (:column='' OR CASE WHEN :group_by='source' THEN s.source_id ELSE s.family END=:column)
+        AND (:column='' OR s.source_id=:column)
  )
 """
 
@@ -152,14 +150,28 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                     {**params, "node_ids": json.dumps(node_ids)},
                 ).mappings()
             ]
+            area_counts = [
+                dict(row)
+                for row in connection.execute(
+                    text(
+                        SOURCES_SQL
+                        + """
+                SELECT c.subject_id,c.node_id,CAST(SUM(c.instances) AS BIGINT) AS count
+                FROM curriculum_statistics c JOIN selected_sources s USING (load_id,source_id)
+                WHERE c.load_id=:load_id AND c.metric='placement'
+                GROUP BY c.subject_id,c.node_id
+            """
+                    ),
+                    params,
+                ).mappings()
+            ]
             columns = [
                 dict(row)
                 for row in connection.execute(
                     text(
                         SOURCES_SQL
                         + """
-                SELECT s.column_id, CASE WHEN :group_by='source' THEN MAX(s.declaration->>'display_name')
-                    ELSE s.column_id END AS name,
+                SELECT s.column_id, MAX(s.declaration->>'display_name') AS name,
                     COUNT(s.source_id) AS sources,
                     COUNT(s.source_id) FILTER (WHERE s.alignment IS NOT NULL) AS processed_sources,
                     CAST(COALESCE(SUM(c.instances),0) AS BIGINT) AS denominator
@@ -233,6 +245,7 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             },
             "nodes": nodes,
             "cells": cells,
+            "area_counts": area_counts,
             "columns": columns,
             "sources": sources,
             "hierarchy": manifest["nodes"],

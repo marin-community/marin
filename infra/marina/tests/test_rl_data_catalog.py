@@ -374,18 +374,29 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
             "insufficient_context": 100 * int(unavailable_status == "insufficient_context"),
             "skipped": 100 * int(unavailable_status == "skipped"),
         }
-        assert first["cells"][0]["count"] == 300
-        assert first["columns"][0]["denominator"] == 400
-        assert first["columns"][0]["processed_sources"] == 2
-        sources = client.get("/curriculum", params={"group_by": "source"}).json()["columns"]
+        assert sum(cell["count"] for cell in first["cells"]) == 300
+        assert sum(column["denominator"] for column in first["columns"]) == 400
+        assert sum(column["processed_sources"] for column in first["columns"]) == 2
+        sources = first["columns"]
+        assert {row["column_id"] for row in sources} == {"a", "b", "inventory"}
         assert next(row for row in sources if row["column_id"] == "inventory")["denominator"] == 0
+        assert {(row["node_id"], row["count"]) for row in first["area_counts"]} == {
+            ("subject:D01", 300),
+            ("arithmetic", 200),
+            ("add", 200),
+        }
         assert first["examples"]["sample_task_count"] == 4
         default = client.get("/curriculum", params={"parent_id": "subject:D01", "subject_id": "D01"}).json()
-        assert default["cells"][0]["count"] == 200
+        assert sum(cell["count"] for cell in default["cells"]) == 200
         assert default["scope_summary"] == {"subject_members": 300, "capability_matches": 200}
         source_view = client.get("/curriculum", params={"source_id": "a"}).json()
         assert source_view["totals"]["denominator"] == 300
         assert source_view["cells"][0]["count"] == 200
+        assert {(row["node_id"], row["count"]) for row in source_view["area_counts"]} == {
+            ("subject:D01", 200),
+            ("arithmetic", 100),
+            ("add", 100),
+        }
         assert client.get("/curriculum", params={"intended_use": "eval"}).json()["totals"]["denominator"] == 0
         params = {"node_id": "add", "subject_id": "D01", "limit": 1}
         page = client.get("/curriculum/tasks", params=params).json()

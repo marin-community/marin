@@ -123,10 +123,18 @@ capabilities. A task can have a capability match, a subject-only match, no
 match within the cutoff, insufficient context, or a skipped embedding.
 Alternative subject and capability matches remain available in sampled task details.
 
+The default heatmap shows all curriculum domains and their topics together.
+Open a domain to see its topics and skills on one page, or select **All skills**
+to expand the complete curriculum. Counts shade each area; zeros stay visible
+to expose gaps. **Compare datasets** shows individual dataset columns. Source
+family labels and answer-format tags are not curriculum dimensions. Opening
+an area also loads its sampled tasks below the map; **View task examples**
+jumps directly to that list. Empty areas explain when no examples are available.
+
 Heatmap cells, column denominators and outcome totals describe every task
 instance in the exported population. A Zephyr pass computes these counts by
 source and curriculum node, including hierarchy rollups. Postgres sums these
-small statistics for source-family and train/eval filters. Overview requests do
+small statistics for dataset and train/eval filters. Overview requests do
 not scan task or match tables.
 
 Examples combine two independent deterministic samples: up to 100 tasks per

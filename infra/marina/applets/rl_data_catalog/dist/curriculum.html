@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Curriculum coverage · RL Data Atlas</title>
+  <title>Curriculum atlas · RL Data Atlas</title>
   <link rel="stylesheet" href="style.css"><link rel="stylesheet" href="curriculum.css">
   <script src="common.js" defer></script><script src="curriculum.js" defer></script>
 </head>
 <body>
 <header class="masthead"><a class="brand" href="./">open athena / research tools</a><nav aria-label="Atlas"><a href="./">Curation</a><a href="curriculum.html" aria-current="page">Curriculum</a><a href="archive.html">Historical reviews ↗</a></nav></header>
 <main>
-  <section class="hero"><div><p class="eyebrow">POST-TRAINING / RL DATA ATLAS</p><h1>Curriculum coverage<span>.</span></h1><p class="intro">Explore task coverage by subject, skill and source. Follow a cell to the tasks behind it.</p></div><span id="population" class="population-chip">Loading release</span></section>
+  <section class="hero"><div><p class="eyebrow">POST-TRAINING / RL DATA ATLAS</p><h1>Curriculum atlas<span>.</span></h1><p class="intro">See the whole curriculum, find coverage gaps and explore the tasks behind each area.</p></div><span id="population" class="population-chip">Loading release</span></section>
   <section class="metrics" aria-label="Alignment totals">
     <div><span class="metric-label" id="count-label">TASK INSTANCES</span><strong id="task-count">—</strong><small id="source-count">Loading sources</small></div>
     <div><span class="metric-label">WITH A CURRICULUM HOME</span><strong id="mapped-count">—</strong><small>Subject or capability within the release cutoffs</small></div>
@@ -22,16 +22,18 @@
       <div class="control-row">
         <label>Sources<select id="source"><option value="">All sources</option></select></label>
         <label>Use<select id="use"><option value="all">Train + evaluation</option><option value="train">Training</option><option value="eval">Evaluation</option></select></label>
-        <label>Columns<select id="group-by"><option value="family">Source family</option><option value="source">Individual source</option></select></label>
-        <label class="include-empty"><input type="checkbox" id="include-empty"> Show sources without processed tasks</label>
+        <label>View<select id="view"><option value="map">Curriculum map</option><option value="sources">Compare datasets</option></select></label>
+        <label id="map-detail-control">Detail<select id="map-detail"><option value="topics">Domains &amp; topics</option><option value="capabilities">All skills</option></select></label>
+        <label id="source-options" class="include-empty" hidden><input type="checkbox" id="include-empty"> Show sources without processed tasks</label>
       </div>
       <div class="control-row"><span id="sample-note"></span><button id="reset-view" class="text-button" type="button">Reset view</button></div>
     </form>
     <div class="matrix-heading"><nav id="breadcrumbs" aria-label="Curriculum path"></nav><label class="search"><input id="search" type="search" placeholder="Find a subject or skill…" aria-label="Search the curriculum"></label></div>
     <p id="coverage-scope" hidden></p>
-    <div class="matrix-help"><span id="level-help">Choose a subject to explore its groups and capabilities.</span><span class="heat-legend">0 <span aria-hidden="true"></span> <b id="heat-max">—</b> · log scale</span></div>
-    <div class="table-scroller coverage-scroller" tabindex="0" aria-label="Curriculum heatmap"><table id="heatmap"><caption class="sr-only">Task counts by curriculum area and source</caption><thead id="matrix-head"></thead><tbody id="matrix-body"></tbody></table><p id="empty" class="empty" hidden>No matching curriculum areas.</p></div>
-    <footer class="table-footer"><span id="matrix-summary"></span><span>Cell details show exact counts and fractions. Stripes mean no processed tasks.</span></footer>
+    <div class="matrix-help"><span id="level-help">Domain totals include broad subject matches. Topics and skills count capability matches.</span><span class="heat-legend">0 <span aria-hidden="true"></span> <b id="heat-max">—</b> · log scale</span></div>
+    <div id="curriculum-map" class="curriculum-map" aria-label="All curriculum domains and topics"></div>
+    <div id="source-matrix" hidden class="table-scroller coverage-scroller" tabindex="0" aria-label="Curriculum heatmap"><table id="heatmap"><caption class="sr-only">Task counts by curriculum area and source</caption><thead id="matrix-head"></thead><tbody id="matrix-body"></tbody></table><p id="empty" class="empty" hidden>No matching curriculum areas.</p></div>
+    <footer class="table-footer"><span id="matrix-summary"></span><span>Darker cells mean more tasks. Empty areas remain visible.</span></footer>
   </section>
   <div id="outcomes" class="outcome-bar" aria-label="Browse tasks by matching outcome"></div>
   <section id="task-panel" class="catalog task-panel" hidden>
