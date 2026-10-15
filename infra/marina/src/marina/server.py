@@ -974,7 +974,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
 
     @api.delete("/api/marina/applets/{applet_id}", status_code=204)
     @requires_auth
-    async def archive_applet(applet_id: uuid.UUID, request: Request) -> Response:
+    async def archive_applet(applet_id: uuid.UUID) -> Response:
         if applet_store is None:
             raise HTTPException(status_code=404, detail="applet not found")
         try:
