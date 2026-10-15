@@ -293,6 +293,10 @@ class UngatedExpertActivation(StrEnum):
     RMS-normalized per token over the expert's hidden units. Fixed coefficients (Motif learns them per expert)."""
 
 
+SCONV_SITES = ("k", "q", "attn", "mlp", "mlp_in", "latent_in", "latent_out", "shared_in", "shared_out")
+"""Valid ``sconv_sites`` entries."""
+
+
 class SharedExpertPlacement(StrEnum):
     """Where the shared experts run relative to the routed experts (same math in every placement)."""
 
@@ -783,6 +787,10 @@ class GrugModelConfig:
     """``short_conv`` implementation for every SConv: None (the fused Pallas kernel on GPU) or ``triton_gpu``
     (streams the sequence with the taps in registers, kernel size 4 only; from #9708)."""
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
+    """Where SConvs (``SCONV_SITES``) sit. MLP sublayer sites: ``mlp`` its whole output, ``mlp_in`` its normed input
+    (router, latent and shared experts all read it); ``latent_in`` / ``latent_out`` the routed experts' latent after
+    the down projection (before its norm, the router unaffected) / after the top-k combine (before the up projection);
+    ``shared_in`` / ``shared_out`` the shared experts' input / output only."""
     pooled_transport_capacity_factor: float | None = 1.05
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     # Dense (no-MoE) mode: every block is a single DenseMLP(hidden, intermediate_dim) SwiGLU; the MoE fields are ignored.
@@ -1127,6 +1135,22 @@ class GrugModelConfig:
             self.attn_res_stream_sources != AttnResStreamSources.ALL or self.attn_res_stream_scalar_taps
         ):
             raise ValueError("attn_res_stream_sources and attn_res_stream_scalar_taps need attn_res_streams > 1")
+        if unknown := set(self.sconv_sites) - set(SCONV_SITES):
+            raise ValueError(f"sconv_sites: unknown sites {sorted(unknown)}; valid: {SCONV_SITES}")
+        moe_sites = {"latent_in", "latent_out", "shared_in", "shared_out"} & set(self.sconv_sites)
+        if self.sconv and moe_sites:
+            if self.dense_mlp:
+                raise ValueError(f"sconv_sites {sorted(moe_sites)} need the MoE MLP")
+            if {"latent_in", "latent_out"} & moe_sites and (self.latent_dim is None or not self.has_latent_up):
+                raise ValueError(
+                    "sconv_sites latent_in / latent_out need a MoE latent (latent_dim) with its up projection"
+                )
+            if {"shared_in", "shared_out"} & moe_sites and (
+                self.shared_expert_intermediate_dim <= 0 or self.moe_shared_placement == SharedExpertPlacement.OVERLAP
+            ):
+                raise ValueError(
+                    "sconv_sites shared_in / shared_out need shared experts outside moe_shared_placement=overlap"
+                )
         if self.attn_res_embed_out and (
             not self.attn_res
             or self.scan_layers
@@ -2399,6 +2423,8 @@ class MoEMLP(eqx.Module):
     latent_width_bias: Float[Array, " B"] | None  # sign-SGD selection bias balancing the widths
     latent_mix_out_gate: Float[Array, "D E"] | None  # mixture of latents on the experts' output latent
     null_gain: Float[Array, ""] | None  # cfg.moe_null_learned_gain (every layer carries it; null layers read it)
+    sconv_latent_in: "ShortConv | None"  # "latent_in" in cfg.sconv_sites
+    sconv_latent_out: "ShortConv | None"  # "latent_out" in cfg.sconv_sites
     cfg: GrugModelConfig = eqx.field(static=True)
     latent_selects: bool = eqx.field(static=True, default=False)
     """This layer forms its expert input by ``latent_select`` (see ``latent_select_layers``)."""
@@ -2506,6 +2532,16 @@ class MoEMLP(eqx.Module):
                 else None
             ),
             null_gain=jnp.ones((), jnp.float32) if cfg.moe_null_learned_gain else None,
+            sconv_latent_in=(
+                ShortConv.init(latent, cfg.sconv_kernel, cfg.sconv_impl)
+                if latent is not None and cfg.sconv and "latent_in" in cfg.sconv_sites
+                else None
+            ),
+            sconv_latent_out=(
+                ShortConv.init(out_width, cfg.sconv_kernel, cfg.sconv_impl)
+                if cfg.sconv and "latent_out" in cfg.sconv_sites
+                else None
+            ),
             expert_mlp=_expert_mlp_init(
                 _bank_config(cfg, 1),
                 expert_width,
@@ -2687,8 +2723,10 @@ class MoEMLP(eqx.Module):
         saved_routed: Float[Array, "T L"] | None = None,
         moe_k_keep: Int[Array, "B S"] | None = None,
         moe_dynamic_layer: bool = False,
+        segment_ids: Int[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``router_embed`` is the token embedding the router reads under ``router_on_embed``.
+        ``segment_ids`` keep the latent SConvs (``latent_in`` / ``latent_out``) within documents.
         ``moe_k_keep`` (a ``moe_dynamic_layers`` layer) is each token's routed-expert count (``MoeDynamicK``).
         ``saved_routed`` is this call's combined expert output from the forward (``scan_save_routed_output``):
         the recompute returns it, with the gradient still flowing through the experts.
@@ -2848,6 +2886,8 @@ class MoEMLP(eqx.Module):
         elif self.w_latent_down is not None and self.latent_norm is not None:
             # Keep the expert input scale independent of the down-projection initialization.
             routed_input = reshard(projected[1], _batch_spec())
+            if self.sconv_latent_in is not None:
+                routed_input = _flat_sconv(self.sconv_latent_in, routed_input, b, s, segment_ids)
             if self.latent_mix_in_gate is None:
                 routed_input = self.latent_norm(routed_input)
             else:
@@ -2925,6 +2965,8 @@ class MoEMLP(eqx.Module):
             hidden_dim = self.cfg.hidden_dim
             router_stats[_LM_HEAD_EXTRA] = rearrange(routed_flat[:, hidden_dim:], "(b s) d -> b s d", b=b, s=s)
             routed_flat = routed_flat[:, :hidden_dim]
+        if self.sconv_latent_out is not None:
+            routed_flat = _flat_sconv(self.sconv_latent_out, routed_flat, b, s, segment_ids)
         if self.latent_mix_out_gate is not None:
             assert self.latent_out_norm is not None
             routed_flat = self._mix_latent(routed_flat, x_flat, self.latent_out_norm, self.latent_mix_out_gate)
@@ -2940,6 +2982,14 @@ class MoEMLP(eqx.Module):
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
         return routed, {**router_stats, **assignments, _ROUTED_INPUT: routed_input}
+
+
+def _flat_sconv(
+    conv: "ShortConv", x_flat: Float[Array, "T C"], b: int, s: int, segment_ids: Int[Array, "B S"] | None
+) -> Float[Array, "T C"]:
+    """``conv`` over the sequence of a token-flattened ``[(B S), C]`` activation."""
+    out = conv(_batch_reshard(rearrange(x_flat, "(b s) c -> b s c", b=b, s=s)), segment_ids)
+    return reshard(rearrange(out, "b s c -> (b s) c"), _batch_spec())
 
 
 def _shared_experts_tail(
@@ -3002,8 +3052,13 @@ def moe_and_shared_fused(
     saved_routed: Float[Array, "T L"] | None = None,
     moe_k_keep: Int[Array, "B S"] | None = None,
     moe_dynamic_layer: bool = False,
+    segment_ids: Int[Array, "B S"] | None = None,
+    shared_out_conv: "ShortConv | None" = None,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """Routed MoE plus the shared SwiGLU experts with every projection of ``x`` in one GEMM.
+
+    ``shared_out_conv`` (``shared_out`` SConv) convolves the shared experts' output, within ``segment_ids``'
+    documents, before it joins the routed output.
 
     The router, latent down-projection and each shared expert's gate/up read the same input, so they
     run as one ``[D, sum widths]`` GEMM; the shared experts' down-projections run as one GEMM over
@@ -3072,6 +3127,7 @@ def moe_and_shared_fused(
             saved_routed=saved_routed,
             moe_k_keep=moe_k_keep,
             moe_dynamic_layer=moe_dynamic_layer,
+            segment_ids=segment_ids,
         )
 
     routed, stats = routed_mlp()
@@ -3088,6 +3144,8 @@ def moe_and_shared_fused(
         mlp.cfg, parts[len(moe_weights) :], len(shared), gated, w_down, x_flat, gate, _batch_spec()
     )
     shared_out = _batch_reshard(rearrange(shared_out, "(b s) d -> b s d", b=b, s=s))
+    if shared_out_conv is not None:
+        shared_out = shared_out_conv(shared_out, segment_ids)
     if shadow is not None:
         shared_in = part_inputs["shared"] if part_inputs and "shared" in part_inputs else x
         # The transfer and gap terms read the shared expert on a stop-gradient input so they move only it.
@@ -3408,6 +3466,8 @@ class Block(eqx.Module):
     sconv_attn: "ShortConv | None"
     sconv_mlp: "ShortConv | None"
     sconv_mlp_in: "ShortConv | None"  # Canon-C conv on the normed MLP input ("mlp_in" in cfg.sconv_sites)
+    sconv_shared_in: "ShortConv | None"  # the shared experts' input only ("shared_in" in cfg.sconv_sites)
+    sconv_shared_out: "ShortConv | None"  # the shared experts' output only ("shared_out" in cfg.sconv_sites)
     # Block AttnRes pseudo-queries of the attention and MLP sublayers (None without cfg.attn_res).
     attn_res_query_attn: Float[Array, " D"] | None
     attn_res_query_mlp: Float[Array, " D"] | None
@@ -3478,6 +3538,16 @@ class Block(eqx.Module):
             sconv_mlp_in=(
                 ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel, cfg.sconv_impl)
                 if cfg.sconv and "mlp_in" in cfg.sconv_sites
+                else None
+            ),
+            sconv_shared_in=(
+                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel, cfg.sconv_impl)
+                if shared is not None and cfg.sconv and "shared_in" in cfg.sconv_sites
+                else None
+            ),
+            sconv_shared_out=(
+                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel, cfg.sconv_impl)
+                if shared is not None and cfg.sconv and "shared_out" in cfg.sconv_sites
                 else None
             ),
             attn_res_query_attn=attn_res_query,
@@ -3604,6 +3674,11 @@ class Block(eqx.Module):
             assert sum_stream is not None
             sum_in = self._mlp_input(sum_stream)
             part_inputs = {p: sum_in for p in sum_parts}
+        segment_ids = _sconv_segment_ids(mask)
+        if self.sconv_shared_in is not None:
+            # The shared experts read their own conv of the input, so they leave the fused input GEMM.
+            shared_base = part_inputs["shared"] if part_inputs and "shared" in part_inputs else mlp_in
+            part_inputs = {**(part_inputs or {}), "shared": self.sconv_shared_in(shared_base, segment_ids)}
         stats: dict[str, jax.Array] = {}
         if isinstance(self.mlp, DenseMLP):
             out = self.mlp(mlp_in, moe_output_reshard=False)
@@ -3624,6 +3699,8 @@ class Block(eqx.Module):
                 saved_routed,
                 moe_k_keep=moe_k_keep,
                 moe_dynamic_layer=moe_dynamic_layer,
+                segment_ids=segment_ids,
+                shared_out_conv=self.sconv_shared_out,
             )
         else:
             out, stats = self.mlp(
@@ -3637,6 +3714,7 @@ class Block(eqx.Module):
                 saved_routed=saved_routed,
                 moe_k_keep=moe_k_keep,
                 moe_dynamic_layer=moe_dynamic_layer,
+                segment_ids=segment_ids,
             )
         if self.sconv_mlp is not None:
             out = self.sconv_mlp(out, _sconv_segment_ids(mask))
