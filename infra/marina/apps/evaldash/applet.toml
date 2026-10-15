@@ -1,3 +1,8 @@
+applet_id = "04ce4ca4-6904-4de8-8a78-e7e86f8de615"
+source_paths = ["infra/marina/web"]
+
+name = "evaldash"
+python_entrypoint = "app:create_api"
 # The eval-results dashboard: one row per model, one column per benchmark, and the run
 # log behind every cell. Records are read from object storage into this app's own
 # Postgres schema; the page fetches everything from /evaldash/api/.
@@ -9,9 +14,6 @@ build_command = "cd web && npm ci && npm run build"
 [[jobs]]
 name = "ingest"
 runner = "evaldash"
-schedule = "*/10 * * * *"
-command = ["python", "-m", "evaldash.ingest"]
+module = "ingest"
 timeout = 1800
-cpu = 1
-memory_gib = 1
 secrets = ["CW_KEY_ID", "CW_KEY_SECRET"]

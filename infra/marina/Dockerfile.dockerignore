@@ -30,8 +30,7 @@
 !lib/finelog/config
 !infra/marina/pyproject.toml
 !infra/marina/src
-!infra/marina/web
-!infra/marina/apps
+!infra/marina/runtime.toml
 **/node_modules
 **/dist
 **/__pycache__

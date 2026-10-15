@@ -5,6 +5,7 @@ import gzip
 import io
 import json
 import shutil
+import subprocess
 import tarfile
 import uuid
 from pathlib import Path
@@ -15,13 +16,289 @@ from marina.applets import AppletForbidden, AppletMode, AppletStore, package_app
 from marina.cli import cli
 from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
 from marina.db import UrlDatabase, grant_read
+from marina.releases import require_current_main
 from marina.server import MarinaConfig, MarinaSurface, create_app
 from marina.table_load import read_table, table_statements
+from marina.testing import isolated_database
 from requests import Response as RequestsResponse
 from sqlalchemy import text
 from starlette.testclient import TestClient
 
 DEMO_APPLET = Path(__file__).parents[1] / "examples" / "problem-set-applet"
+
+
+@pytest.fixture(params=["static", "build"])
+def release_checkout(tmp_path: Path, request: pytest.FixtureRequest) -> Path:
+    repo = tmp_path / "checkout"
+    app = repo / "demo"
+    (app / "dist").mkdir(parents=True)
+    (app / "dist/index.html").write_text("<h1>Released app</h1>")
+    (repo / "shared").mkdir()
+    (repo / "shared/component.js").write_text("export const version = 1")
+    manifest = (
+        'applet_id = "00000000-0000-0000-0000-000000000001"\nsource_paths = ["shared"]\n'
+        'title = "Release test"\ndescription = "Test"\n'
+    )
+    if request.param == "build":
+        manifest += 'build_command = "python build.py"\n'
+        (app / ".gitignore").write_text("dist/\n")
+        (app / "dist/stale.js").write_text("stale()")
+        (app / "build.py").write_text(
+            "from pathlib import Path\n"
+            "Path('dist').mkdir(exist_ok=True)\n"
+            "Path('dist/index.html').write_text('<h1>Built app</h1>')\n"
+        )
+    (app / "applet.toml").write_text(manifest)
+    for arguments in (
+        ["init", "-b", "main"],
+        ["config", "user.email", "test@example.com"],
+        ["config", "user.name", "Test"],
+        ["add", "."],
+        ["commit", "-m", "initial"],
+        ["init", "--bare", str(tmp_path / "origin.git")],
+        ["remote", "add", "origin", str(tmp_path / "origin.git")],
+        ["push", "origin", "HEAD:main"],
+    ):
+        subprocess.run(["git", *arguments], cwd=repo, check=True, capture_output=True)
+    return app
+
+
+@pytest.mark.parametrize(
+    ("release_checkout", "expected_html"),
+    [
+        ("static", b"<h1>Released app</h1>"),
+        ("build", b"<h1>Built app</h1>"),
+    ],
+    indirect=["release_checkout"],
+)
+def test_release_records_source_and_status_ignores_unrelated_commits(
+    release_checkout: Path, expected_html: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    metadata = None
+
+    def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
+        nonlocal metadata
+        if method == "POST":
+            assert url.endswith("/api/marina/applets/00000000-0000-0000-0000-000000000001")
+            assert kwargs["params"] == {"base_version": 7}
+            package = read_applet_package(kwargs["data"])
+            assert "dist/stale.js" not in package.files
+            metadata = json.loads(package.files["dist/marina-release.json"])
+            assert package.files["dist/index.html"] == expected_html
+            return json_response({"id": "00000000-0000-0000-0000-000000000001", "version": 8, "path": "/a/id/v/8/"})
+        if url.endswith("marina-release.json"):
+            response = json_response(metadata if metadata is not None else {"detail": "applet file not found"})
+            if metadata is None:
+                response.status_code = 404
+            return response
+        return json_response({"current_version": 8, "authenticated_url": "http://localhost:8080/a/id/"})
+
+    monkeypatch.setattr("marina.client.requests.request", http_request)
+    runner = CliRunner()
+    status_args = ["release-status", str(release_checkout), "--url", "http://localhost:8080", "--json"]
+    before = runner.invoke(cli, status_args)
+    assert before.exit_code == 0, before.output
+    assert json.loads(before.output)["state"] == "unrecorded"
+
+    result = runner.invoke(
+        cli, ["release", str(release_checkout), "--base-version", "7", "--url", "http://localhost:8080", "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["source"] == metadata
+    assert not (release_checkout / "dist/marina-release.json").exists()
+    assert (release_checkout / "dist/index.html").read_text() == "<h1>Released app</h1>"
+    if (release_checkout / "build.py").exists():
+        assert (release_checkout / "dist/stale.js").read_text() == "stale()"
+    status = runner.invoke(cli, status_args)
+    assert json.loads(status.output)["state"] == "current"
+
+    (release_checkout.parent / "unrelated.txt").write_text("another app")
+    for arguments in (["add", "."], ["commit", "-m", "unrelated"]):
+        subprocess.run(["git", *arguments], cwd=release_checkout.parent, check=True, capture_output=True)
+    status = runner.invoke(cli, status_args)
+    report = json.loads(status.output)
+    assert report["state"] == "current"
+    assert report["checkout"]["commit"] != report["released"]["commit"]
+
+    (release_checkout.parent / "shared/component.js").write_text("export const version = 2")
+    assert json.loads(runner.invoke(cli, status_args).output)["state"] == "modified"
+    for arguments in (["add", "."], ["commit", "-m", "shared component"]):
+        subprocess.run(["git", *arguments], cwd=release_checkout.parent, check=True, capture_output=True)
+    assert json.loads(runner.invoke(cli, status_args).output)["state"] == "different"
+
+    manifest_path = release_checkout / "applet.toml"
+    manifest_path.write_text(manifest_path.read_text().replace('title = "Release test"', 'title = "Changed"'))
+    status = runner.invoke(cli, status_args)
+    assert json.loads(status.output)["state"] == "modified"
+    for arguments in (["add", "."], ["commit", "-m", "app change"]):
+        subprocess.run(["git", *arguments], cwd=release_checkout, check=True, capture_output=True)
+    status = runner.invoke(cli, status_args)
+    assert json.loads(status.output)["state"] == "different"
+
+
+def test_release_requires_expected_revision_and_supports_validation(release_checkout: Path) -> None:
+    runner = CliRunner()
+    missing = runner.invoke(cli, ["release", str(release_checkout)])
+    assert missing.exit_code == 2
+    preview = runner.invoke(cli, ["release", str(release_checkout), "--dry-run", "--json"])
+    assert preview.exit_code == 0, preview.output
+    assert "package" in json.loads(preview.output)["checks"]
+
+
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
+@pytest.mark.parametrize("committed", [False, True])
+def test_release_allow_dirty_uploads_local_source_without_claiming_verified_provenance(
+    release_checkout: Path, committed: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    html = b"<h1>Branch preview</h1>"
+    (release_checkout / "dist/index.html").write_bytes(html)
+    (release_checkout / "dist/extra.js").write_text("branch()")
+    if committed:
+        for args in (["add", "."], ["commit", "-m", "branch work"]):
+            subprocess.run(["git", *args], cwd=release_checkout, check=True, capture_output=True)
+    uploads = []
+
+    def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
+        if method == "POST":
+            package = read_applet_package(kwargs["data"])
+            uploads.append(package)
+            assert kwargs["params"] == {"base_version": 7}
+            assert package.files["dist/index.html"] == html
+            assert package.files["dist/extra.js"] == b"branch()"
+            assert "dist/marina-release.json" not in package.files
+            return json_response({"id": "id", "version": 8, "path": "/a/id/v/8/"})
+        if url.endswith("marina-release.json"):
+            response = json_response({"detail": "applet file not found"})
+            response.status_code = 404
+            return response
+        return json_response({"current_version": 8, "authenticated_url": "http://localhost:8080/a/id/"})
+
+    monkeypatch.setattr("marina.client.requests.request", http_request)
+    runner = CliRunner()
+    args = ["release", str(release_checkout), "--base-version", "7", "--url", "http://localhost:8080", "--json"]
+    assert runner.invoke(cli, args).exit_code == 1
+    assert not uploads
+    released = runner.invoke(cli, [*args, "--allow-dirty"])
+    assert released.exit_code == 0, released.output
+    assert len(uploads) == 1
+    assert "source" not in json.loads(released.output)
+    if not committed:
+        dirty_status = runner.invoke(
+            cli, ["release-status", str(release_checkout), "--url", "http://localhost:8080", "--json"]
+        )
+        assert dirty_status.exit_code == 0, dirty_status.output
+        assert json.loads(dirty_status.output)["state"] == "modified"
+        subprocess.run(["git", "add", "."], cwd=release_checkout, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "capture local source"], cwd=release_checkout, check=True, capture_output=True
+        )
+    status = runner.invoke(cli, ["release-status", str(release_checkout), "--url", "http://localhost:8080", "--json"])
+    assert status.exit_code == 0, status.output
+    assert json.loads(status.output)["state"] == "unrecorded"
+
+
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
+def test_release_rejects_ignored_files_in_static_package(
+    release_checkout: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests = []
+
+    def http_request(method: str, url: str, **_kwargs: object) -> RequestsResponse:
+        requests.append((method, url))
+        return json_response({"path": "/a/id/v/8/"})
+
+    monkeypatch.setattr("marina.client.requests.request", http_request)
+    (release_checkout / ".gitignore").write_text("dist/extra.js\n")
+    for arguments in (["add", "."], ["commit", "-m", "static"], ["push", "origin", "HEAD:main"]):
+        subprocess.run(["git", *arguments], cwd=release_checkout, check=True, capture_output=True)
+    args = ["release", str(release_checkout), "--base-version", "7", "--url", "http://localhost:8080"]
+    clean = CliRunner().invoke(cli, args)
+    assert clean.exit_code == 0, clean.output
+    assert len(requests) == 1
+
+    (release_checkout / "dist/extra.js").write_text("unreviewed()")
+    result = CliRunner().invoke(cli, args)
+    assert result.exit_code == 1
+    assert "absent from Git" in result.output
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
+def test_require_current_main_allows_detached_ci_checkout(release_checkout: Path) -> None:
+    subprocess.run(["git", "checkout", "--detach"], cwd=release_checkout, check=True, capture_output=True)
+    commit = require_current_main(release_checkout)
+    assert subprocess.check_output(["git", "show", f"{commit}:demo/dist/index.html"], cwd=release_checkout) == (
+        b"<h1>Released app</h1>"
+    )
+
+
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
+@pytest.mark.parametrize("change", ["untracked", "modified", "staged", "unmerged", "old_ci_rerun"])
+def test_require_current_main_rejects_unreleased_source(release_checkout: Path, change: str) -> None:
+    if change == "untracked":
+        (release_checkout / "extra.txt").write_text("unreviewed")
+    else:
+        (release_checkout / "applet.toml").write_text('title = "Changed"\n')
+        arguments = []
+        if change != "modified":
+            arguments.append(["add", "."])
+        if change in {"unmerged", "old_ci_rerun"}:
+            arguments.append(["commit", "-m", "change"])
+        if change == "old_ci_rerun":
+            arguments.extend(
+                [
+                    ["push", "origin", "HEAD:main"],
+                    ["checkout", "--detach", "HEAD^"],
+                    ["update-ref", "refs/remotes/origin/main", "HEAD"],
+                ]
+            )
+        for command in arguments:
+            subprocess.run(["git", *command], cwd=release_checkout, check=True, capture_output=True)
+    with pytest.raises(RuntimeError):
+        require_current_main(release_checkout)
+
+
+@pytest.mark.parametrize("release_checkout", ["build"], indirect=True)
+def test_failed_release_build_restores_existing_output(release_checkout: Path) -> None:
+    (release_checkout / "build.py").write_text("from pathlib import Path\nPath('dist').mkdir()\nraise SystemExit(7)\n")
+    for arguments in (["add", "."], ["commit", "-m", "failing build"], ["push", "origin", "HEAD:main"]):
+        subprocess.run(["git", *arguments], cwd=release_checkout, check=True, capture_output=True)
+
+    result = CliRunner().invoke(cli, ["release", str(release_checkout), "--base-version", "7"])
+
+    assert result.exit_code == 1
+    assert "exit status 7" in result.output
+    assert (release_checkout / "dist/index.html").read_text() == "<h1>Released app</h1>"
+    assert (release_checkout / "dist/stale.js").read_text() == "stale()"
+    assert subprocess.check_output(["git", "status", "--porcelain"], cwd=release_checkout) == b""
+
+
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
+@pytest.mark.parametrize("failure", ["unreachable", "timeout"])
+def test_release_reports_remote_git_failures(
+    release_checkout: Path, failure: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if failure == "unreachable":
+        subprocess.run(
+            ["git", "remote", "set-url", "origin", str(release_checkout / "missing.git")],
+            cwd=release_checkout,
+            check=True,
+            capture_output=True,
+        )
+    else:
+        run = subprocess.run
+
+        def remote_timeout(arguments, **kwargs):
+            if arguments[1] == "ls-remote":
+                raise subprocess.TimeoutExpired(arguments, 30)
+            return run(arguments, **kwargs)
+
+        monkeypatch.setattr("rigging.provenance.subprocess.run", remote_timeout)
+
+    result = CliRunner().invoke(cli, ["release", str(release_checkout), "--base-version", "7"])
+
+    assert result.exit_code == 1
+    assert "Error: git ls-remote" in result.output
 
 
 def json_response(value: object) -> RequestsResponse:
@@ -39,8 +316,58 @@ def applet_client_and_store(tmp_path: Path, database_url: str) -> tuple[TestClie
     store = AppletStore(database)
     ensure_applet_provisioning(store.engine)
     store.migrate()
-    config = MarinaConfig(apps_dir=apps_dir, data_root=str(tmp_path / "data"), iap_audience=None, database=database)
+    config = MarinaConfig(data_root=str(tmp_path / "data"), iap_audience=None, database=database)
     return TestClient(create_app(config), client=("127.0.0.1", 40000)), store
+
+
+def test_release_without_git_creates_and_updates_the_returned_uuid(
+    tmp_path: Path, database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "adhoc"
+    (source / "dist").mkdir(parents=True)
+    (source / "applet.toml").write_text('title = "Report"\ndescription = "One-off report"\n')
+    index = source / "dist/index.html"
+    index.write_text("first report")
+
+    with isolated_database(database_url) as local_url:
+        client, store = applet_client_and_store(tmp_path, local_url)
+
+        def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
+            response = client.request(method, url, params=kwargs.get("params"), content=kwargs.get("data"))
+            result = json_response(response.json())
+            result.status_code = response.status_code
+            return result
+
+        monkeypatch.setattr("marina.client.requests.request", http_request)
+        runner = CliRunner()
+        arguments = ["release", str(source), "--url", "http://localhost:8080", "--json"]
+        first = runner.invoke(cli, [*arguments, "--base-version", "0"])
+        assert first.exit_code == 0, first.output
+        selected = json.loads(first.output)
+        index.write_text("second report")
+        second = runner.invoke(cli, [*arguments, "--id", selected["id"], "--base-version", "1"])
+        assert second.exit_code == 0, second.output
+        assert json.loads(second.output)["id"] == selected["id"]
+        assert client.get(f"/a/{selected['id']}/").text == "second report"
+        assert client.get(f"/a/{selected['id']}/v/1/").text == "first report"
+
+        manifest = source / "applet.toml"
+        manifest.write_text(f'applet_id = "{selected["id"]}"\nsource_paths = ["shared"]\n' + manifest.read_text())
+        (source / "shared").mkdir()
+        index.write_text("declared report")
+        declared = runner.invoke(cli, [*arguments, "--base-version", "2", "--allow-dirty"])
+        assert declared.exit_code == 0, declared.output
+        assert json.loads(declared.output)["id"] == selected["id"]
+        assert client.get(f"/a/{selected['id']}/").text == "declared report"
+        stored = store.version(uuid.UUID(selected["id"]), 3).manifest
+        assert stored.applet_id == selected["id"]
+        assert stored.source_paths == ("shared",)
+        rejected = client.post(
+            f"/api/marina/applets/{uuid.uuid4()}", params={"base_version": 0}, content=package_applet(source)
+        )
+        assert rejected.status_code == 400
+        assert store.current_version(uuid.UUID(selected["id"])) == 3
+        store.engine.dispose()
 
 
 def test_publish_demo_serves_files_schema_query_and_python_api(tmp_path: Path, database_url: str) -> None:
@@ -229,7 +556,6 @@ def test_update_keeps_old_files_and_routes_each_python_revision(tmp_path: Path, 
 def test_applet_host_exposes_only_applet_routes(tmp_path: Path, database_url: str) -> None:
     _client, store = applet_client_and_store(tmp_path, database_url)
     config = MarinaConfig(
-        apps_dir=tmp_path / "apps",
         data_root=str(tmp_path / "data"),
         iap_audience=None,
         database=store.database,
@@ -267,7 +593,6 @@ def test_applet_host_exposes_only_applet_routes(tmp_path: Path, database_url: st
 def test_public_applet_surface_serves_only_public_reads(tmp_path: Path, database_url: str) -> None:
     _publisher, store = applet_client_and_store(tmp_path, database_url)
     publisher_config = MarinaConfig(
-        apps_dir=tmp_path / "apps",
         data_root=str(tmp_path / "data"),
         iap_audience=None,
         database=store.database,
@@ -275,7 +600,6 @@ def test_public_applet_surface_serves_only_public_reads(tmp_path: Path, database
     )
     publisher = TestClient(create_app(publisher_config), client=("127.0.0.1", 40000))
     public_config = MarinaConfig(
-        apps_dir=tmp_path / "apps",
         data_root=str(tmp_path / "data"),
         iap_audience=None,
         database=store.database,
@@ -345,7 +669,6 @@ def test_named_applet_host_pins_revisions_and_isolates_routes(tmp_path: Path, da
     applet_id = first["id"]
     store.bind_host("zephyr.example", uuid.UUID(applet_id))
     config = MarinaConfig(
-        apps_dir=tmp_path / "apps",
         data_root=str(tmp_path / "data"),
         iap_audience=None,
         database=store.database,
@@ -397,7 +720,6 @@ def test_named_applet_host_authenticates_rewritten_routes(
     published = publisher.post("/api/marina/applets", content=package_applet(DEMO_APPLET)).json()
     store.bind_host("zephyr.example", uuid.UUID(published["id"]))
     config = MarinaConfig(
-        apps_dir=tmp_path / "apps",
         data_root=str(tmp_path / "data"),
         iap_audience="test-audience",
         database=store.database,
@@ -414,7 +736,6 @@ def test_host_binding_changes_reach_running_servers_and_require_operator(tmp_pat
     first = publisher.post("/api/marina/applets", content=package).json()
     second = publisher.post("/api/marina/applets", content=package).json()
     config = MarinaConfig(
-        apps_dir=tmp_path / "apps",
         data_root=str(tmp_path / "data"),
         iap_audience=None,
         database=store.database,
@@ -695,8 +1016,8 @@ def create_api(_services):
         assert schemas_after == schemas_before
 
 
-def test_publish_dry_run_reports_package_checks_and_runtime_omissions() -> None:
-    result = CliRunner().invoke(cli, ["publish", str(DEMO_APPLET), "--dry-run", "--json"])
+def test_release_dry_run_reports_checks_and_runtime_omissions() -> None:
+    result = CliRunner().invoke(cli, ["release", str(DEMO_APPLET), "--dry-run", "--json"])
     assert result.exit_code == 0, result.output
     report = json.loads(result.output)
     assert report["file_count"] == 5
@@ -707,16 +1028,15 @@ def test_publish_dry_run_reports_package_checks_and_runtime_omissions() -> None:
         "server/__init__.py",
         "server/app.py",
     ]
-    assert report["checks"] == ["package", "inline_scripts"]
+    assert report["checks"] == ["package", "inline_scripts", "backend_import"]
     assert report["not_checked"] == [
-        "backend_import",
         "backend_factory_execution",
         "migration_execution",
         "browser",
     ]
 
 
-def test_publish_cli_sends_public_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_release_cli_sends_public_mode(release_checkout: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     requests: list[tuple[str, str, dict[str, object] | None]] = []
 
     def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
@@ -735,11 +1055,27 @@ def test_publish_cli_sends_public_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("marina.client.requests.request", http_request)
     result = CliRunner().invoke(
         cli,
-        ["publish", str(DEMO_APPLET), "--url", "http://localhost:8080", "--mode", "public", "--json"],
+        [
+            "release",
+            str(release_checkout),
+            "--url",
+            "http://localhost:8080",
+            "--base-version",
+            "0",
+            "--mode",
+            "public",
+            "--json",
+        ],
     )
 
     assert result.exit_code == 0
-    assert requests == [("POST", "http://localhost:8080/api/marina/applets", {"mode": "public"})]
+    assert requests == [
+        (
+            "POST",
+            "http://localhost:8080/api/marina/applets/00000000-0000-0000-0000-000000000001",
+            {"base_version": 0, "mode": "public"},
+        )
+    ]
     assert json.loads(result.output)["mode"] == "public"
 
 

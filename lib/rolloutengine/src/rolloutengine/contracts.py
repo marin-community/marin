@@ -8,14 +8,17 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
 
+from pydantic import JsonValue
 from shellbox.machine import Machine
-from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from taskcompendium.models import FunctionDefinition, ProviderRequirement
 
 from rolloutengine.spec import LoweredTaskSpec
 
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"
 TOTAL_TURN_TIMEOUT_STOP_REASON = "total_turn_timeout"
+BUDGET_STOP_REASON = "budget_reached"
 
 
 @dataclass(frozen=True)
@@ -43,8 +46,23 @@ class SessionStart:
 
 
 @dataclass(frozen=True)
+class TokenUsage:
+    """Token counts that the model transport reports for one inference request."""
+
+    prompt_tokens: int
+    completion_tokens: int
+
+
+@dataclass(frozen=True)
 class ModelTurn:
-    """Exact tokens and the parsed message from one inference request."""
+    """Exact tokens and the parsed message from one inference request.
+
+    Under ``TraceMode.MESSAGES`` the token fields may be empty and ``logprobs`` may be ``None``;
+    the engine records reported token IDs without checking them.
+    ``usage`` overrides the token-ID counts when the engine charges this request
+    against ``TaskSessionSpec.max_total_tokens``. Transports that report usage but
+    not exact token IDs, such as chat endpoints, set it so the budget still counts.
+    """
 
     message: dict[str, Any]
     prompt_token_ids: tuple[int, ...]
@@ -53,6 +71,14 @@ class ModelTurn:
     stop_reason: str
     text: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    usage: TokenUsage | None = None
+
+    @property
+    def request_tokens(self) -> int:
+        """Tokens this request spent: the reported ``usage``, else the prompt and response token-ID counts."""
+        if self.usage is not None:
+            return self.usage.prompt_tokens + self.usage.completion_tokens
+        return len(self.prompt_token_ids) + len(self.response_token_ids)
 
 
 class GenerationLimitReached(Exception):
@@ -73,6 +99,12 @@ class RolloutFailure:
 
 @dataclass(frozen=True)
 class RolloutData:
+    """One attempt's conversation, token evidence, grade, and captured run outputs.
+
+    ``outputs`` maps each regular file under ``TaskSpec.output_paths`` on the task machine
+    to its bytes. The engine captures them once after the turn loop, before final grading.
+    """
+
     task_id: str
     messages: tuple[dict[str, Any], ...]
     prompt_token_ids: tuple[int, ...]
@@ -83,6 +115,7 @@ class RolloutData:
     stop_reason: str
     steps: tuple["RolloutStep", ...] = ()
     metrics: dict[str, Any] = field(default_factory=dict)
+    outputs: dict[str, bytes] = field(default_factory=dict)
     failure: RolloutFailure | None = None
 
 
@@ -141,7 +174,11 @@ class TaskSession(Protocol):
 
     async def advance(self, turn: ModelTurn) -> Transition: ...
 
-    async def grade(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult: ...
+    async def grade(
+        self, messages: tuple[dict[str, Any], ...], *, stop_reason: str, outputs: dict[str, bytes]
+    ) -> GradeResult:
+        """Grade the attempt; ``outputs`` holds the run outputs the engine captured after the turn loop."""
+        ...
 
     async def close(self) -> None: ...
 
@@ -174,17 +211,24 @@ class MachineReady:
 
 @dataclass(frozen=True)
 class SessionPrepared:
-    message_count: int
+    """The session returned the first request's ``messages`` and ``options``, including its advertised tools."""
+
+    messages: tuple[dict[str, Any], ...]
+    options: dict[str, Any]
     duration: float
     type: RolloutEventType = field(default=RolloutEventType.SESSION_PREPARED, init=False)
 
 
 @dataclass(frozen=True)
 class ModelTurnCompleted:
+    """A model turn passed the token checks; ``message`` is the assistant message it produced."""
+
     turn_index: int
+    message: dict[str, Any]
     stop_reason: str
     prompt_token_count: int
     response_token_count: int
+    usage: TokenUsage | None
     metadata: dict[str, Any]
     duration: float
     type: RolloutEventType = field(default=RolloutEventType.MODEL_TURN_COMPLETED, init=False)
@@ -192,19 +236,30 @@ class ModelTurnCompleted:
 
 @dataclass(frozen=True)
 class ToolCallCompleted:
-    """A session tool call returned an observation to the model."""
+    """A session tool call returned an observation; ``done`` means the call ended the rollout.
 
+    The observation itself arrives in the turn's ``TransitionCompleted``, keyed by ``call_id``.
+    """
+
+    call_id: str
     name: str
     observation_bytes: int
+    done: bool
     duration: float
     type: RolloutEventType = field(default=RolloutEventType.TOOL_CALL_COMPLETED, init=False)
 
 
 @dataclass(frozen=True)
 class TransitionCompleted:
+    """The session handled a turn and returned ``observations``, or a new conversation in ``reset_conversation``.
+
+    The engine skips a reset when the turn or token limit ends the rollout.
+    """
+
     turn_index: int
     done: bool
-    observation_count: int
+    observations: tuple[dict[str, Any], ...]
+    reset_conversation: tuple[dict[str, Any], ...] | None
     duration: float
     type: RolloutEventType = field(default=RolloutEventType.TRANSITION_COMPLETED, init=False)
 
@@ -213,15 +268,23 @@ class TransitionCompleted:
 class Graded:
     status: Outcome
     reward: float | None
+    error: str | None
+    failure: GradingFailure | None
+    duration: float
     type: RolloutEventType = field(default=RolloutEventType.GRADED, init=False)
 
 
 @dataclass(frozen=True)
 class AttemptEnded:
-    """The attempt returned with ``stop_reason``, or was interrupted during ``operation``."""
+    """The attempt returned with ``stop_reason``, or was interrupted during ``operation`` by ``error``.
+
+    ``duration`` covers the whole attempt, including resource cleanup.
+    """
 
     stop_reason: str | None
     operation: RolloutOperation | None
+    error: str | None
+    duration: float
     type: RolloutEventType = field(default=RolloutEventType.ATTEMPT_ENDED, init=False)
 
 
@@ -263,7 +326,9 @@ class EventSink(Protocol):
 
 
 class TaskGrader(Protocol):
-    async def __call__(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult: ...
+    async def __call__(
+        self, messages: tuple[dict[str, Any], ...], *, stop_reason: str, outputs: dict[str, bytes]
+    ) -> GradeResult: ...
 
 
 @dataclass(frozen=True)
@@ -286,3 +351,39 @@ class TaskSessionContext:
 
 
 TaskSessionFactory = Callable[[TaskSessionContext], TaskSession]
+
+
+@dataclass(frozen=True)
+class ToolContext:
+    """The attempt's task machine and the task requirement a provider session serves."""
+
+    machine: Machine | None
+    requirement: ProviderRequirement
+
+
+@dataclass(frozen=True)
+class ToolCallResult:
+    """A tool observation; ``done`` ends the rollout after this call, and later calls of the turn do not run."""
+
+    content: str
+    done: bool = False
+
+
+class ToolProviderSession(Protocol):
+    """One attempt's provider state for one task requirement."""
+
+    async def call(self, name: str, arguments: dict[str, JsonValue]) -> ToolCallResult: ...
+
+    async def close(self) -> None: ...
+
+
+class ToolProvider(Protocol):
+    """Host tools for one action interface, served beside the built-in shell tool."""
+
+    def tools(self, requirement: ProviderRequirement) -> tuple[FunctionDefinition, ...]:
+        """The functions advertised to the model for one task requirement."""
+        ...
+
+    async def open(self, context: ToolContext) -> ToolProviderSession:
+        """Start the state of one attempt, typically from ``context.requirement.initial_state``."""
+        ...
