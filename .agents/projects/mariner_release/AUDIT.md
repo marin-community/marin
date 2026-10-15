@@ -19,7 +19,7 @@ uv run python -m experiments.domain_phase_mix.release.verify_paper_numbers --bui
   --sections "<paper folder>/sections" --fail-on-untraced --allow-registered-skips
 ```
 
-- Build: 35 tables, MANIFEST.json `commit` 5b9da64a29, built 2026-10-15T14:53Z, 0 consistency problems.
+- Build: 35 tables, MANIFEST.json `commit` 3681ab32b3, built 2026-10-15T21:44Z, 0 consistency problems.
 - Paper: `sections/` of the paper folder on Google Drive. The tables are in `results.tex` (modified 2026-10-12 20:13,
   SHA-256 prefix e2a47c370e100b1e), `surrogate.tex` (2026-10-13 02:17, 81cc91596e2a38ea), `appendix.tex` (2026-10-13
   18:21, 56d9771c55d2d188) and `appendix_analysis.tex` (2026-10-14 01:25, 61aeead7375b3d31), local times.
@@ -164,3 +164,8 @@ reported as untraced. After the paper is corrected, remove the fixed cells from 
 ## Update 2026-10-15
 
 Both tab:a-unimax-cap cells were corrected in sections/appendix.tex (1.099 -> 1.098; 0.936 -> 0.935); the audit now reports `0 differences, 3 untraced cells, 88 registered skips` (exit 0 with --allow-registered-skips).
+
+The build at 3681ab32b3 replaces `aggregate_version` and the `_source` and `_fixed` aggregate columns with
+`bpb__uncheatable` and `bpb__obe_easy` under one rule, and the registry queries those two columns. The audit of that
+build reports the same `0 differences, 3 untraced cells, 88 registered skips`; the tab:scaling-main values, which now
+read the ladder's computed aggregates, moved by at most 7.7e-8.
