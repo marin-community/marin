@@ -6,7 +6,8 @@
 The labelled cases cover valid calls, alternative actions, clarification requests, unsupported
 calls and invented results. Each case pins its normalized task hash to the original calibration
 artifact identified in fixtures/tool_judge_provenance.json. The checked-in fixtures make the
-challenge set reproducible without a campaign download.
+challenge set reproducible without a campaign download; the reports this writes are not
+checked in and are linked from the pull request that cites them.
 """
 
 import argparse

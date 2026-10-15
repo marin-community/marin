@@ -3,7 +3,6 @@
 
 """Grade complete rollouts in real bubblewrap sandboxes built from package locks."""
 
-import hashlib
 import json
 import os
 from dataclasses import dataclass, replace
@@ -70,9 +69,6 @@ def local_grading_factory():
 def lock_environment(tmp_path):
     lock = tmp_path / "requirements.lock"
     lock.write_bytes((Path(__file__).parent / "fixtures" / "local-grader.lock").read_bytes())
-    (tmp_path / ".artifact.json").write_text(
-        json.dumps({"result": {"lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest(), "data": []}})
-    )
     return EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS,
         packages_lock=str(lock),

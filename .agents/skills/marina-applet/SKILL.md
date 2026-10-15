@@ -5,11 +5,18 @@ description: Build, validate, publish, update, inspect, query, roll back, or arc
 
 # Work with Marina applets
 
-Read the `Publishing an applet` section of `infra/marina/README.md` before
-changing an applet or publishing one. Use
+Start with [Building Marina apps](../../../docs/references/marina.md) for
+features, app-type selection, and data storage decisions. Read the `Publishing
+an applet` section of `infra/marina/README.md` before changing or publishing an
+applet. Use
 `infra/marina/examples/problem-set-applet/` as the minimal working package and
 backend reference. Treat those files and `marina --help` as authoritative when
 this skill disagrees with the checkout.
+
+Prefer a checked-in app under `infra/marina/apps/` when it will be updated
+regularly or maintained by peers. Keep its source, review history, and deployment
+path in the repository. Choose a dynamic applet for independently published
+reports, explorers, or small tools.
 
 ## Choose the applet shape
 
@@ -39,8 +46,9 @@ client state. For Vue applets:
 - Bundle dependencies into `dist/`. Marina's content security policy does not
   allow scripts loaded from a third-party CDN.
 
-Keep the source `index.html`, `package.json`, the Vite configuration, and `src/`
-beside `applet.toml`. They are local build inputs and are not uploaded. A
+Keep the source `index.html`, `package.json`, `package-lock.json`, the Vite
+configuration, and `src/` beside `applet.toml`. They are local build inputs and
+are not uploaded. Commit the lockfile before using `npm ci`. A
 typical manifest uses `build_command = "npm ci && npm run build"`. Marina runs
 that command before every publish by default. Use `--no-build` only when the
 existing `dist/` has already been built and validated.
@@ -110,8 +118,9 @@ inline scripts under Marina's `script-src 'self'` policy. Load JavaScript from
 relative packaged files.
 
 Respect the current package limits: 25 MiB total, 8 MiB per file, and 2,000
-regular files. Keep large data out of the package until Marina gains an object
-store path.
+regular files. Package uploads have no separate large-object storage path.
+Keep large datasets in external object storage and access bounded portions
+through the Python backend using installed storage helpers.
 
 Run the complete local stack with:
 
@@ -147,16 +156,37 @@ cd infra/marina && uv run pytest
 
 ## Use applet data
 
+Choose a serving data path before implementing the backend. Follow the
+[loading and caching guide](../../../docs/references/marina.md#load-and-cache-data):
+
+- Use the applet's Postgres schema for mutable state and reusable catalogs,
+  filter indexes, and summaries. Cache expensive remote reads there when reuse
+  across workers justifies it; an in-memory cache does not survive a cold start.
+- Load remote datasets separately from serving. At startup, read a bounded
+  committed Postgres snapshot if useful; do not scan object storage in
+  `create_api` or migrations. Applets have no background refresh worker.
+- Key caches by source version and query, record freshness, and serialize
+  competing refreshes in Postgres. Preserve the last complete snapshot on failure.
+- Keep large payloads in object storage, small immutable reports in the bundle,
+  and live telemetry fresh with source queries or short TTLs.
+
 The applet role owns `applet_<uuid-without-hyphens>` and inherits read access to
 checked-in and other applet schemas. It can write only its own schema. Prefer
 the CLI for small datasets:
 
 ```bash
-uv run marina applets table load <uuid> observations rows.parquet --replace
-uv run marina applets sql <uuid> 'SELECT * FROM observations'
+uv run marina applets table load <uuid> observations rows.parquet --replace --url <origin>
+uv run marina applets sql <uuid> 'SELECT * FROM observations LIMIT 20' --url <origin>
 ```
 
+For local validation, use the origin and UUID printed by `publish --local` while
+that process runs. For production, use `https://marina.oa.dev`. Omitting `--url`
+targets production, even if a local preview is running.
+
 Table loading accepts JSON arrays, JSONL, CSV, and Parquet with scalar columns.
+`--replace` drops the table before separate insert requests; use a staged load
+and an atomic current-version switch for a live catalog. Repeated loads without
+`--replace` append rows. See `infra/marina/applets/rl_data_catalog/load.py`.
 Browser code may post one SQLAlchemy text statement to relative URL `query`.
 Query results are limited in Postgres to 10,000 rows and 5 MiB with a 10-second
 timeout. Transaction and role-control commands, data-modifying `WITH`, and

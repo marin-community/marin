@@ -212,7 +212,7 @@ class ShellSimMachineFactory:
         disk: int = DEFAULT_DISK_LIMIT,
         output: int = DEFAULT_OUTPUT_LIMIT,
     ):
-        self.context = context if context is not None else shellsim.Context()
+        self.context = context if context is not None else shellsim.Context(trusted_precompiled=True)
         self.cpu = cpu
         self.disk = disk
         self.output = output
