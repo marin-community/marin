@@ -37,7 +37,7 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 
 RUN_LABEL = "testgen20261013"
 RELEASE_REPO = "open-athena/taskforge-testgen20261013"
-RELEASE_REVISION = "dbddda1bd387384e82e72803b2919580933f45d6"
+RELEASE_REVISION = "d415c8e7ac8f4515fb9c5a79bc589c335138bdbe"
 CONVERTER_VERSION = "1"
 SOURCE_SCHEMA_VERSION = "0.25"
 SHELL_CAPABILITY = "shell"
