@@ -8,6 +8,7 @@ import hashlib
 import os
 import re
 import secrets
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -53,11 +54,18 @@ class ObservationRegistry:
         return self._map[run_name]
 
     def save(self) -> None:
+        """Write the map owner-only, since it is the one file that undoes the pseudonymization.
+
+        `tempfile.mkstemp` creates the new map exclusively with mode 0o600, and `os.replace` puts it in place of the old
+        map, whose mode does not carry over.
+        """
         self.map_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.map_path.open("w", newline="") as handle:
+        fd, staging = tempfile.mkstemp(dir=self.map_path.parent, prefix=f".{self.map_path.name}.")
+        with os.fdopen(fd, "w", newline="") as handle:
             writer = csv.writer(handle)
             writer.writerow(["run_name", "observation_id"])
             writer.writerows(sorted(self._map.items()))
+        os.replace(staging, self.map_path)
 
 
 def load_salt(path: Path) -> str:

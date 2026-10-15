@@ -41,8 +41,13 @@ def test_observation_registry_is_stable_and_opaque(tmp_path):
     assert first == reg.id_for("lwspu_t9_snc_cap08_3e18-6c15f1")
     assert first.startswith("obs_") and len(first) == 16 and "6c15f1" not in first
     reg.save()
+    # The map undoes the pseudonymization: owner-only, also when it replaces a map that others could read.
+    assert (tmp_path / "map.csv").stat().st_mode & 0o777 == 0o600
     reloaded = keys.ObservationRegistry(salt="unit-test-salt", map_path=tmp_path / "map.csv")
     assert reloaded.id_for("lwspu_t9_snc_cap08_3e18-6c15f1") == first
+    (tmp_path / "map.csv").chmod(0o644)
+    reloaded.save()
+    assert (tmp_path / "map.csv").stat().st_mode & 0o777 == 0o600
 
 
 def test_load_salt_rejects_malformed_file(tmp_path):
