@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
-from decimal import Decimal
 from pathlib import Path
 
 from iris.cli.connect import open_iris_client
@@ -64,11 +63,7 @@ def _status(state: str) -> str:
 
 
 def _score_text(score: float) -> str:
-    if score == 0:
-        return "0.000"
-    value = Decimal(str(score))
-    rounded = value.quantize(Decimal(1).scaleb(value.adjusted() - 2))
-    return format(rounded.quantize(Decimal(1).scaleb(rounded.adjusted() - 2)), "f")
+    return f"{score:.3f}"
 
 
 def _acceptable_coverage(coverage: TaskCoverage | None) -> bool:

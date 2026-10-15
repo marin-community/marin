@@ -19,11 +19,12 @@ refresh = importlib.import_module(
 )
 
 
-def test_score_display_uses_three_significant_digits() -> None:
+def test_score_display_uses_three_decimal_places() -> None:
     assert refresh._score_text(0) == "0.000"
-    assert refresh._score_text(0.001) == "0.00100"
+    assert refresh._score_text(0.001) == "0.001"
+    assert refresh._score_text(0.01004) == "0.010"
     assert refresh._score_text(0.9501) == "0.950"
-    assert refresh._score_text(1) == "1.00"
+    assert refresh._score_text(1) == "1.000"
 
 
 def test_tournament_cell_requires_ninety_percent_scored_coverage() -> None:
