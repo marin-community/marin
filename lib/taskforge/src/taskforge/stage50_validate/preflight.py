@@ -23,7 +23,8 @@ moved. Any other outcome of the probe, a grade included, keeps the first lowerin
 about the grader the trials will say again. A verifier machine never falls back: its preparation
 failure is a task defect the trials report.
 
-The probe is not evidence: it records no attempt file and no ledger span.
+The probe is not evidence: it records no attempt file and no ledger span, and runs under the engine's
+messages trace, so its one-token reply carries no token ids.
 """
 
 import asyncio
@@ -32,7 +33,7 @@ from dataclasses import dataclass
 
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutData
 from rolloutengine.lowering import lower_task
-from rolloutengine.spec import LoweredTaskSpec, TaskRuntimeSpec
+from rolloutengine.spec import LoweredTaskSpec, TaskRuntimeSpec, TraceMode
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import TaskSpec
 
@@ -52,8 +53,6 @@ HOST_CAUSES = {
 }
 """The probe outcomes the host causes as readily as the task, with the infrastructure cause a repeat raises."""
 PROBE_REPLY = ""
-PROBE_TOKEN = 0
-"""The one token id the probe's reply carries: the engine requires token evidence, and the probe is never recorded."""
 
 
 @dataclass(frozen=True)
@@ -81,8 +80,8 @@ class _ProbeModel:
     async def __call__(self, request: ModelRequest) -> ModelTurn:
         return ModelTurn(
             message={"role": "assistant", "content": PROBE_REPLY},
-            prompt_token_ids=(PROBE_TOKEN,),
-            response_token_ids=(PROBE_TOKEN,),
+            prompt_token_ids=(),
+            response_token_ids=(),
             logprobs=None,
             stop_reason="stop",
             text=PROBE_REPLY,
@@ -142,6 +141,8 @@ async def _probe(lowered: LoweredTaskSpec, settings: EngineSettings, deadlines: 
     """One engine run of ``lowered`` with the probe model, classified as a trial outcome would be."""
     engine = settings.engine(_ProbeModel())
     prepared = settings.apply(deadlines.apply(lowered))
+    # The probe's turn carries no token ids: it is never recorded, so it runs under the messages trace.
+    prepared = prepared.model_copy(update={"session": prepared.session.model_copy(update={"trace": TraceMode.MESSAGES})})
     try:
         async with asyncio.timeout(deadlines.attempt_timeout):
             result: RolloutData | Exception = await engine.run(prepared)

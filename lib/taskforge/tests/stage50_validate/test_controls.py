@@ -13,21 +13,12 @@ from taskcompendium.grading_result import Outcome
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
-from taskforge.llm.rollout_model import ServerRenderer
 from taskforge.spec.controls import ControlCategory, ControlKind, Expectation
 from taskforge.stage50_validate.controls import ControlPlan, ControlVerdict, replay
 from taskforge.stage50_validate.outcome import Cause, Graded, Ungraded
 from taskforge.stage50_validate.trials import Deadlines, EngineSettings
 from tests.conftest import fake_source
 from tests.sandbox.fixture_images import FixtureImageFactory
-from tests.stage50_validate.conftest import TemplateTokenizer, render_ids
-
-
-class ReorderingTokenizer(TemplateTokenizer):
-    """A template whose rendering of a finished conversation does not extend its prompt rendering."""
-
-    async def rendered_ids(self, messages, options):
-        return render_ids(messages)[::-1]
 
 
 def settings(factory, max_turns: int = 6) -> EngineSettings:
@@ -60,7 +51,6 @@ async def test_transcript_and_workspace_controls_meet_their_expectations(tmp_pat
         file_controls,
         plan(tmp_path),
         settings(fakes.flaky_factory(0, RuntimeError)),
-        TemplateTokenizer(),
     )
 
     assert [(o.control.id, o.verdict) for o in outcomes] == [(c.id, ControlVerdict.MET) for c in file_controls]
@@ -80,7 +70,6 @@ async def test_workspace_files_land_after_environment_setup(tmp_path, file_task_
         file_controls,
         plan(tmp_path),
         settings(fakes.flaky_factory(0, RuntimeError)),
-        TemplateTokenizer(),
     )
 
     workspace = next(o for o in outcomes if o.control.id == "workspace-correct")
@@ -94,7 +83,6 @@ async def test_math_controls(tmp_path, math_task, math_controls, fakes):
         math_controls,
         plan(tmp_path),
         settings(fakes.flaky_factory(0, RuntimeError)),
-        TemplateTokenizer(),
     )
 
     assert [o.verdict for o in outcomes] == [ControlVerdict.MET] * len(math_controls)
@@ -115,7 +103,6 @@ async def test_wrong_expectation_is_violated(tmp_path, math_task, math_controls,
         controls,
         plan(tmp_path),
         settings(fakes.flaky_factory(0, RuntimeError)),
-        TemplateTokenizer(),
     )
 
     assert [o.verdict for o in outcomes] == [ControlVerdict.MET] * len(math_controls) + [ControlVerdict.VIOLATED]
@@ -124,7 +111,7 @@ async def test_wrong_expectation_is_violated(tmp_path, math_task, math_controls,
 async def test_a_retried_control_replays_from_its_first_turn(tmp_path, file_task, file_controls, fakes):
     factory = fakes.flaky_factory(failures=1, error=lambda: RuntimeError("broker refused"))
 
-    outcomes = await replay(file_task, file_controls, plan(tmp_path), settings(factory), TemplateTokenizer())
+    outcomes = await replay(file_task, file_controls, plan(tmp_path), settings(factory))
 
     assert [o.verdict for o in outcomes] == [ControlVerdict.MET] * len(file_controls)
     assert factory.creates == len(file_controls) + 1
@@ -141,7 +128,6 @@ async def test_a_re_entered_control_numbers_attempts_after_the_ones_on_disk(tmp_
         file_controls,
         plan(tmp_path, first_attempts={"correct": 2}),
         settings(fakes.flaky_factory(0, RuntimeError)),
-        TemplateTokenizer(),
     )
 
     assert [o.verdict for o in outcomes] == [ControlVerdict.MET] * len(file_controls)
@@ -159,27 +145,7 @@ async def test_a_control_longer_than_max_turns_is_refused(tmp_path, file_task, f
             file_controls,
             plan(tmp_path),
             settings(fakes.flaky_factory(0, RuntimeError), max_turns=1),
-            TemplateTokenizer(),
         )
-
-
-async def test_a_rendering_that_does_not_extend_the_prompt_is_ungraded_and_not_retried(
-    tmp_path, math_task, math_controls, fakes
-):
-    outcomes = await replay(
-        math_task,
-        math_controls,
-        plan(tmp_path),
-        settings(fakes.flaky_factory(0, RuntimeError)),
-        ReorderingTokenizer(),
-    )
-
-    assert all(o.verdict is ControlVerdict.UNGRADED for o in outcomes)
-    assert all(isinstance(o.outcome, Ungraded) and o.outcome.cause is Cause.TOKEN_CONTRACT for o in outcomes)
-    # Scripted turns render the same way every time, so a control has no token contract retries.
-    assert sorted(path.name for path in (tmp_path / "control").glob("*/attempt-*.json")) == ["attempt-0.json"] * len(
-        math_controls
-    )
 
 
 @dataclass
@@ -191,27 +157,3 @@ class PromptIdStream:
     stall: None = None
 
 
-def prompt_id_stream(prompt: list[int]) -> PromptIdStream:
-    return PromptIdStream(
-        [
-            {"choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": None}], "prompt_token_ids": prompt},
-            {"choices": [{"index": 0, "delta": {"content": "x"}, "token_ids": [7], "finish_reason": "length"}]},
-            {"choices": [], "usage": {"prompt_tokens": len(prompt), "completion_tokens": 1}},
-        ]
-    )
-
-
-async def test_server_renderer_tokenizes_with_and_without_the_generation_prompt(fake_glm, fast_provider):
-    fake_glm.responses.append(prompt_id_stream([1, 2, 3]))
-    fake_glm.responses.append(prompt_id_stream([1, 2, 3, 4]))
-    tools = [{"type": "function", "function": {"name": "shell"}}]
-    async with GlmClient(fake_source(fake_glm), replace(fast_provider, max_attempts=1)) as client:
-        tokenize = ServerRenderer(client, LLMPolicy())
-        messages = [{"role": "user", "content": "q"}]
-        prompt = await tokenize.prompt_ids(messages, {"tools": tools})
-        rendered = await tokenize.rendered_ids([*messages, {"role": "assistant", "content": "a"}], {"tools": tools})
-
-    assert (prompt, rendered) == ((1, 2, 3), (1, 2, 3, 4))
-    first, second = fake_glm.requests
-    assert (first["max_tokens"], first["return_token_ids"], first["tools"]) == (1, True, tools)
-    assert "add_generation_prompt" not in first and second["add_generation_prompt"] is False

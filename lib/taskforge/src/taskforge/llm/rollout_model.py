@@ -70,7 +70,6 @@ from taskforge.llm.recording import CallLedger, complete_into, generate_into, ll
 
 GLM_CONTEXT_WINDOW = 262_144
 TOKEN_FIELDS: dict[str, object] = {"return_token_ids": True, "logprobs": True}
-NO_GENERATION_PROMPT: dict[str, object] = {"add_generation_prompt": False}
 PROMPT_CACHE_KEY = "prompt_cache_key"
 TOKEN_CONTRACT_CAUSE = "token_contract"
 DETAIL_LIMIT = 2000
@@ -302,31 +301,6 @@ def token_model_turn(
 def render_policy(policy: LLMPolicy) -> LLMPolicy:
     """``policy`` for a one-token render probe; only its template inputs (``reasoning_effort``) matter."""
     return replace(policy, max_tokens=1, max_continuations=0)
-
-
-@dataclass(frozen=True)
-class ServerRenderer:
-    """The served chat template's token ids for a conversation, through one-token chat completions.
-
-    ``policy`` must match the rollout policy's template inputs (``reasoning_effort``).
-    """
-
-    client: ModelClient
-    policy: LLMPolicy
-
-    async def prompt_ids(self, messages: Sequence[Mapping[str, Any]], options: Mapping[str, Any]) -> tuple[int, ...]:
-        """The rendered conversation followed by the generation prompt."""
-        return await self._served_prompt(messages, {**TOKEN_FIELDS, **options})
-
-    async def rendered_ids(self, messages: Sequence[Mapping[str, Any]], options: Mapping[str, Any]) -> tuple[int, ...]:
-        """The rendered conversation without the generation prompt."""
-        return await self._served_prompt(messages, {**TOKEN_FIELDS, **options, **NO_GENERATION_PROMPT})
-
-    async def _served_prompt(self, messages: Sequence[Mapping[str, Any]], fields: dict[str, Any]) -> tuple[int, ...]:
-        completion = await self.client.complete(
-            [dict(message) for message in messages], render_policy(self.policy), fields
-        )
-        return served_tokens(completion).prompt
 
 
 @dataclass(frozen=True)

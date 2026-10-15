@@ -38,7 +38,6 @@ from taskforge.stage50_validate.lowering import lower
 from taskforge.stage50_validate.trials import Deadlines, EngineSettings
 from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory
 from tests.stage40_build.conftest import FACTORIES, PROPOSAL
-from tests.stage50_validate.conftest import TemplateTokenizer
 
 TASK = draft.assemble(
     "item",
@@ -130,7 +129,7 @@ async def test_validation_writes_controls_the_grader_has_not_seen_and_replays_th
         first_attempts={},
     )
     outcomes = await replay(
-        lower(TASK, MachineHost.LAPTOP, FACTORIES), written, plan, engine_settings(), TemplateTokenizer()
+        lower(TASK, MachineHost.LAPTOP, FACTORIES), written, plan, engine_settings()
     )
     assert {o.control.id: o.verdict for o in outcomes} == {c.id: ControlVerdict.MET for c in written}
 

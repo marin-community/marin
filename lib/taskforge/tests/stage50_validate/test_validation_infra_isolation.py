@@ -17,7 +17,6 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rolloutengine.contracts import RolloutData, RolloutInterrupted, RolloutOperation
-from rolloutengine.engine import _empty_rollout
 from shellbox.machine import MachineTerminated
 from taskcompendium.grading_result import GradeResult, GradingFailure
 from taskcompendium.grading_result import Outcome as GradeStatus
@@ -42,12 +41,17 @@ def task() -> TaskSpec:
     )
 
 
+def empty_rollout(spec: TaskSpec) -> RolloutData:
+    """The rollout the engine keeps for an attempt that produced no turn."""
+    return RolloutData(spec.id, (), (), (), (), None, GradeResult(GradeStatus.UNAVAILABLE, None), "")
+
+
 def interrupted(operation: RolloutOperation, original: BaseException) -> RolloutInterrupted:
     try:
         try:
             raise original
         except BaseException as cause:
-            raise RolloutInterrupted(_empty_rollout(task()), operation) from cause
+            raise RolloutInterrupted(empty_rollout(task()), operation) from cause
     except RolloutInterrupted as error:
         return error
 
@@ -115,7 +119,7 @@ CASES: dict[str, tuple[RolloutInterrupted | RolloutData, Cause]] = {
 def timed_out_grade() -> RolloutData:
     """A rollout the engine returned whose grader command hit its own timeout (``GradingFailure.TIMEOUT``)."""
     grade = GradeResult(GradeStatus.INFRA_ERROR, None, "Grader command timed out", failure=GradingFailure.TIMEOUT)
-    return replace(_empty_rollout(task()), grade=grade)
+    return replace(empty_rollout(task()), grade=grade)
 
 
 CASES["grader-command-timed-out"] = (timed_out_grade(), Cause.GRADER_TIMEOUT)
