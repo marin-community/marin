@@ -7,10 +7,12 @@ to inspect its current-stage shard grid.
 ## Mapper and reducer progress
 
 Each running tile fills with the fraction of its current input consumed.
-Select a tile to see row counts, elapsed time, average input rate, worker
+Select a tile to see row counts, elapsed time, worker
 heartbeat age, and a link to the worker task. Use the shard-state selector to
 show only running shards when looking for the remaining work in a stage.
 Progress remains separate for concurrent shards on the same worker.
+When reader record counts are available, the inspector also shows their
+average rate over the shard's elapsed time, including earlier input files.
 
 Input totals come from metadata already used by readers:
 

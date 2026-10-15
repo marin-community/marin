@@ -58,6 +58,11 @@ def _counter_values(counters: dict[str, CounterEntry]) -> dict[str, int | float]
     return {name: entry.value for name, entry in counters.items()}
 
 
+def _execution_counters(counters: dict[str, CounterEntry]) -> dict[str, CounterEntry]:
+    # Per-input gauges reset between files and cannot be summed across runners.
+    return {name: entry for name, entry in counters.items() if name not in stage_counters.INPUT_PROGRESS_COUNTERS}
+
+
 def _shard_progress(active: _ActiveShard, counters: dict[str, CounterEntry], now: float) -> ShardProgress:
     completed = counters.get(stage_counters.INPUT_ROWS_COMPLETED)
     total = counters.get(stage_counters.INPUT_ROWS_TOTAL)
@@ -340,7 +345,7 @@ class ZephyrWorker:
                 task.shard_idx,
                 work.attempt,
                 result,
-                CounterSnapshot(counters=dict(task_counters), generation=counter_generation),
+                CounterSnapshot(counters=_execution_counters(task_counters), generation=counter_generation),
                 work.stage_generation,
             ).result()
         except Exception:
@@ -446,7 +451,7 @@ class ZephyrWorker:
                         _counter_values(counters),
                         active_shard.attempt_id,
                     )
-                entries_by_execution[active_shard.execution_id].extend(counters.items())
+                entries_by_execution[active_shard.execution_id].extend(_execution_counters(counters).items())
                 shards_by_execution[active_shard.execution_id][active_shard.task.shard_idx] = _shard_progress(
                     active_shard, counters, time.monotonic()
                 )

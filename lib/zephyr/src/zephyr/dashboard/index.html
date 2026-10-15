@@ -594,11 +594,14 @@ function startDashboard() {
         } else detail.append(element('p', 'Input size unknown; a percentage is unavailable.'));
         const list = element('dl');
         list.className = 'summary';
-        for (const [label, value] of [
+        const values = [
           ['Elapsed', `${number(progress.elapsed_seconds)} s`],
           [known ? 'Rows consumed' : 'Records read', number(consumed)],
-          ['Average input rate', `${number(progress.elapsed_seconds ? consumed / progress.elapsed_seconds : 0)} ${known ? 'rows' : 'records'}/s`],
-        ]) {
+        ];
+        if (progress.records_in > 0 && progress.elapsed_seconds > 0) {
+          values.push(['Average read rate', `${number(progress.records_in / progress.elapsed_seconds)} records/s`]);
+        }
+        for (const [label, value] of values) {
           const item = element('div');
           item.append(element('dt', label), element('dd', value));
           list.append(item);

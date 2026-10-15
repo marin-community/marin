@@ -61,6 +61,7 @@ UNKNOWN_INPUT_ROWS = -1
 
 Completed rows advance after downstream consumption of each read group/batch.
 """
+INPUT_PROGRESS_COUNTERS = frozenset({INPUT_ROWS_TOTAL, INPUT_ROWS_COMPLETED})
 PARTITIONS_SKIPPED = "zephyr/partitions_skipped"
 """Output partitions skipped because the target already existed (``skip_existing``)."""
 SHUFFLE_INPUT_ROWS = "zephyr/shuffle/input_rows"

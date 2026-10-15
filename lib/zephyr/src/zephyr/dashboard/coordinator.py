@@ -120,12 +120,12 @@ class _DashboardWorkerSnapshot:
     counters: dict[str, CounterEntry]
 
 
-def _shard_indices(run: DashboardExecution, state: str, stopped: bool) -> tuple[Iterable[int], int]:
+def _shard_indices(run: DashboardExecution, state: ShardState | None, stopped: bool) -> tuple[Iterable[int], int]:
     if state == ShardState.RUNNING:
         return sorted(run.in_flight), len(run.in_flight)
     if state == ShardState.SUCCEEDED:
         return sorted(run.results), len(run.results)
-    if not state:
+    if state is None:
         return range(run.total_shards), run.total_shards
     if (state == ShardState.STOPPED) != stopped:
         return (), 0
@@ -286,7 +286,7 @@ class CoordinatorDashboard:
             pipelines.sort(key=lambda item: (item.status.started_at_ms, item.status.execution_id))
             return DashboardOverview(pipelines=tuple(pipelines))
 
-    def shards(self, execution_id: str, offset: int, limit: int, state: str = "") -> ShardPage:
+    def shards(self, execution_id: str, offset: int, limit: int, state: ShardState | None = None) -> ShardPage:
         now = time.monotonic()
         with self._coordinator._lock:
             run = self._run_locked(execution_id)

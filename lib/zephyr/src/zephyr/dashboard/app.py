@@ -220,7 +220,7 @@ class DashboardData(Protocol):
     """Queries used by the dashboard HTTP routes."""
 
     def overview(self) -> DashboardOverview: ...
-    def shards(self, execution_id: str, offset: int, limit: int, state: str = "") -> ShardPage: ...
+    def shards(self, execution_id: str, offset: int, limit: int, state: ShardState | None = None) -> ShardPage: ...
     def metrics(self, execution_id: str, max_points: int) -> PipelineMetrics: ...
     def counters(self, query: CounterQuery) -> CounterPage: ...
     def workers(self, query: WorkerQuery) -> WorkerPage: ...
@@ -302,9 +302,11 @@ def create_dashboard_application(data: DashboardData) -> ASGIApp:
         execution_id = request.query_params.get("execution_id", "")
         offset = max(_integer_parameter(request, "offset"), 0)
         limit = bounded_limit(_integer_parameter(request, "limit"), DEFAULT_SHARD_LIMIT, MAX_SHARD_LIMIT)
-        state = request.query_params.get("state", "")
-        if state and state not in ShardState:
-            raise HTTPException(status_code=400, detail="Unknown shard state")
+        raw_state = request.query_params.get("state", "")
+        try:
+            state = ShardState(raw_state) if raw_state else None
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="Unknown shard state") from error
         return _json_response(await run_in_threadpool(data.shards, execution_id, offset, limit, state))
 
     async def metrics(request: Request) -> Response:
