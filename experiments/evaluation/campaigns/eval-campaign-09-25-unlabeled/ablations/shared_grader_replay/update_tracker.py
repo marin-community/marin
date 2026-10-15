@@ -14,8 +14,8 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 SCORE_CELL = re.compile(r"([0-9.]+) \((s3://[^)]+)\)")
-BENCHMARKS = ("math500", "aime24", "olympiadbench")
-EXPECTED_TRIALS = {"math500": 500, "aime24": 300, "olympiadbench": 300}
+BENCHMARKS = ("math500", "aime24", "olympiadbench", "financebench")
+EXPECTED_TRIALS = {"math500": 500, "aime24": 300, "olympiadbench": 300, "financebench": 50}
 
 
 def read_result(uri: str) -> dict | None:
@@ -60,7 +60,7 @@ def update_tracker(
                 raise ValueError(f"{model}/{benchmark}: result identity differs from frozen source")
             if result["num_trials"] != EXPECTED_TRIALS[benchmark]:
                 raise ValueError(f"{model}/{benchmark}: incomplete trial count")
-            if benchmark == "olympiadbench" and result["num_judge_failed"]:
+            if benchmark in ("olympiadbench", "financebench") and result["num_judge_failed"]:
                 raise ValueError(f"{model}/{benchmark}: failed judge requests")
             score = float(result["corrected_score"])
             if not 0 <= score <= 1:

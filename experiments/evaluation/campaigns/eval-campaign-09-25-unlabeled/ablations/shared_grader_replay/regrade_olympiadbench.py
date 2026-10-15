@@ -25,7 +25,13 @@ from marin.inference.serve import local_inference
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from ..olympiadbench_judge.regrade import JUDGE_EXTRA_BODY, Source, source_examples  # noqa: TID252
+from ..olympiadbench_judge.regrade import (  # noqa: TID252
+    JUDGE_EXTRA_BODY,
+    Source,
+)
+from ..olympiadbench_judge.regrade import (  # noqa: TID252
+    source_examples as raw_source_examples,
+)
 
 LOGGER = logging.getLogger(__name__)
 EVALCHEMY_COMMIT = "958cdb8019b7a4c8432fe85eb9572538ceb75950"
@@ -110,6 +116,31 @@ def read_json(uri: str) -> tuple[dict, str]:
     with filesystem.open(key, "rb") as source:
         raw = source.read()
     return json.loads(raw), hashlib.sha256(raw).hexdigest()
+
+
+def source_examples(source: Source) -> tuple[list[dict], list[dict]]:
+    """Resolve a replay link to its original samples while preserving current verdicts."""
+    if not source.uri.endswith(".json"):
+        return raw_source_examples(source)
+    replay, _ = read_json(source.uri)
+    if replay["model"] != source.model or replay["num_trials"] != 300:
+        raise ValueError(f"{source.model}: replay source identity is invalid")
+    replay_score = float(replay.get("corrected_score", replay.get("new_score")))
+    if abs(replay_score - source.old_score) > 0.0005:
+        raise ValueError(f"{source.model}: replay score differs from tracker")
+    original_score = float(replay.get("tracker_score", replay.get("old_score")))
+    examples, rows = source_examples(Source(source.model, original_score, replay["source"]))
+    if len(rows) != len(replay["trials"]):
+        raise ValueError(f"{source.model}: replay trial count differs from sealed source")
+    for index, (row, trial) in enumerate(zip(rows, replay["trials"], strict=True)):
+        document, repeat = divmod(index, 10)
+        example = examples[document]
+        if (trial["doc_id"], trial["trial_id"]) != (document, repeat):
+            raise ValueError(f"{source.model}: replay trial positions differ from sealed source")
+        if trial["candidate_answer"] != example["model_answers"][repeat]:
+            raise ValueError(f"{source.model}: replay candidate differs from sealed source")
+        row["metrics"]["accuracy"] = float(trial.get("corrected_correct", trial.get("new_correct")))
+    return examples, rows
 
 
 def write_json(uri: str, payload: dict) -> None:
