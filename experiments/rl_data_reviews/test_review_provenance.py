@@ -57,10 +57,42 @@ def _publication_files(root: Path, mode: str, verifyit_commit: str | None = None
     return {"origin": "MarinSkyRL", "revision": "a" * 40, "dataset_revision": "data1", "verifier_mode": mode}
 
 
+def _add_runtime_reviews(root: Path, make_review, modes: list[bool | None]) -> None:
+    evidence_path = root / "runtime-evidence.json"
+    evidence_path.write_text("{}")
+    evidence = make_review.evidence(evidence_path, root)
+    path = root / "quality-reviews.json"
+    collection = json.loads(path.read_text())
+    for index, mode in enumerate(modes):
+        review = make_review.review_record(
+            f"runtime:{index}",
+            "source:test",
+            {"summary": "Native verification completed", "verdict": "unrated", "metrics": [], "findings": []},
+            "runtime_execution",
+            {
+                "scope": "single_task",
+                "sample_count": 1,
+                "population_count": 1,
+                "sampling_method": None,
+                "seed": None,
+                "samples": [],
+            },
+            True,
+            [evidence],
+            {"name": "test"},
+        )
+        review["attributes"] = {"verification": {"status": "verified"}}
+        if mode is not None:
+            review["attributes"]["verifyit_enabled"] = mode
+        collection["reviews"].append(review)
+    path.write_text(json.dumps(collection))
+
+
 @pytest.mark.parametrize("executed", [None, "b" * 40, "c" * 40])
 def test_publication_rejects_stale_verifyit_evidence_before_writing(tmp_path, monkeypatch, executed, review_modules):
-    _, publish_review = review_modules
+    make_review, publish_review = review_modules
     payload = _publication_files(tmp_path, "verifyit", verifyit_commit=executed)
+    _add_runtime_reviews(tmp_path, make_review, [True])
     payload["verifyit_revision"] = "c" * 40
 
     def atlas_sql(statement, _parameters):
@@ -73,6 +105,23 @@ def test_publication_rejects_stale_verifyit_evidence_before_writing(tmp_path, mo
     else:
         with pytest.raises(ValueError, match="Executed verifyit revision differs"):
             publish_review.publish_review(tmp_path, "MarinSkyRL:test")
+    assert not (tmp_path / "atlas-publication.json").exists()
+
+
+@pytest.mark.parametrize("modes", [[False], [None], [True, False], []])
+def test_publication_rejects_verifyit_runtime_mode_before_writing(tmp_path, monkeypatch, modes, review_modules):
+    make_review, publish_review = review_modules
+    payload = _publication_files(tmp_path, "verifyit", verifyit_commit="c" * 40)
+    _add_runtime_reviews(tmp_path, make_review, modes)
+    payload["verifyit_revision"] = "c" * 40
+
+    def atlas_sql(statement, _parameters):
+        assert statement.startswith("SELECT"), "Invalid runtime evidence must never be published"
+        return {"rows": [{"payload": payload}]}
+
+    monkeypatch.setattr(publish_review, "sql", atlas_sql)
+    with pytest.raises(ValueError, match="did not all enable verifyit"):
+        publish_review.publish_review(tmp_path, "MarinSkyRL:test")
     assert not (tmp_path / "atlas-publication.json").exists()
 
 

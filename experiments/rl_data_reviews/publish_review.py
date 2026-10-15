@@ -136,6 +136,9 @@ def validated_publication(root: Path, atlas_id: str) -> ReviewPublication:
     if subjects[0]["dataset_revision"] != (payload.get("dataset_revision") or payload.get("revision")):
         raise ValueError("Reviewed data revision differs from the current Atlas source")
     if payload.get("verifier_mode") == "verifyit":
+        runtime = [review for review in collection["reviews"] if review["method"] == "runtime_execution"]
+        if not runtime or any(review["attributes"].get("verifyit_enabled") is not True for review in runtime):
+            raise ValueError("Executed runtime attempts did not all enable verifyit")
         package = provenance.get("verifyit")
         if not package or package["source_commit"] != payload["verifyit_revision"]:
             raise ValueError("Executed verifyit revision differs from the current Atlas verifier")
