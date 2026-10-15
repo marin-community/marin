@@ -121,6 +121,8 @@ class _Selection:
 
 def _balanced_end(text: str, start: int, opening: str, closing: str, quotes: str = "") -> int:
     """Index of the bracket that closes the one at `start`, skipping quoted strings."""
+    if not text.startswith(opening, start):
+        raise ValueError(f"expected {opening!r} at position {start} of {text!r}")
     depth, quote = 0, None
     for pos in range(start, len(text)):
         char = text[pos]
