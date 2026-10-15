@@ -34,7 +34,8 @@ def test_cohorts_and_swarms(table):
 
 
 def test_expanded_rows_key_on_training_run_names(ctx, table):
-    # validation_3e18 keys these runs on their training run names; the table keeps the registry's row order.
+    # validation_3e18 keys these runs on the hashed training run names in their eval_metrics_uri. The table keeps the
+    # registry's row order.
     runs = pd.read_csv(SRC / "heldout_runs.csv")
     expanded = runs[table.cohort == "expanded"]
     names = {}
@@ -81,7 +82,7 @@ def test_labels_are_kept_and_aggregates_versioned(table):
     assert len(pooled) == 14 and set(pooled.proposal_method) == {"path_midpoints", "regmix_reference"}
     assert (pooled.bpb__uncheatable_source - pooled.bpb__uncheatable_fixed).between(0.005, 0.013).all()
     qwen = table[(table.aggregate_version == "fixed_20260927") & table.bpb__uncheatable_fixed.notna()]
-    assert np.allclose(qwen.bpb__uncheatable_fixed, qwen.bpb__uncheatable_source, atol=2e-6)
+    assert np.allclose(qwen.bpb__uncheatable_fixed, qwen.bpb__uncheatable_source, rtol=0, atol=2e-6)
     # OlmoBaseEval Easy is a plain mean in every panel, so it checks each swarm's component join.
     obe = table[table.bpb__obe_easy.notna()]
     assert np.allclose(obe.bpb__obe_easy, obe.bpb__obe_easy_source, rtol=0, atol=1e-12)
@@ -89,7 +90,7 @@ def test_labels_are_kept_and_aggregates_versioned(table):
 
 def test_weights_and_pool_fractions(table):
     w = table[[f"w__{b}" for b in naming.BUCKETS]]
-    assert np.allclose(w.sum(axis=1), 1.0, atol=1e-9)
+    assert np.allclose(w.sum(axis=1), 1.0, rtol=0, atol=1e-9)
     pf = table[[f"pf__{b}" for b in naming.BUCKETS]]
     assert ((pf > 0) & (pf <= 1)).all().all()
     assert (pf < 1).any().any()  # the a-priori runs vary pool fractions

@@ -3,10 +3,11 @@
 
 """The cumulative held-out registry: frozen (September 2) and expanded (September 13) cohorts of all three swarms.
 
-Observation ids key on each run's training run name (with its six-hex-digit hash) wherever one is derivable, as the
-other tables do. The 116 validation-launch runs take it from their evaluation-metrics URI, as `validation_3e18` does.
-679 frozen runs take the registry's W&B training run id; for the 187 `delphi_archive::` rows that is the row_id without
-its prefix. The 134 Llama 200M runs record no run name and key on the registry's `row_id`.
+Observation ids key on each run's training run name with its six-hex-digit hash (as W&B records it) wherever one is
+derivable. The swarm tables key on hash-less training names; no held-out run is in a swarm table. The 116
+validation-launch runs take the name from their evaluation-metrics URI, as `validation_3e18` does. 679 frozen runs take
+the registry's W&B training run id; for the 187 `delphi_archive::` rows that is the row_id without its prefix. The 134
+Llama 200M runs record no run name and key on the registry's `row_id`.
 """
 
 import numpy as np
