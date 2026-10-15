@@ -34,6 +34,15 @@
   ],
   "failed_attempt_allocated_h100_hours": 3.8060244444444447,
   "basis": "Terminal retention-ledger600 storage deadline before any learning in final startup. Fresh namespace retains identical scientific/source/horizon/placement fields. Old439-update partial and all allocation intervals remain. Storage-stall root cause is unproved.",
-  "submitted": false,
-  "completion_claim": false
+  "submitted": true,
+  "completion_claim": false,
+  "confirmed_controller_job_spec": {
+    "job_id": "/romain/sc-qwen-transfer-native-window-tis-s0-main-rno-a3-01a126ce",
+    "state": "3",
+    "num_tasks": "2",
+    "priority_band": "3",
+    "bundle_id": "25d5c41dc5dae58a22b845bbf55dffca7b35c61fe2d7d16a879f0dc8a2795f4a",
+    "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+    "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+  }
 }
