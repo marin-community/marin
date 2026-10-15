@@ -1152,7 +1152,7 @@
       "id": 14,
       "type": "timeseries",
       "title": "Weight sync and policy offload walls",
-      "description": "Mean phase_duration_seconds for sync_weights, init_weight_sync_state, offload_policy_model_to_cpu and update_ref_with_policy, split by outcome and execution. sync_weights times broadcast_to_inference_engines; the rest time the one-time sync-state setup and the optimizer offload around it. Always on when telemetry is configured; these are elapsed waits and do not measure GPU kernel time.",
+      "description": "Mean phase_duration_seconds for synchronization and related phases, split by outcome and execution. Current MarinSkyRL exports sync_weights and update_ref_with_policy. Optimizer offload is included in sync_weights and has no separate exported span; sync-state initialization is startup-only. Additional phase series appear only when recorded. These measure elapsed waits, not GPU kernel time.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
