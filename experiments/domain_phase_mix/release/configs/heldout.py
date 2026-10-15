@@ -66,10 +66,9 @@ FIXED_RULE_PANEL = "delphi_3e18_39bucket"
 POOLED_SOURCES = ("validation::path_midpoints", "validation::regmix_reference")
 # Uncheatable components and data seeds that the registry lacks, frozen from W&B run summaries and configs: rows of
 # (training_wandb_run_id, metric, value, pulled_at). The pooled aggregate (WANDB_POOLED) ties each pull to the run's
-# registry record, which keeps six decimals (REGISTRY_ROUNDING).
+# registry record, which holds the same W&B value at full precision.
 WANDB_PULL = paths.REPO / "experiments/domain_phase_mix/release/configs/heldout_wandb_components_20261015.csv"
 WANDB_POOLED = "eval/uncheatable_eval/bpb"
-REGISTRY_ROUNDING = 5e-7
 # Result folders of the validation launches in the expanded cohort, from the launch registry of
 # collect_delphi_3e18_validation_results_20260906.py, which the expanded registry's builder read.
 VALIDATION_LAUNCHES = {
@@ -191,7 +190,7 @@ def _with_pulled_components(out: pd.DataFrame, runs: pd.DataFrame, run_keys: pd.
     """`out` with the Uncheatable components of the runs in WANDB_PULL, which the registry lacks.
 
     Raises unless each pulled run is a held-out run without registry components for those tasks whose recorded
-    Uncheatable aggregate is the pulled pooled value, to the registry's rounding.
+    Uncheatable aggregate is the pulled pooled value.
     """
     pulls = _wandb_pulls()
     pulled = run_keys[run_keys.isin(pulls.index)]
@@ -201,7 +200,7 @@ def _with_pulled_components(out: pd.DataFrame, runs: pd.DataFrame, run_keys: pd.
     columns = [c for c in pulls.columns if c.startswith("bpb__")]
     if out.loc[pulled.index, columns].notna().any().any():
         raise ValueError(f"pulled runs that already have registry components: {pulled.tolist()}")
-    off = (pull.pooled - runs.uncheatable_bpb[pulled.index]).abs() > REGISTRY_ROUNDING
+    off = pull.pooled != runs.uncheatable_bpb[pulled.index]
     if off.any():
         raise ValueError(f"pulled pooled aggregates that differ from the registry's: {pulled[off].tolist()}")
     out = out.copy()
