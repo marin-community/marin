@@ -6,7 +6,8 @@
 import hashlib
 import json
 import logging
-from dataclasses import asdict, dataclass, replace
+import re
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 import safetensors.torch
@@ -40,6 +41,8 @@ METADATA_NAMES = (
 class CheckpointSource:
     path: str
     revision: str
+    # Full-match regex -> (stored dtype, loaded dtype). Empty means no conversions.
+    dtype_widenings: dict[str, tuple[str, str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -70,6 +73,11 @@ class CheckpointReader:
 
     def __init__(self, source: CheckpointSource):
         self.source = source
+        self.widening_patterns = []
+        for pattern, (from_dtype, to_dtype) in source.dtype_widenings.items():
+            if (from_dtype, to_dtype) != ("bfloat16", "float32"):
+                raise ValueError("Only explicit bfloat16 -> float32 widening is supported")
+            self.widening_patterns.append(re.compile(pattern))
         self.fs, self.path = filesystem_for(source.path)
         if self.fs.exists(prefix_join(self.path, INCOMPLETE_NAME)):
             raise ValueError(f"Incomplete merged checkpoint: {source.path}")
@@ -86,6 +94,11 @@ class CheckpointReader:
         if shard != self.shard_name:
             self.tensors.clear()
             self.tensors = safetensors.torch.load(self.fs.cat_file(prefix_join(self.path, shard)))
+            for tensor_name, tensor in self.tensors.items():
+                if any(pattern.fullmatch(tensor_name) for pattern in self.widening_patterns):
+                    if tensor.dtype != torch.bfloat16:
+                        raise ValueError(f"Expected bfloat16 for allowlisted tensor {tensor_name}, got {tensor.dtype}")
+                    self.tensors[tensor_name] = tensor.to(torch.float32)
             self.shard_name = shard
         return self.tensors[name]
 
