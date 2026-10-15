@@ -408,6 +408,17 @@ async def test_a_name_error_in_a_step_reports_its_program_line_to_the_author(tmp
     assert await failure_first_lines(tmp_path, source) == (expected,) * 3
 
 
+async def test_an_os_error_raised_by_a_step_is_the_programs_failure(tmp_path):
+    """A step opening a file that is not there is a program bug, not the storage fault the OSError pass-through covers."""
+    source = SOURCE.replace(NUMBERS_FILE, 'InlineFile(content_base64=open("/workspace/does-not-exist.txt").read())')
+    assert source != SOURCE
+    expected = (
+        "FileNotFoundError: [Errno 2] No such file or directory: '/workspace/does-not-exist.txt' at numbers, "
+        + program_line(source, "does-not-exist")
+    )
+    assert await failure_first_lines(tmp_path, source) == (expected,) * 3
+
+
 async def test_a_library_error_called_from_a_step_still_reports_the_program_line(tmp_path):
     source = SOURCE.replace(NUMBERS_FILE, '"6 7"')
     assert source != SOURCE

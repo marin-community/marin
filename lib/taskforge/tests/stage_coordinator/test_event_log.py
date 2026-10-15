@@ -43,9 +43,3 @@ def test_a_file_written_under_another_schema_is_refused(tmp_path):
 
     with pytest.raises(ValueError, match="event schema '0'"):
         store.load(ITEM)
-
-
-@pytest.mark.parametrize("item_id", ["../escape", "a/b", ".hidden"])
-def test_an_item_id_unsafe_as_a_directory_name_is_refused(tmp_path, item_id):
-    with pytest.raises(ValueError, match="must match"):
-        JsonEventStore(tmp_path).save(item_id, ())

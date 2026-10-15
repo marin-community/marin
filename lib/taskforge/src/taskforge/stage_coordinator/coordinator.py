@@ -20,8 +20,10 @@ Each stage runs through an adapter in this module. The adapter calls the caller'
 the round's files, and returns the stage's event. The coordinator spends a build revision on:
 
 * a build raising ``BuildFailure`` or any other error, recorded as ``BUILD_FAILED``, unless the
-  error is a ``BuildInfrastructureFailure``, ``ModelUnavailable`` or ``OSError``: a storage fault,
-  a missing blob or memo, or a corrupt one (``StoreCorruption``);
+  error is a ``BuildInfrastructureFailure``, ``ModelUnavailable``, or an ``OSError`` raised outside
+  the program's own frames: a storage fault, a missing blob or memo, or a corrupt one
+  (``StoreCorruption``). An ``OSError`` raised in the program, a step opening a file that is not
+  there, is the program's and spends a revision like any other error of its code;
 * an author raising ``StructuredOutputError``, recorded as ``AUTHOR_FAILED``. The author's
   structured reply stayed invalid through its repairs, as when the output limit cut it, and a new
   call samples again.
@@ -181,9 +183,10 @@ async def run_item(coordinator: StageCoordinator, item_id: str, proposal: object
 
     A build failure, or an author raising ``StructuredOutputError``, spends one of the item's build
     revisions and sends the item back to the author. When the build raises
-    ``BuildInfrastructureFailure``, ``ModelUnavailable`` or an ``OSError``, the item fails in place
-    with its revisions unspent, and the next ``run_item`` builds the same program again. An
-    ``OSError`` is a storage fault, a missing blob or memo, or a corrupt one (``StoreCorruption``).
+    ``BuildInfrastructureFailure``, ``ModelUnavailable`` or an ``OSError`` from outside the program's
+    frames, the item fails in place with its revisions unspent, and the next ``run_item`` builds the
+    same program again. Such an ``OSError`` is a storage fault, a missing blob or memo, or a corrupt
+    one (``StoreCorruption``); one raised by the program's own code is the program's.
 
     Raises:
         ValueError: ``item_id`` is unsafe as a directory name, the item was opened for another
@@ -318,8 +321,9 @@ async def _build(item: _Item, state: ItemState) -> ItemEvent:
 
     * ``BuildInfrastructureFailure``, raised when the build host fails;
     * ``ModelUnavailable``, raised when the model stays unreachable;
-    * ``OSError`` and its subclasses: a storage fault, a missing blob or memo, or a corrupt one
-      (``StoreCorruption``).
+    * ``OSError`` and its subclasses raised outside the program's frames (``_raised_in_program``): a
+      storage fault, a missing blob or memo, or a corrupt one (``StoreCorruption``). An ``OSError``
+      raised by the program's own code is a program bug and spends a revision.
     """
     coordinator = item.coordinator
     program = await _authored_program(item, state)
@@ -335,9 +339,11 @@ async def _build(item: _Item, state: ItemState) -> ItemEvent:
             coordinator.model_digest,
             state.round,
         )
-    except (BuildInfrastructureFailure, ModelUnavailable, OSError):
+    except (BuildInfrastructureFailure, ModelUnavailable):
         raise
     except Exception as error:
+        if isinstance(error, OSError) and not _raised_in_program(error, program):
+            raise
         attrs = {
             **_failure_attrs(item, state, error, _build_failure_line(error, program)),
             "step": (error.step or "") if isinstance(error, BuildFailure) else "",
@@ -395,7 +401,7 @@ def _build_failure_line(error: Exception, program: RLEnvBuildProgram) -> str:
         TypeError: ... in library code at pydantic/main.py:253 (__init__), called from numbers, program line 12: ...
         ValueError: ... outside the program, at taskforge/stage40_build/run.py:124 (run)
     """
-    files = {inspect.getfile(node.fn) for node in (*program.steps.values(), program.sink)}
+    files = _program_files(program)
     steps = {*program.steps, program.sink.name}
     named = error.step if isinstance(error, BuildFailure) else None
     tracebacks = [traceback.extract_tb(link.__traceback__) for link in reversed(_exception_chain(error))]
@@ -418,6 +424,21 @@ def _build_failure_line(error: Exception, program: RLEnvBuildProgram) -> str:
     if deepest[-1] == len(frames) - 1:
         return f"{headline} at {location}"
     return f"{headline} in library code at {library}, called from {location}"
+
+
+def _program_files(program: RLEnvBuildProgram) -> set[str]:
+    """The files of the program's step functions, as the loader registers them in ``linecache``."""
+    return {inspect.getfile(node.fn) for node in (*program.steps.values(), program.sink)}
+
+
+def _raised_in_program(error: BaseException, program: RLEnvBuildProgram) -> bool:
+    """Whether a traceback in ``error``'s chain passes through one of the program's own frames."""
+    files = _program_files(program)
+    return any(
+        frame.filename in files
+        for link in _exception_chain(error)
+        for frame in traceback.extract_tb(link.__traceback__)
+    )
 
 
 def _exception_chain(error: BaseException) -> list[BaseException]:
