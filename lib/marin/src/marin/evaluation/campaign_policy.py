@@ -17,9 +17,7 @@ from marin.evaluation.harbor.agent_context import reconciled_model_info, served_
 from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import EvalchemyRef, EvalRef, ModelRef
 
-OCTOBER_5_VERSION = "eval-policy-2026-10-05-verified"
-OCTOBER_6_VERSION = "eval-policy-2026-10-06-verified"
-OCTOBER_9_VERSION = "eval-policy-2026-10-09-verified"
+OCTOBER_14_VERSION = "eval-policy-2026-10-14-verified"
 MAX_SERVED_CONTEXT = 131072
 
 
@@ -51,31 +49,9 @@ class CampaignProfile(BaseModel):
 
 
 CAMPAIGN = CampaignProfile.model_validate_json(
-    Path(__file__).with_name("policies").joinpath("october_05.json").read_text()
+    Path(__file__).with_name("policies").joinpath("october_14.json").read_text()
 )
-OCTOBER_5_ORIGINAL_HARBOR_COMMIT = CAMPAIGN.runtimes["harbor"]
-CAMPAIGN = CAMPAIGN.model_copy(
-    update={"runtimes": {**CAMPAIGN.runtimes, "harbor": "721215263368e3ff2b16806e01cb1d710a61e573"}}
-)
-CAMPAIGNS = {
-    OCTOBER_5_VERSION: CAMPAIGN,
-    OCTOBER_6_VERSION: CAMPAIGN.model_copy(
-        update={
-            "runtimes": {
-                "harbor": "065a04787a0023b5f9a972799d68d4d4b9068983",
-                "evalchemy": "9780bea47d243d883ca0aa4189cf352d5bef86fb",
-            }
-        }
-    ),
-}
-CAMPAIGNS[OCTOBER_9_VERSION] = CAMPAIGNS[OCTOBER_6_VERSION].model_copy(
-    update={
-        "runtimes": {
-            **CAMPAIGNS[OCTOBER_6_VERSION].runtimes,
-            "harbor": "1675efa0f23c0033f0b5028ea42d56ae09f15115",
-        }
-    }
-)
+CAMPAIGNS = {OCTOBER_14_VERSION: CAMPAIGN}
 
 
 def campaign_policy_violations(model: ModelRef, evaluation: EvalRef, profile: CampaignProfile) -> tuple[str, ...]:

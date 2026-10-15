@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "runtimes": {
-    "evalchemy": "af61e0baaa291071f815f14f567852adece6e14c",
-    "harbor": "82b45e4506584675012ebf9611302889b62aeb24"
+    "harbor": "c66e91369d70f0dc616d7ebb7498a4e1c68e8ef0",
+    "evalchemy": "958cdb8019b7a4c8432fe85eb9572538ceb75950"
   },
   "native32k_locations": [
     "inclusionAI/Ling-lite-1.5",
@@ -538,7 +538,7 @@
     "triviaqa": {
       "name": "triviaqa",
       "mechanism": "evalchemy",
-      "source_digest": "sha256:9163a251af774fc9da5e856e0eca3247ee1eb40e155af35cd6185900006f24c3",
+      "source_digest": "sha256:d38cd316f6affb512041d4edab2bd837170bf3df42c0189fb6039f5d3874408c",
       "tasks": [
         {
           "name": "triviaqa",
@@ -553,7 +553,7 @@
         "apply_chat_template": true,
         "chat_tokenizer_backend": "none",
         "debug": false,
-        "num_concurrent": 16,
+        "num_concurrent": 128,
         "extra_gen_kwargs": {},
         "extra_model_args": {},
         "chat_template_kwargs": {

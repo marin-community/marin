@@ -15,8 +15,6 @@ import yaml
 
 from marin.evaluation.campaign_policy import (
     CAMPAIGNS,
-    OCTOBER_5_ORIGINAL_HARBOR_COMMIT,
-    OCTOBER_5_VERSION,
     campaign_policy_violations,
 )
 from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS, SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
@@ -271,9 +269,6 @@ def runtime_violations(version: str | None, evaluation: EvalRef, runtime: str) -
     commit = commits.get(evaluation.mechanism)
     if commit is None:
         return (f"missing {evaluation.mechanism} evaluator pin for {version}",)
-    # This campaign explicitly permits the disk-full fix alongside its original runtime.
-    if version == OCTOBER_5_VERSION and evaluation.mechanism == "harbor" and OCTOBER_5_ORIGINAL_HARBOR_COMMIT in runtime:
-        commit = OCTOBER_5_ORIGINAL_HARBOR_COMMIT
     if commit not in runtime:
         return (f"evaluator runtime must use commit {commit}",)
     if evaluation.harbor is not None:
