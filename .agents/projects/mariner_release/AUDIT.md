@@ -19,7 +19,7 @@ uv run python -m experiments.domain_phase_mix.release.verify_paper_numbers --bui
   --sections "<paper folder>/sections" --fail-on-untraced --allow-registered-skips
 ```
 
-- Build: 35 tables, MANIFEST.json `commit` cf599108dc, built 2026-10-15T11:02Z, 0 consistency problems.
+- Build: 35 tables, MANIFEST.json `commit` 5b9da64a29, built 2026-10-15T14:53Z, 0 consistency problems.
 - Paper: `sections/` of the paper folder on Google Drive. The tables are in `results.tex` (modified 2026-10-12 20:13,
   SHA-256 prefix e2a47c370e100b1e), `surrogate.tex` (2026-10-13 02:17, 81cc91596e2a38ea), `appendix.tex` (2026-10-13
   18:21, 56d9771c55d2d188) and `appendix_analysis.tex` (2026-10-14 01:25, 61aeead7375b3d31), local times.
