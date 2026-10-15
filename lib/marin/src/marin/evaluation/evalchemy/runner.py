@@ -380,6 +380,30 @@ def _run_evalchemy_once(
     )
 
 
+def _inference_interrupted(sessions: tuple[RemoteInferenceSession, ...], before: tuple[int, ...]) -> bool:
+    state = inference_backend_state(sessions)
+    return state is not InferenceBackendState.FINISHED and (
+        state is InferenceBackendState.RECOVERING or before != tuple(session.preemption_count() for session in sessions)
+    )
+
+
+def _evalchemy_model(session: RemoteInferenceSession) -> RunningModel:
+    if not session.jobs:
+        return session.model
+    try:
+        address = iris_ctx().client.resolve_endpoint(session.endpoint_name).rstrip("/")
+    except ConnectionError as exc:
+        raise InferenceUnavailable("inference endpoint registration is unavailable") from exc
+    return RunningModel(
+        endpoint=OpenAIEndpoint(
+            base_url=f"{address}{OPENAI_API_SUFFIX}",
+            model=session.model.endpoint.model,
+            api_key=session.model.endpoint.api_key,
+        ),
+        tokenizer=session.model.tokenizer,
+    )
+
+
 @dataclass(frozen=True)
 class EvalchemyExecutor:
     """Run one resolved Evalchemy configuration."""
@@ -401,26 +425,18 @@ class EvalchemyExecutor:
             before = tuple(inference.preemption_count() for inference in sessions)
             check_inference_backend(inference_backend_state(sessions))
             try:
-                result: EvaluationOutcome | Exception = self._run_once(session, attempt_dir, env_vars, judge=judge)
+                result = self._run_once(session, attempt_dir, env_vars, judge=judge)
             except InferenceUnavailable:
                 raise
             except Exception as exc:
-                result = exc
-            incomplete = isinstance(result, Exception) or any(
+                if _inference_interrupted(sessions, before):
+                    raise InferenceUnavailable("inference interrupted during Evalchemy") from exc
+                raise
+            incomplete = any(
                 coverage.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for coverage in result.coverage.values()
             )
-            state = inference_backend_state(sessions)
-            if (
-                incomplete
-                and state is not InferenceBackendState.FINISHED
-                and (
-                    before != tuple(inference.preemption_count() for inference in sessions)
-                    or state is InferenceBackendState.RECOVERING
-                )
-            ):
+            if incomplete and _inference_interrupted(sessions, before):
                 raise InferenceUnavailable("inference interrupted during Evalchemy")
-            if isinstance(result, Exception):
-                raise result
             return result
 
         def prepare_retry() -> None:
@@ -445,23 +461,9 @@ class EvalchemyExecutor:
         *,
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
-        model = session.model
-        if session.jobs:
-            try:
-                address = iris_ctx().client.resolve_endpoint(session.endpoint_name).rstrip("/")
-            except ConnectionError as exc:
-                raise InferenceUnavailable("inference endpoint registration is unavailable") from exc
-            model = RunningModel(
-                endpoint=OpenAIEndpoint(
-                    base_url=f"{address}{OPENAI_API_SUFFIX}",
-                    model=session.model.endpoint.model,
-                    api_key=session.model.endpoint.api_key,
-                ),
-                tokenizer=session.model.tokenizer,
-            )
         try:
             outcome = _run_evalchemy_once(
-                model,
+                _evalchemy_model(session),
                 self.config,
                 output_dir,
                 env_vars=env_vars,
