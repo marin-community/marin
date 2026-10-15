@@ -59,7 +59,7 @@ def _value_problems(tables: dict[str, pd.DataFrame]) -> list[str]:
     parts = []
     for name, df in tables.items():
         columns = [c for c in df.columns if c.startswith(SHARED_PREFIXES)]
-        if not columns:
+        if not columns or "observation_id" not in df:  # a table without ids shares no run with another table
             continue
         long = df[["observation_id", *columns]].melt(id_vars="observation_id", var_name="column").dropna()
         parts.append(long.assign(table=name, value=long.value.astype(float)))

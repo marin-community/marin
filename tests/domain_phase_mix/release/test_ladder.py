@@ -93,6 +93,18 @@ def test_compute_equivalence_rests_on_the_ladder(out, plotted):
         assert np.allclose(reached, rows.mariner_bpb, rtol=0, atol=1e-9)
 
 
+def test_unimax_cap_sweep_scores_runs_as_the_ladder_does(out, plotted):
+    sweep = out["ladder_unimax_cap_sweep"]
+    assert len(sweep) == 3 and sorted(sweep.epoch_cap) == [1.0, 4.0, 12.0]
+    assert sweep[[f"bpb__{t}" for t in ladder.OBE_TASKS]].notna().all().all()
+    # The sweep's results file also scores the ladder's UniMax-8 seed-0 run, with the ladder's components.
+    unimax8 = json.loads(ladder.CAP_SWEEP_TABLE9.read_text())["unimax8_3e18"]["components"]
+    rung = plotted[(plotted.method == "unimax8") & (plotted.compute_flops == 3e18) & (plotted.trainer_seed == 0)]
+    assert len(rung) == 1
+    ladder_values = [rung.iloc[0][f"bpb__{task}"] for task in unimax8]
+    assert np.allclose(ladder_values, list(unimax8.values()), rtol=0, atol=1e-15)
+
+
 def test_scale_constants_and_weights(out):
     t = out["ladder"]
     assert sorted(t.compute_flops.unique()) == [3e18, 2e19, 3e20, 1e21]
@@ -209,7 +221,7 @@ def test_accuracy_rows_are_the_1e21_ladder_runs(out):
 
 
 def test_no_internal_strings(out):
-    text = out["ladder"].to_csv(index=False) + out["ladder_accuracy"].to_csv(index=False)
+    text = "".join(table.to_csv(index=False) for table in out.values())
     for needle in ["gs://", "http", "wandb", "pinlin_calvin_xu", "/Users/"]:
         assert needle not in text
     assert not re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", text)  # email addresses

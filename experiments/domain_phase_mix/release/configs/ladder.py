@@ -33,6 +33,11 @@ law `law_e + law_a * (C / 1e18) ** -law_alpha` fitted to the baseline's mean los
 residual over them), and at each MARINER rung (`compute_flops`, MARINER's mean loss `mariner_bpb`) the compute at which
 the law reaches that loss, its multiple of MARINER's compute, the saving (one minus the inverse multiple, in percent),
 the loss improvement at matched compute (percent) and whether the match lies beyond the baseline's largest rung.
+
+`ladder_unimax_cap_sweep` holds the UniMax cap sweep's runs at caps 1, 4 and 12 (table tab:a-unimax-cap), one run each
+at the 3e18 rung's model size and token count: each run's cap, seeds, 51 OlmoBaseEval Easy components and their mean.
+The sweep's cap-8 and proportional runs are ladder rows. The three runs' Uncheatable values exist only in their
+evaluation logs on GCS, and their hashed run names only in the sweep's README, so the table has no observation ids.
 """
 
 import json
@@ -68,6 +73,9 @@ ACCURACY = paths.RO / "accuracy_component_table_20260922"  # components.csv and 
 # The UniMax cap sweep's Table 9 results, which hold the 51 components of the June proportional run at 3e18.
 CAP_SWEEP_TABLE9 = paths.AG / "unimax_cap_sweep_20260922/table9_results.json"
 CAP_SWEEP_PROPORTIONAL = "proportional_3e18"  # the sweep's key of that run
+CAP_SWEEP_TABLE = "ladder_unimax_cap_sweep"
+# The sweep's launch record: each run's mixture, seeds and size (run_specs.json) and each mixture's cap (summary.json).
+CAP_SWEEP_LAUNCH = paths.RO / "delphi_baseline_mixtures_issue6607_20260623"
 # The audits recorded the fixed weighting of each run's components; the June ladder's legacy-schema aggregates agree
 # with it to 8e-8.
 AGGREGATE_VERSION = "fixed_20260927"
@@ -90,6 +98,8 @@ def required_sources() -> list[Path]:
         CAP_SWEEP_TABLE9,
         COMPUTE_EQUIVALENCE / "compute_equivalence.csv",
         COMPUTE_EQUIVALENCE / "fits.json",
+        CAP_SWEEP_LAUNCH / "run_specs.json",
+        CAP_SWEEP_LAUNCH / "summary.json",
     ]
 
 
@@ -356,6 +366,29 @@ def _compute_equivalence() -> pd.DataFrame:
     return table[[*columns, "multiplier", "compute_saved_pct", "loss_improvement_pct", "extrapolated"]]
 
 
+def _unimax_cap_sweep(ctx: ExportContext) -> pd.DataFrame:
+    """The cap sweep's runs that no other table holds, with their OlmoBaseEval Easy components and mean."""
+    results = json.loads(paths.require(CAP_SWEEP_TABLE9).read_text())
+    specs = json.loads(paths.require(CAP_SWEEP_LAUNCH / "run_specs.json").read_text())
+    caps = json.loads(paths.require(CAP_SWEEP_LAUNCH / "summary.json").read_text())["unimax_epoch_caps"]
+    scale = SCALES[SWARM_FLOPS]
+    rows = []
+    for spec in specs:
+        size = (spec["total_trainable_params"], spec["non_embedding_params"], spec["realized_train_tokens"])
+        if size != (scale["total_parameters"], scale["non_embedding_parameters"], scale["train_tokens"]):
+            raise ValueError(f"{spec['run_name']} is not at the 3e18 rung's model size and token count")
+        components = results[spec["run_name"]]["components"]
+        if sorted(components) != sorted(OBE_TASKS):
+            raise ValueError(f"{spec['run_name']} needs each of the 51 OlmoBaseEval Easy components once")
+        seeds = {"data_seed": spec["data_seed"], "trainer_seed": spec["trainer_seed"]}
+        rows.append({"epoch_cap": caps[spec["mixture"]], **seeds, **{f"bpb__{t}": components[t] for t in OBE_TASKS}})
+    table = tables.add_aggregates(pd.DataFrame(rows), {"obe_easy": ctx.weights["obe_easy"]})
+    recorded = [results[spec["run_name"]]["macro"] for spec in specs]
+    if not np.allclose(table.bpb__obe_easy, recorded, rtol=0, atol=1e-12):
+        raise ValueError("a cap-sweep run's components do not reproduce its recorded OlmoBaseEval Easy mean")
+    return tables.order_columns(table, ctx.buckets, ctx.tasks)
+
+
 def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     accuracy = tables.read_csv(paths.require(ACCURACY / "components.csv"))
     if sorted(accuracy.component) != sorted(OBE_TASKS):
@@ -374,6 +407,7 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
         LADDER: ladder_table,
         ACCURACY_TABLE: _accuracy(accuracy, ladder_table),
         EQUIVALENCE_TABLE: _compute_equivalence(),
+        CAP_SWEEP_TABLE: _unimax_cap_sweep(ctx),
     }
 
 

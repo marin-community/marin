@@ -57,6 +57,7 @@ EXPORTER = {
     "ladder": ladder,
     "ladder_accuracy": ladder,
     "ladder_compute_equivalence": ladder,
+    "ladder_unimax_cap_sweep": ladder,
     "starcoder": starcoder,
     "domain_sweeps": domain_sweeps,
     "fits": fits,
@@ -92,6 +93,7 @@ KEYING = {
     ),
     "ladder_accuracy": "The ladder's ids of the four scored 1e21 runs.",
     "ladder_compute_equivalence": NO_IDS,
+    "ladder_unimax_cap_sweep": NO_IDS,
     "starcoder_observations": "The training run name of each atlas run.",
     "starcoder_curve_membership": "The training run name of each atlas run.",
     "starcoder_curves": NO_IDS,
@@ -176,6 +178,11 @@ NOTES = {
         "UniMax-8 trainer seeds 1 and 2 at 3e18 carry aggregates only, and the proportional and UniMax-8 runs at "
         "2e19 and 3e20 carry aggregates and Uncheatable components only (components_available false).",
         "The swarm repeats' bpb__obe_easy_source is the mean of their 51 components, as every source computes it.",
+    ],
+    "ladder_unimax_cap_sweep": [
+        "The UniMax cap sweep's runs at caps 1, 4 and 12, at the 3e18 rung's model size and token count; its cap-8 "
+        "and proportional runs are ladder rows. Their Uncheatable values exist only in the runs' evaluation logs, so "
+        "the table holds the 51 OlmoBaseEval Easy components and their mean.",
     ],
     "domain_sweeps": [
         "These models use the TinyLlama tokenizer named in `tokenizer`, not the tokenizer of the tasks table, which "
