@@ -16,22 +16,23 @@ copy-pasted panel bodies that drift out of sync with the bridge's actual schema.
 Dashboard links use ``{"linkRef": "<fragment-name>"}`` markers resolved from
 ``SHARED_LINKS`` for the same reason.
 
-Targets with ``targetRef`` share endpoint parameters while specifying their view,
-format and columns locally. A panelRef mount's ``vars`` maps template variables
-after targets expand, in one pass, so a replacement can reference a dashboard
-variable without being substituted again.
+Targets with ``targetRef`` share endpoint parameters. Time-series targets default to
+time/series/value columns; each target specifies its view, format and other columns.
 """
 
 import argparse
 import json
-import re
 from pathlib import Path
 
 PANEL_REF_KEY = "panelRef"
-PANEL_VARS_KEY = "vars"
 LINK_REF_KEY = "linkRef"
 TARGET_REF_KEY = "targetRef"
-_VARIABLE = re.compile(r"\$\{([^}]+)\}")
+
+_TIMESERIES_COLUMNS = [
+    {"selector": "t", "text": "time", "type": "timestamp_epoch"},
+    {"selector": "series", "text": "series", "type": "string"},
+    {"selector": "value", "text": "value", "type": "number"},
+]
 
 _RANGE_PARAMS = (("from", "${__from}"), ("to", "${__to}"), ("bucket_ms", "${__interval_ms}"))
 _SHARED_TARGET_PARAMS = {
@@ -101,17 +102,6 @@ def load_panel_fragments(panels_dir: Path) -> dict[str, dict]:
     return {path.stem: json.loads(path.read_text()) for path in panels_dir.glob("*.json")}
 
 
-def _substitute(value, variables: dict[str, str]):
-    """Replace variables in JSON string values once, preserving unlisted variables."""
-    if isinstance(value, str):
-        return _VARIABLE.sub(lambda match: variables.get(match.group(1), match.group(0)), value)
-    if isinstance(value, list):
-        return [_substitute(item, variables) for item in value]
-    if isinstance(value, dict):
-        return {key: _substitute(item, variables) for key, item in value.items()}
-    return value
-
-
 def _stitch_target(target: dict) -> dict:
     ref = target.get(TARGET_REF_KEY)
     if ref is None:
@@ -119,7 +109,7 @@ def _stitch_target(target: dict) -> dict:
     if ref not in _SHARED_TARGET_PARAMS:
         raise KeyError(f"unknown target parameter set {ref!r}")
     params = (*_SHARED_TARGET_PARAMS[ref], ("view", target["view"]))
-    local = ("refId", "format", "url", "columns", "view", TARGET_REF_KEY)
+    columns = target.get("columns", _TIMESERIES_COLUMNS) if target["format"] == "timeseries" else target["columns"]
     return {
         "refId": target["refId"],
         "type": "json",
@@ -128,8 +118,7 @@ def _stitch_target(target: dict) -> dict:
         "parser": "backend",
         "url": target["url"],
         "url_options": {"method": "GET", "params": [{"key": key, "value": value} for key, value in params]},
-        "columns": target["columns"],
-        **{key: value for key, value in target.items() if key not in local},
+        "columns": [dict(column) for column in columns],
     }
 
 
@@ -142,7 +131,6 @@ def _stitch_panels(panels: list[dict], fragments: dict[str, dict]) -> list[dict]
     resolved = []
     for panel in panels:
         ref = panel.get(PANEL_REF_KEY)
-        variables = panel.get(PANEL_VARS_KEY, {})
         if ref is not None:
             if ref not in fragments:
                 raise KeyError(f"panel {panel.get('id')} references unknown panel fragment {ref!r}")
@@ -151,8 +139,6 @@ def _stitch_panels(panels: list[dict], fragments: dict[str, dict]) -> list[dict]
             panel = {**panel, "panels": _stitch_panels(panel["panels"], fragments)}
         if "targets" in panel:
             panel = {**panel, "targets": [_stitch_target(target) for target in panel["targets"]]}
-        if ref is not None:
-            panel = _substitute(panel, variables)
         resolved.append(panel)
     return resolved
 
@@ -171,7 +157,7 @@ def _stitch_links(links: list[dict]) -> list[dict]:
 
 
 def stitch_dashboard(source: dict, fragments: dict[str, dict]) -> dict:
-    """Resolve panelRef, linkRef, targetRef and mounted variables in a dashboard.
+    """Resolve panelRef, linkRef and targetRef in a dashboard.
 
     Raises:
         KeyError: A panel, link or target references an unknown fragment.

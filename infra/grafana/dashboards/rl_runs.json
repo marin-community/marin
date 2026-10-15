@@ -328,23 +328,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "policy_step"
         }
@@ -404,23 +387,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "token_rates"
         }
@@ -903,23 +869,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "driver_walls"
         }
@@ -981,24 +930,7 @@
           "targetRef": "rl_attempt",
           "url": "/v1/rl/attempt",
           "view": "step_composition",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
+          "format": "timeseries"
         }
       ],
       "interval": "30s",
@@ -1052,23 +984,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/overview",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_run",
           "view": "critical_path"
         }
@@ -1124,23 +1039,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/overview",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_run",
           "view": "straggler"
         }
@@ -1200,23 +1098,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "sync_walls"
         }
@@ -1407,23 +1288,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "worker_waits"
         }
@@ -1483,23 +1347,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "buffer"
         }
@@ -1559,23 +1406,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "buffer_dwell"
         }
@@ -1635,23 +1465,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "rollout_latency"
         }
@@ -1711,23 +1524,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "event_loop_lag"
         }
@@ -1786,23 +1582,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "residuals"
         }
@@ -1930,23 +1709,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "group_dispositions"
         }
@@ -2006,23 +1768,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "group_tokens"
         }
@@ -2184,23 +1929,6 @@
               "refId": "A",
               "format": "timeseries",
               "url": "/v1/rl/attempt",
-              "columns": [
-                {
-                  "selector": "t",
-                  "text": "time",
-                  "type": "timestamp_epoch"
-                },
-                {
-                  "selector": "series",
-                  "text": "series",
-                  "type": "string"
-                },
-                {
-                  "selector": "value",
-                  "text": "value",
-                  "type": "number"
-                }
-              ],
               "targetRef": "rl_attempt",
               "view": "policy_staleness"
             }
@@ -2260,23 +1988,6 @@
               "refId": "A",
               "format": "timeseries",
               "url": "/v1/rl/attempt",
-              "columns": [
-                {
-                  "selector": "t",
-                  "text": "time",
-                  "type": "timestamp_epoch"
-                },
-                {
-                  "selector": "series",
-                  "text": "series",
-                  "type": "string"
-                },
-                {
-                  "selector": "value",
-                  "text": "value",
-                  "type": "number"
-                }
-              ],
               "targetRef": "rl_attempt",
               "view": "staleness_groups"
             }
@@ -2336,23 +2047,6 @@
               "refId": "A",
               "format": "timeseries",
               "url": "/v1/rl/attempt",
-              "columns": [
-                {
-                  "selector": "t",
-                  "text": "time",
-                  "type": "timestamp_epoch"
-                },
-                {
-                  "selector": "series",
-                  "text": "series",
-                  "type": "string"
-                },
-                {
-                  "selector": "value",
-                  "text": "value",
-                  "type": "number"
-                }
-              ],
               "targetRef": "rl_attempt",
               "view": "staleness_tokens"
             }
@@ -2411,23 +2105,6 @@
               "refId": "A",
               "format": "timeseries",
               "url": "/v1/rl/attempt",
-              "columns": [
-                {
-                  "selector": "t",
-                  "text": "time",
-                  "type": "timestamp_epoch"
-                },
-                {
-                  "selector": "series",
-                  "text": "series",
-                  "type": "string"
-                },
-                {
-                  "selector": "value",
-                  "text": "value",
-                  "type": "number"
-                }
-              ],
               "targetRef": "rl_attempt",
               "view": "mismatch_staleness0"
             }
@@ -2486,23 +2163,6 @@
               "refId": "A",
               "format": "timeseries",
               "url": "/v1/rl/attempt",
-              "columns": [
-                {
-                  "selector": "t",
-                  "text": "time",
-                  "type": "timestamp_epoch"
-                },
-                {
-                  "selector": "series",
-                  "text": "series",
-                  "type": "string"
-                },
-                {
-                  "selector": "value",
-                  "text": "value",
-                  "type": "number"
-                }
-              ],
               "targetRef": "rl_attempt",
               "view": "mismatch_by_staleness"
             }
@@ -2939,23 +2599,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/overview",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_run",
           "view": "engine_latency"
         }
@@ -3012,23 +2655,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/overview",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_run",
           "view": "engine_preemptions"
         }
@@ -3088,23 +2714,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/overview",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_run",
           "view": "engine_finish"
         }
@@ -3160,23 +2769,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/overview",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_run",
           "view": "engine_prefix_cache"
         }
@@ -3249,23 +2841,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "megatron_policy_wall"
         }
@@ -3324,23 +2899,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "optimizer"
         }
@@ -3581,23 +3139,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/gpu",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_run",
           "view": "gpu_utilization"
         }
@@ -3658,24 +3199,7 @@
           "targetRef": "rl_run",
           "url": "/v1/rl/gpu",
           "view": "sm_activity",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
+          "format": "timeseries"
         }
       ],
       "interval": "1m",
@@ -3807,24 +3331,7 @@
           "targetRef": "rl_run",
           "url": "/v1/rl/gpu",
           "view": "fabric_receive",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
+          "format": "timeseries"
         }
       ],
       "interval": "1m",
@@ -3951,23 +3458,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "reward"
         }
@@ -4027,23 +3517,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "evaluation"
         }
@@ -4104,23 +3577,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "length_stops"
         }
@@ -4208,23 +3664,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "evaluation_lengths"
         }
@@ -4283,23 +3722,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "evaluation_contributions"
         }
@@ -4371,23 +3793,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "drift"
         }
@@ -4446,23 +3851,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "clip_pressure"
         }
@@ -4521,23 +3909,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "drift_coverage"
         }
@@ -4596,23 +3967,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "log_ratio_squared"
         }
@@ -4672,23 +4026,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "correction_weights"
         }
@@ -4747,23 +4084,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "corrections"
         }
@@ -4822,23 +4142,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "learner_drift"
         }
@@ -4897,23 +4200,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "position_dependence"
         }
@@ -4985,23 +4271,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "core_cycle"
         }
@@ -5060,23 +4329,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "loss_token_rates"
         }
@@ -5135,23 +4387,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "core_fractions"
         }
@@ -5210,23 +4445,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "role_gpu_tokens"
         }
@@ -5285,23 +4503,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "role_gpus"
         }
@@ -5360,23 +4561,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_attempt",
           "view": "core_gpu_hours"
         }
@@ -5512,23 +4696,6 @@
           "refId": "A",
           "format": "timeseries",
           "url": "/v1/rl/overview",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
           "targetRef": "rl_run",
           "view": "ray_spill"
         }

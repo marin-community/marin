@@ -59,10 +59,10 @@ def _window_literal(epoch_ms):
     return f"TIMESTAMP '{datetime.fromtimestamp(epoch_ms / 1000, UTC).strftime('%Y-%m-%d %H:%M:%S')}'"
 
 
-def resolve(sql, *, window_ms=WINDOW_MS):
+def resolve(sql):
     for macro, value in {
         "{{from}}": _window_literal(WINDOW_START_MS),
-        "{{to}}": _window_literal(WINDOW_START_MS + window_ms),
+        "{{to}}": _window_literal(WINDOW_START_MS + WINDOW_MS),
         "${training_type:sqlstring}": "'async'",
         "${cluster:sqlstring}": f"'{CLUSTER}'",
         "${run:sqlstring}": f"'{RUN_ID}'",
@@ -79,12 +79,6 @@ def run_variable_sql():
     return next(param["value"] for param in params if param["key"] == "sql")
 
 
-def panel_view(title):
-    target = PANELS[title]["targets"][0]
-    assert target["url"] == ENDPOINT
-    return next(param["value"] for param in target["url_options"]["params"] if param["key"] == "view")
-
-
 def dataset(*, window_ms=WINDOW_MS, bucket_ms=WINDOW_MS):
     """The dataset every panel requests for the selected identity over this suite's window."""
     return rl_attempt_dataset(
@@ -92,16 +86,13 @@ def dataset(*, window_ms=WINDOW_MS, bucket_ms=WINDOW_MS):
     )
 
 
-def materialize_sources(database, selected):
-    for source in selected.sources:
-        database.execute(f'CREATE OR REPLACE TEMP TABLE "{source.name}" AS {source.sql}')
-
-
 def query(database, title, *, window_ms=WINDOW_MS, bucket_ms=WINDOW_MS):
     target = PANELS[title]["targets"][0]
     selected = dataset(window_ms=window_ms, bucket_ms=bucket_ms)
-    materialize_sources(database, selected)
-    cursor = database.execute(selected.views[panel_view(title)])
+    for source in selected.sources:
+        database.execute(f'CREATE OR REPLACE TEMP TABLE "{source.name}" AS {source.sql}')
+    view = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "view")
+    cursor = database.execute(selected.views[view])
     columns = [column[0] for column in cursor.description]
     assert columns == [column["selector"] for column in target["columns"]]
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
@@ -450,12 +441,12 @@ EXPECTED_PANELS = json.loads((Path(__file__).parent / "fixtures/rl_attempt_panel
 ASYNC_ONLY_PANEL_IDS = {11, 47, 48, 51, 52, 54, 55}
 
 
-def _target_params(target, *, run=RUN_ID, executions=f"{DRIVER},{WORKER}"):
+def _target_params(target, *, run=RUN_ID):
     variables = {
         "${cluster:csv}": CLUSTER,
         "${run}": run,
         "${job}": JOB_ID,
-        "${execution:csv}": executions,
+        "${execution:csv}": f"{DRIVER},{WORKER}",
         "${__from}": str(WINDOW_START_MS),
         "${__to}": str(WINDOW_START_MS + WINDOW_MS),
         "${__interval_ms}": str(RL_ATTEMPT_MIN_BUCKET_MS),
@@ -468,15 +459,6 @@ def _target_params(target, *, run=RUN_ID, executions=f"{DRIVER},{WORKER}"):
         assert "${" not in value, value
         params[param["key"]] = value
     return params
-
-
-def _filtered_rows(target, rows):
-    expression = target.get("filterExpression")
-    if not expression:
-        return rows
-    return [
-        row for row in rows if eval(expression.replace("&&", " and ").replace("||", " or "), {"__builtins__": {}}, row)
-    ]
 
 
 def test_every_panel_view_returns_declared_fields_for_selected_attempt(store):
@@ -494,7 +476,7 @@ def test_every_panel_view_returns_declared_fields_for_selected_attempt(store):
                     expected = EXPECTED_PANELS[str(panel["id"])]
                     columns = [column["selector"] for column in target["columns"]]
                     assert columns == expected["columns"]
-                    returned = _filtered_rows(target, response.json())
+                    returned = response.json()
                     assert all(set(row) == {"section", *columns} for row in returned)
                     assert all(row["section"] == params["view"] for row in returned)
                     actual = sorted([tuple(row[key] for key in columns) for row in returned], key=repr)
@@ -589,7 +571,8 @@ def test_all_attempts_match_picker_values_and_keep_job_scope(telemetry_table):
         assert explicit.json() == {"error": "executions must contain between 1 and 32 values"}
 
 
-def _long_run_store(database, *, ranks=256, steps=500):
+def _long_run_store(database):
+    ranks, steps = 256, 500
     window_ms = 7 * 24 * 3600 * 1000
     spacing = (window_ms - 2 * 60000) // steps
     database.execute(
@@ -632,6 +615,7 @@ def _long_run_store(database, *, ranks=256, steps=500):
 
 
 def _long_run_nodes(database, nodes):
+    """Seed one node before growing the same fixture to a larger node count."""
     if nodes == 1:
         database.execute(f"ALTER TABLE {TABLE} ADD COLUMN node_name VARCHAR")
         database.execute(f"ALTER TABLE {TABLE} ADD COLUMN process_index VARCHAR")

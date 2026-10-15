@@ -48,7 +48,7 @@ _DCGM_DEVICE = ("gpu_power_watts", *_DCGM_COUNTERS)
 
 
 def _run_nodes_cte(bucket: str, clusters_sql: str, run_sql: str, start_ms: int, end_ms: int) -> str:
-    """Attribute each node bucket to the run with the most MarinSkyRL observations."""
+    """Attribute selected node buckets to the run with the most observations across all runs."""
     return f"""selected_nodes AS (
     SELECT DISTINCT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
            node_name AS node
@@ -342,7 +342,7 @@ WITH {_run_nodes_cte(bucket, clusters_sql, run_sql, start_ms, end_ms)}, counter_
     GROUP BY 1, 2, 3, 4, 5
 ), attributed AS (
     SELECT gpu.* FROM run_node JOIN gpu USING (origin_cluster, t, node)
-    WHERE run_node.run = {sql_string(run)}
+    WHERE run_node.run = {run_sql}
 )
 SELECT CASE WHEN GROUPING(node) = 1 THEN 'series' ELSE 'device' END AS statistic,
        t, name, node, gpu,

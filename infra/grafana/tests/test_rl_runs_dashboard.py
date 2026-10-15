@@ -345,12 +345,6 @@ def store() -> duckdb.DuckDBPyConnection:
     return database
 
 
-def _in_window(sql: str) -> str:
-    """Resolve Grafana's window macros to this suite's window."""
-    sql = sql.replace("{{from}}", f"TIMESTAMP '{WINDOW_START.replace(tzinfo=None)}'")
-    return sql.replace("{{to}}", f"TIMESTAMP '{NOW.replace(tzinfo=None)}'")
-
-
 def _view_sql(view: str, endpoint: str) -> str:
     build = {"/v1/rl/overview": rl_overview_dataset, "/v1/rl/gpu": rl_gpu_dataset}[endpoint]
     dataset = build((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 5 * 60 * 1000)

@@ -23,8 +23,6 @@ GIB = 1073741824
 FINITE_VALUE_LIMIT_SQL = "1e308"
 MARINSKYRL_TABLE = '"telemetry_v1.marinskyrl"'
 
-# Loop events aggregated per display bucket and execution. Gauges keep their latest observation
-# per process; the dwell, staleness and rollout-call names carry percentiles as well.
 _CORE_NAMES = (
     "event_loop_lag_seconds",
     "phase_duration_seconds",
@@ -262,7 +260,7 @@ def rl_attempt_dataset(
     executions: tuple[str, ...],
     start_ms: int,
     end_ms: int,
-    requested_bucket_ms: int = RL_ATTEMPT_MIN_BUCKET_MS,
+    requested_bucket_ms: int,
 ) -> DashboardDataset:
     """Build bounded sources for a job and selected attempts of either training type."""
     validate_values("clusters", clusters, max_values=RL_ATTEMPT_MAX_CLUSTERS, max_length=128)
@@ -333,18 +331,6 @@ WITH selected AS (
 ), latest AS (
     SELECT 'latest' AS statistic,
            t, name, execution_uid,
-           CAST(NULL AS VARCHAR) AS work_kind,
-           CAST(NULL AS VARCHAR) AS phase,
-           CAST(NULL AS VARCHAR) AS outcome,
-           CAST(NULL AS VARCHAR) AS role,
-           CAST(NULL AS VARCHAR) AS rank,
-           CAST(NULL AS VARCHAR) AS wait,
-           CAST(NULL AS VARCHAR) AS stat,
-           CAST(NULL AS VARCHAR) AS disposition,
-           CAST(NULL AS VARCHAR) AS clock_domain,
-           CAST(NULL AS VARCHAR) AS parent,
-           CAST(NULL AS VARCHAR) AS root,
-           CAST(NULL AS DOUBLE) AS weights_step,
            value AS sum_value,
            CAST(1 AS BIGINT) AS sample_count,
            value AS min_value,
@@ -362,18 +348,6 @@ WITH selected AS (
 ), percentiles AS (
     SELECT 'percentile' AS statistic,
            t, name, execution_uid,
-           CAST(NULL AS VARCHAR) AS work_kind,
-           CAST(NULL AS VARCHAR) AS phase,
-           CAST(NULL AS VARCHAR) AS outcome,
-           CAST(NULL AS VARCHAR) AS role,
-           CAST(NULL AS VARCHAR) AS rank,
-           CAST(NULL AS VARCHAR) AS wait,
-           CAST(NULL AS VARCHAR) AS stat,
-           CAST(NULL AS VARCHAR) AS disposition,
-           CAST(NULL AS VARCHAR) AS clock_domain,
-           CAST(NULL AS VARCHAR) AS parent,
-           CAST(NULL AS VARCHAR) AS root,
-           CAST(NULL AS DOUBLE) AS weights_step,
            SUM(value) AS sum_value,
            COUNT(value) AS sample_count,
            MIN(value) AS min_value,
@@ -387,8 +361,8 @@ WITH selected AS (
     GROUP BY 2, 3, 4
 )
 SELECT * FROM aggregates
-UNION ALL SELECT * FROM latest
-UNION ALL SELECT * FROM percentiles
+UNION ALL BY NAME SELECT * FROM latest
+UNION ALL BY NAME SELECT * FROM percentiles
 ORDER BY t, name, execution_uid
 LIMIT {RL_ATTEMPT_MAX_CORE_ROWS + 1}
 """.strip()
