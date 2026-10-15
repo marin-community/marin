@@ -12,7 +12,7 @@ import tarfile
 import tempfile
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 from shellbox.backends.local.machine import NPROC_HEADROOM, LocalMachine, LocalMachineFactory, SandboxUnavailable
@@ -28,6 +28,7 @@ from shellbox.machine import (
     ExitReason,
     HostImage,
     MachineSpec,
+    Mount,
     NetworkPolicy,
     PackageSpec,
     Result,
@@ -232,6 +233,26 @@ def test_host_image_adds_read_only_mount_and_program_path(tmp_path, factory):
     result = run_command(factory, Command(("grader-python",)), spec)
 
     assert (result.exit_code, result.stdout) == (0, b"mounted-runtime\n")
+
+
+def test_host_image_mounts_a_directory_read_only_at_another_guest_path(tmp_path, factory):
+    data = tmp_path / "english"
+    data.mkdir()
+    (data / "abbrev.tab").write_text("etc\n")
+    guest = PurePosixPath("/srv/fixture/data")
+    spec = MachineSpec(HostImage(mounts=(Mount(data, guest),)), workdir="/app")
+    script = f"cat {guest}/abbrev.tab; echo changed > {guest}/abbrev.tab 2>/dev/null || echo refused"
+
+    result = run_command(factory, Command(("sh", "-c", script)), spec)
+
+    assert (result.exit_code, result.stdout) == (0, b"etc\nrefused\n"), result.stderr
+    assert (data / "abbrev.tab").read_text() == "etc\n"
+
+
+def test_a_mount_inside_a_host_system_directory_is_refused(tmp_path, factory):
+    spec = MachineSpec(HostImage(mounts=(Mount(tmp_path, PurePosixPath("/usr/local/share/fixture")),)), workdir="/app")
+    with pytest.raises(UnsupportedMachineSpec, match="system directory"):
+        asyncio.run(factory.create(spec))
 
 
 def test_timeout_kills_the_command_and_its_descendants(factory):

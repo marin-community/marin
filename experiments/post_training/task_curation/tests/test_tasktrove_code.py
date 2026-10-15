@@ -33,13 +33,13 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import solve_script
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import OUTPUT_PATH
+from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.tasktrove.harbor_export import (
     harbor_payload,
     harbor_record,
 )
 from experiments.post_training.task_curation.tests.conversion import (
-    BASE_IMAGE,
     convert_row,
     converted_task,
     fixture_context,

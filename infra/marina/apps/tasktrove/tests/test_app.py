@@ -129,6 +129,18 @@ def test_task_metadata_and_archive_are_served_by_row(tmp_path) -> None:
     assert archive.headers["content-disposition"] == 'attachment; filename="task-0.tar.gz"'
 
 
+def test_filters_reuse_metadata_after_storage_becomes_unavailable(tmp_path) -> None:
+    api = client(tmp_path)
+    assert api.get("/tasks").json()["total"] == 3
+    (tmp_path / "tasks" / "part-00000.parquet").unlink()
+
+    response = api.get("/tasks", params={"tag": "calendar", "query": "002"})
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert [row["path"] for row in response.json()["rows"]] == ["calendar-002"]
+
+
 def test_task_api_rejects_rows_outside_the_parquet(tmp_path) -> None:
     api = client(tmp_path)
 

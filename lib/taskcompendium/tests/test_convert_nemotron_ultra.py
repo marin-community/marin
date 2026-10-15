@@ -109,14 +109,26 @@ def test_agent_and_text_requests_admit_only_their_grading_agents():
     assert isinstance(text_request(without_tools, ("fixture_agent",)), BlendRequest)
 
 
-@pytest.mark.parametrize(
-    "duplicate",
-    [TOOL, {**TOOL, "parameters": {"type": "object"}}, {"type": "function", "function": TOOL}],
-    ids=["identical", "different-schema", "nested"],
-)
-def test_blend_request_rejects_duplicate_advertised_functions_as_source_defect(duplicate):
+@pytest.mark.parametrize("duplicate", [TOOL, {"type": "function", "function": TOOL}], ids=["flat", "nested"])
+def test_blend_request_removes_identical_duplicate_advertised_functions(duplicate):
     result = blend_request(
         row(responses_create_params={"input": [{"role": "user", "content": "Find x."}], "tools": [TOOL, duplicate]})
+    )
+    assert isinstance(result, BlendRequest)
+    assert result.tools == (
+        FunctionDefinition(name="lookup", parameters=TOOL["parameters"], description="Look up a value."),
+    )
+    assert [(change.field, change.replacement) for change in result.changes] == [("tools[1]", "Removed")]
+
+
+def test_blend_request_rejects_conflicting_duplicate_advertised_functions_as_source_defect():
+    result = blend_request(
+        row(
+            responses_create_params={
+                "input": [{"role": "user", "content": "Find x."}],
+                "tools": [TOOL, {**TOOL, "parameters": {"type": "object"}}],
+            }
+        )
     )
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason, result.detail) == (

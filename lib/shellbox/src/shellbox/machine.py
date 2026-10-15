@@ -5,7 +5,7 @@
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import ClassVar, Protocol, runtime_checkable
 
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage
@@ -123,11 +123,23 @@ class PackageSpec:
 
 
 @dataclass(frozen=True)
+class Mount:
+    """A host file or directory that commands see read-only at ``guest``."""
+
+    host: Path
+    guest: PurePosixPath
+
+
+@dataclass(frozen=True)
 class HostImage:
-    """The host's programs, with optional per-machine read-only mounts and program paths."""
+    """The host's programs, with optional per-machine read-only mounts and program paths.
+
+    ``read_only`` directories appear at their own host paths; each ``Mount`` appears at its guest path.
+    """
 
     read_only: tuple[Path, ...] = ()
     bin_dirs: tuple[Path, ...] = ()
+    mounts: tuple[Mount, ...] = ()
 
 
 @dataclass(frozen=True)

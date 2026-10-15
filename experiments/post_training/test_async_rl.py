@@ -56,14 +56,19 @@ def test_rollout_overrides_change_the_run_identity(monkeypatch) -> None:
 
 @pytest.mark.timeout(180)  # A cold cache must install the locked CPU-safe launcher dependencies.
 @pytest.mark.parametrize(
-    ("preset", "training_type"),
-    [(async_rl.DEFAULT, "async"), (async_rl.SMOKE_PRESET, "async"), (async_rl.ON_POLICY, "sync")],
-    ids=["default", "smoke", "on-policy"],
+    ("preset", "training_type", "settings"),
+    [
+        (async_rl.DEFAULT, "async", ()),
+        (async_rl.SMOKE_PRESET, "async", ()),
+        (async_rl.ON_POLICY, "sync", ()),
+        (async_rl.DEFAULT, "async", ("trainer.max_steps=3", "trainer.eval_interval=2")),
+    ],
+    ids=["default", "smoke", "on-policy", "off-boundary-terminal"],
 )
-def test_launcher_composes_pinned_rollout_buffer_config(preset, training_type, tmp_path, monkeypatch) -> None:
+def test_launcher_composes_pinned_rollout_buffer_config(preset, training_type, settings, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
     monkeypatch.setattr(async_rl, "username_segment", lambda: "alice")
-    run = async_rl.build_run(SNOWBALL_POLICY, preset, version="2026.09.18")
+    run = async_rl.build_run(SNOWBALL_POLICY, preset, version="2026.09.18", settings=settings)
     launch = run.rl.build_config(StepContext.for_fingerprint(run.rl.runtime_args, run.rl.deps))
     path = tmp_path / "launch.yaml"
     path.write_text(launch.launch_config_yaml)
@@ -72,10 +77,10 @@ def test_launcher_composes_pinned_rollout_buffer_config(preset, training_type, t
     bootstrap = command[: command.index("marinskyrl")]
     result = subprocess.run(
         [*bootstrap, "python", "-c", COMPOSE_LAUNCH, str(path)],
-        check=True,
         capture_output=True,
         text=True,
     )
+    assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
         "entrypoint": "skyrl_train.entrypoints.main_base",
         "training_type": training_type,

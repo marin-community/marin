@@ -3,20 +3,24 @@
 
 """Build lock-only grading environments shared by curation and rollouts.
 
-Each runtime contains a managed CPython, locked packages, verifyit, and declared NLTK data.
-Bubblewrap mounts the built root read-only. System packages come from the host;
-environments needing other system packages require an image.
+Each runtime contains a managed CPython, locked packages, verifyit, and the files the environment
+places at absolute paths; it also carries the environment's variables. Bubblewrap mounts the built
+root read-only and each file at its path. System packages come from the host; environments needing
+other system packages require an image.
 """
 
 import fcntl
 import hashlib
+import io
 import json
 import shutil
 import stat
 import subprocess
+import tarfile
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import cache, cached_property
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import verifyit
@@ -27,16 +31,45 @@ from shellbox.backends.local.python_environment import (
     PythonEnvironment,
     build_python_environment,
 )
-from shellbox.machine import Backend, HostImage, MachineFactory, MachineSpec, NetworkPolicy
+from shellbox.machine import Backend, HostImage, MachineFactory, MachineSpec, Mount, NetworkPolicy
 
 from taskcompendium.models import DEFAULT_WORKSPACE, EnvironmentRequirements, require_resolved_environment
 
 RUNTIME_PACKAGES = (Path(verifyit.__file__).parent,)
 LOCK_FILE = "requirements.lock"
+FILES_ARCHIVE = "files.tar"
+"""The environment's placed files, stored beside the lock as a tar of paths relative to ``/``."""
+ENVIRONMENT_MANIFEST = "environment.json"
+"""An ``EnvironmentManifest`` as JSON, stored beside the lock when the environment places files or sets variables."""
 RUNTIME_PTH = "task-curation-runtime.pth"
 IDENTITY_CHARS = 16
 REGULAR_MODE = "100644"
 EXECUTABLE_MODE = "100755"
+
+
+@dataclass(frozen=True)
+class EnvironmentManifest:
+    """What a worker needs beyond the lock: the placed files' paths and archive digest, and the variables."""
+
+    files: tuple[str, ...] = ()
+    files_sha256: str | None = None
+    """The SHA-256 of ``files.tar``, so a changed archive at the same paths builds a new worker environment."""
+    env: Mapping[str, str] = field(default_factory=dict)
+
+
+def dump_manifest(manifest: EnvironmentManifest) -> str:
+    return json.dumps(
+        {
+            "files": sorted(manifest.files),
+            "files_sha256": manifest.files_sha256,
+            "env": dict(sorted(manifest.env.items())),
+        }
+    )
+
+
+def load_manifest(text: str) -> EnvironmentManifest:
+    declared = json.loads(text)
+    return EnvironmentManifest(tuple(declared["files"]), declared["files_sha256"], declared["env"])
 
 
 class ContextFile(BaseModel):
@@ -75,26 +108,10 @@ def runtime_files() -> dict[str, list[dict[str, str]]]:
     return {package.name: [file.model_dump() for file in context_files(package)] for package in RUNTIME_PACKAGES}
 
 
-def nltk_packages(data: tuple[str, ...]) -> tuple[str, ...]:
-    """The NLTK packages named by an environment's data entries."""
-    return tuple(entry.removeprefix("nltk:") for entry in data)
-
-
-class LockEnvironment(BaseModel):
-    """Runtime fields from a curation environment artifact's result."""
-
-    lock_sha256: str
-    data: tuple[str, ...]
-
-
-class _EnvironmentRecord(BaseModel):
-    result: LockEnvironment
-
-
 COMPLETE_MARKER = ".complete"
 ENVIRONMENT_DIRECTORY = "env"
 RUNTIME_DIRECTORY = "runtime"
-NLTK_DATA_DIRECTORY = Path("share") / "nltk_data"
+FILES_DIRECTORY = "files"
 
 
 def _runtime_parent() -> Path:
@@ -103,28 +120,45 @@ def _runtime_parent() -> Path:
     return cache / "task-curation" if cache.is_mount() else Path("/tmp")
 
 
+def extract_files(archive: bytes, directory: Path) -> None:
+    """Unpack the placed files' tar under ``directory``; its members are paths relative to ``/``."""
+    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+        for member in tar.getmembers():
+            name = PurePosixPath(member.name)
+            if name.is_absolute() or ".." in name.parts:
+                raise ValueError(f"{FILES_ARCHIVE} member escapes the files directory: {member.name}")
+        tar.extractall(directory, filter="data")
+
+
 @dataclass(frozen=True)
 class LocalRuntime:
     """A Python environment under ``parent`` built from the lock at ``lock_url``.
 
-    ``lock_sha256`` is the digest the environment's artifact records for the lock and ``data`` the
-    downloads it names. The environment's directory is named by its identity, so a changed lock builds
-    a new one beside the old and environments with the same packages share one.
+    ``lock_sha256`` is the digest of the lock, ``manifest`` names the absolute paths the environment places
+    files at, from the ``files.tar`` beside the lock, with that archive's digest, and the variables graders
+    run with. The environment's directory is named by its identity, so a changed lock or archive builds a
+    new one beside the old and environments with the same packages, files and env share one.
     """
 
     lock_url: str
     lock_sha256: str
-    data: tuple[str, ...]
+    manifest: EnvironmentManifest = EnvironmentManifest()
     parent: Path = field(default_factory=_runtime_parent)
+
+    @property
+    def env(self) -> Mapping[str, str]:
+        return self.manifest.env
 
     @cached_property
     def identity(self) -> str:
-        """The SHA-256 of the lock, the data, the Python version and the runtime packages' files."""
+        """The SHA-256 of the lock, the placed files' paths and archive, the env, the Python version and the runtime."""
         return hashlib.sha256(
             json.dumps(
                 {
                     "lock_sha256": self.lock_sha256,
-                    "data": sorted(self.data),
+                    "files": sorted(self.manifest.files),
+                    "files_sha256": self.manifest.files_sha256,
+                    "env": dict(self.manifest.env),
                     "python": DEFAULT_PYTHON_VERSION,
                     "runtime": runtime_files(),
                 },
@@ -145,9 +179,10 @@ class LocalRuntime:
         return self.environment.bin_dir
 
     @property
-    def variables(self) -> dict[str, str]:
-        """Environment variables graders need to find the environment's data."""
-        return {"NLTK_DATA": str(self.root / NLTK_DATA_DIRECTORY)} if nltk_packages(self.data) else {}
+    def mounts(self) -> tuple[Mount, ...]:
+        """Each placed file, from its copy under the root to the path the environment declares."""
+        files = self.root / FILES_DIRECTORY
+        return tuple(Mount(files / path.removeprefix("/"), PurePosixPath(path)) for path in self.manifest.files)
 
     def ensure_built(self) -> None:
         """Build the environment unless a complete one exists; concurrent callers on one host build it once.
@@ -169,9 +204,6 @@ class LocalRuntime:
         self.root.mkdir(parents=True)
         lock = self.root / LOCK_FILE
         lock.write_bytes(StoragePath(self.lock_url).read_bytes())
-        digest = hashlib.sha256(lock.read_bytes()).hexdigest()
-        if digest != self.lock_sha256:
-            raise RuntimeError(f"{self.lock_url} has SHA-256 {digest}; its artifact records {self.lock_sha256}")
         python = str(build_python_environment(self.environment.root, lock, DEFAULT_PYTHON_VERSION).python)
         # A built image copies each runtime package into its runtime directory and puts that on sys.path.
         runtime = self.root / RUNTIME_DIRECTORY
@@ -184,18 +216,20 @@ class LocalRuntime:
             text=True,
         ).stdout.strip()
         (Path(purelib) / RUNTIME_PTH).write_text(f"{runtime}\n")
-        packages = nltk_packages(self.data)
-        if packages:
-            data = self.root / NLTK_DATA_DIRECTORY
-            subprocess.run([python, "-m", "nltk.downloader", "-d", str(data), *packages], check=True)
+        if self.manifest.files:
+            archive = (StoragePath(self.lock_url).parent / FILES_ARCHIVE).read_bytes()
+            if hashlib.sha256(archive).hexdigest() != self.manifest.files_sha256:
+                raise ValueError(f"{FILES_ARCHIVE} beside {self.lock_url} does not match the manifest digest")
+            extract_files(archive, self.root / FILES_DIRECTORY)
 
 
 @cache
 def local_runtime(lock_url: str) -> LocalRuntime:
-    """The runtime for a built lock, from the environment artifact the lock belongs to."""
-    record = StoragePath(lock_url).parent / ".artifact.json"
-    built = _EnvironmentRecord.model_validate_json(record.read_text()).result
-    return LocalRuntime(lock_url, built.lock_sha256, tuple(built.data))
+    """The runtime for a built lock and the environment manifest beside it, if any."""
+    lock = StoragePath(lock_url)
+    stored = lock.parent / ENVIRONMENT_MANIFEST
+    manifest = load_manifest(stored.read_text()) if stored.exists() else EnvironmentManifest()
+    return LocalRuntime(lock_url, hashlib.sha256(lock.read_bytes()).hexdigest(), manifest)
 
 
 @cache

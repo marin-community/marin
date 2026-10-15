@@ -373,20 +373,59 @@ def landing_page(apps: list[AppManifest], applets: list[dict[str, object]] | Non
         *({"title": app.title, "description": app.description, "path": app.path} for app in apps),
         *(applets or []),
     ]
-    rows = "".join(
-        f'<li><a href="{html.escape(str(app["path"]))}">{html.escape(str(app["title"]))}</a>'
-        f'<span>{html.escape(str(app["description"]))}</span></li>'
+    entries.sort(key=lambda entry: str(entry["title"]).casefold())
+    cards = "".join(
+        f'<li><a class="card" href="{html.escape(str(app["path"]))}">'
+        f'<span class="card-heading"><span class="app-name">{html.escape(str(app["title"]))}</span>'
+        '<span class="arrow" aria-hidden="true">↗</span></span>'
+        f'<span class="description">{html.escape(str(app["description"]))}</span>'
+        '<span class="open">Open app <span aria-hidden="true">→</span></span></a></li>'
         for app in entries
     )
+    directory = f'<ul class="directory">{cards}</ul>' if entries else '<p class="empty">No apps published yet.</p>'
     return (
-        "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-        "<title>Marina</title>"
-        "<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem}"
-        "h1{font-size:1.2rem}ul{list-style:none;padding:0}li{padding:.6rem 0;border-top:1px solid #ddd}"
-        "li a{font-weight:600;display:block}li span{color:#666}"
-        "@media(prefers-color-scheme:dark){body{background:#15171a;color:#ece9e1}"
-        "li{border-color:#333}li span{color:#999}}"
-        "</style><h1>Marina</h1><ul>" + rows + "</ul>"
+        """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Marina — Apps</title>
+<style>
+:root { color-scheme: light dark; --ink:#17181c; --paper:#fcfbf8; --panel:#fff;
+  --edge:#e2ded2; --muted:#6d6a60; --mark:#1f5c4a; }
+* { box-sizing:border-box; }
+body { margin:0; font:16px/1.6 ui-sans-serif,system-ui,sans-serif; background:var(--paper); color:var(--ink); }
+header { padding:1rem max(1.5rem,calc((100% - 72rem)/2)); border-bottom:1px solid var(--edge); background:var(--panel); }
+.wordmark { color:var(--ink); text-decoration:none; font-weight:650; letter-spacing:.02em; }
+main { max-width:75rem; margin:0 auto; padding:4rem 1.5rem; }
+.eyebrow { color:var(--mark); text-transform:uppercase; letter-spacing:.14em; font-size:.75rem; font-weight:650; }
+h1 { font-size:clamp(2.25rem,5vw,3.5rem); line-height:1.15; letter-spacing:-.045em;
+  margin:.75rem 0 1rem; font-weight:600; }
+.intro { color:var(--muted); max-width:36rem; margin:0; font-size:1.1rem; }
+.list-heading { display:flex; align-items:baseline; gap:.75rem; margin:3rem 0 1rem; }
+h2 { font-size:1rem; margin:0; font-weight:600; }
+.count { font-size:.8rem; color:var(--muted); }
+.directory { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,20rem),1fr));
+  gap:1rem; padding:0; margin:0; list-style:none; }
+.card { display:flex; flex-direction:column; height:100%; padding:1.5rem; border:1px solid var(--edge);
+  border-radius:.85rem; background:var(--panel); text-decoration:none; color:inherit; }
+.card:hover { border-color:var(--mark); box-shadow:0 4px 18px rgb(0 0 0 / .04); }
+a:focus-visible { outline:3px solid var(--mark); outline-offset:4px; }
+.card-heading { display:flex; align-items:baseline; justify-content:space-between; gap:1rem; }
+.app-name { font-size:1.2rem; font-weight:600; letter-spacing:-.02em; overflow-wrap:anywhere; }
+.arrow { color:var(--muted); }
+.description { color:var(--muted); font-size:.9rem; margin:.65rem 0 1.5rem; overflow-wrap:anywhere; }
+.open { margin-top:auto; color:var(--mark); font-size:.8rem; font-weight:600; }
+.empty { color:var(--muted); padding:2rem 0; }
+@media (prefers-color-scheme:dark) { :root { --ink:#ece9e1; --paper:#15171a; --panel:#1c1f22;
+  --edge:#2f3336; --muted:#aaa79e; --mark:#6cc4a5; } }
+@media (max-width:40rem) { main { padding:2.5rem 1.25rem; } header { padding:1rem 1.25rem; } .card { padding:1.25rem; } }
+</style></head><body><header><a class="wordmark" href="/">Marina</a></header>
+<main><p class="eyebrow">The Marin workspace</p><h1>A place for your work.</h1>
+<p class="intro">Explore data, follow experiments, and plan what comes next. Your team's tools, together in Marina.</p>
+<div class="list-heading"><h2>All apps</h2><span class="count">"""
+        + str(len(entries))
+        + """ available</span></div>
+"""
+        + directory
+        + "</main></body></html>"
     )
 
 
