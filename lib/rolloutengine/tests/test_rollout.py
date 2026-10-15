@@ -1379,7 +1379,7 @@ async def test_context_limit_keeps_served_evidence_and_grades_only_completed_ope
     [
         # Token IDs charge 3 tokens, then 6: the second request reaches the budget.
         (None, 9, 2, "budget_reached"),
-        # Requests charge 2 each; the third leaves 8 + 2 >= 9 only after the last permitted turn.
+        # Requests charge 2 each; after the third, 6 + 2 < 10, so only the turn limit stops the rollout.
         (TokenUsage(prompt_tokens=1, completion_tokens=1), 10, 3, "max_turns"),
         # The third and last permitted request leaves no room for another: the budget takes precedence.
         (TokenUsage(prompt_tokens=1, completion_tokens=1), 8, 3, "budget_reached"),
