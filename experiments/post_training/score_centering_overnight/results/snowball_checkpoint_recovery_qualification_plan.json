@@ -1,7 +1,7 @@
 {
   "scope": "Three-phase five-node engineering qualification for the checkpoint-recovery candidate. Initial save5 is submitted; both restore phases remain gated. It cannot replace scientific main1200 or stale calibration130.",
   "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
-  "status": "Exact173 initial save5 all native and12152 original-response gates PASS. Five-node BATCH restore5-to7 is now controller-confirmed submitted; two new updates6/7 plus eval7only and all native/restoration/response gates pending. Third phase remains unsubmitted.",
+  "status": "Exact173 initial save5 passed all native and12152 original grades. Five-node RNO BATCH restore5-to7 physical0 is now allocated/running, started2026-10-15T22:30:30.022000+00:00. Actual checkpoint restoration, new6/7, skipped restored eval5/eval7only and all control/Flash/noise/membership/grade gates remain pending. Third phase remains unsubmitted; no scientific173 promotion.",
   "prerequisite": "Complete bounded Qwen periodic/noisy save2, restore2-to5, restore5-to7 qualification with real native state and behavior evidence.",
   "geometry": {
     "cluster": "cw-rno2a",
@@ -348,7 +348,66 @@
           "exit_code": "",
           "node_name": ""
         }
-      ]
+      ],
+      "latest_controller_attempt": 0,
+      "latest_task_attempts": [
+        {
+          "task_id": "/romain/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "b993c1b593e932f6",
+          "state": "3",
+          "exit_code": "",
+          "started_at_ms": "1792103430022",
+          "finished_at_ms": "",
+          "node_name": "g1cc352",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "7ad697c6726998af",
+          "state": "3",
+          "exit_code": "",
+          "started_at_ms": "1792103430022",
+          "finished_at_ms": "",
+          "node_name": "gf62afe",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/2",
+          "attempt_id": "0",
+          "attempt_uid": "7611f289aa6931e2",
+          "state": "3",
+          "exit_code": "",
+          "started_at_ms": "1792103430022",
+          "finished_at_ms": "",
+          "node_name": "g530748",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/3",
+          "attempt_id": "0",
+          "attempt_uid": "a98b6c00a99fa18d",
+          "state": "3",
+          "exit_code": "",
+          "started_at_ms": "1792103430022",
+          "finished_at_ms": "",
+          "node_name": "g538100",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/4",
+          "attempt_id": "0",
+          "attempt_uid": "ea7b540cfe983ec8",
+          "state": "3",
+          "exit_code": "",
+          "started_at_ms": "1792103430022",
+          "finished_at_ms": "",
+          "node_name": "g8364ba",
+          "terminal_reason": ""
+        }
+      ],
+      "actual_allocation_started": "2026-10-15T22:30:30.022000+00:00"
     },
     {
       "phase": "restore7",
@@ -418,7 +477,7 @@
       }
     ]
   },
-  "source_policy": "The submitted initial save remains frozen on afbe6cc36. Only the unsubmitted continuations use 173f626e6, which adds the tested native parser classification and optional evaluation-resume bookkeeping. The six listed noise, loss, context, Megatron strategy, original grader utility and dependency-lock files remain byte-identical; trainer.py deliberately changes checkpoint evaluation metadata and is not claimed identical.",
+  "source_policy": "All three phases in this exact-head qualification use frozen173f626e668ba9284e7a9a42354c1505cab22ad1. Earlier afbe6cc36 and0212 qualifications remain separate engineering evidence. The six listed noise, loss, context, Megatron strategy, original grader utility and dependency-lock files remain byte-identical; trainer.py deliberately changes checkpoint evaluation metadata and is not claimed identical. Scientific173 promotion requires all three native five-node phases and full response replays.",
   "source_compatibility_sha256": {
     "skyrl-train/skyrl_train/inference_engines/vllm/fixed_sampler_noise.py": "2e86d08aa514608890b342f43df85322a2f599461c6c152bc26be46f3c7c0bca",
     "skyrl-train/skyrl_train/objective/score_centering.py": "bdfa50f95408da1e229eed83a15cac9bba3f8782516381ddf56d2877b6708871",
@@ -436,7 +495,8 @@
     ],
     "same_original_bucket": true,
     "all_four_configurations_unsubmitted": true,
-    "source_unchanged": "173f626e668ba9284e7a9a42354c1505cab22ad1"
+    "source_unchanged": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+    "scope": "Historical unsubmitted placement/preflight observation; current submission and allocation state is recorded in phases."
   },
   "native_rno_prepare": {
     "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
@@ -446,5 +506,5 @@
   },
   "qwen_prerequisite_passed": true,
   "qwen_prerequisite_evidence": "results/qwen_periodic_checkpoint_recovery_qualification_complete.json",
-  "observed_controller_snapshot": "2026-10-15T18:00Z"
+  "observed_controller_snapshot": "2026-10-15T22:30:35Z"
 }

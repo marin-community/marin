@@ -68,7 +68,7 @@
         "node_name": "ge6b2c0",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending.",
+      "status": "Controller exit0; full physical249984 cohort verified, available original responses graded and native failure placeholders retained separately.",
       "archive_downloads_complete": true,
       "download_manifest": {
         "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s2-a0-01a126ce/download-manifest.json.gz",
@@ -86,7 +86,34 @@
         "native_failures": 0,
         "result_passed": null,
         "failure_published": false
-      }
+      },
+      "full_response_replay_passed": true,
+      "terminal_controller": {
+        "job_id": "/romain/score-grader-qwen-curriculum-tis-s2-a0-01a126ce",
+        "job_state": "4",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "576a948c03e5a1a54adb2d3688e77fe42ff1a34c15ec1bf4c14e38894b5b7d68",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-curriculum-tis-s2-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "64b622ed903c8c96",
+        "task_state": "4",
+        "exit_code": "0",
+        "started_at_ms": "1792096108972",
+        "finished_at_ms": "1792102574762",
+        "node_name": "ge6b2c0",
+        "terminal_reason": ""
+      },
+      "allocated_cpu_hours": 57.47368888888889,
+      "physical_records": 249984,
+      "actual_original_grade_calls": 249984,
+      "native_failure_placeholders": 0,
+      "completed_report": "sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce-regrading.json.gz"
     },
     {
       "job_id": "/romain/score-grader-qwen-advantages-sc-s0-a0-01a126ce",
@@ -155,7 +182,7 @@
         "node_name": "gb95c40",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending.",
+      "status": "Controller exit0; full physical249984 cohort verified, available original responses graded and native failure placeholders retained separately.",
       "archive_downloads_complete": true,
       "download_manifest": {
         "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-advantages-sc-s0-a0-01a126ce/download-manifest.json.gz",
@@ -173,7 +200,34 @@
         "native_failures": 0,
         "result_passed": null,
         "failure_published": false
-      }
+      },
+      "full_response_replay_passed": true,
+      "terminal_controller": {
+        "job_id": "/romain/score-grader-qwen-advantages-sc-s0-a0-01a126ce",
+        "job_state": "4",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "edabdb79950661614727e4ea0b3ac5405a6fb920b1b3c91ab494bd19b234857a",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-advantages-sc-s0-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "676dce2769a634c4",
+        "task_state": "4",
+        "exit_code": "0",
+        "started_at_ms": "1792096114050",
+        "finished_at_ms": "1792102667210",
+        "node_name": "gb95c40",
+        "terminal_reason": ""
+      },
+      "allocated_cpu_hours": 58.25031111111111,
+      "physical_records": 249984,
+      "actual_original_grade_calls": 249983,
+      "native_failure_placeholders": 1,
+      "completed_report": "sc-qwen-transfer-advantages-sc-s0-main-rno-a1-01a126ce-regrading.json.gz"
     },
     {
       "job_id": "/romain/score-grader-qwen-advantages-sc-s1-a0-01a126ce",
@@ -242,7 +296,7 @@
         "node_name": "gb95f20",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending.",
+      "status": "Controller exit0; full physical249984 cohort verified, available original responses graded and native failure placeholders retained separately.",
       "archive_downloads_complete": true,
       "download_manifest": {
         "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-advantages-sc-s1-a0-01a126ce/download-manifest.json.gz",
@@ -260,7 +314,34 @@
         "native_failures": 0,
         "result_passed": null,
         "failure_published": false
-      }
+      },
+      "full_response_replay_passed": true,
+      "terminal_controller": {
+        "job_id": "/romain/score-grader-qwen-advantages-sc-s1-a0-01a126ce",
+        "job_state": "4",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "76763b9806617ff7312ddf380ce4a66da1506638684f08b85ba4e9be50eb9e87",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-advantages-sc-s1-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "e010899350303199",
+        "task_state": "4",
+        "exit_code": "0",
+        "started_at_ms": "1792096119811",
+        "finished_at_ms": "1792102595992",
+        "node_name": "gb95f20",
+        "terminal_reason": ""
+      },
+      "allocated_cpu_hours": 57.566053333333336,
+      "physical_records": 249984,
+      "actual_original_grade_calls": 249983,
+      "native_failure_placeholders": 1,
+      "completed_report": "sc-qwen-transfer-advantages-sc-s1-main-rno-a1-01a126ce-regrading.json.gz"
     }
   ],
   "total_requested_cpu": 96,
@@ -268,7 +349,7 @@
   "total_requested_gpu": 0,
   "maximum_archive_io_workers": 6,
   "first_complete_cpu_replay_proof": "qwen_curriculum300_first_cpu_complete_response_replay.json",
-  "status": "All3 wave3 native archive downloads complete and all identities verified;6IO workers released. Each currently has16384 physical records processed,zero discrepancies/native failures,20:50UTC. Full original-grade results remain pending; next bounded wave may submit.",
+  "status": "All3 wave3 CPU tasks completed exit0 and complete native300 cohorts verified:749952 physical records/749950 actual original grades/2 pre-existing native failure placeholders,zero grade discrepancies,all48 native evaluations matched. Actual173.2900533333CPU-hours/0H100-hours.",
   "native_bundle_validation_passed": true,
   "resource_board_ids": [
     1067,

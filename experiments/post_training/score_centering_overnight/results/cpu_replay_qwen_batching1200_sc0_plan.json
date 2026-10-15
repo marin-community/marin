@@ -1,0 +1,87 @@
+{
+  "scope": "First complete1200-update Qwen batching SCseed0 available-response replay. Actual native1200 audit,1200x32 training responses plus61x3012 evaluation responses,222132 total. Same already-qualified original CPU grader source/lock/packages/runner; this extends the replay horizon and batch size, without new training or duplicate of any healthy grader. All earlier bulk archive downloads and raw preservation are complete.",
+  "cases": [
+    {
+      "job_id": "/romain/score-grader-qwen-batching-sc-s0-a0-01a126ce",
+      "run_id": "sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce",
+      "arm": "sc-s0",
+      "workspace": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/score-grader-qwen-batching-sc-s0-a0-01a126ce-workspace",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "analysis_source": "213f2fed2a2954c50c973c742bfff998f9a2edef",
+      "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e",
+      "spec_sha256": "88c11cc18b13f919ae368b2c4ad4e324a7a048b9cba445bd6626501d14e9116a",
+      "requested_cpu": 32,
+      "requested_memory": "64GB",
+      "requested_disk": "50GB",
+      "requested_accelerators": 0,
+      "cpu_workers": 32,
+      "io_workers": 2,
+      "timeout_seconds": 43200,
+      "failure_retries": 0,
+      "preemption_retries": 0,
+      "expected_records": 222132,
+      "selected_archives": 9661,
+      "native_archive_bytes": 620658552,
+      "output_prefix": "marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-batching-sc-s0-a0-01a126ce",
+      "local_input_validation_passed": true,
+      "bundle": {
+        "bytes": 8239327,
+        "sha256": "b02020d1d61fdf1f96b07dd8eed20d98df2bb936094e9d07498dc131edc0ef35",
+        "spec_sha256": "88c11cc18b13f919ae368b2c4ad4e324a7a048b9cba445bd6626501d14e9116a",
+        "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e",
+        "all_input_files_verified": true
+      },
+      "native_bundle_validation_passed": true,
+      "native_submission_confirmed": true,
+      "retained_input_objects": {
+        "bundle": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-batching-sc-s0-a0-01a126ce/inputs/bundle.zip",
+          "bytes": 8239327,
+          "etag": "\"55cc98c5f04148c4ff3e97f5634e6114\"",
+          "sha256": "b02020d1d61fdf1f96b07dd8eed20d98df2bb936094e9d07498dc131edc0ef35"
+        },
+        "spec": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-batching-sc-s0-a0-01a126ce/inputs/spec.json",
+          "bytes": 157756,
+          "etag": "\"caade3b4a9196863067eb6ddd695bba6\"",
+          "sha256": "88c11cc18b13f919ae368b2c4ad4e324a7a048b9cba445bd6626501d14e9116a"
+        }
+      },
+      "controller_row": {
+        "job_id": "/romain/score-grader-qwen-batching-sc-s0-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "b02020d1d61fdf1f96b07dd8eed20d98df2bb936094e9d07498dc131edc0ef35",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-batching-sc-s0-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "522a2604b5e27137",
+        "task_state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792103128096",
+        "finished_at_ms": "",
+        "node_name": "ge6b2c0",
+        "terminal_reason": ""
+      },
+      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+    }
+  ],
+  "total_requested_cpu": 32,
+  "total_requested_memory_gib": 64,
+  "total_requested_gpu": 0,
+  "maximum_archive_io_workers": 2,
+  "first_complete_cpu_replay_proof": "qwen_curriculum300_first_cpu_complete_response_replay.json",
+  "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU. All9661 native archives/620658552bytes downloaded and original source/spec/archive identities verified. Full222132-response original-grader replay is running; final grade and evaluation-quality gates remain pending. The2 archiveIO workers are released.",
+  "native_bundle_validation_passed": true,
+  "resource_board_ids": [
+    1075,
+    1076
+  ],
+  "archive_downloads_complete": true,
+  "archive_downloads_evidence": "cpu-wave-status-20261015T2242-batching1200.json"
+}
