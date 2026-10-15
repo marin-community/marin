@@ -364,7 +364,7 @@ def build_evaluation_steps(batch: EvaluationBatch, execute: EvaluationStep) -> t
         StepSpec(
             name=f"eval/{batch.model.name}/{evaluation.identity.eval_ref.name}",
             override_output_path=prefix_join(batch.records_prefix, evaluation.identity.run_id),
-            fn=partial(execute, evaluation),
+            fn=lambda output_path, evaluation=evaluation: execute(evaluation, output_path),
             hash_attrs={
                 "run_id": evaluation.identity.run_id,
                 "group_id": batch.group_id,
