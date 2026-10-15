@@ -314,8 +314,9 @@ async def run_build(
         sampling: The sampling policy steps pass to ``model``.
         services: Machines, images, web tools, the ledger and the agent-loop settings.
         round: The build round, copied into ``WorkpieceBuildProvenance`` and the ledger.
-        research: Under ``ENFORCED``, the program needs a ``sources`` step returning ``Sources``
-            with a finding for every research item of ``proposal``.
+        research: Under ``ENFORCED``, a program for a proposal that lists research needs a ``sources``
+            step returning ``Sources`` with a finding for every research item; a proposal without
+            research needs no such step.
         invalidate: Step names to rerun even when the store holds their output.
         model_digest: Replaces ``build_model_digest(model, sampling, services)`` in every key.
 
@@ -324,9 +325,8 @@ async def run_build(
         BuildInfrastructureFailure: a step failed because of the host.
         ValueError: ``check_workpiece_id`` refused ``workpiece_id``.
     """
-    if research is ResearchRequirement.ENFORCED and (
-        SOURCES_STEP not in program.steps or program.steps[SOURCES_STEP].output_type is not Sources
-    ):
+    researches = research is ResearchRequirement.ENFORCED and bool(proposal.header.research)
+    if researches and (SOURCES_STEP not in program.steps or program.steps[SOURCES_STEP].output_type is not Sources):
         raise BuildFailure(f"a build that researches its proposal needs a {SOURCES_STEP!r} step returning Sources")
     store = RLEnvBuildStepStore(store_root, workpiece_id)
     keyed_model = build_model_digest(model, sampling, services) if model_digest is None else model_digest
@@ -351,7 +351,7 @@ async def run_build(
             steps=outcomes,
         ),
     )
-    if research is ResearchRequirement.ENFORCED:
+    if researches:
         check_research(proposal, step_output(draft, store_root, SOURCES_STEP, Sources))
     _write_draft(round_dir / DRAFT_DIR, draft)
     return draft
