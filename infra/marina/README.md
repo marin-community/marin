@@ -231,8 +231,17 @@ to that revision. Existing URLs on `MARINA_APPLET_ORIGIN` remain valid.
 ## Deploying
 
 ```bash
-cd infra/marina && uv run pulumi up
+gh workflow run ops-pulumi-rollout.yaml --ref main -f service=marina
 ```
+
+Production updates require a clean checkout at the current remote `origin/main`
+commit. The workflow checks out main when the deploy job starts, including when
+an older run containing these safeguards is rerun. Workflow definitions from
+before this guard and direct Cloud Run writes remain privileged bypasses.
+A local `marin-deploy marina rollout` or direct `pulumi up`
+applies the same guard; Pulumi previews and non-production stacks remain usable
+from branches. Main can advance between checkout and the guard; retry from its
+new tip if the guard rejects the update.
 
 The image builds from the repository root (`Dockerfile.dockerignore` allowlists
 what it copies). `pulumi up` builds the image, creates one Cloud Run job and
@@ -256,6 +265,18 @@ to the repository, service, and bucket this stack creates, so a first deployment
 runs this stack as a privileged operator and then applies the `marin` stack;
 after that, apply `marin` whenever the grants change.
 
+Checked-in apps share one image and update together. A restart preserves that
+image; rebuilding from a checkout is a deployment. Use `marina dev` or
+`marina publish --local` for branch work. Applet bundles and their current
+revision pointers live in Postgres and survive runtime deployments and restarts.
+An applet-only PR runs Marina tests but does not select a shared-image rollout.
+
+If Pulumi reports a lock, inspect its owning rollout or process before recovery.
+After confirming that owner has stopped, run `cd infra/marina && uv run pulumi
+cancel --stack marin-marina`, then dispatch the main rollout. A lock's age alone
+does not establish that it is abandoned. Never cancel a live update to make room
+for another deploy. See the [October 2026 incident](https://marina.oa.dev/echo/wiki/734).
+
 Data under the bucket is uploaded by hand when an app's files change:
 
 ```bash
@@ -263,6 +284,44 @@ gsutil -m rsync -r infra/marina/.data/tasktrove gs://marin-marina/tasktrove
 ```
 
 ## Publishing an applet
+
+For maintained applets, bind an existing UUID to its checked-in source directory
+with a client-side `release.toml`:
+
+```toml
+applet_id = "01234567-89ab-cdef-0123-456789abcdef"
+```
+
+Release from a clean checkout of the current remote main:
+
+```bash
+uv run marina release-status my-applet --json
+uv run marina applets versions 01234567-89ab-cdef-0123-456789abcdef --json
+uv run marina release my-applet --base-version <current> --json
+```
+
+`release` builds the frontend, validates the package and backend import, and
+updates only the configured UUID with the explicit expected current version.
+It preserves the applet's access mode. Static bundles without a build command
+must have all packaged files tracked in Git; backend files must always be
+tracked. It adds `marina-release.json` to the immutable frontend package with
+the commit, source path and source subtree hash. That metadata is public when
+the applet is public; it contains no publisher identity.
+
+`release-status` compares subtree hashes, so unrelated repository commits do
+not report applet drift. It reports `unrecorded` for older packages without
+metadata, `modified` for local source edits, `different` for another committed
+source tree, and `current` for a matching tree. Compare reported commits with
+`git log <released-commit>..HEAD -- <source-path>` when both commits are local.
+Status compares against the checkout's HEAD; fetch main before using it to
+assess production freshness.
+
+`publish` refuses remote updates from directories containing `release.toml`;
+local previews and dry runs still work. This is an operator safeguard, not a
+server authorization boundary: old clients and direct HTTP uploads can bypass
+it. Existing owner/operator permissions and version checks still apply.
+Applets without a release declaration retain the standalone publishing flow
+below. A source merge never publishes an applet or loads its application data.
 
 An applet is a small application uploaded without rebuilding Marina. Its UUID
 is stable; each publish creates a numbered revision. Every applet gets a

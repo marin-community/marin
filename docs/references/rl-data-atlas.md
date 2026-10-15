@@ -62,16 +62,23 @@ Publish code when the schema or UI changes, then load data explicitly:
 
 ```bash
 uv run marina validate infra/marina/applets/rl_data_catalog
+uv run marina release-status infra/marina/applets/rl_data_catalog --json
 uv run marina applets versions fb11c931-5861-4878-8bb5-a964d652b45f --json
-uv run marina publish infra/marina/applets/rl_data_catalog \
-  --update fb11c931-5861-4878-8bb5-a964d652b45f --base-version CURRENT_VERSION
+uv run marina release infra/marina/applets/rl_data_catalog --base-version CURRENT_VERSION
 
 uv run python infra/marina/applets/rl_data_catalog/load.py \
   --catalog-root CATALOG_ROOT \
   --applet-id fb11c931-5861-4878-8bb5-a964d652b45f
 ```
 
-The first code update requires the applet's publisher. Run the loader in the
+`release.toml` binds this directory to the existing applet. Release requires a
+clean checkout at the current remote main and the applet's publisher or a
+configured operator. A Marina image deployment does not publish Atlas. The
+release records its source commit and subtree hash in the immutable package;
+`release-status` reports whether that tree matches this checkout.
+
+Coordinate the code release and data load: the new API returns 503 until a
+catalog has been selected. Run the loader in the
 catalog's storage region. It reads through `CurationCatalog`, sends byte-bounded
 SQL batches, checks sample and packet coverage, then selects the load with one
 UPDATE. An unchanged snapshot skips loading. One operator runs updates; concurrent

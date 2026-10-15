@@ -306,7 +306,7 @@ def read_applet_package(payload: bytes) -> AppletPackage:
     return _validate_package_files(files)
 
 
-def package_applet(app_dir: Path) -> bytes:
+def package_applet(app_dir: Path, *, extra_files: dict[str, bytes] | None = None) -> bytes:
     """Build the validated tarball sent by ``marina publish``."""
     paths = [app_dir / APPLET_MANIFEST]
     for directory in (app_dir / "dist", app_dir / "server"):
@@ -324,6 +324,12 @@ def package_applet(app_dir: Path) -> bytes:
             if path.is_symlink() or not path.is_file():
                 raise ValueError(f"package entry {path} is not a regular file")
             archive.add(path, arcname=path.relative_to(app_dir).as_posix(), recursive=False)
+        for name, body in (extra_files or {}).items():
+            if (app_dir / name).exists():
+                raise ValueError(f"generated package entry {name!r} already exists in the source directory")
+            member = tarfile.TarInfo(name)
+            member.size = len(body)
+            archive.addfile(member, io.BytesIO(body))
     payload = buffer.getvalue()
     read_applet_package(payload)
     return payload

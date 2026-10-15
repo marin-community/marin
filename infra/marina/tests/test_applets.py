@@ -5,6 +5,7 @@ import gzip
 import io
 import json
 import shutil
+import subprocess
 import tarfile
 import uuid
 from pathlib import Path
@@ -22,6 +23,137 @@ from sqlalchemy import text
 from starlette.testclient import TestClient
 
 DEMO_APPLET = Path(__file__).parents[1] / "examples" / "problem-set-applet"
+
+
+@pytest.fixture(params=["static", "build"])
+def release_checkout(tmp_path: Path, request: pytest.FixtureRequest) -> Path:
+    repo = tmp_path / "checkout"
+    app = repo / "demo"
+    (app / "dist").mkdir(parents=True)
+    (app / "dist/index.html").write_text("<h1>Released app</h1>")
+    (app / "release.toml").write_text('applet_id = "00000000-0000-0000-0000-000000000001"\n')
+    manifest = 'title = "Release test"\ndescription = "Test"\n'
+    if request.param == "build":
+        manifest += 'build_command = "python build.py"\n'
+        (app / ".gitignore").write_text("dist/\n")
+        (app / "build.py").write_text(
+            "import shutil\nfrom pathlib import Path\n"
+            "shutil.rmtree('dist')\nPath('dist').mkdir()\n"
+            "Path('dist/index.html').write_text('<h1>Built app</h1>')\n"
+        )
+    (app / "applet.toml").write_text(manifest)
+    for arguments in (
+        ["init", "-b", "main"],
+        ["config", "user.email", "test@example.com"],
+        ["config", "user.name", "Test"],
+        ["add", "."],
+        ["commit", "-m", "initial"],
+        ["init", "--bare", str(tmp_path / "origin.git")],
+        ["remote", "add", "origin", str(tmp_path / "origin.git")],
+        ["push", "origin", "HEAD:main"],
+    ):
+        subprocess.run(["git", *arguments], cwd=repo, check=True, capture_output=True)
+    return app
+
+
+def test_release_records_source_and_status_ignores_unrelated_commits(
+    release_checkout: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    metadata = None
+
+    def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
+        nonlocal metadata
+        if method == "POST":
+            assert url.endswith("/api/marina/applets/00000000-0000-0000-0000-000000000001")
+            assert kwargs["params"] == {"base_version": 7}
+            package = read_applet_package(kwargs["data"])
+            metadata = json.loads(package.files["dist/marina-release.json"])
+            assert package.files["dist/index.html"] in {b"<h1>Released app</h1>", b"<h1>Built app</h1>"}
+            return json_response({"id": "00000000-0000-0000-0000-000000000001", "version": 8, "path": "/a/id/v/8/"})
+        if url.endswith("marina-release.json"):
+            response = json_response(metadata if metadata is not None else {"detail": "applet file not found"})
+            if metadata is None:
+                response.status_code = 404
+            return response
+        return json_response({"current_version": 8, "authenticated_url": "http://localhost:8080/a/id/"})
+
+    monkeypatch.setattr("marina.client.requests.request", http_request)
+    runner = CliRunner()
+    status_args = ["release-status", str(release_checkout), "--url", "http://localhost:8080", "--json"]
+    before = runner.invoke(cli, status_args)
+    assert before.exit_code == 0, before.output
+    assert json.loads(before.output)["state"] == "unrecorded"
+
+    result = runner.invoke(
+        cli, ["release", str(release_checkout), "--base-version", "7", "--url", "http://localhost:8080", "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["source"] == metadata
+    assert not (release_checkout / "dist/marina-release.json").exists()
+    status = runner.invoke(cli, status_args)
+    assert json.loads(status.output)["state"] == "current"
+
+    (release_checkout.parent / "unrelated.txt").write_text("another app")
+    for arguments in (["add", "."], ["commit", "-m", "unrelated"]):
+        subprocess.run(["git", *arguments], cwd=release_checkout.parent, check=True, capture_output=True)
+    status = runner.invoke(cli, status_args)
+    report = json.loads(status.output)
+    assert report["state"] == "current"
+    assert report["checkout"]["commit"] != report["released"]["commit"]
+
+    (release_checkout / "applet.toml").write_text('title = "Changed"\ndescription = "New source"\n')
+    status = runner.invoke(cli, status_args)
+    assert json.loads(status.output)["state"] == "modified"
+    for arguments in (["add", "."], ["commit", "-m", "app change"]):
+        subprocess.run(["git", *arguments], cwd=release_checkout, check=True, capture_output=True)
+    status = runner.invoke(cli, status_args)
+    assert json.loads(status.output)["state"] == "different"
+
+
+def test_publish_registered_applet_requires_release_and_keeps_dry_run(
+    release_checkout: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests = []
+
+    def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
+        requests.append((method, url))
+        return json_response({"path": "/a/id/v/8/"})
+
+    monkeypatch.setattr("marina.client.requests.request", http_request)
+    monkeypatch.setattr("marina.client.bearer_token", lambda: "test-token")
+    runner = CliRunner()
+    result = runner.invoke(cli, ["publish", str(release_checkout), "--update", str(uuid.uuid4()), "--base-version", "7"])
+    assert result.exit_code == 2
+    assert requests == []
+    preview = runner.invoke(cli, ["publish", str(release_checkout), "--dry-run", "--json"])
+    assert preview.exit_code == 0, preview.output
+    assert "package" in json.loads(preview.output)["checks"]
+
+
+def test_release_rejects_ignored_files_in_static_package(
+    release_checkout: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests = []
+
+    def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
+        requests.append((method, url))
+        return json_response({"path": "/a/id/v/8/"})
+
+    monkeypatch.setattr("marina.client.requests.request", http_request)
+    (release_checkout / ".gitignore").write_text("dist/extra.js\n")
+    # Static applets must account for every uploaded byte in Git.
+    manifest = release_checkout / "applet.toml"
+    manifest.write_text('title = "Static"\ndescription = "Test"\n')
+    for arguments in (["add", "."], ["commit", "-m", "static"], ["push", "origin", "HEAD:main"]):
+        subprocess.run(["git", *arguments], cwd=release_checkout, check=True, capture_output=True)
+    (release_checkout / "dist/extra.js").write_text("unreviewed()")
+
+    result = CliRunner().invoke(
+        cli, ["release", str(release_checkout), "--base-version", "7", "--url", "http://localhost:8080"]
+    )
+
+    assert result.exit_code == 1
+    assert requests == []
 
 
 def json_response(value: object) -> RequestsResponse:

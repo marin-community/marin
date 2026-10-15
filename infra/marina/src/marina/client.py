@@ -20,6 +20,12 @@ DEFAULT_MARINA_URL = "https://marina.oa.dev"
 DEFAULT_TIMEOUT = 60
 
 
+class MarinaRequestError(RuntimeError):
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(f"Marina request failed ({status_code}): {detail}")
+        self.status_code = status_code
+
+
 def _cached_login_provider() -> TokenProvider | None:
     provider = iap_edge_provider("marin")
     if provider is not None:
@@ -75,7 +81,7 @@ def marina_request(
             if "json" in response.headers.get("content-type", "")
             else response.text
         )
-        raise RuntimeError(f"Marina request failed ({response.status_code}): {detail}")
+        raise MarinaRequestError(response.status_code, str(detail))
     if response.status_code == 204:
         return None
     return response.json()

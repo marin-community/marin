@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 import click
 import pytest
 import uvicorn
+from rigging.provenance import require_current_main
 
 from marina.applets import (
     APPLET_MANIFEST,
@@ -28,7 +29,7 @@ from marina.applets import (
     validate_backend_import,
 )
 from marina.apps import is_python_app, migration, services_for
-from marina.client import DEFAULT_MARINA_URL, marina_request, publish_applet
+from marina.client import DEFAULT_MARINA_URL, MarinaRequestError, marina_request, publish_applet
 from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
 from marina.db import (
     DatabaseSpec,
@@ -44,6 +45,15 @@ from marina.journey_plugin import DEFAULT_SHOTS_DIR, JOURNEYS_DIR
 from marina.journeys import running_kernel
 from marina.local_postgres import docker_database
 from marina.manifest import AppManifest, JobRunner, discover_apps, job_runners
+from marina.releases import (
+    RELEASE_CONFIG,
+    RELEASE_METADATA,
+    ReleaseSource,
+    git_output,
+    release_applet_id,
+    release_source,
+    require_tracked_package,
+)
 from marina.server import APPS_DIR_ENV, MarinaConfig, create_app
 from marina.table_load import read_table, table_statements
 
@@ -194,7 +204,9 @@ def run_jobs(runner_name: str, apps_dir: Path, reader: str | None, migrate_only:
             raise click.ClickException(f"job failures: {', '.join(failures)}")
 
 
-def _publish_package(app_dir: Path, *, build: bool) -> tuple[bytes, AppletPackage]:
+def _publish_package(
+    app_dir: Path, *, build: bool, extra_files: dict[str, bytes] | None = None
+) -> tuple[bytes, AppletPackage]:
     manifest_path = app_dir / APPLET_MANIFEST
     if not manifest_path.is_file():
         raise click.UsageError(f"{app_dir} has no {APPLET_MANIFEST}")
@@ -204,7 +216,7 @@ def _publish_package(app_dir: Path, *, build: bool) -> tuple[bytes, AppletPackag
     elif build and not (app_dir / "dist" / "index.html").is_file():
         raise click.UsageError("dist/index.html is absent and applet.toml has no build_command")
     try:
-        payload = package_applet(app_dir)
+        payload = package_applet(app_dir, extra_files=extra_files)
     except ValueError as error:
         raise click.UsageError(str(error)) from error
     return payload, read_applet_package(payload)
@@ -330,6 +342,13 @@ def publish(
     json_output: bool,
 ) -> None:
     """Publish a built applet directory and print its URL."""
+    if (
+        not local
+        and not dry_run
+        and urlparse(service_url).hostname not in {"localhost", "127.0.0.1"}
+        and (app_dir / RELEASE_CONFIG).exists()
+    ):
+        raise click.UsageError("This applet has release.toml; use `marina release` for production updates.")
     if local:
         if dry_run:
             raise click.UsageError("--local cannot be combined with --dry-run")
@@ -355,6 +374,81 @@ def publish(
     except RuntimeError as error:
         raise click.ClickException(str(error)) from error
     _print_publish_result(result, service_url, json_output=json_output)
+
+
+@cli.command()
+@click.argument("app_dir", type=click.Path(path_type=Path, file_okay=False, exists=True))
+@click.option("--base-version", required=True, type=int, help="The live revision inspected before this release.")
+@click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
+@click.option("--json", "json_output", is_flag=True)
+def release(app_dir: Path, base_version: int, service_url: str, json_output: bool) -> None:
+    """Release a registered applet from a clean, current main checkout."""
+    try:
+        applet_id = release_applet_id(app_dir)
+        require_current_main(app_dir)
+        source = release_source(app_dir)
+        payload, package = _publish_package(
+            app_dir, build=True, extra_files={RELEASE_METADATA: json.dumps(asdict(source)).encode()}
+        )
+        require_tracked_package(
+            app_dir, package.files.keys() - {RELEASE_METADATA}, build_command=package.manifest.build_command
+        )
+        if package.manifest.python_entrypoint is not None:
+            validate_backend_import(package)
+        # Builds may change tracked files or take long enough for main to advance.
+        if require_current_main(app_dir) != source.commit:
+            raise RuntimeError("The checkout changed while building; retry the release.")
+        result = publish_applet(service_url, payload, applet_id=applet_id, base_version=base_version)
+    except (RuntimeError, ValueError) as error:
+        raise click.ClickException(str(error)) from error
+    result["source"] = asdict(source)
+    _print_publish_result(result, service_url, json_output=json_output)
+
+
+@cli.command("release-status")
+@click.argument("app_dir", type=click.Path(path_type=Path, file_okay=False, exists=True))
+@click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
+@click.option("--json", "json_output", is_flag=True)
+def release_status(app_dir: Path, service_url: str, json_output: bool) -> None:
+    """Compare an applet's live source tree with this checkout's committed source."""
+    applet_id = release_applet_id(app_dir)
+    expected = release_source(app_dir)
+    details = marina_request(service_url, "GET", f"/api/marina/applets/{applet_id}")
+    assert isinstance(details, dict)
+    version = details["current_version"]
+    parsed = urlparse(details["authenticated_url"])
+    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
+    try:
+        metadata = marina_request(origin, "GET", f"/a/{applet_id}/v/{version}/marina-release.json")
+    except MarinaRequestError as error:
+        if error.status_code != 404:
+            raise
+        metadata = None
+    if metadata is not None:
+        assert isinstance(metadata, dict)
+    actual = ReleaseSource(**metadata) if metadata is not None else None
+    if git_output(app_dir, "status", "--porcelain", "--untracked-files=all", "--", "."):
+        state = "modified"
+    elif actual is None:
+        state = "unrecorded"
+    elif actual.tree == expected.tree and actual.path == expected.path:
+        state = "current"
+    else:
+        state = "different"
+    result = {
+        "applet_id": applet_id,
+        "version": version,
+        "state": state,
+        "released": asdict(actual) if actual is not None else None,
+        "checkout": asdict(expected),
+    }
+    if json_output:
+        click.echo(json.dumps(result, sort_keys=True))
+    else:
+        click.echo(f"{applet_id} v{version}: {state}")
+        click.echo(f"Checkout: {expected.commit} {expected.path} (tree {expected.tree})")
+        if actual is not None:
+            click.echo(f"Released: {actual.commit} {actual.path} (tree {actual.tree})")
 
 
 @cli.group()

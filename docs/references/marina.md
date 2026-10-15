@@ -10,19 +10,32 @@ without rebuilding the Marina image.
 | | Checked-in app | Dynamic applet |
 | --- | --- | --- |
 | Source | `infra/marina/apps/<name>/` | A directory containing `applet.toml` and `dist/` |
-| Delivery | PR and Marina image deployment | `marina publish`; retained, numbered revisions |
+| Delivery | PR and Marina image deployment | `marina publish` or registered `marina release`; retained, numbered revisions |
 | URL | `/<name>/` on Marina | `/a/<uuid>/` on an isolated applet origin |
 | Backend factory | `create_api(services)` returns `registered_api(api)` | `create_api(services)` returns an ASGI app |
 | Migration | `migrate(engine)` at deploy | `migrate(connection)` inside the publish transaction |
 | Refresh work | Manifest-declared scheduled jobs | Explicit loader or bounded request-driven refresh; no background workers |
 
-Use a checked-in app for apps you expect to update regularly or that peers will
-maintain. This keeps the source, review history, and deployment path in the
-repository. Also choose a checked-in app when it needs scheduled ingestion, new
-server dependencies, or Marina's MCP and page-agent integrations. Use an applet
-for a small report, explorer, or tool that needs independent publishing. Applet
-backends use packages already installed in Marina and run as trusted plugins,
-not sandboxes.
+Keep maintained source and its release declaration in the repository. Prefer an
+applet for a report, explorer, or tool that can use Marina's installed packages
+and needs independent publishing. Choose a checked-in app under `apps/` when it
+needs scheduled ingestion, new shared server dependencies, or Marina's MCP and
+page-agent integrations. Applet backends run as trusted plugins, not sandboxes.
+
+Maintained applets such as Atlas and Filer keep their source in this repository
+and bind their existing UUID in `release.toml`. Use `marina release-status
+<directory>` to compare the live source tree with your checkout, and `marina
+release <directory> --base-version <current>` to release from clean current main.
+Merging their source or restarting Marina preserves the currently published
+package. Applet code releases and data loading are separate operations.
+
+Checked-in apps update together in the shared image. Production Marina updates
+require clean current main; use local previews for branch work. Applet releases
+isolate code revisions and schema writes, but Python plugins share the process,
+dependencies, service credentials, and resource limits. Prefer independently
+released applets where those shared runtime constraints fit. Apps requiring
+separate dependencies, credentials, or failure isolation need their own service
+project under the [infrastructure conventions](https://github.com/marin-community/marin/blob/main/infra/pulumi.md).
 
 ## Build and try it
 

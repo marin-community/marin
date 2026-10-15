@@ -41,6 +41,32 @@ submission's provenance — :meth:`Provenance.capture` prefers it over shelling 
 """
 
 
+def require_current_main(repo_dir: Path) -> str:
+    """Require a clean checkout at origin's current main and return its full commit.
+
+    This checks the remote directly so an old local tracking ref or a rerun of an
+    old CI job cannot authorize a production deployment. It does not modify refs.
+    """
+    cwd = str(repo_dir)
+    if _git(["status", "--porcelain", "--untracked-files=all"], cwd):
+        raise RuntimeError("Production releases require a clean checkout; use a local preview for branch work.")
+    commit = _git(["rev-parse", "HEAD"], cwd)
+    remote = subprocess.run(
+        ["git", "ls-remote", "--exit-code", "origin", "refs/heads/main"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    if commit != remote.stdout.split()[0]:
+        raise RuntimeError(
+            "Production releases require origin's current main commit; "
+            "update the checkout or dispatch the production workflow on main."
+        )
+    return commit
+
+
 @dataclass(frozen=True)
 class Provenance:
     """Identity, human context, and launch context of a built artifact.

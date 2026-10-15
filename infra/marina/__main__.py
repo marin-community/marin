@@ -35,6 +35,7 @@ from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 from iac.gcp.marina import PUBLIC_APPLET_SERVICE
 from marina.database_setup import LOOM_DATABASE_USER
 from marina.manifest import JobRunner, discover_apps, job_runners
+from rigging.provenance import require_current_main
 
 PROJECT = "hai-gcp-models"
 REGION = "us-central1"
@@ -122,6 +123,8 @@ def job_template(
 
 
 def main() -> None:
+    if pulumi.get_stack() == "marin-marina" and not pulumi.runtime.is_dry_run():
+        require_current_main(Path(__file__).resolve().parents[2])
     config = pulumi.Config()
     applet_operators = config.get_object("applet_operators") or []
     if not isinstance(applet_operators, list) or not all(isinstance(item, str) for item in applet_operators):

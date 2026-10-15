@@ -13,10 +13,11 @@ applet. Use
 backend reference. Treat those files and `marina --help` as authoritative when
 this skill disagrees with the checkout.
 
-Prefer a checked-in app under `infra/marina/apps/` when it will be updated
-regularly or maintained by peers. Keep its source, review history, and deployment
-path in the repository. Choose a dynamic applet for independently published
-reports, explorers, or small tools.
+Keep maintained source, review history, and release declarations in the
+repository. Prefer an independently released applet under `infra/marina/applets/`
+when Marina's installed dependencies and applet features fit. Use a checked-in
+app under `infra/marina/apps/` for scheduled jobs, shared dependency changes, or
+Marina's MCP and page-agent integrations.
 
 ## Choose the applet shape
 
@@ -220,7 +221,20 @@ Fetch the stable current URL with:
 uv run marina applets versions <uuid> --json
 ```
 
-Update the same applet with optimistic concurrency:
+For maintained applets with `release.toml` (including Atlas and Filer), inspect
+source status and release from a clean checkout at the current remote main:
+
+```bash
+uv run marina release-status my-applet --json
+uv run marina release my-applet --base-version <current> --json
+```
+
+The declaration binds the existing UUID. Release builds and records the commit,
+source path and subtree hash in the package. A source merge or Marina restart
+does not publish the applet or load its data. Use `publish --local` or `--dry-run`
+for branch previews. See the registered-release section of the Marina README.
+
+Update an applet without a release declaration with optimistic concurrency:
 
 ```bash
 uv run marina publish my-applet --update <uuid> --base-version <current>

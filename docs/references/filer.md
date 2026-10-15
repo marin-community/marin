@@ -59,12 +59,15 @@ Validate, then obtain the current revision number before publishing:
 
 ```bash
 uv run marina validate infra/marina/applets/filer
+uv run marina release-status infra/marina/applets/filer --json
 uv run marina applets versions 7f536ce3-0562-40f1-b209-e6110d8ab4e8 --json
-uv run marina publish infra/marina/applets/filer \
-  --update 7f536ce3-0562-40f1-b209-e6110d8ab4e8 --base-version <current>
+uv run marina release infra/marina/applets/filer --base-version <current>
 ```
 
 Replace `<current>` with the current version reported by `marina applets versions`.
+Release requires a clean checkout at the current remote main. `release.toml`
+binds this directory to its UUID; the release records the source commit and
+subtree hash. `release-status` compares that tree with the local checkout.
 
 Keep the applet private: its backend uses Marina's storage credentials. Backend
 code runs as a trusted plugin in Marina's process. It needs no database tables or
