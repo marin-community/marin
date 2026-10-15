@@ -182,6 +182,7 @@ def align_tasks(
             key=lambda row: row["embedding_key"],
             sort_by=lambda row: row["kind"],
             reducer=_matched_descriptions,
+            num_output_shards=context.max_workers,
         )
         .write_parquet(
             str(StoragePath(output_root) / "matched-descriptions/part-{shard:05d}.parquet"),
@@ -196,7 +197,12 @@ def align_tasks(
     result = context.execute(
         Dataset.from_list(inputs)
         .flat_map(_join_records)
-        .group_by(key=lambda row: row["content_hash"], sort_by=lambda row: row["kind"], reducer=_described_tasks)
+        .group_by(
+            key=lambda row: row["content_hash"],
+            sort_by=lambda row: row["kind"],
+            reducer=_described_tasks,
+            num_output_shards=context.max_workers,
+        )
         .map(_task_alignment)
         .write_parquet(
             str(StoragePath(output_root) / "assignments/part-{shard:05d}.parquet"), schema=arrow_schema(TaskAlignment)

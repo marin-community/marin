@@ -283,6 +283,8 @@ streamed from the task-vector Parquet outputs. Scoring uses the embedding keys
 deduplicated by the embedding pass. Zephyr joins those scores to descriptions and
 task instances, producing assignment records for the Atlas export. Alignment
 does not read the inference cache.
+Alignment and export shuffles use `--max-workers` for their output partition
+count, keeping the number of output files independent of the source-file count.
 
 All stages use the driver's shared `--max-workers`, `--worker-cpu`,
 `--worker-memory` and `--coordinator-memory` options. Embedding defaults to four

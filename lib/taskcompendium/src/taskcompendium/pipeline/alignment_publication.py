@@ -92,25 +92,31 @@ def publish_alignments(
     result = context.execute(
         Dataset.from_list(tagged)
         .flat_map(_tagged_rows)
-        .group_by(key=lambda row: (row["source_id"], row["task_id"]), reducer=_covered_task)
+        .group_by(
+            key=lambda row: (row["source_id"], row["task_id"]),
+            reducer=_covered_task,
+            num_output_shards=context.max_workers,
+        )
         .write_parquet(
             str(StoragePath(output_root) / "tasks/part-{shard:05d}.parquet"), schema=arrow_schema(TaskAlignment)
         ),
         name="publish-curriculum-matches",
     )
     data = Dataset.from_list(result.results).load_parquet()
-    counts = context.execute(data.group_by(key=lambda row: row["source_id"], reducer=_source_counts))
-    unique = data.deduplicate(key=lambda row: row["content_hash"])
+    counts = context.execute(
+        data.group_by(key=lambda row: row["source_id"], reducer=_source_counts, num_output_shards=context.max_workers)
+    )
+    unique = data.deduplicate(key=lambda row: row["content_hash"], num_output_shards=context.max_workers)
     per_source = context.execute(
-        data.deduplicate(key=lambda row: (row["source_id"], row["content_hash"])).group_by(
-            key=lambda row: row["source_id"], reducer=_count
-        )
+        data.deduplicate(
+            key=lambda row: (row["source_id"], row["content_hash"]), num_output_shards=context.max_workers
+        ).group_by(key=lambda row: row["source_id"], reducer=_count, num_output_shards=context.max_workers)
     )
     unique_counts = {row["source_id"]: row["count"] for row in per_source.results}
     global_count = context.execute(unique.count()).results[0]
     embedding_count = context.execute(
         data.filter(lambda row: row["description_status"] == "ready")
-        .deduplicate(key=lambda row: row["description"])
+        .deduplicate(key=lambda row: row["description"], num_output_shards=context.max_workers)
         .count()
     ).results[0]
     return PublicationData(

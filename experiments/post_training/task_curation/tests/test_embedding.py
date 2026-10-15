@@ -286,7 +286,7 @@ def test_driver_converts_embeds_and_resumes_without_rereading_raw_inputs(
     raw_file.unlink()
     resumed = runner.invoke(main, [*common, "--corpus", str(corpus), "--run"])
     assert resumed.exit_code == 0, resumed.output
-    release_files = list((cache / "rl-semantics").glob("publication-*/2026.10.14.1/release.json"))
+    release_files = list((cache / "rl-semantics").glob("publication-*/*/release.json"))
     assert len(release_files) == 1
     release = json.loads(release_files[0].read_text())
     assert release["task_count"] == release["ready_count"] == 1

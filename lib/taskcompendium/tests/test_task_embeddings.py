@@ -351,6 +351,8 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
         output_root=str(tmp_path / "aligned"),
     )
     parked_cache.rename(vector_cache)
+    # Adding join inputs must not multiply the number of output files.
+    assert len(assigned) <= context.max_workers
     output = {row["task_id"]: row for row in rows(assigned)}
     assert set(output) == {"a", "b", "c", "d"}
     assert output["a"]["description"] == "Elementary arithmetic: count apples."
@@ -365,6 +367,7 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
     publication = publish_alignments(
         context, input_paths=inputs, alignment_paths=assigned, output_root=str(tmp_path / "release")
     )
+    assert len(publication.paths) <= context.max_workers
     assert publication.sources[0].task_count == 4
     assert publication.sources[0].ready_count == 3
     assert publication.sources[0].insufficient_context_count == 1
