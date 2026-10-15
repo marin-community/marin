@@ -152,6 +152,8 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
         out[dst] = runs[src]
     # The 160M panel and some archived Qwen3 runs record no proposal model; their registry source names the experiment.
     out["proposal_method"] = out.proposal_method.fillna(runs.source)
+    # Public objective names (`table9` is `obe_easy`); the Llama panels record no objective.
+    out["proposal_objective"] = out.proposal_objective.map(naming.objective_public, na_action="ignore")
     wcols = [c for c in runs.columns if c.startswith("weight::")]
     pcols = [c for c in runs.columns if c.startswith("pool_fraction::")]
     for c in wcols:

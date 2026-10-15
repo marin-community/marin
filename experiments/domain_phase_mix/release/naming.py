@@ -35,6 +35,33 @@ _TASK_PATTERNS = [
 ]
 
 
+# Public names of the objective a run's mixture was proposed for: the two objectives, the subsets of their tasks that
+# some proposals optimized, `none` for the scaling baselines (proportional, UniMax-8), and the held-out registry's labels
+# of its baselines (`baseline`), of designs built for both objectives and of runs whose names name no objective.
+OBJECTIVES = frozenset(
+    {
+        "uncheatable",
+        "obe_easy",
+        "uncheatable_worsened",
+        "obe_easy_qa15",
+        "obe_easy_qa19",
+        "obe_easy_snr2",
+        "obe_easy_snr5",
+        "obe_easy_snr8",
+        "none",
+        "baseline",
+        "uncheatable_and_obe_easy",
+        "other",
+    }
+)
+# Sources name OlmoBaseEval Easy `table9` (and its subsets `table9_<subset>`); some name an objective by its metric.
+_OBJECTIVE_ALIASES = {
+    "table9_macro_bpb": "obe_easy",
+    "uncheatable_bpb": "uncheatable",
+    "uncheatable_and_table9": "uncheatable_and_obe_easy",
+}
+
+
 def bucket_public(internal: str) -> str:
     return _BUCKET_BY_INTERNAL[internal]
 
@@ -49,6 +76,14 @@ def task_public(internal_metric: str) -> str:
             if public in TASKS:
                 return public
     raise KeyError(f"unknown task metric {internal_metric!r}")
+
+
+def objective_public(internal: str) -> str:
+    """The public name of an objective from any source's spelling; raises ValueError for an unknown one."""
+    public = _OBJECTIVE_ALIASES.get(internal) or re.sub(r"^table9", "obe_easy", internal)
+    if public not in OBJECTIVES:
+        raise ValueError(f"unknown objective {internal!r}")
+    return public
 
 
 @cache

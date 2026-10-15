@@ -74,6 +74,18 @@ def test_exposure_ids_split_what_mixture_ids_merge(table):
 
 def test_labels_are_kept_and_aggregates_versioned(table):
     assert table.proposal_method.notna().all()
+    # Objectives take their public names (the registry's `table9`, `table9_macro_bpb` and `uncheatable_and_table9`
+    # among them); the Llama panels record none.
+    qwen = table.swarm == "qwen3_360m_1p6b"
+    assert table.proposal_objective[~qwen].isna().all()
+    assert set(table.proposal_objective[qwen]) == {
+        "obe_easy",
+        "uncheatable",
+        "uncheatable_worsened",
+        "uncheatable_and_obe_easy",
+        "baseline",
+        "other",
+    }
     assert set(table.aggregate_version) == {"fixed_20260927", "legacy", "pooled_schema2"}
     assert (table.loc[table.swarm != "qwen3_360m_1p6b", "aggregate_version"] == "legacy").all()
     # The path-midpoint and RegMix-reference launches recorded the BPB-schema-2 pooled Uncheatable aggregate, about

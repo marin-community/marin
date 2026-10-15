@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from experiments.domain_phase_mix.release import context, naming, paths
-from experiments.domain_phase_mix.release.configs import heldout, validation
+from experiments.domain_phase_mix.release.configs import heldout, ladder, validation
 
 pytestmark = pytest.mark.skipif(
     not (paths.RO / "delphi_frozen_procedure_validation_3e18_20260908").exists(), reason="validation sources absent"
@@ -69,19 +69,29 @@ def test_subset_proposals_name_their_objective(table):
     subset = {
         "lwspu_w3_snc_cap06": "uncheatable_worsened",
         "olmixq_w3_kl0p05_cap04": "uncheatable_worsened",
-        "qa15_t9_cap04": "table9_qa15",
-        "olmixq_qa15_kl0p005_cap04": "table9_qa15",
-        "qa19_t9_cap05": "table9_qa19",
-        "snr5_t9_cap09": "table9_snr5",
-        "snr8_t9_cap07": "table9_snr8",
+        "qa15_t9_cap04": "obe_easy_qa15",
+        "olmixq_qa15_kl0p005_cap04": "obe_easy_qa15",
+        "qa19_t9_cap05": "obe_easy_qa19",
+        "snr5_t9_cap09": "obe_easy_snr5",
+        "snr8_t9_cap07": "obe_easy_snr8",
     }
     for variant, objective in subset.items():
         rows = table[table.variant == variant]
         assert len(rows) == 3 and (rows.proposal_objective == objective).all(), variant
-    # Every other proposal optimized a full objective, so these filters select full-objective runs only.
-    assert set(table.proposal_objective[~table.variant.isin(subset)].dropna()) == {"uncheatable", "table9"}
+    # Every other proposal optimized a full objective, so these filters select full-objective runs only; the UniMax-8
+    # baseline optimizes none.
+    others = table[~table.variant.isin(subset)]
+    assert set(others.proposal_objective[others.variant != "unimax8"]) == {"uncheatable", "obe_easy"}
     olmix_uncheatable = table[(table.method == "olmix") & (table.proposal_objective == "uncheatable")]
     assert not olmix_uncheatable.variant.isin(subset).any()
+
+
+def test_unimax8_rows_carry_the_ladder_labels(table):
+    # The ladder's 3e18 rung copies these runs; both tables name the baseline and its cap alike.
+    unimax = table[table.variant == "unimax8"]
+    method, objective = ladder.POLICY["unimax8"]
+    assert len(unimax) == 3 and (unimax.method == method).all() and (unimax.proposal_objective == objective).all()
+    assert (unimax.epoch_cap == 8).all()
 
 
 def test_validation_join_reports_unmatched_candidates(tmp_path):

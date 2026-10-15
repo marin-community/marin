@@ -42,6 +42,17 @@ def test_task_public_accepts_every_internal_spelling():
     assert naming.task_public("uncheatable_ao3_english_bpb") == "uncheatable/ao3_english"
 
 
+def test_objective_public_maps_every_source_spelling():
+    assert naming.objective_public("table9") == "obe_easy"
+    assert naming.objective_public("table9_qa15") == "obe_easy_qa15"
+    assert naming.objective_public("table9_macro_bpb") == "obe_easy"
+    assert naming.objective_public("uncheatable_bpb") == "uncheatable"
+    assert naming.objective_public("uncheatable_and_table9") == "uncheatable_and_obe_easy"
+    assert all(naming.objective_public(name) == name for name in naming.OBJECTIVES)
+    with pytest.raises(ValueError):  # an unknown spelling must never reach a public table
+        naming.objective_public("table9_macro")
+
+
 def test_paper_names_appear_verbatim_in_the_appendix():
     appendix = (paths.DRIVE / "sections/appendix.tex").read_text()
     out = partition_tasks.export(None)

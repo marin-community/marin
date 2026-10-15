@@ -86,7 +86,6 @@ POLICY = {
 }
 PROPORTIONAL = "proportional"
 BASELINES = ("proportional", "unimax8")
-OBJECTIVE = {"table9": "obe_easy", "uncheatable": "uncheatable"}  # the audits' `target`, in the public vocabulary
 # The mixtures whose 1e21 runs the accuracy table scores, in its column order; it names its columns by method.
 ACCURACY_POLICIES = ("proportional", "unimax8", "olmixq_t9_kl0p005_cap04", "lwspu_t9_snc_cap08")
 UNCHEATABLE_TASKS = [t for t in naming.TASKS if t.startswith("uncheatable/")]
@@ -130,7 +129,7 @@ def _audited(folder: Path) -> pd.DataFrame:
     results = results[results.status == "measured"].reset_index(drop=True)
     if [run_names.training_run_name_from_uri(uri) for uri in results.eval_metrics_uri] != list(results.run_name):
         raise ValueError(f"{folder.name}: run names differ from the evaluation-metrics URIs")
-    if not (results.target.map(OBJECTIVE) == [POLICY[p][1] for p in results.policy]).all():
+    if not (results.target.map(naming.objective_public) == [POLICY[p][1] for p in results.policy]).all():
         raise ValueError(f"{folder.name}: a mixture's proposal objective differs from its runs' target")
     runs = pd.DataFrame(
         {

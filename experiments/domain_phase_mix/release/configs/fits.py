@@ -45,7 +45,6 @@ same runs; tasks by the paper's task ids (`naming.task_public`); objectives as `
 """
 
 import json
-import re
 from pathlib import Path
 
 import numpy as np
@@ -58,16 +57,6 @@ from experiments.domain_phase_mix.release.context import ExportContext
 SWARM = "qwen3_360m_1p6b"
 PANEL = {swarm: panel for panel, swarm in heldout.SWARM.items()}[SWARM]  # the held-out registry's name of the swarm
 MIXSEL_OBJECTIVES = ("table9", "uncheatable")  # mixture-selection's names, which name its files
-PUBLIC_OBJECTIVES = {
-    "obe_easy",
-    "uncheatable",
-    "uncheatable_worsened",
-    "obe_easy_qa15",
-    "obe_easy_qa19",
-    "obe_easy_snr2",
-    "obe_easy_snr5",
-    "obe_easy_snr8",
-}
 DATA = paths.MIXSEL / "data"
 TASK_FITS = DATA / "reference_task_fits.csv"
 SWARM_RUNS = DATA / "swarm_weights.csv"
@@ -200,18 +189,10 @@ def _json(path: Path) -> dict:
     return json.loads(paths.require(path).read_text())
 
 
-def _public_objective(name: str) -> str:
-    """The public name of an objective from a source's spelling, in which `table9` is OlmoBaseEval Easy."""
-    public = re.sub(r"^table9", "obe_easy", name)
-    if public not in PUBLIC_OBJECTIVES:
-        raise ValueError(f"unknown objective {name!r}")
-    return public
-
-
 def _task_parameters() -> pd.DataFrame:
     t = _csv(TASK_FITS)
     t["task_id"] = t.component.map(naming.task_public)
-    t["objective"] = t.objective.map(_public_objective)
+    t["objective"] = t.objective.map(naming.objective_public)
     t["swarm"] = SWARM
     return t[["swarm", "objective", "task_id", "rate", "power", "threshold", "ridge", "kappa", "floor", "inner_cv_rmse"]]
 
@@ -232,7 +213,7 @@ def _swarm_predictions(ctx: ExportContext) -> pd.DataFrame:
         wide = _csv(DATA / f"{SWARM_PREDICTIONS}_{name}.csv")
         assert wide.run.is_unique and set(wide.run) == set(runs), f"{name}: predictions cover other runs than the swarm"
         long = _long_tasks(wide, key="run")
-        long.insert(0, "objective", _public_objective(name))
+        long.insert(0, "objective", naming.objective_public(name))
         long.insert(1, "observation_id", long.pop("run").map(ctx.registry.id_for))
         frames.append(long)
     return pd.concat(frames, ignore_index=True)
@@ -270,7 +251,7 @@ def _heldout_predictions(runs: pd.DataFrame) -> pd.DataFrame:
         counts = per_run.coordinate_id.value_counts().reindex(run_count.index)
         assert (counts == run_count.run_count).all(), f"{name}: the bank counts other runs per mixture than the registry"
         long = _long_tasks(per_run.drop(columns="coordinate_id"), key="observation_id")
-        long.insert(0, "objective", _public_objective(name))
+        long.insert(0, "objective", naming.objective_public(name))
         frames.append(long)
     return pd.concat(frames, ignore_index=True)
 
@@ -295,7 +276,7 @@ def _learning_curves(exposures: pd.Series) -> pd.DataFrame:
         f.insert(0, "study", study)
         frames.append(f)
     df = pd.concat(frames, ignore_index=True)
-    df["target"] = df.target.map(_public_objective)
+    df["target"] = df.target.map(naming.objective_public)
     per_task = (df.evaluation == "oof_component") & (df.stratum != COMPONENT_MEAN)
     df.loc[per_task, "stratum"] = df.stratum[per_task].map(naming.task_public)
     unknown = set(df.selected_coordinate_id.dropna()) - set(exposures.index)
@@ -336,7 +317,7 @@ def _olmix_task_laws(ctx: ExportContext) -> pd.DataFrame:
             rows.append(
                 {
                     "swarm": SWARM,
-                    "objective": _public_objective(name),
+                    "objective": naming.objective_public(name),
                     "task_id": naming.task_public(law["component"]),
                     "log_c": law["log_c"],
                     "huber_loss": law["huber_loss"],
@@ -443,7 +424,7 @@ def _snr_subset(objectives: pd.Series) -> pd.DataFrame:
     variants = {objective: variant for variant, objective in objectives.items()} | {"obe_easy": FROZEN_MARINER["table9"]}
     assert len(variants) == len(objectives) + 1, "two subset proposals optimized one objective"
     table = _csv(SNR_SUBSET)
-    policy = table.policy.replace({"full": "table9"}).map(lambda p: variants[_public_objective(p)])
+    policy = table.policy.replace({"full": "table9"}).map(lambda p: variants[naming.objective_public(p)])
     return _rows(policy, table.subset.replace({"full": "table9"}), "mariner", True, table.predicted)
 
 
@@ -513,9 +494,9 @@ def _factorial() -> pd.DataFrame:
 
 
 def _proposal_objectives(validation_table: pd.DataFrame, launch: str) -> pd.Series:
-    """The public name of the objective each of a launch's proposals optimized, by variant."""
+    """The objective each of a launch's proposals optimized, by variant."""
     rows = validation_table[validation_table.launch == launch].drop_duplicates("variant").set_index("variant")
-    return rows.proposal_objective.map(_public_objective)
+    return rows.proposal_objective
 
 
 def _proposal_predictions(validation_table: pd.DataFrame) -> pd.DataFrame:
@@ -535,7 +516,7 @@ def _proposal_predictions(validation_table: pd.DataFrame) -> pd.DataFrame:
         ],
         ignore_index=True,
     )
-    predictions["objective"] = predictions.objective.map(_public_objective)
+    predictions["objective"] = predictions.objective.map(naming.objective_public)
     # Several folders predict some proposals with the same model (the frozen MARINER proposals above all); they agree.
     key = ["variant", "objective", "predictor"]
     spread = predictions.groupby(key).agg(
