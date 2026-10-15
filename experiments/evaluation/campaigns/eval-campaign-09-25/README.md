@@ -45,7 +45,7 @@ boundary above.
 For current verified launches, pass `--version eval-policy-2026-10-14-verified`. Benchmark settings and
 evaluator revisions are frozen in `lib/marin/src/marin/evaluation/policies/october_14.json`.
 EvalDash excludes runs whose recorded settings or evaluator revisions differ from that profile.
-Partial benchmark subsets are allowed; normalized model configurations define distinct comparison identities.
+Partial benchmark subsets are allowed. EvalDash groups runs by model name within the selected cohort.
 
 ```bash
 ./launch-campaign.sh --version eval-policy-2026-10-14-verified --model Qwen-Qwen3.6-35B-A3B

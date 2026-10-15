@@ -15,7 +15,6 @@ from marin.evaluation.eval_policy import (
 )
 from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.model_identity import comparison_model_name, model_config_digest
 from marin.evaluation.records import EvalchemyRef, EvalRef, EvalTaskRef, ModelConfigRef, ModelRef
 
 
@@ -90,12 +89,3 @@ def test_runtime_pin_is_selected_by_cohort(monkeypatch):
     assert runtime_violations(SEPTEMBER_16_VERSION, evaluation, "older") == ()
     assert runtime_violations(SEPTEMBER_24_VERSION, evaluation, "newer") == ()
     assert runtime_violations(SEPTEMBER_16_VERSION, evaluation, "newer")
-
-
-def test_model_configurations_have_distinct_comparison_identities():
-    first = _model({"enable_thinking": False})
-    second = _model({"enable_thinking": True})
-    assert comparison_model_name(first) != comparison_model_name(second)
-    assert comparison_model_name(first) == comparison_model_name(
-        first.model_copy(update={"config_digest": model_config_digest(first.config)})
-    )

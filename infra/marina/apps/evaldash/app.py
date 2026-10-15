@@ -52,7 +52,6 @@ from marin.evaluation.eval_stats import (
     SelectionRequest,
     declared_protocols,
 )
-from marin.evaluation.model_identity import comparison_model_name
 from marin.evaluation.records import (
     DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
@@ -349,7 +348,7 @@ def record_to_row(record: EvalRunRecord) -> dict:
         "created_at": record.created_at,
         "version": record.version,
         "user_name": record.user,
-        "model_name": comparison_model_name(record.model),
+        "model_name": record.model.name,
         "model_location": record.model.location,
         "eval_name": record.evaluation.name,
         "mechanism": record.evaluation.mechanism,
@@ -372,7 +371,7 @@ def _group_sibling_row(record: EvalRunRecord) -> dict:
     return {
         "run_id": record.run_id,
         "eval_name": record.evaluation.name,
-        "model_name": comparison_model_name(record.model),
+        "model_name": record.model.name,
         "status": record.status.value,
         "created_at": record.created_at,
     }
@@ -433,7 +432,7 @@ class RecordStore:
         _records, by_id = self._snapshot()
         record = by_id.get(run_id)
         return (
-            {**record.model_dump(mode="json", by_alias=True), "comparison_model": comparison_model_name(record.model)}
+            {**record.model_dump(mode="json", by_alias=True), "comparison_model": record.model.name}
             if record is not None
             else None
         )
@@ -471,11 +470,7 @@ class RecordStore:
         records, _by_id = self._snapshot()
         archived = self.archived_models()
         if not include_archived:
-            records = [
-                record
-                for record in records
-                if record.model.name not in archived and comparison_model_name(record.model) not in archived
-            ]
+            records = [record for record in records if record.model.name not in archived]
         return build_panel(records, request, frozenset(archived), aggregate)
 
     def comparison(self, request: SelectionRequest, models: tuple[str, ...]) -> dict:
@@ -502,7 +497,7 @@ class RecordStore:
         records, _by_id = self._snapshot()
         by_group: dict[str, list[EvalRunRecord]] = {}
         for record in records:
-            if (model and comparison_model_name(record.model) != model) or (user and record.user != user):
+            if (model and record.model.name != model) or (user and record.user != user):
                 continue
             by_group.setdefault(record.group_id, []).append(record)
         groups: list[dict] = []
@@ -513,7 +508,7 @@ class RecordStore:
             groups.append(
                 {
                     "group_id": group_id,
-                    "model_name": comparison_model_name(newest.model),
+                    "model_name": newest.model.name,
                     "version": newest.version,
                     "description": newest.description,
                     "user_name": newest.user,
@@ -538,9 +533,7 @@ class RecordStore:
         task_records = [
             record
             for record in records
-            if comparison_model_name(record.model) == model
-            and record.evaluation.name == task
-            and not record_policy_violations(record)
+            if record.model.name == model and record.evaluation.name == task and not record_policy_violations(record)
         ]
         protocol_records = [
             record for record in records if record.evaluation.name == task and not record_policy_violations(record)

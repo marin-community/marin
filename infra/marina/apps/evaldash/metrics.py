@@ -46,7 +46,6 @@ from marin.evaluation.eval_stats import (
     panel_aggregate,
     select,
 )
-from marin.evaluation.model_identity import comparison_model_name
 from marin.evaluation.records import EvalRunRecord, RunStatus
 
 # Capped-instance launcher validation runs; kept out of the headline panel (they stay visible in the
@@ -177,11 +176,9 @@ def run_metadata(records: list[EvalRunRecord]) -> dict[str, dict[str, str]]:
 
 
 def _panel_records(records: list[EvalRunRecord], cohort_version: str | None = None) -> list[EvalRunRecord]:
-    """Only policy-compliant, non-smoke records, with configuration-specific model identities."""
+    """Only policy-compliant, non-smoke records in the selected cohort."""
     return [
-        record.model_copy(
-            update={"model": record.model.model_copy(update={"name": comparison_model_name(record.model)})}
-        )
+        record
         for record in records
         if not record.evaluation.name.endswith(SMOKE_SUFFIX)
         if cohort_version is None or record.version == cohort_version
@@ -196,7 +193,7 @@ def _policy_rejections(
     return [
         {
             "run_id": record.run_id,
-            "model": comparison_model_name(record.model),
+            "model": record.model.name,
             "benchmark": record.evaluation.name,
             "reasons": list(violations),
         }
@@ -204,8 +201,8 @@ def _policy_rejections(
         if not record.evaluation.name.endswith(SMOKE_SUFFIX)
         if request.cohort_version is None or record.version == request.cohort_version
         if request.panel is None or record.evaluation.name in request.panel
-        if models is None or comparison_model_name(record.model) in models
-        if matches_filters(comparison_model_name(record.model), metadata[record.run_id], request)
+        if models is None or record.model.name in models
+        if matches_filters(record.model.name, metadata[record.run_id], request)
         if (violations := record_policy_violations(record))
     ]
 
@@ -346,7 +343,7 @@ def build_panel(
         rows.append(
             {
                 "model": model,
-                "archived": model in archived_models or model.split("@", 1)[0] in archived_models,
+                "archived": model in archived_models,
                 "cells": {name: cell_payload(measurement) for name, measurement in cells.items()},
                 "missing": missing.get(model, {}),
                 "last_updated": max((measurement.created_at for measurement in cells.values()), default=None),
@@ -446,7 +443,7 @@ def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, mo
 
 def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = frozenset()) -> dict:
     """Return panel filter metadata and all known variants for each family."""
-    all_models = sorted({comparison_model_name(record.model) for record in records})
+    all_models = sorted({record.model.name for record in records})
     records = _panel_records(records)
     eval_names = {r.evaluation.name for r in records}
     by_family = group_by_family(sorted(eval_names), declared_families(records))
@@ -555,7 +552,7 @@ def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
     and ``runs`` spans every run for the model (smoke included), newest first.
     """
     protocols = declared_protocols(measurements_from_records(_panel_records(records)))
-    model_records = [record for record in records if comparison_model_name(record.model) == model]
+    model_records = [record for record in records if record.model.name == model]
     if not model_records:
         return None
     newest = max(model_records, key=lambda record: record.created_at or "")

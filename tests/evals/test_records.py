@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 from marin.evaluation.model_config import AgentConfig, GenerationConfig, ModelConfig, ResourceHint, ServeConfig
-from marin.evaluation.model_identity import comparison_model_name
+from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
@@ -441,4 +441,5 @@ def test_a_serve_field_the_schema_has_not_learned_remains_in_the_model_identity(
     assert record.model.config is not None
     assert record.model.config.serve.tensor_parallel_size is None
     assert record.model.config.serve.future_serve_option == 2
-    assert comparison_model_name(record.model) != comparison_model_name(configured.model)
+    assert configured.model.config is not None
+    assert model_config_digest(record.model.config) != model_config_digest(configured.model.config)
