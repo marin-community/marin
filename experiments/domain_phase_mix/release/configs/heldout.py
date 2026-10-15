@@ -259,7 +259,11 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     )
     without_components = out[[f"bpb__{t}" for t in ctx.weights["uncheatable"]]].isna().any(axis=1)
     legacy_only = without_components & recorded.uncheatable.notna() & ~fixed_rule.uncheatable
-    assert run_keys[legacy_only].tolist() == [LEGACY_AGGREGATE_ONLY], f"legacy-only: {run_keys[legacy_only].tolist()}"
+    if run_keys[legacy_only].tolist() != [LEGACY_AGGREGATE_ONLY]:
+        raise ValueError(
+            f"expected {LEGACY_AGGREGATE_ONLY} to be the one run without Uncheatable components whose source recorded "
+            f"the aggregate under other weights, found {run_keys[legacy_only].tolist()}"
+        )
     recorded.loc[legacy_only, "uncheatable"] = np.nan
     out = tables.add_aggregates(out, ctx.weights, recorded, fixed_rule)  # null where neither exists
     return {"heldout": tables.order_columns(out, ctx.buckets, ctx.tasks)}

@@ -48,28 +48,30 @@ def add_aggregates(
     objectives.
     """
     out = df.copy()
+    rows = out["observation_id"] if "observation_id" in out else out.index.to_series()  # names rows in errors
     for objective, weights in task_weights.items():
         computed = sum(out[f"bpb__{t}"] * w for t, w in weights.items())  # null wherever a component is
         if recorded is not None and objective in recorded:
-            computed = _fill_recorded(computed, recorded[objective], fixed_rule[objective], objective)
+            computed = _fill_recorded(computed, recorded[objective], fixed_rule[objective], objective, rows)
         out[f"bpb__{objective}"] = computed
     return out
 
 
-def _fill_recorded(computed: pd.Series, recorded: pd.Series, fixed_rule: pd.Series, objective: str) -> pd.Series:
-    """`computed`, with the recorded fixed-rule aggregate wherever a component is missing."""
-    checked = computed.notna() & recorded.notna() & fixed_rule
-    off = (computed[checked] - recorded[checked]).abs() > FIXED_RULE_TOLERANCE
+def _fill_recorded(
+    computed: pd.Series, recorded: pd.Series, fixed_rule: pd.Series, objective: str, rows: pd.Series
+) -> pd.Series:
+    """`computed`, with the recorded fixed-rule aggregate wherever a component is missing; `rows` names each row."""
+    off = computed.notna() & recorded.notna() & fixed_rule & ((computed - recorded).abs() > FIXED_RULE_TOLERANCE)
     if off.any():
         raise ValueError(
             f"{off.sum()} recorded {objective} aggregates said to use the fixed rule differ from their components by "
-            f"more than {FIXED_RULE_TOLERANCE}"
+            f"more than {FIXED_RULE_TOLERANCE}: {rows[off].tolist()[:10]}"
         )
     needed = computed.isna() & recorded.notna()
     other_weights = needed & ~fixed_rule
     if other_weights.any():
         raise ValueError(
             f"{other_weights.sum()} rows lack {objective} components, and their sources recorded the aggregate under "
-            "other weights than the fixed rule"
+            f"other weights than the fixed rule: {rows[other_weights].tolist()[:10]}"
         )
     return computed.mask(needed, recorded)

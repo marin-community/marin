@@ -4,12 +4,12 @@
 with the dataset build. The registry `experiments/domain_phase_mix/release/paper_cells.csv` maps each number to a query
 over the build tables. The audit reports differences and never edits the LaTeX.
 
-Result on 2026-10-15: the 20 tables print 1,768 numbers that need a check (1,758 outside the row-label column, plus
-the ten registered row labels of `tab:a-heteroskedastic`). 1,677 are traced to the build: 1,675 match at the paper's
-printed decimals and two differ. 88 are registered skips: 54 configuration constants and 34 numbers of the two
-deferred two-phase tables. Three numbers of `tab:a-unimax-cap` are untraced: the Uncheatable values of the UniMax cap
-sweep's cap-1, cap-4 and cap-12 runs, whose evaluation logs are on GCS only. The audit therefore exits 1: two
-differences, and three untraced numbers under `--fail-on-untraced`.
+Result on 2026-10-15, after the paper corrected two cells of `tab:a-unimax-cap`: the 20 tables print 1,768 numbers
+that need a check (1,758 outside the row-label column, plus the ten registered row labels of `tab:a-heteroskedastic`).
+1,677 are traced to the build, and all of them match at the paper's printed decimals. 88 are registered skips: 54
+configuration constants and 34 numbers of the two deferred two-phase tables. Three numbers of `tab:a-unimax-cap` are
+untraced: the Uncheatable values of the UniMax cap sweep's cap-1, cap-4 and cap-12 runs, whose evaluation logs are on
+GCS only. The audit therefore exits 1 under `--fail-on-untraced`, on those three numbers alone.
 
 ## Run
 
@@ -21,11 +21,12 @@ uv run python -m experiments.domain_phase_mix.release.verify_paper_numbers --bui
 
 - Build: 35 tables, MANIFEST.json `commit` 3681ab32b3, built 2026-10-15T21:44Z, 0 consistency problems.
 - Paper: `sections/` of the paper folder on Google Drive. The tables are in `results.tex` (modified 2026-10-12 20:13,
-  SHA-256 prefix e2a47c370e100b1e), `surrogate.tex` (2026-10-13 02:17, 81cc91596e2a38ea), `appendix.tex` (2026-10-13
-  18:21, 56d9771c55d2d188) and `appendix_analysis.tex` (2026-10-14 01:25, 61aeead7375b3d31), local times.
-- Output: `2 differences, 3 untraced cells, 88 registered skips`, exit code 1.
+  SHA-256 prefix e2a47c370e100b1e), `surrogate.tex` (2026-10-13 02:17, 81cc91596e2a38ea), `appendix.tex` (2026-10-15
+  14:15, a6b17d4f7fffadd1) and `appendix_analysis.tex` (2026-10-14 01:25, 61aeead7375b3d31), local times.
+- Output: `0 differences, 3 untraced cells, 88 registered skips`, exit code 1: `--allow-registered-skips` accepts the
+  constant and deferred two-phase cells, and the three untraced cells fail `--fail-on-untraced`.
 - `tests/domain_phase_mix/release/test_verify_paper_numbers.py::test_registry_checks_every_number_of_the_paper` runs
-  the same audit and pins the two known differences.
+  the same audit and expects no differences (`KNOWN_DIFFERENCES` is empty) and no unregistered numbers.
 
 ## Per table
 
@@ -47,14 +48,14 @@ another value than the paper prints.
 | tab:a-hyperparameters | 53 | 24 | 29 | | | 0 | ladder, swarm_*, heldout |
 | tab:a-scaling-configurations | 16 | 16 | | | | 0 | ladder |
 | tab:a-olmix-cap-kl | 92 | 92 | | | | 0 | validation_3e18 |
-| tab:a-unimax-cap | 40 | 37 | | | 3 | 2 | ladder, ladder_unimax_cap_sweep, tasks |
+| tab:a-unimax-cap | 40 | 37 | | | 3 | 0 | ladder, ladder_unimax_cap_sweep, tasks |
 | tab:a-regmix-argmin | 32 | 32 | | | | 0 | validation_3e18, fits_proposal_predictions |
 | tab:a-kl-ablation | 38 | 38 | | | | 0 | validation_3e18, fits_proposal_predictions |
 | tab:a-ablations-full | 193 | 168 | 25 | | | 0 | fits_surrogate_benchmark |
 | tab:a-baseline-validation | 84 | 84 | | | | 0 | validation_3e18, swarm_qwen3_360m_1p6b |
 | tab:a-compute-equivalence | 72 | 72 | | | | 0 | ladder_compute_equivalence |
 | tab:a-accuracy-components | 459 | 459 | | | | 0 | ladder_accuracy |
-| Total | 1,768 | 1,677 | 54 | 34 | 3 | 2 | |
+| Total | 1,768 | 1,677 | 54 | 34 | 3 | 0 | |
 
 ## Differences (corrected in the paper on 2026-10-15; the audit now reports 0 differences)
 
@@ -163,7 +164,10 @@ reported as untraced. After the paper is corrected, remove the fixed cells from 
 
 ## Update 2026-10-15
 
-Both tab:a-unimax-cap cells were corrected in sections/appendix.tex (1.099 -> 1.098; 0.936 -> 0.935); the audit now reports `0 differences, 3 untraced cells, 88 registered skips` (exit 0 with --allow-registered-skips).
+Both tab:a-unimax-cap cells were corrected in sections/appendix.tex (1.099 -> 1.098; 0.936 -> 0.935); the audit now
+reports `0 differences, 3 untraced cells, 88 registered skips`. With `--fail-on-untraced --allow-registered-skips` it
+exits 1, because the second flag accepts only the constant and deferred two-phase cells and the three untraced cells
+remain; without `--fail-on-untraced` it exits 0.
 
 The build at 3681ab32b3 replaces `aggregate_version` and the `_source` and `_fixed` aggregate columns with
 `bpb__uncheatable` and `bpb__obe_easy` under one rule, and the registry queries those two columns. The audit of that

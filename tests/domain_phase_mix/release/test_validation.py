@@ -152,8 +152,11 @@ def test_aggregates_recompute_the_recorded_values(table):
     assert (recorded.candidate.isna() | (recorded.candidate == table.variant)).all()
     pooled = table.launch.isin(validation.POOLED_LAUNCHES)
     assert pooled.sum() == 14 and table.components_available[pooled].all()
-    assert (recorded.uncheatable - table.bpb__uncheatable)[pooled].between(0.005, 0.013).all()
-    assert np.allclose(table.bpb__uncheatable[~pooled], recorded.uncheatable[~pooled], rtol=0, atol=2e-6)
+    assert (recorded.uncheatable - table.bpb__uncheatable)[pooled].between(0.008, 0.0115).all()
+    fixed = ~pooled
+    assert np.allclose(
+        table.bpb__uncheatable[fixed], recorded.uncheatable[fixed], rtol=0, atol=tables.FIXED_RULE_TOLERANCE
+    )
     # OlmoBaseEval Easy is a plain mean, so it checks that each run, seed by seed, got its own components.
     assert np.allclose(table.bpb__obe_easy, recorded.obe_easy, rtol=0, atol=1e-12)
 

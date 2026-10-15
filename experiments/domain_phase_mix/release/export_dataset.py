@@ -149,8 +149,8 @@ NOTES = {
         "Ten frozen archive runs, in four exposure groups, are deterministic re-trainings: their aggregates are "
         "bit-identical within each group.",
         "628 of the 929 runs (455 Qwen3, 117 Llama 200M and 56 Llama 160M runs) have all 58 per-task values.",
-        "One Llama 160M run has no per-task values, and its source recorded its Uncheatable aggregate only under the "
-        "archived swarms' legacy corpus weights, so both its aggregates are null.",
+        "One Llama 160M run has no per-task values: its source records no OlmoBaseEval Easy aggregate, and its "
+        "Uncheatable aggregate only under the archived swarms' legacy corpus weights, so both its aggregates are null.",
         "proposal_objective uses the public objective names: none for the UniMax-8 baseline (epoch cap 8, as in "
         "validation_3e18), uncheatable_and_obe_easy for designs built for both objectives, and other where the "
         "registry's run names name no objective; the Llama panels leave it null.",
@@ -165,9 +165,9 @@ NOTES = {
         "The 3e18 rung copies 15 validation_3e18 rows and the ten proportional repeats of swarm_qwen3_360m_1p6b "
         "under their observation ids, and adds the June proportional run, which no other table holds; the scaling "
         "figure averages these runs at 3e18.",
-        "UniMax-8 trainer seeds 1 and 2 at 3e18 carry recorded aggregates only, and the proportional and UniMax-8 "
-        "runs at 2e19 and 3e20 carry their Uncheatable components and recorded OlmoBaseEval Easy mean only "
-        "(components_available false).",
+        "UniMax-8 trainer seeds 1 and 2 at 3e18 carry recorded aggregates only. The proportional and UniMax-8 runs "
+        "at 2e19 and 3e20 have Uncheatable components only: their Uncheatable aggregate is recomputed and their "
+        "OlmoBaseEval Easy mean is the recorded one (components_available false).",
     ],
     "ladder_unimax_cap_sweep": [
         "The UniMax cap sweep's runs at caps 1, 4 and 12, at the 3e18 rung's model size and token count; its cap-8 "
@@ -197,7 +197,7 @@ RELEASE_NOTES = [
     "bpb__uncheatable (the seven Uncheatable corpora weighted by the tasks table's aggregate_weight, the paper's fixed "
     "byte shares) and bpb__obe_easy (the mean of the 51 OlmoBaseEval Easy tasks) are computed from a run's components "
     "whenever it has all of that objective's components, and otherwise are the aggregate its source recorded under "
-    "the same weights, or null where it recorded none.",
+    "the same weights, or null where the source recorded none under those weights.",
     "Source paths are relative to the marin repository's root, those under mixture-selection/ to the "
     "mixture-selection repository's; `*` stands for a run name that begins a file name or a hash that names a folder.",
     "figures_tables.csv lists the paper's 26 figures and 20 tables with their builders (paths in the paper folder, or "

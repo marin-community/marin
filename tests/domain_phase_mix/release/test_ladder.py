@@ -23,8 +23,9 @@ RUN_SPECS_3E18 = paths.RO / "delphi_frozen_procedure_validation_3e18_20260908/la
 # Uncheatable components of all eleven.
 PROPORTIONAL_UNCHEATABLE = paths.RO / "table9_reliability_20260905/proportional_uncheatable_components.csv"
 # The figure and the compute-equivalence fits average the runs' recorded aggregates. The table recomputes Uncheatable
-# from the components, within 2e-6 of every fixed-rule record, and OlmoBaseEval Easy (a plain mean) to rounding.
-RECOMPUTED_TOLERANCE = {"uncheatable": 2e-6, "obe_easy": 1e-12}
+# from the components, within the fixed-rule tolerance of every record, and OlmoBaseEval Easy (a plain mean) to
+# rounding.
+RECOMPUTED_TOLERANCE = {"uncheatable": tables.FIXED_RULE_TOLERANCE, "obe_easy": 1e-12}
 
 
 @pytest.fixture(scope="module")

@@ -108,8 +108,8 @@ def test_aggregates_recompute_the_recorded_values(table):
     # The registry records each run's aggregates, row for row with the table. The Qwen3 panel recorded Uncheatable
     # under the fixed rule, except the path-midpoint and RegMix-reference launches, which recorded the BPB-schema-2
     # pooled aggregate, about 0.01 BPB above the fixed weighting of the same components; the Llama panels recorded it
-    # under the legacy weights, within 1e-4 of the fixed rule. OlmoBaseEval Easy is a plain mean in every panel, so it
-    # checks each swarm's component join.
+    # under the legacy weights, within 1e-4 of the fixed rule, and no row copies a legacy record. OlmoBaseEval Easy is
+    # a plain mean in every panel, so it checks each swarm's component join.
     runs = tables.read_csv(SRC / "heldout_runs.csv")
     complete = {
         objective: table[[f"bpb__{t}" for t in weights]].notna().all(axis=1)
@@ -118,12 +118,15 @@ def test_aggregates_recompute_the_recorded_values(table):
     pooled = runs.source.isin(heldout.POOLED_SOURCES)
     assert pooled.sum() == 14 and set(table.proposal_method[pooled]) == {"path_midpoints", "regmix_reference"}
     assert complete["uncheatable"][pooled].all()
-    assert (runs.uncheatable_bpb - table.bpb__uncheatable)[pooled].between(0.005, 0.013).all()
+    assert (runs.uncheatable_bpb - table.bpb__uncheatable)[pooled].between(0.008, 0.0115).all()
     qwen = table.swarm == "qwen3_360m_1p6b"
     fixed = qwen & ~pooled & runs.uncheatable_bpb.notna()
-    assert np.allclose(table.bpb__uncheatable[fixed], runs.uncheatable_bpb[fixed], rtol=0, atol=2e-6)
+    assert np.allclose(
+        table.bpb__uncheatable[fixed], runs.uncheatable_bpb[fixed], rtol=0, atol=tables.FIXED_RULE_TOLERANCE
+    )
     legacy = ~qwen & complete["uncheatable"] & runs.uncheatable_bpb.notna()
-    assert (table.bpb__uncheatable - runs.uncheatable_bpb)[legacy].abs().max() < 1e-4
+    gap = (table.bpb__uncheatable - runs.uncheatable_bpb)[legacy].abs()
+    assert gap.max() < 1e-4 and (gap > 0).all()
     obe = runs.table9_macro_bpb.notna()
     assert np.allclose(table.bpb__obe_easy[obe], runs.table9_macro_bpb[obe], rtol=0, atol=1e-12)
     # Without all of an objective's components, a run takes its fixed-rule record or has no value; one Llama 160M run
