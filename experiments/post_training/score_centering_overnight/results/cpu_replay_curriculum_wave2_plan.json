@@ -70,7 +70,7 @@
         "node_name": "ge6b2c0",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending.",
+      "status": "Controller exit0; full physical249984 cohort verified, available original responses graded and native failure placeholders retained separately.",
       "archive_downloads_complete": true,
       "download_manifest": {
         "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-sc-s1-a1-01a126ce/download-manifest.json.gz",
@@ -88,7 +88,34 @@
         "native_failures": 0,
         "result_passed": null,
         "failure_published": false
-      }
+      },
+      "full_response_replay_passed": true,
+      "terminal_controller": {
+        "job_id": "/romain/score-grader-qwen-curriculum-sc-s1-a1-01a126ce",
+        "job_state": "4",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "9f903ac0e6802f9022178f73b1186b1a5e15e3b91663130c04ed3da0316f1f89",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-curriculum-sc-s1-a1-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "e63ce1a6a9a94b0f",
+        "task_state": "4",
+        "exit_code": "0",
+        "started_at_ms": "1792094165946",
+        "finished_at_ms": "1792100350362",
+        "node_name": "ge6b2c0",
+        "terminal_reason": ""
+      },
+      "allocated_cpu_hours": 54.972586666666665,
+      "physical_records": 249984,
+      "actual_original_grade_calls": 249983,
+      "native_failure_placeholders": 1,
+      "completed_report": "sc-qwen-transfer-curriculum-sc-s1-main-rno-a1-01a126ce-regrading.json.gz"
     },
     {
       "job_id": "/romain/score-grader-qwen-curriculum-tis-s0-a1-01a126ce",
@@ -272,7 +299,7 @@
   "total_requested_gpu": 0,
   "maximum_archive_io_workers": 6,
   "first_complete_cpu_replay_proof": "qwen_curriculum300_first_cpu_complete_response_replay.json",
-  "status": "All3 wave2 native archive cohorts fully downloaded and identities verified;6IO workers released. Actual original grades continue:32768 SCseed1,32768 TISseed0,16384 TISseed1, allzero discrepancies/native failures as observed20:25UTC. Next bounded wave may submit.",
+  "status": "Curriculum SCseed1 completed full249984 physical records/249983 original grades with1 pre-existing native failure placeholder,zero grade discrepancies and all16 native evals matched. TISseeds0/1 remain controller-running,229376 records each as of21:50UTC; original errors retained separately.",
   "native_bundle_validation_passed": true,
   "resource_board_ids": [
     1064,

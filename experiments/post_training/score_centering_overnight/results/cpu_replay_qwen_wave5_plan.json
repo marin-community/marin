@@ -68,7 +68,25 @@
         "node_name": "ge6b2c0",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending.",
+      "archive_downloads_complete": true,
+      "download_manifest": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-advantages-tis-s2-a0-01a126ce/download-manifest.json.gz",
+        "bytes": 1369366,
+        "etag": "\"9d167bebd520b837c2040e0be09f2b0d\"",
+        "sha256": "42bfbb16e4aff1ea36eb6071b614f20fb7dca266406f7216f86c54680a71b9c5",
+        "modified": "2026-10-15T21:34:42+00:00"
+      },
+      "progress_at_download_release": {
+        "job_id": "/romain/score-grader-qwen-advantages-tis-s2-a0-01a126ce",
+        "started": true,
+        "archive_downloads_complete": true,
+        "records": 32768,
+        "discrepancies": 0,
+        "native_failures": 0,
+        "result_passed": null,
+        "failure_published": false
+      }
     }
   ],
   "total_requested_cpu": 32,
@@ -76,7 +94,7 @@
   "total_requested_gpu": 0,
   "maximum_archive_io_workers": 2,
   "first_complete_cpu_replay_proof": "qwen_curriculum300_first_cpu_complete_response_replay.json",
-  "status": "Last wave5 advantageTISseed2 task controller-running32CPU/64GiB/50GiB,zeroGPU,2archiveIO workers. Frozen input package read back and fullSHA verified. All unstarted curriculum/advantage mains are now assigned; existing local optimizer/pilot graders remain healthy and unchanged.",
+  "status": "Last unstarted advantageTISseed2 input cohort completely downloaded and verified;2IO workers released.32768 physical records processed with zero reported grade discrepancies/native failures as of21:50UTC. All curriculum/advantage main graders now have their complete frozen inputs; full results remain pending.",
   "native_bundle_validation_passed": true,
   "resource_board_ids": [
     1072,

@@ -236,15 +236,13 @@
       "physical_records": 249984,
       "actual_original_grade_calls": 249980,
       "native_failure_placeholders": 4
-    }
-  ],
-  "active_allocations": [
+    },
     {
       "job_id": "/romain/score-grader-qwen-curriculum-sc-s1-a1-01a126ce",
       "cluster": "cw-rno2a",
-      "controller_row": {
+      "task_attempt": {
         "job_id": "/romain/score-grader-qwen-curriculum-sc-s1-a1-01a126ce",
-        "job_state": "3",
+        "job_state": "4",
         "num_tasks": "1",
         "priority_band": "3",
         "bundle_id": "9f903ac0e6802f9022178f73b1186b1a5e15e3b91663130c04ed3da0316f1f89",
@@ -256,22 +254,27 @@
         "task_id": "/romain/score-grader-qwen-curriculum-sc-s1-a1-01a126ce/0",
         "attempt_id": "0",
         "attempt_uid": "e63ce1a6a9a94b0f",
-        "task_state": "3",
-        "exit_code": "",
+        "task_state": "4",
+        "exit_code": "0",
         "started_at_ms": "1792094165946",
-        "finished_at_ms": "",
+        "finished_at_ms": "1792100350362",
         "node_name": "ge6b2c0",
         "terminal_reason": ""
       },
       "requested_cpu": 32,
       "requested_memory": "64GB",
       "requested_disk": "50GB",
+      "controller_accelerator_spec": {},
+      "allocated_cpu_hours": 54.972586666666665,
       "allocated_h100_hours": 0,
-      "terminal_cost_pending": true,
-      "role": "Full native300 curriculum original-grader replay, replacing terminal preemption where recorded",
-      "output_prefix": "marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-sc-s1-a1-01a126ce",
-      "replaces_preempted_cpu_job": "/romain/score-grader-qwen-curriculum-sc-s1-a0-01a126ce"
-    },
+      "role": "Completed full native300 Qwen original-grader replay",
+      "full_response_replay_passed": true,
+      "physical_records": 249984,
+      "actual_original_grade_calls": 249983,
+      "native_failure_placeholders": 1
+    }
+  ],
+  "active_allocations": [
     {
       "job_id": "/romain/score-grader-qwen-curriculum-tis-s0-a1-01a126ce",
       "cluster": "cw-rno2a",
@@ -570,6 +573,6 @@
       "replaces_preempted_cpu_job": null
     }
   ],
-  "total_terminal_allocated_cpu_hours": 132.670955,
+  "total_terminal_allocated_cpu_hours": 187.64354166666666,
   "total_allocated_h100_hours": 0
 }
