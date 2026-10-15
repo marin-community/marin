@@ -49,15 +49,19 @@ launches append no hash); the runs appear in no other config.
 `domain_sweeps_olmix_fits` holds Olmix's log-linear fit to each matched-proxy curve that the figure draws:
 BPB(p) = exp(log_c) + exp(coefficient_domain * p + coefficient_web * (1 - p)) at domain weight p, fitted to the
 curve's eight points under Olmix's Huber loss (delta 0.02). For each curve, the figure's v03 builder kept the
-lowest-loss fit among Olmix's 48-start fit and two refits restricted to a falling and a rising response. The fits exist
-only in that builder's receipt on Drive.
+lowest-loss fit among Olmix's 48-start fit and two refits restricted to a falling and a rising response. That builder
+rewrites its receipt on Drive on every run, so the export reads a committed copy of the two fits
+(`AG/starcoder_tpp10/domain_sweeps/figure4_olmix_fits_receipt_20260924.json`) and checks it against the Drive receipt
+when the paper folder is mounted.
 
 `domain_sweeps_sources.json` lists, by domain, each file the export reads and each other file that the figure's
 builder chain reads (`figure4_cap_policy_drafts` in the paper folder: v16_full_width -> v11_options -> v03 ->
-plot_alternatives), with its original and the names the export takes from it.
+plot_alternatives), with its original and the names the export takes from it. `required_sources()` returns the files
+the export needs; the sweeps' measurement CSVs are git-ignored, so a checkout can lack them.
 """
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -108,6 +112,14 @@ ARMS = {
 ALLOCATION_KEYS = {"proxy": "proxy_allocation", "target": "target_allocation"}
 DOMAIN_COMPONENT = "starcoder"  # the allocator's name for the swept domain in every sweep
 PAPER_TASK_METRICS = frozenset(naming.task_table().internal_metric)
+
+
+def required_sources() -> list[Path]:
+    """The files the export reads. The Drive receipt is optional: the export compares it with its committed copy only
+    when the paper folder is mounted."""
+    sources = json.loads(paths.require(SOURCES).read_text())
+    read = {paths.REPO / entry["original"] for entries in sources.values() for entry in entries if entry["reader"]}
+    return sorted({DESIGN, ALLOCATIONS, *read})
 
 
 def _arm_designs(design: dict) -> pd.DataFrame:
@@ -184,10 +196,18 @@ def _public_evaluation(name: str) -> str:
     return naming.task_public(name) if name in PAPER_TASK_METRICS else name
 
 
+def _selected_fit(receipt: Path, curve: str) -> dict:
+    return json.loads(receipt.read_text())["analysis"]["fit_audit"][curve]["selected"]
+
+
 def _olmix_fit(entry: dict, domain: str, arms: pd.DataFrame) -> dict:
-    """Olmix's fit to one matched-proxy curve, as the figure's builder chain reads it from the v03 receipt on Drive."""
-    receipt = json.loads(paths.require(paths.DRIVE / entry["drive_copy"]).read_text())
-    fit = receipt["analysis"]["fit_audit"][f"{entry['source_domain']}/{entry['arm']}"]["selected"]
+    """Olmix's fit to one matched-proxy curve from the committed copy of the v03 builder's receipt, which must still
+    equal the Drive receipt the figure's builder chain reads whenever the paper folder is mounted."""
+    curve = f"{entry['source_domain']}/{entry['arm']}"
+    fit = _selected_fit(paths.require(paths.REPO / entry["original"]), curve)
+    drive = paths.DRIVE / entry["drive_copy"]
+    if drive.exists() and _selected_fit(drive, curve) != fit:
+        raise ValueError(f"{entry['original']} differs from the Drive receipt's {curve} fit")
     arm = arms.set_index("arm").loc[entry["arm"]]
     row = {
         "domain": domain,

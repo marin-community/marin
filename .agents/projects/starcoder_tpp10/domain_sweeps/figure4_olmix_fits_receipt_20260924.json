@@ -1,0 +1,32 @@
+{
+  "note": "Olmix's selected fits to the two matched-proxy curves of the paper's epoch-cap figure (fig:domain-repetition), copied on 2026-10-15 from the v03 builder's receipt in the paper's Drive folder (last written 2026-09-24). build_preview.py rewrites that receipt on every run. The release export (configs/domain_sweeps.py, table domain_sweeps_olmix_fits) reads this copy and checks it against the Drive receipt when the folder is mounted.",
+  "drive_copy": "figure4_cap_policy_drafts/v03/receipt.json",
+  "drive_receipt_sha256": "cc0e769466564620a52c09d1184b581488eea834748a7f231e51412474984226",
+  "copied_on": "2026-10-15",
+  "analysis": {
+    "fit_audit": {
+      "dolmino_flan/matched": {
+        "selected": {
+          "log_c": 0.40328029776133073,
+          "coefficients": [
+            -0.6064838531201886,
+            -7.7197297941788605
+          ],
+          "huber_loss": 0.0035564828127310883,
+          "slope": 7.113245941058672
+        }
+      },
+      "finemath_3plus/matched": {
+        "selected": {
+          "log_c": 0.47581536386578427,
+          "coefficients": [
+            -8.525996292918222,
+            -1.179089506834231
+          ],
+          "huber_loss": 0.0021650065412001057,
+          "slope": -7.346906786083991
+        }
+      }
+    }
+  }
+}

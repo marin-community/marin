@@ -13,7 +13,10 @@ from experiments.domain_phase_mix.release import context, paths
 from experiments.domain_phase_mix.release.configs import domain_sweeps
 
 SWEEPS = paths.AG / "starcoder_tpp10"
-pytestmark = pytest.mark.skipif(not SWEEPS.exists(), reason="domain sweep sources absent")
+# The sweeps' measurement CSVs are git-ignored, so a checkout can hold the folder without them.
+pytestmark = pytest.mark.skipif(
+    not all(path.exists() for path in domain_sweeps.required_sources()), reason="domain sweep sources absent"
+)
 # The files the epoch-cap figure's builder chain reads for the four curves it draws (build_preview.load_curves).
 FLAN = SWEEPS / "instruction_sweep"
 MATH = (
@@ -220,6 +223,37 @@ def test_olmix_fits_are_fits_to_the_matched_proxies(out):
     fit = fits.set_index("domain")
     assert fit.coefficient_domain["instruction"] > fit.coefficient_web["instruction"]
     assert fit.coefficient_domain["finemath"] < fit.coefficient_web["finemath"]
+
+
+def test_olmix_fits_come_from_the_committed_receipt(ctx, out, monkeypatch, tmp_path):
+    # Without the Drive folder, the export reads the same fits from the committed copy.
+    monkeypatch.setattr(paths, "DRIVE", tmp_path / "unmounted")
+    fits = domain_sweeps.export(ctx)["domain_sweeps_olmix_fits"]
+    pd.testing.assert_frame_equal(fits, out["domain_sweeps_olmix_fits"])
+    # The v03 builder rewrites its Drive receipt on every run; a receipt that drifts from the copy fails the export.
+    sources = json.loads(domain_sweeps.SOURCES.read_text())
+    entry = next(entry for entries in sources.values() for entry in entries if entry["reader"] == "olmix_fits")
+    receipt = json.loads((paths.REPO / entry["original"]).read_text())
+    receipt["analysis"]["fit_audit"][f"{entry['source_domain']}/{entry['arm']}"]["selected"]["log_c"] += 1e-9
+    drifted = tmp_path / "drive" / entry["drive_copy"]
+    drifted.parent.mkdir(parents=True)
+    drifted.write_text(json.dumps(receipt))
+    monkeypatch.setattr(paths, "DRIVE", tmp_path / "drive")
+    with pytest.raises(ValueError, match="Drive receipt"):
+        domain_sweeps.export(ctx)
+
+
+def test_required_sources_are_the_files_the_export_reads(ctx, monkeypatch):
+    # The skip guard above, and any package-level guard, rely on this list.
+    read = set()
+    require = paths.require
+    monkeypatch.setattr(paths, "require", lambda path: read.add(path) or require(path))
+    domain_sweeps.export(ctx)
+    required = set(domain_sweeps.required_sources())
+    assert read - {domain_sweeps.SOURCES} == required
+    # The sources file lists each of them under the domains it feeds.
+    sources = json.loads(domain_sweeps.SOURCES.read_text())
+    assert required <= {paths.REPO / entry["original"] for entries in sources.values() for entry in entries}
 
 
 def test_no_run_names_or_internal_strings(out):

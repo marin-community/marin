@@ -97,11 +97,18 @@
       "note": "The repository's TPP-10 design; the export reads it for every domain as domain_sweeps.DESIGN."
     },
     {
-      "original": null,
+      "original": ".agents/projects/starcoder_tpp10/allocation_audit.json",
+      "drive_copy": null,
+      "figure": null,
+      "reader": null,
+      "note": "The design's allocation audit, the domain sequences the allocator draws at each weight and scale; the export reads it for every domain as domain_sweeps.ALLOCATIONS and derives each run's epochs from it."
+    },
+    {
+      "original": ".agents/projects/starcoder_tpp10/domain_sweeps/figure4_olmix_fits_receipt_20260924.json",
       "drive_copy": "figure4_cap_policy_drafts/v03/receipt.json",
       "figure": "build_options.load: analysis.fit_audit['dolmino_flan/matched'].selected, Olmix's fit drawn in panel A",
       "reader": "olmix_fits",
-      "note": "Drive only, with no original under .agents/projects/starcoder_tpp10: the v03 builder's own output.",
+      "note": "The chain reads the Drive receipt, which build_preview.py rewrites on every run. The original is a committed copy of its two selected fits; the export reads it and checks it against the Drive receipt when the paper folder is mounted.",
       "source_domain": "dolmino_flan",
       "arm": "matched",
       "evaluation": "sciq_bpb",
@@ -133,6 +140,20 @@
         "arxiv_computer_science": "eval/uncheatable_eval/arxiv_computer_science/bpb",
         "ao3_english": "eval/uncheatable_eval/ao3_english/bpb"
       }
+    },
+    {
+      "original": "experiments/domain_phase_mix/starcoder_tpp10_assets/design.json",
+      "drive_copy": null,
+      "figure": null,
+      "reader": null,
+      "note": "The repository's TPP-10 design; the export reads it for every domain as domain_sweeps.DESIGN."
+    },
+    {
+      "original": ".agents/projects/starcoder_tpp10/allocation_audit.json",
+      "drive_copy": null,
+      "figure": null,
+      "reader": null,
+      "note": "The design's allocation audit, the domain sequences the allocator draws at each weight and scale; the export reads it for every domain as domain_sweeps.ALLOCATIONS and derives each run's epochs from it."
     }
   ],
   "arxiv": [
@@ -155,6 +176,20 @@
         "arxiv_computer_science": "eval/uncheatable_eval/arxiv_computer_science/bpb",
         "ao3_english": "eval/uncheatable_eval/ao3_english/bpb"
       }
+    },
+    {
+      "original": "experiments/domain_phase_mix/starcoder_tpp10_assets/design.json",
+      "drive_copy": null,
+      "figure": null,
+      "reader": null,
+      "note": "The repository's TPP-10 design; the export reads it for every domain as domain_sweeps.DESIGN."
+    },
+    {
+      "original": ".agents/projects/starcoder_tpp10/allocation_audit.json",
+      "drive_copy": null,
+      "figure": null,
+      "reader": null,
+      "note": "The design's allocation audit, the domain sequences the allocator draws at each weight and scale; the export reads it for every domain as domain_sweeps.ALLOCATIONS and derives each run's epochs from it."
     }
   ],
   "finemath": [
@@ -226,11 +261,18 @@
       "note": "The repository's TPP-10 design; the export reads it for every domain as domain_sweeps.DESIGN."
     },
     {
-      "original": null,
+      "original": ".agents/projects/starcoder_tpp10/allocation_audit.json",
+      "drive_copy": null,
+      "figure": null,
+      "reader": null,
+      "note": "The design's allocation audit, the domain sequences the allocator draws at each weight and scale; the export reads it for every domain as domain_sweeps.ALLOCATIONS and derives each run's epochs from it."
+    },
+    {
+      "original": ".agents/projects/starcoder_tpp10/domain_sweeps/figure4_olmix_fits_receipt_20260924.json",
       "drive_copy": "figure4_cap_policy_drafts/v03/receipt.json",
       "figure": "build_options.load: analysis.fit_audit['finemath_3plus/matched'].selected, Olmix's fit drawn in panel B",
       "reader": "olmix_fits",
-      "note": "Drive only, with no original under .agents/projects/starcoder_tpp10: the v03 builder's own output.",
+      "note": "The chain reads the Drive receipt, which build_preview.py rewrites on every run. The original is a committed copy of its two selected fits; the export reads it and checks it against the Drive receipt when the paper folder is mounted.",
       "source_domain": "finemath_3plus",
       "arm": "matched",
       "evaluation": "gsm8k_bpb",
