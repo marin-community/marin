@@ -5,6 +5,7 @@
 
 import json
 import time
+from collections.abc import Mapping
 from typing import Any
 
 from taskcompendium.chat import assistant_message
@@ -18,6 +19,7 @@ from taskcompendium.models import (
     AssistantToolCalls,
     FinalAction,
     FunctionCall,
+    FunctionDefinition,
     SessionGrader,
     TaskSpec,
 )
@@ -32,19 +34,28 @@ from taskcompendium.submission import (
 from rolloutengine.contracts import (
     LENGTH_STOP_REASON,
     ModelTurn,
+    ProviderSession,
     SessionStart,
     TaskSessionContext,
     ToolCallCompleted,
+    ToolContext,
+    ToolProvider,
     Transition,
 )
+from rolloutengine.lowering import bind_provider_tools
 
 WORKSPACE_INSTRUCTION = (
     "Use the {tool_name} tool to inspect and change the workspace. Send a final response when the task is completed."
 )
 
 
-def session_start(task: TaskSpec, shell_tool: BoundShellTool | None) -> SessionStart:
-    """Render only public task fields, with the answer format's instruction and tools."""
+def session_start(
+    task: TaskSpec, shell_tool: BoundShellTool | None, provider_tools: tuple[FunctionDefinition, ...]
+) -> SessionStart:
+    """Render only public task fields, with the answer format's instruction and tools.
+
+    Provider tools that the task already declares as interaction tools are advertised once.
+    """
     answer_format = task.answer_format
     messages = conversation_messages(task.context.events)
     options: dict[str, Any] = {}
@@ -73,30 +84,47 @@ def session_start(task: TaskSpec, shell_tool: BoundShellTool | None) -> SessionS
             messages.append(
                 {"role": "user", "content": WORKSPACE_INSTRUCTION.format(tool_name=shell_tool.definition.name)}
             )
+    tools.extend(
+        {"type": "function", "function": function.model_dump(exclude_none=True)}
+        for function in provider_tools
+        if function not in task.interaction_tools
+    )
     if tools:
         options["tools"] = tools
     return SessionStart(tuple(messages), options)
 
 
 class _ShellboxTaskSession:
-    """Execute shell calls and grade final task evidence."""
+    """Execute shell and provider tool calls and grade final task evidence."""
 
-    def __init__(self, context: TaskSessionContext):
+    def __init__(self, context: TaskSessionContext, providers: Mapping[str, ToolProvider]):
         self.lowered = context.lowered
         self.machine = context.machine
         self.grader = context.require_task_grader()
         self.events = context.events
         self.shell_tool = resolve_shell_tool(context.lowered.task, context.lowered.session.shell_tool)
+        self.provider_tools = bind_provider_tools(context.lowered.task, self.shell_tool, providers)
+        self.provider_sessions: dict[str, ProviderSession] = {}
 
     async def prepare(self) -> SessionStart:
-        return session_start(self.lowered.task, self.shell_tool)
+        for bound in self.provider_tools.values():
+            if bound.requirement_name not in self.provider_sessions:
+                self.provider_sessions[bound.requirement_name] = await bound.provider.open(
+                    ToolContext(self.machine, bound.requirement)
+                )
+        definitions = tuple(tool.definition for tool in self.provider_tools.values())
+        return session_start(self.lowered.task, self.shell_tool, definitions)
 
     async def advance(self, turn: ModelTurn) -> Transition:
         try:
             message = assistant_message(turn.message)
         except (TypeError, ValueError):
             return Transition(done=True, metrics={"invalid_assistant_message": 1.0})
-        if self.machine is None or not isinstance(message, AssistantToolCalls) or turn.stop_reason == LENGTH_STOP_REASON:
+        if (
+            (self.machine is None and not self.provider_tools)
+            or not isinstance(message, AssistantToolCalls)
+            or turn.stop_reason == LENGTH_STOP_REASON
+        ):
             return Transition(done=True)
         observations = []
         final_tools = {function.name for function in self.lowered.task.final_tools}
@@ -105,9 +133,14 @@ class _ShellboxTaskSession:
             if call.name in final_tools or answer_call:
                 return Transition(done=True)
             started = time.monotonic()
+            done = False
             if not isinstance(call.arguments, dict):
                 observation = json.dumps({"error": TOOL_ARGUMENTS_OBJECT_ERROR})
-            elif self.shell_tool is None:
+            elif call.name in self.provider_tools:
+                provider = self.provider_sessions[self.provider_tools[call.name].requirement_name]
+                result = await provider.call(call.name, call.arguments)
+                observation, done = result.content, result.done
+            elif self.machine is None or self.shell_tool is None:
                 observation = json.dumps({"error": "No shell tool is available"})
             else:
                 observation = await run_shell_call(
@@ -126,6 +159,8 @@ class _ShellboxTaskSession:
                     "content": observation,
                 }
             )
+            if done:
+                return Transition(done=True, observations=tuple(observations))
         return Transition(done=False, observations=tuple(observations))
 
     async def grade(
@@ -134,4 +169,5 @@ class _ShellboxTaskSession:
         return await self.grader(messages, stop_reason=stop_reason, outputs=outputs)
 
     async def close(self) -> None:
-        pass
+        for provider in self.provider_sessions.values():
+            await provider.close()

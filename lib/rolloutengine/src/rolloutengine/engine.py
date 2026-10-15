@@ -8,6 +8,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, replace
+from functools import partial
 from typing import Any
 
 from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory
@@ -39,6 +40,7 @@ from rolloutengine.contracts import (
     TaskSession,
     TaskSessionContext,
     TaskSessionFactory,
+    ToolProvider,
     Transition,
     TransitionCompleted,
 )
@@ -79,6 +81,7 @@ class RolloutEngine:
     """Generate exact-token rollouts from lowered single-stage tasks.
 
     An optional observer receives progress events while each attempt runs.
+    ``providers`` serve the built-in session's host tools, keyed by ``ProviderRequirement.action_interface``.
     """
 
     def __init__(
@@ -88,11 +91,13 @@ class RolloutEngine:
         *,
         sessions: Mapping[str, TaskSessionFactory] | None = None,
         observer: RolloutObserver | None = None,
+        providers: Mapping[str, ToolProvider] | None = None,
     ):
         self.model = model
         self.factories = factories
         self.sessions = {} if sessions is None else sessions
         self.observer = observer
+        self.providers = {} if providers is None else providers
 
     async def run(self, lowered: LoweredTaskSpec, run_key: str | None = None) -> RolloutData:
         """Run one attempt; release its resources outside the attempt deadline.
@@ -102,7 +107,7 @@ class RolloutEngine:
         Queued events are delivered within the cleanup deadline after the attempt's resources are
         released; events the observer did not receive are counted in ``RolloutData.metrics``.
         """
-        validate_lowered_task(lowered, factories=self.factories, sessions=self.sessions)
+        validate_lowered_task(lowered, factories=self.factories, sessions=self.sessions, providers=self.providers)
         events = _EventDelivery(self.observer, lowered.task.id if run_key is None else run_key, lowered.task.id)
         try:
             events.emit(AttemptStarted())
@@ -183,7 +188,7 @@ class RolloutEngine:
 
         session_factories: Mapping[str, TaskSessionFactory] = {
             **self.sessions,
-            SHELLBOX_SESSION: _ShellboxTaskSession,
+            SHELLBOX_SESSION: partial(_ShellboxTaskSession, providers=self.providers),
         }
         try:
             context = TaskSessionContext(

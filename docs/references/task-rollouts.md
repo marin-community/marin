@@ -38,7 +38,7 @@ Lowering preserves the task definition and adds these deployment settings:
 | `TaskSessionSpec` | `task_session`, `shell_tool`, `max_turns`, `model_turn_timeout`, `command_timeout`, `tool_turn_timeout`, `total_turn_timeout`, `attempt_timeout`, `verifier_timeout`, `cleanup_timeout` |
 | `LoweredTaskSpec` | `task: TaskSpec`, `runtime: TaskRuntimeSpec`, `session: TaskSessionSpec` |
 
-`rolloutengine.lowering.lower_task(task, runtime, session, factories=..., sessions=...)` constructs and validates the lowered record.
+`rolloutengine.lowering.lower_task(task, runtime, session, factories=..., sessions=..., providers=...)` constructs and validates the lowered record.
 The engine validates a directly constructed `LoweredTaskSpec` before execution.
 
 Runtime fields require explicit values except `shell_tool`, which defaults to `shell(command)`.
@@ -163,7 +163,55 @@ tool_bindings={"Bash": ShellToolBinding(command_parameter="script")},
 The built-in session preserves that definition and prompt. It supports one shell binding
 with one required, unconstrained string argument; unsupported schemas fail before machine
 acquisition. Tool names alone never select an executor. Other interaction tools and
-provider contracts require a custom session.
+provider contracts require a registered tool provider or a custom session.
+
+### Tool providers
+
+A tool provider serves host tools for one action interface. Register providers with
+`RolloutEngine(model, factories, providers={"checker:v1": provider})`; the key matches
+`ProviderRequirement.action_interface` in `environment_requirements.tool_providers`.
+No provider is registered by default.
+
+```python
+from rolloutengine.contracts import ProviderResult, ToolContext
+
+
+class Checker:
+    def tools(self, requirement):
+        return (CHECK,)  # FunctionDefinitions advertised to the model
+
+    async def open(self, context: ToolContext) -> "CheckSession":
+        return CheckSession(context.machine, dict(context.requirement.initial_state))
+
+
+class CheckSession:
+    def __init__(self, machine, state):
+        self.machine, self.state = machine, state
+
+    async def call(self, name, arguments) -> ProviderResult:
+        result = await self.machine.run(Command(("cat", arguments["path"])))
+        return ProviderResult(result.stdout.decode(), done=True)
+
+    async def close(self) -> None:
+        pass
+```
+
+The built-in session advertises each provider's tools after the shell tool and runs a turn's calls in order.
+When the session prepares, it opens one `ProviderSession` per requirement with a `ToolContext`: the task machine,
+or `None` for a task without one, and the task's `ProviderRequirement`, including its `initial_state`.
+Attempts never share a provider session, so provider state cannot leak between rollouts; the session closes
+with the attempt's other resources. `ProviderResult.content` becomes the tool observation.
+`done=True` ends the rollout after the current call, like a final tool; grading follows.
+Non-object arguments return the JSON error observation that shell calls use; the provider validates the rest.
+A provider-only task needs no task machine.
+
+Lowering rejects these tasks before machine acquisition:
+
+- a provider requirement whose action interface has no registered provider;
+- a provider tool whose name matches the shell tool, a final tool, the answer tool, or another provider tool;
+- an interaction tool that neither the shell binding nor a provider serves, or that differs from the provider's definition.
+
+A task can declare a provider's tool in `interaction_tools` to fix its definition; the session advertises it once.
 
 For tasks that declare only the shell capability, the harness supplies the interface.
 Set `TaskSessionSpec(shell_tool=ShellToolConfig(name="terminal", command_parameter="cmd"), ...)`

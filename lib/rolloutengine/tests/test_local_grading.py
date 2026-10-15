@@ -82,7 +82,7 @@ def test_lowering_accepts_wrapped_local_factory(lock_environment):
     spec = lowered(task, verifier_machine=machine_runtime())
     factory = DelegatingLocalFactory(UnavailableLocalFactory())
 
-    selected = lower_task(task, spec.runtime, spec.session, factories={"local": factory}, sessions={})
+    selected = lower_task(task, spec.runtime, spec.session, factories={"local": factory}, sessions={}, providers={})
 
     assert selected == spec
 

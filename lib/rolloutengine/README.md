@@ -8,7 +8,8 @@ factories. Each factory receives a `TaskSessionContext` for one attempt;
 a session class with that constructor signature can be registered directly.
 Each session prepares model requests, handles responses and tools, and grades the attempt.
 The built-in `shellbox` session uses the same execution
-loop as registered sessions and handles shell tools. `AgentTaskSession` adapts
+loop as registered sessions and handles shell tools. Optional `ToolProvider`s, keyed by
+`ProviderRequirement.action_interface`, serve host tools that the session advertises beside the shell tool. `AgentTaskSession` adapts
 an agent that controls its own prompt and tool loop. Its factory can use the
 default grader supplied by the engine.
 For text, number, JSON, and native-action answers, it adds the task's answer-format instruction and tools to the model request.
