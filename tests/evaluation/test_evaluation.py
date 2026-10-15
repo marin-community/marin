@@ -1972,7 +1972,7 @@ def test_launch_dry_run_prints_the_resolved_harbor_agent_context(tmp_path, monke
     [
         ((), "cw-us-east-02a", "inherit"),
         (
-            ("--federated_cluster", "cw-rno2a", "--priority", "interactive", "--max-concurrent", "1"),
+            ("--federated_cluster", "cw-rno2a", "--priority", "interactive"),
             "cw-rno2a",
             "interactive",
         ),
