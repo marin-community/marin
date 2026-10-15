@@ -61,11 +61,10 @@ def test_stitch_dashboard_expands_target_refs_in_fragments_and_collapsed_rows(pa
         {"key": "run", "value": "${run}"},
         {"key": "from", "value": "${__from}"},
         {"key": "to", "value": "${__to}"},
+        {"key": "bucket_ms", "value": "${__interval_ms}"},
         {"key": "view", "value": "spans"},
     ]
-    if parameter_set == "rl_run":
-        params.insert(-1, {"key": "bucket_ms", "value": "60000"})
-    else:
+    if parameter_set == "rl_attempt":
         params[2:2] = [{"key": "job", "value": "${job}"}, {"key": "executions", "value": "${execution:csv}"}]
     expanded = {
         "refId": "A",

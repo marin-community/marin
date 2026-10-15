@@ -14,7 +14,12 @@ import pytest
 from config import ClusterTarget
 from conftest import bridge_config, dashboard_panels, install_finelog_dialect_macros
 from dashboard_stitch import stitch_all
-from rl_attempt_observability import _METRIC_NAMES, RL_ATTEMPT_MAX_RESULT_ROWS, rl_attempt_dataset
+from rl_attempt_observability import (
+    _METRIC_NAMES,
+    RL_ATTEMPT_MAX_RESULT_ROWS,
+    RL_ATTEMPT_MIN_BUCKET_MS,
+    rl_attempt_dataset,
+)
 from rl_observability import _DCGM_SERIES, rl_gpu_dataset, rl_overview_dataset
 from server import create_app
 from starlette.testclient import TestClient
@@ -453,6 +458,7 @@ def _target_params(target, *, run=RUN_ID, executions=f"{DRIVER},{WORKER}"):
         "${execution:csv}": executions,
         "${__from}": str(WINDOW_START_MS),
         "${__to}": str(WINDOW_START_MS + WINDOW_MS),
+        "${__interval_ms}": str(RL_ATTEMPT_MIN_BUCKET_MS),
     }
     params = {}
     for param in target["url_options"]["params"]:
@@ -499,6 +505,24 @@ def test_every_panel_view_returns_declared_fields_for_selected_attempt(store):
                     ], (run, panel["id"], actual)
             assert len(queries) - initial_queries == len(dataset().sources), run
 
+        panel = next(panel for panel in PANELS.values() if panel["id"] == 3)
+        target = panel["targets"][0]
+        response = client.get(
+            f"/finelog/marin{target['url']}",
+            params={**_target_params(target), "bucket_ms": 60000},
+        )
+        assert response.status_code == 200, response.text
+        assert sorted(response.json(), key=lambda row: row["series"]) == [
+            {"section": "token_rates", "t": BASE_EPOCH_MS, "series": "consumed_loss_token · driver", "value": 1.5},
+            {
+                "section": "token_rates",
+                "t": BASE_EPOCH_MS,
+                "series": "consumed_response_token · driver",
+                "value": pytest.approx(100 / 60, rel=1e-12),
+            },
+            {"section": "token_rates", "t": BASE_EPOCH_MS, "series": "generated_token · driver", "value": 2.5},
+        ]
+
 
 def _bridge(database, *, max_rows=1000):
     queries = []
@@ -518,6 +542,7 @@ REQUEST = {
     "executions": f"{DRIVER},{WORKER}",
     "from": WINDOW_START_MS,
     "to": WINDOW_START_MS + WINDOW_MS,
+    "bucket_ms": RL_ATTEMPT_MIN_BUCKET_MS,
 }
 
 

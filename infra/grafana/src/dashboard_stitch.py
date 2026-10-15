@@ -33,9 +33,9 @@ LINK_REF_KEY = "linkRef"
 TARGET_REF_KEY = "targetRef"
 _VARIABLE = re.compile(r"\$\{([^}]+)\}")
 
-_RANGE_PARAMS = (("from", "${__from}"), ("to", "${__to}"))
+_RANGE_PARAMS = (("from", "${__from}"), ("to", "${__to}"), ("bucket_ms", "${__interval_ms}"))
 _SHARED_TARGET_PARAMS = {
-    "rl_run": (("clusters", "${cluster:csv}"), ("run", "${run}"), *_RANGE_PARAMS, ("bucket_ms", "60000")),
+    "rl_run": (("clusters", "${cluster:csv}"), ("run", "${run}"), *_RANGE_PARAMS),
     "rl_attempt": (
         ("clusters", "${cluster:csv}"),
         ("run", "${run}"),

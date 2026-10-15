@@ -349,7 +349,8 @@
           "view": "policy_step"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 3,
@@ -424,7 +425,8 @@
           "view": "token_rates"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 104,
@@ -494,7 +496,8 @@
           "view": "rollout_progress"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 4,
@@ -580,7 +583,9 @@
           "targetRef": "rl_attempt",
           "view": "lifecycle"
         }
-      ]
+      ],
+      "maxDataPoints": 360,
+      "interval": "30s"
     },
     {
       "id": 101,
@@ -693,7 +698,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 120,
@@ -760,7 +766,9 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360,
+      "interval": "30s"
     },
     {
       "id": 28,
@@ -826,7 +834,9 @@
           "targetRef": "rl_attempt",
           "view": "exporter"
         }
-      ]
+      ],
+      "maxDataPoints": 360,
+      "interval": "30s"
     },
     {
       "id": 202,
@@ -914,7 +924,8 @@
           "view": "driver_walls"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 121,
@@ -990,7 +1001,8 @@
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 102,
@@ -1133,7 +1145,8 @@
           "view": "straggler"
         }
       ],
-      "maxDataPoints": 360
+      "maxDataPoints": 360,
+      "interval": "1m"
     },
     {
       "id": 14,
@@ -1208,7 +1221,8 @@
           "view": "sync_walls"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 53,
@@ -1303,7 +1317,7 @@
           "view": "weight_sync_stages"
         }
       ],
-      "interval": "1m",
+      "interval": "30s",
       "transformations": [
         {
           "id": "organize",
@@ -1325,7 +1339,8 @@
             "keepFields": false
           }
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 203,
@@ -1413,7 +1428,8 @@
           "view": "worker_waits"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 8,
@@ -1488,7 +1504,8 @@
           "view": "buffer"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 10,
@@ -1563,7 +1580,8 @@
           "view": "buffer_dwell"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 12,
@@ -1638,7 +1656,8 @@
           "view": "rollout_latency"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 15,
@@ -1713,7 +1732,8 @@
           "view": "event_loop_lag"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 16,
@@ -1787,7 +1807,8 @@
           "view": "residuals"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 18,
@@ -1853,7 +1874,9 @@
           "targetRef": "rl_attempt",
           "view": "training_overlap"
         }
-      ]
+      ],
+      "maxDataPoints": 360,
+      "interval": "30s"
     },
     {
       "id": 19,
@@ -1928,7 +1951,8 @@
           "view": "group_dispositions"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 20,
@@ -2003,7 +2027,8 @@
           "view": "group_tokens"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 42,
@@ -2092,7 +2117,8 @@
           "view": "inference_service"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 210,
@@ -2179,7 +2205,8 @@
               "view": "policy_staleness"
             }
           ],
-          "interval": "1m"
+          "interval": "30s",
+          "maxDataPoints": 360
         },
         {
           "id": 51,
@@ -2254,7 +2281,8 @@
               "view": "staleness_groups"
             }
           ],
-          "interval": "1m"
+          "interval": "30s",
+          "maxDataPoints": 360
         },
         {
           "id": 52,
@@ -2329,7 +2357,8 @@
               "view": "staleness_tokens"
             }
           ],
-          "interval": "1m"
+          "interval": "30s",
+          "maxDataPoints": 360
         },
         {
           "id": 54,
@@ -2403,7 +2432,8 @@
               "view": "mismatch_staleness0"
             }
           ],
-          "interval": "1m"
+          "interval": "30s",
+          "maxDataPoints": 360
         },
         {
           "id": 55,
@@ -2477,7 +2507,8 @@
               "view": "mismatch_by_staleness"
             }
           ],
-          "interval": "1m"
+          "interval": "30s",
+          "maxDataPoints": 360
         },
         {
           "datasource": {
@@ -2558,7 +2589,9 @@
             }
           ],
           "title": "Uniform-staleness diagnostic token coverage",
-          "type": "stat"
+          "type": "stat",
+          "maxDataPoints": 360,
+          "interval": "30s"
         },
         {
           "datasource": {
@@ -2664,7 +2697,9 @@
             }
           ],
           "title": "Uniform-staleness batch diagnostics",
-          "type": "table"
+          "type": "table",
+          "maxDataPoints": 360,
+          "interval": "30s"
         }
       ]
     },
@@ -3235,7 +3270,8 @@
           "view": "megatron_policy_wall"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 24,
@@ -3309,7 +3345,8 @@
           "view": "optimizer"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 27,
@@ -3380,7 +3417,9 @@
           "targetRef": "rl_attempt",
           "view": "megatron_phases"
         }
-      ]
+      ],
+      "maxDataPoints": 360,
+      "interval": "30s"
     },
     {
       "id": 41,
@@ -3474,7 +3513,8 @@
           "view": "learner_memory"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 206,
@@ -3843,7 +3883,8 @@
           ]
         }
       ],
-      "maxDataPoints": 360
+      "maxDataPoints": 360,
+      "interval": "1m"
     },
     {
       "id": 207,
@@ -3931,7 +3972,8 @@
           "view": "reward"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 23,
@@ -4006,7 +4048,8 @@
           "view": "evaluation"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 40,
@@ -4082,7 +4125,8 @@
           "view": "length_stops"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 49,
@@ -4185,7 +4229,8 @@
           "view": "evaluation_lengths"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 50,
@@ -4259,7 +4304,8 @@
           "view": "evaluation_contributions"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 208,
@@ -4346,7 +4392,8 @@
           "view": "drift"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 31,
@@ -4420,7 +4467,8 @@
           "view": "clip_pressure"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 32,
@@ -4494,7 +4542,8 @@
           "view": "drift_coverage"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 44,
@@ -4568,7 +4617,8 @@
           "view": "log_ratio_squared"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 46,
@@ -4643,7 +4693,8 @@
           "view": "correction_weights"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 59,
@@ -4717,7 +4768,8 @@
           "view": "corrections"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 56,
@@ -4791,7 +4843,8 @@
           "view": "learner_drift"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 57,
@@ -4865,7 +4918,8 @@
           "view": "position_dependence"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 209,
@@ -4952,7 +5006,8 @@
           "view": "core_cycle"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 35,
@@ -5026,7 +5081,8 @@
           "view": "loss_token_rates"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 36,
@@ -5100,7 +5156,8 @@
           "view": "core_fractions"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 38,
@@ -5174,7 +5231,8 @@
           "view": "role_gpu_tokens"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 39,
@@ -5248,7 +5306,8 @@
           "view": "role_gpus"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 43,
@@ -5322,7 +5381,8 @@
           "view": "core_gpu_hours"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
       "id": 211,

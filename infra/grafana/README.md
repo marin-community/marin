@@ -340,6 +340,10 @@ Execution pickers select the same attempt data for both types. All executions in
 identified execution of the selected job. Run-wide panels state that they ignore these two
 pickers. MarinSkyRL documents telemetry export at `docs/grafana-rl-runs.md`.
 
+RL panels have a 360-point budget. Overview, GPU and attempt requests pass
+Grafana's interval. Attempt panels use a 30-second minimum; run-wide charts use one minute.
+The bridge raises either interval as needed to keep each trend within 360 points.
+
 Attempt panels require an Iris `job_id`. Runs without one show missing-job errors on the
 attempt panels; the run-wide panels still render.
 
