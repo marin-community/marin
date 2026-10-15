@@ -85,7 +85,7 @@ from rolloutengine.contracts import (
 )
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.lowering import lower_task
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.spec import LoweredTaskSpec, TraceMode
 from rolloutengine.task_session import WORKSPACE_INSTRUCTION
 from rolloutengine.test_support import (
     TWELVE,
@@ -647,8 +647,9 @@ async def test_session_replaces_model_options_after_conversation_reset(next_opti
     assert result.loss_mask == (1, 0, 0, 1)
 
 
+@pytest.mark.parametrize("trace", list(TraceMode))
 @pytest.mark.parametrize("alter_prefix", [False, True])
-async def test_session_replays_exact_initial_tokens_and_rejects_transport_changes(alter_prefix):
+async def test_session_replays_exact_initial_tokens_and_rejects_transport_changes(alter_prefix, trace):
     prefix = (128000, 42, 128005)
 
     class Session:
@@ -670,16 +671,18 @@ async def test_session_replays_exact_initial_tokens_and_rejects_transport_change
         return ModelTurn({"role": "assistant", "content": "done"}, served, (5, 6), (-0.1, -0.2), "stop")
 
     runner = RolloutEngine(model, {}, sessions={"fixture": lambda _context: Session()})
-    task = lowered(arithmetic_task(), task_session="fixture")
+    task = lowered(arithmetic_task(), task_session="fixture", trace=trace)
     if alter_prefix:
+        # A chat endpoint cannot serve pinned tokens either, so the replay check holds in every trace mode.
         with pytest.raises(RolloutContractError, match="replay token prefix"):
             await runner.run(task)
         return
     result = await runner.run(task)
-    assert result.prompt_token_ids == prefix
-    assert result.response_token_ids == (5, 6)
-    assert result.loss_mask == (1, 1)
-    assert result.logprobs == (-0.1, -0.2)
+    assert (result.prompt_token_ids, result.response_token_ids) == (prefix, (5, 6))
+    if trace == TraceMode.EXACT_TOKENS:
+        assert (result.loss_mask, result.logprobs) == ((1, 1), (-0.1, -0.2))
+    else:
+        assert (result.loss_mask, result.logprobs) == ((0, 0), None)
 
 
 @pytest.mark.parametrize("stop_reason", ["stop", "length"])
@@ -1386,6 +1389,75 @@ async def test_model_transport_must_preserve_exact_token_evidence(violation):
     runner = RolloutEngine(complete, {"local": FixtureImageFactory()})
     with pytest.raises(RolloutContractError):
         await runner.run(lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()))
+
+
+@dataclass
+class ChatModel:
+    """Return parsed messages without token evidence, as a hosted chat endpoint does."""
+
+    replies: list[dict]
+    requests: list = field(default_factory=list)
+
+    async def complete(self, request):
+        self.requests.append(request)
+        return ModelTurn(self.replies[len(self.requests) - 1], (), (), None, "stop")
+
+
+async def test_message_trace_runs_chat_models():
+    replies = [shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}]
+    spec = lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), trace=TraceMode.MESSAGES)
+    model = ChatModel(replies)
+
+    record = await engine(model, {"local": FixtureImageFactory()}).run(spec)
+
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    assert record.stop_reason == "stop"
+    assert record.messages[-1] == replies[-1]
+    assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
+    assert [request.prefix_token_ids for request in model.requests] == [(), ()]
+    assert len(record.steps) == 2
+    assert (record.prompt_token_ids, record.response_token_ids, record.loss_mask, record.logprobs) == ((), (), (), None)
+    assert record.metrics["trace"] == "messages"
+
+
+@dataclass
+class RetokenizingChatModel:
+    """Report token IDs whose later prompts do not extend the earlier sequence, as a re-tokenizing endpoint does."""
+
+    replies: list[dict]
+    requests: list = field(default_factory=list)
+
+    async def complete(self, request):
+        self.requests.append(request)
+        index = len(self.requests) - 1
+        prompt = (10, 11) if index == 0 else (10, 99, 98, 97)
+        return ModelTurn(self.replies[index], prompt, (20 + index,), (-0.5,), "stop")
+
+
+async def test_message_trace_keeps_reported_tokens_without_making_them_trainable():
+    replies = [shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}]
+    spec = lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), trace=TraceMode.MESSAGES)
+
+    record = await engine(RetokenizingChatModel(replies), {"local": FixtureImageFactory()}).run(spec)
+
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    # The last served sequence minus the first prompt's length: re-tokenization makes it informational only.
+    assert (record.prompt_token_ids, record.response_token_ids) == ((10, 11), (98, 97, 21))
+    assert (record.loss_mask, record.logprobs) == ((0, 0, 0), None)
+    assert record.metrics["trace"] == "messages"
+
+
+async def test_interrupted_message_trace_record_is_marked():
+    class UnavailableModel:
+        async def complete(self, request):
+            raise ConnectionError("chat endpoint unavailable")
+
+    spec = lowered(arithmetic_task(), trace=TraceMode.MESSAGES)
+    with pytest.raises(RolloutInterrupted) as interrupted:
+        await engine(UnavailableModel()).run(spec)
+
+    assert interrupted.value.operation == RolloutOperation.MODEL
+    assert interrupted.value.rollout.metrics["trace"] == "messages"
 
 
 @pytest.mark.parametrize(

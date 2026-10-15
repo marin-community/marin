@@ -46,7 +46,11 @@ class SessionStart:
 
 @dataclass(frozen=True)
 class ModelTurn:
-    """Exact tokens and the parsed message from one inference request."""
+    """Exact tokens and the parsed message from one inference request.
+
+    Under ``TraceMode.MESSAGES`` the token fields may be empty and ``logprobs`` may be ``None``;
+    the engine records reported token IDs without checking them.
+    """
 
     message: dict[str, Any]
     prompt_token_ids: tuple[int, ...]

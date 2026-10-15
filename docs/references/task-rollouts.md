@@ -35,13 +35,14 @@ Lowering preserves the task definition and adds these deployment settings:
 | --- | --- |
 | `MachineRuntimeSpec` | `backend`, `network`, `cpus`, `memory_mb`, `storage_mb`, `gpus`, `user`, `startup_timeout`, `cleanup_timeout` |
 | `TaskRuntimeSpec` | Optional `task_machine` and `verifier_machine` selections |
-| `TaskSessionSpec` | `task_session`, `shell_tool`, `max_turns`, `model_turn_timeout`, `command_timeout`, `tool_turn_timeout`, `total_turn_timeout`, `attempt_timeout`, `verifier_timeout`, `cleanup_timeout` |
+| `TaskSessionSpec` | `task_session`, `shell_tool`, `max_turns`, `model_turn_timeout`, `command_timeout`, `tool_turn_timeout`, `total_turn_timeout`, `attempt_timeout`, `verifier_timeout`, `cleanup_timeout`, `trace` |
 | `LoweredTaskSpec` | `task: TaskSpec`, `runtime: TaskRuntimeSpec`, `session: TaskSessionSpec` |
 
 `rolloutengine.lowering.lower_task(task, runtime, session, factories=..., sessions=..., providers=...)` constructs and validates the lowered record.
 The engine validates a directly constructed `LoweredTaskSpec` before execution.
 
-Runtime fields require explicit values except `shell_tool`, which defaults to `shell(command)`.
+Runtime fields require explicit values except `shell_tool`, which defaults to `shell(command)`,
+and `trace`, which defaults to `TraceMode.EXACT_TOKENS`.
 Optional fields accept `None`.
 `TaskSessionSpec.cleanup_timeout` requires a finite, positive value.
 Other deadlines accept `None` or a finite, positive value.
@@ -303,7 +304,7 @@ Durations are wall-clock seconds.
 | `AttemptStarted` | After validation, before machine acquisition | |
 | `MachineReady` | After task-machine setup; not emitted without a task machine | `duration` |
 | `SessionPrepared` | After `prepare()` | `message_count`, `duration` |
-| `ModelTurnCompleted` | After a model turn passes the token checks | `turn_index`, `stop_reason`, prompt and response token counts, `ModelTurn.metadata`, `duration` |
+| `ModelTurnCompleted` | After a model turn passes the token checks | `turn_index`, `stop_reason`, prompt and response token counts (as reported and unchecked under `TraceMode.MESSAGES`), `ModelTurn.metadata`, `duration` |
 | `ToolCallCompleted` | By a session, per tool call that returns an observation | `name`, `observation_bytes`, `duration` |
 | `TransitionCompleted` | After `advance(turn)` | `turn_index`, `done`, `observation_count`, `duration` |
 | `Graded` | After the session's `grade()` returns | `status`, `reward` |
@@ -444,6 +445,25 @@ A custom session can use this operation after a failed proof attempt.
 `GenerationLimitReached` retains rendered prompt tokens when the model cannot start another response.
 The engine grades completed state with stop reason `length`.
 It does not add an oversized observation to retained response evidence.
+
+## Trace modes
+
+`TaskSessionSpec.trace` selects the evidence that the engine records.
+`TraceMode.EXACT_TOKENS`, the default, enforces the exact-token contract above.
+`TraceMode.MESSAGES` lets a model behind a chat endpoint drive a rollout for evaluation, task validation, or data collection.
+Chat endpoints re-tokenize the conversation for every request, so the exact-token contract cannot hold there:
+on GLM-5.3 behind the Orion router, 2 of 7 recorded 7-turn ShellSim rollouts failed it on a single non-canonical sampled token.
+The engine sends empty `prefix_token_ids` and skips the prefix, token-evidence, log-probability, and token-credit checks.
+It still checks token replay: a chat endpoint cannot serve a session's `SessionStart.prompt_token_ids` or
+`Transition.next_prompt_token_ids`, so a `MESSAGES` rollout whose session pins prompt tokens raises `RolloutContractError`
+unless the model reports serving exactly those tokens.
+A model may return a `ModelTurn` with empty token fields and `logprobs=None`.
+The engine keeps the token IDs a model does report: `RolloutData.prompt_token_ids` is the first prompt, `response_token_ids`
+is the last served sequence after it, and both are informational only.
+The loss mask is all zeros with one value per response token, and `logprobs` is `None`.
+Every `MESSAGES` record, including an empty or interrupted one, carries `metrics["trace"] = "messages"`.
+Messages, steps, stop reasons, and grades are unchanged.
+Do not train on `MESSAGES` rollouts; reject records that carry the `trace` metric.
 
 ## Use
 
