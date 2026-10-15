@@ -3,6 +3,7 @@
 
 """Build Smartie training from a pinned initializer and an admitted mixed-task dataset."""
 
+import json
 from copy import deepcopy
 from pathlib import Path
 
@@ -46,11 +47,19 @@ ROLE_PLAN = SkyRLRolePlan(
 )
 
 
-def training_config(max_steps: int, resume_path: str | None = None) -> dict:
+def training_config(
+    max_steps: int,
+    resume_path: str | None = None,
+    *,
+    initial_model_uri: str,
+    learning_rate: float,
+    benchmark_selection: Path | None = None,
+) -> dict:
     """Render the objective and runtime settings; SkyRLSpec supplies role geometry."""
     with Path(__file__).with_name("recipe.yaml").open() as stream:
         config = yaml.safe_load(stream)
     trainer = config["trainer"]
+    trainer["policy"]["optimizer_config"]["lr"] = learning_rate
     trainer.update(
         max_steps=max_steps,
         flash_attn=False,
@@ -61,6 +70,16 @@ def training_config(max_steps: int, resume_path: str | None = None) -> dict:
         reset_global_step_on_resume=False,
         evaluation_runner="training",
         tracker_commit_each_step=True,
+        callbacks=[
+            {"type": "checkpoint", "save_steps": 2},
+            {"type": "evaluation", "eval_steps": 2, "eval_before_train": True, "eval_on_train_end": True},
+            {
+                "type": "best_checkpoint",
+                "initial_model_uri": initial_model_uri,
+                "expected_tasks": 1000,
+                "minimum_scored_tasks": 950,
+            },
+        ],
     )
     geometry = {
         "tensor_model_parallel_size": 1,
@@ -80,6 +99,63 @@ def training_config(max_steps: int, resume_path: str | None = None) -> dict:
     geometry["optimizer_checkpoint_sharding_type"] = "dp_reshardable"
     trainer["policy"]["megatron_config"] = geometry
     trainer["placement"] = {"policy_strict_spread_pg": True}
+    if benchmark_selection is not None:
+        selection = json.loads(benchmark_selection.read_text())
+        cohorts = []
+        for name in ("bfcl_parity", "swebench-verified", "openthoughts-tblite"):
+            tasks = [
+                {**{key: task[key] for key in ("git_url", "git_commit_id", "path")}, "source": name}
+                for task in selection["tasks"]
+                if task["benchmark"] == name
+            ]
+            if len(tasks) != 30:
+                raise ValueError(f"Expected 30 fixed validation tasks for {name}")
+            cohorts.append(
+                {
+                    "name": name,
+                    "reward_key": "reward",
+                    "job": {
+                        "tasks": tasks,
+                        "n_attempts": 1,
+                        "n_concurrent_trials": 30,
+                        "environment": {"type": "daytona", "delete": True},
+                        "retry": {
+                            "max_retries": 1,
+                            "include_exceptions": [
+                                "APIConnectionError",
+                                "APITimeoutError",
+                                "SandboxBuildFailedError",
+                                "ContainerRegistryThrottledError",
+                                "DaytonaProcessError",
+                            ],
+                        },
+                        "agents": [
+                            {
+                                "name": "terminus-2",
+                                "override_timeout_sec": 600,
+                                "override_setup_timeout_sec": 360,
+                                "kwargs": {
+                                    "temperature": 1.0,
+                                    "max_turns": 32,
+                                    "model_info": {"max_input_tokens": 32768, "max_output_tokens": 8192},
+                                },
+                            }
+                        ],
+                        "verifier": {"override_timeout_sec": 300},
+                        "trial_attempt_timeout_sec": 1800,
+                    },
+                }
+            )
+        trainer["callbacks"].insert(
+            2,
+            {
+                "type": "harbor_evaluation",
+                "cohorts": cohorts,
+                "timeout": 10800,
+                "minimum_coverage": 0.9,
+            },
+        )
+        config["generator"].update(enable_http_endpoint=True, http_endpoint_host="127.0.0.1", http_endpoint_port=8000)
     config["generator"].update(
         weight_sync_backend="nccl",
         weight_sync_transport="broadcast",
@@ -93,7 +169,14 @@ def training_config(max_steps: int, resume_path: str | None = None) -> dict:
 
 
 def build_run(
-    *, model_uri: str, data_uri: str, data_version: str, max_steps: int, resume_path: str | None = None
+    *,
+    model_uri: str,
+    data_uri: str,
+    data_version: str,
+    max_steps: int,
+    learning_rate: float,
+    resume_path: str | None = None,
+    benchmark_selection: Path | None = None,
 ) -> ArtifactStep:
     """Bind regional model bytes and native train/validation tasks to a 112-H100 run."""
     name = user_owned_name("models/snowball-smartie")
@@ -109,7 +192,16 @@ def build_run(
         SkyRLSpec(
             name=name,
             version=resolve_version(name, None),
-            config_yaml=yaml.safe_dump(training_config(max_steps, resume_path), sort_keys=False),
+            config_yaml=yaml.safe_dump(
+                training_config(
+                    max_steps,
+                    resume_path,
+                    initial_model_uri=model_uri,
+                    learning_rate=learning_rate,
+                    benchmark_selection=benchmark_selection,
+                ),
+                sort_keys=False,
+            ),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
                 step=model, tokenizer_uri=MODEL_REPOSITORY, tokenizer_revision=MODEL_REVISION, relative_path=""
@@ -134,7 +226,7 @@ def build_run(
             wandb_entity=None,
             required_env_vars=("DAYTONA_RL_API_KEY",),
         ),
-        export_hf=True,
+        export_hf=False,
     )
 
 
@@ -142,16 +234,33 @@ def build_run(
 @click.option("--model-uri", required=True, help="Regional HF-format bytes verified against the pinned initializer.")
 @click.option("--data-uri", required=True, help="Admitted mixed native-task directory, including validation.parquet.")
 @click.option("--data-version", required=True, help="Immutable admitted dataset version.")
-@click.option("--max-steps", type=click.IntRange(min=2), default=2, show_default=True)
+@click.option("--max-steps", type=click.IntRange(min=20), default=20, show_default=True)
+@click.option("--learning-rate", type=click.FloatRange(min=0, min_open=True), required=True)
 @click.option("--resume-path", help="Complete native training checkpoint; max-steps is the total update target.")
+@click.option(
+    "--benchmark-selection",
+    type=click.Path(path_type=Path, exists=True),
+    default=Path(__file__).with_name("benchmark_selection.json"),
+    show_default=True,
+)
 @rl_build_options
-def main(model_uri: str, data_uri: str, data_version: str, max_steps: int, resume_path: str | None) -> ArtifactStep:
+def main(
+    model_uri: str,
+    data_uri: str,
+    data_version: str,
+    max_steps: int,
+    learning_rate: float,
+    resume_path: str | None,
+    benchmark_selection: Path,
+) -> ArtifactStep:
     return build_run(
         model_uri=model_uri,
         data_uri=data_uri,
         data_version=data_version,
         max_steps=max_steps,
+        learning_rate=learning_rate,
         resume_path=resume_path,
+        benchmark_selection=benchmark_selection,
     )
 
 

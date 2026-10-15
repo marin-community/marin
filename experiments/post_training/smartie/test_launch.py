@@ -47,6 +47,7 @@ def test_joint_recipe_crosses_pinned_launcher_boundary(tmp_path, resume):
             data_uri=str(tmp_path / "data"),
             data_version="dev",
             max_steps=6 if resume else 2,
+            learning_rate=1e-6,
             resume_path=resume_path,
         )
     launch = run.build_config(StepContext.for_fingerprint(run.runtime_args, run.deps))

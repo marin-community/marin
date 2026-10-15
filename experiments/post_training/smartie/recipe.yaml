@@ -36,7 +36,7 @@ trainer:
   eval_before_train: true
   eval_interval: 2
   ckpt_interval: 2
-  hf_save_interval: 2
+  hf_save_interval: -1
   logger: wandb
   project_name: snowball-smartie-rl
   algorithm:

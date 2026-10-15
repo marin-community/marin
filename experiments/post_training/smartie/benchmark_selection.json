@@ -1,0 +1,726 @@
+{
+  "selection_salt": "smartie-target-benchmarks-20261015-v1",
+  "registry_sha256": "3c7f4f7ef802bc22e9aeefd47cf70db8ed42aaca334ecd737e08856f1b2f6da1",
+  "tasks": [
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-simple-python-161",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-simple-python-161"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-live-irrelevance-103-3-0",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-live-irrelevance-103-3-0"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-live-irrelevance-781-290-0",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-live-irrelevance-781-290-0"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-simple-java-73",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-simple-java-73"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-multiple-147",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-multiple-147"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-live-multiple-538-152-0",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-live-multiple-538-152-0"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-parallel-7",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-parallel-7"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-live-irrelevance-511-151-0",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-live-irrelevance-511-151-0"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-parallel-multiple-13",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-parallel-multiple-13"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-live-multiple-179-75-1",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-live-multiple-179-75-1"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-live-multiple-591-157-12",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-live-multiple-591-157-12"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-irrelevance-154",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-irrelevance-154"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-parallel-147",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-parallel-147"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-simple-javascript-7",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-simple-javascript-7"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-live-irrelevance-600-193-2",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-live-irrelevance-600-193-2"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-simple-python-2",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-simple-python-2"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-live-multiple-236-106-2",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-live-multiple-236-106-2"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-live-multiple-685-164-1",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-live-multiple-685-164-1"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-parallel-84",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-parallel-84"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-live-multiple-13-4-5",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-live-multiple-13-4-5"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-live-simple-248-130-0",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-live-simple-248-130-0"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-simple-python-149",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-simple-python-149"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-simple-python-14",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-simple-python-14"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-simple-python-296",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-simple-python-296"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-multiple-105",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-multiple-105"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-live-multiple-350-133-14",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-live-multiple-350-133-14"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-live-multiple-337-133-1",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-live-multiple-337-133-1"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-live-multiple-48-18-3",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-live-multiple-48-18-3"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-live-irrelevance-698-227-1",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-live-irrelevance-698-227-1"
+    },
+    {
+      "benchmark": "bfcl_parity",
+      "version": "1.0",
+      "name": "bfcl-irrelevance-53",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "6bedd7878dc5d6f3456b4d80b781eb3c2d84f262",
+      "path": "datasets/bfcl_parity/bfcl-irrelevance-53"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "django__django-12419",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/django__django-12419"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "django__django-11951",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/django__django-11951"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "django__django-14007",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/django__django-14007"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "django__django-15629",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/django__django-15629"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "sphinx-doc__sphinx-10673",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/sphinx-doc__sphinx-10673"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "sympy__sympy-22080",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/sympy__sympy-22080"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "django__django-11790",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/django__django-11790"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "sphinx-doc__sphinx-7889",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/sphinx-doc__sphinx-7889"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "django__django-13513",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/django__django-13513"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "sphinx-doc__sphinx-8721",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/sphinx-doc__sphinx-8721"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "sphinx-doc__sphinx-7462",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/sphinx-doc__sphinx-7462"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "matplotlib__matplotlib-23476",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/matplotlib__matplotlib-23476"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "sphinx-doc__sphinx-8548",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/sphinx-doc__sphinx-8548"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "django__django-13363",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/django__django-13363"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "sphinx-doc__sphinx-9461",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/sphinx-doc__sphinx-9461"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "sympy__sympy-15976",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/sympy__sympy-15976"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "django__django-13658",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/django__django-13658"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "django__django-11066",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/django__django-11066"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "matplotlib__matplotlib-24637",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/matplotlib__matplotlib-24637"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "scikit-learn__scikit-learn-13142",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/scikit-learn__scikit-learn-13142"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "django__django-14034",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/django__django-14034"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "django__django-12708",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/django__django-12708"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "django__django-15569",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/django__django-15569"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "psf__requests-2931",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/psf__requests-2931"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "django__django-11555",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/django__django-11555"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "django__django-12741",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/django__django-12741"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "django__django-12193",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/django__django-12193"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "django__django-16485",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/django__django-16485"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "django__django-12143",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/django__django-12143"
+    },
+    {
+      "benchmark": "swebench-verified",
+      "version": "1.0",
+      "name": "scikit-learn__scikit-learn-14087",
+      "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+      "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "path": "datasets/swebench-verified/scikit-learn__scikit-learn-14087"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "malicious-package-forensics",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "malicious-package-forensics"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "book-portfolio-analysis",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "book-portfolio-analysis"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "industrial-kiln-controller",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "industrial-kiln-controller"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "iris-dataset-classification",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "iris-dataset-classification"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "task-xxe-exploit",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "task-xxe-exploit"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "protein-sequence",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "protein-sequence"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "reverse-engineer-stack-vm",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "reverse-engineer-stack-vm"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "cryptographic-protocol-verifier",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "cryptographic-protocol-verifier"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "mtls-cert-rotation",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "mtls-cert-rotation"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "symlink-chain-traversal",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "symlink-chain-traversal"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "monorepo-changelog-cli",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "monorepo-changelog-cli"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "raft-log-repair-concurrent-access",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "raft-log-repair-concurrent-access"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "vimscript-vim-quine",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "vimscript-vim-quine"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "systemd-log-monitoring",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "systemd-log-monitoring"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "ekf-localization",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "ekf-localization"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "api-endpoint-permission-canonicalizer",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "api-endpoint-permission-canonicalizer"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "grpc-plant-position-server",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "grpc-plant-position-server"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "pandas-numpy-data-analysis",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "pandas-numpy-data-analysis"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "hydra-debug-slurm-mode",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "hydra-debug-slurm-mode"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "grid-pathfinding",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "grid-pathfinding"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "competitive-programming-solver",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "competitive-programming-solver"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "todos-api",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "todos-api"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "etl_checkpoint_resume_bug",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "etl_checkpoint_resume_bug"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "iot-device-registration-server",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "iot-device-registration-server"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "reproducibility-and-envsetup",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "reproducibility-and-envsetup"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "mlflow-register",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "mlflow-register"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "application-debug",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "application-debug"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "acl-permissions-inheritance",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "acl-permissions-inheritance"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "maven-slf4j-conflict",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "maven-slf4j-conflict"
+    },
+    {
+      "benchmark": "openthoughts-tblite",
+      "version": "2.0",
+      "name": "schedule-vacation",
+      "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+      "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+      "path": "schedule-vacation"
+    }
+  ]
+}
