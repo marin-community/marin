@@ -1411,7 +1411,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?branch=atqamar%2Fstartup-refresh-arm-x2" }]
+requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?branch=atqamar%2Fstartup-refresh-x2-diagnostic" }]
 
 [[package]]
 name = "marin-finelog"
@@ -1645,7 +1645,7 @@ schema = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=atqamar%2Fstartup-refresh-arm-x2#cbf9b9b27272463d978832f8e51a3f380e00e79b" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=atqamar%2Fstartup-refresh-x2-diagnostic#892f460534c6e0f6fdad530f953683fb9e3d2004" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
