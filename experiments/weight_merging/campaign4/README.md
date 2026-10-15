@@ -26,7 +26,7 @@ Base scored 174.90 on the four-target sum and 95.00 on MATH500. These are single
 | Evalchemy | `marin-community/evalchemy@958cdb8019b7a4c8432fe85eb9572538ceb75950` |
 | Harbor | `marin-community/harbor@2203bacd03d82e9d4f2a9422f0b3f7e9bb7952cc` |
 
-The published winning model repositories contain the exact merge recipe, selected tensor rows, row coefficients, readback audit, final tracker snapshot, and sanitized sealed evaluation records under `provenance/campaign4/`. Use Marin [revision `b64808f31c`](https://github.com/marin-community/marin/commit/b64808f31c10b0a2accf29a1ec675d2cd266e66a) for the merge commands below and the immutable model revision recorded in the campaign issue; the recipe's source revisions are provenance fields and do not download a parent automatically.
+The published winning model repositories contain the exact merge recipe, selected tensor rows, row coefficients, readback audit, final tracker snapshot, and sanitized sealed evaluation records under `provenance/campaign4/`. Use Marin [revision `14a407e045`](https://github.com/marin-community/marin/commit/14a407e045f83f38e4e94a2fb21869707a256997) for the merge commands below and the immutable model revision recorded in the campaign issue; the recipe's source revisions are provenance fields and do not download a parent automatically.
 
 ## Reproduce a merge
 
