@@ -69,6 +69,30 @@ def test_every_plotted_point_is_reproduced(plotted, flops):
         assert np.isclose(values.mean(), p.mean, rtol=0, atol=1e-12), (p.label, p.flops, p.target)
 
 
+def _power_law(e: float, a: float, alpha: float, compute: np.ndarray) -> np.ndarray:
+    return e + a * (compute / 1e18) ** -alpha
+
+
+def test_compute_equivalence_rests_on_the_ladder(out, plotted):
+    # The multiples come from laws fitted to the baselines' rung means and from MARINER's rung means, all ladder runs.
+    equivalence = out["ladder_compute_equivalence"]
+    assert len(equivalence) == 24  # two objectives, three baselines, four MARINER rungs
+    column = {"uncheatable": "bpb__uncheatable_source", "obe_easy": "bpb__obe_easy_source"}
+    for (objective, baseline), rows in equivalence.groupby(["objective", "baseline"]):
+        means = {
+            method: plotted[(plotted.method == method) & plotted.proposal_objective.isin([objective, "none"])]
+            .groupby("compute_flops")[column[objective]]
+            .mean()
+            for method in ("mariner", baseline)
+        }
+        assert np.allclose(rows.mariner_bpb, means["mariner"].loc[rows.compute_flops], rtol=0, atol=1e-12)
+        e, a, alpha, rmse = rows[["law_e", "law_a", "law_alpha", "law_rmse"]].iloc[0]
+        residual = _power_law(e, a, alpha, means[baseline].index.to_numpy()) - means[baseline].to_numpy()
+        assert np.isclose(np.sqrt(np.mean(residual**2)), rmse, rtol=0, atol=1e-12)
+        reached = _power_law(e, a, alpha, rows.baseline_compute_to_match.to_numpy())
+        assert np.allclose(reached, rows.mariner_bpb, rtol=0, atol=1e-9)
+
+
 def test_scale_constants_and_weights(out):
     t = out["ladder"]
     assert sorted(t.compute_flops.unique()) == [3e18, 2e19, 3e20, 1e21]

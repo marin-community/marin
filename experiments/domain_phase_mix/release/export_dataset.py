@@ -56,6 +56,7 @@ EXPORTER = {
     "validation_3e18": validation,
     "ladder": ladder,
     "ladder_accuracy": ladder,
+    "ladder_compute_equivalence": ladder,
     "starcoder": starcoder,
     "domain_sweeps": domain_sweeps,
     "fits": fits,
@@ -90,6 +91,7 @@ KEYING = {
         "and swarm_qwen3_360m_1p6b rows."
     ),
     "ladder_accuracy": "The ladder's ids of the four scored 1e21 runs.",
+    "ladder_compute_equivalence": NO_IDS,
     "starcoder_observations": "The training run name of each atlas run.",
     "starcoder_curve_membership": "The training run name of each atlas run.",
     "starcoder_curves": NO_IDS,

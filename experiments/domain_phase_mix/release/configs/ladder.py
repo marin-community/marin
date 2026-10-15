@@ -26,6 +26,13 @@ and the scaling launches record trainer seed 0. Model sizes and token counts are
 `ladder_accuracy` has the BPB and accuracy (percent; MT-MBPP as executable pass@1) on the 51 OlmoBaseEval Easy tasks
 of the four 1e21 runs that the paper scores, keyed by observation id, with the accuracy example counts that the paper's
 table tab:a-accuracy-components prints.
+
+`ladder_compute_equivalence` holds the compute multiples of table tab:a-compute-equivalence, as
+`compute_equivalence_20260915.py` computed them from the scaling figure's points: for each objective and baseline, the
+law `law_e + law_a * (C / 1e18) ** -law_alpha` fitted to the baseline's mean loss at the four rungs (`law_rmse`, its
+residual over them), and at each MARINER rung (`compute_flops`, MARINER's mean loss `mariner_bpb`) the compute at which
+the law reaches that loss, its multiple of MARINER's compute, the saving (one minus the inverse multiple, in percent),
+the loss improvement at matched compute (percent) and whether the match lies beyond the baseline's largest rung.
 """
 
 import json
@@ -42,6 +49,10 @@ from experiments.domain_phase_mix.release.context import ExportContext
 
 LADDER = "ladder"
 ACCURACY_TABLE = "ladder_accuracy"
+EQUIVALENCE_TABLE = "ladder_compute_equivalence"
+# compute_equivalence.csv (one row per objective, baseline and MARINER rung) and fits.json (each baseline's law).
+COMPUTE_EQUIVALENCE = paths.RO / "compute_equivalence_20260915"
+EQUIVALENCE_BASELINES = {"Proportional": "proportional", "UniMax-8": "unimax8", "Olmix": "olmix"}
 FROZEN = paths.RO / "frozen_scaling_update_20260913"
 # Each holds audited_measured_results.csv and every run's Table 9 result, `<run name>_table9.json`.
 AUDITED = (FROZEN / "mariner", FROZEN / "matched_olmix")
@@ -77,6 +88,8 @@ def required_sources() -> list[Path]:
         ACCURACY / "components.csv",
         ACCURACY / "rows.tex",
         CAP_SWEEP_TABLE9,
+        COMPUTE_EQUIVALENCE / "compute_equivalence.csv",
+        COMPUTE_EQUIVALENCE / "fits.json",
     ]
 
 
@@ -317,6 +330,30 @@ def _accuracy(accuracy: pd.DataFrame, ladder_table: pd.DataFrame) -> pd.DataFram
     return pd.concat(parts, ignore_index=True)
 
 
+def _compute_equivalence() -> pd.DataFrame:
+    """Each baseline's fitted law and, at each MARINER rung, the compute at which it reaches MARINER's loss."""
+    fits = json.loads(paths.require(COMPUTE_EQUIVALENCE / "fits.json").read_text())
+    if any(fit["form"] != "power" for fit in fits):
+        raise ValueError("every compute-equivalence fit must be the power law")
+    laws = pd.DataFrame(
+        {
+            "objective": [naming.objective_public(fit["target"]) for fit in fits],
+            "baseline": [EQUIVALENCE_BASELINES[fit["baseline"]] for fit in fits],
+            "law_e": [fit["parameters"]["E"] for fit in fits],
+            "law_a": [fit["parameters"]["A"] for fit in fits],
+            "law_alpha": [fit["parameters"]["alpha"] for fit in fits],
+            "law_rmse": [fit["rmse"] for fit in fits],
+        }
+    )
+    matches = tables.read_csv(paths.require(COMPUTE_EQUIVALENCE / "compute_equivalence.csv"))
+    matches["objective"] = matches.target.map(naming.objective_public)
+    matches["baseline"] = matches.baseline.map(EQUIVALENCE_BASELINES)
+    table = matches.merge(laws, on=["objective", "baseline"], how="left", validate="many_to_one")
+    table = table.rename(columns={"mariner_compute": "compute_flops", "mariner_loss": "mariner_bpb"})
+    columns = ["objective", "baseline", *laws.columns[2:], "compute_flops", "mariner_bpb", "baseline_compute_to_match"]
+    return table[[*columns, "multiplier", "compute_saved_pct", "loss_improvement_pct", "extrapolated"]]
+
+
 def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     accuracy = tables.read_csv(paths.require(ACCURACY / "components.csv"))
     if sorted(accuracy.component) != sorted(OBE_TASKS):
@@ -331,7 +368,11 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     if not np.allclose(obe[complete].mean(axis=1), runs.bpb__obe_easy_source[complete], rtol=0, atol=1e-12):
         raise ValueError("a run's OlmoBaseEval Easy components do not reproduce its recorded aggregate")
     ladder_table = _ladder(ctx, runs)
-    return {LADDER: ladder_table, ACCURACY_TABLE: _accuracy(accuracy, ladder_table)}
+    return {
+        LADDER: ladder_table,
+        ACCURACY_TABLE: _accuracy(accuracy, ladder_table),
+        EQUIVALENCE_TABLE: _compute_equivalence(),
+    }
 
 
 def with_3e18_rows(

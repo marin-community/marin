@@ -26,7 +26,7 @@ fig:a-curricula-sweeps,figure,a_curricula_sweeps,revision_notes/20261004_curricu
 fig:a-switch-smoothing,figure,a_switch_smoothing,revision_notes/20261007_appendix_e3/build_figure.py,starcoder
 fig:a-ramp-schedules,figure,a_ramp_schedules,revision_notes/20261007_appendix_e3/build_ramp_schedules.py,starcoder
 tab:a-olmix-cap-kl,table,,experiments/domain_phase_mix/exploratory/two_phase_many/build_olmix_cap_kl_table_20260927.py,validation_3e18
-tab:a-compute-equivalence,table,,experiments/domain_phase_mix/exploratory/two_phase_many/compute_equivalence_20260915.py,ladder
+tab:a-compute-equivalence,table,,experiments/domain_phase_mix/exploratory/two_phase_many/compute_equivalence_20260915.py,ladder;ladder_compute_equivalence
 tab:a-accuracy-components,table,,experiments/domain_phase_mix/exploratory/two_phase_many/build_accuracy_component_table_20260922.py,ladder_accuracy
 tab:a-baseline-validation,table,,experiments/domain_phase_mix/exploratory/two_phase_many/summarize_delphi_comparator_proposals_20260909.py;experiments/domain_phase_mix/exploratory/two_phase_many/summarize_table5_repeats_20260928.py,validation_3e18
 tab:ablations,table,,experiments/domain_phase_mix/exploratory/two_phase_many/summarize_delphi_comparator_proposals_20260909.py;experiments/domain_phase_mix/exploratory/two_phase_many/summarize_table5_repeats_20260928.py,validation_3e18
