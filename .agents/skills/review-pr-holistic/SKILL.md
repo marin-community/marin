@@ -1,7 +1,7 @@
 ---
 name: review-pr-holistic
 description: Review an explicitly identified Marin pull request as a whole change, asking whether it fits repository patterns, whether a better abstraction exists, and what breaks outside the diff; use for large or agent-authored PRs, after or alongside review-pr.
-allowed-tools: Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(gh api:*), Bash(git diff:*), Bash(git log:*), Bash(git merge-base:*), Bash(git rev-parse:*), Bash(git show:*), Bash(rg:*), Bash(uv run pytest:*), Bash(uv run infra/codehealth/log_stats.py:*)
+allowed-tools: Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(gh api:*), Bash(git diff:*), Bash(git grep:*), Bash(git log:*), Bash(git merge-base:*), Bash(git rev-parse:*), Bash(git show:*), Bash(rg:*), Bash(uv run pytest:*), Bash(uv run infra/codehealth/log_stats.py:*)
 ---
 
 # Review a pull request as a whole
@@ -119,11 +119,7 @@ the posted comment body with it.
 > **In short:** <Two or three sentences: what the diff does, the verdict, and
 > the one thing the reviewer must decide or examine.>
 
-### Why
-<The problem or goal, and its trigger: an issue, an incident, a parent
-project, or a failed run. Quote the evidence.>
-
-### Current state
+### System
 ```mermaid
 flowchart TB
   subgraph <system>["<System name>"]
@@ -132,8 +128,15 @@ flowchart TB
   classDef changed fill:#fde7c8,stroke:#e8710a,stroke-width:2px
   classDef added fill:#d7f0dd,stroke:#1e8e3e,stroke-width:2px
 ```
-<What the diagram cannot show: entry points, data flow, callers, and the
-prerequisite work the PR builds on. End with what is wrong or missing.>
+
+### Why
+<The problem or goal, and its trigger: an issue, an incident, a parent
+project, or a failed run. Quote the evidence.>
+
+### Current state
+<The system before the change, beyond what the diagram shows: entry points,
+data flow, callers, and the prerequisite work the PR builds on. End with what
+is wrong or missing.>
 
 ### How
 **<A bold sentence that states one decision.>** <The snippet that shows it and
@@ -173,14 +176,16 @@ Write the walkthrough sections with these rules:
 - **In short.** Tell what the diff does, not what the title says, and name
   the difference when they disagree. When item 1 recommends a split, start
   with it.
-- **System diagram.** Every packet has one component diagram, at the start
-  of Current state. Draw each system as a subgraph, each component that the
-  PR touches as a box with its real code name, and each call or data flow as
-  an edge with a short label. Mark changed components with `changed` and new
-  ones with `added`. Use at most about 10 boxes and at most three side by
-  side. Use only `flowchart TB`, `subgraph`, node, edge, and `classDef` lines,
-  and quote labels that contain punctuation, so that GitHub renders it. Add a
-  second diagram in How only when the PR changes how the components connect.
+- **System diagram.** Every packet has one component diagram in System. It
+  shows the system after the change: boxes without a class existed before,
+  `changed` marks the components that the PR changes, and `added` marks the
+  new ones. Draw each system as a subgraph, each component that the PR
+  touches as a box with its real code name, and each call or data flow as an
+  edge with a short label. Use at most about 10 boxes and at most three side
+  by side. Use only `flowchart TB`, `subgraph`, node, edge, and `classDef`
+  lines, and quote labels that contain punctuation, so that GitHub renders
+  it. When the PR changes how the components connect, add a diagram of the
+  old connections in Current state.
 - **Snippets.** Each snippet shows a decision, a behavior to check, or the
   problem. Use 3 to 12 lines, with the path as a comment on the first line.
   Show each piece of code once: use one `diff` snippet for a before/after
