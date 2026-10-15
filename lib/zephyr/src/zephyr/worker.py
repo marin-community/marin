@@ -11,7 +11,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from fray.actor import ActorFuture, ActorHandle, current_actor
@@ -30,7 +30,7 @@ from zephyr.stats import (
     ZephyrWorkerStatStatus,
     _push_iris_task_status,
 )
-from zephyr.worker_context import CounterEntry, CounterSnapshot, ShardProgress, merge_counter_entries
+from zephyr.worker_context import CounterEntry, CounterSnapshot, RunnerSnapshot, ShardProgress, merge_counter_entries
 
 logger = logging.getLogger(__name__)
 
@@ -58,23 +58,15 @@ def _counter_values(counters: dict[str, CounterEntry]) -> dict[str, int | float]
     return {name: entry.value for name, entry in counters.items()}
 
 
-def _execution_counters(counters: dict[str, CounterEntry]) -> dict[str, CounterEntry]:
-    # Per-input gauges reset between files and cannot be summed across runners.
-    return {name: entry for name, entry in counters.items() if name not in stage_counters.INPUT_PROGRESS_COUNTERS}
-
-
-def _shard_progress(active: _ActiveShard, counters: dict[str, CounterEntry], now: float) -> ShardProgress:
-    completed = counters.get(stage_counters.INPUT_ROWS_COMPLETED)
-    total = counters.get(stage_counters.INPUT_ROWS_TOTAL)
+def _shard_progress(active: _ActiveShard, snapshot: RunnerSnapshot, now: float) -> ShardProgress:
+    progress = snapshot.input_progress
     return ShardProgress(
         stage_generation=active.stage_generation,
         attempt=active.attempt,
         elapsed_seconds=max(0, now - active.start_time),
-        records_in=int(counters.get(stage_counters.RECORDS_IN, CounterEntry(0)).value),
-        input_rows_completed=int(completed.value) if completed is not None else None,
-        input_rows_total=(
-            int(total.value) if total is not None and total.value != stage_counters.UNKNOWN_INPUT_ROWS else None
-        ),
+        records_in=int(snapshot.counters.get(stage_counters.RECORDS_IN, CounterEntry(0)).value),
+        input_rows_completed=progress.completed if progress is not None else None,
+        input_rows_total=progress.total if progress is not None else None,
     )
 
 
@@ -332,7 +324,7 @@ class ZephyrWorker:
             try:
                 result, task_counters = self._execute_shard(task, work.chunk_prefix, work.execution_id, runner)
             except Exception:
-                self._finish_active_shard(active_shard, ZephyrWorkerStatStatus.FAILED, runner.live_counters())
+                self._finish_active_shard(active_shard, ZephyrWorkerStatStatus.FAILED, runner.live_snapshot().counters)
                 raise
             self._finish_active_shard(active_shard, ZephyrWorkerStatStatus.END, task_counters)
             logger.info("[%s] Shard %d done in %.2fs", self._worker_id, task.shard_idx, time.monotonic() - task_start)
@@ -345,7 +337,7 @@ class ZephyrWorker:
                 task.shard_idx,
                 work.attempt,
                 result,
-                CounterSnapshot(counters=_execution_counters(task_counters), generation=counter_generation),
+                CounterSnapshot(counters=dict(task_counters), generation=counter_generation),
                 work.stage_generation,
             ).result()
         except Exception:
@@ -439,7 +431,8 @@ class ZephyrWorker:
         shards_by_execution: dict[str, dict[int, ShardProgress]] = defaultdict(dict)
         with self._resources_lock:
             for active_shard in self._active_shards:
-                counters = {name: replace(entry) for name, entry in active_shard.runner.live_counters().items()}
+                snapshot = active_shard.runner.live_snapshot()
+                counters = snapshot.counters
                 active_shard.last_counters = dict(counters)
                 if ZEPHYR_WORKER_MEM_CURRENT_KEY in counters:
                     self._stats_writer.emit_worker_stat(
@@ -451,9 +444,9 @@ class ZephyrWorker:
                         _counter_values(counters),
                         active_shard.attempt_id,
                     )
-                entries_by_execution[active_shard.execution_id].extend(_execution_counters(counters).items())
+                entries_by_execution[active_shard.execution_id].extend(counters.items())
                 shards_by_execution[active_shard.execution_id][active_shard.task.shard_idx] = _shard_progress(
-                    active_shard, counters, time.monotonic()
+                    active_shard, snapshot, time.monotonic()
                 )
             snapshots: dict[str, CounterSnapshot] = {}
             execution_ids = entries_by_execution.keys() | self._last_reported_counters.keys()

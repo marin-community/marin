@@ -135,7 +135,7 @@ class ShardStatus:
     state: ShardState
     worker_id: str = ""
     task_id: str = ""
-    heartbeat_age_seconds: float | None = None
+    last_seen_age_seconds: float | None = None
     progress: ShardProgress | None = None
 
 

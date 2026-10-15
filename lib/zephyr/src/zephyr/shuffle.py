@@ -56,10 +56,10 @@ from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import RateLimiter, log_time
 
-from zephyr import counters, memory_budget
+from zephyr import memory_budget
 from zephyr.parquet_scan import scan_parquet
 from zephyr.shard_keys import encode_key, hash_encoded_key
-from zephyr.worker_context import _worker_ctx_var
+from zephyr.worker_context import _worker_ctx_var, input_progress
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -587,8 +587,7 @@ class ScatterReader:
             Deserialized Python items in merged sort order.
         """
 
-        counters.pipeline.set_counter(counters.INPUT_ROWS_COMPLETED, 0)
-        counters.pipeline.set_counter(counters.INPUT_ROWS_TOTAL, self.shard_payload_rows)
+        progress = input_progress(self.shard_payload_rows)
         with pl.Config() as polars_config:
             polars_config.set_streaming_chunk_size(memory_budget.STREAMING_CHUNK_SIZE_ROWS)
 
@@ -631,7 +630,7 @@ class ScatterReader:
 
             for batch in batches:
                 yield from _dataframe_to_items(batch)
-                counters.pipeline.update_counter(counters.INPUT_ROWS_COMPLETED, len(batch))
+                progress.completed += len(batch)
 
 
 # ---------------------------------------------------------------------------

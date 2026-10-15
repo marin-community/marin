@@ -29,7 +29,8 @@ from zephyr.coordinator import ZEPHYR_HISTORY_ENDPOINT_NAME
 from zephyr.dataset import Dataset
 from zephyr.plan import compute_plan
 from zephyr.runners import InlineRunner, SubprocessRunner
-from zephyr.stage_io import ZephyrWorkerError
+from zephyr.shuffle import ListShard, MemChunk
+from zephyr.stage_io import ShardTask, ZephyrWorkerError
 from zephyr.stats import (
     ZEPHYR_EXECUTION_STATS_NAMESPACE,
     ZEPHYR_STAGE_STATS_NAMESPACE,
@@ -38,7 +39,7 @@ from zephyr.stats import (
     StatsWriter,
 )
 from zephyr.testing.coordinator import TEST_EXECUTION_ID, TEST_TASK_COST, make_test_coordinator, start_test_stage
-from zephyr.worker_context import CounterEntry, CounterSnapshot
+from zephyr.worker_context import CounterEntry, CounterSnapshot, InputProgress
 
 
 def _ctx(local_client, tmp_path, *, stage_runner_factory) -> ZephyrContext:
@@ -129,7 +130,32 @@ def test_input_progress_gauges_do_not_enter_pipeline_totals(local_client, tmp_pa
         ctx.shutdown()
     assert sorted(row["id"] for row in outcome.results) == [0, 0, 1, 1, 2, 2]
     assert outcome.counters[counters.RECORDS_IN] == 6
-    assert counters.INPUT_PROGRESS_COUNTERS.isdisjoint(outcome.counters)
+    assert {"zephyr/input_rows_total", "zephyr/input_rows_completed"}.isdisjoint(outcome.counters)
+
+
+def test_runner_snapshots_keep_input_progress_separate_and_reset_between_tasks(tmp_path, runner_factory):
+    runner = runner_factory()
+    for extension, count, total in (("parquet", 3, 3), ("jsonl", 2, None)):
+        records = [{"id": index} for index in range(count)]
+        path = tmp_path / f"input.{extension}"
+        if extension == "parquet":
+            pl.DataFrame(records).write_parquet(path)
+        else:
+            path.write_text("\n".join(json.dumps(record) for record in records))
+        plan = compute_plan(Dataset.from_list([str(path)]).load_file())
+        task = ShardTask(
+            shard_idx=0,
+            total_shards=1,
+            shard=ListShard(refs=[MemChunk(items=[plan.source_items[0].data])]),
+            operations=plan.stages[0].operations,
+            cost=TEST_TASK_COST,
+            stage_name="read",
+        )
+        result, final_counters = runner.execute(task, str(tmp_path / "chunks"), f"read-{extension}")
+        snapshot = runner.live_snapshot()
+        assert list(result.shard) == records
+        assert snapshot.input_progress == InputProgress(completed=count, total=total)
+        assert snapshot.counters[counters.RECORDS_IN].value == final_counters[counters.RECORDS_IN].value == count
 
 
 def test_exception_preserves_user_frame(local_client, tmp_path, runner_factory):

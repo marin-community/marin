@@ -28,6 +28,7 @@ from rigging.filesystem.factory import open_url, url_to_fs
 from zephyr import counters
 from zephyr.expr import Expr, referenced_columns, to_pyarrow_expr
 from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
+from zephyr.worker_context import input_progress
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +84,7 @@ def iter_parquet_row_groups(
         if row_groups is None or i in row_groups:
             selected_rows += max(0, min(group_end, end) - max(group_start, start))
         group_start = group_end
-    counters.pipeline.set_counter(counters.INPUT_ROWS_COMPLETED, 0)
-    counters.pipeline.set_counter(counters.INPUT_ROWS_TOTAL, selected_rows)
+    progress = input_progress(selected_rows)
 
     cumulative_rows = 0
 
@@ -115,7 +115,7 @@ def iter_parquet_row_groups(
 
         if len(table) > 0:
             yield table
-            counters.pipeline.update_counter(counters.INPUT_ROWS_COMPLETED, len(table))
+            progress.completed += len(table)
 
 
 # 16 MB read blocks with background prefetch for S3/remote reads.
@@ -311,8 +311,7 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
     filter_fn = spec.filter_expr.evaluate if spec.filter_expr is not None else None
     columns = spec.columns
 
-    counters.pipeline.set_counter(counters.INPUT_ROWS_COMPLETED, 0)
-    counters.pipeline.set_counter(counters.INPUT_ROWS_TOTAL, counters.UNKNOWN_INPUT_ROWS)
+    progress = input_progress(None)
     with open_file(spec.path, "rt") as f:
         for line in f:
             line = line.strip()
@@ -325,7 +324,7 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
                 record = {k: record[k] for k in columns if k in record}
             counters.pipeline.update_counter(counters.RECORDS_IN, 1)
             yield record
-            counters.pipeline.update_counter(counters.INPUT_ROWS_COMPLETED, 1)
+            progress.completed += 1
 
 
 def load_parquet_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:
@@ -448,11 +447,8 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
     num_rows = dataset.count_rows()
     start = 0 if spec.row_start is None else spec.row_start
     end = num_rows if spec.row_end is None else min(spec.row_end, num_rows)
-    counters.pipeline.set_counter(counters.INPUT_ROWS_COMPLETED, 0)
     # Filtered output batches do not expose how many source rows were scanned.
-    counters.pipeline.set_counter(
-        counters.INPUT_ROWS_TOTAL, max(0, end - start) if pa_filter is None else counters.UNKNOWN_INPUT_ROWS
-    )
+    progress = input_progress(max(0, end - start) if pa_filter is None else None)
 
     # Schema-less empty files cannot be projected by Vortex.
     if not dataset.schema.names and num_rows == 0:
@@ -481,7 +477,7 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
             batch = batch.select([])
         counters.pipeline.update_counter(counters.RECORDS_IN, len(batch))
         yield from batch.to_pylist()
-        counters.pipeline.update_counter(counters.INPUT_ROWS_COMPLETED, len(batch))
+        progress.completed += len(batch)
 
 
 SUPPORTED_EXTENSIONS = tuple(

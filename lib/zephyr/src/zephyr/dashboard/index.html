@@ -613,9 +613,9 @@ function startDashboard() {
         if (shard.task_id) worker.append(' · ', taskLink(shard.task_id, 'Open worker task'));
         detail.append(worker);
       }
-      if (shard.heartbeat_age_seconds !== null) {
-        const age = element('p', `Worker heartbeat: ${number(shard.heartbeat_age_seconds)} s ago`);
-        if (shard.heartbeat_age_seconds > 15) { age.className = 'stale'; age.append(' · Progress may be stale'); }
+      if (shard.last_seen_age_seconds !== null) {
+        const age = element('p', `Worker heartbeat: ${number(shard.last_seen_age_seconds)} s ago`);
+        if (shard.last_seen_age_seconds > 15) { age.className = 'stale'; age.append(' · Progress may be stale'); }
         detail.append(age);
       }
     };

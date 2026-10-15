@@ -92,6 +92,22 @@ def merge_counter_entries(entries: Iterable[tuple[str, CounterEntry]]) -> tuple[
     return merged, conflicted
 
 
+@dataclass
+class InputProgress:
+    """Rows consumed from the current input, with an optional known total."""
+
+    completed: int
+    total: int | None
+
+
+@dataclass(frozen=True)
+class RunnerSnapshot:
+    """Detached counters and input progress from one runner."""
+
+    counters: dict[str, CounterEntry] = field(default_factory=dict)
+    input_progress: InputProgress | None = None
+
+
 @dataclass(frozen=True)
 class ShardProgress:
     """Live progress for one runner's current shard and input."""
@@ -133,9 +149,19 @@ class WorkerContext(Protocol):
     def set_aggregation(self, name: str, agg: Aggregation) -> None: ...
     def current_stage_name(self) -> str: ...
     def get_counter_snapshot(self) -> CounterSnapshot: ...
+    def set_input_progress(self, progress: InputProgress) -> None: ...
 
 
 _worker_ctx_var: ContextVar[WorkerContext | None] = ContextVar("zephyr_worker_ctx", default=None)
+
+
+def input_progress(total: int | None) -> InputProgress:
+    """Start tracking the current input; reporting is optional outside a task."""
+    progress = InputProgress(completed=0, total=total)
+    ctx = _worker_ctx_var.get()
+    if ctx is not None:
+        ctx.set_input_progress(progress)
+    return progress
 
 
 def zephyr_worker_ctx() -> WorkerContext:

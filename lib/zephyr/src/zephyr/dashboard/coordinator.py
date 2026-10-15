@@ -121,6 +121,7 @@ class _DashboardWorkerSnapshot:
 
 
 def _shard_indices(run: DashboardExecution, state: ShardState | None, stopped: bool) -> tuple[Iterable[int], int]:
+    """Return matching shard IDs and their count before pagination."""
     if state == ShardState.RUNNING:
         return sorted(run.in_flight), len(run.in_flight)
     if state == ShardState.SUCCEEDED:
@@ -317,7 +318,7 @@ class CoordinatorDashboard:
                         state=state,
                         worker_id=worker_id,
                         task_id=self._coordinator._worker_task_ids.get(worker_id, ""),
-                        heartbeat_age_seconds=max(0, now - last_seen) if last_seen is not None else None,
+                        last_seen_age_seconds=max(0, now - last_seen) if last_seen is not None else None,
                         progress=progress,
                     )
                 )

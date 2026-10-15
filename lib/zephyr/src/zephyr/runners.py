@@ -34,6 +34,7 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
+from dataclasses import replace
 from typing import Any, TypeVar
 
 import cloudpickle
@@ -60,7 +61,15 @@ from zephyr.stats import (
     ZEPHYR_WORKER_MEM_CURRENT_KEY,
     ZEPHYR_WORKER_MEM_PEAK_KEY,
 )
-from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, _worker_ctx_var, merge_counter_entries
+from zephyr.worker_context import (
+    Aggregation,
+    CounterEntry,
+    CounterSnapshot,
+    InputProgress,
+    RunnerSnapshot,
+    _worker_ctx_var,
+    merge_counter_entries,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +109,7 @@ class _InProcessWorkerContext:
         self._stage_name = stage_name
         self._shared_data_cache: dict[str, Any] = {}
         self._counters: dict[str, CounterEntry] = {}
+        self._input_progress: InputProgress | None = None
         self._generation = 0
         self.task_memory_bytes = task_memory_bytes
 
@@ -150,8 +160,18 @@ class _InProcessWorkerContext:
     def get_counter_snapshot(self) -> CounterSnapshot:
         self._generation += 1
         return CounterSnapshot(
-            counters={k: CounterEntry(e.value, e.aggregation, e.stage, e.count) for k, e in self._counters.items()},
+            counters=self.get_runner_snapshot().counters,
             generation=self._generation,
+        )
+
+    def set_input_progress(self, progress: InputProgress) -> None:
+        self._input_progress = progress
+
+    def get_runner_snapshot(self) -> RunnerSnapshot:
+        progress = self._input_progress
+        return RunnerSnapshot(
+            counters={name: replace(entry) for name, entry in self._counters.items()},
+            input_progress=replace(progress) if progress is not None else None,
         )
 
 
@@ -323,7 +343,7 @@ class InlineRunner:
 
     def __init__(self) -> None:
         self._ctx: _InProcessWorkerContext | None = None
-        self._last_counters: dict[str, CounterEntry] = {}
+        self._last_snapshot = RunnerSnapshot()
 
     def execute(
         self,
@@ -333,7 +353,7 @@ class InlineRunner:
     ) -> tuple[TaskResult, dict[str, CounterEntry]]:
         ctx = _InProcessWorkerContext(chunk_prefix, execution_id, task.stage_name, task_memory_bytes=task.cost.memory)
         self._ctx = ctx
-        self._last_counters = {}
+        self._last_snapshot = RunnerSnapshot()
         worker_token = _worker_ctx_var.set(ctx)
         _set_counter_aggregations()
         try:
@@ -344,14 +364,14 @@ class InlineRunner:
             ):
                 result = _run_stage_with_ctx(task, chunk_prefix, execution_id)
         finally:
-            self._last_counters = dict(ctx._counters)
+            self._last_snapshot = ctx.get_runner_snapshot()
             _worker_ctx_var.reset(worker_token)
             self._ctx = None
         return result, dict(ctx._counters)
 
-    def live_counters(self) -> dict[str, CounterEntry]:
+    def live_snapshot(self) -> RunnerSnapshot:
         ctx = self._ctx
-        return dict(ctx._counters) if ctx is not None else dict(self._last_counters)
+        return ctx.get_runner_snapshot() if ctx is not None else self._last_snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +395,7 @@ class SubprocessRunner:
         self._process: psutil.Process | None = None
         self._process_stats: _InProcessWorkerContext | None = None
         self._cpu_time_at_start = 0.0
-        self._last_counters: dict[str, CounterEntry] = {}
+        self._last_snapshot = RunnerSnapshot()
         self._state_lock = threading.Lock()
 
     def _child_returncode(
@@ -431,7 +451,7 @@ class SubprocessRunner:
             result_file = f.name
         counter_file = f"{result_file}.counters"
         self._counter_file = counter_file
-        self._last_counters = {}
+        self._last_snapshot = RunnerSnapshot()
 
         try:
             # ``-u`` keeps the child's stdout/stderr unbuffered so any
@@ -461,10 +481,10 @@ class SubprocessRunner:
                 )
 
             with open(result_file, "rb") as f:
-                result_or_error, child_counters = cloudpickle.load(f)
+                result_or_error, child_snapshot = cloudpickle.load(f)
 
-            final_counters = self._final_counters(child_counters)
-            self._last_counters = final_counters
+            final_counters = self._final_counters(child_snapshot.counters)
+            self._last_snapshot = RunnerSnapshot(final_counters, child_snapshot.input_progress)
 
             # Switch heartbeat reads to the final snapshot before returning.
             self._counter_file = None
@@ -482,14 +502,14 @@ class SubprocessRunner:
                 with suppress(FileNotFoundError):
                     os.unlink(p)
 
-    def live_counters(self) -> dict[str, CounterEntry]:
+    def live_snapshot(self) -> RunnerSnapshot:
         cf = self._counter_file
         if cf is None:
-            return dict(self._last_counters)
-        counters: dict[str, CounterEntry] = {}
+            return self._last_snapshot
+        snapshot = RunnerSnapshot()
         try:
             with open(cf, "rb") as f:
-                counters = cloudpickle.load(f)
+                snapshot = cloudpickle.load(f)
         except (FileNotFoundError, EOFError):
             pass
         except Exception:
@@ -503,7 +523,7 @@ class SubprocessRunner:
                     pass
                 except psutil.Error:
                     logger.warning("Failed to sample subprocess resource use", exc_info=True)
-                counters.update(self._process_stats._counters)
-        if counters:
-            self._last_counters = dict(counters)
-        return counters
+                snapshot.counters.update(self._process_stats.get_runner_snapshot().counters)
+        if snapshot.counters or snapshot.input_progress is not None:
+            self._last_snapshot = snapshot
+        return snapshot
