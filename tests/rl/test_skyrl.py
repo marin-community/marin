@@ -84,7 +84,6 @@ def _role_plan() -> SkyRLRolePlan:
         policy_num_gpus_per_node=4,
         colocate_policy_ref=True,
         reference_num_nodes=1,
-        reference_num_gpus_per_node=4,
         num_inference_engines=4,
         inference_engine_tensor_parallel_size=1,
         inference_engine_pipeline_parallel_size=1,
@@ -199,7 +198,6 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
         policy_num_nodes=4,
         policy_num_gpus_per_node=8,
         reference_num_nodes=4,
-        reference_num_gpus_per_node=8,
         num_inference_engines=1,
         inference_engine_data_parallel_size=8,
         inference_engine_expert_parallel_size=8,
@@ -242,7 +240,6 @@ def test_skyrl_topology_accepts_node_local_dp8_engines() -> None:
         policy_num_nodes=4,
         policy_num_gpus_per_node=8,
         reference_num_nodes=4,
-        reference_num_gpus_per_node=8,
         num_inference_engines=4,
         inference_engine_data_parallel_size=8,
         inference_engine_expert_parallel_size=8,
@@ -255,7 +252,6 @@ def test_skyrl_topology_rejects_a_colocated_slice_that_does_not_tile_the_node() 
     plan = dataclasses.replace(
         _role_plan(),
         policy_num_gpus_per_node=8,
-        reference_num_gpus_per_node=8,
         num_inference_engines=2,
         inference_engine_tensor_parallel_size=3,
     )
@@ -268,7 +264,6 @@ def test_skyrl_topology_rejects_unequal_colocated_role_sizes() -> None:
     plan = dataclasses.replace(
         _role_plan(),
         policy_num_gpus_per_node=8,
-        reference_num_gpus_per_node=8,
         num_inference_engines=3,
         inference_engine_tensor_parallel_size=2,
     )
@@ -293,7 +288,6 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
         policy_num_nodes=4,
         policy_num_gpus_per_node=8,
         reference_num_nodes=2,
-        reference_num_gpus_per_node=8,
         num_inference_engines=1,
         inference_engine_data_parallel_size=8,
         inference_engine_expert_parallel_size=8,

@@ -65,14 +65,18 @@ class SkyRLRuntime:
 
 @dataclass(frozen=True)
 class SkyRLRolePlan:
-    """Explicit policy, rollout, and reference settings that bear experiment identity."""
+    """Explicit policy, rollout, and reference settings that bear experiment identity.
+
+    The reference role reuses the policy's GPUs-per-node width: the pinned
+    launcher requires a single GPUs-per-node value across all Iris bundles, so a
+    distinct reference width is not representable downstream.
+    """
 
     colocate_all: bool
     colocate_policy_ref: bool
     policy_num_nodes: int
     policy_num_gpus_per_node: int
     reference_num_nodes: int
-    reference_num_gpus_per_node: int
     num_inference_engines: int
     inference_engine_tensor_parallel_size: int
     inference_engine_pipeline_parallel_size: int
@@ -103,7 +107,6 @@ class SkyRLTopology:
             "policy_num_nodes",
             "policy_num_gpus_per_node",
             "reference_num_nodes",
-            "reference_num_gpus_per_node",
             "num_inference_engines",
             "inference_engine_tensor_parallel_size",
             "inference_engine_pipeline_parallel_size",
@@ -122,14 +125,9 @@ class SkyRLTopology:
             raise ValueError("SkyRL policy_num_nodes exceeds the allocated topology")
         if plan.policy_num_gpus_per_node > self.gpus_per_node:
             raise ValueError("SkyRL policy_num_gpus_per_node exceeds the GPUs on one allocated node")
-        if plan.reference_num_gpus_per_node > self.gpus_per_node:
-            raise ValueError("SkyRL reference footprint exceeds the GPUs on one allocated node")
         if plan.colocate_all and not plan.colocate_policy_ref:
             raise ValueError("colocate_all requires a shared policy/reference footprint")
-        if plan.colocate_policy_ref and (
-            plan.reference_num_nodes,
-            plan.reference_num_gpus_per_node,
-        ) != (plan.policy_num_nodes, plan.policy_num_gpus_per_node):
+        if plan.colocate_policy_ref and plan.reference_num_nodes != plan.policy_num_nodes:
             raise ValueError("colocated policy/reference roles must have the same footprint")
 
         tensor_pipeline_gpus = plan.inference_engine_tensor_parallel_size * plan.inference_engine_pipeline_parallel_size
@@ -162,7 +160,7 @@ class SkyRLTopology:
             )
         planned_gpus = policy_gpus if plan.colocate_all else policy_gpus + rollout_gpus
         if not plan.colocate_policy_ref:
-            planned_gpus += plan.reference_num_nodes * plan.reference_num_gpus_per_node
+            planned_gpus += plan.reference_num_nodes * plan.policy_num_gpus_per_node
         allocated_gpus = self.num_nodes * self.gpus_per_node
         # MarinSkyRL derives optional critic, teacher, and draft-trainer claims from the recipe
         # and validates that the complete role plan exactly consumes this allocation.
@@ -465,14 +463,18 @@ def _declared_config_value(config: dict[str, object], dotted_key: str) -> object
 
 
 def _role_plan_config_values(role_plan: SkyRLRolePlan) -> dict[str, object]:
-    """Map Marin's typed role plan to the canonical SkyRL Hydra paths."""
+    """Map Marin's typed role plan to the canonical SkyRL Hydra paths.
+
+    The reference role inherits the policy's GPUs-per-node width: the pinned
+    launcher requires one width across all Iris bundles.
+    """
     return {
         "trainer.placement.colocate_all": role_plan.colocate_all,
         "trainer.placement.colocate_policy_ref": role_plan.colocate_policy_ref,
         "trainer.placement.policy_num_nodes": role_plan.policy_num_nodes,
         "trainer.placement.policy_num_gpus_per_node": role_plan.policy_num_gpus_per_node,
         "trainer.placement.ref_num_nodes": role_plan.reference_num_nodes,
-        "trainer.placement.ref_num_gpus_per_node": role_plan.reference_num_gpus_per_node,
+        "trainer.placement.ref_num_gpus_per_node": role_plan.policy_num_gpus_per_node,
         "trainer.train_batch_size": role_plan.train_batch_size,
         "trainer.policy_mini_batch_size": role_plan.policy_mini_batch_size,
         "trainer.micro_train_batch_size_per_gpu": role_plan.micro_train_batch_size_per_gpu,
@@ -547,6 +549,8 @@ def _validate_skyrl_backend_constraints(
 ) -> None:
     """Validate assumptions imposed by Marin's scalar role-plan interface."""
     plan = topology.role_plan
+    # The reference role inherits the policy width, so this one check covers both:
+    # the launcher requires a single GPUs-per-node value across all bundles.
     if plan.policy_num_gpus_per_node != topology.gpus_per_node:
         raise ValueError(
             "SkyRL policy_num_gpus_per_node must match the whole-node topology width; "

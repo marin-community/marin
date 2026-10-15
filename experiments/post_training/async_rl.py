@@ -143,7 +143,6 @@ SNOWBALL_RECIPE = TrainingRecipe(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         colocate_policy_ref=True,
         reference_num_nodes=4,
-        reference_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=1,
         inference_engine_tensor_parallel_size=1,
         inference_engine_pipeline_parallel_size=1,
