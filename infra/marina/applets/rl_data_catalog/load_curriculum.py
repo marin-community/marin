@@ -26,6 +26,10 @@ TABLE_COLUMNS = {
     "nodes": "subject_id TEXT, node_id TEXT, parent_id TEXT, kind TEXT, name TEXT, description TEXT",
     "ancestors": "subject_id TEXT, node_id TEXT, ancestor_id TEXT",
     "tasks": "source_id TEXT, task_id TEXT, content_hash TEXT, description_status TEXT, description TEXT, detail JSONB",
+    "matches": (
+        "source_id TEXT, task_id TEXT, subject_id TEXT, capability_id TEXT, facet TEXT, "
+        "membership_similarity DOUBLE PRECISION, capability_similarity DOUBLE PRECISION"
+    ),
 }
 
 
@@ -162,31 +166,27 @@ def load_curriculum(release_uri: str, query: Query) -> dict[str, Any]:
                 embedding_texts.add(hashlib.sha256(row["description"].encode()).digest())
             yield row
 
-    # Expand only this byte-bounded request, avoiding whole-release SQL scans.
     counts["tasks"] = 0
     counts["matches"] = 0
     for body in batches(checked_tasks()):
-        inserted = execute(
-            f"""
-            WITH input AS MATERIALIZED (
-                SELECT * FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS row({TABLE_COLUMNS['tasks']})
-            ), tasks AS (
-                INSERT INTO curriculum_tasks
-                    (load_id, source_id, task_id, content_hash, description_status, description, detail)
-                SELECT :load_id, source_id, task_id, content_hash, description_status, description, detail FROM input
-                RETURNING source_id, task_id
-            )
-            INSERT INTO curriculum_matches
-                (load_id, source_id, task_id, subject_id, capability_id, facet,
-                    membership_similarity, capability_similarity)
-            SELECT :load_id, i.source_id, i.task_id, m->>'subject_id', m->>'capability_id', m->>'facet',
-                (m->>'membership_similarity')::double precision, (m->'candidates'->0->>'similarity')::double precision
-            FROM input i JOIN tasks USING (source_id, task_id)
-            CROSS JOIN LATERAL jsonb_array_elements(i.detail->'matches'->'subjects') m
-            """,
-            {"load_id": load_id, "rows": body},
+        rows = json.loads(body)
+        counts["tasks"] += insert("tasks", rows)
+        counts["matches"] += insert(
+            "matches",
+            (
+                {
+                    "source_id": row["source_id"],
+                    "task_id": row["task_id"],
+                    "subject_id": match["subject_id"],
+                    "capability_id": match["capability_id"],
+                    "facet": match["facet"],
+                    "membership_similarity": match["membership_similarity"],
+                    "capability_similarity": match["candidates"][0]["similarity"],
+                }
+                for row in rows
+                for match in (row["detail"]["matches"] or {}).get("subjects", [])
+            ),
         )
-        counts["matches"] += inserted["row_count"]
     for source, expected in selected.items():
         actual = source_counts[source]
         if (actual["tasks"], len(source_content[source]), actual["ready"], actual["insufficient_context"]) != (
@@ -196,7 +196,6 @@ def load_curriculum(release_uri: str, query: Query) -> dict[str, Any]:
             expected["insufficient_context_count"],
         ):
             raise ValueError(f"Loaded task counts differ from release: {source}")
-    counts["tasks"] = sum(row["tasks"] for row in source_counts.values())
     if (counts["tasks"], len(content_hashes), len(embedding_texts)) != (
         release.task_count,
         release.unique_content_count,

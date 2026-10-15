@@ -11,7 +11,7 @@ from functools import partial
 
 import numpy as np
 from finestore.rl.curation import SourceDeclaration
-from finestore.rl.curriculum import AlignmentRelease, AlignmentSource
+from finestore.rl.curriculum import AlignmentRelease, AlignmentSource, EmbeddingSpec
 from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
@@ -34,7 +34,6 @@ from taskcompendium.pipeline.semantics import (
 )
 from taskcompendium.pipeline.task_alignment import align_tasks
 from taskcompendium.pipeline.task_embeddings import (
-    EmbeddingSpec,
     TextEmbedder,
     embed_texts,
     task_text_records,

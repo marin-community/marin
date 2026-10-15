@@ -7,13 +7,13 @@ import json
 import time
 from collections.abc import Iterator
 from functools import partial
-from typing import Literal, Protocol
+from typing import Protocol
 
 import numpy as np
 import pyarrow as pa
 from finestore.reader import ReadView
+from finestore.rl.curriculum import EmbeddingSpec
 from finestore.store import DataStore
-from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -26,22 +26,6 @@ EMBEDDING_INSTRUCTION = (
     "Represent the core knowledge and decisive operation required by this work, ignoring story details "
     "and routine setup, capture, formatting or submission unless they are the main problem."
 )
-
-
-class EmbeddingSpec(BaseModel):
-    """Numerical and text-rendering identity shared by tasks and curriculum anchors."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    model: str
-    revision: str
-    tokenizer_revision: str
-    dimensions: int = Field(gt=0)
-    max_tokens: int = Field(gt=0)
-    compute_dtype: Literal["float32", "float16", "bfloat16"]
-    pooling: Literal["last"] = "last"
-    normalization: Literal["l2"] = "l2"
-    storage_dtype: Literal["float32"] = "float32"
 
 
 class TextEmbedder(Protocol):

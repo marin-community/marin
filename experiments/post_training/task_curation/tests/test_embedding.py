@@ -13,13 +13,14 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from finestore.rl.curriculum import EmbeddingSpec
 from marin.execution.lazy import ArtifactStep, run
 from marin.processing.embeddings.harrier import HarrierEmbedder
 from taskcompendium.convert.answers import numeric_answer_task
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.semantics import DescriptionModel
-from taskcompendium.pipeline.task_embeddings import EmbeddingSpec, text_record
+from taskcompendium.pipeline.task_embeddings import text_record
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 

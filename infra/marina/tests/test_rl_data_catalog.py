@@ -33,7 +33,7 @@ from finestore.rl.curation import (
 )
 from finestore.rl.curriculum import AlignmentRelease
 from finestore.store import DataStore
-from marina.applets import AppletServices
+from marina.applets import AppletServices, validate_query
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 
@@ -296,7 +296,14 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
         ],
         paths=[str(data)],
         lineage={"alignment_root": "fixture"},
-        embedding_spec={"model": "fixture"},
+        embedding_spec={
+            "model": "fixture",
+            "revision": "fixture",
+            "tokenizer_revision": "fixture",
+            "dimensions": 2,
+            "max_tokens": 512,
+            "compute_dtype": "float32",
+        },
     )
     path = tmp_path / "release.json"
     path.write_text(release.model_dump_json())
@@ -312,6 +319,7 @@ def test_curriculum_runtime_cutoffs_dedup_pagination_and_atomic_load(
     engine = catalog_database
 
     def query(sql, parameters):
+        validate_query(sql)
         with engine.begin() as connection:
             result = connection.execute(text(sql), parameters)
             return {

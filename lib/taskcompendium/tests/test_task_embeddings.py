@@ -10,6 +10,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from finestore.reader import ReadView
+from finestore.rl.curriculum import EmbeddingSpec
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
@@ -36,7 +37,7 @@ from taskcompendium.pipeline.semantics import (
     task_semantic_input,
 )
 from taskcompendium.pipeline.task_alignment import align_tasks
-from taskcompendium.pipeline.task_embeddings import EmbeddingSpec, embed_texts, task_text_records, text_record
+from taskcompendium.pipeline.task_embeddings import embed_texts, task_text_records, text_record
 
 
 @pytest.fixture

@@ -3,11 +3,25 @@
 
 """Immutable scored curriculum releases consumed by Atlas."""
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import Field
 
 from finestore.rl.curation import CatalogRecord, SourceDeclaration
+
+
+class EmbeddingSpec(CatalogRecord):
+    """Numerical and text-rendering identity shared by tasks and curriculum anchors."""
+
+    model: str
+    revision: str
+    tokenizer_revision: str
+    dimensions: int = Field(gt=0)
+    max_tokens: int = Field(gt=0)
+    compute_dtype: Literal["float32", "float16", "bfloat16"]
+    pooling: Literal["last"] = "last"
+    normalization: Literal["l2"] = "l2"
+    storage_dtype: Literal["float32"] = "float32"
 
 
 class AlignmentSource(CatalogRecord):
@@ -50,4 +64,4 @@ class AlignmentRelease(CatalogRecord):
     nodes: list[CurriculumNode]
     paths: list[str]
     lineage: dict[str, str]
-    embedding_spec: dict[str, Any]
+    embedding_spec: EmbeddingSpec

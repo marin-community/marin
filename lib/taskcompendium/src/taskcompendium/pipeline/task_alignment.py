@@ -10,6 +10,7 @@ from functools import partial
 
 import numpy as np
 from finestore.reader import ReadView
+from finestore.rl.curriculum import EmbeddingSpec
 from finestore.schema import arrow_schema
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath
@@ -26,7 +27,7 @@ from taskcompendium.pipeline.curriculum_alignment import (
     rank_task_batch,
 )
 from taskcompendium.pipeline.semantics import DescriptionStatus
-from taskcompendium.pipeline.task_embeddings import EmbeddingSpec, text_record
+from taskcompendium.pipeline.task_embeddings import text_record
 
 PREVIEW_CHARACTERS = 8192
 

@@ -12,6 +12,7 @@ from typing import cast
 
 import click
 from finestore.rl.curation import SourceDeclaration
+from finestore.rl.curriculum import EmbeddingSpec
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -31,7 +32,6 @@ from taskcompendium.pipeline.semantics import DescriptionModel
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.pipeline.source_quality import MAX_SOURCE_QUALITY_SAMPLE_SIZE, SOURCE_QUALITY_SAMPLE_SIZE
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
-from taskcompendium.pipeline.task_embeddings import EmbeddingSpec
 from zephyr.context import ZephyrContext
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL
@@ -125,6 +125,63 @@ def _conversion_steps(
             step, name=f"rl-semantics/converted/{source.name}-{identity[:16]}", version=CORPUS_CONVERSION_VERSION
         )
     return steps
+
+
+def _quick_conversion(
+    steps: dict[str, ArtifactStep[CampaignArtifact]],
+    selected: dict[str, RlDataSource],
+    *,
+    options: PipelineOptions,
+    output_root: str,
+    cache_dir: Path | None,
+    pool: CampaignPool,
+    stage: str | None,
+    do_run: bool,
+) -> dict[str, str] | None:
+    local_quick = not StoragePath(output_root).is_remote
+    report_path = str(StoragePath(output_root) / "campaign.json")
+    if not do_run:
+        plan = {
+            "mode": options.mode,
+            "sources": [
+                {"name": name, "fingerprint": step.fingerprint(), "dependencies": [dep.name for dep in step.deps]}
+                for name, step in steps.items()
+            ],
+            "input_root": options.inputs.root,
+            "input_files": {name: str(file) for name, file in options.inputs.files.items()},
+            "inputs": dict(options.inputs.auxiliary),
+            "output_root": str(output_root),
+            "cache_dir": str(cache_dir),
+            "max_workers": pool.max_workers,
+            "embedding_stage": stage,
+        }
+        if not local_quick:
+            plan.update(campaign_plan(list(steps.values()), pool))
+        click.echo(json.dumps(plan, indent=2))
+        return None
+    if local_quick:
+        assert cache_dir is not None
+        outcomes = run_local_steps(
+            steps,
+            Path(output_root),
+            runtime=options.runtime,
+            max_workers=pool.max_workers,
+            worker_resources=pool.worker_resources,
+            cache_dir=cache_dir,
+            source_ids={name: source.info.id for name, source in selected.items()},
+        )
+    else:
+        outcomes = run_campaign(
+            list(steps.values()),
+            pool=pool,
+            runtime=options.runtime,
+            report_path=report_path,
+            source_ids={steps[name].name: source.info.id for name, source in selected.items()},
+            mode=options.mode,
+        )
+    identifiers = {steps[name].name if not local_quick else name: source.info.id for name, source in selected.items()}
+    roots = {identifiers[outcome.name]: outcome.path for outcome in outcomes}
+    return roots
 
 
 def _write_corpus(roots: dict[str, str], inventory: list[SourceDeclaration], report_path: str, population: str) -> None:
@@ -500,50 +557,19 @@ def main(
             if local_quick
             else _conversion_steps(selected, options)
         )
-        report_path = str(StoragePath(output_root) / "campaign.json")
-        if not do_run:
-            plan = {
-                "mode": processing_mode,
-                "sources": [
-                    {"name": name, "fingerprint": step.fingerprint(), "dependencies": [dep.name for dep in step.deps]}
-                    for name, step in steps.items()
-                ],
-                "input_root": inputs.root,
-                "input_files": {name: str(file) for name, file in inputs.files.items()},
-                "inputs": dict(inputs.auxiliary),
-                "output_root": str(output_root),
-                "cache_dir": str(cache_dir),
-                "max_workers": max_workers,
-                "embedding_stage": embed,
-            }
-            if not local_quick:
-                plan.update(campaign_plan(list(steps.values()), pool))
-            click.echo(json.dumps(plan, indent=2))
+        roots = _quick_conversion(
+            steps,
+            selected,
+            options=options,
+            output_root=output_root,
+            cache_dir=cache_dir,
+            pool=pool,
+            stage=embed,
+            do_run=do_run,
+        )
+        if roots is None:
             return
-        if local_quick:
-            assert cache_dir is not None
-            outcomes = run_local_steps(
-                steps,
-                Path(output_root),
-                runtime=runtime,
-                max_workers=max_workers,
-                worker_resources=worker_resources,
-                cache_dir=cache_dir,
-                source_ids={name: source.info.id for name, source in selected.items()},
-            )
-        else:
-            outcomes = run_campaign(
-                list(steps.values()),
-                pool=pool,
-                runtime=runtime,
-                report_path=report_path,
-                source_ids={steps[name].name: source.info.id for name, source in selected.items()},
-                mode=processing_mode,
-            )
-        identifiers = {
-            steps[name].name if not local_quick else name: source.info.id for name, source in selected.items()
-        }
-        roots = {identifiers[outcome.name]: outcome.path for outcome in outcomes}
+        report_path = str(StoragePath(output_root) / "campaign.json")
         if not local_quick or embed is not None:
             _write_corpus(roots, inventory, report_path, "converted")
         if embed is not None:

@@ -153,8 +153,8 @@ uv run python -m infra.marina.applets.rl_data_catalog.load_curriculum \
 The loader streams Parquet in bounded batches and checks each task's source key,
 converted/admitted population, training/evaluation use and curriculum references.
 It compares per-source and global counts against the release manifest, then
-switches the selected release atomically. Each SQL request inserts tasks and
-expands their matches within the same byte-bounded batch. Compact hashes count
+switches the selected release atomically. The loader inserts tasks, then their
+match rows, using byte-bounded SQL requests. Compact hashes count
 distinct public inputs and embedding texts without a whole-release SQL scan.
 Failed loads preserve the selected release. The loader retains the selected
 release and its immediate predecessor; other abandoned or obsolete staged loads

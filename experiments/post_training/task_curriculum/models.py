@@ -214,23 +214,16 @@ class Curriculum(StrictModel):
         return [section for section in self.sections if isinstance(section, CapabilitySection)]
 
 
-class RoutingFacet(StrEnum):
-    """Semantic-key projection used to route tasks into a curriculum graph."""
-
-    SUBJECT_DOMAIN = "subject_domain"
-    TASK_MECHANIC = "task_mechanic"
-
-
 class CatalogCurriculum(StrictModel):
     """One subject curriculum and its declared graph-routing projection."""
 
-    routing_facet: RoutingFacet
+    routing_facet: CurriculumFacet
     curriculum: Curriculum
 
     def embedding_anchors(self) -> list[CurriculumAnchor]:
         """Represent root scopes and individual capability operations for retrieval."""
         curriculum = self.curriculum
-        facet = CurriculumFacet(self.routing_facet.value)
+        facet = self.routing_facet
         label = "Subject domain" if facet == CurriculumFacet.SUBJECT_DOMAIN else "Task mechanic"
         roots = [
             CurriculumAnchor(
