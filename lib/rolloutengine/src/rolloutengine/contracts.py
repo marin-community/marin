@@ -9,7 +9,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from shellbox.machine import Machine
-from taskcompendium.grading_result import GradeResult
+from taskcompendium.grading_result import GradeResult, Outcome
 
 from rolloutengine.spec import LoweredTaskSpec
 
@@ -146,17 +146,137 @@ class TaskSession(Protocol):
     async def close(self) -> None: ...
 
 
+class RolloutEventType(StrEnum):
+    """Names each event payload, so a serialized event keeps its type."""
+
+    ATTEMPT_STARTED = "attempt_started"
+    MACHINE_READY = "machine_ready"
+    SESSION_PREPARED = "session_prepared"
+    MODEL_TURN_COMPLETED = "model_turn_completed"
+    TOOL_CALL_COMPLETED = "tool_call_completed"
+    TRANSITION_COMPLETED = "transition_completed"
+    GRADED = "graded"
+    ATTEMPT_ENDED = "attempt_ended"
+
+
+@dataclass(frozen=True)
+class AttemptStarted:
+    type: RolloutEventType = field(default=RolloutEventType.ATTEMPT_STARTED, init=False)
+
+
+@dataclass(frozen=True)
+class MachineReady:
+    """The task machine is created, its resources installed, and its setup commands run."""
+
+    duration: float
+    type: RolloutEventType = field(default=RolloutEventType.MACHINE_READY, init=False)
+
+
+@dataclass(frozen=True)
+class SessionPrepared:
+    message_count: int
+    duration: float
+    type: RolloutEventType = field(default=RolloutEventType.SESSION_PREPARED, init=False)
+
+
+@dataclass(frozen=True)
+class ModelTurnCompleted:
+    turn_index: int
+    stop_reason: str
+    prompt_token_count: int
+    response_token_count: int
+    metadata: dict[str, Any]
+    duration: float
+    type: RolloutEventType = field(default=RolloutEventType.MODEL_TURN_COMPLETED, init=False)
+
+
+@dataclass(frozen=True)
+class ToolCallCompleted:
+    """A session tool call returned an observation to the model."""
+
+    name: str
+    observation_bytes: int
+    duration: float
+    type: RolloutEventType = field(default=RolloutEventType.TOOL_CALL_COMPLETED, init=False)
+
+
+@dataclass(frozen=True)
+class TransitionCompleted:
+    turn_index: int
+    done: bool
+    observation_count: int
+    duration: float
+    type: RolloutEventType = field(default=RolloutEventType.TRANSITION_COMPLETED, init=False)
+
+
+@dataclass(frozen=True)
+class Graded:
+    status: Outcome
+    reward: float | None
+    type: RolloutEventType = field(default=RolloutEventType.GRADED, init=False)
+
+
+@dataclass(frozen=True)
+class AttemptEnded:
+    """The attempt returned with ``stop_reason``, or was interrupted during ``operation``."""
+
+    stop_reason: str | None
+    operation: RolloutOperation | None
+    type: RolloutEventType = field(default=RolloutEventType.ATTEMPT_ENDED, init=False)
+
+
+RolloutEventPayload = (
+    AttemptStarted
+    | MachineReady
+    | SessionPrepared
+    | ModelTurnCompleted
+    | ToolCallCompleted
+    | TransitionCompleted
+    | Graded
+    | AttemptEnded
+)
+
+
+@dataclass(frozen=True)
+class RolloutEvent:
+    """One event of the attempt that ``RolloutEngine.run`` started with ``run_key`` for task ``task_id``."""
+
+    run_key: str
+    task_id: str
+    payload: RolloutEventPayload
+
+
+class RolloutObserver(Protocol):
+    """Receive rollout progress in order, delivered off the rollout's path.
+
+    The attempt never waits on delivery, so a slow or failing observer cannot change a rollout. After the
+    attempt releases its resources, ``run`` waits up to ``cleanup_timeout`` for queued events.
+    """
+
+    async def on_event(self, event: RolloutEvent) -> None: ...
+
+
+class EventSink(Protocol):
+    """Queue an event payload for delivery as a ``RolloutEvent`` of the current attempt; never blocks."""
+
+    def emit(self, payload: RolloutEventPayload) -> None: ...
+
+
 class TaskGrader(Protocol):
     async def __call__(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult: ...
 
 
 @dataclass(frozen=True)
 class TaskSessionContext:
-    """Inputs for one task session; session-graded tasks have no task grader."""
+    """Inputs for one task session; session-graded tasks have no task grader.
+
+    A session may report its own events, such as tool calls, to ``events``.
+    """
 
     lowered: LoweredTaskSpec
     machine: Machine | None
     task_grader: TaskGrader | None
+    events: EventSink
 
     def require_task_grader(self) -> TaskGrader:
         """Return the task grader for a session that delegates final grading."""
