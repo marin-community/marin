@@ -52,7 +52,8 @@ from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 from rigging.filesystem.atomic import atomic_rename
-from taskcompendium.models import TextMessage
+from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.models import TaskResource, TextMessage
 
 from taskforge.ledger.records import EntryKind, Ledger, LedgerEntry
 from taskforge.llm.agent import AgentRun, AgentStop, AgentTool, AgentTurn, ReasoningReplay, ToolOutcome, run_agent
@@ -524,6 +525,7 @@ class AuthorSession:
         record: dict = {"path": raw, "program_digest": program.digest, "invalidate": sorted(invalidate)}
         try:
             draft = await self.build.builder(source, run_dir, invalidate=invalidate)
+            empty = await self._check_empty_answer(draft)
         except ModelUnavailable:
             raise
         except Exception as error:
@@ -539,15 +541,37 @@ class AuthorSession:
         record |= {"status": "built", "wall": time.monotonic() - started, "steps": ledger_steps(ledger, offset)}
         _write_json(run_dir / RUN_FILE, record)
         self.builds.append(record)
-        return f"built: program {program.digest[:16]}\nsteps: {_steps_line(record['steps'])}\n{self._digest(draft)}"
+        return (
+            f"built: program {program.digest[:16]}\nsteps: {_steps_line(record['steps'])}\n{self._digest(draft, empty)}"
+        )
 
-    async def run_grade_candidate(self, arguments: Mapping[str, object]) -> str:
-        draft = self.last_draft
-        if draft is None:
-            raise ToolRefusal("no draft built in this session yet; run_build the program first")
-        task = draft.task
+    async def _check_empty_answer(self, draft: TaskDraft) -> GradeResult:
+        """Grade the empty answer against the built draft's grader, as validation's negative controls will.
+
+        The empty answer comes back as ``SUBMISSION_FAILURE`` when the submission is refused before
+        any grader runs, or ``GRADED`` with whatever an empty candidate earns. Either rejects it,
+        unless the reward is above the grader's declared ``rejection_ceiling``: that grader credits
+        nothing, and the build fails in the grader step with the grade for the model to fix.
+
+        Raises:
+            BuildFailure: the empty answer is graded above the ceiling.
+        """
         grader = step_output(draft, self.build.store_root, GRADER_STEP, Grader)
-        files = [draft_module.file(str(f["path"]), str(f["content"])) for f in _list_argument(arguments, "files")]
+        empty = await self._grade(draft, grader, "", ())
+        if empty.status == Outcome.GRADED and (empty.reward or 0.0) > grader.rejection_ceiling:
+            raise BuildFailure(
+                f"the empty answer is graded with reward {empty.reward}, above the grader's declared "
+                f"rejection_ceiling {grader.rejection_ceiling}; a submission with nothing in it must earn at most "
+                f"the ceiling\n{grade_diagnostics(empty)}",
+                GRADER_STEP,
+            )
+        return empty
+
+    async def _grade(
+        self, draft: TaskDraft, grader: Grader, reply: str, workspace: Sequence[TaskResource]
+    ) -> GradeResult:
+        """Grade ``reply`` with the ``workspace`` files it leaves against ``draft``'s task, no model called."""
+        task = draft.task
         context = RLEnvBuildContext(
             workpiece_id=self.item,
             round=self.round_no,
@@ -557,19 +581,27 @@ class AuthorSession:
             step=GRADE_STEP,
         )
         machine = SHELL_CAPABILITY in task.environment_requirements.capabilities
+        return await grade_candidate(
+            context,
+            task.environment_requirements if machine else None,
+            grader.package,
+            task.answer_type,
+            task.answer_format,
+            GRADE_INSTRUCTION,
+            reply,
+            files=task.resources.worker,
+            workspace=workspace,
+            output_paths=task.output_paths,
+        )
+
+    async def run_grade_candidate(self, arguments: Mapping[str, object]) -> str:
+        draft = self.last_draft
+        if draft is None:
+            raise ToolRefusal("no draft built in this session yet; run_build the program first")
+        grader = step_output(draft, self.build.store_root, GRADER_STEP, Grader)
+        files = [draft_module.file(str(f["path"]), str(f["content"])) for f in _list_argument(arguments, "files")]
         try:
-            grade = await grade_candidate(
-                context,
-                task.environment_requirements if machine else None,
-                grader.package,
-                task.answer_type,
-                task.answer_format,
-                GRADE_INSTRUCTION,
-                str(arguments["reply"]),
-                files=task.resources.worker,
-                workspace=files,
-                output_paths=task.output_paths,
-            )
+            grade = await self._grade(draft, grader, str(arguments["reply"]), files)
         except ModelUnavailable:
             raise
         except Exception as error:
@@ -666,7 +698,8 @@ class AuthorSession:
                 "store. Steps whose source and inputs are unchanged load their stored output. path: the program "
                 "file; invalidate: optional step names to rerun even when stored. Returns each step's cache status "
                 "and wall, then the failure (the step's message, or the crashing program line first) or a digest "
-                "of the built task.",
+                "of the built task. After a build the library grades the empty answer itself: a reward above the "
+                "grader's declared rejection_ceiling fails the build in the grader step.",
                 _schema({"path": PATH_ARGUMENT, "invalidate": {"type": "array", "items": {"type": "string"}}}, ["path"]),
                 self.run_build,
             ),
@@ -714,16 +747,17 @@ class AuthorSession:
 
         return replace(tool, handler=handler)
 
-    def _digest(self, draft: TaskDraft) -> str:
+    def _digest(self, draft: TaskDraft, empty: GradeResult) -> str:
+        """What the model reads after a build: the grader, its reference grade, the library's empty-answer grade."""
         grader = step_output(draft, self.build.store_root, GRADER_STEP, Grader)
         reference = next((c for c in grader.prototyped if c.reply == grader.reference_reply), None)
-        empty = next((c for c in grader.prototyped if not c.reply and not c.files), None)
         task = draft.task
         return "\n".join(
             [
                 f"grader: {type(grader.package.grader).__name__}",
                 f"reference: {_prototyped(reference)}",
-                f"empty answer: {_prototyped(empty)}",
+                f"empty answer: {empty.status} reward {empty.reward} (graded by the library; ceiling "
+                f"{grader.rejection_ceiling})",
                 f"instruction: {_instruction_words(draft)} words",
                 f"worker files: {[r.path for r in task.resources.worker]}",
             ]

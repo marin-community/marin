@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
+from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind
@@ -254,6 +255,7 @@ async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_st
     assert refused.startswith("not handed in: the loader accepts it") and "never built in this session" in refused
     assert built.startswith("built: program ") and "sources MISS" in built and "grader MISS" in built
     assert "reference: graded reward 1.0" in built
+    assert "empty answer: submission_failure reward 0.0 (graded by the library; ceiling 0.0)" in built
     assert graded.startswith("status graded, reward 0.0")
     assert not model.replies, "the session stopped at the accepted submit"
 
@@ -322,6 +324,34 @@ async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_st
         research=ResearchRequirement.OFF,
     )
     assert step_statuses(stage_ledger.path_for(WORKPIECE)) == [("sources", "hit"), ("grader", "hit"), ("assemble", "hit")]
+
+
+async def test_a_grader_crediting_the_empty_answer_fails_the_build_in_the_grader_step(tmp_path, author, monkeypatch):
+    """The program grades nothing but its reference; the library's empty-answer grade still fails the build."""
+    graded = (Outcome.GRADED, 1.0)
+
+    async def credit_everything(context, requirements, package, answer_type, answer_format, instruction, reply, **kw):
+        status, reward = graded if reply == "" else (Outcome.GRADED, 1.0 if reply == "42" else 0.0)
+        return GradeResult(status=status, reward=reward)
+
+    monkeypatch.setattr(aa, "grade_candidate", credit_everything)
+    item = tmp_path / "item"
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": "ships anyway"})),
+        turn(("submit", {"path": "program.py", "notes": "ships anyway"})),
+    )
+    outcome = await author(item, model)
+
+    _, built, refused = tool_outputs(model)
+    assert built.startswith("build failed (build_failure in step grader)")
+    assert "the empty answer is graded with reward 1.0, above the grader's declared rejection_ceiling 0.0" in built
+    assert "never built in this session" in refused
+    assert outcome.status is AuthorStatus.ACCEPTED
+    assert read(authored(item, 0, 0) / "submit.json")["tested"] is False
+    run = read(agentic(item, 0, 0) / "runs" / "0" / "run.json")
+    assert (run["status"], run["step"]) == ("build_failure", "grader")
 
 
 async def test_agentic_record_has_the_one_shot_record_shape(tmp_path, author, proposal, ledger):

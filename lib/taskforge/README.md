@@ -263,7 +263,9 @@ sends a failing grader back to the model, and after `sdk.ATTEMPTS` requests fail
 grader that rejects its own reference, returns a reward outside its score range, or credits the
 empty answer above its declared `rejection_ceiling` is a build failure. The `Grader` it returns
 holds the reference answer, the ceiling (the most a submission wrong in substance can earn under
-its partial-credit scheme) and every candidate it graded. `sdk.checked_structured` treats a reply
+its partial-credit scheme) and every candidate it graded. The agentic author's `run_build` tool
+grades the empty answer in the library after every build, whatever the program did, and fails the
+build in the grader step when it is graded above the ceiling; its digest reports that grade. `sdk.checked_structured` treats a reply
 the output limit cut off as one failed submission and asks for a shorter one.
 
 `stage40_build_with_program.glm_author.GlmAuthor` asks GLM for a program with the template as its example, and
