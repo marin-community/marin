@@ -11,6 +11,6 @@ class TriageDecision(StrEnum):
     REJECT = "reject"
 
 
-def accept(proposal: object) -> TriageDecision:
+async def accept(proposal: object) -> TriageDecision:
     """Accept ``proposal`` without checking it."""
     return TriageDecision.ACCEPT

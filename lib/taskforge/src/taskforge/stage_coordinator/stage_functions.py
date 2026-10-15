@@ -37,7 +37,7 @@ from taskforge.stage60_review.decision import Decision
 
 
 class Triage(Protocol):
-    def __call__(self, proposal: object, /) -> TriageDecision: ...
+    async def __call__(self, proposal: object, /) -> TriageDecision: ...
 
 
 class LoadProgram(Protocol):
@@ -71,7 +71,7 @@ class Validate(Protocol):
 class Review(Protocol):
     """Decide on the summary of a validation round."""
 
-    def __call__(self, summary: object, /) -> Decision: ...
+    async def __call__(self, summary: object, /) -> Decision: ...
 
 
 @dataclass(frozen=True)

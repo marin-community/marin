@@ -4,8 +4,7 @@
 """Run an item through its stages with the stage functions a caller passes.
 
 A ``StageCoordinator`` holds the caller's ``StageFunctions``, the item budget, the run root, the
-event store, the model with its sampling policy, and a transition table. ``run_item`` runs an
-item to a terminal:
+event store, and the model with its sampling policy. ``run_item`` runs an item to a terminal:
 
 1. When the caller's log is empty and the event store holds the item's events, ``run_item``
    restores the log from the store.
@@ -21,7 +20,8 @@ Each stage runs through an adapter in this module. The adapter calls the caller'
 the round's files, and returns the stage's event. The coordinator spends a build revision on:
 
 * a build raising ``BuildFailure`` or any other error, recorded as ``BUILD_FAILED``, unless the
-  error is a ``BuildInfrastructureFailure``, ``ModelUnavailable`` or ``OSError``;
+  error is a ``BuildInfrastructureFailure``, ``ModelUnavailable`` or ``OSError``: a storage fault,
+  a missing blob or memo, or a corrupt one (``StoreCorruption``);
 * an author raising ``StructuredOutputError``, recorded as ``AUTHOR_FAILED``. The author's
   structured reply stayed invalid through its repairs, as when the output limit cut it, and a new
   call samples again.
@@ -81,7 +81,6 @@ from taskforge.stage40_build.step_store import CacheStatus, check_item_id
 from taskforge.stage60_review.decision import Accept, Decision, Modify, Reject, Retry
 from taskforge.stage_coordinator.event_log import ITEMS_DIR, ItemEventLog, ItemEventStore
 from taskforge.stage_coordinator.item_machine import (
-    DEFAULT_TRANSITIONS,
     EXIT,
     FINAL,
     REASON_ATTR,
@@ -92,8 +91,6 @@ from taskforge.stage_coordinator.item_machine import (
     ItemState,
     Stage,
     Terminal,
-    Transitions,
-    check_transitions,
     derive_state,
     transition,
 )
@@ -144,7 +141,6 @@ class StageCoordinator:
         sampling: The sampling policy build steps pass to ``model``.
         model_digest: The model part of every step key, usually ``step_store.model_digest(model, sampling)``.
             ``OPENED`` records it.
-        transitions: The next stage for each stage and exit, checked by ``check_transitions``.
     """
 
     stages: StageFunctions
@@ -154,10 +150,6 @@ class StageCoordinator:
     model: ModelClient
     sampling: LLMPolicy
     model_digest: str
-    transitions: Transitions = DEFAULT_TRANSITIONS
-
-    def __post_init__(self) -> None:
-        check_transitions(self.transitions)
 
 
 @dataclass(frozen=True)
@@ -190,7 +182,8 @@ async def run_item(coordinator: StageCoordinator, item_id: str, proposal: object
     A build failure, or an author raising ``StructuredOutputError``, spends one of the item's build
     revisions and sends the item back to the author. When the build raises
     ``BuildInfrastructureFailure``, ``ModelUnavailable`` or an ``OSError``, the item fails in place
-    with its revisions unspent, and the next ``run_item`` builds the same program again.
+    with its revisions unspent, and the next ``run_item`` builds the same program again. An
+    ``OSError`` is a storage fault, a missing blob or memo, or a corrupt one (``StoreCorruption``).
 
     Raises:
         ValueError: ``item_id`` is unsafe as a directory name, the item was opened for another
@@ -204,7 +197,7 @@ async def run_item(coordinator: StageCoordinator, item_id: str, proposal: object
         log.restore(stored)
     item = _Item(coordinator, item_id, proposal, log)
     _open(item)
-    state = derive_state(log.events(), coordinator.transitions)
+    state = derive_state(log.events())
     if state.terminal is not None and state.terminal in FINAL:
         if stored != log.events():
             coordinator.event_store.save(item_id, log.events())
@@ -224,7 +217,7 @@ async def run_item(coordinator: StageCoordinator, item_id: str, proposal: object
 async def _advance(item: _Item, state: ItemState) -> ItemState:
     while True:
         event = await ADAPTERS[state.stage](item, state)
-        state = transition(state, item.log.append(event), item.coordinator.transitions)
+        state = transition(state, item.log.append(event))
         if state.terminal is not None:
             return state
 
@@ -256,7 +249,7 @@ def _write(path: Path, content: bytes) -> None:
 
 
 async def _triage(item: _Item, state: ItemState) -> ItemEvent:
-    way = TRIAGE_EXITS[item.coordinator.stages.triage(item.proposal)]
+    way = TRIAGE_EXITS[await item.coordinator.stages.triage(item.proposal)]
     return ItemEvent(EventKind.TRIAGED, state.round, state.proposal_digest, {EXIT: way})
 
 
@@ -285,7 +278,7 @@ async def _author(item: _Item, state: ItemState) -> ItemEvent:
     place at the author stage.
     """
     try:
-        authored = item.coordinator.stages.author(item.proposal, _revision(item, state))
+        authored = await item.coordinator.stages.author(item.proposal, _revision(item, state))
     except StructuredOutputError as error:
         attrs = _failure_attrs(item, state, error, _error_line(error))
         return ItemEvent(EventKind.AUTHOR_FAILED, state.round, state.proposal_digest, attrs)
@@ -297,7 +290,7 @@ async def _author(item: _Item, state: ItemState) -> ItemEvent:
     return ItemEvent(EventKind.AUTHORED, state.round, authored.program.digest, attrs)
 
 
-def _authored_program(item: _Item, state: ItemState) -> RLEnvBuildProgram:
+async def _authored_program(item: _Item, state: ItemState) -> RLEnvBuildProgram:
     """Load the program from ``authored/<k>/program.py``, or ask the author again when it wrote no source.
 
     Raises:
@@ -308,7 +301,7 @@ def _authored_program(item: _Item, state: ItemState) -> RLEnvBuildProgram:
         program = item.coordinator.stages.load_program(source.read_text())
         found = f"{source} holds program {program.digest}"
     else:
-        program = item.coordinator.stages.author(item.proposal, _revision(item, state)).program
+        program = (await item.coordinator.stages.author(item.proposal, _revision(item, state))).program
         found = f"the author now returns program {program.digest}"
     if program.digest != state.program_digest:
         raise ValueError(f"{item.item_id}: {found}, not the authored {state.program_digest}")
@@ -325,10 +318,11 @@ async def _build(item: _Item, state: ItemState) -> ItemEvent:
 
     * ``BuildInfrastructureFailure``, raised when the build host fails;
     * ``ModelUnavailable``, raised when the model stays unreachable;
-    * ``OSError`` and its subclasses, raised on a storage fault or a missing blob or memo.
+    * ``OSError`` and its subclasses: a storage fault, a missing blob or memo, or a corrupt one
+      (``StoreCorruption``).
     """
     coordinator = item.coordinator
-    program = _authored_program(item, state)
+    program = await _authored_program(item, state)
     try:
         draft = await coordinator.stages.build(
             program,
@@ -456,7 +450,7 @@ async def _validate(item: _Item, state: ItemState) -> ItemEvent:
 async def _review(item: _Item, state: ItemState) -> ItemEvent:
     """Decide on the summary read back from ``validation.json`` and write the decision to ``decision.json``."""
     round_dir = item.round_dir(state.round)
-    decision = item.coordinator.stages.review(json.loads((round_dir / VALIDATION_FILE).read_bytes()))
+    decision = await item.coordinator.stages.review(json.loads((round_dir / VALIDATION_FILE).read_bytes()))
     _write(round_dir / DECISION_FILE, _DECISION.dump_json(decision, indent=2))
     return ItemEvent(EventKind.DECIDED, state.round, state.task_digest, _decision_attrs(item, state, decision))
 

@@ -32,7 +32,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.storage_path import StoragePath
 
@@ -61,6 +61,13 @@ def model_digest(model: ModelClient, sampling: LLMPolicy) -> str:
     one and passes it to ``run_build`` in place of this one.
     """
     return digest({"model": model.model, "sampling": sampling})
+
+
+class StoreCorruption(OSError):
+    """A memo or blob in the store is unreadable or does not match its digest.
+
+    The store is a host fault, not the program's.
+    """
 
 
 class CacheStatus(StrEnum):
@@ -144,16 +151,25 @@ class RLEnvBuildStepStore:
             The memo and the decoded output, or ``None`` when no memo exists.
 
         Raises:
-            ValueError: the blob's content does not match the digest in the memo.
+            StoreCorruption: the memo does not validate, the blob's content does not match the digest
+                in the memo, or the blob does not decode as ``output_type``.
         """
         path = self._memo_path(key, name)
         if not path.exists():
             return None
-        memo = _MEMO.validate_json(path.read_bytes())
+        try:
+            memo = _MEMO.validate_json(path.read_bytes())
+        except ValidationError as error:
+            raise StoreCorruption(f"Memo {path} of step {name} does not validate") from error
         content = (self.root / "blobs" / memo.output_digest).read_bytes()
         if sha256_hex(content) != memo.output_digest:
-            raise ValueError(f"Blob {memo.output_digest} of step {name} does not match its digest")
-        return memo, TypeAdapter(output_type).validate_json(content)
+            raise StoreCorruption(f"Blob {memo.output_digest} of step {name} does not match its digest")
+        try:
+            return memo, TypeAdapter(output_type).validate_json(content)
+        except ValidationError as error:
+            raise StoreCorruption(
+                f"Blob {memo.output_digest} of step {name} does not decode as {output_type}"
+            ) from error
 
     def store(self, key: RLEnvBuildStepKey, name: str, output: object) -> RLEnvBuildStepMemo:
         """Write ``output``'s blob unless it exists, then the memo for ``name`` under ``key``."""

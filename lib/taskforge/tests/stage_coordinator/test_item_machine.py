@@ -10,14 +10,11 @@ import pytest
 from taskforge.stage30_author.author import RevisionKind
 from taskforge.stage60_review.decision import RejectKind
 from taskforge.stage_coordinator.item_machine import (
-    DEFAULT_TRANSITIONS,
     EXIT,
     EventKind,
-    Exit,
     ItemEvent,
     Stage,
     Terminal,
-    check_transitions,
     derive_state,
 )
 
@@ -170,16 +167,3 @@ def test_a_gap_or_a_repeat_in_seq_is_refused(shift, message):
 
     with pytest.raises(ValueError, match=message):
         derive_state(log)
-
-
-def test_a_caller_table_re_targets_an_edge_and_a_table_missing_an_exit_is_refused():
-    rebuild = {**DEFAULT_TRANSITIONS, (Stage.REVIEW, Exit.RETRY): Stage.BUILD}
-    check_transitions(rebuild)
-    log = numbered(*VALIDATED_LOG, decided(exit="retry", cause="model_unavailable", count="1", retries_used="1"))
-    assert derive_state(log, rebuild).stage is Stage.BUILD
-
-    missing = {edge: target for edge, target in DEFAULT_TRANSITIONS.items() if edge != (Stage.REVIEW, Exit.MODIFY)}
-    with pytest.raises(ValueError, match=r"missing \['review/modify'\]"):
-        check_transitions(missing)
-    with pytest.raises(ValueError, match="only a closing edge leads to done"):
-        check_transitions({**DEFAULT_TRANSITIONS, (Stage.REVIEW, Exit.RETRY): Stage.DONE})

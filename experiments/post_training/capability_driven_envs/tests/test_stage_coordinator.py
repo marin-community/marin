@@ -59,7 +59,7 @@ async def validate(draft: TaskDraft) -> dict[str, int]:
     return {"graded": 4, "solved": 2}
 
 
-def review(summary: object) -> Decision:
+async def review(summary: object) -> Decision:
     return Accept(band=BandOutcome.IN_BAND)
 
 

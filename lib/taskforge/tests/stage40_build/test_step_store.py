@@ -12,6 +12,7 @@ from taskforge.stage40_build.step_store import (
     CacheStatus,
     RLEnvBuildStepKey,
     RLEnvBuildStepStore,
+    StoreCorruption,
 )
 
 
@@ -88,7 +89,7 @@ def test_a_blob_altered_on_disk_is_refused(tmp_path):
     record = store.store(KEY, "fixtures", OUTPUT)
     (tmp_path / "blobs" / record.output_digest).write_text("{}")
 
-    with pytest.raises(ValueError, match="does not match its digest"):
+    with pytest.raises(StoreCorruption, match="does not match its digest"):
         store.load(KEY, "fixtures", Fixture)
 
 

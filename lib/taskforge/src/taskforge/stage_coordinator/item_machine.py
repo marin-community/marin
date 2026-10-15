@@ -4,9 +4,8 @@
 """The item machine: the stages of an item, and the item's state as a fold over its events.
 
 The coordinator runs the stage in ``ItemState.stage`` and appends the stage's event to the item's
-log. ``transition`` then looks up the event's exit in a transition table to move the item to its
-next stage. ``DEFAULT_TRANSITIONS`` holds the table below, and a caller may pass its own table to
-re-target an edge::
+log. ``transition`` then looks up the event's exit in ``TRANSITIONS``, the table below, to move the
+item to its next stage::
 
     stage     event          exit       next      bookkeeping
     --------  -------------  ---------  --------  ------------------------------------------------
@@ -35,7 +34,7 @@ reject for ``AUTHOR_FAILED`` and ``BUILD_FAILED``, and retry or abandon for ``DE
 ``derive_state`` folds an item's events into its ``ItemState`` by calling ``transition`` on each
 event in turn. The state is computed again from the events on every read and is stored nowhere.
 The fold raises ``ValueError`` on a gap or a repeat in ``seq``, on an event recorded outside its
-stage, and on an exit the table has no edge for.
+stage, and on an exit its stage has no edge for.
 
 An item ending ``ACCEPTED`` or ``REJECTED`` is finished, and the fold refuses any later event. An
 item ending ``ABANDONED`` or ``FAILED`` continues when it runs again, and its next event clears the
@@ -98,7 +97,7 @@ class Stage(StrEnum):
 
 
 class Exit(StrEnum):
-    """The way a stage ended, stored as ``attrs[EXIT]`` and looked up in the transition table."""
+    """The way a stage ended, stored as ``attrs[EXIT]`` and looked up in ``TRANSITIONS``."""
 
     ACCEPT = "accept"
     REJECT = "reject"
@@ -111,15 +110,6 @@ class Exit(StrEnum):
     MODIFY = "modify"
 
 
-EXITS: Mapping[Stage, frozenset[Exit]] = {
-    Stage.TRIAGE: frozenset({Exit.ACCEPT, Exit.REJECT}),
-    Stage.AUTHOR: frozenset({Exit.AUTHORED, Exit.REVISE, Exit.REJECT}),
-    Stage.BUILD: frozenset({Exit.BUILT, Exit.REVISE, Exit.REJECT}),
-    Stage.VALIDATE: frozenset({Exit.VALIDATED}),
-    Stage.REVIEW: frozenset({Exit.ACCEPT, Exit.REJECT, Exit.RETRY, Exit.ABANDON, Exit.MODIFY}),
-}
-"""The exits of each stage. ``DONE`` has none, because its ``TERMINAL`` event ends the item."""
-
 EVENT_STAGES: Mapping[EventKind, Stage] = {
     EventKind.TRIAGED: Stage.TRIAGE,
     EventKind.AUTHORED: Stage.AUTHOR,
@@ -131,10 +121,7 @@ EVENT_STAGES: Mapping[EventKind, Stage] = {
 }
 """The stage recording each stage event."""
 
-type Transitions = Mapping[tuple[Stage, Exit], Stage]
-"""A transition table, from each stage and exit to the next stage."""
-
-DEFAULT_TRANSITIONS: Transitions = MappingProxyType(
+TRANSITIONS: Mapping[tuple[Stage, Exit], Stage] = MappingProxyType(
     {
         (Stage.TRIAGE, Exit.ACCEPT): Stage.AUTHOR,
         (Stage.TRIAGE, Exit.REJECT): Stage.DONE,
@@ -152,36 +139,6 @@ DEFAULT_TRANSITIONS: Transitions = MappingProxyType(
         (Stage.REVIEW, Exit.MODIFY): Stage.AUTHOR,
     }
 )
-
-CLOSING_EDGES = frozenset(
-    {
-        (Stage.TRIAGE, Exit.REJECT),
-        (Stage.AUTHOR, Exit.REJECT),
-        (Stage.BUILD, Exit.REJECT),
-        (Stage.REVIEW, Exit.ACCEPT),
-        (Stage.REVIEW, Exit.REJECT),
-        (Stage.REVIEW, Exit.ABANDON),
-    }
-)
-"""The edges whose event records a ``Closing``. A table sends these edges to ``DONE``, and no others."""
-
-
-def check_transitions(table: Transitions) -> None:
-    """Raise ``ValueError`` unless ``table`` maps each stage exit to a stage, with closing edges to ``DONE``.
-
-    The event on a closing edge records the reason the item ends, so ``check_transitions`` requires
-    each closing edge to lead to ``DONE`` and every other edge to lead elsewhere.
-    """
-    expected = {(stage, way) for stage, ways in EXITS.items() for way in ways}
-    missing = sorted(f"{stage}/{way}" for stage, way in expected - table.keys())
-    unknown = sorted(f"{stage}/{way}" for stage, way in table.keys() - expected)
-    if missing or unknown:
-        raise ValueError(f"a transition table needs exactly the stage exits: missing {missing}, unknown {unknown}")
-    for (stage, way), target in table.items():
-        if not isinstance(target, Stage):
-            raise ValueError(f"transition {stage}/{way} leads to {target!r}, not a Stage")
-        if (target is Stage.DONE) != ((stage, way) in CLOSING_EDGES):
-            raise ValueError(f"transition {stage}/{way} -> {target}: only a closing edge leads to done")
 
 
 class Terminal(StrEnum):
@@ -278,11 +235,11 @@ def opened(event: ItemEvent) -> ItemState:
     )
 
 
-def transition(state: ItemState, event: ItemEvent, table: Transitions = DEFAULT_TRANSITIONS) -> ItemState:
+def transition(state: ItemState, event: ItemEvent) -> ItemState:
     """Return the state after ``event``, the item's next event.
 
     A ``TERMINAL`` event ends the item at its closing, or marks it failed in place. Any other event
-    belongs to the stage in ``EVENT_STAGES``. Its exit picks the next stage from ``table``, and its
+    belongs to the stage in ``EVENT_STAGES``. Its exit picks the next stage from ``TRANSITIONS``, and its
     kind and exit select the bookkeeping in the module docstring's table.
 
     Raises:
@@ -303,9 +260,9 @@ def transition(state: ItemState, event: ItemEvent, table: Transitions = DEFAULT_
     if stage is not state.stage:
         raise ValueError(f"{kind} is recorded by stage {stage}, but the item is in stage {state.stage}")
     way = Exit(attrs[EXIT])
-    if (state.stage, way) not in table:
+    if (state.stage, way) not in TRANSITIONS:
         raise ValueError(f"{kind} exits {way}, which stage {state.stage} has no edge for")
-    state = replace(state, stage=table[(state.stage, way)])
+    state = replace(state, stage=TRANSITIONS[(state.stage, way)])
     match (kind, way):
         case (EventKind.TRIAGED, Exit.ACCEPT) | (EventKind.VALIDATED, Exit.VALIDATED):
             return state
@@ -360,7 +317,7 @@ def _terminal(state: ItemState, terminal: Terminal) -> ItemState:
     return state
 
 
-def derive_state(events: Iterable[ItemEvent], table: Transitions = DEFAULT_TRANSITIONS) -> ItemState:
+def derive_state(events: Iterable[ItemEvent]) -> ItemState:
     """Fold an item's events into its ``ItemState``: ``opened`` on the first, then ``transition`` on each.
 
     Raises:
@@ -372,5 +329,5 @@ def derive_state(events: Iterable[ItemEvent], table: Transitions = DEFAULT_TRANS
         raise ValueError("an item's log starts with OPENED, and this log is empty")
     state = opened(first)
     for event in events:
-        state = transition(state, event, table)
+        state = transition(state, event)
     return state

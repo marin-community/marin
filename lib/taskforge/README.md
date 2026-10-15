@@ -7,7 +7,7 @@ Taskforge turns task ideas into TaskCompendium `TaskSpec`s with a model's help. 
 
 ```
 src/taskforge/
-  stage_coordinator/  item_machine.py: Stage, Exit, DEFAULT_TRANSITIONS, `transition`, `derive_state`;
+  stage_coordinator/  item_machine.py: Stage, Exit, TRANSITIONS, `transition`, `derive_state`;
                       event_log.py: ItemEventLog, InMemoryEventLog, ItemEventStore, JsonEventStore;
                       stage_functions.py: the stage Protocols and `StageFunctions`;
                       coordinator.py: ItemBudget, StageCoordinator, `run_item`
@@ -80,7 +80,7 @@ consumers cached.
 ## The stage machine
 
 `run_item` runs an item through the stages with the functions a caller passes in
-`StageFunctions`. Each stage returns an event with an exit, and the transition table in
+`StageFunctions`. Each stage returns an event with an exit, and `TRANSITIONS` in
 `stage_coordinator/item_machine.py` gives the next stage:
 
 | stage    | event           | exit      | next     |
@@ -151,7 +151,8 @@ instead, with its revisions unspent, when:
 - the build host fails (`BuildInfrastructureFailure`), and the relaunch builds the same program
   again;
 - the model is unavailable (`ModelUnavailable`), at the author or the build stage;
-- storage fails, or a blob or memo is missing (`OSError`).
+- storage fails, or a blob or memo is missing or corrupt (`OSError`, with `StoreCorruption` for a
+  corrupt one).
 
 The relaunch then resumes at the stage that raised.
 
@@ -168,5 +169,5 @@ uv run --package marin-taskforge --frozen --group test pytest -c lib/taskforge/p
 cd lib/taskforge && uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
-`tests/test_pipeline_walkthrough.py` runs a toy item through the stage functions directly and
-through `run_item`, and is the place to start reading.
+`tests/test_pipeline_walkthrough.py` runs a toy item through the stage functions with `run_item`,
+and is the place to start reading.
