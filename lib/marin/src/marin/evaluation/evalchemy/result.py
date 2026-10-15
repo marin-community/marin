@@ -60,6 +60,8 @@ class EvalchemyResult(EvalResult):
 
     Keys use task-config directories, with subtask names appended for groups.
     Shot variants remain distinct. Cross-task averages are empty.
+    Historical reports persist the ``EvalchemyResult`` type name, so this reader
+    remains part of their decoding contract.
     """
 
     @functools.cached_property

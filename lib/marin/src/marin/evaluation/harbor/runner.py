@@ -202,6 +202,7 @@ def _attempted_trials(job_dir: StoragePath) -> int | None:
     """Read the intended trial count from job-level ``result.json`` or ``lock.json``.
 
     Return ``None`` if neither contains a positive count or a nonempty trial list.
+    Coverage remains unknown for interrupted jobs even when some trials have results.
     """
     for name, key in (("result.json", "n_total_trials"), ("lock.json", "trials")):
         path = job_dir / name
@@ -265,7 +266,10 @@ def _aggregate(
     benchmark: BenchmarkMetadataRef,
     trials_per_task: int,
 ) -> HarborRunResult:
-    """Aggregate rewards over scored trials and retain unscored trials in coverage."""
+    """Aggregate rewards over scored trials and retain unscored trials in coverage.
+
+    Including unscored trials in the mean would treat missing grades as zero rewards.
+    """
     if benchmark.n_benchmark is None or benchmark.n_attempted is None:
         raise ValueError("Harbor benchmark metadata must report task counts")
     n_benchmark = benchmark.n_benchmark * trials_per_task
