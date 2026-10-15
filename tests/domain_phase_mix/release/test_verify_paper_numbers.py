@@ -1,11 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from experiments.domain_phase_mix.release import paths
+from experiments.domain_phase_mix.release import export_dataset, paths, tables
 from experiments.domain_phase_mix.release import verify_paper_numbers as v
 
 TEX = r"""
@@ -100,7 +102,7 @@ PAPER_LABELS = {
 }
 SECTIONS = paths.DRIVE / "sections"
 # The numbers of the paper that differ from the build, as .agents/projects/mariner_release/AUDIT.md explains them.
-KNOWN_DIFFERENCES = {("tab:a-unimax-cap", 0, 4, 0)}
+KNOWN_DIFFERENCES = {("tab:a-unimax-cap", 0, 4, 0), ("tab:a-unimax-cap", 4, 4, 0)}
 
 
 def registry_frame(rows: list[dict]) -> pd.DataFrame:
@@ -301,10 +303,21 @@ def test_cli_exit_codes(tmp_path):
 
     assert run(traced, "--fail-on-untraced") == 1  # three numbers unregistered
     assert run(traced + skipped, "--fail-on-untraced") == 1  # registered skips fail unless allowed
+    # Constants and deferred two-phase numbers are the only skips the flag allows; a registered untraced number fails.
     assert run(traced + skipped, "--fail-on-untraced", "--allow-registered-skips") == 0
+    unchecked = [*skipped[:2], {"label": "tab:example", "row": 1, "col": 2, "note": "untraced: the source is absent"}]
+    assert run(traced + unchecked, "--fail-on-untraced", "--allow-registered-skips") == 1
     assert run(traced) == 0  # untraced numbers fail only on request
     mismatch = [{**traced[0], "query": "ladder[method=='olmix'].bpb.value"}, traced[1]]
     assert run(mismatch + skipped, "--allow-registered-skips") == 1  # a difference always fails
+
+
+def test_figure_index_lists_every_config_the_registry_reads():
+    # figures_tables.csv names the configs behind each paper table; the registry's queries read only those.
+    index = tables.read_csv(export_dataset.FIGURES_TABLES, keep_default_na=False).set_index("label").configs
+    for label, queries in v.read_registry(v.REGISTRY).groupby("label")["query"]:
+        read = {export_dataset.config_of(t) for query in queries for t in re.findall(r"([A-Za-z_]\w*)\[", query)}
+        assert read <= set(index[label].split(";")), (label, sorted(read - set(index[label].split(";"))))
 
 
 @pytest.mark.skipif(not SECTIONS.exists(), reason="paper folder absent")

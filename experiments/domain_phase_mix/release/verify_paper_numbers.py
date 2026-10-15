@@ -123,7 +123,8 @@ def _balanced_end(text: str, start: int, opening: str, closing: str, quotes: str
     """Index of the bracket that closes the one at `start`, skipping quoted strings."""
     if not text.startswith(opening, start):
         raise ValueError(f"expected {opening!r} at position {start} of {text!r}")
-    depth, quote = 0, None
+    depth: int = 0
+    quote: str | None = None
     for pos in range(start, len(text)):
         char = text[pos]
         if quote:
@@ -235,7 +236,7 @@ def _aggregate(values: pd.Series, agg: str) -> float:
     if agg == "count":
         return float(len(values))
     if values.isna().any():
-        raise ValueError(f"the selection holds {int(values.isna().sum())} null value(s)")
+        raise ValueError(f"the selection holds {values.isna().sum()} null value(s)")
     if values.empty:
         raise ValueError("the selection is empty")
     if agg == "value":
@@ -250,7 +251,7 @@ def _aggregate(values: pd.Series, agg: str) -> float:
     if agg in ("std", "se"):
         if len(values) < 2:
             raise ValueError(f"{agg} needs two or more rows, got {len(values)}")
-        std = float(values.std(ddof=1))
+        std = values.std(ddof=1)
         return std if agg == "std" else std / math.sqrt(len(values))
     return float(getattr(values, agg)())
 

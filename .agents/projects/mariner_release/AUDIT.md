@@ -5,11 +5,11 @@ with the dataset build. The registry `experiments/domain_phase_mix/release/paper
 over the build tables. The audit reports differences and never edits the LaTeX.
 
 Result on 2026-10-15: the 20 tables print 1,768 numbers that need a check (1,758 outside the row-label column, plus
-the ten registered row labels of `tab:a-heteroskedastic`). 1,656 are traced to the build: 1,655 match at the paper's
-printed decimals and one differs. 88 are registered skips: 54 configuration constants and 34 numbers of the two
-deferred two-phase tables. 24 numbers of `tab:a-unimax-cap` are untraced, because the build does not hold the UniMax cap
-sweep's cap-1, cap-4 and cap-12 runs. The audit therefore exits 1: one difference, and 24 untraced numbers under
-`--fail-on-untraced`.
+the ten registered row labels of `tab:a-heteroskedastic`). 1,677 are traced to the build: 1,675 match at the paper's
+printed decimals and two differ. 88 are registered skips: 54 configuration constants and 34 numbers of the two
+deferred two-phase tables. Three numbers of `tab:a-unimax-cap` are untraced: the Uncheatable values of the UniMax cap
+sweep's cap-1, cap-4 and cap-12 runs, whose evaluation logs are on GCS only. The audit therefore exits 1: two
+differences, and three untraced numbers under `--fail-on-untraced`.
 
 ## Run
 
@@ -19,13 +19,13 @@ uv run python -m experiments.domain_phase_mix.release.verify_paper_numbers --bui
   --sections "<paper folder>/sections" --fail-on-untraced --allow-registered-skips
 ```
 
-- Build: 34 tables, MANIFEST.json `commit` 6bfb359981, built 2026-10-15T10:33Z, 0 consistency problems.
+- Build: 35 tables, MANIFEST.json `commit` cf599108dc, built 2026-10-15T11:02Z, 0 consistency problems.
 - Paper: `sections/` of the paper folder on Google Drive. The tables are in `results.tex` (modified 2026-10-12 20:13,
   SHA-256 prefix e2a47c370e100b1e), `surrogate.tex` (2026-10-13 02:17, 81cc91596e2a38ea), `appendix.tex` (2026-10-13
   18:21, 56d9771c55d2d188) and `appendix_analysis.tex` (2026-10-14 01:25, 61aeead7375b3d31), local times.
-- Output: `1 differences, 24 untraced cells, 88 registered skips`, exit code 1.
+- Output: `2 differences, 3 untraced cells, 88 registered skips`, exit code 1.
 - `tests/domain_phase_mix/release/test_verify_paper_numbers.py::test_registry_checks_every_number_of_the_paper` runs
-  the same audit and pins the known difference.
+  the same audit and pins the two known differences.
 
 ## Per table
 
@@ -47,29 +47,30 @@ another value than the paper prints.
 | tab:a-hyperparameters | 53 | 24 | 29 | | | 0 | ladder, swarm_*, heldout |
 | tab:a-scaling-configurations | 16 | 16 | | | | 0 | ladder |
 | tab:a-olmix-cap-kl | 92 | 92 | | | | 0 | validation_3e18 |
-| tab:a-unimax-cap | 40 | 16 | | | 24 | 1 | ladder, tasks |
+| tab:a-unimax-cap | 40 | 37 | | | 3 | 2 | ladder, ladder_unimax_cap_sweep, tasks |
 | tab:a-regmix-argmin | 32 | 32 | | | | 0 | validation_3e18, fits_proposal_predictions |
 | tab:a-kl-ablation | 38 | 38 | | | | 0 | validation_3e18, fits_proposal_predictions |
 | tab:a-ablations-full | 193 | 168 | 25 | | | 0 | fits_surrogate_benchmark |
 | tab:a-baseline-validation | 84 | 84 | | | | 0 | validation_3e18, swarm_qwen3_360m_1p6b |
 | tab:a-compute-equivalence | 72 | 72 | | | | 0 | ladder_compute_equivalence |
 | tab:a-accuracy-components | 459 | 459 | | | | 0 | ladder_accuracy |
-| Total | 1,768 | 1,656 | 54 | 34 | 24 | 1 | |
+| Total | 1,768 | 1,677 | 54 | 34 | 3 | 2 | |
 
 ## Differences
 
-`tab:a-unimax-cap`, row Proportional, column Math (7): the paper prints 1.099. The build gives 1.098485, which rounds
-to 1.098. The query is `ladder[method=='proportional' & compute_flops==3e18 & data_seed==660700]
-.mean_of(tasks[task_id.str.startswith('minerva_math_')].task_id).value`, the mean of the June proportional run's seven
-Minerva MATH components. The paper's table matches the results table of the cap sweep's README
-(`.agents/projects/unimax_cap_sweep_20260922/README.md`), which also prints 1.099. The README's source,
-`table9_results.json`, gives the same 1.098485 as the build. The printed value matches rounding 1.0985 half up, so the
-README likely rounded a four-decimal intermediate. The correction is 1.098.
+Both differences are in `tab:a-unimax-cap`, column Math (7), the mean of a run's seven Minerva MATH components. The
+paper's rows match the results table of the cap sweep's README (`.agents/projects/unimax_cap_sweep_20260922/README.md`),
+which prints the same two values. The README's source, `table9_results.json`, gives the build's values.
 
-The same pattern affects one untraced number of that table. Cap 12's Math (7) prints 0.936; `table9_results.json`
-gives 0.935454, which rounds to 0.935. The other 20 OlmoBaseEval Easy numbers of the cap-1, cap-4 and cap-12 rows
-match that file. If this cell is corrected too, caps 8 and 12 both print 0.935 in that column (0.935380 and 0.935454
-at full precision). The bold mark on cap 8, the lowest entry, stays correct.
+| Row | Paper | Build | Correct rounding | Query |
+|---|---:|---:|---:|---|
+| Proportional (r0 c4) | 1.099 | 1.098485 | 1.098 | `ladder[method=='proportional' & compute_flops==3e18 & data_seed==660700].mean_of(...)` |
+| Cap 12 (r4 c4) | 0.936 | 0.935454 | 0.935 | `ladder_unimax_cap_sweep[epoch_cap==12].mean_of(...)` |
+
+Both printed values match rounding a four-decimal intermediate (1.0985, 0.9355) half up, so the README likely rounded
+twice. The other 35 traced numbers of the table, including the 20 other OlmoBaseEval Easy numbers of the sweep's runs,
+match. With both corrections, caps 8 and 12 print 0.935 in that column (0.935380 and 0.935454 at full precision); the
+bold mark on cap 8, the lowest entry, stays correct.
 
 ## Registered skips
 
@@ -88,17 +89,14 @@ Constants (54). The registry rows have an empty query and the note `constant`.
 Deferred two-phase numbers (34), note `deferred_two_phase`: all of `tab:a-matched-swarms` (18) and
 `tab:a-phase-fiber` (16). This release omits the two-phase swarms.
 
-Untraced numbers (24), note `untraced: ...`: the cap-1, cap-4 and cap-12 rows of `tab:a-unimax-cap`. The 21
-OlmoBaseEval Easy numbers come from the sweep's local `table9_results.json`. The three Uncheatable values (1.036,
-1.024, 1.025) exist only in the README's table and in each run's `checkpoints/eval_metrics.jsonl` on GCS, under
-`gs://marin-us-east5/.../delphi_baseline_mixtures_issue6607_20260623/<run>-<hash>/`. The runs' hashed names appear
-only in that README. A partial row in `validation_3e18` would break that table's rule that a run has all 58 per-task
-values or none. To trace the 24 numbers, pull the three runs' final Uncheatable components and add the launch to
-`validation_manifest.csv` as `unimax_cap_sweep`. The Proportional and cap-8 rows are traced; they are ladder runs.
+Untraced numbers (3), note `untraced: ...`: the Uncheatable values (1.036, 1.024, 1.025) of the cap-1, cap-4 and cap-12
+runs of `tab:a-unimax-cap`. They exist only in the README's table and in each run's `checkpoints/eval_metrics.jsonl`
+on GCS, under `gs://marin-us-east5/.../delphi_baseline_mixtures_issue6607_20260623/<run>-<hash>/`. To trace them, pull
+the three runs' final Uncheatable components and add them to `ladder_unimax_cap_sweep`.
 
 ## Tables added to the build
 
-The audit needed three sources that no build table held. Each was added to an existing config with a test:
+The audit needed four sources that no build table held. Each was added to an existing exporter with a test:
 
 - `starcoder_repeat_noise` (config `starcoder`, 50 rows): the repeat-noise panel behind `tab:a-heteroskedastic`, ten
   two-phase Nemotron-CC/StarCoder mixtures, five data seeds each, on the 60M-parameter proxy for 1.0B tokens. Per run:
@@ -115,9 +113,17 @@ The audit needed three sources that no build table held. Each was added to an ex
   (`fits.SURROGATE_BENCHMARK`). Runs of 2026-09-08 and later re-fit MARINER, Olmix, the linear model and the
   comparators bit for bit. Earlier runs of the additive response, Olmix and the linear model, and the first two
   2026-09-16 runs of the two convex per-bucket models, report other values; the paper uses the third, `20260916c`.
+- `ladder_unimax_cap_sweep` (own config folder, 3 rows): the UniMax cap sweep's runs at caps 1, 4 and 12, from
+  `.agents/projects/unimax_cap_sweep_20260922/table9_results.json` and the launch's `run_specs.json` and
+  `summary.json` under `RO/delphi_baseline_mixtures_issue6607_20260623/`. Per run: cap, seeds, the 51 OlmoBaseEval Easy
+  components and their mean, which equals the recorded mean to 1e-12. The exporter checks each run's model size and
+  token count against the ladder's 3e18 rung. The table has no observation ids, because the runs' hashed names appear
+  only in the README; the cross-table consistency check now skips tables without ids. The test checks the three caps
+  and that the same results file scores the ladder's UniMax-8 seed-0 run with the ladder's components (to 1e-15).
 
-`figures_tables.csv` now lists configs for these three tables in place of `untraced` (the Params column of
-`tab:a-ablations-full` adds `constant`).
+`figures_tables.csv` lists every config that each table's registry queries read; a test in
+`test_verify_paper_numbers.py` enforces this. The Params column of `tab:a-ablations-full` adds `constant`, and
+`tab:a-unimax-cap` keeps `untraced` for its three Uncheatable values.
 
 ## Strength of the checks
 
@@ -140,14 +146,16 @@ The audit needed three sources that no build table held. Each was added to an ex
   retrains in `validation_3e18` (`table5_repeats`, trainer seeds 1 and 2, the same data seed).
 - The total share of `tab:a-buckets` (100.00) is a sum over itself and cannot differ.
 - Bold, italics and daggers are not checked.
-- A perturbation check (every float of the build scaled by 1.03 and shifted by 0.01) makes 1,406 of the 1,656 traced
+- A perturbation check (every float of the build scaled by 1.03 and shifted by 0.01) makes 1,427 of the 1,677 traced
   numbers differ. The other 250 read integer columns, which the check left alone, or are standard deviations,
   standard errors, paired differences and ratios whose printed digits survive the change.
 
 ## Maintaining the registry
 
 The registry has one row per printed number: `label, row, col, part, query, decimals, note` (the module docstring of
-`verify_paper_numbers.py` defines the columns and the query language). When the paper changes, a registry row whose
+`verify_paper_numbers.py` defines the columns and the query language). Regenerate it with
+`uv run python -m experiments.domain_phase_mix.release.gen_registry`, which maps each table's row labels and columns
+to queries and reads the row and column indices from the parsed paper. When the paper changes, a registry row whose
 cell no longer prints a number, or prints other decimals, makes the audit raise and name the row, and a new number is
-reported as untraced. After the paper is corrected, remove the fixed cell from `KNOWN_DIFFERENCES` in
+reported as untraced. After the paper is corrected, remove the fixed cells from `KNOWN_DIFFERENCES` in
 `test_verify_paper_numbers.py`.
