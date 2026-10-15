@@ -92,6 +92,14 @@ model_config_overrides:
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12.yaml
   open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-06-2026.10.13:
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-06-2026.10.13.yaml
+  open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-08-2026.10.14:
+    tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-08-2026.10.14.yaml
+  open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-05-2026.10.14:
+    tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-05-2026.10.14.yaml
+  open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-06-2026.10.14:
+    tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-06-2026.10.14.yaml
+  open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-Transfer-06-2026.10.14:
+    tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-Transfer-06-2026.10.14.yaml
   open-athena-Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09:
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09.yaml
   open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21:
