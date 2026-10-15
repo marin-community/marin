@@ -134,7 +134,7 @@ def test_shards_keep_concurrent_mapper_progress_separate_and_reject_stale_attemp
     for _ in range(2):
         _, work = coordinator.pull_task("worker", TEST_WORKER_AVAILABLE)
         assert work is not None
-    first = ShardProgress("map", run.stage_generation, 0, 20, 40, 40, 100)
+    first = ShardProgress(run.stage_generation, 0, 20, 40, 40, 100)
     second = replace(first, records_in=80, input_rows_completed=80)
     coordinator.heartbeat("worker", {"mappers": CounterSnapshot({}, 2, {0: first, 1: second})})
     coordinator.heartbeat("worker", {"mappers": CounterSnapshot({}, 1, {0: second})})

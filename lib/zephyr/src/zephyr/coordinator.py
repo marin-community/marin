@@ -1024,7 +1024,7 @@ class ZephyrCoordinator:
             run.stage_done.set()
 
     def _clear_worker_inflight_counters(self, worker_id: str, execution_id: str, generation: int = 0) -> None:
-        """Zero a worker's in-flight snapshot, keeping the generation watermark.
+        """Clear live counters while retaining sibling progress and the generation watermark.
 
         Called when a task's runner is done, so late heartbeats from that task
         (strictly-lower generation) are rejected and the finished task's live

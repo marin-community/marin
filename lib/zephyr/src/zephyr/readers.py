@@ -312,7 +312,7 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
     columns = spec.columns
 
     counters.pipeline.set_counter(counters.INPUT_ROWS_COMPLETED, 0)
-    counters.pipeline.set_counter(counters.INPUT_ROWS_TOTAL, -1)
+    counters.pipeline.set_counter(counters.INPUT_ROWS_TOTAL, counters.UNKNOWN_INPUT_ROWS)
     with open_file(spec.path, "rt") as f:
         for line in f:
             line = line.strip()
@@ -449,7 +449,9 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
     end = num_rows if spec.row_end is None else min(spec.row_end, num_rows)
     counters.pipeline.set_counter(counters.INPUT_ROWS_COMPLETED, 0)
     # Filtered output batches do not expose how many source rows were scanned.
-    counters.pipeline.set_counter(counters.INPUT_ROWS_TOTAL, max(0, end - start) if pa_filter is None else -1)
+    counters.pipeline.set_counter(
+        counters.INPUT_ROWS_TOTAL, max(0, end - start) if pa_filter is None else counters.UNKNOWN_INPUT_ROWS
+    )
 
     # Schema-less empty files cannot be projected by Vortex.
     if not dataset.schema.names and num_rows == 0:

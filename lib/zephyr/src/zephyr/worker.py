@@ -58,6 +58,21 @@ def _counter_values(counters: dict[str, CounterEntry]) -> dict[str, int | float]
     return {name: entry.value for name, entry in counters.items()}
 
 
+def _shard_progress(active: _ActiveShard, counters: dict[str, CounterEntry], now: float) -> ShardProgress:
+    completed = counters.get(stage_counters.INPUT_ROWS_COMPLETED)
+    total = counters.get(stage_counters.INPUT_ROWS_TOTAL)
+    return ShardProgress(
+        stage_generation=active.stage_generation,
+        attempt=active.attempt,
+        elapsed_seconds=max(0, now - active.start_time),
+        records_in=int(counters.get(stage_counters.RECORDS_IN, CounterEntry(0)).value),
+        input_rows_completed=int(completed.value) if completed is not None else None,
+        input_rows_total=(
+            int(total.value) if total is not None and total.value != stage_counters.UNKNOWN_INPUT_ROWS else None
+        ),
+    )
+
+
 def _format_worker_status_md(active_tasks: int, stage: str) -> tuple[str, str]:
     """Return worker status text, or two idle values when no task is active."""
     if active_tasks == 0 or not stage:
@@ -414,7 +429,7 @@ class ZephyrWorker:
         return self._counter_generation
 
     def _heartbeat_counter_snapshots(self) -> dict[str, CounterSnapshot] | None:
-        """Return changed live counters, grouped by pipeline execution."""
+        """Return live shard progress and counters, grouped by pipeline execution."""
         entries_by_execution: dict[str, list[tuple[str, CounterEntry]]] = defaultdict(list)
         shards_by_execution: dict[str, dict[int, ShardProgress]] = defaultdict(dict)
         with self._resources_lock:
@@ -432,16 +447,8 @@ class ZephyrWorker:
                         active_shard.attempt_id,
                     )
                 entries_by_execution[active_shard.execution_id].extend(counters.items())
-                completed = counters.get(stage_counters.INPUT_ROWS_COMPLETED)
-                total = counters.get(stage_counters.INPUT_ROWS_TOTAL)
-                shards_by_execution[active_shard.execution_id][active_shard.task.shard_idx] = ShardProgress(
-                    stage_name=active_shard.task.stage_name,
-                    stage_generation=active_shard.stage_generation,
-                    attempt=active_shard.attempt,
-                    elapsed_seconds=max(0, time.monotonic() - active_shard.start_time),
-                    records_in=int(counters.get(stage_counters.RECORDS_IN, CounterEntry(0)).value),
-                    input_rows_completed=int(completed.value) if completed is not None else None,
-                    input_rows_total=int(total.value) if total is not None and total.value >= 0 else None,
+                shards_by_execution[active_shard.execution_id][active_shard.task.shard_idx] = _shard_progress(
+                    active_shard, counters, time.monotonic()
                 )
             snapshots: dict[str, CounterSnapshot] = {}
             execution_ids = entries_by_execution.keys() | self._last_reported_counters.keys()

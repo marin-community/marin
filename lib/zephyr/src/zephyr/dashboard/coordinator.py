@@ -120,6 +120,21 @@ class _DashboardWorkerSnapshot:
     counters: dict[str, CounterEntry]
 
 
+def _shard_indices(run: DashboardExecution, state: str, stopped: bool) -> tuple[Iterable[int], int]:
+    if state == ShardState.RUNNING:
+        return sorted(run.in_flight), len(run.in_flight)
+    if state == ShardState.SUCCEEDED:
+        return sorted(run.results), len(run.results)
+    if not state:
+        return range(run.total_shards), run.total_shards
+    if (state == ShardState.STOPPED) != stopped:
+        return (), 0
+    return (
+        (index for index in range(run.total_shards) if index not in run.results and index not in run.in_flight),
+        run.total_shards - len(run.results) - len(run.in_flight),
+    )
+
+
 class CoordinatorDashboard:
     """Read coordinator state and build dashboard responses."""
 
@@ -278,24 +293,7 @@ class CoordinatorDashboard:
             if run is None:
                 return ShardPage(shards=(), total=0, stage_name="")
             stopped = self._phase_locked(run) == PipelinePhase.FAILED
-            indices: Iterable[int]
-            if state == ShardState.RUNNING:
-                indices = sorted(run.in_flight)
-                matching = len(indices)
-            elif state == ShardState.SUCCEEDED:
-                indices = sorted(run.results)
-                matching = len(indices)
-            elif state:
-                available = (state == ShardState.STOPPED) == stopped
-                matching = run.total_shards - len(run.results) - len(run.in_flight) if available else 0
-                indices = (
-                    index
-                    for index in range(run.total_shards)
-                    if available and index not in run.results and index not in run.in_flight
-                )
-            else:
-                indices = range(run.total_shards)
-                matching = run.total_shards
+            indices, matching = _shard_indices(run, state, stopped)
             shards = []
             for index in islice(indices, offset, offset + limit):
                 if index in run.results:

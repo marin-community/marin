@@ -56,6 +56,7 @@ RECORDS_OUT = "zephyr/records_out"
 """Records written by the output writers (jsonl/parquet/vortex/binary)."""
 INPUT_ROWS_TOTAL = "zephyr/input_rows_total"
 INPUT_ROWS_COMPLETED = "zephyr/input_rows_completed"
+UNKNOWN_INPUT_ROWS = -1
 """Current input's selected rows before filtering; total is -1 when unknown.
 
 Completed rows advance after downstream consumption of each read group/batch.

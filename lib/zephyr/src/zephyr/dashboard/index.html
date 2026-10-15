@@ -557,8 +557,8 @@ function startDashboard() {
 
   function renderShards(page) {
     const area = byId('shard-area');
-    if (!page.shards.length && page.matching && shardOffset) {
-      shardOffset = Math.floor((page.matching - 1) / shardPageSize) * shardPageSize;
+    if (!page.shards.length && shardOffset) {
+      shardOffset = page.matching ? Math.floor((page.matching - 1) / shardPageSize) * shardPageSize : 0;
       void refresh();
       return;
     }
@@ -583,15 +583,14 @@ function startDashboard() {
       if (progress) {
         const known = progress.input_rows_total !== null;
         const consumed = known ? (progress.input_rows_completed || 0) : progress.records_in;
-        if (progress.input_rows_total !== null) {
+        if (known) {
           const total = progress.input_rows_total;
-          const completed = progress.input_rows_completed || 0;
-          const percent = total ? Math.min(100, 100 * completed / total) : 100;
+          const percent = total ? Math.min(100, 100 * consumed / total) : 100;
           const bar = element('progress');
           bar.max = 100;
           bar.value = percent;
           bar.setAttribute('aria-label', `Current input: ${number(percent)}% consumed`);
-          detail.append(bar, element('p', `Current input: ${number(completed)} / ${number(total)} rows consumed (${number(percent)}%)`));
+          detail.append(bar, element('p', `Current input: ${number(consumed)} / ${number(total)} rows consumed (${number(percent)}%)`));
         } else detail.append(element('p', 'Input size unknown; a percentage is unavailable.'));
         const list = element('dl');
         list.className = 'summary';

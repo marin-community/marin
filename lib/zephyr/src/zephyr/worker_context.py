@@ -96,7 +96,6 @@ def merge_counter_entries(entries: Iterable[tuple[str, CounterEntry]]) -> tuple[
 class ShardProgress:
     """Live progress for one runner's current shard and input."""
 
-    stage_name: str
     stage_generation: int
     attempt: int
     elapsed_seconds: float
