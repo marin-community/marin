@@ -1922,7 +1922,8 @@ async def test_observer_failure_leaves_the_rollout_unchanged():
     )
 
     assert (record.grade.status, record.grade.reward, record.stop_reason) == (Outcome.GRADED, 1.0, "stop")
-    assert record.metrics["observer_error_count"] == 1.0
+    # Three events precede the failing first model turn; the six after it are never delivered.
+    assert (record.metrics["observer_error_count"], record.metrics["observer_undelivered_events"]) == (1.0, 6.0)
 
 
 async def test_blocked_observer_does_not_hold_the_rollout():

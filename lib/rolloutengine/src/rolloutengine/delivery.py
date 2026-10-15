@@ -25,21 +25,23 @@ class _EventDelivery:
 
     def __init__(self, observer: RolloutObserver | None):
         self.queue: asyncio.Queue[RolloutEvent] = asyncio.Queue(EVENT_QUEUE_CAPACITY)
-        self.accepted = 0
+        self.emitted = 0
         self.delivered = 0
         self.dropped = 0
         self.failed = False
         self.task = None if observer is None else asyncio.create_task(self._deliver(observer))
 
     def emit(self, event: RolloutEvent) -> None:
-        if self.task is None or self.failed:
+        if self.task is None:
+            return
+        self.emitted += 1
+        # After a failure nothing delivers, so the event counts as undelivered without being queued.
+        if self.failed:
             return
         try:
             self.queue.put_nowait(event)
         except asyncio.QueueFull:
             self.dropped += 1
-            return
-        self.accepted += 1
 
     async def _deliver(self, observer: RolloutObserver) -> None:
         while True:
@@ -67,7 +69,7 @@ class _EventDelivery:
         counts = {
             "observer_dropped_events": float(self.dropped),
             # The event that failed counts as an error, not as undelivered.
-            "observer_undelivered_events": float(self.accepted - self.delivered - self.failed),
+            "observer_undelivered_events": float(self.emitted - self.delivered - self.dropped - self.failed),
             "observer_error_count": float(self.failed),
         }
         return {key: value for key, value in counts.items() if value}
