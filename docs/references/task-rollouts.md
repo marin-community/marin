@@ -207,7 +207,7 @@ The task grader that the engine supplies in `TaskSessionContext.task_grader` gra
 It raises `RuntimeError` if a session calls it during the turn loop, before the capture.
 
 Capture runs inside the verifier deadline, as part of the final grading phase.
-A capture failure or expired deadline raises `RolloutInterrupted` with operation `grade`, as a download failure in grading did before.
+A capture failure or expired deadline raises `RolloutInterrupted` with operation `grade`.
 A record interrupted before capture, during startup, preparation, a transition, or at the attempt deadline, has empty `outputs`.
 A record interrupted after capture, by a grading failure or a model failure, retains `outputs`.
 Attempts that end before the first model response are not graded and have empty `outputs`.
