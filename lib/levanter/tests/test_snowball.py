@@ -24,6 +24,7 @@ import pytest
 import haliax as hax
 from haliax import Axis
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
+from jax.sharding import NamedSharding, PartitionSpec as P
 from safetensors.numpy import load_file
 
 from levanter.grug.grug_moe import PreparedMoERouteCapture
@@ -219,7 +220,13 @@ def test_snowball_state_dict_roundtrip_is_exact(individual_experts, prefix):
         for name, weight in canonical.items():
             if individual_experts and ".mlp.experts." in name:
                 stem, projection = name.split(".mlp.experts.")
-                sd.update({f"{stem}.mlp.experts.{i}.{projection}": weight[i] for i in range(cfg.num_experts)})
+                expert_sharding = NamedSharding(weight.sharding.mesh, P(*weight.sharding.spec[1:]))
+                sd.update(
+                    {
+                        f"{stem}.mlp.experts.{i}.{projection}": weight.at[i].get(out_sharding=expert_sharding)
+                        for i in range(cfg.num_experts)
+                    }
+                )
             else:
                 sd[name] = weight
         dst = hax.named_jit(lambda m, state: m.from_state_dict(state, prefix=prefix))(dst, sd)
