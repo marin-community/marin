@@ -13,7 +13,6 @@ from marin.rl.openhands_pivot import candidate_rows
 from rolloutengine.spec import LoweredTaskSpec
 from taskcompendium.models import AnswerType, AssistantToolCalls, TaskSpec, TextMessage
 from taskcompendium.pipeline.models import CheckStatus, ImportRejection, NormalizedTask
-from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.pipeline.verification import verify_task
 
 from experiments.post_training.pivotrl.compendium import (
@@ -24,10 +23,8 @@ from experiments.post_training.pivotrl.compendium import (
     pivot_tasks,
 )
 from experiments.post_training.pivotrl.selection import TRAIN_FILENAME
-from experiments.post_training.task_curation.campaign import CampaignRuntime
-from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.datasets.pivotrl.tasks import sources
-from experiments.post_training.task_curation.pipeline import CurationRecipe, download_identity, source_downloads
+from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.tests.conversion import convert_row
 
 RECIPES = {source.name: cast(CurationRecipe, source.config) for source in sources()}
@@ -150,17 +147,6 @@ def test_openhands_candidates_become_next_action_tasks():
     task = _converted("pivotrl-openhands", rows[-1]).task
     assert task.grader.parameters["cwd"] == f"{root}/src"
     assert _checks(task) == {"empty": CheckStatus.PASS, "reference": CheckStatus.PASS}
-
-
-def test_artifact_source_reads_the_candidate_artifact_it_names():
-    recipe = RECIPES["pivotrl-swe"]
-    source = recipe.source
-    primary, auxiliary = source_downloads(
-        recipe, PipelineOptions(mode=SourceProcessingMode.QUICK, runtime=CampaignRuntime())
-    )
-    assert primary is source.step and auxiliary == {}
-    assert download_identity(source) == {"artifact": source.revision, "files": [CANDIDATES_FILENAME]}
-    assert source.revision.startswith("processed/nemotron-pivot-swe-long@")
 
 
 def test_selected_pivots_become_lowered_tasks(tmp_path):

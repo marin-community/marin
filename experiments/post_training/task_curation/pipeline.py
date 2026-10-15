@@ -711,7 +711,7 @@ def download_step(source: HfSource | UrlSource, campaign: CampaignRuntime) -> Ar
 def source_downloads(
     pipeline: CurationRecipe, options: PipelineOptions
 ) -> tuple[ArtifactStep[Artifact] | None, dict[str, ArtifactStep[Artifact]]]:
-    """Download pinned inputs unless the invocation supplies their local replacements."""
+    """Return source steps for inputs without local overrides."""
     primary = None
     if options.inputs.root is None and not options.inputs.files:
         source = pipeline.source
