@@ -6,13 +6,13 @@ summary: 'Replace single-stream Block AttnRes with m=4 depth-attention streams: 
   by causal depthwise token convolutions (kernels 4/8/12, zero-init), fused by a sigmoid mixer (arXiv 2610.13630).'
 source: maintainer
 status: running
-paper:
-  arxiv: '2610.13630'
-  title: Multi-Stream Attention Residuals
 knobs:
 - attn_res_streams
 - attn_res_stream_kernels
 - attn_res_stream_mixer
+papers:
+- arxiv: '2610.13630'
+  title: Multi-Stream Attention Residuals
 trials:
 - variant: m=4, kernels 4/8/12, no mixer (plain sum)
   rung: d512
