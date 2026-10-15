@@ -96,7 +96,7 @@ GET  /runs/{run_id}/samples?task=&offset=&limit=&correct=   paged sample rows
 GET  /runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (the trajectory) as text
 POST /runs/{run_id}/samples/review   LLM failure-mode review of up to n sampled task rows ({task, filter, n})
 GET  /runs/{run_id}/group          sibling runs sharing the run's group_id
-GET  /models/{model}    one model configuration's aggregated detail (identity, version cohorts, current cohort cells, per-eval history, all runs; 404 if absent)
+GET  /models/{model}    one model's aggregated detail (identity, version cohorts, current cohort cells, per-eval history, all runs; 404 if absent)
 GET  /panel?benchmarks=&cohort=&complete=&min_coverage=&aggregate=&model=&<facet>=&include_archived=   the model x benchmark panel: per-cell measurements with intervals, explained gaps, the benchmark families its columns group into, and an optional qualified aggregate
 GET  /compare?models=a,b[,c,d]&<panel filters>   head-to-head: per-benchmark cells, each model's difference interval against that benchmark's leader, and each model's aggregate over the shared benchmarks
 GET  /history?model=&task=   every run's headline score for one cell, over time
@@ -154,8 +154,8 @@ Historical cohort labels remain selectable. `cohort=all` selects the newest admi
 benchmark across cohorts for browsing; model comparison is disabled and the `/compare` API rejects
 it. The UI marks all-cohort and unverified historical views with an asterisk because their settings
 are not verified as comparable. A named verified cohort admits only records with its approved
-benchmark config, evaluator revision, and thinking mode. Models with different normalized source
-YAMLs have separate comparison names ending in `@<12-character digest>`.
+benchmark config, evaluator revision, and thinking mode. Rows are grouped by model name within the
+selected cohort.
 
 Within the selected cohort, each benchmark uses the newest run that clears the request's admission rules
 (`min_coverage`, default 0.9, and a succeeded status). `min_benchmark_coverage`, also 0.9, is the share
