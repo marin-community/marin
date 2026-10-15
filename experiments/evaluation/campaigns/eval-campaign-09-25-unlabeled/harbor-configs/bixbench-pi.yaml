@@ -42,6 +42,6 @@ agents:
 datasets:
 - name: bixbench-cli-marin-corrections
   version: '3'
-  registry_url: https://raw.githubusercontent.com/marin-community/harbor/f7c3554a4b2cca54ff800027747b525071dd9b0b/registry.json
+  registry_url: https://raw.githubusercontent.com/marin-community/harbor/016dd78b301b621ee4089f2da5776ebe80236820/registry.json
 verifier:
   override_timeout_sec: 300
