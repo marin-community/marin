@@ -12,9 +12,16 @@ and replays a request that has not received a response once the endpoint is
 registered again. A request whose response has started is never replayed: the
 relay drops the client connection so the client's own retry policy applies.
 
-Run inside an Iris task as
-``python -m iris.cluster.client.endpoint_relay /serve/name --port-file PATH``
-and point the client at ``http://127.0.0.1:<port>``.
+Inside an Iris task, use the context manager to start and stop the serving threads::
+
+    with EndpointRelay(registry_resolver("/serve/name"), name="/serve/name") as relay:
+        # Send requests to relay.url; relay.port is also available.
+        ...
+
+Clients in an isolated environment without Iris installed can launch
+``$IRIS_VENV/bin/python -m iris.cluster.client.endpoint_relay /serve/name --port-file PATH``
+and use ``http://127.0.0.1:<port>``. The CLI is an adapter for that interpreter boundary;
+Python callers with Iris installed do not need a subprocess.
 """
 
 import argparse
@@ -23,11 +30,12 @@ import logging
 import re
 import socket
 import threading
-import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from rigging.timing import Deadline, Timer
 
 from iris.client.client import iris_ctx
 
@@ -148,6 +156,7 @@ class EndpointRelay:
         self._lock = threading.Lock()
         self._lookup_lock = threading.Lock()
         self._address: str | None = None
+        self._lookup_clock = Timer()
         self._looked_up_at = float("-inf")
         self._in_flight: set[_Upstream] = set()
         self._local = threading.local()
@@ -197,7 +206,7 @@ class EndpointRelay:
         self.close()
 
     def refresh(self, *, newer_than: float = float("inf"), failed: str | None = None) -> str | None:
-        """Look the endpoint up, reusing a lookup that started after ``newer_than`` (``time.monotonic()``).
+        """Look up the endpoint, reusing lookups newer than the relay clock's ``newer_than`` seconds.
 
         Requests that fail together share one lookup instead of each asking the registry. ``failed``
         is an address that just failed; another registered address is preferred over it.
@@ -205,7 +214,7 @@ class EndpointRelay:
         with self._lookup_lock:
             if self._looked_up_at > newer_than:
                 return self.address
-            started = time.monotonic()
+            started = self._lookup_clock.elapsed_seconds()
             try:
                 addresses = self._resolve()
             except Exception:
@@ -232,7 +241,7 @@ class EndpointRelay:
 
     def _refresh_loop(self) -> None:
         while not self._stopped.wait(self._refresh_interval):
-            self.refresh(newer_than=time.monotonic() - self._refresh_interval / 2)
+            self.refresh(newer_than=self._lookup_clock.elapsed_seconds() - self._refresh_interval / 2)
 
     def _upstream(self, address: str) -> _Upstream:
         """This handler thread's pooled connection to ``address``."""
@@ -263,7 +272,7 @@ class EndpointRelay:
         The returned upstream stays in flight, so a move aborts its body, until the
         caller passes it to :meth:`_release`.
         """
-        deadline = time.monotonic() + self._recovery_timeout
+        deadline = Deadline.from_seconds(self._recovery_timeout)
         answered_404: set[str] = set()
         while True:
             address = self.address
@@ -284,13 +293,13 @@ class EndpointRelay:
                         continue
                     logger.warning("Request to %s at %s failed: %s", self._name, address, exc)
                 else:
-                    if response.status != 404 or time.monotonic() >= deadline:
+                    if response.status != 404 or deadline.expired():
                         return upstream, response
                     answered_404.add(address)
                     # Untrack the 404 during the lookup so a move it causes cannot abort a
                     # response this request may still return.
                     self._release(upstream)
-                    moved_to = self.refresh(newer_than=time.monotonic(), failed=address)
+                    moved_to = self.refresh(newer_than=self._lookup_clock.elapsed_seconds(), failed=address)
                     if moved_to == address or moved_to in answered_404:
                         with self._lock:
                             self._in_flight.add(upstream)
@@ -299,11 +308,12 @@ class EndpointRelay:
                     self._drop_upstream()
                     logger.warning("%s at %s answered 404 from a stale address", self._name, address)
                     continue
-            if time.monotonic() >= deadline:
+            if deadline.expired():
                 return None
-            failed_at = time.monotonic()
+            failed_at = self._lookup_clock.elapsed_seconds()
             if self.refresh(newer_than=failed_at - _RECOVERY_POLL_SECONDS, failed=address) == address:
-                time.sleep(_RECOVERY_POLL_SECONDS)
+                if self._stopped.wait(min(_RECOVERY_POLL_SECONDS, deadline.remaining_seconds())):
+                    return None
 
     def _handler_class(self) -> type[BaseHTTPRequestHandler]:
         relay = self
@@ -314,8 +324,19 @@ class EndpointRelay:
             def log_message(self, format: str, *args: object) -> None:  # noqa: A002
                 logger.debug("%s - " + format, self.client_address[0], *args)
 
+            def _read_request_body(self) -> bytes:
+                if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
+                    parts = []
+                    while size := int(self.rfile.readline().split(b";")[0], 16):
+                        parts.append(self.rfile.read(size))
+                        self.rfile.readline()
+                    while self.rfile.readline() not in (b"\r\n", b"\n", b""):
+                        pass
+                    return b"".join(parts)
+                return self.rfile.read(int(self.headers.get("Content-Length") or 0))
+
             def _forward(self) -> None:
-                body = self._read_body()
+                body = self._read_request_body()
                 headers = {key: value for key, value in self.headers.items() if key.lower() not in _HOP_BY_HOP_HEADERS}
                 opened = relay.open(self.command, self.path, body, headers)
                 if opened is None:
@@ -365,17 +386,6 @@ class EndpointRelay:
                     self.wfile.write(b"0\r\n\r\n")
                 if response.will_close:
                     relay._drop_upstream()
-
-            def _read_body(self) -> bytes:
-                if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
-                    parts = []
-                    while size := int(self.rfile.readline().split(b";")[0], 16):
-                        parts.append(self.rfile.read(size))
-                        self.rfile.readline()
-                    while self.rfile.readline() not in (b"\r\n", b"\n", b""):
-                        pass
-                    return b"".join(parts)
-                return self.rfile.read(int(self.headers.get("Content-Length") or 0))
 
             def _reply_unavailable(self) -> None:
                 message = f"endpoint {relay._name} unreachable for {relay._recovery_timeout:.0f}s\n".encode()

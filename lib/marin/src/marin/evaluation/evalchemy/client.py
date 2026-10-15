@@ -115,7 +115,12 @@ def budget_arguments(config: dict, task: dict, max_length: int | None) -> tuple[
 
 @contextmanager
 def endpoint_relay(endpoint_name: str) -> Iterator[str]:
-    """Run the Iris endpoint relay for ``endpoint_name`` and yield its loopback origin."""
+    """Run the Iris endpoint relay for ``endpoint_name`` and yield its loopback origin.
+
+    This client runs in Evalchemy's isolated uvx environment, which does not install Iris.
+    Start the relay in the task's Iris interpreter instead of importing it here; the relay
+    itself serves on threads and also exposes a context manager to in-process Iris callers.
+    """
     python = Path(os.environ["IRIS_VENV"]) / "bin" / "python"
     with tempfile.TemporaryDirectory() as tmp:
         port_file = Path(tmp) / "port"
