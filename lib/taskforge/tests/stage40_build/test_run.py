@@ -33,7 +33,7 @@ from taskforge.ledger.records import EntryKind
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
-from taskforge.stage10_proposal.model import TaskProposal
+from taskforge.stage10_proposal.model import ResearchNeed, TaskProposal
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build import run as run_module
 from taskforge.stage40_build.context import BuildFailure, RLEnvBuildContext
@@ -485,3 +485,12 @@ async def test_research_off_builds_without_every_finding(tmp_path, two_items, se
 async def test_a_program_without_a_sources_step_is_refused_under_the_requirement(tmp_path, proposal, services):
     with pytest.raises(BuildFailure, match="needs a 'sources' step"):
         await build(tmp_path, proposal, services, research=ResearchRequirement.ENFORCED)
+
+
+async def test_a_proposal_without_research_needs_no_sources_step_under_the_requirement(tmp_path, proposal, services):
+    header = replace(proposal.header, research_need=ResearchNeed.NOT_NEEDED, research=())
+    unresearched = replace(proposal, header=header, body=proposal.body.replace("Sources: research[0].", ""))
+
+    draft = await build(tmp_path, unresearched, services, research=ResearchRequirement.ENFORCED)
+
+    assert draft.task.id
