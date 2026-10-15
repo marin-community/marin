@@ -396,6 +396,11 @@ def test_an_answer_call_task_offers_submit_answer_only_as_the_final_turn():
         (
             Expectation(Outcome.GRADED, reward_min=0.0, reward_max=0.0),
             GradeResult(Outcome.SUBMISSION_FAILURE, 0.0),
+            True,
+        ),
+        (
+            Expectation(Outcome.GRADED, reward_min=0.0, reward_max=0.0),
+            GradeResult(Outcome.GRADED, 0.5),
             False,
         ),
         (Expectation(Outcome.SUBMISSION_FAILURE), GradeResult(Outcome.GRADED, 0.0), False),

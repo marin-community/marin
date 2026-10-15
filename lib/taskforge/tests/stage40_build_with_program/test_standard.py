@@ -321,8 +321,9 @@ LEDGER_LINE = "2024-03-01,ACME-SUPPLY,invoice 8812,1234.56,approved by finance"
         ("Reconcile the ledger. " + "Check every entry carefully. " * 130, "words outside the answer contract"),
         (f"Reconcile the ledger. The first entry is:\n{LEDGER_LINE}\n", "copies solver-visible file lines"),
         ("Reconcile workspace/ledger.csv by hand and report the total.", "asks for work by hand"),
+        ("Reconcile workspace/ledger.csv; only the final line is graded.", "refers to grading ('graded')"),
     ],
-    ids=["over-500-words", "inlined-fixture-line", "by-hand"],
+    ids=["over-500-words", "inlined-fixture-line", "by-hand", "grading-language"],
 )
 async def test_the_instructions_step_sends_back_an_instruction_with_a_problem(
     context, proposal, fake_glm, instruction, problem

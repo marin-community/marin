@@ -68,6 +68,12 @@ INSTRUCTION_WORD_LIMIT = 500
 INLINED_LINE_CHARS = 40
 """A solver-visible file line at least this long must not be copied into the instruction."""
 HAND_COMPUTATION = re.compile(r"\bby hand\b|\bcompute (?:it )?manually\b", re.IGNORECASE)
+GRADING_LANGUAGE = re.compile(
+    r"\b(grader|graders|(?:un)?graded|grading|auto-?grad\w*|machine[- ]check\w*|checker|checkers|scorer|rubric)\b",
+    re.IGNORECASE,
+)
+"""Words that describe the grading machinery to the solver. "parser" is left out: parsing tasks use it as
+their subject, and a refusal the author cannot satisfy would fail the build."""
 ANSWER_FORMAT = PlainText()
 """The answer format of template tasks: a plain-text final reply, read as a text answer."""
 SUBMISSION = (
@@ -272,7 +278,10 @@ class GraderDraft(BaseModel):
         "option letter. Otherwise empty."
     )
     tolerance: float = Field(description="For numeric, the absolute tolerance; otherwise 0.")
-    answer_contract: str = Field(description="The exact output format the solver must follow, for the instruction.")
+    answer_contract: str = Field(
+        description="The exact output format the solver must follow, written as format requirements for the "
+        "instruction; never describe grading, parsing, credit or tolerances."
+    )
     reference_reply: str = Field(description="A complete correct final reply that follows the contract.")
     reference_files: list[FileDraft] = Field(
         description=f"Files a correct solver leaves under {WORKSPACE}/ (relative to the machine root), if the "
@@ -639,4 +648,16 @@ def instruction_problem(text: str, fixtures: Fixtures, grader: Grader) -> str | 
     by_hand = HAND_COMPUTATION.search(text)
     if by_hand:
         return f"the instruction asks for work by hand ({by_hand.group(0)!r}); the solver may use its machine's tools"
+    grading = grading_language(text)
+    if grading:
+        return (
+            f"the instruction refers to grading ({grading!r}); describe the format as a requirement, not grader "
+            "behaviour"
+        )
     return None
+
+
+def grading_language(text: str) -> str | None:
+    """The first word of ``text`` that describes the grading machinery (``GRADING_LANGUAGE``), or ``None``."""
+    match = GRADING_LANGUAGE.search(text)
+    return None if match is None else match.group(0)

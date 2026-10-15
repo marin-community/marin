@@ -330,7 +330,9 @@ def python_grader(
     """A Python program graded as ``python3 /tests/grade.py`` in a verifier machine.
 
     ``script`` is ``/tests/grade.py`` and ``config`` its private ``/tests/config.json``; ``files``
-    are further private inputs, paths relative to ``/tests``. The program reads the extracted
+    are further private inputs, paths relative to ``/tests``. No private file may have the same
+    bytes as a solver-visible file (``assemble`` refuses it); the verifier machine already holds the
+    solver-visible files at their own paths, so the program reads them there. The program reads the extracted
     answer at ``answer_path`` (``ANSWER_PATH`` for a text answer, ``None`` for a file answer) and
     captured output files at their absolute paths, never stdin, and writes its verdict
     (``spec.verdict.verdict_json``: the reward and one result per check) to ``GRADER_VERDICT_PATH``.
@@ -361,17 +363,26 @@ def answer_grader(spec: Spec, *, environment: EnvironmentRequirements | None = N
 
     Without ``environment`` the mode must be one verifyit grades in process (exact, numeric, mcq,
     math, ifeval, json_schema, xml_elements, csv_columns, structured_exact, predicted_action). Any
-    other mode runs the verifyit command in a verifier machine built from ``environment``, whose
-    image must contain verifyit.
+    other mode, the LLM judge (``JudgeSpec``) included, runs ``python -c 'import verifyit ...'`` in a
+    verifier machine built from ``environment``, whose image must contain verifyit.
+    ``GRADER_BASE_IMAGE`` does not, and ``grade_candidate`` calls no model, so a judge cannot be
+    prototyped at build time: grade with deterministic checks in ``python_grader`` instead.
 
     Raises:
-        ValueError: the mode does not grade in process and no environment was given.
+        ValueError: the mode does not grade in process and no environment was given, or the
+            environment is ``GRADER_BASE_IMAGE``.
     """
     mode = mode_of(spec)
     if environment is None and mode not in IN_PROCESS_MODES:
         raise ValueError(
             f"verifyit mode {mode.value!r} does not grade in process; give it a grading environment with "
             "verifyit installed, or use script_grader"
+        )
+    if environment is not None and environment.docker_image == GRADER_BASE_IMAGE:
+        raise ValueError(
+            f"verifyit mode {mode.value!r} cannot run on GRADER_BASE_IMAGE, which has no verifyit (it fails with "
+            "\"No module named 'verifyit'\"); grade_candidate calls no model either, so write deterministic checks "
+            "with python_grader"
         )
     return verifyit_package(spec, environment=environment)
 
@@ -397,7 +408,7 @@ def assemble(
     from its conversation; a file or workspace-state task carries one too, which grading never
     reads. ``environment`` is the task machine (``requirements(...)``) or ``None`` for a task
     without one. ``files`` are the agent-visible files installed relative to the machine root; the
-    grader's files stay private.
+    grader's files stay private, so none of them may have the same bytes as an agent-visible file.
 
     Raises:
         ValueError: TaskSpec validation failed, files or output paths were given without a task
@@ -429,6 +440,8 @@ def assemble(
     if spec.answer_type in CONVERSATION_ANSWERS:
         # As the Shellbox session does at start: only an answer read from the conversation has a format to check.
         require_submission_compatibility(spec)
+    # A private file whose bytes the solver can read is no longer private: the verifier machine
+    # already sees the agent-visible files at their own paths, so the grader reads them there.
     visible = {resource_bytes(item) for item in spec.resources.all + spec.resources.worker}
     leaked = sorted(item.path for item in spec.resources.verifier if resource_bytes(item) in visible)
     if leaked:

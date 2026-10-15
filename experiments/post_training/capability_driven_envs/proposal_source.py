@@ -272,7 +272,10 @@ def document_template(proposal_id: str, idea: CapabilityIdea) -> str:
 
 
 SECTION_GUIDE = """- Task: the realistic user request as the solver sees it; the concrete visible inputs and
-  deliverables; constraints; what makes it difficult; and how it exercises the capability.
+  deliverables; constraints; what makes it difficult; and how it exercises the capability. The
+  solver-visible text states the deliverable and its format only; grading belongs in 'Grader design
+  and controls', never in Task (no 'graded', 'checked', 'parsed', 'ignored', credit or tolerances in
+  solver-visible text).
 - Realism and workflow: who does this work and why, the workflow it reproduces, why this
   environment and verification fit (justify any change from the planned slot), and what a real
   user can see and do versus what stays evaluator-only.
