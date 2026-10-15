@@ -4,6 +4,7 @@
 from dataclasses import replace
 
 import pytest
+from taskcompendium.pipeline.curriculum_alignment import CurriculumFacet
 
 from experiments.post_training.task_curriculum.models import (
     BlindFitReview,
@@ -18,7 +19,6 @@ from experiments.post_training.task_curriculum.models import (
     HolisticReviewStatus,
     LearningProgression,
     LearningProgressionReview,
-    RoutingFacet,
     SampleTask,
     SystematicGapDisposition,
 )
@@ -89,9 +89,9 @@ def _catalog() -> CurriculumCatalog:
     return CurriculumCatalog(
         catalog_version="catalog-1",
         curricula=[
-            CatalogCurriculum(routing_facet=RoutingFacet.SUBJECT_DOMAIN, curriculum=_curriculum()),
+            CatalogCurriculum(routing_facet=CurriculumFacet.SUBJECT_DOMAIN, curriculum=_curriculum()),
             CatalogCurriculum(
-                routing_facet=RoutingFacet.TASK_MECHANIC,
+                routing_facet=CurriculumFacet.TASK_MECHANIC,
                 curriculum=_curriculum("C01", "practice."),
             ),
         ],
