@@ -191,6 +191,24 @@ def cell_statistics(cell: Cell, recovered: dict[str, dict]) -> dict[str, object]
         count = int(replay["num_trials"])
         if replay["model"] != cell.model or replay["benchmark"] != cell.benchmark or len(trials) != count:
             raise ValueError(f"invalid replay identity or trial count for {cell.model} / {cell.benchmark}")
+        if cell.benchmark == "SOTOPIA-hard" and all("length_controlled_overall" in trial for trial in trials):
+            rewards = np.asarray([float(trial["length_controlled_overall"]) for trial in trials])
+            mean = float(rewards.mean())
+            if count < 2 or abs(mean - cell.score) > 0.0005:
+                raise ValueError(f"SOTOPIA replay trial mean differs from tracker for {cell.model}")
+            sem = float(rewards.std(ddof=1) / math.sqrt(count))
+            return {
+                "model": cell.model,
+                "benchmark": cell.benchmark,
+                "score": cell.score,
+                "trial_count": count,
+                "raw_reward_mean": mean,
+                "sem": sem,
+                "adjusted_sem": sem / math.sqrt(SURVIVAL),
+                "sem_basis": "length_controlled_episode_rewards",
+                "source": cell.results_path,
+                "statistics_version": STATISTICS_VERSION,
+            }
         if replay.get("num_judge_failed", 0):
             raise ValueError(f"failed replay judgments for {cell.model} / {cell.benchmark}")
         mean = sum(float(trial["corrected_correct"]) for trial in trials) / count

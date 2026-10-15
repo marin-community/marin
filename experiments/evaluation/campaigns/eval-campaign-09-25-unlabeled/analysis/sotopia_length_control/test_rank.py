@@ -1,9 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from __future__ import annotations
 
 import importlib.util
@@ -38,8 +35,8 @@ def test_length_control_removes_synthetic_verbosity_bonus() -> None:
             score = 1 / (1 + math.exp(-(0.7 + task_effect + length_bonus)))
             episodes.append(rank.EpisodeScore(model, task, score, length))
 
-    scores, _, _ = rank.length_controlled_scores(episodes, regularization=(100.0,))
-    by_model = {row.model: row for row in scores}
+    fit = rank.length_controlled_scores(episodes, regularization=(100.0,))
+    by_model = {row.model: row for row in fit.scores}
 
     assert by_model["long"].raw_overall > by_model["short"].raw_overall + 0.15
     assert math.isclose(

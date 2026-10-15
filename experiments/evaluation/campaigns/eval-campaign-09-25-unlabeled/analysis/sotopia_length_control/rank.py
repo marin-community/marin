@@ -20,6 +20,7 @@ from typing import cast
 import numpy as np
 from finestore.reader import ReadView
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 from scipy import sparse
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import GroupKFold
@@ -60,6 +61,23 @@ class ModelScore:
     scored_episodes: int
     judged_episodes: int
     median_response_characters: float
+
+
+@dataclass(frozen=True)
+class AdjustedEpisodeScore:
+    model: str
+    task_id: str
+    raw_overall: float
+    response_characters: int | None
+    length_controlled_overall: float
+
+
+@dataclass(frozen=True)
+class LengthControlFit:
+    scores: list[ModelScore]
+    episodes: list[AdjustedEpisodeScore]
+    selected_regularization: float
+    cross_validation_losses: dict[float, float]
 
 
 def tracker_cells(path: Path) -> list[SotopiaCell]:
@@ -130,7 +148,7 @@ def read_episodes(cell: SotopiaCell) -> list[EpisodeScore]:
     if rows is None:
         raise ValueError(f"no normalized SOTOPIA samples for {cell.model}")
     sample_rows = rows.to_pylist(maps_as_pydicts="strict")
-    fs, harbor_jobs = filesystem_for(f"{cell.results_path}/harbor_jobs")
+    fs, harbor_jobs = filesystem_for(prefix_join(cell.results_path, "harbor_jobs"))
     summaries: dict[str, list[tuple[int, str]]] = defaultdict(list)
     for path in fs.find(harbor_jobs):
         if match := SUMMARY.search(path):
@@ -203,7 +221,7 @@ def _fractional_log_loss(expected: np.ndarray, predicted: np.ndarray) -> float:
 def length_controlled_scores(
     episodes: list[EpisodeScore],
     regularization: tuple[float, ...] = REGULARIZATION,
-) -> tuple[list[ModelScore], float, dict[float, float]]:
+) -> LengthControlFit:
     """Fit the cohort GLM and predict every judged episode at zero length delta."""
     judged = [row for row in episodes if row.response_characters is not None]
     models = sorted({row.model for row in episodes})
@@ -263,8 +281,29 @@ def length_controlled_scores(
     controlled = model.predict_proba(controlled_matrix)[:, 1]
 
     predictions: dict[str, list[float]] = defaultdict(list)
+    adjusted_episodes = []
     for row, prediction in zip(judged, controlled, strict=True):
         predictions[row.model].append(float(prediction))
+        adjusted_episodes.append(
+            AdjustedEpisodeScore(
+                model=row.model,
+                task_id=row.task_id,
+                raw_overall=row.normalized_overall,
+                response_characters=row.response_characters,
+                length_controlled_overall=float(prediction),
+            )
+        )
+    adjusted_episodes.extend(
+        AdjustedEpisodeScore(
+            model=row.model,
+            task_id=row.task_id,
+            raw_overall=row.normalized_overall,
+            response_characters=None,
+            length_controlled_overall=0.0,
+        )
+        for row in episodes
+        if row.response_characters is None
+    )
     results = []
     for model_name in models:
         model_rows = [row for row in episodes if row.model == model_name]
@@ -282,18 +321,19 @@ def length_controlled_scores(
             )
         )
     results.sort(key=lambda row: (-row.length_controlled_overall, row.model))
-    return results, selected, losses
+    adjusted_episodes.sort(key=lambda row: (row.model, row.task_id))
+    return LengthControlFit(results, adjusted_episodes, selected, losses)
 
 
 def write_results(
     output_dir: Path,
-    scores: list[ModelScore],
+    fit: LengthControlFit,
     cells: list[SotopiaCell],
     tracker_hash: str,
-    selected_regularization: float,
-    cross_validation_losses: dict[float, float],
+    output_prefix: str,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
+    scores = fit.scores
     raw_order = sorted(scores, key=lambda row: (-row.raw_overall, row.model))
     raw_ranks = {row.model: index + 1 for index, row in enumerate(raw_order)}
     rows = []
@@ -319,31 +359,83 @@ def write_results(
             "length": "evaluated-agent emitted characters over the full episode",
             "counterfactual": "zero difference from the per-task cohort median",
             "model": "fractional logistic GLM with model, task, and tanh length effects",
-            "selected_regularization_c": selected_regularization,
+            "selected_regularization_c": fit.selected_regularization,
             "cross_validation": "five folds grouped by task",
-            "cross_validation_losses": cross_validation_losses,
+            "cross_validation_losses": fit.cross_validation_losses,
         },
     }
     (output_dir / "sotopia_length_controlled_metadata.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n"
     )
+    source_by_model = {cell.model: cell.results_path for cell in cells}
+    episodes_by_model: dict[str, list[AdjustedEpisodeScore]] = defaultdict(list)
+    for episode in fit.episodes:
+        episodes_by_model[episode.model].append(episode)
+    result_dir = output_dir / "results" / "sotopia-hard"
+    result_dir.mkdir(parents=True, exist_ok=True)
+    statistics = []
+    updates = []
+    for score in scores:
+        model_episodes = episodes_by_model[score.model]
+        values = np.asarray([episode.length_controlled_overall for episode in model_episodes])
+        sem = float(values.std(ddof=1) / math.sqrt(values.size))
+        relative = f"results/sotopia-hard/{score.model.replace('/', '--')}.json"
+        result_uri = prefix_join(output_prefix, relative)
+        payload = {
+            "model": score.model,
+            "benchmark": "SOTOPIA-hard",
+            "source": source_by_model[score.model],
+            "corrected_score": score.length_controlled_overall,
+            "num_trials": len(model_episodes),
+            "num_scored_failures": sum(episode.response_characters is None for episode in model_episodes),
+            "method": metadata["method"],
+            "trials": [asdict(episode) for episode in model_episodes],
+        }
+        (output_dir / relative).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        statistics.append(
+            {
+                "model": score.model,
+                "benchmark": "SOTOPIA-hard",
+                "score": score.length_controlled_overall,
+                "trial_count": len(model_episodes),
+                "raw_reward_mean": score.length_controlled_overall,
+                "sem": sem,
+                "adjusted_sem": sem / math.sqrt(0.9),
+                "sem_basis": "length_controlled_episode_rewards",
+                "source": result_uri,
+                "statistics_version": "sotopia-length-controlled-overall-v1",
+            }
+        )
+        updates.append(
+            {
+                "model": score.model,
+                "old_source": source_by_model[score.model],
+                "score": score.length_controlled_overall,
+                "source": result_uri,
+            }
+        )
+    for name, output_rows in (("cell_statistics.csv", statistics), ("tracker_updates.csv", updates)):
+        with (output_dir / name).open("w", newline="") as target:
+            writer = csv.DictWriter(target, fieldnames=list(output_rows[0]))
+            writer.writeheader()
+            writer.writerows(output_rows)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tracker", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--output-prefix", required=True)
     args = parser.parse_args()
     cells = tracker_cells(args.tracker)
     episodes = [episode for cell in cells for episode in read_episodes(cell)]
-    scores, selected, losses = length_controlled_scores(episodes)
+    fit = length_controlled_scores(episodes)
     write_results(
         args.output_dir,
-        scores,
+        fit,
         cells,
         hashlib.sha256(args.tracker.read_bytes()).hexdigest(),
-        selected,
-        losses,
+        args.output_prefix,
     )
 
 

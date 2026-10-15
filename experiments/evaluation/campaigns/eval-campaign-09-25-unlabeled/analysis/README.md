@@ -17,9 +17,12 @@ common benchmark panel and tracker-snapshot hash.
 episode summaries, computes normalized seven-dimension overall scores and the
 evaluated agent's emitted character count, then fits the campaign's
 AlpacaEval-style cohort GLM. It writes raw and length-controlled rankings plus
-the exact tracker hash, source archives, selected regularization strength, and
-cross-validation losses. Goal achievement remains available in the source
-metrics but is not the default ranking outcome.
+the exact tracker hash, source archives, selected regularization strength,
+cross-validation losses, per-episode adjusted scores, and task-level SEM. Pass
+the immutable object-store destination with `--output-prefix`; the generated
+`tracker_updates.csv` maps each original archive to its durable regrade record.
+Goal achievement remains available in the source metrics but is not the default
+ranking outcome.
 
 Run the tournament before plotting. Both commands and their required inputs are
 specified in the campaign release document's “Reproduce the Snowball tournament
