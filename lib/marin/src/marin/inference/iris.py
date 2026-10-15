@@ -512,7 +512,10 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
         revision=model.revision,
         tokenizer_revision=model.effective_tokenizer_revision,
     )
-    backend = VllmBackend(cast(VllmEngineConfig, _resolved_engine(service.engine, service.iris)))
+    backend = VllmBackend(
+        cast(VllmEngineConfig, _resolved_engine(service.engine, service.iris)),
+        port=iris_ctx().get_port(BACKEND_PORT_NAME),
+    )
     with iris_vllm_launch(
         pipeline_parallel_size=geometry.pipeline_parallel_size,
         tensor_parallel_size=geometry.tensor_parallel_size,
