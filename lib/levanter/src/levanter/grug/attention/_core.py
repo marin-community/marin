@@ -104,8 +104,9 @@ class AttentionMask(eqx.Module):
         """Return a boolean mask (True = allowed) or None.
 
         Shapes:
-          - If `segment_ids` is unset, returns `(q_len, k_len)` (broadcastable across batch).
-          - If `segment_ids` is set with per-batch IDs, returns `(batch, q_len, k_len)`.
+          - Precomputed `fa4_bounds` return `(batch, q_len, k_len)`.
+          - Per-batch `segment_ids` also return `(batch, q_len, k_len)`.
+          - Otherwise, a materialized mask has shape `(q_len, k_len)` and broadcasts across batch.
         """
         if self.fa4_bounds is not None:
             if q_len != k_len:
