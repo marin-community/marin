@@ -1,0 +1,5 @@
+applet_id = "95b59a50-a74b-4aa6-870c-b89d05f501ba"
+title = "Python playground"
+description = "Edit Python projects, upload data, and preview generated reports and plots."
+python_entrypoint = "server.app:create_api"
+build_command = "npm ci && npm run build"

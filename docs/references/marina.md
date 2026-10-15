@@ -140,3 +140,114 @@ Applets default to private. Public mode exposes GET/HEAD only on the public appl
 origin and must contain only data and trusted handlers intended for unrestricted
 access. Named apps stay private. See the [reference](https://github.com/marin-community/marin/blob/main/infra/marina/README.md)
 for mode changes, query limits, deployment gates and recovery.
+
+## Python playground
+
+The trusted Python playground lives in `infra/marina/applets/python_playground/`.
+Start its disposable local preview with:
+
+```bash
+uv run marina release infra/marina/applets/python_playground --local --json
+```
+
+Open the printed `url`. Stop the preview with Ctrl-C to remove its
+disposable server and Postgres container, including all local projects and results.
+To update a running preview, use its origin and inspected current package version:
+
+```bash
+uv run marina release infra/marina/applets/python_playground \
+  --url LOCAL_ORIGIN --base-version CURRENT_VERSION --allow-dirty --json
+```
+
+This preserves its database. Starting another `--local` preview creates a new database.
+
+Edit text files, upload binary or text inputs, select a `.py` entrypoint and list
+one Python package requirement per line. Packages install through `uv run --with`
+when execution starts. The host needs uv and access to the requested package
+indexes. Run time includes package setup and is limited to 120 seconds.
+
+Programs run in a fresh project directory under full CPython with the host's
+privileges, network and inherited environment. Use this app only with trusted
+users. A subprocess is not a security sandbox. The app does not use Shellsim.
+
+Write `output/index.md` for the report, with relative image links such as
+`![Posterior](posterior.png)`. Collected images under `output/` also appear in the image
+gallery; other generated files are downloadable. `OUTPUT_DIR` contains the absolute
+output path. The app creates `output/` before each run and removes the workspace
+after collecting results. It does not mount `/output` at the host root.
+Failed and timed-out programs retain collected files written before they stopped. The Logs
+tab shows combined stdout and stderr, including Python tracebacks.
+
+The index lists shared projects with name search, ascending/descending sorting by
+name, creation time, last edit or last run, and pagination. Create a blank project
+or import a project JSON file. Existing projects open from their names in the list.
+The editor can load either example into the current project. Each editor has a
+stable hash URL; the logo and title return to the project index. Edits autosave to Postgres; the Save button retries a failed save. Run
+waits for pending saves before executing. Conflicting edits from another tab return
+an error and keep the local editor open for export.
+
+The applet's Postgres schema contains `projects`, `input_files`, `runs`,
+`output_files` and `blobs`. Project and run metadata use typed columns; file contents
+use binary `BYTEA` blobs. JSON is used for HTTP requests and project exports only.
+Unchanged input blobs are reused when saving metadata edits. The app keeps the latest
+completed run per project, including logs and downloadable outputs. Saving a new run's
+results atomically replaces the previous output blobs, including when the new program
+failed or timed out. Previous results stay in Postgres until that replacement commits.
+Deleting a project removes all its files and results.
+Results from an earlier source revision remain visible with a notice until the next run.
+There is no total app storage or project-count cap.
+
+Projects and results survive browser reloads and application releases. The local
+preview uses disposable Postgres, so stopping it removes its database. Export source
+projects and download any outputs you want to keep beyond that preview. Project exports
+include source, uploaded binary/text inputs, entrypoint and package requirements; they
+exclude run results. JSON import
+creates a new project. The index can import a browser draft saved by the initial
+prototype on the same origin. There is no durable run queue.
+
+The Bayesian example computes a beta-binomial posterior and a failure budget from
+editable `config.json`: the largest number of failures at the given trial count
+whose posterior probability of exceeding the target success rate still meets the
+required confidence. Its conclusions assume independent Bernoulli trials and
+the selected prior. The Seaborn example generates a report from seeded synthetic
+data without downloading a dataset.
+
+Each saved project accepts at most 100 input files, including source and uploaded
+inputs, totaling 5 MiB decoded. Results
+include at most 100 files and 10 MiB of output, plus 256 KiB of combined stdout and
+stderr. Oversized artifacts are skipped with a warning; logs are truncated. These
+bound each project's saved inputs and latest output set. They do not limit a trusted
+program's disk or memory use. Input saves above the limit fail without replacing
+the existing files.
+
+### Upload projects from agents and the CLI
+
+Upload a directory from the repository root:
+
+```bash
+uv run -m infra.marina.applets.python_playground.cli upload ./my-analysis \
+  --title "My analysis"
+```
+
+The command creates a new project and prints its ID, source revision and URL as
+JSON. It reuses Marin login credentials. Add `--url http://127.0.0.1:PORT` for a
+local preview. `--entrypoint` defaults to `main.py`; repeated `--package` options
+override the root `requirements.txt`. Hidden paths, Python caches, `node_modules`,
+`venv` and `output/` are excluded. Symlinks are rejected.
+
+The raw upload endpoint is
+`POST /a/95b59a50-a74b-4aa6-870c-b89d05f501ba/api/projects/import?title=NAME`.
+Send a ZIP body with `Content-Type: application/zip` and project files at the archive
+root. Optional `entrypoint` and repeated `packages` query parameters select the
+entrypoint and override requirements. The compressed upload limit is 6 MiB; the
+decoded project limit remains 5 MiB across 100 files. Imports create new projects.
+Use `PUT /api/projects/{project_id}` with the expected source revision to update
+an existing project through the JSON API.
+
+The backend publishes `list_projects`, `get_project`, `create_project`,
+`save_project`, `run_project` and `delete_project` through Marina's MCP discovery.
+Find them through `/api/marina/mcp/` using `find_tool` with “Python playground”.
+Read-only discovery exposes listing and reading. Execution is an external-write
+operation because trusted Python can access the host's network and credentials.
+The binary ZIP endpoint is HTTP-only; MCP creation accepts the same source/input
+file records as the editor.
