@@ -1,3 +1,6 @@
+applet_id = "b4af3dbc-a72a-41e5-97d7-4d57b6dce630"
+source_paths = ["infra/marina/web"]
+
 name = "zephyr"
 python_entrypoint = "backend.app:create_api"
 title = "Zephyr"

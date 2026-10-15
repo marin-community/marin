@@ -44,11 +44,9 @@ from marina.journeys import LOOPBACK, running_kernel
 from marina.local_postgres import docker_database
 from marina.preview import install_preview_sources
 from marina.releases import (
-    RELEASE_CONFIG,
     RELEASE_METADATA,
     ReleaseSource,
     clean_frontend_build,
-    release_applet_id,
     release_source,
     require_current_main,
     require_tracked_package,
@@ -287,7 +285,7 @@ def _serve_local_applet(payload: bytes, *, applet_id: str, mode: AppletMode | No
 @cli.command()
 @click.argument("app_dir", type=click.Path(path_type=Path, file_okay=False, exists=True))
 @click.option("--base-version", type=int, help="Expected live revision; use 0 for the first release.")
-@click.option("--id", "explicit_id", help="Stable UUID for an applet without a release.toml declaration.")
+@click.option("--id", "explicit_id", help="Stable UUID for an applet without applet_id in applet.toml.")
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 @click.option("--mode", type=click.Choice([mode.value for mode in AppletMode]), default=None)
 @click.option("--local", is_flag=True, help="Preview using disposable Postgres and Marina.")
@@ -313,13 +311,12 @@ def release(
     if not local and not dry_run and base_version is None:
         raise click.UsageError("Supply --base-version; use 0 for the first release")
     publishing = not local and not dry_run
-    registered = (app_dir / RELEASE_CONFIG).exists()
-    guarded = publishing and registered and not allow_dirty
     try:
-        source = release_source(app_dir) if guarded else None
+        manifest = parse_applet_manifest((app_dir / APPLET_MANIFEST).read_bytes())
+        guarded = publishing and manifest.applet_id is not None and not allow_dirty
+        source = release_source(app_dir, manifest.source_paths) if guarded else None
         if guarded:
             require_current_main(app_dir)
-        manifest = parse_applet_manifest((app_dir / APPLET_MANIFEST).read_bytes())
         extra_files = {RELEASE_METADATA: json.dumps(asdict(source)).encode()} if source is not None else None
         build_context = clean_frontend_build(app_dir) if manifest.build_command is not None else nullcontext()
         with build_context:
@@ -340,21 +337,21 @@ def release(
         if local:
             _serve_local_applet(
                 payload,
-                applet_id=release_applet_id(app_dir) if registered else str(uuid4()),
+                applet_id=manifest.applet_id or str(uuid4()),
                 mode=AppletMode(mode) if mode is not None else None,
                 json_output=json_output,
             )
             return
-        if registered:
-            applet_id = release_applet_id(app_dir)
+        if manifest.applet_id is not None:
+            applet_id = manifest.applet_id
             if explicit_id is not None and explicit_id != applet_id:
-                raise ValueError("--id differs from the source directory's release.toml")
+                raise ValueError("--id differs from applet.toml's applet_id")
         elif explicit_id is not None:
             applet_id = explicit_id
         elif base_version == 0:
             applet_id = str(uuid4())
         else:
-            raise ValueError("Supply --id for updates, or commit a release.toml declaration")
+            raise ValueError("Supply --id for updates, or declare applet_id in applet.toml")
         if guarded and source is not None and require_current_main(app_dir) != source.commit:
             raise RuntimeError("The checkout changed while building; retry the release.")
         result = publish_applet(service_url, payload, applet_id=applet_id, base_version=base_version, mode=mode)
@@ -375,7 +372,10 @@ def release(
 def release_status(app_dir: Path, service_url: str, json_output: bool) -> None:
     """Compare an applet's live source tree with this checkout's committed source."""
     try:
-        applet_id = release_applet_id(app_dir)
+        manifest = parse_applet_manifest((app_dir / APPLET_MANIFEST).read_bytes())
+        applet_id = manifest.applet_id
+        if applet_id is None:
+            raise ValueError("release-status requires applet_id in applet.toml")
         details = _applet_details(service_url, applet_id)
         version = details["current_version"]
         assert isinstance(version, int)
@@ -389,7 +389,7 @@ def release_status(app_dir: Path, service_url: str, json_output: bool) -> None:
         if metadata is not None:
             assert isinstance(metadata, dict)
         actual = ReleaseSource(**metadata) if metadata is not None else None
-        result = source_status(app_dir, applet_id, version, actual)
+        result = source_status(app_dir, applet_id, version, actual, manifest.source_paths)
     except (OSError, RuntimeError, ValueError) as error:
         raise click.ClickException(str(error)) from error
     if json_output:

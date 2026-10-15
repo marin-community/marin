@@ -20,8 +20,7 @@ not select a deployment mechanism.
 
 ```text
 my-app/
-  applet.toml
-  release.toml       # stable UUID for maintained source
+  applet.toml       # package metadata, optional stable UUID and shared source inputs
   dist/index.html   # built frontend
   server/app.py     # optional backend; root app.py and backend/app.py also work
   web/              # optional frontend source
@@ -46,7 +45,7 @@ Most applets use `/a/<uuid>/` on the isolated authenticated applet origin. A man
 with `name = "echo"` registers the stable authenticated route `/echo/`. Initial named
 registration requires an operator, and names cannot change on later releases.
 Echo, EvalDash, TaskTrove and Zephyr keep their existing names, UUID
-bindings in `release.toml`, data locations and database schemas.
+bindings in `applet.toml`, data locations and database schemas.
 
 Named applications can declare an allowed `data_url`, scheduled jobs and an agent
 panel. These capabilities are checked by the server against `runtime.toml`.
@@ -54,12 +53,12 @@ Ordinary unnamed applets cannot request them. Named applications remain private.
 
 ## Release an application
 
-Commit a maintained application's stable identity alongside its source:
+Add a maintained application's stable identity to its `applet.toml`:
 
 ```toml
-# release.toml
+# applet.toml (alongside title, description and other package fields)
 applet_id = "01234567-89ab-cdef-0123-456789abcdef"
-source_paths = ["infra/marina/web"]  # shared build inputs, when used
+source_paths = ["infra/marina/web"]  # shared inputs, relative to the repository root
 ```
 
 From a clean checkout at the current remote main:
@@ -80,10 +79,10 @@ changes and leaves the previous revision current.
 Frontend builds start with empty `dist/`. The builder restores existing local
 output after packaging, including on failure. Production releases always build;
 there is no `--no-build` release path. Backend files and unbuilt static files must
-be tracked by default. A release declaration checks clean current main before
-and after the build and records its commit, source path and hashes of the app
-and declared shared inputs in
-`dist/marina-release.json`. The metadata contains no publisher identity and is
+be tracked by default. When `applet_id` is set, the default release checks clean
+current main before and after the build and records its commit, source path and
+hashes of the app and declared shared inputs in `dist/marina-release.json`.
+The metadata contains no publisher identity and is
 public when the applet is public.
 
 Use `--allow-dirty` to explicitly release from a branch or uncommitted checkout.
@@ -99,7 +98,7 @@ released package has no source metadata.
 Fetch main before assessing freshness. Declare repository-relative shared build inputs in `source_paths`; the four named
 apps include `infra/marina/web`. Runtime dependencies can also affect behavior.
 
-An ad hoc applet can use the same command without a Git repository or declaration:
+An ad hoc applet can use the same command without a Git repository or declared `applet_id`:
 
 ```bash
 uv run marina release my-report --base-version 0 --json
@@ -107,9 +106,10 @@ uv run marina release my-report --id RETURNED_UUID --base-version CURRENT_VERSIO
 ```
 
 The first command allocates a UUID. Record it before updating. Maintained source
-should commit a declaration so ordinary releases cannot accidentally select another
-application. Source checks are client safeguards; server owner/operator and version
-checks still apply to direct uploads and older clients.
+should declare `applet_id` in `applet.toml` so ordinary releases cannot
+accidentally select another application. A declared UUID must match the upload
+target, including direct API uploads. Source checks are client safeguards; server
+owner/operator and version checks still apply to direct uploads and older clients.
 
 Merging source does not release it. Changing shared browser components requires
 releasing the applications that consume them. Dataset loading is a separate

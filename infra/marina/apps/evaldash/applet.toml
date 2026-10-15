@@ -1,3 +1,6 @@
+applet_id = "04ce4ca4-6904-4de8-8a78-e7e86f8de615"
+source_paths = ["infra/marina/web"]
+
 name = "evaldash"
 python_entrypoint = "app:create_api"
 # The eval-results dashboard: one row per model, one column per benchmark, and the run

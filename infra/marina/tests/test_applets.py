@@ -33,10 +33,12 @@ def release_checkout(tmp_path: Path, request: pytest.FixtureRequest) -> Path:
     app = repo / "demo"
     (app / "dist").mkdir(parents=True)
     (app / "dist/index.html").write_text("<h1>Released app</h1>")
-    (app / "release.toml").write_text('applet_id = "00000000-0000-0000-0000-000000000001"\nsource_paths = ["shared"]\n')
     (repo / "shared").mkdir()
     (repo / "shared/component.js").write_text("export const version = 1")
-    manifest = 'title = "Release test"\ndescription = "Test"\n'
+    manifest = (
+        'applet_id = "00000000-0000-0000-0000-000000000001"\nsource_paths = ["shared"]\n'
+        'title = "Release test"\ndescription = "Test"\n'
+    )
     if request.param == "build":
         manifest += 'build_command = "python build.py"\n'
         (app / ".gitignore").write_text("dist/\n")
@@ -124,7 +126,8 @@ def test_release_records_source_and_status_ignores_unrelated_commits(
         subprocess.run(["git", *arguments], cwd=release_checkout.parent, check=True, capture_output=True)
     assert json.loads(runner.invoke(cli, status_args).output)["state"] == "different"
 
-    (release_checkout / "applet.toml").write_text('title = "Changed"\ndescription = "New source"\n')
+    manifest_path = release_checkout / "applet.toml"
+    manifest_path.write_text(manifest_path.read_text().replace('title = "Release test"', 'title = "Changed"'))
     status = runner.invoke(cli, status_args)
     assert json.loads(status.output)["state"] == "modified"
     for arguments in (["add", "."], ["commit", "-m", "app change"]):
@@ -347,6 +350,23 @@ def test_release_without_git_creates_and_updates_the_returned_uuid(
         assert json.loads(second.output)["id"] == selected["id"]
         assert client.get(f"/a/{selected['id']}/").text == "second report"
         assert client.get(f"/a/{selected['id']}/v/1/").text == "first report"
+
+        manifest = source / "applet.toml"
+        manifest.write_text(f'applet_id = "{selected["id"]}"\nsource_paths = ["shared"]\n' + manifest.read_text())
+        (source / "shared").mkdir()
+        index.write_text("declared report")
+        declared = runner.invoke(cli, [*arguments, "--base-version", "2", "--allow-dirty"])
+        assert declared.exit_code == 0, declared.output
+        assert json.loads(declared.output)["id"] == selected["id"]
+        assert client.get(f"/a/{selected['id']}/").text == "declared report"
+        stored = store.version(uuid.UUID(selected["id"]), 3).manifest
+        assert stored.applet_id == selected["id"]
+        assert stored.source_paths == ("shared",)
+        rejected = client.post(
+            f"/api/marina/applets/{uuid.uuid4()}", params={"base_version": 0}, content=package_applet(source)
+        )
+        assert rejected.status_code == 400
+        assert store.current_version(uuid.UUID(selected["id"])) == 3
         store.engine.dispose()
 
 

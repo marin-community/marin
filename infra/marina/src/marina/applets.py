@@ -55,7 +55,19 @@ MAX_REVISIONS = 5
 BACKEND_VALIDATION_TIMEOUT = 15
 SCHEMA_ADOPTION_LOCK_TIMEOUT = "5s"
 KNOWN_MANIFEST_KEYS = frozenset(
-    {"title", "description", "connect_src", "build_command", "python_entrypoint", "name", "data_url", "jobs", "agent"}
+    {
+        "title",
+        "description",
+        "connect_src",
+        "build_command",
+        "python_entrypoint",
+        "name",
+        "data_url",
+        "jobs",
+        "agent",
+        "applet_id",
+        "source_paths",
+    }
 )
 SOURCE_EXCLUSIONS = frozenset({"tests", "journeys", "web", "dist", "node_modules", "__pycache__"})
 ENTRYPOINT_PATTERN = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:[A-Za-z_]\w*$")
@@ -126,6 +138,8 @@ class AppletManifest:
     data_url: str | None = None
     jobs: tuple[AppJob, ...] = ()
     agent: AgentPanelManifest | None = None
+    applet_id: str | None = None
+    source_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -240,7 +254,7 @@ def parse_applet_manifest(content: bytes) -> AppletManifest:
         raise ValueError(f"{APPLET_MANIFEST}: 'connect_src' must be a list of strings")
     if any(not item or any(character.isspace() or character == ";" for character in item) for item in connect_src):
         raise ValueError(f"{APPLET_MANIFEST}: connect_src entries must be single CSP source expressions")
-    for optional in ("build_command", "python_entrypoint", "data_url"):
+    for optional in ("build_command", "python_entrypoint", "data_url", "applet_id"):
         if optional in raw and not isinstance(raw[optional], str):
             raise ValueError(f"{APPLET_MANIFEST}: {optional!r} must be a string")
     entrypoint = raw.get("python_entrypoint")
@@ -251,6 +265,11 @@ def parse_applet_manifest(content: bytes) -> AppletManifest:
         not isinstance(name, str) or len(name) > 63 or not APP_NAME_PATTERN.fullmatch(name) or name in KERNEL_PREFIXES
     ):
         raise ValueError(f"{APPLET_MANIFEST}: invalid or reserved application name {name!r}")
+    source_paths = raw.get("source_paths", [])
+    if not isinstance(source_paths, list) or any(
+        not isinstance(path, str) or Path(path).is_absolute() or ".." in Path(path).parts for path in source_paths
+    ):
+        raise ValueError("source_paths must be repository-relative paths")
     return AppletManifest(
         title=raw["title"].strip(),
         description=raw["description"].strip(),
@@ -261,6 +280,8 @@ def parse_applet_manifest(content: bytes) -> AppletManifest:
         data_url=raw.get("data_url"),
         jobs=app_jobs(raw.get("jobs", [])),
         agent=agent_panel(raw["agent"]) if "agent" in raw else None,
+        applet_id=str(uuid.UUID(raw["applet_id"])) if "applet_id" in raw else None,
+        source_paths=tuple(source_paths),
     )
 
 
@@ -379,6 +400,8 @@ def _manifest_json(manifest: AppletManifest) -> str:
 def _manifest_from_json(value: dict[str, object]) -> AppletManifest:
     connect_src = value.get("connect_src", [])
     assert isinstance(connect_src, list)
+    source_paths = value.get("source_paths", [])
+    assert isinstance(source_paths, list)
     return AppletManifest(
         title=str(value["title"]),
         description=str(value["description"]),
@@ -389,6 +412,8 @@ def _manifest_from_json(value: dict[str, object]) -> AppletManifest:
         data_url=str(value["data_url"]) if value.get("data_url") is not None else None,
         jobs=app_jobs(value.get("jobs", [])),
         agent=agent_panel(value["agent"]) if value.get("agent") is not None else None,
+        applet_id=str(value["applet_id"]) if value.get("applet_id") is not None else None,
+        source_paths=tuple(str(item) for item in source_paths),
     )
 
 
@@ -519,6 +544,10 @@ class AppletStore:
         reader_roles: tuple[str, ...] = (),
     ) -> PublishResult:
         applet_id = applet_id or uuid.uuid4()
+        if package.manifest.applet_id is not None and package.manifest.applet_id != str(applet_id):
+            raise ValueError(
+                "Upload target differs from applet.toml's applet_id; supply the declared UUID and base version"
+            )
         if package.manifest.name is None and (
             package.manifest.data_url is not None or package.manifest.jobs or package.manifest.agent is not None
         ):

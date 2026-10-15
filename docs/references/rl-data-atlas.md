@@ -71,7 +71,7 @@ uv run python infra/marina/applets/rl_data_catalog/load.py \
   --applet-id fb11c931-5861-4878-8bb5-a964d652b45f
 ```
 
-`release.toml` binds this directory to the existing applet. Releases require the
+`applet.toml` declares the existing applet's UUID. Releases require the
 applet's publisher or a configured operator. By default, source must be a clean
 checkout at the current remote main. A Marina image deployment does not publish Atlas. A
 default release records its source commit and subtree hash in the immutable package;

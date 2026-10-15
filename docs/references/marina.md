@@ -29,7 +29,8 @@ credentials or failure isolation need their own service project under the
 Start with `infra/marina/examples/problem-set-applet/` for Python/Postgres or
 `infra/marina/examples/vue-applet/` for Vue. A package contains `applet.toml`,
 `dist/index.html`, browser assets, and optional Python modules. Maintained source
-also commits a `release.toml` containing its stable `applet_id` UUID.
+declares its stable `applet_id` UUID and optional repository-relative
+`source_paths` for shared build inputs in the same `applet.toml`.
 
 ```bash
 uv run marina validate my-app
@@ -60,7 +61,7 @@ The stable UUID and existing access mode are preserved.
 
 Ad hoc directories without a Git repository use the same command. Their first
 `release --base-version 0` returns a UUID; later releases supply `--id UUID` and
-`--base-version CURRENT_VERSION`. Commit a declaration when maintaining the source.
+`--base-version CURRENT_VERSION`. Declare `applet_id` in `applet.toml` when maintaining the source.
 
 `release-status` compares recorded source trees, distinguishes local edits, and
 reports `unrecorded` for packages without provenance. Declared shared build inputs

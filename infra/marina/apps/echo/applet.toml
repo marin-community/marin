@@ -1,3 +1,6 @@
+applet_id = "7082d9d8-6c10-4a6f-b544-c8cb825034f2"
+source_paths = ["infra/marina/web"]
+
 name = "echo"
 python_entrypoint = "app:create_api"
 # Marin's shared agent-context store: GitHub and Discord activity, the indexed heads of
