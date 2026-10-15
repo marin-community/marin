@@ -35,7 +35,7 @@ from shellbox.machine import (
 
 @cache
 def _worker_context() -> shellsim.Context:
-    return shellsim.Context()
+    return shellsim.Context(trusted_precompiled=True)
 
 
 def _download_target(target: Path | StoragePath | str) -> Path | StoragePath:

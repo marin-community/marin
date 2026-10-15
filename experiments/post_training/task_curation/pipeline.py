@@ -251,7 +251,12 @@ class CampaignMachines:
             from shellbox.backends.shellsim.machine import ShellSimMachineFactory  # noqa: PLC0415
         except ImportError as error:
             raise UnsupportedMachineSpec("Simulator controls require the Shellbox shellsim extra") from error
-        return ShellSimMachineFactory(context=shellsim.Context(pypi_catalog=self.simulator_catalog))
+        return ShellSimMachineFactory(
+            context=shellsim.Context(
+                pypi_catalog=self.simulator_catalog,
+                trusted_precompiled=self.simulator_catalog in (None, shellsim.DEFAULT_PYPI_CATALOG),
+            )
+        )
 
     def identity(self) -> dict[str, Any]:
         factory = self.image_factory
