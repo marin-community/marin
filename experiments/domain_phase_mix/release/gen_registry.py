@@ -15,7 +15,7 @@ from experiments.domain_phase_mix.release import paths
 from experiments.domain_phase_mix.release import verify_paper_numbers as v
 
 V = "validation_3e18"
-U, O = "bpb__uncheatable_fixed", "bpb__obe_easy"
+U, O = "bpb__uncheatable", "bpb__obe_easy"
 MARINER_U = "launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'"
 MARINER_O = "launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'"
 PRED = "fits_proposal_predictions"
@@ -224,9 +224,7 @@ def _scaling_main(reg: _Registry) -> None:
     for i in range(len(reg.parsed[label])):
         method = METHODS[reg.stub(label, i)]
         for j in range(1, 9):
-            objective, column = (
-                ("uncheatable", "bpb__uncheatable_source") if j <= 4 else ("obe_easy", "bpb__obe_easy_source")
-            )
+            objective, column = ("uncheatable", U) if j <= 4 else ("obe_easy", O)
             rung = RUNGS[(j - 1) % 4]
             target = "none" if method in ("proportional", "unimax8") else objective
             sel = f"ladder[method=='{method}' & proposal_objective=='{target}' & compute_flops=={rung}].{column}"

@@ -20,13 +20,12 @@ import json
 import re
 import shutil
 import subprocess
-from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
 
-from experiments.domain_phase_mix.release import checks, context, paths
+from experiments.domain_phase_mix.release import checks, context, naming, paths
 from experiments.domain_phase_mix.release.configs import (
     domain_sweeps,
     fits,
@@ -128,16 +127,12 @@ NOTES = {
         "The ten proportional repeats (design_kind repeat, fit_inclusion false) pair their OlmoBaseEval Easy and "
         "Uncheatable components by run letter: one source indexes the runs by letter, the other by run name, and the "
         "noise panel's pooled Uncheatable BPB of each letter confirms the pairing.",
-        "The source bundle records components only: bpb__uncheatable_source applies the fixed byte shares to each "
-        "run's seven Uncheatable components, and the table has no OlmoBaseEval Easy source aggregate.",
         "The ten proportional repeats are also rows of the ladder's 3e18 rung.",
     ],
     "swarm_llama_160m_1p2b": [
         "The 39 single-bucket deletions (design_kind deletion) are fit rows here and frozen held-out runs in heldout, "
         "under the same observation ids; pool the two tables by observation_id.",
         "No launch manifest of the deletions is among the sources, so their seeds are null.",
-        "bpb__uncheatable_source uses the legacy Uncheatable weights (aggregate_version legacy) and differs from "
-        "bpb__uncheatable_fixed by less than 1e-4 BPB.",
     ],
     "swarm_llama_200m_6b": [
         "The proportional fit row (run_label baseline_proportional) keeps its own run's values. The parity panel "
@@ -145,8 +140,6 @@ NOTES = {
         "runs: the ten repeats here and the two-phase swarm's proportional run, which this release omits.",
         "The stratified baseline is a two-phase swarm run whose launch left no manifest among the sources, so its "
         "seeds are null.",
-        "bpb__uncheatable_source uses the legacy Uncheatable weights (aggregate_version legacy) and differs from "
-        "bpb__uncheatable_fixed by less than 1e-4 BPB.",
     ],
     "heldout": [
         "The 39 Llama 160M single-bucket deletions are also fit rows of swarm_llama_160m_1p2b, and 117 Qwen3 runs "
@@ -156,18 +149,15 @@ NOTES = {
         "Ten frozen archive runs, in four exposure groups, are deterministic re-trainings: their aggregates are "
         "bit-identical within each group.",
         "628 of the 929 runs (455 Qwen3, 117 Llama 200M and 56 Llama 160M runs) have all 58 per-task values.",
-        "aggregate_version is fixed_20260927 for the Qwen3 runs and legacy for the Llama runs, except for the 14 "
-        "path-midpoint and RegMix-reference runs (pooled_schema2), whose recorded Uncheatable aggregate is the "
-        "BPB-schema-2 pooled value, 0.008 to 0.011 BPB above bpb__uncheatable_fixed; compare runs on "
-        "bpb__uncheatable_fixed.",
+        "One Llama 160M run has no per-task values, and its source recorded its Uncheatable aggregate only under the "
+        "archived swarms' legacy corpus weights, so both its aggregates are null.",
         "proposal_objective uses the public objective names: none for the UniMax-8 baseline (epoch cap 8, as in "
         "validation_3e18), uncheatable_and_obe_easy for designs built for both objectives, and other where the "
         "registry's run names name no objective; the Llama panels leave it null.",
     ],
     "validation_3e18": [
-        "UniMax-8 trainer seeds 1 and 2 carry source aggregates only; their per-task values are not among the sources.",
-        "The 14 path_midpoints and regmix_reference runs record the BPB-schema-2 pooled Uncheatable aggregate "
-        "(aggregate_version pooled_schema2), 0.008 to 0.011 BPB above bpb__uncheatable_fixed.",
+        "UniMax-8 trainer seeds 1 and 2 carry recorded aggregates only; their per-task values are not among the "
+        "sources.",
         "117 runs are also rows of heldout, and the ladder's 3e18 rung copies 15: trainer seeds 0 to 2 of MARINER's "
         "and of the matched Olmix proposals for each objective, and the UniMax-8 repeats.",
     ],
@@ -175,9 +165,9 @@ NOTES = {
         "The 3e18 rung copies 15 validation_3e18 rows and the ten proportional repeats of swarm_qwen3_360m_1p6b "
         "under their observation ids, and adds the June proportional run, which no other table holds; the scaling "
         "figure averages these runs at 3e18.",
-        "UniMax-8 trainer seeds 1 and 2 at 3e18 carry aggregates only, and the proportional and UniMax-8 runs at "
-        "2e19 and 3e20 carry aggregates and Uncheatable components only (components_available false).",
-        "The swarm repeats' bpb__obe_easy_source is the mean of their 51 components, as every source computes it.",
+        "UniMax-8 trainer seeds 1 and 2 at 3e18 carry recorded aggregates only, and the proportional and UniMax-8 "
+        "runs at 2e19 and 3e20 carry their Uncheatable components and recorded OlmoBaseEval Easy mean only "
+        "(components_available false).",
     ],
     "ladder_unimax_cap_sweep": [
         "The UniMax cap sweep's runs at caps 1, 4 and 12, at the 3e18 rung's model size and token count; its cap-8 "
@@ -204,9 +194,10 @@ RELEASE_NOTES = [
     "table that holds it, and run_sets lists its memberships, so pool tables by observation_id.",
     "mixture_id hashes a row's weights rounded to 1e-9; exposure_id hashes its weights, pool fractions and the "
     "partition revision.",
-    "aggregate_version names the weighting behind bpb__uncheatable_source: fixed_20260927 (the paper's fixed byte "
-    "shares, which bpb__uncheatable_fixed applies to every run with components), legacy (the archived swarms' "
-    "weights) or pooled_schema2 (BPB schema 2's pooled bytes).",
+    "bpb__uncheatable (the seven Uncheatable corpora weighted by the tasks table's aggregate_weight, the paper's fixed "
+    "byte shares) and bpb__obe_easy (the mean of the 51 OlmoBaseEval Easy tasks) are computed from a run's components "
+    "whenever it has all of that objective's components, and otherwise are the aggregate its source recorded under "
+    "the same weights, or null where it recorded none.",
     "Source paths are relative to the marin repository's root, those under mixture-selection/ to the "
     "mixture-selection repository's; `*` stands for a run name that begins a file name or a hash that names a folder.",
     "figures_tables.csv lists the paper's 26 figures and 20 tables with their builders (paths in the paper folder, or "
@@ -269,10 +260,23 @@ def _sources(table: str) -> list[Path]:
 
 def _notes(table: str, df: pd.DataFrame) -> list[str]:
     notes = list(NOTES.get(table, []))
-    if "aggregate_version" in df:
-        counts = Counter(df.aggregate_version)
-        notes.append("aggregate_version: " + ", ".join(f"{v} ({n} rows)" for v, n in sorted(counts.items())))
+    if "components_available" in df:
+        notes.append(_aggregate_counts(df))
     return notes
+
+
+def _aggregate_counts(df: pd.DataFrame) -> str:
+    """How many rows of a run table compute each aggregate from their components, take it from their source's record,
+    or leave it null."""
+    counts = []
+    for objective, weights in naming.task_weights().items():
+        computed = df[[f"bpb__{t}" for t in weights]].notna().all(axis=1)
+        present = df[f"bpb__{objective}"].notna()
+        counts.append(
+            f"bpb__{objective} is computed from components in {computed.sum()} rows, recorded in "
+            f"{(present & ~computed).sum()} and null in {(~present).sum()}"
+        )
+    return f"Aggregates: {'; '.join(counts)}."
 
 
 def _write_table(df: pd.DataFrame, path: Path, form: str) -> None:
