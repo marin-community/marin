@@ -1,0 +1,117 @@
+{
+  "scope": "Bounded real-GPU engineering qualification; no scientific comparison endpoint or new main-source qualification.",
+  "source": "afbe6cc3633f596c29459a052040d5c2cd23e74f",
+  "source_branch": "experiments/score-centering-recovery-01a126ce",
+  "status": "Initial save submitted/controller-confirmed queued on2RNO BATCH nodes; both restore phases remain unsubmitted behind prior-phase native checkpoint gates.",
+  "geometry": {
+    "cluster": "cw-rno2a",
+    "priority": "batch",
+    "nodes": 2,
+    "h100_per_node": 8,
+    "learner_nodes": 1,
+    "inference_nodes": 1
+  },
+  "recipe": "Frozen Qwen optimizer pilot AdamW/constant scheduler, full512-response logical batches, naturalK128/chosen-q, TIS2 plus score centering, noise0.05. Deliberate diagnostic refresh period3 and checkpoint every update with keep2. All learning/model/data settings otherwise unchanged.",
+  "phases": [
+    {
+      "phase": "save",
+      "run_id": "sc-qwen-checkpoint-periodic3-save-noise005-sc-s0-rno-a0-01a126ce",
+      "source": "afbe6cc3633f596c29459a052040d5c2cd23e74f",
+      "new_completed_updates": [
+        1,
+        2
+      ],
+      "from_completed_updates": null,
+      "from_checkpoint": null,
+      "checkpoint_root": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-periodic3-save-noise005-sc-s0-rno-a0-01a126ce/checkpoints",
+      "first_new_sampler_completed_updates": 0,
+      "final_saved_sampler_completed_updates": 0,
+      "controller_confirmed": true,
+      "submission_gate": "Initial save may submit after native prepare and resource checks.",
+      "controller_job": {
+        "job_id": "/romain/sc-qwen-checkpoint-periodic3-save-noise005-sc-s0-rno-a0-01a126ce",
+        "state": "3",
+        "num_tasks": "2",
+        "priority_band": "3",
+        "bundle_id": "67acb9503004362b1572b5348d365fd553e6b19a8c002fca19c26f8ca26dbaac",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "initial_task_attempts": [
+        {
+          "task_id": "/romain/sc-qwen-checkpoint-periodic3-save-noise005-sc-s0-rno-a0-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "94859d4dd7ae8524",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-checkpoint-periodic3-save-noise005-sc-s0-rno-a0-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "e40e3bc42de832ae",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        }
+      ],
+      "submitted_configuration": "qwen_checkpoint_periodic_recovery_v1/save-detach.yaml",
+      "configuration_sha256": "04e8a019e58c19249334f8eea551548411d89757b9170b828508be3fc21176e5"
+    },
+    {
+      "phase": "restore2",
+      "run_id": "sc-qwen-checkpoint-periodic3-restore2-noise005-sc-s0-rno-a0-01a126ce",
+      "source": "afbe6cc3633f596c29459a052040d5c2cd23e74f",
+      "new_completed_updates": [
+        3,
+        4,
+        5
+      ],
+      "from_completed_updates": 2,
+      "from_checkpoint": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-periodic3-save-noise005-sc-s0-rno-a0-01a126ce/checkpoints/global_step_2",
+      "checkpoint_root": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-periodic3-restore2-noise005-sc-s0-rno-a0-01a126ce/checkpoints",
+      "first_new_sampler_completed_updates": 0,
+      "final_saved_sampler_completed_updates": 3,
+      "controller_confirmed": false,
+      "submission_gate": "Previous phase must complete with full native checkpoint/optimizer/loader and frozen-sampler identity audit before this phase may submit."
+    },
+    {
+      "phase": "restore5",
+      "run_id": "sc-qwen-checkpoint-periodic3-restore5-noise005-sc-s0-rno-a0-01a126ce",
+      "source": "afbe6cc3633f596c29459a052040d5c2cd23e74f",
+      "new_completed_updates": [
+        6,
+        7
+      ],
+      "from_completed_updates": 5,
+      "from_checkpoint": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-periodic3-restore2-noise005-sc-s0-rno-a0-01a126ce/checkpoints/global_step_5",
+      "checkpoint_root": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-periodic3-restore5-noise005-sc-s0-rno-a0-01a126ce/checkpoints",
+      "first_new_sampler_completed_updates": 3,
+      "final_saved_sampler_completed_updates": 6,
+      "controller_confirmed": false,
+      "submission_gate": "Previous phase must complete with full native checkpoint/optimizer/loader and frozen-sampler identity audit before this phase may submit."
+    }
+  ],
+  "required_evidence": [
+    "Actual new optimizer steps1/2 then3/4/5 then6/7 with no repeated committed learner updates.",
+    "All8 learner-rank DCP shards and optimizer states, serialized trainer/rollout loader state and committed marker at each phase endpoint.",
+    "Original model-derived fixed-noise delta fingerprints identical across all3 processes; actual original sampler restored at checkpoint2 and actual trained sampler3 restored at checkpoint5 while current learner5 remains restored.",
+    "Actual serving versions and ages follow floor((update-1)/3)*3; finite applied updates, full512 membership, natural nonuniform K128, aligned chosen-q and TIS2/SC.",
+    "Checkpoint cleanup retains recent committed recovery points and referenced sampler3 or6 even after newer partial state.",
+    "All raw responses/controller events/errors and all allocated H100 time retained; full original grader replay where responses exist."
+  ],
+  "limits": [
+    "This2-node Qwen qualification does not establish five-node Snowball PP2/EP8 restart behavior.",
+    "Refresh3 diagnostic does not replace full stale65 calibration130 or any scientific main1200.",
+    "No current frozen0212 long run is altered or canceled by this plan.",
+    "Any eventual resumed scientific main needs an explicit committed-checkpoint lineage and exact per-update selected segments, never naive pooled duplicate steps.",
+    "Do not submit later phases merely because an observation command times out."
+  ],
+  "clean_predecessor_disposition": "The earlier frozen0212 clean save2 diagnostic actually started on both ranks before the new queued periodic diagnostic was confirmed. It remains active; no cancellation of healthy work."
+}

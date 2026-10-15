@@ -1,0 +1,139 @@
+{
+  "scope": "CPU engineering qualification of checkpoint recovery; simulated policy/serving RPC boundaries with actual trainer/checkpoint/noise logic. No real-GPU restart or scientific comparison endpoint is established.",
+  "source": "afbe6cc3633f596c29459a052040d5c2cd23e74f",
+  "branch": "https://github.com/marin-community/MarinSkyRL/tree/experiments/score-centering-recovery-01a126ce",
+  "base": "2c77ce20ed19f4936925ae5ca572d7ea1e20ef39",
+  "frozen_live_gpu_source_unchanged": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "prior_fixed_noise_cpu_report": "checkpoint_recovery_fixed_noise_cpu.json",
+  "invariants": [
+    "Derive the fixed sampler perturbation once from the configured original model before loading the trained learner checkpoint.",
+    "Persist completed sampler updates and exact committed policy URI in trainer metadata; restore the expected floor(N/period)*period generating policy before restoring current learner N without optimizer/scheduler/RNG rollback.",
+    "Support the original frozen policy at S0, a positive older sampler anchor and a boundary S=N; preserve a referenced URI from an earlier per-job checkpoint root.",
+    "Checkpoint cadence must include every periodic refresh boundary; reject a missing required committed anchor before a large checkpoint save begins.",
+    "Preserve latest committed recovery points and their sampler dependencies even while a newer partial checkpoint exists.",
+    "Validate interrupted-upload consistency with the active checkpoint callbacks save cadence, including explicit callback configuration overriding legacy ckpt_interval."
+  ],
+  "regressions": {
+    "periodic_before": "3 failing cases and3 passing controls with noise0/.05 and fresh/boundary/midcycle restoration.",
+    "cleanup_before": "A partial newer directory caused the required sampler anchor and backup recovery point to be deleted.",
+    "callback_interval_before": "A committed13 plus partial26, actual callback save_steps13 and legacy ckpt_interval5 was incorrectly rejected; baseline1fail/1pass also retains rejection for partial27.",
+    "periodic_after_tests": 83,
+    "final_invariant_tests": 10,
+    "review_fix_after_tests": 95,
+    "counts_are_separate_invocations_not_unique_tests": true,
+    "mechanical_checks": "Ruff check/format and git diff --check pass."
+  },
+  "advisory_review": {
+    "reviewed_source": "48163429d134dba47721be9849b24d1eea47ffe6",
+    "lanes": [
+      {
+        "lane": "interfaces",
+        "native_id": "01a13f46-1100-75d2-8a16-f692a53e9aee",
+        "requested_model": "gpt-6.1-sol",
+        "requested_effort": "xhigh",
+        "observed_turn_contexts": [
+          {
+            "model": "gpt-6.1-sol",
+            "effort": "xhigh",
+            "cwd": "/home/romain/work/marin-community/MarinSkyRL/score-centering-recovery-01a126ce",
+            "sandbox_policy": {
+              "type": "read-only"
+            }
+          }
+        ],
+        "native_transcript": "/home/romain/.codex/sessions/2026/10/15/rollout-2026-10-15T04-15-19-01a13f46-1100-75d2-8a16-f692a53e9aee.jsonl",
+        "actual_command_count": 17,
+        "source_write_or_test_actions_observed": false,
+        "review_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/reviews/lint-checkpoint-recovery-20261015T1120/CODEX_INTERFACES_REVIEW.md",
+        "exit_code": 0
+      },
+      {
+        "lane": "robustness",
+        "native_id": "01a13f47-9e44-70f0-9a70-a856e4accb4d",
+        "requested_model": "gpt-6.1-sol",
+        "requested_effort": "xhigh",
+        "observed_turn_contexts": [
+          {
+            "model": "gpt-6.1-sol",
+            "effort": "xhigh",
+            "cwd": "/home/romain/work/marin-community/MarinSkyRL/score-centering-recovery-01a126ce",
+            "sandbox_policy": {
+              "type": "read-only"
+            }
+          }
+        ],
+        "native_transcript": "/home/romain/.codex/sessions/2026/10/15/rollout-2026-10-15T04-17-01-01a13f47-9e44-70f0-9a70-a856e4accb4d.jsonl",
+        "actual_command_count": 28,
+        "source_write_or_test_actions_observed": false,
+        "review_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/reviews/lint-checkpoint-recovery-20261015T1120/CODEX_ROBUSTNESS_REVIEW.md",
+        "exit_code": 0
+      }
+    ],
+    "findings": [
+      {
+        "finding": "ml-config-not-threaded",
+        "disposition": "Fixed active callback save-cadence validation; real persisted checkpoint regression fails before and passes after, while incompatible partial state still rejects."
+      },
+      {
+        "finding": "ml-naive-path-join",
+        "disposition": "Use the existing shared URI join helper for new sampler/recovery paths."
+      },
+      {
+        "finding": "ml-magic-constant",
+        "disposition": "Reuse POLICY_CHECKPOINT_SUBDIRECTORY for new sampler/recovery policy paths."
+      }
+    ],
+    "parent_registration_verified": true,
+    "second_full_panel": "Not requested or run; focused two-lane advisory pass only."
+  },
+  "evidence": {
+    "checkpoint-periodic-sampler-regression-before.log": {
+      "path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/checkpoint-periodic-sampler-regression-before.log",
+      "sha256": "3cf86c70d90acafc1ae288ff6bfafc750218700d6831a41ad76bb025af0a324c",
+      "bytes": 35571
+    },
+    "checkpoint-anchor-backup-retention-before.log": {
+      "path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/checkpoint-anchor-backup-retention-before.log",
+      "sha256": "e8c592f79e9339d6609065ce56b221e6fa72455e41db5d87641cf7a4476b1fbb",
+      "bytes": 3801
+    },
+    "checkpoint-periodic-sampler-regression-after-backup-fix.log": {
+      "path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/checkpoint-periodic-sampler-regression-after-backup-fix.log",
+      "sha256": "1c6f1948356498e8ebe2af73bc48d4b8bf8ef4b0bffce3b6d7d24ac089dd90ed",
+      "bytes": 114584
+    },
+    "checkpoint-periodic-sampler-final-focused.log": {
+      "path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/checkpoint-periodic-sampler-final-focused.log",
+      "sha256": "508a1e3520a2a68cf87ef5437e17fabfc0022250cffba96bfae2e104ea6976eb",
+      "bytes": 20426
+    },
+    "checkpoint-callback-interval-regression-before.log": {
+      "path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/checkpoint-callback-interval-regression-before.log",
+      "sha256": "f09c12e44a8cba428970b52268bb1418b8d15871e0d872b7bfe5ee5db6ca35d3",
+      "bytes": 6838
+    },
+    "checkpoint-review-fixes-regression-after.log": {
+      "path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/checkpoint-review-fixes-regression-after.log",
+      "sha256": "9e75b8173acf54986f1cb2903bc305b3cca0350ea65b11061e248977a53e05c2",
+      "bytes": 103006
+    },
+    "checkpoint-review-fixes-lint.log": {
+      "path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/checkpoint-review-fixes-lint.log",
+      "sha256": "81affcad1f2a8690bec6220d7aea7ea6f14da90c6bdff4394c75411f761f79e0",
+      "bytes": 217
+    }
+  },
+  "gpu_validation": {
+    "status": "pending",
+    "qwen_plan": "qwen_periodic_checkpoint_recovery_qualification_plan.json",
+    "qwen_phases": "2updates, checkpoint2\u21925, checkpoint5\u21927; noise.05, refresh3, checkpoint every1, keep2, native full512-response batches.",
+    "snowball_gate": "A separate five-node PP2/EP8 actual save/restore qualification is required before any long Snowball source change."
+  },
+  "limits": [
+    "No objective, gradient formula, response grader or fixed-noise formula changes.",
+    "CPU tensor equality is not actual CUDA/vLLM serving or distributed optimizer evidence.",
+    "Documentation checkpoint13/refresh65 is an example, not an adopted live main cadence.",
+    "All scientific300/1200/130 horizons and controls remain required.",
+    "A resumed main needs explicit selected committed-checkpoint lineage; this report does not authorize pooling duplicate uncommitted updates."
+  ]
+}
