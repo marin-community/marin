@@ -15,13 +15,15 @@ June ladder at 3e18, has objective `none` and, as in `validation_3e18`, its cons
 
 Seeds come from the launch records that `validation_3e18` reads, wherever they hold the run: each validation-launch
 run's from the directory that holds it (`run_names.seeds_from_uri`), and the UniMax-8 run's from the UniMax-8 repeats'
-record. They must agree with the registry's seeds, which it records for 42 of the 116 validation-launch runs. Every
-other run keeps the registry's seeds, which are null for the Llama runs and for some frozen Qwen3 runs.
+record. The data seed of each run in WANDB_PULL comes from its W&B config. They must agree with the registry's seeds,
+which it records for 42 of the 116 validation-launch runs. Every other run keeps the registry's seeds, which are null
+for the other Llama runs and for some frozen Qwen3 runs.
 
 Aggregates follow `tables.add_aggregates`: recomputed from a run's components where it has them all, else the
 registry's recorded aggregate where that used the fixed rule. Every run whose recorded Uncheatable aggregate uses other
 weights (the Llama panels' legacy weights, or the BPB-schema-2 pooled value of the 14 path-midpoint and RegMix-reference
-runs) has its Uncheatable components, except one Llama 160M run (LEGACY_AGGREGATE_ONLY), whose aggregates stay null.
+runs) has its Uncheatable components: the registry's, or for one archived Llama 160M run, which the registry scores by
+its pooled aggregate only, those of its W&B run summary (WANDB_PULL).
 """
 
 from pathlib import Path
@@ -62,9 +64,12 @@ FIXED_RULE_PANEL = "delphi_3e18_39bucket"
 # aggregate is its pooled one, 0.008 to 0.011 BPB above the fixed weighting of the same runs' components
 # (two_phase_many/uncheatable_objective.py); the expanded registry copied it unchecked.
 POOLED_SOURCES = ("validation::path_midpoints", "validation::regmix_reference")
-# The one run whose only Uncheatable value is a recorded aggregate under the legacy weights: an archived two-phase
-# Llama 160M run that the registry scores on Uncheatable alone, without components. Its aggregates stay null.
-LEGACY_AGGREGATE_ONLY = "baseline_power_ridge_single_constant_mix-170469"
+# Uncheatable components and data seeds that the registry lacks, frozen from W&B run summaries and configs: rows of
+# (training_wandb_run_id, metric, value, pulled_at). The pooled aggregate (WANDB_POOLED) ties each pull to the run's
+# registry record, which keeps six decimals (REGISTRY_ROUNDING).
+WANDB_PULL = paths.REPO / "experiments/domain_phase_mix/release/configs/heldout_wandb_components_20261015.csv"
+WANDB_POOLED = "eval/uncheatable_eval/bpb"
+REGISTRY_ROUNDING = 5e-7
 # Result folders of the validation launches in the expanded cohort, from the launch registry of
 # collect_delphi_3e18_validation_results_20260906.py, which the expanded registry's builder read.
 VALIDATION_LAUNCHES = {
@@ -90,7 +95,8 @@ VALIDATION_LAUNCHES = {
 def required_sources() -> list[Path]:
     launches = [paths.RO / folder / name for folder in VALIDATION_LAUNCHES.values() for name in LAUNCH_FILES]
     frozen = [FROZEN / name for name in FROZEN_FILES]
-    return [*frozen, *(EXPANDED / name for name in EXPANDED_FILES), *launches, UNIMAX8_WEIGHTS, UNIMAX8_REPEATS]
+    expanded = [EXPANDED / name for name in EXPANDED_FILES]
+    return [*frozen, *expanded, *launches, UNIMAX8_WEIGHTS, UNIMAX8_REPEATS, WANDB_PULL]
 
 
 def _unimax8_mixture() -> str:
@@ -155,15 +161,52 @@ def _launch_seeds() -> pd.DataFrame:
     """Data and trainer seed of each run in a launch record, indexed by training run name.
 
     A validation run's seeds come from the directory that holds it, as in `validation_3e18`; the UniMax-8 repeats'
-    record gives its three runs' seeds.
+    record gives its three runs' seeds, and WANDB_PULL the data seed in each pulled run's W&B config.
     """
     uris = _validation_uris()
     names = uris.map(run_names.training_run_name_from_uri)
     validation_seeds = pd.DataFrame([run_names.seeds_from_uri(uri) for uri in uris], index=names, columns=SEEDS)
     repeats = tables.read_csv(paths.require(UNIMAX8_REPEATS)).set_index("run")[SEEDS]
-    seeds = pd.concat([validation_seeds, repeats])
+    pulled = _wandb_pulls().data_seed.to_frame().assign(trainer_seed=np.nan)
+    seeds = pd.concat([validation_seeds, repeats, pulled])
     assert seeds.index.is_unique, "a training run appears in two launch records"
     return seeds
+
+
+def _wandb_pulls() -> pd.DataFrame:
+    """WANDB_PULL, one row per pulled run indexed by its training run name: `bpb__<task>` for the seven Uncheatable
+    corpora, `pooled` (the run's pooled Uncheatable aggregate) and `data_seed`."""
+    long = tables.read_csv(paths.require(WANDB_PULL), comment="#")
+    wide = long.pivot(index="training_wandb_run_id", columns="metric", values="value")  # raises on a repeated pair
+    pulls = wide[[WANDB_POOLED, "data_seed"]].set_axis(["pooled", "data_seed"], axis=1)
+    components = wide.drop(columns=[WANDB_POOLED, "data_seed"])
+    components.columns = [f"bpb__{naming.task_public(c)}" for c in components.columns]
+    uncheatable = [f"bpb__{t}" for t in naming.TASKS if t.startswith("uncheatable/")]
+    assert sorted(components.columns) == sorted(uncheatable), f"pulled metrics {sorted(components.columns)}"
+    assert components.notna().all().all() and pulls.notna().all().all(), "every pulled run needs every metric"
+    return pd.concat([components[uncheatable], pulls], axis=1)
+
+
+def _with_pulled_components(out: pd.DataFrame, runs: pd.DataFrame, run_keys: pd.Series) -> pd.DataFrame:
+    """`out` with the Uncheatable components of the runs in WANDB_PULL, which the registry lacks.
+
+    Raises unless each pulled run is a held-out run without registry components for those tasks whose recorded
+    Uncheatable aggregate is the pulled pooled value, to the registry's rounding.
+    """
+    pulls = _wandb_pulls()
+    pulled = run_keys[run_keys.isin(pulls.index)]
+    if sorted(pulled) != sorted(pulls.index):
+        raise ValueError(f"pulled runs that are not held-out runs: {sorted(set(pulls.index) - set(pulled))}")
+    pull = pulls.loc[pulled].set_axis(pulled.index)
+    columns = [c for c in pulls.columns if c.startswith("bpb__")]
+    if out.loc[pulled.index, columns].notna().any().any():
+        raise ValueError(f"pulled runs that already have registry components: {pulled.tolist()}")
+    off = (pull.pooled - runs.uncheatable_bpb[pulled.index]).abs() > REGISTRY_ROUNDING
+    if off.any():
+        raise ValueError(f"pulled pooled aggregates that differ from the registry's: {pulled[off].tolist()}")
+    out = out.copy()
+    out.loc[pulled.index, columns] = pull[columns]
+    return out
 
 
 def _seeds(runs: pd.DataFrame, run_keys: pd.Series) -> pd.DataFrame:
@@ -252,18 +295,12 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     unimax8 = (out.proposal_objective == "none") & (out.mixture_id == _unimax8_mixture())
     out.loc[unimax8, "epoch_cap"] = UNIMAX8_EPOCH_CAP
     out = out.join(_components(ctx, runs).reindex(runs.row_id).reset_index(drop=True))
+    out = _with_pulled_components(out, runs, run_keys)
     out["components_available"] = out[[f"bpb__{t}" for t in ctx.tasks]].notna().all(axis=1)
     recorded = pd.DataFrame({"uncheatable": runs.uncheatable_bpb, "obe_easy": runs.table9_macro_bpb})
     fixed_rule = pd.DataFrame(
         {"uncheatable": (runs.panel == FIXED_RULE_PANEL) & ~runs.source.isin(POOLED_SOURCES), "obe_easy": True}
     )
-    without_components = out[[f"bpb__{t}" for t in ctx.weights["uncheatable"]]].isna().any(axis=1)
-    legacy_only = without_components & recorded.uncheatable.notna() & ~fixed_rule.uncheatable
-    if run_keys[legacy_only].tolist() != [LEGACY_AGGREGATE_ONLY]:
-        raise ValueError(
-            f"expected {LEGACY_AGGREGATE_ONLY} to be the one run without Uncheatable components whose source recorded "
-            f"the aggregate under other weights, found {run_keys[legacy_only].tolist()}"
-        )
-    recorded.loc[legacy_only, "uncheatable"] = np.nan
-    out = tables.add_aggregates(out, ctx.weights, recorded, fixed_rule)  # null where neither exists
+    # Raises for a run that would need a recorded aggregate under other weights; null where neither exists.
+    out = tables.add_aggregates(out, ctx.weights, recorded, fixed_rule)
     return {"heldout": tables.order_columns(out, ctx.buckets, ctx.tasks)}

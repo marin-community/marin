@@ -1,0 +1,14 @@
+# Uncheatable components of held-out runs that the held-out registry lacks, frozen from W&B (entity marin-community,
+# project marin) on 2026-10-15 with one read-only call. The registry scores these runs by their pooled Uncheatable
+# aggregate only; eval/uncheatable_eval/bpb, that pooled value, ties each pull to the registry's record, and data_seed
+# is the run's W&B config value. The run logged no OlmoBaseEval Easy metrics.
+training_wandb_run_id,metric,value,pulled_at
+baseline_power_ridge_single_constant_mix-170469,eval/uncheatable_eval/ao3_english/bpb,1.5188452005386353,2026-10-15
+baseline_power_ridge_single_constant_mix-170469,eval/uncheatable_eval/arxiv_computer_science/bpb,1.1138893365859983,2026-10-15
+baseline_power_ridge_single_constant_mix-170469,eval/uncheatable_eval/arxiv_physics/bpb,1.1524652242660522,2026-10-15
+baseline_power_ridge_single_constant_mix-170469,eval/uncheatable_eval/bbc_news/bpb,1.2804508209228516,2026-10-15
+baseline_power_ridge_single_constant_mix-170469,eval/uncheatable_eval/github_cpp/bpb,0.8440077900886536,2026-10-15
+baseline_power_ridge_single_constant_mix-170469,eval/uncheatable_eval/github_python/bpb,0.8165931105613708,2026-10-15
+baseline_power_ridge_single_constant_mix-170469,eval/uncheatable_eval/wikipedia_english/bpb,1.3286073207855225,2026-10-15
+baseline_power_ridge_single_constant_mix-170469,eval/uncheatable_eval/bpb,1.1439474821090698,2026-10-15
+baseline_power_ridge_single_constant_mix-170469,data_seed,245,2026-10-15

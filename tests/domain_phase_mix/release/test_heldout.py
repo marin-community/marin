@@ -108,9 +108,11 @@ def test_aggregates_recompute_the_recorded_values(table):
     # The registry records each run's aggregates, row for row with the table. The Qwen3 panel recorded Uncheatable
     # under the fixed rule, except the path-midpoint and RegMix-reference launches, which recorded the BPB-schema-2
     # pooled aggregate, about 0.01 BPB above the fixed weighting of the same components; the Llama panels recorded it
-    # under the legacy weights, within 1e-4 of the fixed rule, and no row copies a legacy record. OlmoBaseEval Easy is
-    # a plain mean in every panel, so it checks each swarm's component join.
+    # under the legacy weights, within 1e-4 of the fixed rule for the registry's components, and no row copies a legacy
+    # record. The run whose components come from W&B pooled its record 3.6e-4 away from the fixed rule; its own test
+    # checks its pull. OlmoBaseEval Easy is a plain mean in every panel, so it checks each swarm's component join.
     runs = tables.read_csv(SRC / "heldout_runs.csv")
+    pulled = runs.training_wandb_run_id.isin(tables.read_csv(heldout.WANDB_PULL, comment="#").training_wandb_run_id)
     complete = {
         objective: table[[f"bpb__{t}" for t in weights]].notna().all(axis=1)
         for objective, weights in naming.task_weights().items()
@@ -124,16 +126,32 @@ def test_aggregates_recompute_the_recorded_values(table):
     assert np.allclose(
         table.bpb__uncheatable[fixed], runs.uncheatable_bpb[fixed], rtol=0, atol=tables.FIXED_RULE_TOLERANCE
     )
-    legacy = ~qwen & complete["uncheatable"] & runs.uncheatable_bpb.notna()
+    legacy = ~qwen & ~pulled & complete["uncheatable"] & runs.uncheatable_bpb.notna()
     gap = (table.bpb__uncheatable - runs.uncheatable_bpb)[legacy].abs()
     assert gap.max() < 1e-4 and (gap > 0).all()
     obe = runs.table9_macro_bpb.notna()
     assert np.allclose(table.bpb__obe_easy[obe], runs.table9_macro_bpb[obe], rtol=0, atol=1e-12)
-    # Without all of an objective's components, a run takes its fixed-rule record or has no value; one Llama 160M run
-    # records Uncheatable under the legacy weights only and has none.
+    # Without all of an objective's components, a run takes its fixed-rule record or has no value. No run is left with
+    # only a record under other weights.
     assert table.bpb__uncheatable.notna().equals(complete["uncheatable"] | fixed)
     assert table.bpb__obe_easy.notna().equals(complete["obe_easy"] | obe)
-    assert (~complete["uncheatable"] & ~fixed & runs.uncheatable_bpb.notna()).sum() == 1
+    assert not (~complete["uncheatable"] & ~fixed & runs.uncheatable_bpb.notna()).any()
+
+
+def test_wandb_pull_completes_the_run_the_registry_scores_by_its_pooled_aggregate(ctx, table):
+    # One archived Llama 160M run has only its pooled Uncheatable aggregate in the registry. Its seven components and
+    # data seed come from its W&B summary and config, frozen in the repository; it logged no OlmoBaseEval Easy metrics.
+    pull = tables.read_csv(heldout.WANDB_PULL, comment="#")
+    (name,) = pull.training_wandb_run_id.unique()
+    values = pull.set_index("metric").value
+    run = table.set_index("observation_id").loc[ctx.registry.id_for(name)]
+    weights = naming.task_weights()["uncheatable"]
+    components = {t: values[f"eval/uncheatable_eval/{t.removeprefix('uncheatable/')}/bpb"] for t in weights}
+    assert all(run[f"bpb__{t}"] == value for t, value in components.items())
+    fixed = sum(value * weights[t] for t, value in components.items())
+    assert abs(run.bpb__uncheatable - fixed) <= tables.FIXED_RULE_TOLERANCE
+    assert run[[f"bpb__{t}" for t in naming.TASKS[7:]] + ["bpb__obe_easy"]].isna().all()
+    assert run.data_seed == 245 and pd.isna(run.trainer_seed) and not run.components_available
 
 
 def test_weights_and_pool_fractions(table):
