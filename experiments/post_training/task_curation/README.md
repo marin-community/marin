@@ -269,9 +269,6 @@ descriptions and vectors. Keep the vector archive under a persistent retention
 policy: assignment workers read it in bounded batches. Independent Parquet vector
 outputs preserve each embedding stage's data and provenance.
 
-For an existing Iris-managed TEI Harrier pool, use `--embedding-backend tei
---tei-endpoint NAME` and declare the pool's actual `--compute-dtype`. Configure
-the same checkpoint, tokenizer and token limit. Requests reject truncation.
 `--max-workers`, `--worker-cpu` and `--worker-memory` select the Zephyr worker
 pool. Description and embedding deduplication distribute work across that pool,
 independently of source-file count. CPU inference limits PyTorch threads to the

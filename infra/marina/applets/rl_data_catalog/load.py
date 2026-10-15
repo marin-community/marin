@@ -54,6 +54,20 @@ def batches(rows: Iterable[dict[str, Any]]) -> Iterable[str]:
         yield "[" + ",".join(batch) + "]"
 
 
+def insert_rows(query: Query, table: str, columns: str, load_id: str, rows: Iterable[dict[str, Any]]) -> int:
+    """Insert byte-bounded batches and return the stored row count."""
+    names = ", ".join(column.strip().split()[0] for column in columns.split(","))
+    count = 0
+    for body in batches(rows):
+        result = query(
+            f"INSERT INTO {table} (load_id, {names}) SELECT :load_id, {names} "
+            f"FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS row({columns})",
+            {"load_id": load_id, "rows": body},
+        )
+        count += result["row_count"]
+    return count
+
+
 def load_catalog(catalog: CurationCatalog, query: Query) -> dict[str, Any]:
     """Stage, check and select one snapshot using a single operator."""
     started = time.monotonic()
@@ -76,19 +90,7 @@ def load_catalog(catalog: CurationCatalog, query: Query) -> dict[str, Any]:
         return query(sql, parameters)
 
     def insert(table: str, rows: Iterable[dict[str, Any]]) -> int:
-        columns = TABLE_COLUMNS[table]
-        names = ", ".join(column.strip().split()[0] for column in columns.split(","))
-        count = 0
-        for body in batches(rows):
-            result = execute(
-                f"""
-                INSERT INTO atlas_{table} (load_id, {names})
-                SELECT :load_id, {names} FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS row({columns})
-            """,
-                {"load_id": load_id, "rows": body},
-            )
-            count += result["row_count"]
-        return count
+        return insert_rows(execute, f"atlas_{table}", TABLE_COLUMNS[table], load_id, rows)
 
     # Discard abandoned and obsolete staging data before loading; retain the selected snapshot.
     for table in [*TABLE_COLUMNS, "loads"]:

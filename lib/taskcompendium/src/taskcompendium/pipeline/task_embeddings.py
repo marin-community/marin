@@ -126,7 +126,7 @@ def embed_texts(
     output_root: str,
     batch_size: int = 4096,
 ) -> list[str]:
-    """Embed unique text keys with batched FineStore reads and transactional cache writes."""
+    """Return vector Parquet paths for unique text keys, reusing cached vectors."""
     schema = pa.schema([("embedding_key", pa.string()), ("embedding", pa.list_(pa.float32(), spec.dimensions))])
     result = context.execute(
         texts.deduplicate(key=lambda row: row["embedding_key"], num_output_shards=context.max_workers)

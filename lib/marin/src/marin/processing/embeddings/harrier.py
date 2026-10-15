@@ -18,6 +18,7 @@ HARRIER_DIMENSIONS = 1024
 def _harrier_model(
     model: str, revision: str, tokenizer_revision: str, compute_dtype: str, device: str
 ) -> tuple[Any, Any]:
+    # Auto factories select the model/tokenizer classes at runtime; keep inference dependencies optional.
     import torch  # noqa: PLC0415 - optional CPU/GPU inference dependency
     from transformers import AutoModel, AutoTokenizer  # noqa: PLC0415 - optional inference dependency
 

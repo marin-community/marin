@@ -113,6 +113,7 @@ def _describe(
 ) -> SemanticArtifact:
     assert prompt_version == DESCRIPTION_PROMPT_VERSION
     base_url = endpoint.base_url or resolve_glm_base_url(endpoint.relay_job)
+    # Resolve credentials during execution so they never enter the artifact identity.
     submit = partial(
         chat_output,
         OpenAIChatClient(base_url, os.environ[GLM_BULK_TOKEN_ENV], timeout=GLM_REQUEST_TIMEOUT),

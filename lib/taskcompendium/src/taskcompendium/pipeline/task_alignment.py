@@ -28,6 +28,8 @@ from taskcompendium.pipeline.curriculum_alignment import (
 from taskcompendium.pipeline.semantics import DescriptionStatus
 from taskcompendium.pipeline.task_embeddings import EmbeddingSpec, text_record
 
+PREVIEW_CHARACTERS = 8192
+
 
 class TaskAlignment(BaseModel):
     source_id: str
@@ -116,9 +118,9 @@ def _align_batches(
                 },
                 description_status=row["status"],
                 description=row["description"],
-                task_preview=instructions[:8192],
+                task_preview=instructions[:PREVIEW_CHARACTERS],
                 instruction_characters=len(instructions),
-                preview_truncated=len(instructions) > 8192,
+                preview_truncated=len(instructions) > PREVIEW_CHARACTERS,
                 matches=assigned,
             )
             counters.current_stage().update_counter("alignment/tasks", 1)

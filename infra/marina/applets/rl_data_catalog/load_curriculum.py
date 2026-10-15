@@ -16,7 +16,7 @@ from finestore.rl.curriculum import AlignmentRelease
 from marina.client import DEFAULT_MARINA_URL, marina_request
 from rigging.filesystem.storage_path import StoragePath
 
-from infra.marina.applets.rl_data_catalog.load import Query, batches
+from infra.marina.applets.rl_data_catalog.load import Query, insert_rows
 
 TABLE_COLUMNS = {
     "sources": "source_id TEXT, declaration JSONB, family TEXT, alignment JSONB",
@@ -78,17 +78,7 @@ def load_curriculum(release_uri: str, query: Query) -> dict[str, Any]:
         return query(sql, parameters)
 
     def insert(table: str, rows: Iterable[dict]) -> int:
-        columns = TABLE_COLUMNS[table]
-        names = ", ".join(column.strip().split()[0] for column in columns.split(","))
-        count = 0
-        for body in batches(rows):
-            result = execute(
-                f"INSERT INTO curriculum_{table} (load_id, {names}) SELECT :load_id, {names} "
-                f"FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS row({columns})",
-                {"load_id": load_id, "rows": body},
-            )
-            count += result["row_count"]
-        return count
+        return insert_rows(execute, f"curriculum_{table}", TABLE_COLUMNS[table], load_id, rows)
 
     for table in ("matches", "tasks", "ancestors", "nodes", "sources", "loads"):
         execute(

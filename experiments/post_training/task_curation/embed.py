@@ -14,7 +14,6 @@ from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from marin.execution.lazy import ArtifactStep, run
 from marin.processing.embeddings.harrier import HARRIER_DIMENSIONS, HARRIER_MODEL, HARRIER_REVISION, HarrierEmbedder
-from marin.processing.embeddings.tei import TeiEmbeddingClient
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.semantics import DescriptionModel
@@ -47,8 +46,7 @@ from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURR
 @click.option("--base-url")
 @click.option("--relay-job", default=DEFAULT_GLM_RELAY_JOB)
 @click.option("--review-concurrency", type=click.IntRange(1, 64), default=16)
-@click.option("--embedding-backend", type=click.Choice(["cpu", "gpu", "tei"]), required=True)
-@click.option("--tei-endpoint", help="Iris-registered TEI pool using the selected Harrier revision and token limit.")
+@click.option("--embedding-backend", type=click.Choice(["cpu", "gpu"]), required=True)
 @click.option("--compute-dtype", type=click.Choice(["float32", "bfloat16", "float16"]), required=True)
 @click.option(
     "--max-tokens",
@@ -84,7 +82,6 @@ def main(
     relay_job,
     review_concurrency,
     embedding_backend,
-    tei_endpoint,
     compute_dtype,
     max_tokens,
     max_workers,
@@ -109,8 +106,6 @@ def main(
             curated.append((row["source_id"], row["root"]))
     if len({name for name, _ in curated}) != len(curated):
         raise click.UsageError("Each curated source ID must occur once")
-    if embedding_backend == "tei" and not tei_endpoint:
-        raise click.UsageError("TEI embedding requires --tei-endpoint")
     spec = EmbeddingSpec(
         model=HARRIER_MODEL,
         revision=HARRIER_REVISION,
@@ -119,19 +114,15 @@ def main(
         max_tokens=max_tokens,
         compute_dtype=compute_dtype,
     )
-    embedder = (
-        HarrierEmbedder(
-            model=spec.model,
-            revision=spec.revision,
-            tokenizer_revision=spec.tokenizer_revision,
-            dimensions=spec.dimensions,
-            max_tokens=spec.max_tokens,
-            compute_dtype=spec.compute_dtype,
-            device="cpu" if embedding_backend == "cpu" else "cuda",
-            cpu_threads=max(1, int(worker_cpu)),
-        )
-        if embedding_backend != "tei"
-        else TeiEmbeddingClient(tei_endpoint, spec.dimensions, truncate=False)
+    embedder = HarrierEmbedder(
+        model=spec.model,
+        revision=spec.revision,
+        tokenizer_revision=spec.tokenizer_revision,
+        dimensions=spec.dimensions,
+        max_tokens=spec.max_tokens,
+        compute_dtype=spec.compute_dtype,
+        device="cpu" if embedding_backend == "cpu" else "cuda",
+        cpu_threads=max(1, int(worker_cpu)),
     )
     runtime = CampaignRuntime()
     with ExitStack() as scope:
