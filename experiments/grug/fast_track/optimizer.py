@@ -393,7 +393,7 @@ KDA_BETA_LR_MULT = 2.0
 # and the ``[N, K, D]`` taps must not fall into the MuonH matrix catch-all.
 _ADAM_LEAVES = re.compile(
     r"(?:^|\.)(value_embed|ve_lambda|ve_gate|bigram_gate_[wb]|bigram_gate_[ab]_lr|qk_mult|attn_res_partial_scale"
-    r"|attn_res_stream_mix_(?:w|alpha|b)|attn_res_stream_conv\.\d+)$"
+    r"|attn_res_stream_mix_(?:w|alpha|b)|attn_res_stream_conv(?:_scalar)?\.\d+)$"
 )
 
 

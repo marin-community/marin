@@ -552,7 +552,7 @@ def _cast_to_compute(mp: jmp.Policy, model: Transformer) -> Transformer:
     unit's weights at a time, so the step never holds a compute copy (or its gradient) of every layer's weights.
     ``PARAM_DTYPE_LEAVES`` always stay in the param dtype."""
     compute = jax.tree_util.tree_map_with_path(
-        lambda path, c, p: p if getattr(path[-1], "name", None) in PARAM_DTYPE_LEAVES else c,
+        lambda path, c, p: p if any(getattr(k, "name", None) in PARAM_DTYPE_LEAVES for k in path) else c,
         mp.cast_to_compute(model),
         model,
     )
