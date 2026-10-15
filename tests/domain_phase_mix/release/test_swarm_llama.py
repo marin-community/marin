@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from experiments.domain_phase_mix.release import context, naming, paths
-from experiments.domain_phase_mix.release.configs import swarm_llama
+from experiments.domain_phase_mix.release.configs import heldout, swarm_llama
 
 pytestmark = pytest.mark.skipif(
     not (paths.RO / "60m_39bucket_checkpoint_audit_20260724").exists(), reason="archived swarm sources absent"
@@ -50,24 +50,29 @@ def _rounds_to(value: float, cell: str) -> bool:
 
 def test_160m_rows_and_components(out):
     t = out["swarm_llama_160m_1p2b"]
-    assert len(t) == 242 and t.observation_id.is_unique and t.mixture_id.is_unique
-    assert t.fit_inclusion.all()
+    assert len(t) == 281 + 10 and t.observation_id.is_unique
+    assert t.fit_inclusion.sum() == 281 and t[t.fit_inclusion].mixture_id.is_unique
     assert t.components_available.sum() >= 200
     with_components = t[t.components_available]
     assert np.allclose(with_components.bpb__obe_easy, with_components.bpb__obe_easy_source, rtol=0, atol=1e-6)
-    assert t.design_kind.value_counts().to_dict() == {"sampled": 238, "baseline": 4}
-    assert t.data_seed.notna().all() and (t.trainer_seed == 0).all()  # seeds from the launch manifest
+    assert t.design_kind.value_counts().to_dict() == {"sampled": 238, "deletion": 39, "repeat": 10, "baseline": 4}
+    assert (t.fit_inclusion == (t.design_kind != "repeat")).all()
+    # Seeds come from the launch manifests; none of the deletions' launch is among the sources.
+    launched = t[t.design_kind.isin(["sampled", "baseline"])]
+    assert launched.data_seed.notna().all() and (launched.trainer_seed == 0).all()
+    assert t.loc[t.design_kind == "deletion", ["data_seed", "trainer_seed"]].isna().all().all()
 
 
 def test_200m_rows_and_components(out):
     t = out["swarm_llama_200m_6b"]
-    assert len(t) == 280 and t.observation_id.is_unique
+    assert len(t) == 280 + 10 and t.observation_id.is_unique
     # 240 runs trained for the single-phase swarm, plus the 39 deletions and the stratified baseline, whose native
     # evaluations the parity panel carries.
-    assert t.components_available.sum() == 280
+    assert t.fit_inclusion.sum() == 280 and t.components_available.all()
     with_components = t[t.components_available]
     assert np.allclose(with_components.bpb__obe_easy, with_components.bpb__obe_easy_source, rtol=0, atol=1e-6)
-    assert t.design_kind.value_counts().to_dict() == {"sampled": 238, "deletion": 39, "baseline": 3}
+    assert t.design_kind.value_counts().to_dict() == {"sampled": 238, "deletion": 39, "repeat": 10, "baseline": 3}
+    assert (t.fit_inclusion == (t.design_kind != "repeat")).all()
     # The July panel replaced the proportional run's targets by the mean of 11 proportional runs; the table keeps the
     # run's own evaluation.
     native = pd.read_csv(swarm_llama.PARITY_200 / "single_phase_table9_wide.csv").set_index("run_name")
@@ -75,7 +80,7 @@ def test_200m_rows_and_components(out):
     expected = native.native_table9_macro_bpb["singleavg_baseline_proportional"]
     assert np.allclose(proportional.bpb__obe_easy, expected, rtol=0, atol=1e-12)
     # The stratified baseline is a two-phase swarm run whose launch left no manifest in the sources.
-    assert t.run_label[t.data_seed.isna()].tolist() == ["baseline_stratified"]
+    assert t.run_label[t.trainer_seed.isna()].tolist() == ["baseline_stratified"]
 
 
 @pytest.mark.skipif(not APPENDIX.exists(), reason="paper folder absent")
@@ -97,6 +102,8 @@ def test_setup_columns_match_the_paper(out):
         batch = int(_cells(appendix, "Batch (sequences)")[column])
         context_length = int(_cells(appendix, "Context length")[column].replace(",", ""))
         assert t.train_steps.iloc[0] * batch * context_length == t.train_tokens.iloc[0]
+        assert int(_cells(appendix, "Fit swarm (runs)")[column]) == t.fit_inclusion.sum()
+        assert int(_cells(appendix, "Proportional repeats")[column]) == (t.design_kind == "repeat").sum()
 
 
 def test_weights_sum_to_one_and_legacy_aggregates(out):
@@ -116,14 +123,46 @@ def test_observation_ids_key_on_hashed_training_run_names(ctx, out):
     assert not set(small.observation_id) & set(large.observation_id)
     audit = pd.read_csv(swarm_llama.AUDIT_160 / "fit_single_phase.csv").set_index("paired_run_name")
     hashed = audit.checkpoint_root.str.rsplit("/", n=1).str[-1]  # `singleavg_run_00125-9ca4a6`
-    assert (small.observation_id == small.run_label.map(hashed).map(ctx.registry.id_for)).all()
-    # An export the 200M swarm's builder wrote independently of the sources the exporter reads.
-    scores = pd.read_csv(
-        paths.RO
-        / "one_phase_swarm_scores_export_300m_20260630/one_phase_augmented_fit_panel_uncheatable_table9_scores_300m.csv"
-    )
-    hashed = scores.set_index(scores.run_name.str.removeprefix("singleavg_")).training_wandb_id
-    assert (large.observation_id == large.run_label.map(hashed).map(ctx.registry.id_for)).all()
+    fit = small[small.run_label.isin(hashed.index)]
+    assert len(fit) == 242 and (fit.observation_id == fit.run_label.map(hashed).map(ctx.registry.id_for)).all()
+    # The held-out table keys the deletions on the run ids its registry records, so each deletion has one id.
+    registry = pd.read_csv(heldout.EXPANDED / "heldout_runs.csv")
+    deletions = registry[registry.row_id.str.startswith("60m::pctrl:p60_del_")].training_wandb_run_id
+    assert set(small.observation_id[small.design_kind == "deletion"]) == set(deletions.map(ctx.registry.id_for))
+    # Exports the 200M swarm's builder wrote independently of the sources the exporter reads.
+    scores = paths.RO / "one_phase_swarm_scores_export_300m_20260630"
+    panel = pd.read_csv(scores / "one_phase_augmented_fit_panel_uncheatable_table9_scores_300m.csv")
+    hashed = panel.set_index(panel.run_name.str.removeprefix("singleavg_")).training_wandb_id
+    fit = large[large.fit_inclusion]
+    assert (fit.observation_id == fit.run_label.map(hashed).map(ctx.registry.id_for)).all()
+    references = pd.read_csv(scores / "proportional_reference_uncheatable_table9_scores_300m.csv")
+    repeats = references[references.panel == "proportional_noise"].wandb_run_id
+    assert set(large.observation_id[large.design_kind == "repeat"]) == set(repeats.map(ctx.registry.id_for))
+
+
+def test_proportional_repeats(out):
+    # Ten runs of the proportional mixture per swarm, outside the fit set as in the Qwen3 table. Their launches set
+    # trainer seeds 10000-10009 and no data seed, so data order follows the trainer seed.
+    for t in out.values():
+        repeats = t[t.design_kind == "repeat"]
+        assert len(repeats) == 10 and not repeats.fit_inclusion.any()
+        assert set(repeats.mixture_id) == set(t.mixture_id[t.run_label == "baseline_proportional"])
+        assert sorted(repeats.trainer_seed) == list(range(10_000, 10_010)) and repeats.data_seed.isna().all()
+
+
+def test_deletions_remove_one_bucket_from_the_proportional_mixture(out):
+    labels = []
+    for t in out.values():
+        weights = t.set_index("run_label")[[f"w__{b}" for b in naming.BUCKETS]]
+        proportional = weights.loc["baseline_proportional"]
+        deletions = weights[weights.index.str.startswith("pctrl_del_")]
+        assert len(deletions) == 39 and deletions.eq(0).sum(axis=1).eq(1).all() and deletions.eq(0).any().all()
+        for _, row in deletions.iterrows():
+            removed = row.index[row == 0][0]
+            expected = (proportional / (1 - proportional[removed])).mask(proportional.index == removed, 0.0)
+            assert np.allclose(row, expected, rtol=0, atol=1e-12)
+        labels.append(set(deletions.index))
+    assert labels[0] == labels[1]  # both swarms label a deletion by its bucket
 
 
 def test_no_internal_strings(out):
