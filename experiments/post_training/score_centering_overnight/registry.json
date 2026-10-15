@@ -2126,8 +2126,8 @@
       "configuration_sha256": "9bec369f0da416230960850d19ffa92f7686f0fd1ccb7cead5e3b709f99bf6d7",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 5,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "80ab1da0b696f059d2571c6b5e35bc884009d42c1e0f026951c07fc7d50ebb1c",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
@@ -2321,8 +2321,8 @@
       "configuration_sha256": "ba700ce6c7a417a78577a4f0314dd2b2e3a9179dd2d3745a772aa48488af2af9",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-tis-s2-main-rno-a2-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 5,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "c01facd0abf242aee84d2b3e7b42b320ff133af711d9764fad2f7a3e35c9454d",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
@@ -2649,7 +2649,41 @@
       "priority_band": 3,
       "bundle_id": "58403cb4d02970589a4b91d6e42ec9b73b421b2e43854da7e65c67799dc94f17",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "h100_nodes": 2,
+      "h100_per_node": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v1/native-window-sc-s0.yaml",
+      "configuration_sha256": "f56705a49234d730ec242c7d2195a6946936df0b3ebfe89c01cd9b721cad4a84",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "712d02a19261fb3157a0a9d9711a61476ba79359acde716956b505d10f3a3098",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-native-window-tis-s2-main-rno-a3-01a126ce",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "h100_nodes": 2,
+      "h100_per_node": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v1/native-window-tis-s2.yaml",
+      "configuration_sha256": "80eb638304b55bd61154b14c62713c85a12c2c2a5d3b9f8250741b9a8a77f98d",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-tis-s2-main-rno-a3-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "2da49426de1b708905eed23c8500345602667532e3f01e52a46f2573ac041f97",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-15T00:17:49.681523+00:00"
+  "observed_at": "2026-10-15T01:16:54.478432+00:00"
 }
