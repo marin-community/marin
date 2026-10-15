@@ -1,0 +1,240 @@
+{
+  "instruction": [
+    {
+      "original": ".agents/projects/starcoder_tpp10/instruction_sweep/results/measurements.csv",
+      "drive_copy": null,
+      "figure": "build_preview.SOURCES['flan_matched']: panel A's matched proxy (sciq_bpb)",
+      "reader": "measurements",
+      "columns": {"run_name": "run_name", "domain": "source_domain", "arm": "arm", "percent": "percent", "trainer_seed": "trainer_seed", "subset_seed": "subset_seed"},
+      "source_domain": "dolmino_flan",
+      "evaluations": {
+        "macro_bpb": "macro_bpb",
+        "paloma_bpb": "paloma_bpb",
+        "arc_easy_bpb": "arc_easy_bpb",
+        "arc_challenge_bpb": "arc_challenge_bpb",
+        "openbookqa_bpb": "openbookqa_bpb",
+        "qasc_bpb": "qasc_bpb",
+        "sciq_bpb": "sciq_bpb",
+        "dolmino_flan_heldout_bpb": "dolmino_flan_heldout_bpb",
+        "wikipedia_english": "eval/uncheatable_eval/wikipedia_english/bpb",
+        "github_python": "eval/uncheatable_eval/github_python/bpb",
+        "github_cpp": "eval/uncheatable_eval/github_cpp/bpb",
+        "bbc_news": "eval/uncheatable_eval/bbc_news/bpb",
+        "arxiv_physics": "eval/uncheatable_eval/arxiv_physics/bpb",
+        "arxiv_computer_science": "eval/uncheatable_eval/arxiv_computer_science/bpb",
+        "ao3_english": "eval/uncheatable_eval/ao3_english/bpb"
+      }
+    },
+    {
+      "original": ".agents/projects/starcoder_tpp10/instruction_sweep/results_target/measurements.csv",
+      "drive_copy": null,
+      "figure": "build_preview.SOURCES['flan_target']: panel A's target (sciq_bpb)",
+      "reader": "measurements",
+      "columns": {"run_name": "run_name", "domain": "source_domain", "arm": "arm", "percent": "percent", "trainer_seed": "trainer_seed", "subset_seed": "subset_seed"},
+      "source_domain": "dolmino_flan",
+      "evaluations": {
+        "macro_bpb": "macro_bpb",
+        "paloma_bpb": "paloma_bpb",
+        "arc_easy_bpb": "arc_easy_bpb",
+        "arc_challenge_bpb": "arc_challenge_bpb",
+        "openbookqa_bpb": "openbookqa_bpb",
+        "qasc_bpb": "qasc_bpb",
+        "sciq_bpb": "sciq_bpb",
+        "dolmino_flan_heldout_bpb": "dolmino_flan_heldout_bpb",
+        "wikipedia_english": "eval/uncheatable_eval/wikipedia_english/bpb",
+        "github_python": "eval/uncheatable_eval/github_python/bpb",
+        "github_cpp": "eval/uncheatable_eval/github_cpp/bpb",
+        "bbc_news": "eval/uncheatable_eval/bbc_news/bpb",
+        "arxiv_physics": "eval/uncheatable_eval/arxiv_physics/bpb",
+        "arxiv_computer_science": "eval/uncheatable_eval/arxiv_computer_science/bpb",
+        "ao3_english": "eval/uncheatable_eval/ao3_english/bpb"
+      }
+    },
+    {
+      "original": ".agents/projects/starcoder_tpp10/instruction_sweep/results_unmatched/measurements.csv",
+      "drive_copy": null,
+      "figure": "build_preview.SOURCES['flan_unmatched']: loaded by build_preview.load_curves, not drawn",
+      "reader": "measurements",
+      "columns": {"run_name": "run_name", "domain": "source_domain", "arm": "arm", "percent": "percent", "trainer_seed": "trainer_seed", "subset_seed": "subset_seed"},
+      "source_domain": "dolmino_flan",
+      "evaluations": {
+        "macro_bpb": "macro_bpb",
+        "paloma_bpb": "paloma_bpb",
+        "arc_easy_bpb": "arc_easy_bpb",
+        "arc_challenge_bpb": "arc_challenge_bpb",
+        "openbookqa_bpb": "openbookqa_bpb",
+        "qasc_bpb": "qasc_bpb",
+        "sciq_bpb": "sciq_bpb",
+        "dolmino_flan_heldout_bpb": "dolmino_flan_heldout_bpb",
+        "wikipedia_english": "eval/uncheatable_eval/wikipedia_english/bpb",
+        "github_python": "eval/uncheatable_eval/github_python/bpb",
+        "github_cpp": "eval/uncheatable_eval/github_cpp/bpb",
+        "bbc_news": "eval/uncheatable_eval/bbc_news/bpb",
+        "arxiv_physics": "eval/uncheatable_eval/arxiv_physics/bpb",
+        "arxiv_computer_science": "eval/uncheatable_eval/arxiv_computer_science/bpb",
+        "ao3_english": "eval/uncheatable_eval/ao3_english/bpb"
+      }
+    },
+    {
+      "original": ".agents/projects/starcoder_tpp10/instruction_sweep/results/analysis.json",
+      "drive_copy": null,
+      "figure": "build_preview.SOURCES['flan_matched_epochs']: the epochs of panel A's matched proxy points",
+      "reader": null,
+      "note": "The export derives every run's epochs from the design's allocation audit; the tests compare them with this file."
+    },
+    {
+      "original": ".agents/projects/starcoder_tpp10/instruction_sweep/results_target/analysis.json",
+      "drive_copy": null,
+      "figure": "build_preview.SOURCES['flan_target_epochs']: the epochs of panel A's target points",
+      "reader": null,
+      "note": "The export derives every run's epochs from the design's allocation audit; the tests compare them with this file."
+    },
+    {
+      "original": "experiments/domain_phase_mix/starcoder_tpp10_assets/design.json",
+      "drive_copy": null,
+      "figure": "plot_alternatives.DESIGN: the pool and token budgets behind the unmatched proxies' epochs and the cap arithmetic",
+      "reader": null,
+      "note": "The repository's TPP-10 design; the export reads it for every domain as domain_sweeps.DESIGN."
+    },
+    {
+      "original": null,
+      "drive_copy": "figure4_cap_policy_drafts/v03/receipt.json",
+      "figure": "build_options.load: analysis.fit_audit['dolmino_flan/matched'].selected, Olmix's fit drawn in panel A",
+      "reader": "olmix_fits",
+      "note": "Drive only, with no original under .agents/projects/starcoder_tpp10: the v03 builder's own output.",
+      "source_domain": "dolmino_flan",
+      "arm": "matched",
+      "evaluation": "sciq_bpb",
+      "columns": {"log_c": "log_c", "coefficients": ["coefficient_domain", "coefficient_web"], "huber_loss": "huber_loss"}
+    }
+  ],
+  "rcqa": [
+    {
+      "original": ".agents/projects/starcoder_tpp10/rcqa_sweep/results/measurements.csv",
+      "drive_copy": null,
+      "figure": null,
+      "reader": "measurements",
+      "columns": {"run_name": "run_name", "domain": "source_domain", "arm": "arm", "percent": "percent", "trainer_seed": "trainer_seed", "subset_seed": "subset_seed"},
+      "source_domain": "wiki_to_rcqa",
+      "evaluations": {
+        "macro_bpb": "macro_bpb",
+        "paloma_bpb": "paloma_bpb",
+        "arc_easy_bpb": "arc_easy_bpb",
+        "arc_challenge_bpb": "arc_challenge_bpb",
+        "openbookqa_bpb": "openbookqa_bpb",
+        "qasc_bpb": "qasc_bpb",
+        "sciq_bpb": "sciq_bpb",
+        "wiki_to_rcqa_heldout_bpb": "wiki_to_rcqa_heldout_bpb",
+        "wikipedia_english": "eval/uncheatable_eval/wikipedia_english/bpb",
+        "github_python": "eval/uncheatable_eval/github_python/bpb",
+        "github_cpp": "eval/uncheatable_eval/github_cpp/bpb",
+        "bbc_news": "eval/uncheatable_eval/bbc_news/bpb",
+        "arxiv_physics": "eval/uncheatable_eval/arxiv_physics/bpb",
+        "arxiv_computer_science": "eval/uncheatable_eval/arxiv_computer_science/bpb",
+        "ao3_english": "eval/uncheatable_eval/ao3_english/bpb"
+      }
+    }
+  ],
+  "arxiv": [
+    {
+      "original": ".agents/projects/starcoder_tpp10/arxiv_sweep/results/measurements.csv",
+      "drive_copy": null,
+      "figure": null,
+      "reader": "measurements",
+      "columns": {"run_name": "run_name", "domain": "source_domain", "arm": "arm", "percent": "percent", "trainer_seed": "trainer_seed", "subset_seed": "subset_seed"},
+      "source_domain": "arxiv_papers",
+      "evaluations": {
+        "macro_bpb": "macro_bpb",
+        "paloma_bpb": "paloma_bpb",
+        "s2orc_bpb": "s2orc_bpb",
+        "wikipedia_english": "eval/uncheatable_eval/wikipedia_english/bpb",
+        "github_python": "eval/uncheatable_eval/github_python/bpb",
+        "github_cpp": "eval/uncheatable_eval/github_cpp/bpb",
+        "bbc_news": "eval/uncheatable_eval/bbc_news/bpb",
+        "arxiv_physics": "eval/uncheatable_eval/arxiv_physics/bpb",
+        "arxiv_computer_science": "eval/uncheatable_eval/arxiv_computer_science/bpb",
+        "ao3_english": "eval/uncheatable_eval/ao3_english/bpb"
+      }
+    }
+  ],
+  "finemath": [
+    {
+      "original": ".agents/projects/starcoder_tpp10/domain_sweeps/target_math_complete_20260912/results/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/receipt.json",
+      "drive_copy": null,
+      "figure": "plot_alternatives.MATH: panel B's matched proxy and target (gsm8k_bpb)",
+      "reader": "math_receipt",
+      "groups": ["finemath_3plus/matched", "finemath_3plus/target"],
+      "columns": {
+        "request.run_name": "run_name",
+        "domain": "source_domain",
+        "request.arm": "arm",
+        "request.percent": "percent",
+        "request.trainer_seed": "trainer_seed",
+        "request.subset_seed": "subset_seed",
+        "request.tokens": "train_tokens",
+        "request.support_sequences": "pool_sequences",
+        "epochs": "domain_epochs"
+      },
+      "source_domain": "finemath_3plus",
+      "evaluations": {
+        "archived_metrics.eval/uncheatable_eval/macro_bpb": "macro_bpb",
+        "archived_metrics.eval/paloma/dolma_100_programing_languages-tpp10/bpb": "paloma_bpb",
+        "archived_metrics.eval/uncheatable_eval/wikipedia_english/bpb": "eval/uncheatable_eval/wikipedia_english/bpb",
+        "archived_metrics.eval/uncheatable_eval/github_python/bpb": "eval/uncheatable_eval/github_python/bpb",
+        "archived_metrics.eval/uncheatable_eval/github_cpp/bpb": "eval/uncheatable_eval/github_cpp/bpb",
+        "archived_metrics.eval/uncheatable_eval/bbc_news/bpb": "eval/uncheatable_eval/bbc_news/bpb",
+        "archived_metrics.eval/uncheatable_eval/arxiv_physics/bpb": "eval/uncheatable_eval/arxiv_physics/bpb",
+        "archived_metrics.eval/uncheatable_eval/arxiv_computer_science/bpb": "eval/uncheatable_eval/arxiv_computer_science/bpb",
+        "archived_metrics.eval/uncheatable_eval/ao3_english/bpb": "eval/uncheatable_eval/ao3_english/bpb",
+        "result.metrics.eval/gsm8k/bpb": "gsm8k_bpb",
+        "result.metrics.eval/math500/bpb": "math500_bpb"
+      }
+    },
+    {
+      "original": ".agents/projects/starcoder_tpp10/domain_sweeps/finemath_unmatched/results/measurements.csv",
+      "drive_copy": null,
+      "figure": "build_preview.SOURCES['math_unmatched']: loaded by build_preview.load_curves, not drawn",
+      "reader": "measurements",
+      "columns": {"run_name": "run_name", "domain": "source_domain", "arm": "arm", "percent": "percent", "trainer_seed": "trainer_seed", "subset_seed": "subset_seed"},
+      "source_domain": "finemath_3plus",
+      "evaluations": {
+        "macro_bpb": "macro_bpb",
+        "paloma_bpb": "paloma_bpb",
+        "wikipedia_english": "eval/uncheatable_eval/wikipedia_english/bpb",
+        "github_python": "eval/uncheatable_eval/github_python/bpb",
+        "github_cpp": "eval/uncheatable_eval/github_cpp/bpb",
+        "bbc_news": "eval/uncheatable_eval/bbc_news/bpb",
+        "arxiv_physics": "eval/uncheatable_eval/arxiv_physics/bpb",
+        "arxiv_computer_science": "eval/uncheatable_eval/arxiv_computer_science/bpb",
+        "ao3_english": "eval/uncheatable_eval/ao3_english/bpb",
+        "gsm8k_bpb": "gsm8k_bpb",
+        "math500_bpb": "math500_bpb"
+      }
+    },
+    {
+      "original": ".agents/projects/starcoder_tpp10/domain_sweeps/native_closeout_20260912/plots/curves.json",
+      "drive_copy": null,
+      "figure": "plot_alternatives.NATIVE: read for its Wikipedia curves, which build_preview discards",
+      "reader": null,
+      "note": "Its FineMath points hold the same metrics as the math receipt's archived_metrics; the Wikipedia sweep is outside this config's four domains."
+    },
+    {
+      "original": "experiments/domain_phase_mix/starcoder_tpp10_assets/design.json",
+      "drive_copy": null,
+      "figure": "plot_alternatives.DESIGN: the pool and token budgets behind the unmatched proxies' epochs and the cap arithmetic",
+      "reader": null,
+      "note": "The repository's TPP-10 design; the export reads it for every domain as domain_sweeps.DESIGN."
+    },
+    {
+      "original": null,
+      "drive_copy": "figure4_cap_policy_drafts/v03/receipt.json",
+      "figure": "build_options.load: analysis.fit_audit['finemath_3plus/matched'].selected, Olmix's fit drawn in panel B",
+      "reader": "olmix_fits",
+      "note": "Drive only, with no original under .agents/projects/starcoder_tpp10: the v03 builder's own output.",
+      "source_domain": "finemath_3plus",
+      "arm": "matched",
+      "evaluation": "gsm8k_bpb",
+      "columns": {"log_c": "log_c", "coefficients": ["coefficient_domain", "coefficient_web"], "huber_loss": "huber_loss"}
+    }
+  ]
+}
