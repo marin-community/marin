@@ -52,6 +52,7 @@ from marin.evaluation.records import EvalRunRecord, RunStatus
 # runs list and history).
 SMOKE_SUFFIX = "-smoke"
 DEFAULT_COHORT = OCTOBER_15_VERSION
+_STEP_SUCCESS = "SUCCESS"
 
 # Presentation grouping of eval columns into suites for the dashboard's column tree. This mirrors the
 # launcher's suite membership (experiments/evaluation/evals.py), which evaldash cannot import: it ships
@@ -209,7 +210,7 @@ def _policy_rejections(
 
 def _gap_reason(record: EvalRunRecord) -> str:
     """Why a record contributes no cell, when the request did not reject it outright."""
-    if record.step_status not in (None, "SUCCESS"):
+    if record.step_status not in (None, _STEP_SUCCESS):
         return f"step {record.step_status.lower()}"
     if record.status == RunStatus.SUCCEEDED:
         return declared_metric_gap(record) or "no metrics recorded"
@@ -218,7 +219,7 @@ def _gap_reason(record: EvalRunRecord) -> str:
 
 def display_status(record: EvalRunRecord) -> str:
     """Use the StepSpec state when its run has not completed successfully."""
-    if record.step_status is None or record.step_status == "SUCCESS":
+    if record.step_status is None or record.step_status == _STEP_SUCCESS:
         return record.status.value
     if record.step_status == "RUNNING":
         return "running"
@@ -227,7 +228,7 @@ def display_status(record: EvalRunRecord) -> str:
 
 def score_eligible(record: EvalRunRecord) -> bool:
     """Whether EvalDash can publish scores from this observed record."""
-    return record.step_status in (None, "SUCCESS")
+    return record.step_status in (None, _STEP_SUCCESS)
 
 
 def dashboard_measurements(records: Iterable[EvalRunRecord]) -> list[Measurement]:
