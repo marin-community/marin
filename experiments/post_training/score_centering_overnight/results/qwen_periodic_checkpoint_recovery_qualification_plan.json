@@ -1,7 +1,7 @@
 {
   "scope": "Bounded real-GPU engineering qualification; no scientific comparison endpoint or new main-source qualification.",
   "source_branch": "experiments/score-centering-resume-eval-01a126ce",
-  "status": "Initial save submitted/controller-confirmed queued on2RNO BATCH nodes; both restore phases remain unsubmitted behind prior-phase native checkpoint gates.",
+  "status": "Initial save completed2updates and passed native checkpoint/optimizer/loader/head/full-response replay gates. Restore phases remain unsubmitted until actual submission is confirmed.",
   "geometry": {
     "cluster": "cw-rno2a",
     "priority": "batch",
@@ -61,7 +61,11 @@
         }
       ],
       "submitted_configuration": "qwen_checkpoint_periodic_recovery_v1/save-detach.yaml",
-      "configuration_sha256": "04e8a019e58c19249334f8eea551548411d89757b9170b828508be3fc21176e5"
+      "configuration_sha256": "04e8a019e58c19249334f8eea551548411d89757b9170b828508be3fc21176e5",
+      "completed_updates": 2,
+      "native_save_phase_passed": true,
+      "native_save_audit": "results/qwen_periodic_checkpoint_save2_native_audit.json.gz",
+      "all_response_grade_replays": 1024
     },
     {
       "phase": "restore2",
@@ -79,7 +83,10 @@
       "final_saved_sampler_completed_updates": 3,
       "controller_confirmed": false,
       "submission_gate": "Previous phase must complete with full native checkpoint/optimizer/loader and frozen-sampler identity audit before this phase may submit.",
-      "prepared_configuration_sha256": "dac9c7a24a8b0e1b9ea97f9035534ee4947d5cea0c07ba8f71c6e70ae68c38a5"
+      "prepared_configuration_sha256": "dac9c7a24a8b0e1b9ea97f9035534ee4947d5cea0c07ba8f71c6e70ae68c38a5",
+      "prepared_detach_configuration": "qwen_checkpoint_periodic_recovery_v1/restore2-detach.yaml",
+      "detach_configuration_sha256": "63b44a6e3972e0b8ee7d8e3571bf37985cf99c492e8f569b07d473dbd651c940",
+      "save_phase_gate_passed": true
     },
     {
       "phase": "restore5",
