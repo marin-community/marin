@@ -319,12 +319,19 @@ Durations are wall-clock seconds.
 | --- | --- | --- |
 | `AttemptStarted` | After validation, before machine acquisition | |
 | `MachineReady` | After task-machine setup; not emitted without a task machine | `duration` |
-| `SessionPrepared` | After `prepare()` | `message_count`, `duration` |
-| `ModelTurnCompleted` | After a model turn passes the token checks | `turn_index`, `stop_reason`, prompt and response token counts (as reported and unchecked under `TraceMode.MESSAGES`), `ModelTurn.metadata`, `duration` |
-| `ToolCallCompleted` | By a session, per tool call that returns an observation | `name`, `observation_bytes`, `duration` |
-| `TransitionCompleted` | After `advance(turn)` | `turn_index`, `done`, `observation_count`, `duration` |
-| `Graded` | After the session's `grade()` returns | `status`, `reward` |
-| `AttemptEnded` | After cleanup, when `run()` returns or raises `RolloutInterrupted` | `stop_reason`, or the interrupted `operation` |
+| `SessionPrepared` | After `prepare()` | first request's `messages` and `options`, `duration` |
+| `ModelTurnCompleted` | After a model turn passes the token checks | `turn_index`, assistant `message`, `stop_reason`, prompt and response token counts (as reported and unchecked under `TraceMode.MESSAGES`), `usage`, `ModelTurn.metadata`, `duration` |
+| `ToolCallCompleted` | By a session, per tool call that returns an observation | `call_id`, `name`, `observation_bytes`, `done`, `duration` |
+| `TransitionCompleted` | After `advance(turn)` | `turn_index`, `done`, `observations`, `reset_conversation`, `duration` |
+| `Graded` | After the session's `grade()` returns | `status`, `reward`, `error`, `failure`, `duration` of output capture and grading |
+| `AttemptEnded` | After cleanup, when `run()` returns or raises `RolloutInterrupted` | `stop_reason`, or the interrupted `operation` and its `error`; `duration` of the whole attempt |
+
+The engine's events carry the conversation: `SessionPrepared` the first request, then for each turn
+`ModelTurnCompleted` the assistant message and `TransitionCompleted` the observations or the new conversation
+of a reset, so an observer can follow the transcript for any session. `TransitionCompleted` reports a reset even
+when the turn or token limit ends the rollout and the engine skips it.
+`ToolCallCompleted` carries per-call timing and outcome; its observation is the `TransitionCompleted` message with
+the same `tool_call_id`. Event fields reference the attempt's own messages, so delivery copies nothing.
 
 Sessions emit their own payloads through `TaskSessionContext.events`, an `EventSink` whose `emit` never blocks; the built-in `shellbox` session emits `ToolCallCompleted`.
 The engine never awaits the observer.

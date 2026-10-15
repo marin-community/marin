@@ -10,7 +10,7 @@ from typing import Any, Protocol
 
 from pydantic import JsonValue
 from shellbox.machine import Machine
-from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import FunctionDefinition, ProviderRequirement
 
 from rolloutengine.spec import LoweredTaskSpec
@@ -211,17 +211,24 @@ class MachineReady:
 
 @dataclass(frozen=True)
 class SessionPrepared:
-    message_count: int
+    """The session returned the first request's ``messages`` and ``options``, including its advertised tools."""
+
+    messages: tuple[dict[str, Any], ...]
+    options: dict[str, Any]
     duration: float
     type: RolloutEventType = field(default=RolloutEventType.SESSION_PREPARED, init=False)
 
 
 @dataclass(frozen=True)
 class ModelTurnCompleted:
+    """A model turn passed the token checks; ``message`` is the assistant message it produced."""
+
     turn_index: int
+    message: dict[str, Any]
     stop_reason: str
     prompt_token_count: int
     response_token_count: int
+    usage: TokenUsage | None
     metadata: dict[str, Any]
     duration: float
     type: RolloutEventType = field(default=RolloutEventType.MODEL_TURN_COMPLETED, init=False)
@@ -229,19 +236,30 @@ class ModelTurnCompleted:
 
 @dataclass(frozen=True)
 class ToolCallCompleted:
-    """A session tool call returned an observation to the model."""
+    """A session tool call returned an observation; ``done`` means the call ended the rollout.
 
+    The observation itself arrives in the turn's ``TransitionCompleted``, keyed by ``call_id``.
+    """
+
+    call_id: str
     name: str
     observation_bytes: int
+    done: bool
     duration: float
     type: RolloutEventType = field(default=RolloutEventType.TOOL_CALL_COMPLETED, init=False)
 
 
 @dataclass(frozen=True)
 class TransitionCompleted:
+    """The session handled a turn and returned ``observations``, or a new conversation in ``reset_conversation``.
+
+    The engine skips a reset when the turn or token limit ends the rollout.
+    """
+
     turn_index: int
     done: bool
-    observation_count: int
+    observations: tuple[dict[str, Any], ...]
+    reset_conversation: tuple[dict[str, Any], ...] | None
     duration: float
     type: RolloutEventType = field(default=RolloutEventType.TRANSITION_COMPLETED, init=False)
 
@@ -250,15 +268,23 @@ class TransitionCompleted:
 class Graded:
     status: Outcome
     reward: float | None
+    error: str | None
+    failure: GradingFailure | None
+    duration: float
     type: RolloutEventType = field(default=RolloutEventType.GRADED, init=False)
 
 
 @dataclass(frozen=True)
 class AttemptEnded:
-    """The attempt returned with ``stop_reason``, or was interrupted during ``operation``."""
+    """The attempt returned with ``stop_reason``, or was interrupted during ``operation`` by ``error``.
+
+    ``duration`` covers the whole attempt, including resource cleanup.
+    """
 
     stop_reason: str | None
     operation: RolloutOperation | None
+    error: str | None
+    duration: float
     type: RolloutEventType = field(default=RolloutEventType.ATTEMPT_ENDED, init=False)
 
 

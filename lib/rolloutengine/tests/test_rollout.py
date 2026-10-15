@@ -1020,10 +1020,20 @@ async def test_shell_and_provider_calls_share_one_dispatch_and_a_done_result_end
             {"role": "assistant", "content": "Not requested."},
         ]
     )
-    record = await engine(model, {"local": FixtureImageFactory()}, providers={"checker:v1": provider}).run(
-        lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
-    )
+    observer = RecordingObserver()
+    record = await RolloutEngine(
+        model.complete, {"local": FixtureImageFactory()}, providers={"checker:v1": provider}, observer=observer
+    ).run(lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime()))
 
+    tool_events = [event.payload for event in observer.events if isinstance(event.payload, ToolCallCompleted)]
+    assert [(event.call_id, event.name, event.done) for event in tool_events] == [
+        ("write", "shell", False),
+        ("rejected", "check", False),
+        ("missing", "lookup", False),
+        ("submit", "check", True),
+    ]
+    transitions = [event.payload for event in observer.events if isinstance(event.payload, TransitionCompleted)]
+    assert transitions[-1].observations[-1] == {"role": "tool", "tool_call_id": "submit", "content": "12\n"}
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["shell", "check"]
     observations = model.requests[1].messages[-3:]
     assert json.loads(observations[0]["content"])["exit_code"] == 0
@@ -1489,12 +1499,18 @@ async def test_token_budget_skips_a_conversation_reset_and_grades_the_last_respo
 
     model = ReplayModel([{"role": "assistant", "content": "12"}] * 3)
     # Each request after a reset charges 3 tokens; after the second, a third would reach the budget of 9.
-    record = await engine(model, sessions={"fixture": lambda _context: Session()}).run(
-        lowered(arithmetic_task(), task_session="fixture", max_total_tokens=9)
-    )
+    observer = RecordingObserver()
+    record = await RolloutEngine(
+        model.complete, {}, sessions={"fixture": lambda _context: Session()}, observer=observer
+    ).run(lowered(arithmetic_task(), task_session="fixture", max_total_tokens=9))
     assert len(model.requests) == 2
     assert record.stop_reason == "budget_reached"
     assert graded == [("assistant", "budget_reached")]
+    # Both transitions report the reset the session returned, including the one the budget skipped.
+    transitions = [event.payload for event in observer.events if isinstance(event.payload, TransitionCompleted)]
+    assert [transition.reset_conversation for transition in transitions] == [
+        ({"role": "user", "content": "Start again."},)
+    ] * 2
 
 
 @pytest.mark.parametrize("usage", [None, TokenUsage(prompt_tokens=4, completion_tokens=1)])
@@ -2349,14 +2365,14 @@ class RecordingObserver:
 
 def shell_turn_payloads(model: ReplayModel) -> list[RolloutEventPayload]:
     """Payloads through the first turn of a rollout whose first response writes the answer file."""
-    observation = model.requests[1].messages[-1]["content"]
+    observation = model.requests[1].messages[-1]
     return [
         AttemptStarted(),
         MachineReady(0.0),
-        SessionPrepared(len(model.requests[0].messages), 0.0),
-        ModelTurnCompleted(0, "stop", 2, 1, {}, 0.0),
-        ToolCallCompleted("shell", len(observation.encode()), 0.0),
-        TransitionCompleted(0, False, 1, 0.0),
+        SessionPrepared(model.requests[0].messages, model.requests[0].options, 0.0),
+        ModelTurnCompleted(0, model.requests[1].messages[-2], "stop", 2, 1, None, {}, 0.0),
+        ToolCallCompleted("write", "shell", len(observation["content"].encode()), False, 0.0),
+        TransitionCompleted(0, False, (observation,), None, 0.0),
     ]
 
 
@@ -2369,15 +2385,21 @@ async def test_observer_receives_ordered_events_for_a_multi_turn_shell_rollout()
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert observer.payloads("arithmetic/3") == [
         *shell_turn_payloads(model),
-        ModelTurnCompleted(1, "stop", 5, 1, {}, 0.0),
-        TransitionCompleted(1, True, 0, 0.0),
-        Graded(Outcome.GRADED, 1.0),
-        AttemptEnded("stop", None),
+        ModelTurnCompleted(1, record.messages[-1], "stop", 5, 1, None, {}, 0.0),
+        TransitionCompleted(1, True, (), None, 0.0),
+        Graded(Outcome.GRADED, 1.0, None, None, 0.0),
+        AttemptEnded("stop", None, None, 0.0),
     ]
     assert asdict(observer.events[-1]) == {
         "run_key": "arithmetic/3",
         "task_id": "arithmetic",
-        "payload": {"stop_reason": "stop", "operation": None, "type": RolloutEventType.ATTEMPT_ENDED},
+        "payload": {
+            "stop_reason": "stop",
+            "operation": None,
+            "error": None,
+            "duration": observer.events[-1].payload.duration,
+            "type": RolloutEventType.ATTEMPT_ENDED,
+        },
     }
 
 
@@ -2399,8 +2421,8 @@ async def test_observer_receives_interrupted_operation_after_grading_completed_t
     # Without a run key, events carry the task id.
     assert observer.payloads("arithmetic") == [
         *shell_turn_payloads(model),
-        Graded(Outcome.GRADED, 1.0),
-        AttemptEnded(None, RolloutOperation.MODEL),
+        Graded(Outcome.GRADED, 1.0, None, None, 0.0),
+        AttemptEnded(None, RolloutOperation.MODEL, repr(ConnectionError("inference server unavailable")), 0.0),
     ]
 
 

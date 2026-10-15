@@ -172,7 +172,9 @@ class _ShellboxTaskSession:
             else:
                 result = await self.tools[call.name].call(call.name, call.arguments)
             self.events.emit(
-                ToolCallCompleted(call.name, len(result.content.encode()), time.monotonic() - started),
+                ToolCallCompleted(
+                    call.call_id, call.name, len(result.content.encode()), result.done, time.monotonic() - started
+                ),
             )
             observations.append(
                 {
