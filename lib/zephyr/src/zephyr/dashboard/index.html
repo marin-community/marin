@@ -582,7 +582,7 @@ function startDashboard() {
       const progress = shard.progress;
       if (progress) {
         const known = progress.input_rows_total !== null;
-        const consumed = known ? (progress.input_rows_completed || 0) : progress.records_in;
+        const consumed = progress.input_rows_completed ?? progress.records_in;
         if (known) {
           const total = progress.input_rows_total;
           const percent = total ? Math.min(100, 100 * consumed / total) : 100;

@@ -325,6 +325,7 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
                 record = {k: record[k] for k in columns if k in record}
             counters.pipeline.update_counter(counters.RECORDS_IN, 1)
             yield record
+            counters.pipeline.update_counter(counters.INPUT_ROWS_COMPLETED, 1)
 
 
 def load_parquet_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:

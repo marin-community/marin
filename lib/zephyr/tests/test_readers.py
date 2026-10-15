@@ -87,6 +87,25 @@ def test_vortex_progress_uses_row_range_and_leaves_filtered_totals_unknown(
     assert reader_counters.get_counters()[counters.INPUT_ROWS_COMPLETED] == len(expected)
 
 
+@pytest.mark.parametrize("loader,extension", [(load_jsonl, "jsonl"), (load_vortex, "vortex")])
+def test_unknown_input_counts_reset_between_files(tmp_path, reader_counters, loader, extension):
+    for size in (5, 2):
+        records = [{"id": index} for index in range(size)]
+        path = tmp_path / f"input-{size}.{extension}"
+        if extension == "vortex":
+            write_vortex_file(records, str(path))
+        else:
+            path.write_bytes(b"\n".join(msgspec.json.encode(record) for record in records))
+        reader = loader(InputFileSpec(path=str(path), filter_expr=col("id") >= 1))
+        first = next(reader)
+        values = reader_counters.get_counters()
+        assert values[counters.INPUT_ROWS_TOTAL] == counters.UNKNOWN_INPUT_ROWS
+        assert values[counters.INPUT_ROWS_COMPLETED] == 0
+        assert [first, *reader] == records[1:]
+        assert reader_counters.get_counters()[counters.INPUT_ROWS_COMPLETED] == size - 1
+    assert reader_counters.get_counters()[counters.RECORDS_IN] == 5
+
+
 def test_load_parquet_plain(tmp_path):
     path = str(tmp_path / "data.parquet")
     _write_test_parquet(path, RECORDS)
