@@ -66,7 +66,10 @@ Ad hoc directories without a Git repository use the same command. Their first
 `release-status` compares recorded source trees, distinguishes local edits, and
 reports `unrecorded` for packages without provenance. Declared shared build inputs
 are included in the comparison; installed runtime dependencies also affect behavior. Source checks are operator
-safeguards; server owner/operator permissions and version checks remain authoritative.
+safeguards; server authentication and version checks remain authoritative. Any
+internal Marina user can update, change the access mode, roll back or archive an
+existing application. Publisher identity records attribution without restricting
+access. Initial named registration and host bindings still require an operator.
 
 For source layouts, manifests, auth, runtime configuration and the first production
 handover, see the [Marina reference](https://github.com/marin-community/marin/blob/main/infra/marina/README.md).

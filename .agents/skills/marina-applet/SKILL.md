@@ -105,6 +105,10 @@ for a disposable preview.
 Use zero for a new declared UUID. Version conflicts mean the live selection changed;
 inspect the new revision before retrying. Do not blindly reread the version and
 retry stale source. Release preserves the access mode unless explicitly changed.
+Any authenticated internal Marina user can update an existing application;
+publisher identity is attribution, not ownership. Mode changes, rollback and
+archive use the same shared access policy. Operators are required only for
+initial named registration and host bindings.
 The default origin is `https://marina.oa.dev`, authenticated through cached Marin
 login or ambient IAP credentials.
 

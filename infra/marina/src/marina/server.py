@@ -336,7 +336,7 @@ def applet_directory(
                 applet.path if applet.name else applet_url(applet.path, applet.mode, applet_origin, public_applet_origin)
             ),
             "kind": "applet",
-            "published_by": applet.owner,
+            "published_by": applet.published_by,
             "version": applet.current_version,
             "mode": applet.mode.value,
         }
@@ -816,9 +816,11 @@ def create_app(config: MarinaConfig) -> ASGIApp:
             raise HTTPException(status_code=503, detail="Marina has no database configured")
         package = await uploaded_applet_package(request)
         try:
-            owner = config.local_publisher or identity_for(request, policy).user_id
+            publisher = config.local_publisher or identity_for(request, policy).user_id
             validate_release(package, None)
-            published = await run_in_threadpool(applet_store.publish, package, owner, mode=mode)
+            published = await run_in_threadpool(
+                applet_store.publish, package, publisher, operators=config.applet_operators, mode=mode
+            )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except AppletForbidden as error:
@@ -837,13 +839,13 @@ def create_app(config: MarinaConfig) -> ASGIApp:
             raise HTTPException(status_code=503, detail="Marina has no database configured")
         package = await uploaded_applet_package(request)
         try:
-            owner = config.local_publisher or identity_for(request, policy).user_id
+            publisher = config.local_publisher or identity_for(request, policy).user_id
             validate_release(package, applet_id)
-            operators = config.applet_operators | ({owner} if config.iap_audience is None else set())
+            operators = config.applet_operators | ({publisher} if config.iap_audience is None else set())
             published = await run_in_threadpool(
                 applet_store.publish,
                 package,
-                owner,
+                publisher,
                 applet_id,
                 base_version,
                 frozenset(operators),
@@ -866,7 +868,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         except AppletNotFound as error:
             raise HTTPException(status_code=404, detail="applet not found") from error
         except AppletForbidden as error:
-            raise HTTPException(status_code=403, detail="only the publisher may update this applet") from error
+            raise HTTPException(status_code=403, detail=str(error)) from error
         except AppletConflict as error:
             raise HTTPException(status_code=409, detail="applet version or registered name conflicts") from error
         return publish_result_response(published, config.applet_origin, config.public_applet_origin)
@@ -922,24 +924,17 @@ def create_app(config: MarinaConfig) -> ASGIApp:
             mode = AppletMode(body["mode"])
         except ValueError as error:
             raise HTTPException(status_code=400, detail="mode must be private or public") from error
-        actor = identity_for(request, policy).user_id
         try:
             await run_in_threadpool(
                 applet_store.set_mode,
                 applet_id,
                 mode,
-                actor,
                 body["base_version"],
-                config.applet_operators,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except AppletNotFound as error:
             raise HTTPException(status_code=404, detail="applet not found") from error
-        except AppletForbidden as error:
-            raise HTTPException(
-                status_code=403, detail="only the publisher or an operator may change this applet's mode"
-            ) from error
         except AppletConflict as error:
             raise HTTPException(status_code=409, detail="applet has a newer current version") from error
         path = f"/a/{applet_id}/"
@@ -964,22 +959,15 @@ def create_app(config: MarinaConfig) -> ASGIApp:
             or not isinstance(body.get("base_version"), int)
         ):
             raise HTTPException(status_code=400, detail="body must contain integer version and base_version")
-        actor = identity_for(request, policy).user_id
         try:
             await run_in_threadpool(
                 applet_store.rollback,
                 applet_id,
                 body["version"],
-                actor,
                 body["base_version"],
-                config.applet_operators,
             )
         except AppletNotFound as error:
             raise HTTPException(status_code=404, detail="applet or revision not found") from error
-        except AppletForbidden as error:
-            raise HTTPException(
-                status_code=403, detail="only the publisher or an operator may roll back this applet"
-            ) from error
         except AppletConflict as error:
             raise HTTPException(status_code=409, detail="applet has a newer current version") from error
         return JSONResponse({"id": str(applet_id), "version": body["version"]})
@@ -989,17 +977,12 @@ def create_app(config: MarinaConfig) -> ASGIApp:
     async def archive_applet(applet_id: uuid.UUID, request: Request) -> Response:
         if applet_store is None:
             raise HTTPException(status_code=404, detail="applet not found")
-        actor = identity_for(request, policy).user_id
         try:
-            await run_in_threadpool(applet_store.archive, applet_id, actor, config.applet_operators)
+            await run_in_threadpool(applet_store.archive, applet_id)
             assert applet_runtime is not None
             await run_in_threadpool(applet_runtime.retain_versions, applet_id, set())
         except AppletNotFound as error:
             raise HTTPException(status_code=404, detail="applet not found") from error
-        except AppletForbidden as error:
-            raise HTTPException(
-                status_code=403, detail="only the publisher or an operator may archive this applet"
-            ) from error
         return Response(status_code=204)
 
     @api.get("/a/{applet_id}", include_in_schema=False)
