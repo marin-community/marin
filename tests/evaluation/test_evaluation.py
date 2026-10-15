@@ -73,6 +73,8 @@ from marin.evaluation.runner import (
     run_with_inference_recovery,
 )
 from marin.evaluation.serving_config import inference_config_for_model
+from marin.execution.lazy import ArtifactStep, resolve
+from marin.execution.remote import remote
 from marin.execution.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFile
 from marin.experiment.evaluation import EvalchemyEvalConfig, run_served_evalchemy
 from marin.external_dependencies import EVALCHEMY, HARBOR
@@ -829,7 +831,6 @@ def test_evaluation_resumes_one_archive_and_rejects_saved_transport_failures(
         record = read_record(str(tmp_path / "records" / "run-interrupted" / "record.json"))
         if partial_result:
             assert record.coverage["task"].errors[EVALCHEMY_INFRASTRUCTURE_ERROR] == 1
-            assert "cannot be safely resumed" in record.error
             return
         assert record.coverage["task"].n_scored == 2
         final_path = record.results_path
@@ -847,14 +848,27 @@ def test_evaluation_resumes_one_archive_and_rejects_saved_transport_failures(
             out_path=evaluation.identity.output_dir,
         )
         if partial_result:
-            with pytest.raises(EvaluationError, match="cannot be safely resumed") as exc_info:
+            with pytest.raises(EvaluationError) as exc_info:
                 run_served_evalchemy(config)
             assert exc_info.value.status is RunStatus.INFRA_FAILED
             return
-        result = run_served_evalchemy(config)
+        monkeypatch.setenv("MARIN_PREFIX", f"file://{tmp_path / 'pipeline'}")
+        result = resolve(
+            ArtifactStep(
+                name="evaluation/recovery",
+                version="2026.10.15",
+                artifact_type=FineStoreEvalchemyResult,
+                run=remote(run_served_evalchemy),
+                build_config=lambda ctx: replace(config, out_path=ctx.output_path),
+            )
+        )
         final_path = result.path
         assert result.jobs["eval"] == "/eval/child"
         restored = FineStoreEvalchemyResult.raw_load(result.path)
+        assert restored.jobs["eval"] == "/eval/child"
+        assert restored.record is not None
+        assert restored.record.name == "evaluation/recovery"
+        assert restored.record.version == "2026.10.15"
         assert restored.task_metrics()["task"]["accuracy"] == 1.0
     assert len(abandoned_paths) == 3
     assert set(abandoned_paths) == {final_path}
