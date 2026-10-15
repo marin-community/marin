@@ -66,8 +66,8 @@ def main() -> None:
         return
 
     judge = load_model_config(args.judge_config)
-    if judge.serve.max_model_len != 131072 or judge.serve.tensor_parallel_size != 8:
-        raise ValueError("replay requires the pinned 131072-token TP8 MiniMax config")
+    if judge.serve.max_model_len != 262144 or judge.serve.tensor_parallel_size != 8:
+        raise ValueError("replay requires the pinned 262144-token TP8 MiniMax config")
     root = Path(__file__).resolve().parents[6]
     evalchemy_pin = external_revision(root / "config/external/evalchemy/pyproject.toml", "evalchemy")
     harbor_pin = external_revision(root / "config/external/harbor/pyproject.toml", "harbor")

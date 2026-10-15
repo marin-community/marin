@@ -36,7 +36,7 @@ Set `TRACKER` to the tracker to update before running the final command. The thr
 
 For newly evaluated models, freeze their sealed OlympiadBench cells in a new source manifest using the same `models` / `benchmarks` schema. Only the selected benchmark is required. Omit `--prior-prefix` when those sources have no previous MiniMax verdicts; the native grader sends all unresolved, nonempty answers to the live judge. Update those cells with `update_tracker --benchmark olympiadbench`, preserving other models and benchmarks. Keep the final analysis pending until these replay outputs are promoted. When refill is active, hold its tracker lock while calling the updater so concurrent state writes cannot replace newly published scores.
 
-To replay the current judged cohort, freeze the tracker, validate every source, and submit the combined replay from the pinned Marin checkout:
+To replay the current judged cohort, freeze the tracker, validate every source, and submit the combined replay from the pinned Marin checkout. The combined replay uses a 262,144-token judge window. Although policy generation is capped at 73,664 tokens, a response tokenized by its source model can expand substantially under MiniMax's tokenizer; the larger judge window keeps the evidence intact and leaves room for the judge label.
 
 ```bash
 CURRENT_SOURCES="$CAMPAIGN/ablations/shared_grader_replay/sources_current_20261015.yaml"
@@ -48,7 +48,7 @@ uv run python -m "$MODULE.freeze_tracker_sources" \
 
 replay_python -m "$MODULE.regrade_minimax" \
   --sources "$CURRENT_SOURCES" \
-  --judge-config "$CAMPAIGN/ablations/olympiadbench_judge/MiniMaxAI-MiniMax-M3-MXFP8-131k.yaml" \
+  --judge-config "$CAMPAIGN/ablations/olympiadbench_judge/MiniMaxAI-MiniMax-M3-MXFP8-262k.yaml" \
   --output-prefix "$CURRENT_OUTPUT"
 
 replay_python -m "$MODULE.update_tracker" \
