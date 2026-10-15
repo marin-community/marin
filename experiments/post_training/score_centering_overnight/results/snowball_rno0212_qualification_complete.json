@@ -1,0 +1,36 @@
+{
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "run_id": "sc-snowball-runtime-qual-rno-noise005-sc-s0-a0-01a126ce",
+  "controller_attempt": 6,
+  "records": 12152,
+  "all_original_grade_replays_passed": true,
+  "native_failures": 0,
+  "grade_discrepancies": 0,
+  "native_train_steps": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "responses_per_training_step": 512,
+  "evaluation_completed_updates": [
+    0,
+    5
+  ],
+  "responses_per_evaluation": 4796,
+  "evaluation_quality_agrees_with_native": true,
+  "record_payloads_sha256": "18f9f8549cab9c14b53a6bf8eaacfdf9ca464fe000bb5b06466f3003335cf008",
+  "native_audit": "snowball_rno0212_qualification.json.gz",
+  "full_response_replay": "snowball_rno0212_full_response_replay.json.gz",
+  "runtime_and_flash_proof": "snowball_rno0212_runtime_proof.json",
+  "checkpoint_control_audit": "snowball_rno0212_checkpoint_control_audit.json.gz",
+  "allocated_h100_hours": 71.90590444444445,
+  "scope": "Completed bounded five-node RNO runtime qualification for frozen0212 only. It does not qualify173 checkpoint recovery or replace scientific1200/130 comparisons.",
+  "evidence_sha256": {
+    "snowball_rno0212_qualification.json.gz": "4b69d32ed32438e1c296b75f82cf0fc444552a992ff14e3b1bef5e118d47aa1c",
+    "snowball_rno0212_full_response_replay.json.gz": "f9fd105e147ee6530fb274c174b5ca4aa3b77d60e70a57dfd227f171e6d07504",
+    "snowball_rno0212_runtime_proof.json": "43cfb4209e418da225c2a421423e2b30dc2863db33483094840a9b84cadcf5fd",
+    "snowball_rno0212_checkpoint_control_audit.json.gz": "73d344a3e2d7fced436a419bb9dc86e691b6ccf86b8a22516fbe98ac81727c5b"
+  }
+}
