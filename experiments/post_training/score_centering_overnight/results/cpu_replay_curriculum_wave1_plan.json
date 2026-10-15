@@ -29,7 +29,44 @@
         "sha256": "7d0edcd077133e4de5b10dee1bcf4c474c3790608c8fa776b679d6e6726ea590",
         "spec_sha256": "96b454c8ac57d2d036d60e302c90ef9c9c7cdf13ece4062cb60ff13d8c18c954",
         "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e"
-      }
+      },
+      "native_submission_confirmed": true,
+      "controller_confirmation": {
+        "job_id": "/romain/score-grader-qwen-curriculum-sc-s1-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "7d0edcd077133e4de5b10dee1bcf4c474c3790608c8fa776b679d6e6726ea590",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-curriculum-sc-s1-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "2befe4f50eed7863",
+        "task_state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792090177189",
+        "finished_at_ms": "",
+        "node_name": "g5b9592",
+        "terminal_reason": ""
+      },
+      "controller_zero_gpu_verified": true,
+      "durable_inputs": [
+        {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-sc-s1-a0-01a126ce/inputs/source-bundle.zip",
+          "bytes": 8581436,
+          "sha256": "7d0edcd077133e4de5b10dee1bcf4c474c3790608c8fa776b679d6e6726ea590",
+          "etag": "\"bb86d104804e616515fa4096c1cd3a5d\""
+        },
+        {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-sc-s1-a0-01a126ce/inputs/spec.json",
+          "bytes": 157760,
+          "sha256": "96b454c8ac57d2d036d60e302c90ef9c9c7cdf13ece4062cb60ff13d8c18c954",
+          "etag": "\"e75f243c7865b199913153b39d75f8d3\""
+        }
+      ]
     },
     {
       "job_id": "/romain/score-grader-qwen-curriculum-sc-s2-a0-01a126ce",
@@ -59,7 +96,44 @@
         "sha256": "4b50bf5276488ca47edc40eeb6852fd625b87c1c47dfe9c3da3b147917ef9fe5",
         "spec_sha256": "2b26b115c06c304b50003fb5f83a7a55f6faba4c6df2d7811d3520a7b55c03ad",
         "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e"
-      }
+      },
+      "native_submission_confirmed": true,
+      "controller_confirmation": {
+        "job_id": "/romain/score-grader-qwen-curriculum-sc-s2-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "4b50bf5276488ca47edc40eeb6852fd625b87c1c47dfe9c3da3b147917ef9fe5",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-curriculum-sc-s2-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "03952e7cc6da0f55",
+        "task_state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792090177189",
+        "finished_at_ms": "",
+        "node_name": "g8364ba",
+        "terminal_reason": ""
+      },
+      "controller_zero_gpu_verified": true,
+      "durable_inputs": [
+        {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-sc-s2-a0-01a126ce/inputs/source-bundle.zip",
+          "bytes": 8581222,
+          "sha256": "4b50bf5276488ca47edc40eeb6852fd625b87c1c47dfe9c3da3b147917ef9fe5",
+          "etag": "\"07bdbbb2a112e19fa06666d7d6cd0cd7\""
+        },
+        {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-sc-s2-a0-01a126ce/inputs/spec.json",
+          "bytes": 157760,
+          "sha256": "2b26b115c06c304b50003fb5f83a7a55f6faba4c6df2d7811d3520a7b55c03ad",
+          "etag": "\"ca22e923d555d8dae85b7624f5450506\""
+        }
+      ]
     },
     {
       "job_id": "/romain/score-grader-qwen-curriculum-tis-s0-a0-01a126ce",
@@ -89,7 +163,44 @@
         "sha256": "dd6baa00b18c9bdd5d0ff59d42f03ec4b8eb8a29c77fcbe669e2f2e041044d09",
         "spec_sha256": "2a9bdbe64d5688300c13c4cbf249ee0056631d8ac314dc7d7f2e84f796e0c10c",
         "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e"
-      }
+      },
+      "native_submission_confirmed": true,
+      "controller_confirmation": {
+        "job_id": "/romain/score-grader-qwen-curriculum-tis-s0-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "dd6baa00b18c9bdd5d0ff59d42f03ec4b8eb8a29c77fcbe669e2f2e041044d09",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-curriculum-tis-s0-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "856c8109200b18c7",
+        "task_state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792090177189",
+        "finished_at_ms": "",
+        "node_name": "g8364ba",
+        "terminal_reason": ""
+      },
+      "controller_zero_gpu_verified": true,
+      "durable_inputs": [
+        {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s0-a0-01a126ce/inputs/source-bundle.zip",
+          "bytes": 8580474,
+          "sha256": "dd6baa00b18c9bdd5d0ff59d42f03ec4b8eb8a29c77fcbe669e2f2e041044d09",
+          "etag": "\"2c763ef12a2fe19847b1845915d68933\""
+        },
+        {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s0-a0-01a126ce/inputs/spec.json",
+          "bytes": 157770,
+          "sha256": "2a9bdbe64d5688300c13c4cbf249ee0056631d8ac314dc7d7f2e84f796e0c10c",
+          "etag": "\"b962adcb3e2474e80f4f36ee27c4594c\""
+        }
+      ]
     }
   ],
   "total_requested_cpu": 96,
@@ -97,6 +208,10 @@
   "total_requested_gpu": 0,
   "maximum_archive_io_workers": 6,
   "first_complete_cpu_replay_proof": "qwen_curriculum300_first_cpu_complete_response_replay.json",
-  "status": "All three full frozen-input validations and actual native Iris bundle preflights pass. Source and grader runner exactly match the completed full CPU case. All three jobs remain unsubmitted pending controller checks and resource announcement.",
-  "native_bundle_validation_passed": true
+  "status": "All3 CPU-only BATCH tasks controller-confirmed running32CPU/64GiB/50GiB each,zeroGPU. All frozen source bundles/specs retained with full readback SHA. Full249984-record replay gates remain pending; additional waves wait for all3 archive download manifests.",
+  "native_bundle_validation_passed": true,
+  "resource_board_ids": [
+    1058,
+    1059
+  ]
 }
