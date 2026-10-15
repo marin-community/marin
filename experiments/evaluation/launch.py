@@ -270,7 +270,7 @@ def _resolve_definitions(
                     record_ref=definition.record_ref_for(config, runtime_task_limit),
                     runtime_descriptor=harbor_runtime_descriptor(config.error_taxonomy.commit, config.runtime_project),
                     executor=definition.executor_for(config, model, runtime_task_limit),
-                    endpoint_route=EndpointRoute.PROVIDED,
+                    endpoint_route=EndpointRoute.CAPABILITY,
                     secret_env=dict(definition.secret_env_for(config)),
                 ),
             )
