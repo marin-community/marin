@@ -86,13 +86,15 @@ class SkyRLRolePlan:
     def num_nodes(self) -> int:
         if self.colocate_all:
             return self.policy_num_nodes
-        rollout_gpus = (
-            self.num_inference_engines
-            * self.inference_engine_tensor_parallel_size
+        engine_gpus = (
+            self.inference_engine_tensor_parallel_size
             * self.inference_engine_pipeline_parallel_size
             * self.inference_engine_data_parallel_size
         )
-        rollout_nodes = (rollout_gpus + self.policy_num_gpus_per_node - 1) // self.policy_num_gpus_per_node
+        engines_per_node = self.policy_num_gpus_per_node // engine_gpus
+        if not engines_per_node:
+            raise ValueError("each SkyRL inference engine must fit on one node")
+        rollout_nodes = (self.num_inference_engines + engines_per_node - 1) // engines_per_node
         return self.policy_num_nodes + (self.reference_num_nodes or 0) + rollout_nodes
 
 
