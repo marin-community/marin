@@ -480,6 +480,7 @@ def test_inference_recovery_waits_for_tasks_and_routed_endpoint(monkeypatch) -> 
             client=SimpleNamespace(
                 job_status=job_status,
                 list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()],
+                resolve_endpoint=lambda _name: "https://inference.example",
             )
         ),
     )
@@ -518,6 +519,7 @@ def test_inference_recovery_times_out_when_routed_endpoint_stays_unhealthy(monke
                     task_state_counts={TaskState.RUNNING: 1},
                 ),
                 list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()],
+                resolve_endpoint=lambda _name: "https://replacement.example",
             )
         ),
     )
@@ -534,7 +536,7 @@ def test_inference_recovery_times_out_when_routed_endpoint_stays_unhealthy(monke
 
     with pytest.raises(TimeoutError, match=r"did not become healthy within 1800\.0s"):
         _remote_session().wait_until_ready()
-    assert probes == ["https://iris.example/capability/v1/models"]
+    assert probes == ["https://replacement.example/v1/models"]
 
 
 def test_broker_config_rejects_invalid_timeout_ordering() -> None:

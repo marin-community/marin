@@ -15,6 +15,7 @@ from enum import StrEnum
 
 from iris.client.client import Job, JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from rigging.filesystem.storage_path import prefix_join
 
 from marin.evaluation.eval_measurements import task_item_count
 from marin.evaluation.eval_stats import SCORED_COUNT_METRIC, UNGRADED_ERROR
@@ -27,7 +28,16 @@ from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_REQUIREMENT,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
-from marin.evaluation.lm_eval_samples import summarize_native_eval_samples
+from marin.evaluation.inference_recovery import (
+    BACKEND_POLL_SECONDS,
+    InferenceBackendFinished,
+    InferenceUnavailable,
+    check_inference_backend,
+    inference_backend_state,
+    run_with_inference_recovery,
+)
+from marin.evaluation.lm_eval_samples import rebuild_lm_eval_samples, summarize_native_eval_samples
+from marin.evaluation.metric_selection import REPEAT_MEAN_SUFFIX, declared_metric
 from marin.evaluation.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
     EvalTaskRef,
@@ -36,8 +46,9 @@ from marin.evaluation.records import (
 )
 from marin.evaluation.rollouts import normalize_rollouts
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
-from marin.inference.iris import RemoteInferenceSession
-from marin.inference.types import RunningModel
+from marin.inference.backend import OPENAI_API_SUFFIX
+from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
+from marin.inference.types import OpenAIEndpoint, RunningModel
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +236,8 @@ def _run_evalchemy_child(
     config: EvalchemyRunConfig,
     output_dir: str,
     env_vars: Mapping[str, str],
+    *,
+    inference_sessions: tuple[RemoteInferenceSession, ...],
 ) -> str:
     judge_env: dict[str, str] = {}
     if config.judge is not None:
@@ -270,8 +283,21 @@ def _run_evalchemy_child(
         model.endpoint.model,
     )
     try:
-        eval_job.wait(timeout=float("inf"))
+        while True:
+            check_inference_backend(inference_backend_state(inference_sessions))
+            try:
+                eval_job.wait(timeout=BACKEND_POLL_SECONDS)
+                break
+            except TimeoutError:
+                continue
+        check_inference_backend(inference_backend_state(inference_sessions))
+    except (InferenceUnavailable, InferenceBackendFinished):
+        # Cancel the abandoned child; retries use a separate archive.
+        eval_job.cancel()
+        eval_job.wait(timeout=float("inf"), raise_on_failure=False)
+        raise
     except JobFailedError as exc:
+        check_inference_backend(inference_backend_state(inference_sessions))
         raise EvalPipelineError(
             f"Evalchemy job {eval_path} failed: {exc}",
             stage=PipelineStage.EVAL,
@@ -281,24 +307,20 @@ def _run_evalchemy_child(
     return eval_path
 
 
-def run_evalchemy(
+def _run_evalchemy_once(
     model: RunningModel,
     config: EvalchemyRunConfig,
     output_dir: str,
     *,
     env_vars: Mapping[str, str],
+    inference_sessions: tuple[RemoteInferenceSession, ...],
 ) -> EvalchemyOutcome:
-    """Run Evalchemy and read its result and sample tables from FineStore."""
+    """Run one attempt and validate its FineStore artifacts; the executor owns recovery."""
     if not config.tasks:
         raise ValueError("Evalchemy requires at least one task")
     if "://" not in output_dir:
         raise ValueError(f"Evalchemy output_dir {output_dir!r} is not an object-store path")
-    eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
-    return read_evalchemy_outcome(config, output_dir, eval_job)
-
-
-def read_evalchemy_outcome(config: EvalchemyRunConfig, output_dir: str, eval_job: str) -> EvalchemyOutcome:
-    """Validate and normalize saved Evalchemy outputs without repeating inference."""
+    eval_job = _run_evalchemy_child(model, config, output_dir, env_vars, inference_sessions=inference_sessions)
     try:
         result = FineStoreEvalchemyResult(path=output_dir)
         metrics = result.task_metrics()
@@ -372,8 +394,79 @@ class EvalchemyExecutor:
         *,
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
+        sessions = (session,) if judge is None else (session, judge)
+        attempt_dir = output_dir
+
+        def attempt() -> EvaluationOutcome:
+            before = tuple(inference.preemption_count() for inference in sessions)
+            check_inference_backend(inference_backend_state(sessions))
+            try:
+                result: EvaluationOutcome | Exception = self._run_once(session, attempt_dir, env_vars, judge=judge)
+            except InferenceUnavailable:
+                raise
+            except Exception as exc:
+                result = exc
+            incomplete = isinstance(result, Exception) or any(
+                coverage.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for coverage in result.coverage.values()
+            )
+            state = inference_backend_state(sessions)
+            if (
+                incomplete
+                and state is not InferenceBackendState.FINISHED
+                and (
+                    before != tuple(inference.preemption_count() for inference in sessions)
+                    or state is InferenceBackendState.RECOVERING
+                )
+            ):
+                raise InferenceUnavailable("inference interrupted during Evalchemy")
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        def prepare_retry() -> None:
+            nonlocal attempt_dir
+            # Failed requests and source artifacts from abandoned attempts must not enter a retry.
+            attempt_dir = prefix_join(output_dir, f"retries/{uuid.uuid4().hex}")
+
         try:
-            outcome = run_evalchemy(session.model, self.config, output_dir, env_vars=env_vars)
+            return run_with_inference_recovery(attempt, prepare_retry, sessions)
+        except EvaluationError:
+            raise
+        except Exception as exc:
+            raise EvaluationError(
+                f"{type(exc).__name__}: {exc}", status=RunStatus.FAILED, results_path=attempt_dir
+            ) from exc
+
+    def _run_once(
+        self,
+        session: RemoteInferenceSession,
+        output_dir: str,
+        env_vars: Mapping[str, str],
+        *,
+        judge: RemoteInferenceSession | None = None,
+    ) -> EvaluationOutcome:
+        model = session.model
+        if session.jobs:
+            try:
+                address = iris_ctx().client.resolve_endpoint(session.endpoint_name).rstrip("/")
+            except ConnectionError as exc:
+                raise InferenceUnavailable("inference endpoint registration is unavailable") from exc
+            model = RunningModel(
+                endpoint=OpenAIEndpoint(
+                    base_url=f"{address}{OPENAI_API_SUFFIX}",
+                    model=session.model.endpoint.model,
+                    api_key=session.model.endpoint.api_key,
+                ),
+                tokenizer=session.model.tokenizer,
+            )
+        try:
+            outcome = _run_evalchemy_once(
+                model,
+                self.config,
+                output_dir,
+                env_vars=env_vars,
+                inference_sessions=(session,) if judge is None else (session, judge),
+            )
         except EvalPipelineError as exc:
             status = RunStatus.FAILED if exc.stage is PipelineStage.EVAL else RunStatus.ARTIFACT_FAILED
             raise EvaluationError(
@@ -381,11 +474,37 @@ class EvalchemyExecutor:
                 status=status,
                 jobs=exc.jobs,
                 log_tails=exc.log_tails,
+                results_path=output_dir,
             ) from exc
+        metrics = outcome.result.task_metrics()
+        _apply_recovered_metrics(metrics, outcome.recovered_metrics)
+        coverage = _coverage_with_aggregate_counts(outcome.coverage, metrics)
+        canonical_metrics = dict(outcome.canonical_metrics)
+        _apply_recovered_canonical_metrics(canonical_metrics, outcome.recovered_metrics, outcome.tasks)
+        if not metrics:
+            infrastructure_failures = sum(
+                entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for entry in coverage.values()
+            )
+            if not infrastructure_failures:
+                raise EvaluationError(
+                    f"eval finished but no task metrics were readable under {output_dir!r}",
+                    status=RunStatus.ARTIFACT_FAILED,
+                    jobs=outcome.jobs,
+                    coverage=coverage,
+                    results_path=output_dir,
+                )
+            raise EvaluationError(
+                f"eval finished with no successful inference responses under {output_dir!r}",
+                status=RunStatus.INFRA_FAILED,
+                jobs=outcome.jobs,
+                coverage=coverage,
+                results_path=output_dir,
+            )
         return EvaluationOutcome(
             metrics=outcome.metrics,
             canonical_metrics=outcome.canonical_metrics,
             tasks=outcome.tasks,
             jobs=outcome.jobs,
-            coverage=outcome.coverage,
+            coverage=coverage,
+            results_path=output_dir,
         )

@@ -16,7 +16,6 @@ from marin.evaluation.harbor.agent_context import (
 )
 from marin.evaluation.harbor.dataset import local_harbor_dataset_path
 from marin.evaluation.harbor.driver_config import (
-    HarborBackendsUnavailable,
     HarborDatasetKind,
     HarborErrorTaxonomy,
     HarborRuntimeOverlay,
@@ -27,6 +26,7 @@ from marin.evaluation.harbor.runner import (
     _read_trial,
     _read_trials,
 )
+from marin.evaluation.inference_recovery import InferenceUnavailable
 from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind, RunStatus
 from marin.evaluation.runner import EvaluationError
 from marin.external_dependencies import HARBOR
@@ -348,14 +348,16 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
     class RecoveringSession:
         model = _running_model()
         recovery_waits = 0
-        unavailable = True
+        unavailable = False
 
         def backend_state(self) -> InferenceBackendState:
             if self.unavailable:
                 return InferenceBackendState.RECOVERING
             return InferenceBackendState.READY
 
-        def wait_until_ready(self) -> None:
+        def wait_until_ready(self, *, check_dependencies=None) -> None:
+            if check_dependencies is not None:
+                check_dependencies()
             self.recovery_waits += 1
             self.unavailable = False
 
@@ -393,6 +395,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
             )
         interrupted_result = job_dir / "trial-two" / "result.json"
         if driver_starts == 1:
+            session.unavailable = True
             interrupted_result.parent.mkdir(parents=True, exist_ok=True)
             interrupted_result.write_text(
                 json.dumps(
@@ -413,7 +416,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
                 json.dumps({"task_name": "trial-two", "verifier_result": {"rewards": {"reward": 1.0}}})
             )
         if backend_state() is InferenceBackendState.RECOVERING:
-            raise HarborBackendsUnavailable("inference backends are not ready")
+            raise InferenceUnavailable("inference backends are not ready")
 
     monkeypatch.setattr(runner, "run_harbor_driver", run_driver)
 
@@ -468,12 +471,12 @@ def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, 
 
     monkeypatch.setattr(driver_config, "terminate_process_group", terminate)
     monkeypatch.setattr(driver_config, "_driver_command", lambda *_args: ["sleep", "60"])
-    monkeypatch.setattr(driver_config, "_BACKEND_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(driver_config, "BACKEND_POLL_SECONDS", 0.01)
 
     def backend_state() -> InferenceBackendState:
         return InferenceBackendState.RECOVERING
 
-    with pytest.raises(HarborBackendsUnavailable):
+    with pytest.raises(InferenceUnavailable):
         driver_config.run_harbor_driver(
             _validated_config(),
             HarborRuntimeOverlay(
@@ -523,7 +526,7 @@ def test_harbor_driver_classifies_fast_failure_from_unavailable_dependency(tmp_p
     def backend_state() -> InferenceBackendState:
         return InferenceBackendState.RECOVERING
 
-    with pytest.raises(HarborBackendsUnavailable):
+    with pytest.raises(InferenceUnavailable):
         driver_config.run_harbor_driver(
             _validated_config(),
             HarborRuntimeOverlay(

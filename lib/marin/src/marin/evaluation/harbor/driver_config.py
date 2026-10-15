@@ -19,6 +19,7 @@ from rigging.tunnel import terminate_process_group
 
 from marin.evaluation.eval_env import env_vars_from_keys
 from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_LENGTH
+from marin.evaluation.inference_recovery import BACKEND_POLL_SECONDS, check_inference_backend
 from marin.evaluation.records import BenchmarkMetadataRef
 from marin.external_dependencies import HARBOR
 from marin.inference.iris import InferenceBackendState
@@ -26,8 +27,6 @@ from marin.inference.iris import InferenceBackendState
 _TRIAL_DRIVER = Path(__file__).with_name("trial_driver.py")
 _DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
 _OWNER_ONLY_MODE = 0o600
-# Harbor can exhaust a trial's upstream retry budget in tens of seconds when an endpoint disappears.
-_BACKEND_POLL_SECONDS = 5.0
 _DRIVER_TERMINATION_GRACE_SECONDS = 30.0
 _DRIVER_SYSTEM_ENV_KEYS = (
     "CURL_CA_BUNDLE",
@@ -51,10 +50,6 @@ _DRIVER_SYSTEM_ENV_KEYS = (
     "https_proxy",
     "no_proxy",
 )
-
-
-class HarborBackendsUnavailable(RuntimeError):
-    """Harbor stopped because its model backends are not ready."""
 
 
 # Object-store credentials and config the isolated driver needs to write each trial straight to a
@@ -245,27 +240,20 @@ def _stream_driver(
     try:
         while True:
             try:
-                return_code = process.wait(timeout=_BACKEND_POLL_SECONDS)
+                return_code = process.wait(timeout=BACKEND_POLL_SECONDS)
                 break
             except subprocess.TimeoutExpired:
                 if process.poll() is not None:
                     continue
-                _raise_for_backend_state(backend_state())
+                check_inference_backend(backend_state())
     except BaseException:
         terminate_process_group(process, grace_period=_DRIVER_TERMINATION_GRACE_SECONDS)
         raise
 
     if return_code:
-        _raise_for_backend_state(backend_state())
+        check_inference_backend(backend_state())
         exc = subprocess.CalledProcessError(return_code, command)
         raise _driver_failure(exc) from exc
-
-
-def _raise_for_backend_state(state: InferenceBackendState) -> None:
-    if state is InferenceBackendState.RECOVERING:
-        raise HarborBackendsUnavailable("inference backends are not ready")
-    if state is InferenceBackendState.FINISHED:
-        raise RuntimeError("inference backend finished while Harbor was running")
 
 
 def _validated_config(payload: object, path: Path, runtime_project: str) -> ValidatedHarborConfig:
