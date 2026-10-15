@@ -7,6 +7,8 @@
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_REPO, TASKTROVE_REVISION
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
+PDBTHINK_REPO = "open-athena/pdbthink-coordinate-tasks"
+PDBTHINK_REVISION = "3734406cb97b1702844319f9a5d860cbbf8fe660"
 TASKTROVE_INPUT = SourceReference(
     TASKTROVE_REPO,
     TASKTROVE_REVISION,
@@ -24,7 +26,7 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 id="Hugging Face:pdbthink-coordinate-tasks",
-                title="open-athena/pdbthink-coordinate-tasks",
+                title=PDBTHINK_REPO,
                 origin="Hugging Face",
                 family="protein-coordinate-reasoning",
                 tags=("rlvr", "single-turn", "tool-free", "license:apache-2.0"),
@@ -38,10 +40,9 @@ def sources() -> list[RlDataSource]:
                     "at 30% sequence identity were excluded. Apache-2.0; provenance identifies public PDB sources."
                 ),
                 dataset=SourceReference(
-                    "open-athena/pdbthink-coordinate-tasks",
-                    "3734406cb97b1702844319f9a5d860cbbf8fe660",
-                    "https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/tree/"
-                    "3734406cb97b1702844319f9a5d860cbbf8fe660",
+                    PDBTHINK_REPO,
+                    PDBTHINK_REVISION,
+                    f"https://huggingface.co/datasets/{PDBTHINK_REPO}/tree/{PDBTHINK_REVISION}",
                 ),
             )
         ),
