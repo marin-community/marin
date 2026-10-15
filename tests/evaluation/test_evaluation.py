@@ -733,7 +733,9 @@ def test_evaluation_resumes_one_archive_and_rejects_saved_transport_failures(
     monkeypatch.setattr(
         "marin.evaluation.runner.iris_ctx", lambda: SimpleNamespace(client=client, job_id="/orchestrator")
     )
-    monkeypatch.setattr("marin.inference.iris.time.sleep", lambda _seconds: setattr(controller, "ready", True))
+    monkeypatch.setattr(
+        "marin.inference.iris.time", SimpleNamespace(sleep=lambda _seconds: setattr(controller, "ready", True))
+    )
     monkeypatch.setattr("marin.inference.iris.requests.get", lambda *_args, **_kwargs: SimpleNamespace(status_code=200))
     session = replace(
         _remote_session(),
@@ -892,7 +894,7 @@ def test_inference_recovery_stops_when_judge_fails_while_model_is_rebuilding(mon
 
     client = SimpleNamespace(job_status=job_status, list_endpoint_instances=lambda _name: [object()])
     monkeypatch.setattr("marin.inference.iris.iris_ctx", lambda: SimpleNamespace(client=client))
-    monkeypatch.setattr("marin.inference.iris.time.sleep", advance_recovery)
+    monkeypatch.setattr("marin.inference.iris.time", SimpleNamespace(sleep=advance_recovery))
     sessions = tuple(
         replace(_remote_session(), jobs=(SimpleNamespace(job_id=f"/test/{name}"),)) for name in ("model", "judge")
     )
