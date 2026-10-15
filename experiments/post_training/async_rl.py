@@ -93,7 +93,7 @@ RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=2)
 
 @dataclass(frozen=True)
 class TrainingRecipe:
-    """How one policy trains: runtime, topology, parallel geometry and optimizer."""
+    """Topology, parallel geometry, and optimizer settings for one policy."""
 
     strategy: str
     # Nodes the job holds: the policy nodes plus one per engine.

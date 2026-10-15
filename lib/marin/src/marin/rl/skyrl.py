@@ -50,7 +50,7 @@ def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
 
 @dataclass(frozen=True)
 class SkyRLRuntime:
-    """Identity-bearing SkyRL revision and locked dependency profile."""
+    """Identity-bearing SkyRL revision."""
 
     commit: str = field(init=False, default=MARIN_SKYRL.commit)
 

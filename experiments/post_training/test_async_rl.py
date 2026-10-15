@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 from marin.execution.lazy import StepContext
@@ -25,6 +26,18 @@ print(json.dumps({
     "batch_policy": launch.skyrl.trainer.rollout_buffer.batch_policy,
 }))
 """
+
+
+def _compose_launch(path: Path, script: str, *, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+    command = launcher_command_for_test(str(path))
+    # Exercise the production bootstrap without invoking the job-submission CLI.
+    bootstrap = command[: command.index("marinskyrl")]
+    return subprocess.run(
+        [*bootstrap, "python", "-c", script, str(path)],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
 
 
 def test_launcher_builds_complete_smoke_run(monkeypatch) -> None:
@@ -72,14 +85,7 @@ def test_launcher_composes_pinned_rollout_buffer_config(preset, training_type, s
     launch = run.rl.build_config(StepContext.for_fingerprint(run.rl.runtime_args, run.rl.deps))
     path = tmp_path / "launch.yaml"
     path.write_text(launch.launch_config_yaml)
-    command = launcher_command_for_test(str(path))
-    # Exercise the production bootstrap without invoking the job-submission CLI.
-    bootstrap = command[: command.index("marinskyrl")]
-    result = subprocess.run(
-        [*bootstrap, "python", "-c", COMPOSE_LAUNCH, str(path)],
-        capture_output=True,
-        text=True,
-    )
+    result = _compose_launch(path, COMPOSE_LAUNCH)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
         "entrypoint": "skyrl_train.entrypoints.main_base",
@@ -97,14 +103,9 @@ def test_snowball_curriculum_smoke_composes_separate_reference_allocation(tmp_pa
     launch = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
     path = tmp_path / "curriculum.yaml"
     path.write_text(launch.launch_config_yaml)
-    command = launcher_command_for_test(str(path))
-    bootstrap = command[: command.index("marinskyrl")]
-    result = subprocess.run(
-        [
-            *bootstrap,
-            "python",
-            "-c",
-            """
+    result = _compose_launch(
+        path,
+        """
 import json
 import sys
 from cloud.iris.launch_config import load_launch_config
@@ -119,10 +120,6 @@ print(json.dumps({
     "allocated_gpus": launch.iris.allocation.num_nodes * launch.iris.allocation.gpus_per_node,
 }))
 """,
-            str(path),
-        ],
-        capture_output=True,
-        text=True,
         timeout=120,
     )
     assert result.returncode == 0, result.stderr
