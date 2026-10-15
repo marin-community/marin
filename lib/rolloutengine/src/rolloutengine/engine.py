@@ -10,7 +10,7 @@ from dataclasses import asdict, replace
 from typing import Any
 
 from shellbox.machine import MachineFactory
-from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from taskcompendium.grading_result import GradeResult, GradingFailure, GradingPhase, GradingProgress, Outcome
 from taskcompendium.models import SessionGrader, TaskSpec
 from taskcompendium.submission import conversation_messages
 
@@ -50,6 +50,22 @@ def _empty_rollout(task: TaskSpec) -> RolloutData:
         GradeResult(Outcome.UNAVAILABLE, None, "Execution has no final grade"),
         "error",
     )
+
+
+def _expired_verifier_grade(progress: GradingProgress) -> GradeResult:
+    """The grade of an attempt whose verifier deadline expired.
+
+    The deadline covers the verifier machine's preparation as well as the grader's command; which
+    of the two ran out of time decides whether the host or the grader is reported.
+    """
+    if progress.phase is GradingPhase.STAGING:
+        return GradeResult(
+            Outcome.INFRA_ERROR,
+            None,
+            "Verifier deadline expired while preparing the verifier machine",
+            failure=GradingFailure.STAGING,
+        )
+    return GradeResult(Outcome.INFRA_ERROR, None, "Verifier deadline expired", failure=GradingFailure.TIMEOUT)
 
 
 class RolloutEngine:
@@ -117,9 +133,18 @@ class RolloutEngine:
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.START) from error
 
+        progress = GradingProgress()
+
         async def grade(messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult:
             return await _grade_rollout(
-                lowered, messages, machine, self.factories, cleanup, resources, stop_reason=stop_reason
+                lowered,
+                messages,
+                machine,
+                self.factories,
+                cleanup,
+                resources,
+                stop_reason=stop_reason,
+                progress=progress,
             )
 
         session_factories: Mapping[str, TaskSessionFactory] = {
@@ -132,10 +157,10 @@ class RolloutEngine:
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.PREPARE) from error
         resources.push_async_callback(cleanup.run, "session_close", session.close)
-        return await self._run_session(lowered, session, attempt)
+        return await self._run_session(lowered, session, attempt, progress)
 
     async def _run_session(
-        self, lowered: LoweredTaskSpec, session: TaskSession, attempt: asyncio.Timeout
+        self, lowered: LoweredTaskSpec, session: TaskSession, attempt: asyncio.Timeout, progress: GradingProgress
     ) -> RolloutData:
         task = lowered.task
         limits = lowered.session
@@ -301,12 +326,7 @@ class RolloutEngine:
                 raise
             raise RolloutInterrupted(completed, RolloutOperation.ATTEMPT) from TimeoutError("Attempt deadline expired")
         except TimeoutError as error:
-            completed = replace(
-                completed,
-                grade=GradeResult(
-                    Outcome.INFRA_ERROR, None, "Verifier deadline expired", failure=GradingFailure.TIMEOUT
-                ),
-            )
+            completed = replace(completed, grade=_expired_verifier_grade(progress))
             raise RolloutInterrupted(completed, RolloutOperation.GRADE) from error
         except Exception as error:
             raise RolloutInterrupted(completed, RolloutOperation.GRADE) from error

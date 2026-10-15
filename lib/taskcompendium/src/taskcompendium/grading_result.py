@@ -17,11 +17,37 @@ class Outcome(StrEnum):
 
 
 class GradingFailure(StrEnum):
+    """Why a grading ended as ``Outcome.INFRA_ERROR``.
+
+    ``STAGING`` is the verifier machine's preparation failing before the grader's command ran:
+    the staged archive, its unpacking, the grading workspace or the reward files. The other kinds
+    describe commands the task's author chose, the grader's own command, its environment's setup
+    commands and its collect commands, and what the grader wrote.
+    """
+
     TIMEOUT = "timeout"
     MISSING_REWARD = "missing_reward"
     EMPTY_REWARD = "empty_reward"
     INVALID_REWARD = "invalid_reward"
     EXECUTION = "execution"
+    STAGING = "staging"
+
+
+class GradingPhase(StrEnum):
+    STAGING = "staging"
+    GRADER = "grader"
+
+
+@dataclass
+class GradingProgress:
+    """Where a sandbox grading stands, for a caller whose own deadline may expire before the grader runs.
+
+    ``grade_in_sandbox`` sets ``STAGING`` while it starts and prepares the verifier machine and
+    ``GRADER`` once the grader's command starts. A caller that times the whole grading out reads
+    the phase to report the preparation, not the grader, as what ran out of time.
+    """
+
+    phase: GradingPhase = GradingPhase.GRADER
 
 
 @dataclass(frozen=True)
