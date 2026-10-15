@@ -3,9 +3,10 @@
 
 """The cumulative held-out registry: frozen (September 2) and expanded (September 13) cohorts of all three swarms.
 
-The 116 runs of the validation launches key their observation ids on their training run names, read from each run's
-evaluation-metrics URI, because `validation_3e18` exports the same runs; the other 813 runs key on the registry's
-`row_id`.
+Observation ids key on each run's training run name (with its six-hex-digit hash) wherever one is derivable, as the
+other tables do. The 116 validation-launch runs take it from their evaluation-metrics URI, as `validation_3e18` does.
+679 frozen runs take the registry's W&B training run id; for the 187 `delphi_archive::` rows that is the row_id without
+its prefix. The 134 Llama 200M runs record no run name and key on the registry's `row_id`.
 """
 
 import numpy as np
@@ -130,8 +131,10 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     frozen_ids = set(pd.read_csv(paths.require(FROZEN / "heldout_runs.csv")).row_id)
     names = _validation_run_names()
     assert set(runs.row_id) - frozen_ids <= set(names.index), "every expanded run needs its training run name"
+    recorded = runs.training_wandb_run_id
+    assert recorded.dropna().str.fullmatch(run_names.RUN_DIRECTORY.pattern).all(), "W&B run ids must be run names"
 
-    key = runs.row_id.map(names).fillna(runs.row_id)  # training run name where the launch files give one
+    key = runs.row_id.map(names).fillna(recorded).fillna(runs.row_id)  # the training run name wherever one is known
     out = pd.DataFrame({"observation_id": key.map(ctx.registry.id_for)})
     out["swarm"] = runs.panel.map(SWARM)
     out["cohort"] = ["frozen" if r in frozen_ids else "expanded" for r in runs.row_id]

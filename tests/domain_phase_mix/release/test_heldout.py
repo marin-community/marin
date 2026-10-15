@@ -50,6 +50,21 @@ def test_expanded_rows_key_on_training_run_names(ctx, table):
     assert not table.observation_id[expanded.index].isin([ctx.registry.id_for(r) for r in expanded.row_id]).any()
 
 
+def test_frozen_rows_key_on_recorded_run_names(ctx, table):
+    # The registry records the W&B training run id (the run name with its hash) for every frozen run except the 200M
+    # ones; `delphi_archive::` row ids wrap that name.
+    runs = pd.read_csv(SRC / "heldout_runs.csv")
+    archive = runs.row_id.str.startswith("delphi_archive::")
+    stripped = runs.row_id[archive].str.removeprefix("delphi_archive::").map(ctx.registry.id_for)
+    assert archive.sum() == 187 and (table.observation_id[archive] == stripped).all()
+    recorded = runs.training_wandb_run_id.notna()
+    assert recorded.sum() == 679 and (table.cohort[recorded] == "frozen").all()
+    assert (table.observation_id[recorded] == runs.training_wandb_run_id[recorded].map(ctx.registry.id_for)).all()
+    unnamed = (table.cohort == "frozen") & ~recorded
+    assert (table.swarm[unnamed] == "llama_200m_6b").all() and unnamed.sum() == 134
+    assert (table.observation_id[unnamed] == runs.row_id[unnamed].map(ctx.registry.id_for)).all()
+
+
 def test_exposure_ids_split_what_mixture_ids_merge(table):
     frozen = table[(table.swarm == "qwen3_360m_1p6b") & (table.cohort == "frozen")]
     assert frozen.mixture_id.nunique() == 410
