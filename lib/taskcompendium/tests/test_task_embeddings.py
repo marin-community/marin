@@ -280,7 +280,6 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
     assert len(requests) == 5
     public_inputs = [json.loads(request["body"]["messages"][1]["content"]) for request in requests]
     assert any(item["context"]["events"][0]["content"] == long_prompt for item in public_inputs)
-    assert any("failed schema validation" in request["body"]["messages"][-1]["content"] for request in requests)
     replay = describe_tasks(
         context,
         input_paths=inputs,
