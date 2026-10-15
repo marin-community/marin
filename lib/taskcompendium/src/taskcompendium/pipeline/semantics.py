@@ -193,6 +193,7 @@ def _description_request(row: dict, model: DescriptionModel, feedback: str | Non
                 "role": "user",
                 "content": (
                     f"The previous response failed schema validation: {feedback}\n"
+                    f"Copy this task_id exactly: {row['content_hash']}\n"
                     "Return a complete describe_task call with every required field, including status and task_id."
                 ),
             }
@@ -306,7 +307,7 @@ def describe_tasks(
     submit: Callable[[Sequence[dict]], RequestOutput],
     cache_root: str,
     output_root: str,
-    batch_size: int = 16,
+    batch_size: int = 128,
 ) -> list[str]:
     """Describe unique public inputs through the shared cached model transport."""
     schema = pa.schema([("content_hash", pa.string()), *arrow_schema(TaskDescription)])

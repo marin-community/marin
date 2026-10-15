@@ -90,15 +90,18 @@ def publish_alignments(
         Dataset.from_list(tagged)
         .flat_map(_tagged_rows)
         .group_by(key=lambda row: (row["source_id"], row["task_id"]), reducer=_covered_task)
-        .write_parquet(str(StoragePath(output_root) / "tasks/part-{shard:05d}.parquet"), schema=arrow_schema(TaskAlignment)),
+        .write_parquet(
+            str(StoragePath(output_root) / "tasks/part-{shard:05d}.parquet"), schema=arrow_schema(TaskAlignment)
+        ),
         name="publish-curriculum-matches",
     )
     data = Dataset.from_list(result.results).load_parquet()
     counts = context.execute(data.group_by(key=lambda row: row["source_id"], reducer=_source_counts))
     unique = data.deduplicate(key=lambda row: row["content_hash"])
     per_source = context.execute(
-        data.deduplicate(key=lambda row: (row["source_id"], row["content_hash"]))
-        .group_by(key=lambda row: row["source_id"], reducer=_count)
+        data.deduplicate(key=lambda row: (row["source_id"], row["content_hash"])).group_by(
+            key=lambda row: row["source_id"], reducer=_count
+        )
     )
     unique_counts = {row["source_id"]: row["count"] for row in per_source.results}
     global_count = context.execute(unique.count()).results[0]

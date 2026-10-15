@@ -48,7 +48,7 @@ from experiments.post_training.task_curation.curriculum import curriculum_anchor
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
 INPUTS_VERSION = "2026.10.14.1"
-DESCRIPTIONS_VERSION = "2026.10.14.5"
+DESCRIPTIONS_VERSION = "2026.10.14.7"
 EMBEDDINGS_VERSION = "2026.10.14.4"
 ALIGNMENT_VERSION = "2026.10.14.4"
 PUBLICATION_VERSION = "2026.10.14.1"

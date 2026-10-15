@@ -39,9 +39,7 @@ def corpus_conversion_steps(
         step = source.pipeline(source, options)
         declaration = source_declaration(source)
         assert declaration.pipeline is not None
-        identity = canonical_sha256(
-            {"pipeline": declaration.pipeline.model_dump(), "dependencies": step.fingerprint()}
-        )
+        identity = canonical_sha256({"pipeline": declaration.pipeline.model_dump(), "dependencies": step.fingerprint()})
         steps[source.info.id] = replace(
             step,
             name=f"rl-semantics/converted/{source.name}-{identity[:16]}",
