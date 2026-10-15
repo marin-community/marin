@@ -70,7 +70,25 @@
         "node_name": "ge6b2c0",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending.",
+      "archive_downloads_complete": true,
+      "download_manifest": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-sc-s1-a1-01a126ce/download-manifest.json.gz",
+        "bytes": 1369636,
+        "etag": "\"74bbb3cda3b3ed4e98cc84f76436fee2\"",
+        "sha256": "bf25ceb94b123400e4115ef7a0b2ceb3d1518a273d4eee4335923d1f5d84d007",
+        "modified": "2026-10-15T20:11:13+00:00"
+      },
+      "progress_at_download_release": {
+        "job_id": "/romain/score-grader-qwen-curriculum-sc-s1-a1-01a126ce",
+        "started": true,
+        "archive_downloads_complete": true,
+        "records": 32768,
+        "discrepancies": 0,
+        "native_failures": 0,
+        "result_passed": null,
+        "failure_published": false
+      }
     },
     {
       "job_id": "/romain/score-grader-qwen-curriculum-tis-s0-a1-01a126ce",
@@ -141,7 +159,25 @@
         "node_name": "g1cc242",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending.",
+      "archive_downloads_complete": true,
+      "download_manifest": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s0-a1-01a126ce/download-manifest.json.gz",
+        "bytes": 1369734,
+        "etag": "\"8b2327db8028ba02f9f7feb09de7dec2\"",
+        "sha256": "00e27388e3e30a92fe1a8498e66153a5700928de7b17d1ac18db332c0b02516d",
+        "modified": "2026-10-15T20:11:26+00:00"
+      },
+      "progress_at_download_release": {
+        "job_id": "/romain/score-grader-qwen-curriculum-tis-s0-a1-01a126ce",
+        "started": true,
+        "archive_downloads_complete": true,
+        "records": 32768,
+        "discrepancies": 0,
+        "native_failures": 0,
+        "result_passed": null,
+        "failure_published": false
+      }
     },
     {
       "job_id": "/romain/score-grader-qwen-curriculum-tis-s1-a0-01a126ce",
@@ -210,7 +246,25 @@
         "node_name": "g8364ba",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending.",
+      "archive_downloads_complete": true,
+      "download_manifest": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a0-01a126ce/download-manifest.json.gz",
+        "bytes": 1369610,
+        "etag": "\"56f07bbdf8c2f347593ae25f1e7b9b6b\"",
+        "sha256": "7bed3502590aed70d4e070632bba2fb624e3492cd4ff7d8190b1b1bf871cecfc",
+        "modified": "2026-10-15T20:11:49+00:00"
+      },
+      "progress_at_download_release": {
+        "job_id": "/romain/score-grader-qwen-curriculum-tis-s1-a0-01a126ce",
+        "started": true,
+        "archive_downloads_complete": true,
+        "records": 16384,
+        "discrepancies": 0,
+        "native_failures": 0,
+        "result_passed": null,
+        "failure_published": false
+      }
     }
   ],
   "total_requested_cpu": 96,
@@ -218,7 +272,7 @@
   "total_requested_gpu": 0,
   "maximum_archive_io_workers": 6,
   "first_complete_cpu_replay_proof": "qwen_curriculum300_first_cpu_complete_response_replay.json",
-  "status": "All3 wave2 tasks controller-running: terminal-preemption replacements curriculumSCseed1/TISseed0 plus unstartedTISseed1.96CPU/192GiB/0GPU,6archiveIO workers; input packages read back and fullSHA verified. Further waves wait for these downloads.",
+  "status": "All3 wave2 native archive cohorts fully downloaded and identities verified;6IO workers released. Actual original grades continue:32768 SCseed1,32768 TISseed0,16384 TISseed1, allzero discrepancies/native failures as observed20:25UTC. Next bounded wave may submit.",
   "native_bundle_validation_passed": true,
   "resource_board_ids": [
     1064,

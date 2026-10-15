@@ -13,7 +13,7 @@
   "prepare_configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v2/batching-sc-s2-prepare.yaml",
   "all_scientific_fields_unchanged": true,
   "actual_changes": "Fresh run-owned ID and output/archive/group/Ray namespaces only; same frozen source,seed2,model,data,noise,loss,optimizer,batching,capture and1200-update horizon.",
-  "status": "Native submitted and controller-confirmed2 BATCH8-H100 tasks; full1200-update replacement is pending. Fresh namespace avoids the prior archive reconstruction; successful new retention initialization and training remain to be observed.",
+  "status": "Replacement namespace now has actual native learning: physical2 running both ranks,19 updates observed20:29UTC with finite gradient and zero retention timeouts/write errors. Physical0/1 were priority preempted during startup. Same frozen0212 recipe remains full1200; no scientific endpoint yet.",
   "submission_confirmed": true,
   "old_retention_ledger": {
     "present": false
@@ -111,5 +111,32 @@
   ],
   "resource_board_id": 1057,
   "native_submission_log_sha256": "f3b487961042f39124bd7ee575836074d49f0b5e975641b282af8027efcab33c",
-  "controller_confirmation_observed_at": "2026-10-15T18:28:51.405269+00:00"
+  "controller_confirmation_observed_at": "2026-10-15T18:28:51.405269+00:00",
+  "current_controller_attempt": 2,
+  "current_native_progress": {
+    "run": "sc-qwen-transfer-batching-sc-s2-main-rno-a3-01a126ce",
+    "cluster": "cw-rno2a",
+    "priority": "batch",
+    "planned_updates": 1200,
+    "controller_attempt": 2,
+    "task_states": [
+      "3",
+      "3"
+    ],
+    "started_at_ms": 1792094965450,
+    "published_updates": 19,
+    "evaluations": [
+      "eval-00000000.json"
+    ],
+    "last_metrics": {
+      "trainer/global_step": 19,
+      "policy/raw_grad_norm": 0.8132752776145935,
+      "generate/trajectory_retention/publish_timeouts": 0.0,
+      "generate/trajectory_retention/write_errors": 0.0,
+      "timing/step_wall/group_admission": 9.096001380123198
+    }
+  },
+  "current_progress_observation": "2026-10-15T20:29:23.481811+00:00",
+  "additional_terminal_preemption_h100_hours": 4.474284444444445,
+  "latest_preemption_controller_evidence": "new_terminal_controller_retention_20261015T2025.json.gz"
 }
