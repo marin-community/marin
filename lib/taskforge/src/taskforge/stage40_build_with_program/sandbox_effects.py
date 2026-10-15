@@ -22,7 +22,9 @@ exposes no public form of it.
 
 A deadline that expires while a machine starts or a candidate is graded is the host's
 (``InfrastructureCause.SANDBOX_DEADLINE``): a grader command past its own timeout comes back as a
-result, so the deadline only expires when the sandbox is slow to start, transfer or answer.
+result, so the deadline only expires when the sandbox is slow to start, transfer or answer. A grade
+whose grader command timed out (``GradingFailure.TIMEOUT``) is graded once more on fresh machines,
+because one slow exec cannot be told from a slow grader; only the second result counts.
 """
 
 import re
@@ -35,9 +37,10 @@ from rolloutengine.cleanup import _Cleanup
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutInterrupted
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.machines import _prepare_machine
+from rolloutengine.spec import LoweredTaskSpec
 from shellbox.machine import Machine
 from taskcompendium.grader import GraderPackage
-from taskcompendium.grading_result import GradeResult
+from taskcompendium.grading_result import GradeResult, GradingFailure
 from taskcompendium.models import AnswerFormat, AnswerType, EnvironmentRequirements, Source, TaskResource
 
 from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT, grading_environment
@@ -160,6 +163,10 @@ async def grade_candidate(
     counts both as a rejection: the grader step of ``template.standard`` fails an empty answer only
     when it comes back ``GRADED`` above the grader's declared rejection ceiling.
 
+    A grade whose grader command timed out (``GradingFailure.TIMEOUT``) is graded once more on fresh
+    machines and the second grade is returned, so ``INFRA_ERROR`` with that failure means the grader
+    was slow twice.
+
     Raises:
         BuildFailure: ``spec.draft.assemble`` or ``spec.draft.lower`` rejects the provisional task,
             including an ``answer_format`` that cannot carry ``answer_type`` to ``grader``, or
@@ -207,8 +214,17 @@ async def grade_candidate(
         )
     except (ValueError, NotImplementedError) as error:
         raise BuildFailure(f"grade_candidate: {error}") from error
+    engine = RolloutEngine(_CandidateModel(turns), factories)
+    grade = await _graded(engine, lowered)
+    if grade.failure is GradingFailure.TIMEOUT:
+        grade = await _graded(engine, lowered)
+    return grade
+
+
+async def _graded(engine: RolloutEngine, lowered: LoweredTaskSpec) -> GradeResult:
+    """One rollout of ``lowered`` on fresh machines; a host failure or a sandbox deadline raises as infrastructure."""
     try:
-        rollout = await RolloutEngine(_CandidateModel(turns), factories).run(lowered)
+        rollout = await engine.run(lowered)
     except RolloutInterrupted as error:
         failure = infrastructure_failure(error) or deadline_failure(error)
         if failure is None:

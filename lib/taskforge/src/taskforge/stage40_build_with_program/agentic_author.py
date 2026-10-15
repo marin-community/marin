@@ -17,6 +17,15 @@ program that never built in
 the session is refused once, with the loader's result and the reason, and accepted when submitted
 again; an accepted submission ends the loop through ``run_agent``'s ``stop`` callback.
 
+The model sees a build's failure (the step's message, or the crashing program line first) and a
+grade's diagnostics, never a host failure. A ``BuildInfrastructureFailure`` in ``run_build`` or
+``run_grade_candidate`` is run again up to ``HOST_RETRIES`` times with a doubling backoff from
+``HOST_RETRY_BACKOFF`` inside the tool, at once re-raised for a cause in ``HOST_REJECTIONS``, and
+then re-raised like ``ModelUnavailable``: ``author_round`` ends without a record, so the round
+spends no revision and a relaunch hands the workspace to a fresh session. A failed build still
+writes its ``run.json``, ``status: "infrastructure"`` for the host's. A loader child the host
+killed (``LoaderProcessFailed``) raises the same failure with cause ``BUILD_PROCESS``.
+
 ``author_round`` is the author stage. It writes the AUTHORED record from the submitted file's bytes
 into ``rounds/<n>/authored/<k>/`` (``program.py``, ``program.json``, ``author.json``, ``record.json``),
 with ``submit.json``, ``transcript.json`` (every turn: role, tool calls, tool results cut to
@@ -39,6 +48,7 @@ Author turns record under the ledger step ``author`` with ``author_kind``, ``ses
 attributes; every ledger entry of an in-session grade carries ``origin=author_session``.
 """
 
+import asyncio
 import inspect
 import json
 import shutil
@@ -69,10 +79,11 @@ from taskforge.stage30_author.author import (
     Revision,
     RevisionKind,
 )
-from taskforge.stage30_author.load_process import ProgramManifest, load_program_in_process
+from taskforge.stage30_author.load_process import LoaderProcessFailed, ProgramManifest, load_program_in_process
 from taskforge.stage30_author.loader import GRADER_STEP
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
 from taskforge.stage40_build_with_program.glm_author import RECORD_FILE, REVISION_PROMPT, author_messages, sdk_reference
+from taskforge.stage40_build_with_program.infrastructure import HOST_REJECTIONS, InfrastructureCause
 from taskforge.stage40_build_with_program.outputs import GradedCandidate, Grader
 from taskforge.stage40_build_with_program.run import TaskDraft, step_output
 from taskforge.stage40_build_with_program.sandbox_effects import grade_candidate
@@ -119,6 +130,10 @@ MAX_SESSIONS_PER_ROUND = 4
 REPLAY = ReasoningReplay.KEEP
 LOAD_TIMEOUT = 120.0
 """Seconds the default ``ProgramLoader`` gives a program's module body before it refuses the load."""
+HOST_RETRIES = 2
+"""Times ``run_build`` and ``run_grade_candidate`` run a build or grade again after the host failed it."""
+HOST_RETRY_BACKOFF = 5.0
+"""Seconds before the first such retry; each later retry waits twice as long as the one before."""
 SESSION_ORIGIN = "author_session"
 GRADE_STEP = "author_grade"
 """The ``RLEnvBuildContext.step`` of a ``run_grade_candidate`` call."""
@@ -216,20 +231,48 @@ class ProgramBuilder(Protocol):
         ``run_dir``.
 
         Raises what the build raises; the session turns ``BuildFailure`` and other exceptions into text for the
-        model and re-raises ``ModelUnavailable``.
+        model, re-raises ``ModelUnavailable``, and retries a ``BuildInfrastructureFailure`` before re-raising it.
         """
         ...
 
 
 class ProgramLoader(Protocol):
     async def __call__(self, source: str) -> ProgramManifest:
-        """The manifest of ``source``; raises ``ValueError`` with the loader's refusal."""
+        """The manifest of ``source``; raises ``ValueError`` with the loader's refusal, and
+        ``BuildInfrastructureFailure`` when the host failed the load."""
         ...
 
 
 async def load_in_child(source: str) -> ProgramManifest:
-    """The default ``ProgramLoader``: ``load_program_in_process`` under ``LOAD_TIMEOUT``."""
-    return await load_program_in_process(source, wall_timeout=LOAD_TIMEOUT)
+    """The default ``ProgramLoader``: ``load_program_in_process`` under ``LOAD_TIMEOUT``.
+
+    Raises:
+        ValueError: the loader refused ``source``, or its module body ran past ``LOAD_TIMEOUT``.
+        BuildInfrastructureFailure: the loader child exited without a result (``BUILD_PROCESS``).
+    """
+    try:
+        return await load_program_in_process(source, wall_timeout=LOAD_TIMEOUT)
+    except LoaderProcessFailed as error:
+        raise BuildInfrastructureFailure(InfrastructureCause.BUILD_PROCESS, str(error)) from error
+
+
+async def host_retried[T](run: Callable[[], Awaitable[T]]) -> T:
+    """``run()``, run again up to ``HOST_RETRIES`` times while the host fails it.
+
+    The first retry waits ``HOST_RETRY_BACKOFF`` seconds and each later one twice as long as the one before.
+
+    Raises:
+        BuildInfrastructureFailure: the host failed every run, or failed one with a cause in ``HOST_REJECTIONS``,
+            which no retry changes.
+    """
+    for retry in range(HOST_RETRIES):
+        try:
+            return await run()
+        except BuildInfrastructureFailure as failure:
+            if failure.cause in HOST_REJECTIONS:
+                raise
+        await asyncio.sleep(HOST_RETRY_BACKOFF * 2**retry)
+    return await run()
 
 
 @dataclass(frozen=True)
@@ -304,11 +347,9 @@ def _traceback_tail(error: BaseException) -> str:
 
 
 def _failure_text(error: Exception) -> tuple[str, str | None, str]:
-    """A failed in-session build as (status, step, text) for ``run.json`` and the model."""
+    """A failed in-session build the host did not fail, as (status, step, text) for ``run.json`` and the model."""
     if isinstance(error, BuildFailure):
         return "build_failure", error.step, error.message
-    if isinstance(error, BuildInfrastructureFailure):
-        return "infrastructure", None, str(error)
     return "crash", None, _traceback_tail(error)
 
 
@@ -523,10 +564,20 @@ class AuthorSession:
         offset = ledger.stat().st_size if ledger.exists() else 0
         started = time.monotonic()
         record: dict = {"path": raw, "program_digest": program.digest, "invalidate": sorted(invalidate)}
-        try:
+
+        async def built() -> tuple[TaskDraft, GradeResult]:
             draft = await self.build.builder(source, run_dir, invalidate=invalidate)
-            empty = await self._check_empty_answer(draft)
+            return draft, await self._check_empty_answer(draft)
+
+        try:
+            draft, empty = await host_retried(built)
         except ModelUnavailable:
+            raise
+        except BuildInfrastructureFailure as error:
+            record |= {"status": "infrastructure", "step": None, "wall": time.monotonic() - started}
+            record |= {"steps": ledger_steps(ledger, offset), "text": str(error)}
+            _write_json(run_dir / RUN_FILE, record)
+            self.builds.append(record)
             raise
         except Exception as error:
             status, step, text = _failure_text(error)
@@ -601,8 +652,8 @@ class AuthorSession:
         grader = step_output(draft, self.build.store_root, GRADER_STEP, Grader)
         files = [draft_module.file(str(f["path"]), str(f["content"])) for f in _list_argument(arguments, "files")]
         try:
-            grade = await self._grade(draft, grader, str(arguments["reply"]), files)
-        except ModelUnavailable:
+            grade = await host_retried(lambda: self._grade(draft, grader, str(arguments["reply"]), files))
+        except (ModelUnavailable, BuildInfrastructureFailure):
             raise
         except Exception as error:
             return f"grading failed: {_traceback_tail(error)}"
@@ -1117,6 +1168,7 @@ async def author_round(
 
     Raises:
         ModelUnavailable: the model or an in-session build or grade ran out of retries.
+        BuildInfrastructureFailure: the host failed an in-session load, or a build or grade past its retries.
     """
     plan = plan_session(item_dir, round_no, proposal, revision, config)
     rdir = _round_dir(item_dir, round_no)

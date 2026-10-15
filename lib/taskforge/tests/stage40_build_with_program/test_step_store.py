@@ -93,6 +93,19 @@ def test_a_blob_altered_on_disk_is_refused(tmp_path):
         store.load(KEY, "fixtures", Fixture)
 
 
+def test_a_truncated_memo_or_a_blob_of_another_type_is_a_storage_fault(tmp_path):
+    """Both raise an ``OSError``, which the build child reports as a storage fault rather than a program crash."""
+    store = RLEnvBuildStepStore(str(tmp_path), "workpiece-a")
+    store.store(KEY, "fixtures", OUTPUT)
+    with pytest.raises(StoreCorruption, match="does not decode as"):
+        store.load(KEY, "fixtures", Readings)
+
+    memo = tmp_path / "workpieces" / "workpiece-a" / "steps" / "fixtures" / f"{KEY.digest}.json"
+    memo.write_bytes(memo.read_bytes()[:40])
+    with pytest.raises(OSError, match="does not validate"):
+        store.load(KEY, "fixtures", Fixture)
+
+
 @pytest.mark.parametrize("workpiece_id", ["../escape", "a/b"])
 def test_a_workpiece_id_unsafe_as_a_directory_name_is_refused(tmp_path, workpiece_id):
     with pytest.raises(ValueError, match="must match"):

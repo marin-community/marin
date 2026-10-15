@@ -32,8 +32,9 @@ Only errors the program cannot have caused are infrastructure:
   or the closed-machine messages ``sandbox.host_failures`` shares with validation).
 * ``HOST_UNREACHABLE``: a connection to the machine host failed, or the controller answered an RPC
   with a transport, capacity or credential error.
-* ``BUILD_PROCESS``: the child process running the build (``build_process.py``) exited without
-  writing its result, as when its services could not start or the kernel killed it for memory.
+* ``BUILD_PROCESS``: the child process running the build (``build_process.py``) or loading the
+  program (``stage30_author.load_process``) exited without writing its result, as when its
+  services could not start or the kernel killed it for memory.
 
 Everything else is the program's: an image it built or named that fails to build, pull or start,
 a machine spec the backend refuses (``UnsupportedMachineSpec`` or ``ValueError``), an RPC the

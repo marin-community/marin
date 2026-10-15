@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import pytest
 from shellbox.machine import Backend, Command
 from taskcompendium.grader import GraderPackage
-from taskcompendium.grading_result import Outcome
+from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import (
     AnswerFormat,
     AnswerType,
@@ -21,12 +21,20 @@ from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
 from taskforge.spec import draft
 from taskforge.stage40_build_with_program.context import BuildFailure
 from taskforge.stage40_build_with_program.sandbox_effects import build_machine, grade_candidate, publish_image
-from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, shell_grader
+from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, SlowGraderFactory, shell_grader
+from tests.stage40_build_with_program.conftest import FACTORIES
 
 SHELLSIM = draft.requirements(image=None)
 MACHINE = draft.machine(startup_timeout=60)
 PLAIN = PlainText()
 IMAGE = f"registry.example/taskforge-tasks/d00-arithmetic-products-1@sha256:{'1' * 64}"
+FULL_CREDIT = shell_grader(
+    """printf '%s' '{"reward": 1.0}' > /logs/verifier/reward.json\n""",
+    {},
+    environment=draft.grader_environment(None),
+    answer_path=draft.ANSWER_PATH,
+    timeout=60,
+)
 
 READS_REPORT = """passed=false
 if test -f /workspace/report.txt && test "$(cat /workspace/report.txt)" = total=42; then passed=true; fi
@@ -43,6 +51,22 @@ class RecordingImageBuilder:
     async def publish(self, build: DockerBuild, repository: str) -> str:
         self.published.append((build, repository))
         return IMAGE
+
+
+@pytest.mark.parametrize(
+    ("timeouts", "status", "reward", "failure"),
+    [(1, Outcome.GRADED, 1.0, None), (2, Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)],
+    ids=["slow-once", "slow-twice"],
+)
+async def test_a_grader_timeout_is_graded_once_more_on_fresh_machines(context, timeouts, status, reward, failure):
+    """One slow exec cannot be told from a slow grader, so only a second timeout on fresh machines is returned."""
+    slow = SlowGraderFactory(timeouts)
+    on_host = context(factories={**FACTORIES, Backend.DOCKER.value: slow})
+
+    grade = await grade_candidate(on_host, None, FULL_CREDIT, AnswerType.TEXT, PLAIN, "question", "42")
+
+    assert (grade.status, grade.reward, grade.failure) == (status, reward, failure)
+    assert (slow.machines, slow.grader_runs) == (2, 2)
 
 
 @pytest.mark.parametrize("requirements", [SHELLSIM, None], ids=["shellsim", "no-machine"])

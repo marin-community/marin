@@ -8,8 +8,9 @@ import time
 
 import pytest
 
+from taskforge.stage30_author import load_process
 from taskforge.stage30_author.author import program_manifest
-from taskforge.stage30_author.load_process import ProgramManifest, load_program_in_process
+from taskforge.stage30_author.load_process import LoaderProcessFailed, ProgramManifest, load_program_in_process
 from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage40_build_with_program.template import standard
 
@@ -43,3 +44,11 @@ async def test_a_module_body_that_never_returns_is_cut_off_at_the_wall_timeout()
         await load_program_in_process(spinning_program(), wall_timeout=2)
 
     assert time.monotonic() - started < 15
+
+
+async def test_a_child_that_exits_without_a_result_is_a_loader_process_failure(monkeypatch):
+    """The child dies before it writes a result (here its module is missing; in a run, the kernel killed it)."""
+    monkeypatch.setattr(load_process, "MODULE", "taskforge.no_such_loader")
+
+    with pytest.raises(LoaderProcessFailed, match="the program loader process exited with status 1"):
+        await load_program_in_process(inspect.getsource(standard), wall_timeout=60)

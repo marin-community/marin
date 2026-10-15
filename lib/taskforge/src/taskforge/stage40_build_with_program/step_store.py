@@ -23,7 +23,9 @@ A memo holds a step's stored output under one key. The ledger in a later PR call
 entries.
 
 The store writes the blob before the memo, so every memo points at a complete blob, and it
-writes each file to a temporary sibling before renaming it into place. On an object store the
+writes each file to a temporary sibling before renaming it into place. A memo or blob that reads back
+unreadable or altered raises ``StoreCorruption``, an ``OSError``, so a build reports it as the
+storage fault it is rather than as the program's. On an object store the
 rename is a copy and a delete, so a memo costs three requests and appears whole or not at all;
 CI exercises a ``file://`` root, and ``tests/stage40_build_with_program/test_step_store_live.py`` (marker
 ``manual``) runs the same round trip against a bucket. A step's output has to come
@@ -151,7 +153,7 @@ class RLEnvBuildStepStore:
         try:
             memo = _MEMO.validate_json(path.read_bytes())
         except ValidationError as error:
-            raise StoreCorruption(f"Memo {path} of step {name} does not validate") from error
+            raise StoreCorruption(f"Memo {path} of step {name} does not validate: {error}") from error
         return memo, self.read_output(memo, output_type)
 
     def read_output[T](self, memo: RLEnvBuildStepMemo, output_type: type[T]) -> T:
@@ -168,7 +170,7 @@ class RLEnvBuildStepStore:
             return TypeAdapter(output_type).validate_json(content)
         except ValidationError as error:
             raise StoreCorruption(
-                f"Blob {memo.output_digest} of step {memo.name} does not decode as {output_type}"
+                f"Blob {memo.output_digest} of step {memo.name} does not decode as {output_type}: {error}"
             ) from error
 
     def store(self, key: RLEnvBuildStepKey, name: str, output: object) -> RLEnvBuildStepMemo:

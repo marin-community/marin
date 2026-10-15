@@ -41,6 +41,7 @@ from taskforge.stage40_build_with_program.sdk import (
 from taskforge.stage40_build_with_program.step_store import CacheStatus
 from taskforge.stage40_build_with_program.template import standard
 from taskforge.stage50_validate.lowering import lower
+from tests.sandbox.fixture_images import SlowGraderFactory
 from tests.stage40_build_with_program.conftest import FACTORIES, WORKPIECE, SAMPLING, web_tool
 
 # Grader programs in sh, which ShellGraderImageFactory runs for the template's python3 grader command.
@@ -223,6 +224,21 @@ async def test_the_grader_step_keeps_the_declared_rejection_ceiling(context, pro
 
     assert grader.rejection_ceiling == 0.3
     assert "declare rejection_ceiling" in fake_glm.requests[0]["messages"][-2]["content"]
+
+
+async def test_a_grader_that_times_out_twice_fails_the_build_instead_of_going_back_to_the_model(
+    context, proposal, fake_glm
+):
+    slow = SlowGraderFactory(timeouts=2)
+    fake_glm.stream(content=json.dumps(grader_call(GOOD_GRADER)))
+
+    with pytest.raises(BuildFailure, match="the grader timed out on the reference answer twice"):
+        await standard.grader.fn(
+            context(factories={**FACTORIES, Backend.DOCKER.value: slow}), proposal, FIXTURES, SHELLSIM
+        )
+
+    assert len(fake_glm.requests) == 1
+    assert slow.grader_runs == 2
 
 
 def test_a_rejection_ceiling_at_full_credit_is_refused():
