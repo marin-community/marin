@@ -76,6 +76,10 @@ class Cause(StrEnum):
     GRADER_EXECUTION = "grader_execution"
     GRADER_INFRA = "grader_infra"
     """An infrastructure grade with no ``GradingFailure``."""
+    OUTPUT_CAPTURE = "output_capture"
+    """The engine could not capture the task's declared output paths before grading: over the capture
+    budget (1,024 files, 16 MiB), a file over the per-file limit, or a symlink among them. The agent
+    wrote them, so the trial counts against the task and is not retried."""
     INVALID_TASK = "invalid_task"
     """The grader reported the task itself invalid (TaskCompendium ``Outcome.INVALID_TASK``)."""
     VERIFIER_SKIPPED = "verifier_skipped"

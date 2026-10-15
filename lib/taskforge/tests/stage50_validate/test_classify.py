@@ -277,6 +277,32 @@ def test_a_reward_outside_the_graders_score_range_is_an_ungraded_grader_defect(m
     assert isinstance(trial_outcome(solved, task), Graded)
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("Output capture exceeds its file or byte budget"),
+        ValueError("Downloaded files fall outside the declared output paths"),
+        RuntimeError("Download contains an invalid or oversized file: /workspace/out/big.bin"),
+    ],
+    ids=["budget", "outside-declared-paths", "oversized-file"],
+)
+def test_declared_outputs_the_engine_cannot_capture_count_against_the_task(math_task, error):
+    """The agent wrote the files, so the capture failure is the task's, not a retryable grader fault."""
+    task = math_task.task
+    rollout = RolloutData(task.id, (), (), (), (), None, GradeResult(Outcome.UNAVAILABLE, None), "stop")
+    interrupted = RolloutInterrupted(rollout, RolloutOperation.GRADE)
+    interrupted.__cause__ = error
+
+    outcome = trial_outcome(interrupted, task)
+
+    assert isinstance(outcome, Ungraded) and outcome.cause is Cause.OUTPUT_CAPTURE
+    assert not outcome.retryable and outcome.rollout is rollout
+    raised = RolloutInterrupted(rollout, RolloutOperation.GRADE)
+    raised.__cause__ = RuntimeError("verifier exploded")
+    fallback = trial_outcome(raised, task)
+    assert isinstance(fallback, Ungraded) and fallback.cause is Cause.GRADER_RAISED
+
+
 def test_a_token_contract_break_keeps_the_conversation_up_to_the_break(math_task):
     messages = ({"role": "user", "content": "q"}, {"role": "assistant", "content": "a"})
     error = TokenContractBreak("served prompt diverges", turn=1, messages=messages, prefix_length=42)

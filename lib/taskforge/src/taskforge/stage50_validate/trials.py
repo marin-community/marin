@@ -56,6 +56,7 @@ of its trials is one ``MACHINE_UNSUPPORTED`` attempt carrying the refusals.
 
 import asyncio
 import copy
+import base64
 import dataclasses
 import json
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
@@ -381,8 +382,15 @@ def outcome_json(outcome: Outcome) -> bytes:
         }
     )
     record["cleanup_errors"] = cleanup_errors(outcome)
-    record["rollout"] = None if outcome.rollout is None else dataclasses.asdict(outcome.rollout)
+    record["rollout"] = None if outcome.rollout is None else _rollout_record(outcome.rollout)
     return json.dumps(record, indent=1).encode()
+
+
+def _rollout_record(rollout: RolloutData) -> dict[str, Any]:
+    """``rollout`` as JSON: the captured output files, bytes keyed by path, are base64 strings."""
+    record = dataclasses.asdict(rollout)
+    record["outputs"] = {path: base64.b64encode(content).decode() for path, content in rollout.outputs.items()}
+    return record
 
 
 def write_evidence(path: Path, payload: bytes) -> None:
