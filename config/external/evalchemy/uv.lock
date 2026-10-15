@@ -496,7 +496,7 @@ wheels = [
 [[package]]
 name = "evalchemy"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/evalchemy.git?rev=958cdb8019b7a4c8432fe85eb9572538ceb75950#958cdb8019b7a4c8432fe85eb9572538ceb75950" }
+source = { git = "https://github.com/marin-community/evalchemy.git?rev=abe104f405e7e964f9f5a27f96e622744d4ca076#abe104f405e7e964f9f5a27f96e622744d4ca076" }
 dependencies = [
     { name = "bespokelabs-curator" },
     { name = "datasets" },
@@ -1248,7 +1248,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "evalchemy", git = "https://github.com/marin-community/evalchemy.git?rev=958cdb8019b7a4c8432fe85eb9572538ceb75950" }]
+requires-dist = [{ name = "evalchemy", git = "https://github.com/marin-community/evalchemy.git?rev=abe104f405e7e964f9f5a27f96e622744d4ca076" }]
 
 [[package]]
 name = "marin-finestore"
