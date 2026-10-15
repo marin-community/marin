@@ -12,6 +12,10 @@ or frontend bundles. A restart loads the same selected packages from Postgres.
 See [Building Marina apps](../../docs/references/marina.md) for product guidance and
 [RL Data Atlas](../../docs/references/rl-data-atlas.md) for Atlas's separate data loader.
 
+The [Python playground](applets/python_playground/README.md) provides trusted Python
+execution with saved files and report previews. Its README covers local previews,
+storage limits, examples, the agent pane and project uploads.
+
 ## Source and package layout
 
 Maintained sources live in `apps/<name>/` or `applets/<name>/`. Both directories use
