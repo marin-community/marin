@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from experiments.domain_phase_mix.release import keys, naming, paths, run_names, tables
+from experiments.domain_phase_mix.release import keys, naming, paths, run_names, tables, wandb_pulls
 from experiments.domain_phase_mix.release.context import ExportContext
 
 EXPANDED = paths.RO / "single_phase_heldout_benchmark_expanded_20260913"
@@ -64,11 +64,10 @@ FIXED_RULE_PANEL = "delphi_3e18_39bucket"
 # aggregate is its pooled one, 0.008 to 0.011 BPB above the fixed weighting of the same runs' components
 # (two_phase_many/uncheatable_objective.py); the expanded registry copied it unchecked.
 POOLED_SOURCES = ("validation::path_midpoints", "validation::regmix_reference")
-# Uncheatable components and data seeds that the registry lacks, frozen from W&B run summaries and configs: rows of
-# (training_wandb_run_id, metric, value, pulled_at). The pooled aggregate (WANDB_POOLED) ties each pull to the run's
-# registry record, which holds the same W&B value at full precision.
+# Uncheatable components and data seeds that the registry lacks, frozen from W&B run summaries and configs
+# (`wandb_pulls`). The pooled aggregate ties each pull to the run's registry record, which holds the same W&B value at
+# full precision.
 WANDB_PULL = paths.REPO / "experiments/domain_phase_mix/release/configs/heldout_wandb_components_20261015.csv"
-WANDB_POOLED = "eval/uncheatable_eval/bpb"
 # Result folders of the validation launches in the expanded cohort, from the launch registry of
 # collect_delphi_3e18_validation_results_20260906.py, which the expanded registry's builder read.
 VALIDATION_LAUNCHES = {
@@ -166,24 +165,10 @@ def _launch_seeds() -> pd.DataFrame:
     names = uris.map(run_names.training_run_name_from_uri)
     validation_seeds = pd.DataFrame([run_names.seeds_from_uri(uri) for uri in uris], index=names, columns=SEEDS)
     repeats = tables.read_csv(paths.require(UNIMAX8_REPEATS)).set_index("run")[SEEDS]
-    pulled = _wandb_pulls().data_seed.to_frame().assign(trainer_seed=np.nan)
+    pulled = wandb_pulls.read(WANDB_PULL).data_seed.to_frame().assign(trainer_seed=np.nan)
     seeds = pd.concat([validation_seeds, repeats, pulled])
     assert seeds.index.is_unique, "a training run appears in two launch records"
     return seeds
-
-
-def _wandb_pulls() -> pd.DataFrame:
-    """WANDB_PULL, one row per pulled run indexed by its training run name: `bpb__<task>` for the seven Uncheatable
-    corpora, `pooled` (the run's pooled Uncheatable aggregate) and `data_seed`."""
-    long = tables.read_csv(paths.require(WANDB_PULL), comment="#")
-    wide = long.pivot(index="training_wandb_run_id", columns="metric", values="value")  # raises on a repeated pair
-    pulls = wide[[WANDB_POOLED, "data_seed"]].set_axis(["pooled", "data_seed"], axis=1)
-    components = wide.drop(columns=[WANDB_POOLED, "data_seed"])
-    components.columns = [f"bpb__{naming.task_public(c)}" for c in components.columns]
-    uncheatable = [f"bpb__{t}" for t in naming.TASKS if t.startswith("uncheatable/")]
-    assert sorted(components.columns) == sorted(uncheatable), f"pulled metrics {sorted(components.columns)}"
-    assert components.notna().all().all() and pulls.notna().all().all(), "every pulled run needs every metric"
-    return pd.concat([components[uncheatable], pulls], axis=1)
 
 
 def _with_pulled_components(out: pd.DataFrame, runs: pd.DataFrame, run_keys: pd.Series) -> pd.DataFrame:
@@ -192,7 +177,7 @@ def _with_pulled_components(out: pd.DataFrame, runs: pd.DataFrame, run_keys: pd.
     Raises unless each pulled run is a held-out run without registry components for those tasks whose recorded
     Uncheatable aggregate is the pulled pooled value.
     """
-    pulls = _wandb_pulls()
+    pulls = wandb_pulls.read(WANDB_PULL)
     pulled = run_keys[run_keys.isin(pulls.index)]
     if sorted(pulled) != sorted(pulls.index):
         raise ValueError(f"pulled runs that are not held-out runs: {sorted(set(pulls.index) - set(pulled))}")
