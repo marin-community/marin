@@ -49,6 +49,7 @@ watch(
   },
   { deep: true, flush: "sync" },
 );
+/** Return true once the current edits are saved (or unchanged), and false after a save failure. */
 async function saveProject() {
   clearTimeout(saveTimer);
   if (savingPromise) return savingPromise;
@@ -127,7 +128,6 @@ async function upload(event) {
     for (const file of event.target.files) {
       const path = file.webkitRelativePath || file.name;
       if (!validPath(path)) throw new Error(`Invalid path: ${path}`);
-      if (file.size > 5 * 1024 * 1024) throw new Error(`${path} exceeds 5 MiB`);
       if (project.value.files.some((f) => f.path === path))
         throw new Error(
           `${path} already exists; delete it before uploading a replacement`,
