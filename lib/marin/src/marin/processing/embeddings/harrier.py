@@ -40,6 +40,7 @@ class HarrierEmbedder:
     compute_dtype: str
     device: Literal["cpu", "cuda"]
     batch_size: int = 16
+    batch_token_limit: int = 16_384
     cpu_threads: int = 4
 
     def embed(self, texts: list[str]) -> np.ndarray:
@@ -52,21 +53,33 @@ class HarrierEmbedder:
         tokenizer, model = _harrier_model(
             self.model, self.revision, self.tokenizer_revision, self.compute_dtype, self.device
         )
-        order = sorted(range(len(texts)), key=lambda index: len(texts[index]))
+        encoded = tokenizer(texts, padding=False, truncation=False)
+        token_lengths = np.asarray([len(tokens) for tokens in encoded["input_ids"]])
+        if int(token_lengths.max()) > self.max_tokens:
+            raise ValueError(f"Harrier input exceeds the configured {self.max_tokens}-token limit")
+        order = np.argsort(token_lengths, kind="stable")
         vectors = []
-        for start in range(0, len(texts), self.batch_size):
-            # Similar lengths avoid padding short instructions to an unrelated long task.
-            batch = [texts[index] for index in order[start : start + self.batch_size]]
-            inputs = tokenizer(batch, padding=True, truncation=False, return_tensors="pt")
+        start = 0
+        while start < len(texts):
+            end = start + 1
+            while end < min(start + self.batch_size, len(texts)):
+                padded_tokens = int(token_lengths[order[end]]) * (end - start + 1)
+                if padded_tokens > self.batch_token_limit:
+                    break
+                end += 1
+            positions = order[start:end]
+            inputs = tokenizer.pad(
+                {key: [values[index] for index in positions] for key, values in encoded.items()},
+                return_tensors="pt",
+            )
             lengths = inputs["attention_mask"].sum(dim=1)
-            if int(lengths.max()) > self.max_tokens:
-                raise ValueError(f"Harrier input exceeds the configured {self.max_tokens}-token limit")
             inputs = inputs.to(self.device)
             positions = (lengths - 1).to(self.device)
             with torch.inference_mode():
                 hidden = model(**inputs, use_cache=False).last_hidden_state
                 pooled = hidden[torch.arange(len(lengths), device=self.device), positions].float()
                 vectors.append(torch.nn.functional.normalize(pooled, dim=1).cpu().numpy())
+            start = end
         result = np.concatenate(vectors)
         if result.shape != (len(texts), self.dimensions):
             raise ValueError(f"Unexpected Harrier embedding shape: {result.shape}")

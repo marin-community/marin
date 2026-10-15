@@ -135,9 +135,13 @@ class DescriptionTransport:
 @dataclass(frozen=True)
 class EmbeddingProvider:
     calls: str
+    fail_after: int | None = None
 
     def embed(self, texts):
-        with Path(self.calls).open("a") as stream:
+        calls = Path(self.calls)
+        if self.fail_after is not None and calls.exists() and len(calls.read_text().splitlines()) >= self.fail_after:
+            raise RuntimeError("Embedding provider unavailable")
+        with calls.open("a") as stream:
             for text in texts:
                 stream.write(json.dumps(text) + "\n")
         return np.asarray([[1.0, float(len(text) % 7), 0.5] for text in texts], dtype=np.float32)
@@ -145,6 +149,24 @@ class EmbeddingProvider:
 
 def rows(paths):
     return [row for path in paths for row in load_parquet(path)]
+
+
+def test_embedding_retry_reuses_completed_cache_batches(tmp_path, spec):
+    records = [text_record(f"Count case {i}.", spec) for i in range(520)]
+    cache = str(tmp_path / "vectors-cache")
+    provider = EmbeddingProvider(str(tmp_path / "failed-calls.jsonl"), fail_after=256)
+    arguments = dict(texts=Dataset.from_list(records), spec=spec, cache_root=cache)
+    with ZephyrContext(max_workers=1, max_shard_failures=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+        with pytest.raises(ZephyrWorkerError):
+            embed_texts(context, **arguments, embedder=provider, output_root=str(tmp_path / "failed"))
+        successful = [json.loads(line) for line in Path(provider.calls).read_text().splitlines()]
+        assert len(successful) == 256
+        recovered = EmbeddingProvider(str(tmp_path / "recovered-calls.jsonl"))
+        result = embed_texts(context, **arguments, embedder=recovered, output_root=str(tmp_path / "recovered"))
+    assert len(rows(result)) == 520
+    retried = [json.loads(line) for line in Path(recovered.calls).read_text().splitlines()]
+    assert len(retried) == 264
+    assert not set(successful).intersection(retried)
 
 
 def test_oversized_task_excerpts_preserve_operations_and_valid_utf8():

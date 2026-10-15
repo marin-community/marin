@@ -109,7 +109,7 @@ def embed_texts(
     embedder: TextEmbedder,
     cache_root: str,
     output_root: str,
-    batch_size: int = 4096,
+    batch_size: int = 256,
 ) -> list[str]:
     """Return vector Parquet paths for unique text keys, reusing cached vectors."""
     schema = pa.schema([("embedding_key", pa.string()), ("embedding", pa.list_(pa.float32(), spec.dimensions))])

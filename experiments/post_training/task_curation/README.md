@@ -281,8 +281,10 @@ outputs preserve each embedding stage's vectors and provenance.
 
 All stages use the driver's shared `--max-workers`, `--worker-cpu`,
 `--worker-memory` and `--coordinator-memory` options. Embedding defaults to four
-CPU cores and 8 GB per worker, with inference batches of 16. PyTorch threads
-follow the requested CPU count. Description and vector deduplication distribute
+CPU cores and 8 GB per worker. Inference batches contain at most 16 texts and
+16,384 padded tokens, sorted by token length. Vectors are checkpointed every 256
+texts so retries reuse completed work. PyTorch threads follow the requested CPU
+count. Description and vector deduplication distribute
 work across the pool independently of source-file count.
 
 The catalog declares subject-domain and task-mechanic routing facets. Matching
@@ -327,11 +329,13 @@ The manifest includes completed source roots, immutable source-manifest hashes,
 conversion counts and the full registry inventory. Inventory entries without
 converters remain visible but have no converted tasks.
 
-Resume from that corpus with the same driver and shared model/cache options:
+Resume from that corpus with the same driver and shared model/cache options.
+On CoreWeave, disable Xet downloads to avoid cold-cache download stalls:
 
 ```bash
 uv run iris --cluster=marin job run --target-cluster YOUR-CW-REGION \
   --extra cpu --cpu 0.5 --memory 2GB --timeout 43200 \
+  -e HF_HUB_DISABLE_XET 1 \
   -- python -m experiments.post_training.task_curation.driver \
   --corpus s3://YOUR-REGIONAL-BUCKET/corpus/corpus.json \
   --embed publication --review-cache s3://YOUR-REGIONAL-BUCKET/semantic-cache \
