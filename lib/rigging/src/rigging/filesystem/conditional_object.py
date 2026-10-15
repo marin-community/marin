@@ -32,8 +32,7 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 _MAX_READ_ATTEMPTS = 8
 _MAX_S3_READ_ATTEMPTS = 8
-_S3_READ_BACKOFF_INITIAL = 0.1
-_S3_READ_BACKOFF_MAXIMUM = 5.0
+_S3_READ_BACKOFF = ExponentialBackoff(initial=0.1, maximum=5.0, factor=2.0, jitter=0.25)
 _MAX_S3_WRITE_ATTEMPTS = 8
 _S3_WRITE_BACKOFF_INITIAL = 1.0
 _S3_WRITE_BACKOFF_MAXIMUM = 10 * 60.0
@@ -255,12 +254,7 @@ class S3ConditionalObject:
             head,
             retryable=_is_retryable_s3_conditional_read,
             max_attempts=_MAX_S3_READ_ATTEMPTS,
-            backoff=ExponentialBackoff(
-                initial=_S3_READ_BACKOFF_INITIAL,
-                maximum=_S3_READ_BACKOFF_MAXIMUM,
-                factor=2.0,
-                jitter=0.25,
-            ),
+            backoff=_S3_READ_BACKOFF,
             operation=f"conditional S3 version read {self.path}",
         )
         if response is None:
@@ -284,12 +278,7 @@ class S3ConditionalObject:
             get,
             retryable=_is_retryable_s3_conditional_read,
             max_attempts=_MAX_S3_READ_ATTEMPTS,
-            backoff=ExponentialBackoff(
-                initial=_S3_READ_BACKOFF_INITIAL,
-                maximum=_S3_READ_BACKOFF_MAXIMUM,
-                factor=2.0,
-                jitter=0.25,
-            ),
+            backoff=_S3_READ_BACKOFF,
             operation=f"conditional S3 read {self.path}",
         )
 
