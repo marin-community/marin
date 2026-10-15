@@ -26,6 +26,11 @@ Harbor's native SOTOPIA agent enforces the declared `model_info.max_input_tokens
 the evaluated model at each request. It counts the rendered prompt with the serving endpoint's
 tokenizer and caps the reply to the remaining context. Counterpart and evaluator calls use
 their independently configured models and are not subject to this evaluated-model budget.
+The verifier's default reward is the arithmetic mean of all seven normalized SOTOPIA
+dimensions. It also records the evaluated agent's emitted character count. Run
+`analysis/sotopia_length_control/rank.py` over the complete cohort to obtain the reportable
+length-controlled overall score. Goal achievement remains an explicit non-default dataset
+generation mode.
 
 Evalchemy's 30-minute timeout starts separately for each request after it acquires a client
 concurrency slot. A transport attempt may use that full window; retrying does not extend it.

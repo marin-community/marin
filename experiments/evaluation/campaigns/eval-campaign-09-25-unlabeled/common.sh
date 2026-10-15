@@ -333,7 +333,7 @@ sotopia = yaml.safe_load((harbor / "sotopia-hard.yaml").read_text())
 assert sotopia["datasets"] == [
     {
         "name": "hf://open-athena/sotopia-hard-harbor",
-        "ref": "65be6de928ab289e43a2730182b5b75cf2f75d41",
+        "ref": "a2b6358ef66318841045b3c68c89a84f5f1923a5",
     }
 ]
 
