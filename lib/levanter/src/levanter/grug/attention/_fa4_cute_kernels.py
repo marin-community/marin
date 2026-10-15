@@ -30,22 +30,21 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 # Portions of this file are adapted from:
-# /tmp/cutlass-codex/examples/python/CuTeDSL/cute/ampere/kernel/attention/flash_attention_v2.py
+# NVIDIA/CUTLASS examples/python/CuTeDSL/cute/ampere/kernel/attention/flash_attention_v2.py
 
-"""CuTe DSL segmented FlashAttention forward kernel skeleton for Grug.
+"""CuTe attention launchers and packed-segment adapters for Grug.
 
 This module intentionally has no import-time dependency on CUTLASS/CuTe. The
-kernel classes are built inside :func:`segmented_flash_attention_forward_launcher`
-after the backend has already imported the optional CUDA-only modules.
+launchers load kernel classes after the backend imports the optional CUDA-only modules.
 
-The first target is BSHD BF16/FP16 causal self-attention with packed segment
-metadata:
+The kernels implement BSHD causal self-attention with packed segment metadata:
 
     valid[b, q] and lower_bounds[b, q] <= k <= q + q_offset
 
-The dynamic segment mask is applied in every N tile. That is simpler than the
-FlashAttention v2 sample's split between masked and unmasked tiles and avoids
-materializing a [B, S, S] mask.
+Native SM100 forward and SM90/SM100 backward reuse upstream FA4 kernels, with
+sparse full/partial block metadata to skip empty tiles and avoid masking full
+tiles. Other configurations use the segmented forward/backward ports. These
+paths avoid materializing a [B, S, S] mask.
 
 Nontrivial differences from upstream FA4/CuTe:
 - The public layout is dense BSHD from JAX ``cutlass_call``, not upstream's THD
@@ -1733,7 +1732,7 @@ def _patch_jax_array_list_tvm_ffi_converter() -> None:
     """Teach the installed TVM-FFI converter about CUTLASS JAX wrapper args."""
     # BlockSparseTensors carries JAX arrays inside CUTLASS's JaxArrayList helper.
     # The installed TVM-FFI converter predates that wrapper and treats it as an
-    # unknown object, so the SM90 call boundary cannot pass Grug partial/full
+    # unknown object, so the native call boundaries cannot pass Grug partial/full
     # block-sparse metadata. Convert it to the TupleParam form TVM already
     # understands; the patch is idempotent and limited to this missing wrapper
     # type.
@@ -1742,7 +1741,9 @@ def _patch_jax_array_list_tvm_ffi_converter() -> None:
         jax_types_module = importlib.import_module("cutlass.jax.types")
         tvm_ffi_builder_module = importlib.import_module("cutlass.base_dsl.tvm_ffi_builder")
     except ModuleNotFoundError as exc:
-        raise RuntimeError("Installed CUTLASS JAX is missing the TVM-FFI converter needed by SM90 backward.") from exc
+        raise RuntimeError(
+            "Installed CUTLASS JAX is missing the TVM-FFI converter needed by native FA4 attention."
+        ) from exc
 
     JaxArrayList = jax_types_module.JaxArrayList
     tvm_spec = tvm_ffi_builder_module.spec
@@ -1751,11 +1752,13 @@ def _patch_jax_array_list_tvm_ffi_converter() -> None:
 
     original_convert_single_arg = converter_module._convert_single_arg
 
-    def _patched_convert_single_arg(arg: Any, arg_name: str, arg_type: Any, ctx: Any) -> Any:
-        if isinstance(arg, JaxArrayList):
+    def _patched_convert_single_arg(
+        arg: Any, arg_name: str, arg_type: Any, ctx: Any, *, is_constexpr: bool = False
+    ) -> Any:
+        if isinstance(arg, JaxArrayList) and not is_constexpr:
             tuple_params = [tvm_spec.DataPointer(f"{arg_name}[{idx}]") for idx, _array in enumerate(arg.arrays)]
             return tvm_spec.TupleParam(arg_name, tuple_params)
-        return original_convert_single_arg(arg, arg_name, arg_type, ctx)
+        return original_convert_single_arg(arg, arg_name, arg_type, ctx, is_constexpr=is_constexpr)
 
     _patched_convert_single_arg._levanter_jax_array_list_patch = True
     converter_module._convert_single_arg = _patched_convert_single_arg

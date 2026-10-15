@@ -122,8 +122,9 @@ INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # than default it; see `_apply_hero_ep_runtime_defaults`.
 SERIAL_COLLECTIVE_OVERLAP_LIMIT = 1
 RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
-# TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
-# command buffers after the CUDA graph failure is fixed.
+# #8277 validated command-buffer capture without COLLECTIVES after #5675; #8289 restored
+# this blanket disable with a different process topology. Keep the existing hero default until
+# a matched benchmark and hang soak validate capture on the current ragged/offload recipe.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 _RAGGED_REQUIRED_XLA_FLAG_NAMES = frozenset(flag.partition("=")[0] for flag in RAGGED_REQUIRED_XLA_FLAGS)
 PJRT_DISTRIBUTION = "jax-cuda13-pjrt"
@@ -1295,9 +1296,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     }
                     if router_metrics:
                         levanter.tracker.log(router_metrics, step=step)
-                    if "train/cross_entropy_loss" in metrics:
+                    if "train/lm_loss" in metrics:
                         levanter.tracker.log(
-                            {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
+                            {"train/lm_loss": metrics["train/lm_loss"]},
                             step=step,
                         )
                     if MOE_DROPPED_ASSIGNMENTS_METRIC in metrics:

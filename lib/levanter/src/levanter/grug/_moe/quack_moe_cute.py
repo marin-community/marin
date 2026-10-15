@@ -7,8 +7,9 @@
 Mirrors David's `_fa4_cute_backend.py` pattern: build a thin ``@cute.jit`` launcher
 with the JAX ``cutlass_call`` signature ``(stream, *inputs, *outputs, **scalars)``
 that composes QuACK's SM100 kernel with a gated epilogue, then wrap it with
-``cutlass.jax.cutlass_call``. Forward-only for now (grouped SwiGLU): tokens are
-pre-sorted by expert (varlen_m via ``cu_seqlens_m``; no A_idx gather).
+``cutlass.jax.cutlass_call``. The shim supplies grouped forward, input-gradient,
+weight-gradient, and fused SwiGLU-backward kernels. Tokens are pre-sorted by
+expert (varlen_m via ``cu_seqlens_m``; no A_idx gather).
 
 A[M,K] @ B[E,K,2N]  -> (per expert group) -> SwiGLU -> PostAct[M,N]
 """
