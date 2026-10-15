@@ -300,6 +300,14 @@ days. Kubernetes `DisruptionTarget` conditions are recorded as
 node's taints, conditions, hardware/topology labels, and CoreWeave health
 annotations.
 
+For an evaluator that retries after a `Completed` container event and a later
+`PodDeleted` worker-failure verdict, inspect its durable result archive before
+rerunning or accepting the retry. The evaluator may already have written a
+complete, sealed result even though its parent lacks a canonical record. See
+[Auditing an Evalchemy run](../../docs/tutorials/run-lm-evals.md#audit-an-evalchemy-run-before-its-record-appears)
+for the archive checks. The Iris verdict alone does not establish whether the
+application result is complete.
+
 Default timeout is 60s. Use `--timeout 300` for slow commands, `--timeout -1` for no timeout (last resort).
 
 The exec session is non-interactive and buffers output. To run a command that survives disconnect, wrap with `nohup` + `&`:

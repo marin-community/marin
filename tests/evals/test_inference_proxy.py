@@ -763,6 +763,8 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     ) as session:
         assert session.model.endpoint.model == "public-model"
         assert session.model.endpoint.base_url.startswith("https://iris.example/proxy/t/broker-token/")
+        assert session.effective_serving is not None
+        assert session.effective_serving.task_count == 2
 
     assert proxy_models == ["public-model"]
     _, register_args, register_kwargs = events[0]
@@ -770,6 +772,7 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     assert endpoint_name == minted[0]
     assert address == "http://127.0.0.1:1"
     assert metadata["model"] == "public-model"
+    assert metadata["task_count"] == "2"
     assert register_kwargs["access"] == EndpointAccess.ENDPOINT_ACCESS_LINK
     assert events[-1] == ("unregister", "endpoint-id")
     assert len(client.submissions) == 2
@@ -795,6 +798,25 @@ def test_inference_proxy_routes_models_readiness_to_running_model(mock_cluster: 
     assert response.status_code == 200
     assert response.json()["data"][0]["id"] == mock_cluster.model
     assert len(mock_cluster.upstream.requests_for("/v1/models")) == 1
+    assert mock_cluster.broker.pending() == []
+    assert mock_cluster.broker.size() == 0
+
+
+def test_inference_proxy_forwards_server_root_tokenize_route(mock_cluster: MockInferenceCluster) -> None:
+    server_root = mock_cluster.proxy.endpoint.base_url.removesuffix("/v1")
+    response = httpx.post(
+        f"{server_root}/tokenize",
+        json={
+            "model": mock_cluster.model,
+            "messages": [{"role": "user", "content": "hello"}],
+            "add_generation_prompt": True,
+        },
+        timeout=5,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"count": 3, "max_model_len": 32768, "tokens": [1, 2, 3]}
+    assert len(mock_cluster.upstream.requests_for("/tokenize")) == 1
     assert mock_cluster.broker.pending() == []
     assert mock_cluster.broker.size() == 0
 

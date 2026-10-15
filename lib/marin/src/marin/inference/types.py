@@ -31,6 +31,11 @@ class OpenAIEndpoint:
         """Return an endpoint URL under the API root."""
         return f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
 
+    def server_url(self, path: str) -> str:
+        """Return an endpoint URL relative to the inference server root."""
+        server_root = self.base_url.rstrip("/").removesuffix("/v1")
+        return f"{server_root}/{path.lstrip('/')}"
+
 
 @dataclass(frozen=True)
 class RunningModel:

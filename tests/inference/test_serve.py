@@ -36,11 +36,13 @@ from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
     IrisConfig,
     LevanterEngineConfig,
+    ObjectStoreLoadMode,
     ResolvedModelLocator,
     ServedModelConfig,
     ServingGeometry,
     SpeculativeMethod,
     SpeculativeServingConfig,
+    VllmCompilationCacheMode,
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
@@ -52,7 +54,7 @@ from marin.inference.dashboard_server import (
     build_dashboard_app,
     serve_app_background,
 )
-from marin.inference.iris import IrisServiceConfig, _resolved_engine, _resolved_model, run_iris_service
+from marin.inference.iris import IrisServiceConfig, _resolved_engine, _resolved_model, _staged_model, run_iris_service
 from marin.inference.iris_cli import (
     _checkout_free_setup_script,
     _mint_and_print_capability_url,
@@ -82,10 +84,13 @@ from marin.inference.vllm_server import (
     VllmType,
 )
 from marin.inference.worker import InferenceWorker, run_inference_worker
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Timestamp
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.routing import Route
+
+from tests.inference.fake_vllm_server import FakeVllmLauncher
 
 
 @pytest.mark.parametrize(
@@ -291,6 +296,35 @@ def test_vllm_backend_direct_start_uses_tokenizer_chat_template(monkeypatch):
     assert observed_templates == ["{{ messages }}"]
 
 
+def test_vllm_backend_propagates_startup_timeout_to_engine_processes(tmp_path, monkeypatch):
+    observed = tmp_path / "engine-timeout.json"
+    monkeypatch.setenv("VLLM_ENGINE_READY_TIMEOUT_S", "17")
+    monkeypatch.setattr(
+        "marin.inference.vllm_backend.vllm_launcher",
+        lambda _config: FakeVllmLauncher("record-engine-timeout", str(observed)),
+    )
+    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: None)
+    spec = ModelSpec(
+        weights="org/model",
+        api_model="public-model",
+        num_chips=None,
+        tensor_parallel_size=None,
+        dtype="auto",
+        max_model_len=1024,
+        chat_template_content=None,
+        tokenizer="org/tokenizer",
+        tokenizer_revision="tokenizer-sha",
+    )
+
+    config = VllmEngineConfig(
+        startup_timeout_seconds=1800,
+        compilation_cache=VllmCompilationCacheMode.CALLER_MANAGED,
+    )
+    with VllmBackend(config).start(spec) as environment:
+        environment.wait_until_ready(poll_interval_seconds=0.05)
+        assert json.loads(observed.read_text())["engine_ready_timeout"] == "1800"
+
+
 def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
     """Resolving weights to a cache path must not change the served id.
 
@@ -310,6 +344,43 @@ def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
 
     assert resolved.weights == "gs://cache/quick-serve/qwen3-0.6b"
     assert resolved.model_id == "Qwen/Qwen3-0.6B"
+
+
+def test_staged_model_downloads_remote_weights_to_temporary_directory(monkeypatch):
+    observed: dict[str, object] = {}
+
+    def download_to(self, local_path, *, recursive=False, callback=None, batch_size=None):
+        observed.update(source=str(self), local_path=local_path, recursive=recursive, batch_size=batch_size)
+        destination = Path(local_path)
+        destination.mkdir()
+        (destination / "config.json").write_text("{}")
+
+    monkeypatch.setattr(StoragePath, "download_to", download_to)
+    model = ServedModelConfig(
+        weights="s3://models/large",
+        object_store_load_mode=ObjectStoreLoadMode.STAGE_LOCAL,
+    )
+
+    with _staged_model(model) as staged:
+        assert staged.weights != model.weights
+        assert Path(staged.weights, "config.json").is_file()
+        staged_path = Path(staged.weights)
+
+    assert observed["source"] == "s3://models/large"
+    assert observed["recursive"] is True
+    assert observed["batch_size"] == 16
+    assert not staged_path.exists()
+
+
+def test_staged_model_leaves_local_weights_unchanged(tmp_path):
+    model = ServedModelConfig(
+        weights=str(tmp_path),
+        object_store_load_mode=ObjectStoreLoadMode.STAGE_LOCAL,
+    )
+
+    with _staged_model(model) as staged:
+        assert staged.weights == str(tmp_path)
+        assert Path(staged.weights).samefile(tmp_path)
 
 
 def test_speculative_model_uses_resolved_uri_in_vllm_launch(monkeypatch):
