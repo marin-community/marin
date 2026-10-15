@@ -69,7 +69,6 @@ from rolloutengine.contracts import (
     MachineReady,
     ModelTurn,
     ModelTurnCompleted,
-    ProviderResult,
     RolloutContractError,
     RolloutEvent,
     RolloutEventPayload,
@@ -79,6 +78,7 @@ from rolloutengine.contracts import (
     SessionPrepared,
     SessionStart,
     ToolCallCompleted,
+    ToolCallResult,
     ToolContext,
     Transition,
     TransitionCompleted,
@@ -965,9 +965,9 @@ class CheckSession:
         self.calls.append((name, arguments))
         if self.context.machine is None:
             self.state["attempts"] += 1
-            return ProviderResult(json.dumps(self.state))
+            return ToolCallResult(json.dumps(self.state))
         result = await self.context.machine.run(Command(("cat", arguments["path"])))
-        return ProviderResult(result.stdout.decode(), done=True)
+        return ToolCallResult(result.stdout.decode(), done=True)
 
     async def close(self):
         self.closed = True
@@ -997,7 +997,7 @@ def tool_message(*calls: tuple[str, str, str]) -> dict:
     }
 
 
-async def test_provider_tools_are_served_beside_shell_and_a_done_result_ends_the_rollout():
+async def test_shell_and_provider_calls_share_one_dispatch_and_a_done_result_ends_the_rollout():
     task = file_task(
         environment_requirements=file_task().environment_requirements.model_copy(
             update={"tool_providers": {"checker": CHECKER}}
@@ -1009,6 +1009,7 @@ async def test_provider_tools_are_served_beside_shell_and_a_done_result_ends_the
             tool_message(
                 ("write", "shell", json.dumps({"command": "echo 12 > /workspace/answer"})),
                 ("rejected", "check", '["/workspace/answer"]'),
+                ("missing", "lookup", "{}"),
             ),
             tool_message(("submit", "check", json.dumps({"path": "/workspace/answer"}))),
             {"role": "assistant", "content": "Not requested."},
@@ -1019,9 +1020,10 @@ async def test_provider_tools_are_served_beside_shell_and_a_done_result_ends_the
     )
 
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["shell", "check"]
-    observations = model.requests[1].messages[-2:]
+    observations = model.requests[1].messages[-3:]
     assert json.loads(observations[0]["content"])["exit_code"] == 0
     assert json.loads(observations[1]["content"]) == {"error": "Tool arguments must be a JSON object"}
+    assert json.loads(observations[2]["content"]) == {"error": "Unknown tool: lookup"}
     [session] = provider.sessions
     assert (session.context.requirement, session.calls) == (CHECKER, [("check", {"path": "/workspace/answer"})])
     assert session.closed

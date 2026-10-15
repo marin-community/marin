@@ -312,17 +312,17 @@ class ToolContext:
 
 
 @dataclass(frozen=True)
-class ProviderResult:
+class ToolCallResult:
     """A tool observation; ``done`` ends the rollout after this call, and later calls of the turn do not run."""
 
     content: str
     done: bool = False
 
 
-class ProviderSession(Protocol):
+class ToolProviderSession(Protocol):
     """One attempt's provider state for one task requirement."""
 
-    async def call(self, name: str, arguments: dict[str, JsonValue]) -> ProviderResult: ...
+    async def call(self, name: str, arguments: dict[str, JsonValue]) -> ToolCallResult: ...
 
     async def close(self) -> None: ...
 
@@ -334,6 +334,6 @@ class ToolProvider(Protocol):
         """The functions advertised to the model for one task requirement."""
         ...
 
-    async def open(self, context: ToolContext) -> ProviderSession:
+    async def open(self, context: ToolContext) -> ToolProviderSession:
         """Start the state of one attempt, typically from ``context.requirement.initial_state``."""
         ...
