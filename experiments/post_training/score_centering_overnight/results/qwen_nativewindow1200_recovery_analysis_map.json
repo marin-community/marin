@@ -1,11 +1,11 @@
 {
   "selected_configs": [
-    "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v2/native-window-sc-s0.yaml",
+    "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v1/native-window-sc-s0.yaml",
     "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v1/native-window-sc-s1.yaml",
     "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v1/native-window-sc-s2.yaml",
     "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v2/native-window-tis-s0.yaml",
     "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v1/native-window-tis-s1.yaml",
-    "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v2/native-window-tis-s2.yaml"
+    "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v1/native-window-tis-s2.yaml"
   ],
   "recovery_mappings": [
     {
@@ -28,7 +28,21 @@
       "final_run": "sc-qwen-transfer-native-window-sc-s1-main-rno-a3-01a126ce",
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "same_learning_recipe": true
+    },
+    {
+      "retired_configuration": "qwen_transfer_main_rno_v2/native-window-sc-s0.yaml",
+      "retired_run": "sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce",
+      "final_run": "sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "same_learning_recipe": true
+    },
+    {
+      "retired_configuration": "qwen_transfer_main_rno_v2/native-window-tis-s2.yaml",
+      "retired_run": "sc-qwen-transfer-native-window-tis-s2-main-rno-a2-01a126ce",
+      "final_run": "sc-qwen-transfer-native-window-tis-s2-main-rno-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "same_learning_recipe": true
     }
   ],
-  "scope": "Prospective complete three paired seeds1200 native-window comparison. Exact retired SCseeds1/2 and TISseed1 jobs remain in allocation costs; no partial endpoint claimed. Full756 and separate common753-question comparisons required."
+  "scope": "Prospective complete three paired seeds1200 native-window comparison. Exact retired SCseeds0/1/2 and TISseeds1/2 jobs remain costs; no partial endpoint. Full756 and separate common753 required."
 }

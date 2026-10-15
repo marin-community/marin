@@ -1,0 +1,79 @@
+{
+  "recoveries": [
+    {
+      "new_run": "sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce",
+      "retired_run": "sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "scientific_updates": 1200,
+      "same_learning_recipe": true,
+      "config_sha256": "f56705a49234d730ec242c7d2195a6946936df0b3ebfe89c01cd9b721cad4a84",
+      "preflight_passed": true,
+      "preflight_log_sha256": "8f08d0edb3a4bef511efb661f92cb148bf1ab0a9e7dd5935a9869c972b6a9799",
+      "failed_attempt_number": 4,
+      "failed_attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/0",
+          "attempt_id": "4",
+          "attempt_uid": "a6d55fd054188da4",
+          "state": "5",
+          "exit_code": "1",
+          "started_at_ms": "1792022642019",
+          "finished_at_ms": "1792023496894",
+          "node_name": "g3232cc",
+          "terminal_reason": "result, _LEDGER_NAME)\n  File \"/app/marinskyrl/skyrl-train/skyrl_train/trajectory_runners/trajectory_retention.py\", line 1071, in _raise_publication_error\n    raise TrajectoryRetentionPublicationTimeout(message)\nskyrl_train.trajectory_runners.trajectory_retention.TrajectoryRetentionPublicationTimeout: trajectory retention publication failed for _retention_ledger.json: storage operation exceeded 600 seconds\n2026-10-15 00:17:25.032 | ERROR    | skyrl_train.entrypoints.main_base:run_ray_driver:747 -"
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/1",
+          "attempt_id": "4",
+          "attempt_uid": "733fae8eb34e6358",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1792022642019",
+          "finished_at_ms": "1792023496894",
+          "node_name": "g4ead54",
+          "terminal_reason": ""
+        }
+      ],
+      "failed_attempt_allocated_h100_hours": 3.7994444444444446,
+      "basis": "Terminal retention-ledger600 storage deadline before any update in this startup. Fresh namespace preserves all learning/source/horizon/placement fields; old complete partials and costs remain. Storage-stall cause is unproved."
+    },
+    {
+      "new_run": "sc-qwen-transfer-native-window-tis-s2-main-rno-a3-01a126ce",
+      "retired_run": "sc-qwen-transfer-native-window-tis-s2-main-rno-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "scientific_updates": 1200,
+      "same_learning_recipe": true,
+      "config_sha256": "80eb638304b55bd61154b14c62713c85a12c2c2a5d3b9f8250741b9a8a77f98d",
+      "preflight_passed": true,
+      "preflight_log_sha256": "ca7b48ed20e0fbcb300a354852e9f6448e987a8e4288081f9be4ec70a436d444",
+      "failed_attempt_number": 9,
+      "failed_attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-tis-s2-main-rno-a2-01a126ce/0",
+          "attempt_id": "9",
+          "attempt_uid": "7f357f9ed20e5294",
+          "state": "5",
+          "exit_code": "1",
+          "started_at_ms": "1792022805752",
+          "finished_at_ms": "1792023657988",
+          "node_name": "g82267a",
+          "terminal_reason": "lt, _LEDGER_NAME)\n  File \"/app/marinskyrl/skyrl-train/skyrl_train/trajectory_runners/trajectory_retention.py\", line 1071, in _raise_publication_error\n    raise TrajectoryRetentionPublicationTimeout(message)\nskyrl_train.trajectory_runners.trajectory_retention.TrajectoryRetentionPublicationTimeout: trajectory retention publication failed for _retention_ledger.json: storage operation exceeded 600 seconds\n2026-10-15 00:20:10.186 | ERROR    | skyrl_train.entrypoints.main_base:run_ray_driver:747 - Pre"
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-tis-s2-main-rno-a2-01a126ce/1",
+          "attempt_id": "9",
+          "attempt_uid": "a9e0dfa6179eacb6",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1792022805752",
+          "finished_at_ms": "1792023657988",
+          "node_name": "gb95ea0",
+          "terminal_reason": ""
+        }
+      ],
+      "failed_attempt_allocated_h100_hours": 3.7877155555555557,
+      "basis": "Terminal retention-ledger600 storage deadline before any update in this startup. Fresh namespace preserves all learning/source/horizon/placement fields; old complete partials and costs remain. Storage-stall cause is unproved."
+    }
+  ],
+  "completion_claim": false
+}
