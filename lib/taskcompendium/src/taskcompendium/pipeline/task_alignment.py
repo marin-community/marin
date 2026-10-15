@@ -161,7 +161,7 @@ def align_tasks(
     context.put(shared_key, curriculum)
     matches_type = arrow_schema(TaskAlignment).field("matches").type
     rankings = context.execute(
-        Dataset.from_list(vector_paths)
+        Dataset.from_list(list(vector_paths))
         .load_parquet()
         .window(batch_size)
         .map_shard(partial(_rank_batches, shared_key=shared_key))
