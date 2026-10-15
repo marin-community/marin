@@ -41,7 +41,7 @@ at the 3e18 rung's model size and token count: each run's cap, seeds, 58 compone
 Table 9 results give the 51 OlmoBaseEval Easy components, whose mean reproduces each run's recorded mean. The runs' W&B
 summaries give the seven Uncheatable components (CAP_SWEEP_PULL): each W&B run id is a run name of the launch record
 with its hash, and the data seed of its W&B config must be the launch record's. The sweep's cap-8 and proportional runs
-are ladder rows; the other three appear in no other table, so the table has no observation ids.
+are ladder rows. The table has no observation ids.
 """
 
 import json

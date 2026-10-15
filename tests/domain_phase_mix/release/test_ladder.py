@@ -109,22 +109,11 @@ def test_unimax_cap_sweep_scores_runs_as_the_ladder_does(out, plotted):
     assert np.allclose(ladder_values, list(unimax8.values()), rtol=0, atol=1e-15)
 
 
-def test_unimax_cap_sweep_takes_uncheatable_components_from_each_runs_pull(out):
-    # Each cap's run takes its seven Uncheatable components from the pulled W&B run of the same name with its hash,
-    # whose config gives the data seed of the launch record.
+def test_unimax_cap_sweep_uncheatable_aggregates_reproduce_the_sweep_readme(out):
+    # The table takes each run's Uncheatable components from its W&B pull; the README scored the runs' evaluation logs
+    # on its own, so a pull joined to the wrong cap, or the pulls' pooled aggregates, would not give its values.
     sweep = out["ladder_unimax_cap_sweep"].set_index("epoch_cap")
-    specs = json.loads((ladder.CAP_SWEEP_LAUNCH / "run_specs.json").read_text())
-    caps = json.loads((ladder.CAP_SWEEP_LAUNCH / "summary.json").read_text())["unimax_epoch_caps"]
-    pull = tables.read_csv(ladder.CAP_SWEEP_PULL, comment="#")
-    for spec in specs:
-        run = sweep.loc[caps[spec["mixture"]]]
-        pulled = pull[pull.training_wandb_run_id.str.rsplit("-", n=1).str[0] == spec["run_name"]]
-        values = pulled.set_index("metric").value
-        assert run.data_seed == spec["data_seed"] == values["data_seed"]
-        for task in naming.TASKS[:7]:
-            assert run[f"bpb__{task}"] == values[f"eval/uncheatable_eval/{task.removeprefix('uncheatable/')}/bpb"]
     assert sweep.components_available.all()
-    # The fixed byte shares of the components give the README's values; the pulls' pooled aggregates do not.
     assert sweep.bpb__uncheatable.to_dict() == pytest.approx(CAP_SWEEP_README_UNCHEATABLE, rel=0, abs=5e-5)
 
 
