@@ -688,7 +688,7 @@ function startDashboard() {
       controls.append(previous, next);
       if (!shardFilter) controls.append(jump, go);
     }
-    const note = element('p', 'Running tiles estimate current-input progress from records read. Filters may understate progress. Stripes mean the input size is unknown. Counts reset per input file; 100% input can still be mapping or writing.');
+    const note = element('p', 'Progress is approximate and resets per input file. Stripes indicate unknown input size.');
     note.className = 'muted';
     replaceContent(area, filter, range, grid, detail, key, note, controls);
   }

@@ -13,26 +13,6 @@ stage cards show items-per-second sparklines when Finelog has at least two
 samples and some recorded work for that stage. Heatmap cells group adjacent
 shard IDs when a stage has more than 32 shards; the per-shard grid pages
 through exact IDs.
-
-Filter the grid by shard state to inspect the remaining running tasks. Running
-tiles estimate progress from emitted records: Parquet and Vortex use their
-input row-range totals, and shuffle reducers use partition row counts from
-mapper metadata. Filtering can make the estimate understate progress. Striped
-tiles have an unknown total. Counts reset per input file; a full input bar can
-still precede output flushing. Lookup reads opened inside a mapper leave the
-outer input's progress on the tile.
-
-File and shuffle readers expose a row total when it is cheap to obtain. The
-input operation updates both task progress and cumulative `records_in` counters
-as it consumes a reader. Direct reader calls inside a mapper do not contribute
-to either measurement. Shuffle inputs update task progress and their existing
-shuffle counters; they do not add to file-record totals.
-
-Select a shard for its input count, elapsed time, average reader-record rate
-over the whole shard, worker-task link, and heartbeat age. Heartbeats older than
-15 seconds are marked potentially stale. Workers send progress with heartbeats
-every five seconds; subprocess sampling and dashboard refresh can add delay.
-
 Earlier stages show their final state, since the coordinator retains shard-level
 progress only for the current stage. Select **All pipelines** to return to the
 fleet view. Counters belong to the selected pipeline; Workers shows the shared
