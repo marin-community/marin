@@ -1,0 +1,47 @@
+{
+  "prepared_only": true,
+  "submitted": false,
+  "scope": "Pairedseed1 controlled-noise1200 mains on RNO; same scientific recipes and source as east predecessors. No new scientific result.",
+  "placement_qualification_required": "Exact0212 RNO five-node qualification must complete all5updates, native responses/aligned naturalK128/chosen TIS2, finite updates, both FlashAttention pipeline stages, fixed expert deltas and checkpoint5 before either main is submitted.",
+  "predecessor_rule": "Inspect latest originaleast tasks; submit concrete published replacements only when full RNO qualification passes. Retire exact owned queued predecessors after replacement confirmation; preserve all attempt costs and raw data. No concurrent duplicate learning.",
+  "configs": [
+    {
+      "config": "experiments/post_training/score_centering_overnight/snowball_noise_main_rno_v1/sc-s1.yaml",
+      "sha256": "16512d8df9b099dd44b3a7116e35057437b1e4de8eb32dd140133979df53af77",
+      "run_id": "sc-snowball-main-noise005-sc-s1-rno-a3-01a126ce",
+      "source_config": "experiments/post_training/score_centering_overnight/snowball_noise_main_v3/sc-s1.yaml",
+      "retired_job_if_replacement_submitted": "/romain/sc-snowball-main-noise005-sc-s1-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "seed": 1,
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "nodes": 5,
+      "gpus_per_node": 8,
+      "horizon": 1200,
+      "remaining_learning_fields_unchanged": true,
+      "checkpoint_steps": 1200,
+      "evaluation_steps": 20,
+      "preflight_exit_code": 0,
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-rno-main-sc-s1-preflight.log"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/snowball_noise_main_rno_v1/tis-s1.yaml",
+      "sha256": "c693af9b4957b0888443eeccd67d513c22d92f8bf2ed174008f870f4b10ba49c",
+      "run_id": "sc-snowball-main-noise005-tis-s1-rno-a3-01a126ce",
+      "source_config": "experiments/post_training/score_centering_overnight/snowball_noise_main_v3/tis-s1.yaml",
+      "retired_job_if_replacement_submitted": "/romain/sc-snowball-main-noise005-tis-s1-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "seed": 1,
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "nodes": 5,
+      "gpus_per_node": 8,
+      "horizon": 1200,
+      "remaining_learning_fields_unchanged": true,
+      "checkpoint_steps": 1200,
+      "evaluation_steps": 20,
+      "preflight_exit_code": 0,
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-rno-main-tis-s1-preflight.log"
+    }
+  ]
+}
