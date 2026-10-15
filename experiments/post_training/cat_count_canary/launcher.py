@@ -152,7 +152,6 @@ def resource_recipe(
             train_batch_size=batch_size,
             policy_mini_batch_size=batch_size,
             micro_train_batch_size_per_gpu=micro_train_batch_size,
-            micro_forward_batch_size_per_gpu=micro_train_batch_size,
         ),
         generator=Generator(
             num_inference_engines=GPUS_PER_NODE,
@@ -205,9 +204,6 @@ def training_recipe(
         trainer=Trainer(
             resume_mode="latest" if checkpoint else "none",
             policy=Policy(
-                optimizer_config=PolicyOptimizerConfig(
-                    optimizer="AdamW", lr=2e-06, weight_decay=0.01, max_grad_norm=1.0
-                ),
                 megatron_config=PolicyMegatronConfig(
                     tensor_model_parallel_size=1,
                     pipeline_model_parallel_size=1,
@@ -247,6 +243,12 @@ def training_recipe(
                 epochs=1,
                 max_steps=max_steps,
                 update_epochs_per_batch=2,
+                micro_forward_batch_size_per_gpu=micro_train_batch_size,
+                policy=Policy(
+                    optimizer_config=PolicyOptimizerConfig(
+                        optimizer="AdamW", lr=2e-06, weight_decay=0.01, max_grad_norm=1.0
+                    )
+                ),
                 eval_batch_size=len(cat_count_eval_ns(train_ns)),
                 eval_interval=1 if preset == "dry" else 5,
                 hf_save_interval=max_steps,

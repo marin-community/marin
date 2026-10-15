@@ -188,7 +188,7 @@ SMOKE_PRESET = replace(
     evals="gsm8k-smoke",
 )
 # Every consumed group was sampled by the current weights.
-ON_POLICY = replace(DEFAULT, label="on_policy", max_staleness_steps=0)
+ON_POLICY = replace(DEFAULT, label="on_policy", max_staleness_steps=0, generation_workers=PROMPTS_PER_UPDATE)
 PRESETS: Mapping[str, AsyncPreset] = MappingProxyType(
     {preset.label: preset for preset in (SMOKE_PRESET, DEFAULT, ON_POLICY)}
 )

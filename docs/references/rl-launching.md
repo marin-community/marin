@@ -145,8 +145,9 @@ for these declarations and requires policy GPU width to match the hardware. Read
 through typed attributes, such as `recipe.trainer.placement.policy_num_nodes`; effective values come
 from the launcher's prepare mode. MarinSkyRL owns resource arithmetic and trainer batch validation.
 
-Use `SkyRLRecipe.combine(base=BASE, preset=PRESET, policy=POLICY, arm=ARM)` for independent named
-parts. Different values for one leaf, or a parent and its descendant, raise with both part names.
+Use `SkyRLRecipe.combine(base=BASE, preset=PRESET, policy=POLICY, arm=ARM)` to combine a base with
+independent named contributions. Contributions may override the base. Different values between
+contributions at one leaf, or at a parent and its descendant, raise with both part names.
 Lists are whole values. Use `recipe.merge(PATCH)` for an intentional override, such as optimizer
 or model parallelism tuning. Pass computed checkpoint schedules as another named part so a setting
 that contradicts the schedule raises.
