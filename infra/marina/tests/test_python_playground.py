@@ -293,3 +293,18 @@ def test_cli_discovers_separate_applet_origin_and_uploads_project(client, tmp_pa
     assert published["url"] == app_url + "#/projects/" + published["id"]
     saved = client.get("/projects/" + published["id"]).json()
     assert saved["document"]["files"][0]["content"] == "print('uploaded through the canonical origin')"
+
+
+def test_saved_project_with_many_requirements_runs_without_internal_validation_error(client, monkeypatch):
+    monkeypatch.setenv("UV_OFFLINE", "1")
+    project = create_project(
+        client, "from pathlib import Path\nPath('output/index.md').write_text('# Requirements accepted')"
+    )
+    document = project["document"]
+    # False environment markers exercise many requirements without resolving remote packages.
+    document["packages"] = "\n".join(f"unused-package-{index}; python_version < '0'" for index in range(31))
+    saved = client.put(f"/projects/{project['id']}", json={"revision": 1, "document": document})
+    assert saved.status_code == 200
+    completed = run_project(client, saved.json())
+    assert completed["result"]["exit_code"] == 0
+    assert base64.b64decode(completed["result"]["artifacts"][0]["content"]) == b"# Requirements accepted"

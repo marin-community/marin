@@ -68,7 +68,7 @@ class ProjectFile(BaseModel):
 class RunRequest(BaseModel):
     files: list[ProjectFile] = Field(max_length=MAX_FILES)
     entrypoint: str
-    packages: list[str] = Field(default_factory=list, max_length=30)
+    packages: list[str] = Field(default_factory=list)
     timeout: int = Field(default=RUN_TIMEOUT, ge=1, le=RUN_TIMEOUT)
 
 
