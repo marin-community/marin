@@ -18,10 +18,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     Command,
+    ExitReason,
     Machine,
     MachineFactory,
     MachineSpec,
     QemuBundle,
+    Result,
 )
 
 from taskcompendium.models import (
@@ -41,6 +43,21 @@ from taskcompendium.runtime.staging import resource_files, write_archive
 
 OUTPUT_PATH = "/output/command_capture.txt"
 CONTROL_PATH = "/controls/reference.sh"
+SPILL_DIRECTORY = "/tmp/tool-output"
+SPILL_FILE_BYTES = 64 * 1024 * 1024
+"""Bytes each spilled stream file keeps; output past it is read and discarded, and the command keeps running."""
+# Arguments: $0 is the spill path prefix, $1 the command, $2 the preview read size, $3 the spill threshold,
+# and $4 the per-file cap. Each stream passes through a pipeline that saves its first $4 bytes and drains the
+# rest, so the files stay bounded and the shell waits for both before reading previews. The host reads only
+# each file's head, and files within the threshold are removed.
+SPILL_SCRIPT = (
+    'mkdir -p "${0%/*}" || exit; set -o pipefail; '
+    '{ { bash -c "$1" 2>&1 1>&3 3>&- | { head -c "$4" >"$0.stderr"; cat >/dev/null; }; } 3>&1 1>&2 '
+    '| { head -c "$4" >"$0.stdout"; cat >/dev/null; }; }; status=$?; '
+    'head -c "$2" "$0.stdout"; head -c "$2" "$0.stderr" >&2; '
+    'for stream in stdout stderr; do [ "$(wc -c <"$0.$stream")" -gt "$3" ] || rm -f "$0.$stream"; done; '
+    'exit "$status"'
+)
 
 
 class ShellToolConfig(BaseModel):
@@ -122,8 +139,15 @@ async def run_shell_call(
     timeout: float | None,
     output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     cwd: str | None = None,
+    spill_bytes: int | None = None,
 ) -> str:
-    """Decode a harness call and return the Bash command's observation."""
+    """Decode a harness call and return the Bash command's observation.
+
+    With ``spill_bytes``, each stream is written to a file under ``SPILL_DIRECTORY`` that keeps at most
+    ``SPILL_FILE_BYTES``. A stream longer than ``spill_bytes`` keeps its file, and the observation holds
+    its first ``spill_bytes`` bytes and its path in ``stdout_path`` or ``stderr_path``. A timed-out
+    command reports both paths, since its files can hold output the machine did not return.
+    """
     command = call.arguments.get(tool.command_parameter)
     if (
         call.name != tool.definition.name
@@ -131,19 +155,49 @@ async def run_shell_call(
         or not isinstance(command, str)
     ):
         return json.dumps({"error": f"{tool.definition.name} requires one string {tool.command_parameter}"})
+    if spill_bytes is None:
+        result = await machine.run(
+            Command(("bash", "-c", command), cwd=cwd, timeout=timeout, output_limit_bytes=output_limit_bytes)
+        )
+        return json.dumps(
+            _observation(result, result.stdout, result.stderr, result.stdout_truncated, result.stderr_truncated)
+        )
+    prefix = f"{SPILL_DIRECTORY}/{uuid.uuid4().hex}"
+    # One byte past the preview tells the host that the stream exceeded the threshold.
+    read_bytes = spill_bytes + 1
     result = await machine.run(
-        Command(("bash", "-c", command), cwd=cwd, timeout=timeout, output_limit_bytes=output_limit_bytes)
+        Command(
+            ("bash", "-c", SPILL_SCRIPT, prefix, command, str(read_bytes), str(spill_bytes), str(SPILL_FILE_BYTES)),
+            cwd=cwd,
+            timeout=timeout,
+            output_limit_bytes=min(output_limit_bytes, read_bytes),
+        )
     )
+    timed_out = result.reason == ExitReason.TIMED_OUT
+    stdout_spilled = result.stdout_truncated or len(result.stdout) > spill_bytes
+    stderr_spilled = result.stderr_truncated or len(result.stderr) > spill_bytes
     return json.dumps(
         {
-            "exit_code": result.exit_code,
-            "reason": result.reason.value,
-            "stdout": result.stdout.decode(errors="replace"),
-            "stderr": result.stderr.decode(errors="replace"),
-            "stdout_truncated": result.stdout_truncated,
-            "stderr_truncated": result.stderr_truncated,
+            **_observation(
+                result, result.stdout[:spill_bytes], result.stderr[:spill_bytes], stdout_spilled, stderr_spilled
+            ),
+            "stdout_path": f"{prefix}.stdout" if stdout_spilled or timed_out else None,
+            "stderr_path": f"{prefix}.stderr" if stderr_spilled or timed_out else None,
         }
     )
+
+
+def _observation(
+    result: Result, stdout: bytes, stderr: bytes, stdout_truncated: bool, stderr_truncated: bool
+) -> dict[str, object]:
+    return {
+        "exit_code": result.exit_code,
+        "reason": result.reason.value,
+        "stdout": stdout.decode(errors="replace"),
+        "stderr": stderr.decode(errors="replace"),
+        "stdout_truncated": stdout_truncated,
+        "stderr_truncated": stderr_truncated,
+    }
 
 
 def machine_spec_identity(machine_spec: MachineSpec) -> dict[str, Any]:

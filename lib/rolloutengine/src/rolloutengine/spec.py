@@ -6,7 +6,7 @@
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
-from shellbox.machine import NetworkPolicy
+from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, NetworkPolicy
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.shell import ShellToolConfig
 
@@ -71,6 +71,7 @@ class TaskSessionSpec(BaseModel):
     cleanup_timeout: float = Field(gt=0)
     trace: TraceMode = TraceMode.EXACT_TOKENS
     max_total_tokens: int | None = Field(gt=0)
+    tool_output_spill_bytes: int | None = Field(gt=0, le=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES)
 
 
 class LoweredTaskSpec(BaseModel):
