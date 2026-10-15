@@ -1,0 +1,26 @@
+{
+  "experimental_pr": "https://github.com/marin-community/MarinSkyRL/pull/996",
+  "number": 996,
+  "draft": true,
+  "head": "2c77ce20ed19f4936925ae5ca572d7ea1e20ef39",
+  "training_source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "core_pr": "https://github.com/marin-community/MarinSkyRL/pull/968",
+  "core_head": "117d0598dd017749a301e0374ef9db530fd8d8de",
+  "specification": "https://echo.oa.dev/wiki/731",
+  "exact_title_body_and_label_verified": true,
+  "validation_scope": "Review fixes have CPUvalidation; scientific0212 sourcehas GPUqualification/fullfaithful comparison. FullQwen/Snowmainladder stillrunning; no newGPUqualificationclaimfor2c77.",
+  "initial_checks": [
+    {
+      "bucket": "skipping",
+      "link": "https://github.com/marin-community/MarinSkyRL/actions/runs/38656994681/job/116169040340",
+      "name": "request-cleanup",
+      "state": "SKIPPED"
+    }
+  ],
+  "base_branch": "research/score-centering-core-01a126ce",
+  "base_head": "117d0598dd017749a301e0374ef9db530fd8d8de",
+  "stacked_on_core_pr": true,
+  "initial_main_target_conflicts": true,
+  "current_mergeability": "Unknown immediately after retarget; recheck after GitHub recomputes.",
+  "checks_note": "Only skipped prose-cleanup checks reported initially; no CPU workflow conclusion claimed."
+}
