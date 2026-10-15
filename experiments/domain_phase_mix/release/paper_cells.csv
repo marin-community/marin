@@ -248,7 +248,7 @@ tab:a-unimax-cap,0,5,0,ladder[method=='proportional' & compute_flops==3e18 & dat
 tab:a-unimax-cap,0,6,0,"ladder[method=='proportional' & compute_flops==3e18 & data_seed==660700].mean_of(tasks[task_id.isin(['codex_humaneval','mbpp'])].task_id).value",3,Proportional: equal-weight group mean
 tab:a-unimax-cap,0,7,0,ladder[method=='proportional' & compute_flops==3e18 & data_seed==660700].mean_of(tasks[task_id.str.startswith('mmlu_')].task_id).value,3,Proportional: equal-weight group mean
 tab:a-unimax-cap,0,8,0,ladder[method=='proportional' & compute_flops==3e18 & data_seed==660700].mean_of(tasks[family=='Question answering' & not task_id.str.startswith('mmlu_') & not task_id.str.startswith('basic_skills_')].task_id).value,3,Proportional: equal-weight group mean
-tab:a-unimax-cap,1,1,0,,3,untraced: the cap-1 run's Uncheatable value is on GCS only (see AUDIT.md)
+tab:a-unimax-cap,1,1,0,ladder_unimax_cap_sweep[epoch_cap==1].bpb__uncheatable.value,3,1: Uncheatable
 tab:a-unimax-cap,1,2,0,ladder_unimax_cap_sweep[epoch_cap==1].bpb__obe_easy.value,3,1: OBE Easy
 tab:a-unimax-cap,1,3,0,ladder_unimax_cap_sweep[epoch_cap==1].mean_of(tasks[task_id.str.startswith('mt_mbpp_')].task_id).value,3,1: equal-weight group mean
 tab:a-unimax-cap,1,4,0,ladder_unimax_cap_sweep[epoch_cap==1].mean_of(tasks[task_id.str.startswith('minerva_math_')].task_id).value,3,1: equal-weight group mean
@@ -256,7 +256,7 @@ tab:a-unimax-cap,1,5,0,ladder_unimax_cap_sweep[epoch_cap==1].mean_of(tasks[task_
 tab:a-unimax-cap,1,6,0,"ladder_unimax_cap_sweep[epoch_cap==1].mean_of(tasks[task_id.isin(['codex_humaneval','mbpp'])].task_id).value",3,1: equal-weight group mean
 tab:a-unimax-cap,1,7,0,ladder_unimax_cap_sweep[epoch_cap==1].mean_of(tasks[task_id.str.startswith('mmlu_')].task_id).value,3,1: equal-weight group mean
 tab:a-unimax-cap,1,8,0,ladder_unimax_cap_sweep[epoch_cap==1].mean_of(tasks[family=='Question answering' & not task_id.str.startswith('mmlu_') & not task_id.str.startswith('basic_skills_')].task_id).value,3,1: equal-weight group mean
-tab:a-unimax-cap,2,1,0,,3,untraced: the cap-4 run's Uncheatable value is on GCS only (see AUDIT.md)
+tab:a-unimax-cap,2,1,0,ladder_unimax_cap_sweep[epoch_cap==4].bpb__uncheatable.value,3,4: Uncheatable
 tab:a-unimax-cap,2,2,0,ladder_unimax_cap_sweep[epoch_cap==4].bpb__obe_easy.value,3,4: OBE Easy
 tab:a-unimax-cap,2,3,0,ladder_unimax_cap_sweep[epoch_cap==4].mean_of(tasks[task_id.str.startswith('mt_mbpp_')].task_id).value,3,4: equal-weight group mean
 tab:a-unimax-cap,2,4,0,ladder_unimax_cap_sweep[epoch_cap==4].mean_of(tasks[task_id.str.startswith('minerva_math_')].task_id).value,3,4: equal-weight group mean
@@ -272,7 +272,7 @@ tab:a-unimax-cap,3,5,0,ladder[method=='unimax8' & compute_flops==3e18 & trainer_
 tab:a-unimax-cap,3,6,0,"ladder[method=='unimax8' & compute_flops==3e18 & trainer_seed==0].mean_of(tasks[task_id.isin(['codex_humaneval','mbpp'])].task_id).value",3,8: equal-weight group mean
 tab:a-unimax-cap,3,7,0,ladder[method=='unimax8' & compute_flops==3e18 & trainer_seed==0].mean_of(tasks[task_id.str.startswith('mmlu_')].task_id).value,3,8: equal-weight group mean
 tab:a-unimax-cap,3,8,0,ladder[method=='unimax8' & compute_flops==3e18 & trainer_seed==0].mean_of(tasks[family=='Question answering' & not task_id.str.startswith('mmlu_') & not task_id.str.startswith('basic_skills_')].task_id).value,3,8: equal-weight group mean
-tab:a-unimax-cap,4,1,0,,3,untraced: the cap-12 run's Uncheatable value is on GCS only (see AUDIT.md)
+tab:a-unimax-cap,4,1,0,ladder_unimax_cap_sweep[epoch_cap==12].bpb__uncheatable.value,3,12: Uncheatable
 tab:a-unimax-cap,4,2,0,ladder_unimax_cap_sweep[epoch_cap==12].bpb__obe_easy.value,3,12: OBE Easy
 tab:a-unimax-cap,4,3,0,ladder_unimax_cap_sweep[epoch_cap==12].mean_of(tasks[task_id.str.startswith('mt_mbpp_')].task_id).value,3,12: equal-weight group mean
 tab:a-unimax-cap,4,4,0,ladder_unimax_cap_sweep[epoch_cap==12].mean_of(tasks[task_id.str.startswith('minerva_math_')].task_id).value,3,12: equal-weight group mean

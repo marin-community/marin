@@ -35,7 +35,7 @@ INTERNAL = [
     re.compile(r"(?:exp|run|job)_01[a-z0-9]{24}"),
     re.compile(r"\w-[0-9a-f]{6}(?![0-9a-z])"),
 ]
-SPECIAL_CONFIGS = {"deferred", "constant", "untraced"}  # figures_tables.csv entries that name no config
+SPECIAL_CONFIGS = {"deferred", "constant"}  # figures_tables.csv entries that name no config
 # The tables with one row per training run, which carry the 58 per-task BPB columns and the two aggregates.
 RUN_TABLES = {
     "swarm_qwen3_360m_1p6b",

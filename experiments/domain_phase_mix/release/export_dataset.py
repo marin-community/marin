@@ -203,8 +203,7 @@ RELEASE_NOTES = [
     "mixture-selection repository's; `*` stands for a run name that begins a file name or a hash that names a folder.",
     "figures_tables.csv lists the paper's 26 figures and 20 tables with their builders (paths in the paper folder, or "
     "in the repository under experiments/ and .agents/) and the configs they read: deferred marks two-phase data "
-    "this release omits, constant configuration constants typed into the paper, and untraced numbers whose inputs "
-    "the release does not hold.",
+    "this release omits, and constant marks configuration constants typed into the paper.",
 ]
 
 

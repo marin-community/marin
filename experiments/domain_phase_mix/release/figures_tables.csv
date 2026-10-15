@@ -32,7 +32,7 @@ tab:a-baseline-validation,table,,experiments/domain_phase_mix/exploratory/two_ph
 tab:ablations,table,,experiments/domain_phase_mix/exploratory/two_phase_many/summarize_delphi_comparator_proposals_20260909.py;experiments/domain_phase_mix/exploratory/two_phase_many/summarize_table5_repeats_20260928.py,validation_3e18
 tab:scaling-main,table,,experiments/domain_phase_mix/exploratory/two_phase_many/plot_scaling_curves_placeholder_20260905.py;experiments/domain_phase_mix/exploratory/two_phase_many/build_accuracy_component_table_20260922.py,ladder;ladder_accuracy
 tab:a-buckets,table,,experiments/domain_phase_mix/dolma3_dolmino_top_level_domains.py,partition
-tab:a-unimax-cap,table,,.agents/projects/unimax_cap_sweep_20260922/README.md,validation_3e18;ladder;ladder_unimax_cap_sweep;tasks;untraced
+tab:a-unimax-cap,table,,.agents/projects/unimax_cap_sweep_20260922/README.md,validation_3e18;ladder;ladder_unimax_cap_sweep;tasks
 tab:a-regmix-argmin,table,,experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_regmix_argmin_3e18_20260930;experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_tuned_argmin_3e18_20260930,validation_3e18;fits
 tab:a-kl-ablation,table,,experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_kl_ablation_3e18_20260908/kl_ablation_summary.csv,validation_3e18;fits
 tab:a-ablations-full,table,,experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/single_phase_observatory_*/aggregate_metrics.csv,fits;swarm_qwen3_360m_1p6b;swarm_llama_160m_1p2b;swarm_llama_200m_6b;constant

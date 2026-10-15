@@ -501,10 +501,9 @@ def _unimax_cap(reg: _Registry) -> None:
         cap = reg.stub(label, i)
         if cap in UNIMAX_LADDER_RUNS:
             run = UNIMAX_LADDER_RUNS[cap]
-            reg.add(label, i, 1, 0, f"{run}.{U}.value", f"{cap}: Uncheatable")
-        else:  # the sweep's runs at caps 1, 4 and 12, whose Uncheatable values are on GCS only
+        else:  # the sweep's runs at caps 1, 4 and 12
             run = f"ladder_unimax_cap_sweep[epoch_cap=={cap}]"
-            reg.add(label, i, 1, 0, "", f"untraced: the cap-{cap} run's Uncheatable value is on GCS only (see AUDIT.md)")
+        reg.add(label, i, 1, 0, f"{run}.{U}.value", f"{cap}: Uncheatable")
         reg.add(label, i, 2, 0, f"{run}.{O}.value", f"{cap}: OBE Easy")
         for col, group in UNIMAX_GROUPS.items():
             reg.add(label, i, col, 0, f"{run}.mean_of({group}).value", f"{cap}: equal-weight group mean")

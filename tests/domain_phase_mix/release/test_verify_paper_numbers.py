@@ -330,7 +330,8 @@ def test_every_paper_table_is_parsed():
 @pytest.mark.timeout(300)
 @pytest.mark.skipif(not (SECTIONS.exists() and paths.BUILD.exists()), reason="paper folder or build absent")
 def test_registry_checks_every_number_of_the_paper():
-    # Every registry row names a printed number and evaluates; every number is checked or a registered skip.
+    # Every registry row names a printed number and evaluates; every number is checked, a configuration constant or
+    # a number of the deferred two-phase tables.
     differences, untraced = v.audit(paths.BUILD, SECTIONS)
     assert {(d.label, d.row, d.col, d.part) for d in differences} == KNOWN_DIFFERENCES
-    assert {u.kind for u in untraced} <= set(v.SKIP_KINDS)
+    assert {u.kind for u in untraced} <= {"constant", "deferred_two_phase"}
