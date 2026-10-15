@@ -147,8 +147,8 @@ def test_runs_match_their_launch_plans(ctx, table):
         mine = runs.loc[launched.index]
         assert (mine.scale == launched.arm.map({"matched": "proxy", "unmatched": "proxy", "target": "target"})).all()
         assert (mine.train_tokens == launched.tokens).all()
-        cap = launched.tokens / (launched.support_sequences * 2048)
-        assert np.allclose(mine.cap_epochs, cap, rtol=0, atol=1e-12)
+        per_unit_weight = launched.tokens / (launched.support_sequences * 2048)
+        assert np.allclose(mine.epochs_per_unit_weight, per_unit_weight, rtol=0, atol=1e-12)
         assert np.allclose(mine.domain_weight, launched.percent / 100, rtol=0, atol=1e-12)
         assert (mine.trainer_seed == launched.trainer_seed).all()
         assert mine.subset_seed.fillna(-1).astype(int).tolist() == launched.subset_seed.fillna(-1).astype(int).tolist()
@@ -160,7 +160,8 @@ def test_epochs_match_each_sweeps_analysis(table):
     # The export derives epochs from the design's allocation audit; each sweep's analysis records them per grid point.
     runs = table.drop_duplicates("observation_id")
     for (domain, scale), path in ANALYSES.items():
-        grid = runs[(runs.domain == domain) & (runs.scale == scale) & (runs.cap_epochs > 1)].set_index("domain_weight")
+        grid = runs[(runs.domain == domain) & (runs.scale == scale) & (runs.epochs_per_unit_weight > 1)]
+        grid = grid.set_index("domain_weight")
         for metric in json.loads((SWEEPS / path).read_text())["metrics"].values():
             epochs = grid.domain_epochs.loc[np.array(metric["grid_percent"]) / 100]
             assert np.allclose(epochs, metric["epochs"], rtol=0, atol=1e-12), (domain, scale)
@@ -172,8 +173,9 @@ def test_every_run_reports_its_sweeps_evaluations(table):
         "domain",
         "scale",
         "model_total_parameters",
+        "tokenizer",
         "train_tokens",
-        "cap_epochs",
+        "epochs_per_unit_weight",
         "domain_weight",
         "domain_epochs",
         "evaluation",
@@ -181,6 +183,9 @@ def test_every_run_reports_its_sweeps_evaluations(table):
         "trainer_seed",
         "subset_seed",
     ]
+    # One tokenizer for every run: the TPP-10 design's pin, which the FineMath math receipt also records.
+    pinned = json.loads(MATH.read_text())["shared_scoring"]["tokenizer_pins"]["tokenizer_repo"]
+    assert table.tokenizer.notna().all() and set(table.tokenizer) == {pinned}
     assert not table.duplicated(["observation_id", "evaluation"]).any()
     for domain, own in EVALUATIONS.items():
         per_run = table[table.domain == domain].groupby("observation_id").evaluation.apply(frozenset)
@@ -200,8 +205,9 @@ def test_olmix_fits_are_fits_to_the_matched_proxies(out):
     for fit in fits.itertuples():
         rows = table[(table.domain == fit.domain) & (table.scale == fit.scale) & (table.evaluation == fit.evaluation)]
         # The matched proxy's runs and the web-only control, which sees no domain data (FineMath's is shared).
-        curve = rows[np.isclose(rows.cap_epochs, fit.cap_epochs, rtol=0, atol=1e-12) | rows.domain_weight.eq(0)]
-        curve = curve.sort_values("cap_epochs", ascending=False).drop_duplicates("domain_weight")
+        same_pool = np.isclose(rows.epochs_per_unit_weight, fit.epochs_per_unit_weight, rtol=0, atol=1e-12)
+        curve = rows[same_pool | rows.domain_weight.eq(0)]
+        curve = curve.sort_values("epochs_per_unit_weight", ascending=False).drop_duplicates("domain_weight")
         assert len(curve) == 8
         head = OlmixLoglinearFit(fit.log_c, (fit.coefficient_domain, fit.coefficient_web), fit.huber_loss)
         p = curve.domain_weight.to_numpy()

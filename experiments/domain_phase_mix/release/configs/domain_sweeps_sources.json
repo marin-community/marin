@@ -92,7 +92,7 @@
     {
       "original": "experiments/domain_phase_mix/starcoder_tpp10_assets/design.json",
       "drive_copy": null,
-      "figure": "plot_alternatives.DESIGN: the pool and token budgets behind the unmatched proxies' epochs and the cap arithmetic",
+      "figure": "plot_alternatives.DESIGN: the pool and token budgets behind the unmatched proxies' epochs and the figure's epoch-cap arithmetic",
       "reader": null,
       "note": "The repository's TPP-10 design; the export reads it for every domain as domain_sweeps.DESIGN."
     },
@@ -221,7 +221,7 @@
     {
       "original": "experiments/domain_phase_mix/starcoder_tpp10_assets/design.json",
       "drive_copy": null,
-      "figure": "plot_alternatives.DESIGN: the pool and token budgets behind the unmatched proxies' epochs and the cap arithmetic",
+      "figure": "plot_alternatives.DESIGN: the pool and token budgets behind the unmatched proxies' epochs and the figure's epoch-cap arithmetic",
       "reader": null,
       "note": "The repository's TPP-10 design; the export reads it for every domain as domain_sweeps.DESIGN."
     },

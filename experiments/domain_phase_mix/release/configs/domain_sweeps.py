@@ -13,19 +13,23 @@ match the target's at every weight. The unmatched proxy draws from the whole poo
 draws the matched proxy and the target of FLAN on SciQ (panel A) and of FineMath on GSM8K (panel B). The instruction
 and FineMath sweeps have all three arms; the rcQA and arXiv sweeps have the matched proxy only.
 
-- `cap_epochs` is the run's tokens over its domain pool: the domain's epochs at weight 1, the most repetition the run
-  allows. It is 15.828 for the target, 15.825 for the matched proxy and 0.872 for the unmatched proxy.
+- `epochs_per_unit_weight` is the run's tokens over its domain pool: the epochs the domain would see at weight 1 at
+  the run's scale, as in the `partition` table. It is 15.828 for the target, 15.825 for the matched proxy and 0.872 for
+  the unmatched proxy.
 - `domain_weight` is the requested weight. `domain_epochs` are the realized epochs: the domain sequences that the
   allocator draws (the design's allocation audit) over the pool's sequences. The allocator fills 2,048-sequence blocks,
-  which puts them within 0.44% of domain_weight x cap_epochs. The sweeps' analyses and the FineMath math receipt record
-  the same epochs for the matched proxies and the targets. The figure's builder takes the unmatched proxies' epochs as
-  domain_weight x cap_epochs.
+  which puts them within 0.44% of domain_weight x epochs_per_unit_weight. The sweeps' analyses and the FineMath math
+  receipt record the same epochs for the matched proxies and the targets. The figure's builder takes the unmatched
+  proxies' epochs as domain_weight x epochs_per_unit_weight.
 - FineMath's weight-0 runs are the original TPP-10 experiment's web-only runs, one per scale. A run without domain data
   serves FineMath's matched and unmatched proxy curves alike; these keep their launch record's whole pool (the proxy's
-  cap is 0.872). The other sweeps retrained their weight-0 runs, whose evaluations reproduce one another.
+  epochs_per_unit_weight is 0.872). The other sweeps retrained their weight-0 runs, whose evaluations reproduce one
+  another.
 
-Every evaluation is the final step's bits per byte under the TPP-10 models' TinyLlama tokenizer, pooling the scored
-bits and bytes of each set (Levanter's BPB schema version 2).
+`tokenizer` names the Hugging Face tokenizer that the TPP-10 design pins for every run,
+`TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T` (32,000 tokens). The `tasks` table's tokenizer describes the
+paper's swarms and does not apply to these runs. Every evaluation is the final step's bits per byte under this
+tokenizer, pooling the scored bits and bytes of each set (Levanter's BPB schema version 2).
 
 - The seven Uncheatable components score the paper's 1-14 September 2025 snapshot and carry the paper's task ids
   (`naming.task_public`). `macro_bpb` is their equal-weight mean, the sweeps' selection metric; the paper's Uncheatable
@@ -70,8 +74,9 @@ COLUMNS = [
     "domain",
     "scale",
     "model_total_parameters",
+    "tokenizer",
     "train_tokens",
-    "cap_epochs",
+    "epochs_per_unit_weight",
     "domain_weight",
     "domain_epochs",
     "evaluation",
@@ -82,7 +87,7 @@ COLUMNS = [
 FIT_COLUMNS = [
     "domain",
     "scale",
-    "cap_epochs",
+    "epochs_per_unit_weight",
     "evaluation",
     "log_c",
     "coefficient_domain",
@@ -117,7 +122,7 @@ def _arm_designs(design: dict) -> pd.DataFrame:
                 "model_total_parameters": design["models"][model]["parameters"],
                 "train_tokens": tokens,
                 "pool_sequences": design[pool],
-                "cap_epochs": tokens / (design[pool] * SEQUENCE_LENGTH),
+                "epochs_per_unit_weight": tokens / (design[pool] * SEQUENCE_LENGTH),
             }
         )
     return pd.DataFrame(rows)
@@ -184,7 +189,12 @@ def _olmix_fit(entry: dict, domain: str, arms: pd.DataFrame) -> dict:
     receipt = json.loads(paths.require(paths.DRIVE / entry["drive_copy"]).read_text())
     fit = receipt["analysis"]["fit_audit"][f"{entry['source_domain']}/{entry['arm']}"]["selected"]
     arm = arms.set_index("arm").loc[entry["arm"]]
-    row = {"domain": domain, "scale": arm.scale, "cap_epochs": arm.cap_epochs, "evaluation": entry["evaluation"]}
+    row = {
+        "domain": domain,
+        "scale": arm.scale,
+        "epochs_per_unit_weight": arm.epochs_per_unit_weight,
+        "evaluation": entry["evaluation"],
+    }
     for field, columns in entry["columns"].items():
         row.update(zip(columns, fit[field], strict=True) if isinstance(columns, list) else {columns: fit[field]})
     return row
@@ -217,6 +227,7 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     if df.bpb.isna().any():
         raise ValueError(f"missing evaluations of {sorted(set(df.run_name[df.bpb.isna()]))}")
     df["domain_weight"] = df.percent / 100
+    df["tokenizer"] = design["tokenizer_pins"]["tokenizer_repo"]
     df["observation_id"] = df.run_name.map(ctx.registry.id_for)
     df["evaluation"] = df.evaluation.map(_public_evaluation)
     df = df.astype({"trainer_seed": "int64", "subset_seed": "Int64"})
