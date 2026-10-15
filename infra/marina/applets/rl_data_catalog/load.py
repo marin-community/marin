@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import click
 from finestore.rl.curation import CurationCatalog, JudgmentStatus, validate_items
 from marina.client import DEFAULT_MARINA_URL, marina_request
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
@@ -193,6 +194,7 @@ def applet_query(service_url: str, applet_id: str) -> Query:
 @click.option("--applet-id", required=True)
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 def main(catalog_root: str, applet_id: str, service_url: str) -> None:
+    configure_coreweave_s3()
     click.echo(json.dumps(load_catalog(CurationCatalog(catalog_root), applet_query(service_url, applet_id))))
 
 
