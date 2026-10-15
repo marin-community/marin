@@ -15,6 +15,10 @@ For text, number, JSON, and native-action answers, it adds the task's answer-for
 For workspace-state tasks, this session adds shell and final-response instructions to the model request.
 Importers retain the task problem without these interface instructions.
 The engine owns model calls, conversation and token accumulation, deadlines, and resource cleanup.
+An optional `RolloutObserver` passed as `RolloutEngine(..., observer=...)` receives typed progress events
+from `rolloutengine.contracts` while the attempt runs, so callers can log or trace a rollout before `run()` returns.
+Each event carries the `run_key` passed to `run()`, which defaults to the task id.
+The engine delivers events from a queue and never awaits the observer, so a slow or failing observer does not change the rollout.
 
 `RolloutEngine.run(lowered)` accepts a `LoweredTaskSpec` and asynchronously returns one rollout.
 The lowered record preserves its `TaskSpec` and adds machine selections and session limits.

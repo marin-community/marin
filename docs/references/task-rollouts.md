@@ -214,6 +214,37 @@ These checks run after download and do not limit transfer buffers or downloaded 
 Invalid artifacts and missing required artifacts give `SUBMISSION_FAILURE` with reward zero.
 Archive command failures, archive timeouts, and provider or host I/O failures remain infrastructure errors.
 
+## Rollout events
+
+`RolloutEngine(model, factories, observer=observer)` reports progress while an attempt runs.
+The observer implements `async def on_event(self, event: RolloutEvent) -> None`.
+A `RolloutEvent` carries the attempt's `run_key`, the task's `task_id`, and a `payload`.
+`run(lowered, run_key=...)` sets the run key; it defaults to the task id, so a caller that runs a task more than once passes a key per attempt to tell their events apart.
+Each payload is a frozen dataclass from `rolloutengine.contracts` whose `type` field is a `RolloutEventType`, so a payload serialized with `dataclasses.asdict` keeps its type.
+Durations are wall-clock seconds.
+
+| Payload | Emitted | Fields |
+| --- | --- | --- |
+| `AttemptStarted` | After validation, before machine acquisition | |
+| `MachineReady` | After task-machine setup; not emitted without a task machine | `duration` |
+| `SessionPrepared` | After `prepare()` | `message_count`, `duration` |
+| `ModelTurnCompleted` | After a model turn passes the token checks | `turn_index`, `stop_reason`, prompt and response token counts, `ModelTurn.metadata`, `duration` |
+| `ToolCallCompleted` | By a session, per tool call that returns an observation | `name`, `observation_bytes`, `duration` |
+| `TransitionCompleted` | After `advance(turn)` | `turn_index`, `done`, `observation_count`, `duration` |
+| `Graded` | After the session's `grade()` returns | `status`, `reward` |
+| `AttemptEnded` | After cleanup, when `run()` returns or raises `RolloutInterrupted` | `stop_reason`, or the interrupted `operation` |
+
+Sessions emit their own payloads through `TaskSessionContext.events`, an `EventSink` whose `emit` never blocks; the built-in `shellbox` session emits `ToolCallCompleted`.
+The engine never awaits the observer.
+Each attempt queues its events, up to 1,024, and one task delivers them in order; a full queue drops new events.
+After the attempt releases its machines, the engine delivers the remaining events within `cleanup_timeout`.
+An observer exception is logged and ends delivery for that attempt.
+Neither a slow nor a failing observer changes the rollout's record, grade, or deadlines.
+`RolloutData.metrics` counts events the observer did not receive: `observer_dropped_events`, `observer_undelivered_events` and `observer_error_count` appear only when nonzero.
+Events still queued when the process dies are lost.
+Concurrent attempts deliver to a shared observer concurrently.
+No end event is emitted when a token-contract error or cancellation propagates.
+
 ## Deadlines and failures
 
 | Field | Boundary |
