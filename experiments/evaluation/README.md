@@ -25,9 +25,10 @@ While Iris restarts preempted candidate or hosted-judge inference jobs, Marin st
 evaluators and waits for inference readiness. Both evaluators resume against the same output path.
 Harbor preserves completed trials; Evalchemy restores committed generation requests. Likelihood
 requests and uncommitted generation batches may run again. Saved Evalchemy transport failures
-reject a recovered run because native resume would replay those failures. Completed benchmark
-results remain unchanged. If either inference job reaches a terminal state, Marin records the
-current and remaining benchmarks as infrastructure failures.
+reject a recovered run because native resume would replay those failures. To regenerate those
+requests, remove only the evaluation archive named in the error and retry. Keep sibling evaluation
+archives. Completed benchmark results remain unchanged. If either inference job reaches a terminal
+state, Marin records the current and remaining benchmarks as infrastructure failures.
 
 The user-facing [evaluation guide](../../docs/tutorials/run-lm-evals.md) contains model-specific
 commands, suite constraints, launch controls, and result locations.
