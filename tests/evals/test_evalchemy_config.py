@@ -23,7 +23,7 @@ from marin.evaluation.evalchemy.runner import (
     _run_evalchemy_child,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.inference_recovery import InferenceBackendFinished, InferenceUnavailable
+from marin.evaluation.runner import InferenceBackendFinished, InferenceUnavailable, run_evaluation
 from marin.evaluation.serving_config import _auto_serve_overrides_from_config, auto_serve_overrides
 from marin.inference.iris import InferenceBackendState
 from marin.inference.types import OpenAIEndpoint, RunningModel
@@ -66,7 +66,7 @@ def test_evalchemy_cancels_active_child_when_inference_disappears(monkeypatch, b
     job = EvalJob()
     client = SimpleNamespace(submit=lambda **_kwargs: job)
     monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
-    session = SimpleNamespace(backend_state=lambda: state)
+    session = SimpleNamespace(backend_state=lambda: state, preemption_count=lambda: 0)
 
     with pytest.raises(expected_error):
         _run_evalchemy_child(_MODEL, _config(), "memory://interrupted", {}, inference_sessions=(session,))
@@ -83,6 +83,36 @@ def _config(**overrides) -> EvalchemyRunConfig:
     )
     base.update(overrides)
     return EvalchemyRunConfig(**base)
+
+
+def test_failed_child_cancellation_does_not_start_a_same_archive_retry(tmp_path, monkeypatch):
+    state = InferenceBackendState.READY
+
+    class EvalJob:
+        job_id = "/eval/cancel-failed"
+
+        def wait(self, timeout, **_kwargs):
+            nonlocal state
+            state = InferenceBackendState.RECOVERING
+            raise TimeoutError("still running")
+
+        def cancel(self):
+            raise ConnectionError("cancellation failed")
+
+    client = SimpleNamespace(submit=lambda **_kwargs: EvalJob())
+    monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
+    session = SimpleNamespace(
+        backend_state=lambda: state,
+        preemption_count=lambda: 0,
+        wait_until_ready=lambda **_kwargs: pytest.fail("must not retry while child cancellation is unconfirmed"),
+    )
+
+    def executor(session, output_dir, env_vars, *, judge=None):
+        _run_evalchemy_child(_MODEL, _config(), output_dir, env_vars, inference_sessions=(session,))
+        pytest.fail("the child should not finish successfully")
+
+    with pytest.raises(ConnectionError, match="cancellation failed"):
+        run_evaluation(executor, session, str(tmp_path / "cancel-failed"), {})
 
 
 def _payload(config: EvalchemyRunConfig | None = None) -> dict:
