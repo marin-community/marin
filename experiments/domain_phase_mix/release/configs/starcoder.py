@@ -37,11 +37,21 @@ endpoint observation as `<that>@endpoint`; the export keys on `<name>`. These ru
 - `starcoder_diagonal`: the fixed-total-TPP-5 diagonal, 60 runs (4 matched-compute cells x 15 weights) with each
   cell's measured optimum.
 - `starcoder_curricula`: the confirmed two-phase gains by training horizon and StarCoder subset (28 cells).
+- `starcoder_curricula_matched_nd`: the best tied and two-phase schedules and their fitted gap in each of the 10
+  matched model-size and token-budget cells; `starcoder_curricula_matched_nd_confirmation`: the eight fresh-seed pairs
+  that confirm the selected two-phase schedule of the largest cell (mean gain 0.0061 BPB).
 - `starcoder_transition`: the switch study's tables stacked, named by `table`: `ramp_endpoints` (offline final PL and
   C4 BPB of the 30 ramp and abrupt runs), `ramp_gains_over_october_abrupt`, `switch_window_offline_evals` (offline
-  PL and C4 BPB of switch-window checkpoints), `train_loss_jump`, and `ramp_eval_history` (the ramp runs'
-  training-time PL and C4 BPB every 1,000 steps, which at the final step equal the offline values within 6e-7). A
-  column a table lacks is null; the integer columns are nullable integers.
+  PL and C4 BPB of switch-window checkpoints), `train_loss_jump`, `ramp_eval_history` (the ramp runs' training-time
+  PL and C4 BPB every 1,000 steps, which at the final step equal the offline values within 6e-7), and the changes in
+  the switched-minus-tied gap around each switch: `eval_double_differences` from the training-time evaluations and
+  `switch_window_offline_double_differences` from the offline ones. A column a table lacks is null; the integer
+  columns are nullable integers.
+- `starcoder_ramp_designs`: the launched schedules of the 30 ramp and abrupt runs, one row per stage (a 16-step
+  mixture block of a ramp, or the constant stretch before or after it) with its first step and StarCoder weight, and
+  the run's August abrupt source run and tied comparator. The loader fills each block's 2,048 sequences in integers
+  (Levanter's `MixtureDataset`, which gives the remainder to the largest component), so a block's StarCoder count
+  differs from weight x 2,048 by up to 4.5 sequences.
 - `starcoder_trajectories`: the training loss at every logged step of the 50 runs whose seed means the switch-trace
   figure plots, re-pulled from W&B by `release/pull_switch_traces.py`, with the step of each run's switch; `run_label`
   is the series' label in `train_loss_jump`.
@@ -81,7 +91,26 @@ TRANSITION_TABLES = (
     "switch_window_offline_evals",
     "train_loss_jump",
     "ramp_eval_history",
+    "eval_double_differences",
+    "switch_window_offline_double_differences",
 )
+MATCHED_ND = paths.RO / "starcoder_wsd80_matched_nd_stage1_20260731"
+MATCHED_OPTIMA = MATCHED_ND / "optimum_scaling_20260802/discovered_optimum_scaling.csv"
+MATCHED_CONFIRMATION = MATCHED_ND / "confirmation_results_20260801"
+RAMP_DESIGNS = tuple(
+    paths.REPO / f"experiments/domain_phase_mix/starcoder_wsd80_transition_ramp_{name}.json"
+    for name in ("design_20261006", "quick_design_20261007", "abrupt_design_20261007")
+)
+RAMP_DESIGN_FIELDS = ["support_id", "cell_id", "total_steps", "boundary_step", "steps_per_block"]
+RAMP_RUN_FIELDS = [
+    "arm",
+    "ramp_width",
+    "data_seed",
+    "realized_starcoder_sequences",
+    "target_starcoder_sequences",
+    "pre_boundary_starcoder_sequences",
+    "max_weight_nudge",
+]
 # The training-time evaluations kept from ramp_eval_history.csv, named as in ramp_endpoints.csv.
 EVAL_HISTORY_METRICS = {
     "eval/paloma/dolma_100_programing_languages-llama3/bpb": "pl_bpb",
@@ -247,6 +276,51 @@ def _transition(ctx: ExportContext) -> pd.DataFrame:
     return stacked.astype(dict.fromkeys(integer, "Int64"))
 
 
+def _matched_confirmation(ctx: ExportContext) -> pd.DataFrame:
+    """The matched-N,D confirmation pairs, each run keyed by its training run name."""
+    pairs = pd.read_csv(paths.require(MATCHED_CONFIRMATION / "confirmation_pairs.csv"))
+    runs = pd.read_csv(paths.require(MATCHED_CONFIRMATION / "confirmation_observations.csv"))
+    # The last component of a W&B run URL is the run's id, which for these runs is the training run name.
+    if not (runs.wandb_url.str.rsplit("/", n=1).str[-1] == runs.run_name).all():
+        raise ValueError("a confirmation run's W&B id differs from its run name")
+    for role in ("candidate", "comparator"):
+        names = pairs.pop(f"{role}_wandb_url").str.rsplit("/", n=1).str[-1]
+        if not names.isin(runs.run_name).all():
+            raise ValueError(f"a confirmation {role} is not among the confirmation runs")
+        pairs.insert(pairs.columns.get_loc(f"{role}_bpb"), f"{role}_observation_id", names.map(ctx.registry.id_for))
+    return pairs
+
+
+def _ramp_designs(ctx: ExportContext) -> pd.DataFrame:
+    """The launched ramp and abrupt schedules, one row per stage of each run."""
+    rows = []
+    for path in RAMP_DESIGNS:
+        design = json.loads(paths.require(path).read_text())
+        for run in design["runs"]:
+            ids = {
+                f"{role}observation_id": ctx.registry.id_for(run[f"{role}run_name"]) for role in ("", "source_", "tied_")
+            }
+            for stage, (start_step, weight) in enumerate(run["stages"]):
+                rows.append(
+                    {
+                        "design": design["design_version"],
+                        **ids,
+                        **{field: run[field] for field in RAMP_RUN_FIELDS},
+                        **{field: design[field] for field in RAMP_DESIGN_FIELDS},
+                        "stage": stage,
+                        "start_step": start_step,
+                        "starcoder_weight": weight,
+                    }
+                )
+    table = pd.DataFrame(rows).astype({"ramp_width": "Int64"})
+    starts = table.groupby("observation_id").start_step
+    if table.groupby("observation_id").design.nunique().gt(1).any() or not starts.diff().dropna().gt(0).all():
+        raise ValueError("a ramp run appears twice or its stages do not start at increasing steps")
+    if not (starts.min().eq(0).all() and table.start_step.mod(table.steps_per_block).eq(0).all()):
+        raise ValueError("a ramp schedule does not start at step 0 or a stage starts inside a mixture block")
+    return table
+
+
 def _trajectories(ctx: ExportContext) -> pd.DataFrame:
     trajectories = pd.read_parquet(paths.require(TRANSITION / "trajectories.parquet"))
     ids = {name: ctx.registry.id_for(name) for name in trajectories.run_name.unique()}
@@ -279,7 +353,10 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
         "starcoder_dense_grid": grid,
         "starcoder_diagonal": _diagonal(ctx),
         "starcoder_curricula": pd.read_csv(paths.require(CURRICULA)),
+        "starcoder_curricula_matched_nd": pd.read_csv(paths.require(MATCHED_OPTIMA)),
+        "starcoder_curricula_matched_nd_confirmation": _matched_confirmation(ctx),
         "starcoder_transition": _transition(ctx),
+        "starcoder_ramp_designs": _ramp_designs(ctx),
         "starcoder_trajectories": _trajectories(ctx),
     }
     for name, t in tables.items():

@@ -1,11 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import re
 
 import numpy as np
 import pandas as pd
 import pytest
+from scipy import stats
 
 from experiments.domain_phase_mix.release import context, paths
 from experiments.domain_phase_mix.release.configs import starcoder
@@ -176,6 +178,58 @@ def test_diagonal_cells_and_curricula(out):
     assert len(curricula) == 28 and not curricula.duplicated(["cell_id", "support_id"]).any()
 
 
+def test_figure25_reads_both_double_difference_tables(out):
+    # Figure 25 (a_switch_smoothing) reads both files, which keep every row under their own table name.
+    transition = out["starcoder_transition"]
+    tables = {}
+    for name in ("eval_double_differences", "switch_window_offline_double_differences"):
+        source = pd.read_csv(TRANSITION / f"{name}.csv")
+        tables[name] = transition[transition.table == name][list(source.columns)].reset_index(drop=True)
+        pd.testing.assert_frame_equal(tables[name], source, check_dtype=False)
+    # Panel A: the 0.02 -> 0.82 switch at the decay onset, offline points (no note) over the training-time ones.
+    columns = ["arm", "metric", "lag", "double_diff", "double_diff_ci"]
+    offline = tables["switch_window_offline_double_differences"]
+    offline = offline[offline.note.isna()].rename(columns={"ci": "double_diff_ci"})
+    both = pd.concat([tables["eval_double_differences"][columns], offline[columns]])
+    both = both.drop_duplicates(["arm", "metric", "lag"], keep="last")
+    switch = both[(both.arm == "p3_vs_p4_m100a") & both.lag.between(-256, 1500)]
+    for metric in ("PL", "C4"):
+        assert sorted(switch.lag[switch.metric == metric]) == [-256, 0, 64, 256, 392, 1392]
+
+
+def test_figure24_matched_nd_tables(out):
+    optima = out["starcoder_curricula_matched_nd"]
+    assert len(optima) == len(pd.read_csv(starcoder.MATCHED_OPTIMA)) == 10
+    # Panel C draws four cells along each path: more tokens, larger models, and both.
+    for track in ("increase_d", "increase_n", "increase_nd"):
+        assert optima.track_memberships.str.contains(f"'{track}'", regex=False).sum() == 4
+    pairs = out["starcoder_curricula_matched_nd_confirmation"]
+    assert len(pairs) == len(pd.read_csv(starcoder.MATCHED_CONFIRMATION / "confirmation_pairs.csv")) == 8
+    assert pd.concat([pairs.candidate_observation_id, pairs.comparator_observation_id]).is_unique
+    # Panel C's star, which the builder prints: the mean gain over the eight pairs and its 95% paired-t interval.
+    gain = pairs.gain_tied_minus_untied_bpb
+    half = stats.t.ppf(0.975, len(gain) - 1) * gain.std(ddof=1) / np.sqrt(len(gain))
+    star = [gain.mean(), gain.mean() - half, gain.mean() + half]
+    assert np.allclose(star, [0.0061012, 0.0052691, 0.0069332], rtol=0, atol=5e-8)
+
+
+def test_figure26_ramp_designs(out):
+    designs = out["starcoder_ramp_designs"]
+    sources = [json.loads(path.read_text()) for path in starcoder.RAMP_DESIGNS]
+    assert len(designs) == sum(len(run["stages"]) for design in sources for run in design["runs"]) == 2740
+    # One design for each of the 30 ramp and abrupt runs, whose sources and comparators are the August runs.
+    runs = designs.drop_duplicates("observation_id")
+    transition = out["starcoder_transition"]
+    endpoints = transition[transition.table == "ramp_endpoints"]
+    assert len(runs) == 30 and set(runs.observation_id) == set(endpoints.observation_id)
+    evals = transition[transition.table == "switch_window_offline_evals"]
+    assert set(runs.source_observation_id) == set(evals.observation_id[evals.arm == "august_abrupt"])
+    assert set(runs.tied_observation_id) == set(evals.observation_id[evals.arm == "august_tied"])
+    # The figure draws the six schedules of seed 20260821.
+    shown = runs[runs.data_seed == 20260821]
+    assert sorted(shown.arm) == ["abrupt", "ramp0128", "ramp0256", "ramp0512", "ramp2048", "ramp5632"]
+
+
 def test_no_run_names_or_internal_strings_anywhere(out):
     # Every string a table holds: its column names and the values of its non-numeric columns.
     names = set()
@@ -185,6 +239,10 @@ def test_no_run_names_or_internal_strings_anywhere(out):
     names |= set(pd.read_parquet(TRANSITION / "trajectories.parquet").run_name)
     names |= set(pd.read_csv(starcoder.DIAGONAL / "observations.csv").run_name)
     names |= {run.split(":", 1)[1] for run in pd.read_csv(ATLAS / "predictions.csv").training_run_id}
+    names |= set(pd.read_csv(starcoder.MATCHED_CONFIRMATION / "confirmation_observations.csv").run_name)
+    for path in starcoder.RAMP_DESIGNS:
+        for run in json.loads(path.read_text())["runs"]:
+            names |= {run["run_name"], run["source_run_name"], run["tied_run_name"]}
     patterns = [
         re.compile(r"wandb|gs://|http|/Users/|pinlin_calvin_xu"),
         re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"),  # email addresses
