@@ -8,6 +8,7 @@ from contextlib import ExitStack
 from pathlib import Path
 
 import click
+from finestore.rl.curation import SourceDeclaration
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -28,11 +29,14 @@ from experiments.post_training.task_curation.embedding import (
     curation_embedding_pipeline,
 )
 from experiments.post_training.task_curation.local import local_artifact_prefix
+from experiments.post_training.task_curation.source_metadata import source_declaration
+from experiments.post_training.task_curation.sources import all_sources
 from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM
 
 
 @click.command(help=__doc__)
-@click.option("--curated", multiple=True, nargs=2, required=True, metavar="SOURCE_ID ROOT")
+@click.option("--curated", multiple=True, nargs=2, metavar="SOURCE_ID ROOT")
+@click.option("--corpus", help="Complete corpus.json produced by convert_corpus; alternative to --curated.")
 @click.option("--catalog-root", help="Immutable curriculum artifact directory; defaults to TASK_CURRICULUM.")
 @click.option("--cache-root", required=True, help="Persistent, region-local artifact and inference cache.")
 @click.option("--population", type=click.Choice(["admitted", "converted"]), required=True)
@@ -54,17 +58,21 @@ from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURR
     help="Embedding input limit, including the instruction prefix. Full task instructions go to the describer.",
 )
 @click.option("--max-workers", type=click.IntRange(min=1), default=2)
+@click.option("--worker-cpu", type=click.FloatRange(min=0, min_open=True), default=4, show_default=True)
 @click.option("--worker-memory", default="8g")
 @click.option(
     "--stage",
-    type=click.Choice(["inputs", "descriptions", "task_embeddings", "curriculum_embeddings", "assignments"]),
-    default="assignments",
+    type=click.Choice(
+        ["inputs", "descriptions", "task_embeddings", "curriculum_embeddings", "assignments", "publication"]
+    ),
+    default="publication",
     show_default=True,
     help="Run this artifact stage and its dependencies.",
 )
 @click.option("--run", "do_run", is_flag=True, help="Execute the graph; otherwise print its plan.")
 def main(
     curated,
+    corpus,
     catalog_root,
     cache_root,
     population,
@@ -80,10 +88,25 @@ def main(
     compute_dtype,
     max_tokens,
     max_workers,
+    worker_cpu,
     worker_memory,
     stage,
     do_run,
 ):
+    if bool(curated) == bool(corpus):
+        raise click.UsageError("Supply either --curated or --corpus")
+    inventory = [source_declaration(source) for source in all_sources().values()]
+    if corpus:
+        selected = json.loads(StoragePath(corpus).read_text())
+        inventory = [SourceDeclaration.model_validate(row) for row in selected["inventory"]]
+        if population != selected["population"]:
+            raise click.UsageError("Requested population differs from the corpus manifest")
+        curated = []
+        for row in selected["sources"]:
+            manifest = json.loads((StoragePath(row["root"]) / "manifest.json").read_text())
+            if canonical_sha256(manifest) != row["source_key"]:
+                raise ValueError(f"Corpus source manifest changed: {row['source_id']}")
+            curated.append((row["source_id"], row["root"]))
     if len({name for name, _ in curated}) != len(curated):
         raise click.UsageError("Each curated source ID must occur once")
     if embedding_backend == "tei" and not tei_endpoint:
@@ -105,6 +128,7 @@ def main(
             max_tokens=spec.max_tokens,
             compute_dtype=spec.compute_dtype,
             device="cpu" if embedding_backend == "cpu" else "cuda",
+            cpu_threads=max(1, int(worker_cpu)),
         )
         if embedding_backend != "tei"
         else TeiEmbeddingClient(tei_endpoint, spec.dimensions, truncate=False)
@@ -138,10 +162,18 @@ def main(
             population=population,
             sample_size=sample_size,
             seed=seed,
+            inventory=inventory,
         )
         plan = {
             name: getattr(stages, name).path()
-            for name in ("inputs", "descriptions", "task_embeddings", "curriculum_embeddings", "assignments")
+            for name in (
+                "inputs",
+                "descriptions",
+                "task_embeddings",
+                "curriculum_embeddings",
+                "assignments",
+                "publication",
+            )
         }
         click.echo(
             json.dumps(
@@ -166,7 +198,7 @@ def main(
             ZephyrContext(
                 client=client,
                 max_workers=max_workers,
-                resources=ResourceConfig(cpu=1, ram=worker_memory),
+                resources=ResourceConfig(cpu=worker_cpu, ram=worker_memory),
                 chunk_storage_prefix=str(StoragePath(cache_root) / ".zephyr/embeddings"),
                 name="rl-task-embeddings",
             )

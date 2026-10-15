@@ -39,12 +39,15 @@ class HarrierEmbedder:
     compute_dtype: str
     device: Literal["cpu", "cuda"]
     batch_size: int = 16
+    cpu_threads: int = 4
 
     def embed(self, texts: list[str]) -> np.ndarray:
         import torch  # noqa: PLC0415 - optional CPU/GPU inference dependency
 
         if not texts:
             return np.empty((0, self.dimensions), dtype=np.float32)
+        if self.device == "cpu":
+            torch.set_num_threads(self.cpu_threads)
         tokenizer, model = _harrier_model(
             self.model, self.revision, self.tokenizer_revision, self.compute_dtype, self.device
         )

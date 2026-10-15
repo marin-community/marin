@@ -313,7 +313,7 @@ def describe_tasks(
     result = context.execute(
         Dataset.from_list(list(input_paths))
         .load_parquet()
-        .deduplicate(key=lambda row: row["content_hash"])
+        .deduplicate(key=lambda row: row["content_hash"], num_output_shards=context.max_workers)
         .window(batch_size)
         .map_shard(
             partial(_describe_batches, model=model, submit=submit, cache_root=cache_root, output_root=output_root)

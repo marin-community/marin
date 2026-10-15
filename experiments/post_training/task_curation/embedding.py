@@ -6,15 +6,19 @@
 import json
 import os
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from functools import partial
 
 import numpy as np
+from finestore.rl.curation import SourceDeclaration
+from finestore.rl.curriculum import AlignmentRelease, AlignmentSource
 from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.inference.openai_chat import OpenAIChatClient
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.pipeline.alignment_publication import publish_alignments
 from taskcompendium.pipeline.chat_requests import chat_output
 from taskcompendium.pipeline.curriculum_alignment import (
     CurriculumAnchor,
@@ -46,7 +50,8 @@ from experiments.post_training.task_curriculum.models import CurriculumCatalog
 INPUTS_VERSION = "2026.10.14.1"
 DESCRIPTIONS_VERSION = "2026.10.14.5"
 EMBEDDINGS_VERSION = "2026.10.14.4"
-ALIGNMENT_VERSION = "2026.10.14.3"
+ALIGNMENT_VERSION = "2026.10.14.4"
+PUBLICATION_VERSION = "2026.10.14.1"
 
 
 class SemanticArtifact(Artifact):
@@ -60,6 +65,7 @@ class CurationEmbeddingStages:
     task_embeddings: ArtifactStep[SemanticArtifact]
     curriculum_embeddings: ArtifactStep[SemanticArtifact]
     assignments: ArtifactStep[SemanticArtifact]
+    publication: ArtifactStep[SemanticArtifact]
 
 
 @dataclass(frozen=True)
@@ -204,14 +210,13 @@ def _align(
             dtype=np.float32,
         ),
     )
+    curriculum_key = canonical_sha256({"anchors": [anchor.anchor_id for anchor in anchors], "spec": spec.model_dump()})
     paths = align_tasks(
         runtime.context,
         input_paths=SemanticArtifact.raw_load(inputs_root).paths,
         description_paths=SemanticArtifact.raw_load(descriptions_root).paths,
         curriculum=curriculum,
-        curriculum_key=canonical_sha256(
-            {"anchors": [anchor.anchor_id for anchor in anchors], "spec": spec.model_dump()}
-        ),
+        curriculum_key=curriculum_key,
         cache_root=cache_root,
         spec=spec,
         output_root=output_root,
@@ -223,6 +228,7 @@ def _align(
                 "descriptions_root": descriptions_root,
                 "task_vectors_root": task_vectors_root,
                 "curriculum_vectors_root": curriculum_vectors_root,
+                "curriculum_key": curriculum_key,
                 "spec": spec.model_dump(mode="json"),
                 "paths": paths,
             },
@@ -234,6 +240,90 @@ def _align(
 
 def _named(step: ArtifactStep[SemanticArtifact]) -> ArtifactStep[SemanticArtifact]:
     return replace(step, name=f"{step.name}-{step.fingerprint()[:16]}")
+
+
+def _publish(
+    runtime: CampaignRuntime,
+    *,
+    alignment_root: str,
+    curated_roots: dict[str, str],
+    inventory: list[SourceDeclaration],
+    population: str,
+    sample_size: int | None,
+    output_root: str,
+) -> SemanticArtifact:
+    alignment = json.loads((StoragePath(alignment_root) / "alignment.json").read_text())
+    data = publish_alignments(
+        runtime.context,
+        input_paths=SemanticArtifact.raw_load(alignment["inputs_root"]).paths,
+        alignment_paths=SemanticArtifact.raw_load(alignment_root).paths,
+        output_root=output_root,
+    )
+    counts = {row.source_id: row for row in data.sources}
+    if set(counts) - curated_roots.keys():
+        raise ValueError("Alignment contains sources outside the selected corpus")
+    if curated_roots.keys() - {row.id for row in inventory}:
+        raise ValueError("Selected sources are absent from the published inventory")
+    sources = []
+    for source_id, root in curated_roots.items():
+        manifest = json.loads((StoragePath(root) / "manifest.json").read_text())
+        source_key = canonical_sha256(manifest)
+        row = counts.get(source_id) or AlignmentSource(
+            source_id=source_id,
+            source_key=source_key,
+            population=population,
+            intended_use=manifest["intended_use"],
+            task_count=0,
+            ready_count=0,
+            insufficient_context_count=0,
+            unique_content_count=0,
+        )
+        if (row.source_key, row.population, row.intended_use) != (source_key, population, manifest["intended_use"]):
+            raise ValueError(f"Published source lineage differs from the selected manifest: {source_id}")
+        if population == "converted" and sample_size is None and row.task_count != manifest["converted_rows"]:
+            raise ValueError(f"Alignment does not cover the complete converted source: {source_id}")
+        sources.append(
+            row.model_copy(
+                update={
+                    "curation_root": root,
+                    "input_rows": manifest.get("input_rows"),
+                    "converted_rows": manifest.get("converted_rows"),
+                    "rejections": manifest.get("rejections", {}),
+                }
+            )
+        )
+    curriculum_root = alignment["curriculum_vectors_root"]
+    lineage = {
+        key: alignment[key]
+        for key in ("inputs_root", "descriptions_root", "task_vectors_root", "curriculum_vectors_root")
+    }
+    lineage["alignment_root"] = alignment_root
+    release = AlignmentRelease(
+        release_id=canonical_sha256(
+            {
+                "lineage": lineage,
+                "sources": [row.model_dump() for row in sources],
+                "inventory": [row.model_dump() for row in inventory],
+            }
+        ),
+        created_at=datetime.now(UTC).isoformat(),
+        curriculum_key=alignment["curriculum_key"],
+        population=population,
+        sample_size=sample_size,
+        task_count=sum(row.task_count for row in sources),
+        ready_count=sum(row.ready_count for row in sources),
+        insufficient_context_count=sum(row.insufficient_context_count for row in sources),
+        unique_content_count=data.unique_content_count,
+        unique_embedding_count=data.unique_embedding_count,
+        sources=sources,
+        inventory=inventory,
+        nodes=json.loads((StoragePath(curriculum_root) / "nodes.json").read_text()),
+        paths=data.paths,
+        lineage=lineage,
+        embedding_spec=alignment["spec"],
+    )
+    (StoragePath(output_root) / "release.json").write_text(release.model_dump_json(indent=2))
+    return SemanticArtifact(path=output_root, paths=data.paths)
 
 
 def curation_embedding_pipeline(
@@ -249,6 +339,7 @@ def curation_embedding_pipeline(
     population: str,
     sample_size: int | None,
     seed: int,
+    inventory: list[SourceDeclaration],
 ) -> CurationEmbeddingStages:
     """Bind independent task and curriculum embeddings before the assignment pass."""
     inputs = _named(
@@ -316,4 +407,18 @@ def curation_embedding_pipeline(
             output_root=OUT,
         )
     )
-    return CurationEmbeddingStages(inputs, descriptions, vectors, anchors, assignments)
+    publication = _named(
+        apply(
+            "rl-semantics/publication",
+            partial(_publish, runtime),
+            version=PUBLICATION_VERSION,
+            artifact_type=SemanticArtifact,
+            alignment_root=assignments,
+            curated_roots=curated,
+            inventory=inventory,
+            population=population,
+            sample_size=sample_size,
+            output_root=OUT,
+        )
+    )
+    return CurationEmbeddingStages(inputs, descriptions, vectors, anchors, assignments, publication)

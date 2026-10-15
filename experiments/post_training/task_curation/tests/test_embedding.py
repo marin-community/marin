@@ -25,6 +25,8 @@ from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.curriculum import curriculum_anchors
 from experiments.post_training.task_curation.embedding import DescriptionEndpoint, curation_embedding_pipeline
 from experiments.post_training.task_curation.local import local_artifact_prefix
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source_metadata import source_declaration
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
 
@@ -194,6 +196,9 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
                     population="admitted",
                     sample_size=None,
                     seed=0,
+                    inventory=[
+                        source_declaration(RlDataSource(info=SourceInfo(id="source", title="Fixture", origin="fixture")))
+                    ],
                 )
             )
         first, second = stages
@@ -202,15 +207,19 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
         assert first.task_embeddings.path() == second.task_embeddings.path()
         assert first.curriculum_embeddings.path() != second.curriculum_embeddings.path()
         assert first.assignments.path() != second.assignments.path()
-        built = run(first.assignments, max_concurrent=1)[0]
+        built = run(first.publication, max_concurrent=1)[0]
+        release = json.loads((Path(built.path) / "release.json").read_text())
+        assert release["task_count"] == 2
+        assert release["unique_content_count"] == release["unique_embedding_count"] == 1
         rows = [row for path in built.paths for row in load_parquet(path)]
         assert {row["task_id"] for row in rows} == {"a", "b"}
-        assert all(row["matches"][0]["capability_id"] == "math.addition" for row in rows)
+        assert all(row["matches"]["subjects"][0]["capability_id"] == "math.addition" for row in rows)
         batches = [json.loads(line) for line in Path(provider.calls).read_text().splitlines()]
         expected = {text_record(anchor.text, spec)["text"] for anchor in curriculum_anchors(first_catalog)}
-        assert any(set(batch) == expected for batch in batches)
+        assert expected <= {text for batch in batches for text in batch}
         texts_before = sum(map(len, batches))
-        rebuilt = run(second.assignments, max_concurrent=1)[0]
+        rebuilt = run(second.publication, max_concurrent=1)[0]
+        assert json.loads((Path(rebuilt.path) / "release.json").read_text())["release_id"] != release["release_id"]
         assert {row["task_id"] for path in rebuilt.paths for row in load_parquet(path)} == {"a", "b"}
         assert len(description_server.requests) == 1
         batches = [json.loads(line) for line in Path(provider.calls).read_text().splitlines()]

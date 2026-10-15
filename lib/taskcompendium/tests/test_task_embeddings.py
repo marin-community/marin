@@ -17,6 +17,7 @@ from zephyr.stage_io import ZephyrWorkerError
 
 from taskcompendium.convert.answers import numeric_answer_task
 from taskcompendium.models import Source, TaskSpec
+from taskcompendium.pipeline.alignment_publication import publish_alignments
 from taskcompendium.pipeline.curriculum_alignment import (
     AnchorKind,
     CurriculumAnchor,
@@ -257,9 +258,26 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
     assert set(output) == {"a", "b", "c"}
     assert output["a"]["description"] == "Elementary arithmetic: count apples."
     assert output["a"]["matches"] == output["b"]["matches"]
-    assert output["a"]["matches"][0]["membership_similarity"] == pytest.approx(1.0)
+    assert output["a"]["matches"]["subjects"][0]["membership_similarity"] == pytest.approx(1.0)
+    assert output["a"]["preview_truncated"]
+    assert output["a"]["instruction_characters"] > len(output["a"]["task_preview"])
     assert output["c"]["description_status"] == "insufficient_context"
-    assert output["c"]["matches"] == []
+    assert output["c"]["matches"] is None
+
+    publication = publish_alignments(
+        context, input_paths=inputs, alignment_paths=assigned, output_root=str(tmp_path / "release")
+    )
+    assert publication.sources[0].task_count == 3
+    assert publication.sources[0].ready_count == 2
+    assert publication.sources[0].insufficient_context_count == 1
+    assert publication.unique_content_count == 2
+    assert publication.unique_embedding_count == 1
+    corrupt = tmp_path / "corrupt.parquet"
+    pq.write_table(pa.Table.from_pylist([output["a"], output["a"], output["c"]]), corrupt)
+    with pytest.raises(ZephyrWorkerError, match=r"Duplicate match|Incomplete alignment coverage"):
+        publish_alignments(
+            context, input_paths=inputs, alignment_paths=[str(corrupt)], output_root=str(tmp_path / "broken")
+        )
 
     changed_anchor = text_record("Count and compare items", spec)
     embed_texts(
@@ -343,17 +361,20 @@ def test_exact_matching_preserves_primary_candidates_and_weak_scores():
         CurriculumVectors((*anchors, *neighbor), np.concatenate([references, [[0, 0, 1], [0, 0, 1]]])),
         tasks,
     )
-    assert {row.subject_id for row in output[0]} == {"math", "practice"}
-    math = next(row for row in output[0] if row.subject_id == "math")
+    assert {row.subject_id for row in output[0].subjects} == {"math", "practice"}
+    math = next(row for row in output[0].subjects if row.subject_id == "math")
     assert math.capability_id == "count"
+    assert output[0].capabilities[0].subject_id == "math"
+    assert output[0].capabilities[0].capability_id == "count"
     assert [candidate.subject_id for candidate in math.subject_candidates] == ["math", "neighbor"]
-    tied = next(row for row in output[1] if row.subject_id == "math")
+    tied = next(row for row in output[1].subjects if row.subject_id == "math")
     assert tied.capability_id == "compare"
     assert tied.margin == pytest.approx(0)
     assert [candidate.capability_id for candidate in tied.candidates] == ["compare", "count"]
-    assert all(row.candidates[0].similarity == pytest.approx(0.8) for row in output[2])
-    assert all(row.membership_similarity == pytest.approx(-1) for row in output[3])
-    assert all(row.capability_id for row in output[3])
+    assert all(row.candidates[0].similarity == pytest.approx(0.8) for row in output[2].subjects)
+    assert output[2].capabilities[0].subject_id == "neighbor"
+    assert all(row.membership_similarity == pytest.approx(-1) for row in output[3].subjects)
+    assert all(row.capability_id for row in output[3].subjects)
 
 
 @dataclass(frozen=True)

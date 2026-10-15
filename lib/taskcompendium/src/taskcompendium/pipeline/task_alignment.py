@@ -19,9 +19,10 @@ from zephyr.dataset import Dataset, ShardInfo
 from zephyr.readers import load_parquet
 from zephyr.worker_context import zephyr_worker_ctx
 
+from taskcompendium.models import ConversationInput, format_conversation
 from taskcompendium.pipeline.curriculum_alignment import (
     CurriculumVectors,
-    SubjectMatch,
+    TaskMatches,
     rank_task_batch,
 )
 from taskcompendium.pipeline.semantics import DescriptionStatus
@@ -40,7 +41,9 @@ class TaskAlignment(BaseModel):
     reason: str
     description: str
     task_preview: str
-    matches: list[SubjectMatch]
+    instruction_characters: int
+    preview_truncated: bool
+    matches: TaskMatches | None
 
 
 @dataclass(frozen=True)
@@ -94,7 +97,9 @@ def _align_batches(
             else []
         )
         for row in batch:
-            assigned = next(rankings) if row["status"] == DescriptionStatus.READY else []
+            assigned = next(rankings) if row["status"] == DescriptionStatus.READY else None
+            public = json.loads(row["public_input"])
+            instructions = format_conversation(ConversationInput.model_validate(public["context"]).events)
             result = TaskAlignment(
                 **{
                     name: row[name]
@@ -111,11 +116,15 @@ def _align_batches(
                 },
                 description_status=row["status"],
                 description=row["description"],
-                task_preview=row["public_input"][:4096],
+                task_preview=instructions[:8192],
+                instruction_characters=len(instructions),
+                preview_truncated=len(instructions) > 8192,
                 matches=assigned,
             )
             counters.current_stage().update_counter("alignment/tasks", 1)
-            counters.current_stage().update_counter("alignment/subject_matches", len(assigned))
+            counters.current_stage().update_counter(
+                "alignment/subject_matches", len(assigned.subjects) if assigned else 0
+            )
             yield result.model_dump(mode="json")
 
 

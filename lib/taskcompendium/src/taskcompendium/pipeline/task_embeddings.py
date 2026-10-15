@@ -129,7 +129,7 @@ def embed_texts(
     """Embed unique text keys with batched FineStore reads and transactional cache writes."""
     schema = pa.schema([("embedding_key", pa.string()), ("embedding", pa.list_(pa.float32(), spec.dimensions))])
     result = context.execute(
-        texts.deduplicate(key=lambda row: row["embedding_key"])
+        texts.deduplicate(key=lambda row: row["embedding_key"], num_output_shards=context.max_workers)
         .window(batch_size)
         .map_shard(partial(_embed_batches, spec=spec, embedder=embedder, cache_root=cache_root))
         .write_parquet(str(StoragePath(output_root) / "vectors/part-{shard:05d}.parquet"), schema=schema),

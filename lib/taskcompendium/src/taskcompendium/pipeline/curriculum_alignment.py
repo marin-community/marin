@@ -37,6 +37,7 @@ class CurriculumAnchor(BaseModel):
 
 
 class CapabilityCandidate(BaseModel):
+    subject_id: str
     capability_id: str
     similarity: float
     anchor_id: str
@@ -57,6 +58,11 @@ class SubjectMatch(BaseModel):
     margin: float
     candidates: list[CapabilityCandidate]
     subject_candidates: list[SubjectCandidate]
+
+
+class TaskMatches(BaseModel):
+    subjects: list[SubjectMatch]
+    capabilities: list[CapabilityCandidate]
 
 
 def _top_positions(scores: np.ndarray, count: int) -> np.ndarray:
@@ -156,10 +162,32 @@ class CurriculumVectors:
         )
 
 
+def _capability_candidates(
+    curriculum: CurriculumVectors,
+    scores: np.ndarray,
+    anchor_scores: np.ndarray,
+    positions: tuple[int, ...],
+) -> list[CapabilityCandidate]:
+    candidates = []
+    for winner in _top_positions(scores[list(positions)], TOP_K):
+        capability = curriculum.index.capabilities[positions[winner]]
+        anchors = capability.anchor_positions
+        anchor = curriculum.anchors[anchors[int(np.argmax(anchor_scores[list(anchors)]))]]
+        candidates.append(
+            CapabilityCandidate(
+                subject_id=anchor.subject_id,
+                capability_id=capability.capability_id,
+                similarity=_cosine(scores[positions[winner]]),
+                anchor_id=anchor.anchor_id,
+            )
+        )
+    return candidates
+
+
 def rank_task_batch(
     curriculum: CurriculumVectors,
     task_vectors: np.ndarray,
-) -> list[list[SubjectMatch]]:
+) -> list[TaskMatches]:
     """Score primary subjects and nearest capabilities without applying acceptance thresholds."""
     row_count = len(task_vectors)
     dimensions = curriculum.vectors.shape[1]
@@ -172,7 +200,7 @@ def rank_task_batch(
     capability_scores = np.maximum.reduceat(operation_scores, index.capability_starts, axis=1)
     membership_scores = [anchor_scores[:, list(subject.anchor_positions)] for subject in index.subjects]
     graph_scores = np.stack([scores.max(axis=1) for scores in membership_scores], axis=1)
-    operation_columns = {int(position): column for column, position in enumerate(index.operation_positions)}
+    all_capabilities = tuple(range(len(index.capabilities)))
     by_facet = {
         facet: [position for position, subject in enumerate(index.subjects) if subject.facet == facet]
         for facet in CurriculumFacet
@@ -198,23 +226,10 @@ def rank_task_batch(
             subject_index = nearest_subjects[0]
             subject = subjects[subject_index]
             reference = index.subjects[subject_index]
-            positions = reference.capability_positions
-            scores = capability_scores[row, list(positions)]
-            winners = _top_positions(scores, TOP_K)
-            margin = _cosine(scores[winners[0]]) - _cosine(scores[winners[1]]) if len(winners) > 1 else 2.0
-            candidates = []
-            for winner in winners:
-                capability = index.capabilities[positions[winner]]
-                anchors = capability.anchor_positions
-                columns = [operation_columns[position] for position in anchors]
-                anchor = anchors[int(np.argmax(operation_scores[row, columns]))]
-                candidates.append(
-                    CapabilityCandidate(
-                        capability_id=capability.capability_id,
-                        similarity=_cosine(scores[winner]),
-                        anchor_id=curriculum.anchors[anchor].anchor_id,
-                    )
-                )
+            candidates = _capability_candidates(
+                curriculum, capability_scores[row], anchor_scores[row], reference.capability_positions
+            )
+            margin = candidates[0].similarity - candidates[1].similarity if len(candidates) > 1 else 2.0
             member = _cosine(graph_scores[row, subject_index])
             membership_anchors = reference.anchor_positions
             best_anchor = membership_anchors[int(np.argmax(membership_scores[subject_index][row]))]
@@ -230,5 +245,12 @@ def rank_task_batch(
                     subject_candidates=subject_candidates,
                 )
             )
-        rows.append(assignments)
+        rows.append(
+            TaskMatches(
+                subjects=assignments,
+                capabilities=_capability_candidates(
+                    curriculum, capability_scores[row], anchor_scores[row], all_capabilities
+                ),
+            )
+        )
     return rows

@@ -272,8 +272,11 @@ outputs preserve each embedding stage's data and provenance.
 For an existing Iris-managed TEI Harrier pool, use `--embedding-backend tei
 --tei-endpoint NAME` and declare the pool's actual `--compute-dtype`. Configure
 the same checkpoint, tokenizer and token limit. Requests reject truncation.
-`--max-workers` and `--worker-memory` select the Zephyr worker pool; run the same
-entrypoint inside Iris with a storage-region cache root.
+`--max-workers`, `--worker-cpu` and `--worker-memory` select the Zephyr worker
+pool. Description and embedding deduplication distribute work across that pool,
+independently of source-file count. CPU inference limits PyTorch threads to the
+worker's requested CPU count. Run the same entrypoint inside Iris with a
+storage-region cache root. Use CPU workers for corpus scale-out.
 
 For a direct single-GPU baseline, select `--embedding-backend gpu --max-workers 1`
 inside a GPU-equipped Iris job. This runs local Zephyr workers in that job and
@@ -283,12 +286,47 @@ precision in separate cache roots before sharing vectors across backends.
 Matching selects the nearest subject within each declared curriculum routing
 facet and writes its membership score and nearest capability. The three
 highest-ranked subject and capability candidates, including the nearest match,
-retain their scores and winning anchors. Weak matches are retained too.
+retain their scores and winning anchors. Matching also saves the three nearest
+capabilities across all subjects, to expose candidates excluded by primary
+subject selection. Weak matches are retained too.
 
 Acceptance thresholds belong to aggregation and display. Changing a cutoff
 reuses the scored matches and embeddings; it does not rerun matching. Missing
 task meaning remains `insufficient_context`. This pass does not change curation
 admission or train/eval use.
+
+The default `publication` stage checks task IDs and lineage against selected
+inputs before writing `release.json`. It records instance, unique-public-input,
+unique-embedding-text and insufficient-context counts, the curriculum hierarchy,
+inventory and upstream artifact roots. Duplicate, missing or mismatched task
+rows fail publication. Full converted releases must cover each conversion
+manifest's converted-task count; sampled releases retain their sample size.
+
+### Complete converted corpus
+
+Run complete pinned conversions with the existing campaign scheduler and Zephyr:
+
+```bash
+uv run python -m experiments.post_training.task_curation.convert_corpus \
+  --output-root /path/to/persistent/corpus --max-workers 8
+```
+
+Add `--run` to execute. Repeat `--source NAME` with source invocation names from
+the registry; omit it for every runnable source. The command skips grading and admission, preserves
+converter rejections and writes `corpus.json` only after every selected source
+completes. Conversion outputs are keyed by the pinned acquisition graph and
+recipe version. The manifest records raw input rows, successfully converted
+TaskSpecs, rejections and immutable source-manifest hashes. It also includes the
+full registry inventory. Only `sources` lists completed conversions; unselected
+sources and sources without converters appear in `inventory` alone.
+
+In the embedding command above, replace `--curated` arguments with
+`--corpus /path/to/persistent/corpus/corpus.json --population converted`.
+The embedding entrypoint checks source
+manifest hashes before processing. Raw input rows, converted task instances,
+unique public inputs and unique embedding texts have separate counts; converter
+rejections never enter the embedding population. Neither converted counts nor
+embedding coverage imply that tasks passed curation admission.
 
 ## Declaring a dataset
 
