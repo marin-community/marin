@@ -16,7 +16,7 @@ from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.datasets.skill2env.conversion import RELEASE, convert_task, golden
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HarborSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import InputPreparation, RlDataSource, SourceInfo
 
 RUBRIC = """
 Compare the original task instructions with the unchanged programmatic verifier and private reference solution.
@@ -83,5 +83,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 controls=Controls(golden=golden, memory_mb=4096),
             ),
             pipeline=process_skill2env,
+            preparation=InputPreparation.EXPLICIT,
         )
     ]

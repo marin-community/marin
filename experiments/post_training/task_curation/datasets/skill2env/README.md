@@ -12,15 +12,18 @@ Prepare a bounded selection on a Docker build host with registry access:
 
 ```bash
 uv run --project config/external/harbor --frozen python \
-  experiments/post_training/task_curation/datasets/skill2env/prepare.py \
+  -m experiments.post_training.task_curation.datasets.skill2env.prepare \
   --release skill2env/skill2env@sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c \
   --task skill2env/task_api-design-reviewer_jdkbai64@sha256:acfc393449fdad22ae5a2da63d16d27605c02a983059fac0c5dd49384bf6c260 \
-  --build-repository YOUR_REGISTRY/skill2env --output /tmp/skill2env-input
+  --build-repository ghcr.io/marin-community/iris-task --output /tmp/skill2env-input
 ```
 
 Repeat `--task` for more tasks; `--all` selects the release's complete population.
 `--build-repository` builds and pushes two images per task, recording their
-immutable digests. The actor uses the original Docker context. The verifier
+immutable digests. Both use the shared curation builder's linux/amd64, gzip-layer
+and disabled-provenance settings. Iris workers pull anonymously: use the public
+`ghcr.io/marin-community/iris-task` package, or ensure another repository is
+public before running tasks. The actor uses the original Docker context. The verifier
 uses that image with `/workspace` cleared, so copying the submitted workspace
 cannot resurrect files the agent deleted. Without `--build-repository`, the
 export is available for inspection but conversion defers its unbuilt tasks.
@@ -30,15 +33,18 @@ Convert the prepared selection with the existing driver:
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python \
   -m experiments.post_training.task_curation.driver --mode quick --run \
-  --source skill2env --input-root /tmp/skill2env-input \
+  --source skill2env --source-input-root skill2env /tmp/skill2env-input \
   --output-root /tmp/skill2env-converted
 ```
 
 QUICK does not run graders or admit training tasks. For reviewed SAMPLE/FULL
 execution, use the [campaign options](../../README.md#reviewed-local-loop-on-real-sources)
 with the same input root and an image backend supporting 2 CPUs, 4096 MiB RAM,
-4096 MiB storage and disabled network access. Campaigns require prepared input;
-they do not download or build this source automatically. A selected export is a
+4096 MiB storage and disabled network access. Skill2Env is excluded from default campaigns because it requires prepared input.
+Select it explicitly with `--source skill2env`. In mixed campaigns,
+`--source-input-root skill2env PATH` leaves other sources' downloads unchanged.
+A missing input fails during planning, before workers start. Campaigns do not
+download or build this source automatically. A selected export is a
 subset, not evidence about all 7,496 tasks.
 
 The grader runs the unchanged `tests/test.sh` in a separate sandbox. Private

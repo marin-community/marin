@@ -34,11 +34,12 @@ from experiments.post_training.task_curation.images.build import environment_art
 from experiments.post_training.task_curation.pipeline import (
     CampaignMachines,
     CurationRecipe,
+    HarborSource,
     HfSource,
     environment_requirements,
     process_rows,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import InputPreparation, RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tests.image_builds import (
     DATA_PATH,
     REPOSITORY,
@@ -70,6 +71,12 @@ def catalog(monkeypatch, tmp_path):
                 for name, pipeline in pipelines.items()
             },
             "numbers": number_source(tmp_path / "not-yet-generated"),
+            "prepared": RlDataSource(
+                info=SourceInfo(id="fixture:prepared", title="prepared", origin="fixture"),
+                config=replace(math500(), name="prepared", source=HarborSource("fixture/tasks", "sha256:" + "a" * 64)),
+                pipeline=process_rows,
+                preparation=InputPreparation.EXPLICIT,
+            ),
         },
     )
     return pipelines
@@ -103,6 +110,51 @@ def test_source_option_selects_catalog_order_without_changing_identity(tmp_path,
     unknown = runner.invoke(main, [*arguments(tmp_path), "--source", "unknown", "--run"])
     assert unknown.exit_code == 2
     assert "Unknown source: unknown" in unknown.output
+
+
+@pytest.mark.parametrize("mode", ["quick", "sample", "full"])
+def test_prepared_source_inputs_do_not_replace_peer_downloads(tmp_path, catalog, mode):
+    staged = tmp_path / "prepared"
+    staged.mkdir()
+    payload = staged / "tasks.jsonl"
+    payload.write_text('{"problem": "Two plus two?", "answer": "4"}\n')
+    args = [
+        "--mode",
+        mode,
+        "--source",
+        "first",
+        "--source",
+        "prepared",
+        "--max-workers",
+        "1",
+        "--cache-dir",
+        str(tmp_path / "cache"),
+        "--skip-assessment",
+        "--model-revision",
+        "fixture",
+        "--review-mode",
+        "chat",
+    ]
+    if mode == "quick":
+        args += ["--output-root", str(tmp_path / "output")]
+    runner = CliRunner()
+    missing = runner.invoke(main, args)
+    assert missing.exit_code == 2
+    args += ["--source-input-root", "prepared", str(staged)]
+    initial = runner.invoke(main, args)
+    assert initial.exit_code == 0, initial.output
+    initial_sources = json.loads(initial.output)["sources"]
+    payload.write_text('{"problem": "Three plus three?", "answer": "6"}\n')
+    changed = runner.invoke(main, args)
+    assert changed.exit_code == 0, changed.output
+    changed_sources = json.loads(changed.output)["sources"]
+    assert len(initial_sources) == 2
+    assert initial_sources[0] == changed_sources[0]
+    assert initial_sources[0]["dependencies"]  # The ordinary source still downloads its pinned input.
+    if mode != "quick":
+        # QUICK uses a mutable dev output; reviewed modes cache by input content.
+        assert initial_sources[1]["fingerprint"] != changed_sources[1]["fingerprint"]
+    assert initial_sources[1]["dependencies"] == []
 
 
 def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_their_lock(tmp_path, monkeypatch, request):
@@ -182,7 +234,7 @@ def test_quick_cli_plans_then_converts_once_in_request_order(tmp_path, monkeypat
         assert [row["source_row"] for row in rows] == [source_row]
 
 
-@pytest.mark.parametrize("option", ["--input-root", "--input-file", "--input", "--output-root"])
+@pytest.mark.parametrize("option", ["--input-root", "--source-input-root", "--input-file", "--input", "--output-root"])
 def test_reviewed_cli_rejects_local_input_and_output_options(tmp_path, catalog, option):
     inputs = tmp_path / "inputs"
     inputs.mkdir()
@@ -190,6 +242,7 @@ def test_reviewed_cli_rejects_local_input_and_output_options(tmp_path, catalog, 
     file.write_text('{"prompt": "fixture"}\n')
     values = {
         "--input-root": [str(inputs)],
+        "--source-input-root": ["first", str(inputs)],
         "--input-file": ["fixture.jsonl", str(file)],
         "--input": ["answers", str(inputs)],
         "--output-root": [str(tmp_path / "output")],

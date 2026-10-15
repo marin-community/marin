@@ -49,17 +49,18 @@ from taskcompendium.runtime.local import (
 )
 
 from experiments.post_training.task_curation.environment import Archive, Environment, Placement, placement
+from experiments.post_training.task_curation.images.push import (
+    DEFAULT_REPOSITORY,
+    IMAGE_COMPRESSION,
+    PLATFORM,
+    push_image,
+)
 
-# New GHCR packages are created org-internal and the Iris workers pull anonymously, so built
-# images are tagged into the public iris-task package until a public task-curation package exists.
-DEFAULT_REPOSITORY = "ghcr.io/marin-community/iris-task"
 BASE_IMAGE = "ghcr.io/marin-community/iris-task@sha256:c646ef8b571571edfc96c75fd9c8cc712ad286b61b33781070bdc29ab9f9a6ab"
 """The image built environments start from: iris-task as of 2026-10-07, python:3.12-slim with uv."""
-PLATFORM = "linux/amd64"
 PYTHON_VERSION = "3.12"
 PYTHON_PLATFORM = "x86_64-unknown-linux-gnu"
 ENVIRONMENT_ARTIFACT_VERSION = "2026.10.08"
-IMAGE_COMPRESSION = "gzip"
 EXCLUDE_NEWER = "2026-10-14"
 """Transitive packages resolve among releases uploaded before this date; move it forward with the pins."""
 BUILD_COMMAND = "uv run python -m experiments.post_training.task_curation.images --identity {identity}"
@@ -332,35 +333,6 @@ def _require_tracked(environment: Environment) -> None:
             raise ValueError(f"{package} has executable files {executable}")
 
 
-def _push_image(context: Path, tag: str) -> str:
-    """Build ``context`` for linux/amd64, push it as ``tag``, and return the pushed manifest digest."""
-    package_contexts = [f"--build-context={package.name}={package}" for package in RUNTIME_PACKAGES]
-    # Without provenance the pushed reference is one platform manifest rather than an attestation index.
-    subprocess.run(
-        [
-            "docker",
-            "buildx",
-            "build",
-            f"--platform={PLATFORM}",
-            "--provenance=false",
-            # Export inherited layers with the selected compression too, so OCI
-            # consumers can convert the image to Docker's schema2 format.
-            f"--output=type=registry,compression={IMAGE_COMPRESSION},force-compression=true",
-            f"--tag={tag}",
-            *package_contexts,
-            str(context),
-        ],
-        check=True,
-    )
-    inspected = subprocess.run(
-        ["docker", "buildx", "imagetools", "inspect", tag, "--format", "{{json .Manifest}}"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    return json.loads(inspected)["digest"]
-
-
 def build_environment(environment: Environment, build: EnvironmentBuild) -> EnvironmentArtifact:
     """Store ``environment``'s lock, files and env and, when it needs what the worker image lacks, push its image."""
     if identity_digest(environment) != build.identity:
@@ -377,7 +349,7 @@ def build_environment(environment: Environment, build: EnvironmentBuild) -> Envi
         files = files_archive(context / FILES_DIRECTORY) if environment.files else None
         if builds_image:
             tag = image_tag(build.repository, build.identity)
-            image = f"{build.repository}@{_push_image(context, tag)}"
+            image = f"{build.repository}@{push_image(context, tag, RUNTIME_PACKAGES)}"
     output = StoragePath(build.output_path)
     (output / LOCK_FILE).write_bytes(lock, auto_mkdir=True)
     if files is not None:

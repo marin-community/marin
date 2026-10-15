@@ -10,7 +10,6 @@ import json
 import logging
 import re
 import stat
-import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -19,6 +18,8 @@ from harbor.models.task.id import PackageTaskId
 from harbor.publisher.packager import Packager
 from harbor.registry.client.package import PackageDatasetClient
 from harbor.tasks.client import TaskClient
+
+from experiments.post_training.task_curation.datasets.skill2env.native_images import build_image
 
 MAX_TASK_BYTES = 8 * 1024 * 1024
 # The published Hub release ID is not the current SDK's task-membership hash.
@@ -43,60 +44,6 @@ def export_task(root: Path, task_ref: str) -> dict:
         "files": {path.relative_to(root).as_posix(): base64.b64encode(path.read_bytes()).decode() for path in paths},
         "modes": {path.relative_to(root).as_posix(): format(stat.S_IMODE(path.stat().st_mode), "o") for path in paths},
     }
-
-
-def build_image(root: Path, task_ref: str, repository: str) -> tuple[str, str]:
-    """Build the original context and record the pushed image digest from BuildKit."""
-    tag = f"{repository}:skill2env-{task_ref.rsplit(':', 1)[1]}"
-    with TemporaryDirectory(prefix="skill2env-build-") as directory:
-        metadata = Path(directory) / "metadata.json"
-        subprocess.run(
-            [
-                "docker",
-                "buildx",
-                "build",
-                "--platform",
-                "linux/amd64",
-                "--push",
-                "--tag",
-                tag,
-                "--metadata-file",
-                str(metadata),
-                str(root / "environment"),
-            ],
-            check=True,
-        )
-        digest = json.loads(metadata.read_text())["containerimage.digest"]
-    if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
-        raise ValueError("BuildKit did not return an image digest")
-    actor = f"{repository}@{digest}"
-    # A pristine workspace would resurrect files deleted by the submitted solution.
-    with TemporaryDirectory(prefix="skill2env-verifier-build-") as directory:
-        context = Path(directory)
-        (context / "Dockerfile").write_text(
-            f"FROM {actor}\nUSER root\nRUN rm -rf /workspace && mkdir -p /workspace\nWORKDIR /workspace\n"
-        )
-        metadata = context / "build.json"
-        subprocess.run(
-            [
-                "docker",
-                "buildx",
-                "build",
-                "--platform",
-                "linux/amd64",
-                "--push",
-                "--tag",
-                tag + "-verifier",
-                "--metadata-file",
-                str(metadata),
-                str(context),
-            ],
-            check=True,
-        )
-        grader_digest = json.loads(metadata.read_text())["containerimage.digest"]
-    if re.fullmatch(r"sha256:[0-9a-f]{64}", grader_digest) is None:
-        raise ValueError("BuildKit did not return a verifier image digest")
-    return actor, f"{repository}@{grader_digest}"
 
 
 async def prepare(release: str, output: Path, selected: list[str], build_repository: str | None) -> None:

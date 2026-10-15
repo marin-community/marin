@@ -4,6 +4,7 @@
 """Source declarations and their curation pipeline interfaces."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
 from marin.execution.lazy import ArtifactStep
@@ -73,6 +74,13 @@ class SourceInfo:
     dataset: SourceReference | None = None
 
 
+class InputPreparation(StrEnum):
+    """Whether a campaign can obtain a source's inputs without a separate preparation step."""
+
+    AUTOMATIC = "automatic"
+    EXPLICIT = "explicit"
+
+
 @dataclass(frozen=True)
 class RlDataSource[ConfigT: CatalogConfig]:
     """One source population, its dataset-owned configuration and callable.
@@ -86,6 +94,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
     info: SourceInfo
     config: ConfigT | None = None
     pipeline: "CurationPipeline[ConfigT] | None" = None
+    preparation: InputPreparation = InputPreparation.AUTOMATIC
 
     @property
     def name(self) -> str:

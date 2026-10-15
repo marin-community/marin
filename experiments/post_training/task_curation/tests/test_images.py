@@ -16,6 +16,7 @@ from click.testing import CliRunner
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.task_curation.datasets.skill2env.native_images import build_image
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images import __main__ as images
 from experiments.post_training.task_curation.images import build
@@ -74,6 +75,32 @@ def test_apt_packages_beyond_the_worker_image_push_an_image_and_record_its_diges
     )
     assert parameters["compression"] == "gzip"
     assert parameters["force-compression"] == "true"
+
+
+def test_native_images_use_pull_compatible_exports_and_pin_each_registry_digest(tmp_path, docker_log):
+    native = tmp_path / "native" / "environment"
+    native.mkdir(parents=True)
+    dockerfile_text = "FROM python:3.12-slim\nWORKDIR /workspace\nCOPY tool.py /workspace/tool.py\n"
+    (native / "Dockerfile").write_text(dockerfile_text)
+    (native / "tool.py").write_text("print('native')\n")
+    actor, grader = build_image(native.parent, "fixture/task@sha256:" + "a" * 64, REPOSITORY)
+    commands = [shlex.split(line) for line in docker_log.read_text().splitlines()]
+    exports = [command for command in commands if command[:2] == ["buildx", "build"]]
+    assert len(exports) == 2
+    for reference, export in zip((actor, grader), exports, strict=True):
+        options = dict(arg.split("=", 1) for arg in export if arg.startswith("--"))
+        # These export settings are required by the Iris OCI image consumer.
+        assert options["--platform"] == "linux/amd64"
+        assert options["--provenance"] == "false"
+        assert dict(item.split("=", 1) for item in options["--output"].split(",")) == {
+            "type": "registry",
+            "compression": "gzip",
+            "force-compression": "true",
+        }
+        assert reference == f"{REPOSITORY}@sha256:{hashlib.sha256(options['--tag'].encode()).hexdigest()}"
+    assert actor != grader
+    assert exports[0][-1] == str(native)
+    assert (native / "Dockerfile").read_text() == dockerfile_text
 
 
 def test_image_serialization_changes_invalidate_built_images_but_preserve_worker_environments(monkeypatch):

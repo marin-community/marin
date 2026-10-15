@@ -700,6 +700,8 @@ def source_downloads(
     """Download pinned inputs unless the invocation supplies their local replacements."""
     primary = None
     if options.inputs.root is None and not options.inputs.files:
+        if isinstance(pipeline.source, HarborSource):
+            raise ValueError(f"{pipeline.name} requires prepared inputs; see its dataset README")
         primary = download_step(pipeline.source, options.runtime)
     return primary, {
         name: download_step(source, options.runtime)

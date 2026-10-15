@@ -14,6 +14,12 @@ sources = all_sources()  # stable Atlas ID -> RlDataSource
 ```
 
 Building the catalog performs no downloads, inference or job submission.
+The driver selects sources with automatic input preparation by default.
+Sources declaring `preparation=InputPreparation.EXPLICIT` remain available through
+`--source NAME` and require prepared primary inputs. For mixed local campaigns,
+`--source-input-root NAME PATH` overrides one selected source; `--input-root`
+and `--input-file` apply to all selected sources unless a scoped root overrides
+them. SAMPLE/FULL local input options also require `--cache-dir`.
 
 ## Dataset-owned invocation
 
@@ -131,7 +137,7 @@ The `CurationRecipe` configuration has these fields:
 | Field | Meaning |
 |---|---|
 | `name` | Catalog key and artifact name. |
-| `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)`. |
+| `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)`, or `HarborSource(name, revision)` for a native Hub release with prepared `tasks.jsonl` inputs. |
 | `convert` | `(RawRow, ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection`; it fixes the task's grader. |
 | `version` | Converter revision; bump it when conversion or bundled grader code changes. |
 | `intended_use` | `train` or `eval`. |
