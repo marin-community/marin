@@ -489,7 +489,7 @@ def lower(
             None if verifier_machine is None or grading is None else machine_runtime(verifier_machine, grading, host)
         ),
     )
-    return lower_task(task, runtime, session, factories=factories, sessions={})
+    return lower_task(task, runtime, session, factories=factories, sessions={}, providers={})
 
 
 def machine_runtime(
