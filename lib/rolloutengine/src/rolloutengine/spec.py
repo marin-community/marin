@@ -52,9 +52,9 @@ class TaskRuntimeSpec(BaseModel):
 class TaskSessionSpec(BaseModel):
     """Session selection, deadlines, and token budget for one attempt.
 
-    ``max_total_tokens`` stops new model requests when cumulative prompt plus
-    response tokens reach the threshold; the last request may exceed it.
-    ``None`` sets no threshold.
+    ``max_total_tokens`` stops model requests before one whose prompt alone would bring the
+    cumulative prompt plus response tokens to the threshold; the last request sent may exceed it
+    by its new observation and response tokens. ``None`` sets no threshold.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)

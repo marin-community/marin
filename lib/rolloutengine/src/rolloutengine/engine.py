@@ -54,13 +54,6 @@ from rolloutengine.task_session import _ShellboxTaskSession
 from rolloutengine.trace import _token_trace
 
 
-def _request_tokens(turn: ModelTurn) -> int:
-    """Tokens one request spends; each request charges its full prompt, including a served prefix."""
-    if turn.usage is not None:
-        return turn.usage.prompt_tokens + turn.usage.completion_tokens
-    return len(turn.prompt_token_ids) + len(turn.response_token_ids)
-
-
 def _empty_rollout(lowered: LoweredTaskSpec) -> RolloutData:
     return RolloutData(
         lowered.task.id,
@@ -275,8 +268,17 @@ class RolloutEngine:
                     except Exception as error:
                         model_error = error
                         break
-                    spent_tokens += _request_tokens(turn)
-                    budget_reached = limits.max_total_tokens is not None and spent_tokens >= limits.max_total_tokens
+                    if limits.max_total_tokens is not None and turn.usage is None and not turn.prompt_token_ids:
+                        raise RolloutContractError(
+                            "A token budget needs ModelTurn.usage or prompt token IDs from the model"
+                        )
+                    spent_tokens += turn.request_tokens
+                    # Without a reset, the next prompt holds at least this request's prompt and response,
+                    # so stop when that prompt alone would reach the budget.
+                    budget_reached = (
+                        limits.max_total_tokens is not None
+                        and spent_tokens + turn.request_tokens >= limits.max_total_tokens
+                    )
                     if replay_prompt_token_ids is not None and turn.prompt_token_ids != replay_prompt_token_ids:
                         raise RolloutContractError("Model transport changed the replay token prefix")
                     trace.append(turn)

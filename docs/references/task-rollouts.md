@@ -351,9 +351,14 @@ Each request charges its prompt tokens plus its response tokens. The prompt incl
 earlier turns, so a request charges the full prefix again; a conversation reset does not clear the total.
 If the model callable sets `ModelTurn.usage` (`TokenUsage(prompt_tokens, completion_tokens)`), the engine
 charges those counts. Otherwise it charges `len(prompt_token_ids) + len(response_token_ids)`.
-The request that reaches the budget completes, and the session handles its response.
-The engine then sends no more model requests and starts grading with `stop_reason="budget_reached"`.
-The budget takes precedence when that request also uses the last permitted turn.
+Without a conversation reset, the next prompt holds at least the previous request's prompt and response.
+After each response, the engine stops when the tokens spent plus that request's count reach `max_total_tokens`,
+so it never sends a request whose prompt alone reaches the budget. The last request sent may exceed it by its
+new observation and response tokens.
+The session handles the last response; the engine then sends no more model requests and starts grading with
+`stop_reason="budget_reached"`. The budget takes precedence when that request also uses the last permitted turn.
+With a budget set, a turn that reports neither `usage` nor prompt token IDs, which `TraceMode.MESSAGES` allows,
+raises `RolloutContractError` rather than charging nothing.
 Final grading receives the conversation through the last response, without its observations.
 
 `RolloutInterrupted` retains the failed operation, served token evidence, and original exception cause.

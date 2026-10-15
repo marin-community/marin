@@ -73,6 +73,13 @@ class ModelTurn:
     metadata: dict[str, Any] = field(default_factory=dict)
     usage: TokenUsage | None = None
 
+    @property
+    def request_tokens(self) -> int:
+        """Tokens this request spent: the reported ``usage``, else the prompt and response token-ID counts."""
+        if self.usage is not None:
+            return self.usage.prompt_tokens + self.usage.completion_tokens
+        return len(self.prompt_token_ids) + len(self.response_token_ids)
+
 
 class GenerationLimitReached(Exception):
     """The rendered prompt leaves no permitted generation budget."""
