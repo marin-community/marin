@@ -1,0 +1,82 @@
+{
+  "scope": "Actual first two learner/head updates per newRNOINTER arm. Captures retain two sampled rows per update from the logical32-row batch. Final1200 native response/batch membership, all evaluations, frozen-grader replay and final checkpoints remain required.",
+  "completion_claim": false,
+  "runs": [
+    {
+      "run_id": "sc-qwen-transfer-native-window-sc-s0-main-interactive-rno-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "controller_attempt": 0,
+      "archive_after_ms": 1792044978368,
+      "planned_updates": 1200,
+      "score_centering": true,
+      "steps": [
+        {
+          "step": 1,
+          "gradient_norm": 0.49892422556877136,
+          "logical_rows": 32,
+          "retained_rows": 2,
+          "active_loss_tokens": 277,
+          "natural_head_width": 128,
+          "ppo_ratio_exact_unit_fraction": 1,
+          "ppo_clip_ratio": 0,
+          "sampler_age": 0,
+          "metric_sha256": "f7ce4e4752e8fe886d752755bd5c815c0a606f0cc24b59cd0646af3fb3b3437f",
+          "capture_sha256": "ae37ed9ecf346e5c6405121d3e542837c5479a3b900456fd20066bfc27ee91eb"
+        },
+        {
+          "step": 2,
+          "gradient_norm": 1.093927025794983,
+          "logical_rows": 32,
+          "retained_rows": 2,
+          "active_loss_tokens": 264,
+          "natural_head_width": 128,
+          "ppo_ratio_exact_unit_fraction": 1,
+          "ppo_clip_ratio": 0,
+          "sampler_age": 0,
+          "metric_sha256": "51abd5354b741fd7a74c7d2a66b27f4569869ca0903cb2085e22279624c970a0",
+          "capture_sha256": "2ba3bbf9647b7179988e6205a5b9a8b0a6dfa994972f7a243c971df97b447a06"
+        }
+      ],
+      "early_learner_head_admission_passed": true,
+      "cache": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/.campaign-cache/qwen-native-window1200-main-final/sc-qwen-transfer-native-window-sc-s0-main-interactive-rno-a4-01a126ce"
+    },
+    {
+      "run_id": "sc-qwen-transfer-native-window-tis-s0-main-interactive-rno-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "controller_attempt": 0,
+      "archive_after_ms": 1792045072376,
+      "planned_updates": 1200,
+      "score_centering": false,
+      "steps": [
+        {
+          "step": 1,
+          "gradient_norm": 0.42187124490737915,
+          "logical_rows": 32,
+          "retained_rows": 2,
+          "active_loss_tokens": 368,
+          "natural_head_width": 128,
+          "ppo_ratio_exact_unit_fraction": 1,
+          "ppo_clip_ratio": 0,
+          "sampler_age": 0,
+          "metric_sha256": "b88a4f4a2848c48507ee1313b7448ccdfc77151f877ad531ae4d1212b33027e4",
+          "capture_sha256": "db13786663c909802ba387438038dac19334d1277a9a726e97acf84bcb734203"
+        },
+        {
+          "step": 2,
+          "gradient_norm": 0.6700606942176819,
+          "logical_rows": 32,
+          "retained_rows": 2,
+          "active_loss_tokens": 201,
+          "natural_head_width": 128,
+          "ppo_ratio_exact_unit_fraction": 1,
+          "ppo_clip_ratio": 0,
+          "sampler_age": 0,
+          "metric_sha256": "19d8295be4ee9e508c6db388a83648196f9d7b245c07d4086c597af191a3d10d",
+          "capture_sha256": "d84ddffdf24a96c3e94345bf61d3eb1883dbe31cc0261edfcb58e8da60bea7bf"
+        }
+      ],
+      "early_learner_head_admission_passed": true,
+      "cache": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/.campaign-cache/qwen-native-window1200-main-final/sc-qwen-transfer-native-window-tis-s0-main-interactive-rno-a4-01a126ce"
+    }
+  ]
+}
