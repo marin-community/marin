@@ -367,7 +367,7 @@ def _run_evalchemy_once(
     env_vars: Mapping[str, str],
     inference_sessions: tuple[RemoteInferenceSession, ...],
 ) -> EvalchemyOutcome:
-    """Run one attempt and validate its FineStore artifacts; the shared runner owns recovery."""
+    """Run one Evalchemy attempt and validate and normalize its FineStore artifacts."""
     if not config.tasks:
         raise ValueError("Evalchemy requires at least one task")
     if "://" not in output_dir:

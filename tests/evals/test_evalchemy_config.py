@@ -1,14 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The parent builds the Evalchemy child's config; the child turns each task into an ``evalchemy`` argv.
-
-These are the pure pieces of the serve->eval handoff that do not need a cluster: the JSON payload
-the parent hands the eval child (one upload dir per task-config, kept distinct so shot variants of a
-task do not collide), the lm-eval command the child runs per task (route selection between the
-completions and chat APIs included), and the empty-results guard. Everything else (job submission,
-serving, the eval itself) is exercised by the cluster smoke.
-"""
+"""Test Evalchemy configuration, command construction, and child cancellation."""
 
 import base64
 import json

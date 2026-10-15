@@ -157,7 +157,7 @@ class ValidatedHarborConfig:
         return self.dataset_revision or "unversioned"
 
     def benchmark_for(self, task_limit: int | None, task: str | None = None) -> BenchmarkMetadataRef:
-        """Return the benchmark descriptor Harbor will emit after Marin's runtime overlay."""
+        """Copy benchmark metadata with the task name and attempted count adjusted for the limit."""
         attempted = self.benchmark.n_attempted
         if task_limit is not None and self.benchmark.n_benchmark is not None:
             attempted = min(task_limit, self.benchmark.n_benchmark)

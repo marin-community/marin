@@ -76,7 +76,7 @@ class InferenceBackendFinished(RuntimeError):
 
 
 def inference_backend_state(sessions: tuple[RemoteInferenceSession, ...]) -> InferenceBackendState:
-    """Combine dependency states, with terminal failure taking precedence over recovery."""
+    """Combine session states, prioritizing FINISHED over RECOVERING over READY."""
     states = tuple(session.backend_state() for session in sessions)
     if InferenceBackendState.FINISHED in states:
         return InferenceBackendState.FINISHED
@@ -107,12 +107,11 @@ def run_with_inference_recovery[T](
     attempt: Callable[[int], T],
     sessions: tuple[RemoteInferenceSession, ...],
 ) -> T:
-    """Wait through outages and retry with the adapter's durable progress preserved.
+    """Wait for ready backends and retry attempts that raise InferenceUnavailable.
 
-    The attempt must monitor dependencies and cancel its work before raising
-    InferenceUnavailable. This function does not monitor a running attempt.
-    The zero-based attempt number is passed explicitly to each attempt.
-    Other errors propagate without retry.
+    Each attempt receives a zero-based attempt number. It must monitor
+    dependencies and stop its work before raising InferenceUnavailable.
+    Other exceptions propagate.
     """
 
     def check_dependencies() -> None:
@@ -163,8 +162,7 @@ class EvaluationError(RuntimeError):
         self.jobs = jobs or {}
         self.log_tails = log_tails or {}
         self.coverage = coverage or {}
-        """Coverage measured before the failure, so a rejected run records why it was rejected as
-        structured counts rather than only as an error string."""
+        """Per-task coverage measured before the failure."""
 
 
 class EvalExecutor(Protocol):
@@ -186,7 +184,7 @@ class EvalExecutor(Protocol):
 
 
 class EndpointRoute(StrEnum):
-    """Resolve a current Iris worker address, or keep the supplied endpoint."""
+    """DIRECT resolves the worker address; CAPABILITY preserves the session endpoint."""
 
     DIRECT = "direct"
     CAPABILITY = "capability"
@@ -423,7 +421,7 @@ def run_evaluation(
     endpoint_route: EndpointRoute,
     judge: RemoteInferenceSession | None = None,
 ) -> EvaluationOutcome:
-    """Supervise one evaluator and resume the same archive after inference outages."""
+    """Retry evaluator attempts in the same output directory after inference outages."""
     sessions = (session,) if judge is None else (session, judge)
     resuming_archive = bool(ReadView(output_dir).table_names())
 
@@ -686,7 +684,7 @@ def _evaluate_with_hosted_judge(
 
 
 def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
-    """Serve once, run every evaluation, and write each record as it finishes."""
+    """Serve a model for a batch and write one record per evaluation."""
     configure_coreweave_s3()
     if not batch.evaluations:
         raise ValueError("an evaluation batch requires at least one evaluation")

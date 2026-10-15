@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reusable lazy evaluation steps built on endpoint-oriented mechanisms."""
+"""Build lazy evaluation and report artifacts."""
 
 import logging
 import tempfile
@@ -269,7 +269,7 @@ def lm_eval_step(
     version: str,
     parent_env_vars: Mapping[str, str],
 ) -> ArtifactStep[LmEvalResults]:
-    """Build an lm-eval artifact using the shared remote-inference lifecycle."""
+    """Build a lazy lm-eval result artifact."""
     worker_resources = inference.iris.worker_resources
     if inference.broker is not None:
         eval_run = replace(

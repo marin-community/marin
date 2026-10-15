@@ -156,7 +156,7 @@ def test_reconciled_model_info_rejects_a_policy_limit_above_the_served_window(po
 
 
 def _write_job_record(job_dir: Path, n_total_trials: int, config: ValidatedHarborConfig) -> None:
-    """Harbor's own job-level bookkeeping: the count the coverage denominator comes from."""
+    """Write job trial counts and benchmark metadata to result.json."""
     job_dir.mkdir(parents=True, exist_ok=True)
     job_dir.joinpath("result.json").write_text(
         json.dumps(
@@ -233,12 +233,7 @@ def test_read_trial_applies_harbor_error_taxonomy(
 
 
 def _memory_remote(protocol: str, monkeypatch) -> None:
-    """Route ``protocol://`` reads and writes to a fresh in-memory filesystem.
-
-    Patches rigging's factory (``url_to_fs``/``open_url``), which every read and write resolves through
-    at call time -- ``StoragePath`` verbs, ``atomic_rename``, and the finestore archive writer -- so the
-    whole executor path stays off real object storage.
-    """
+    """Route ``protocol://`` reads and writes to a fresh in-memory filesystem."""
 
     class RemoteMemoryFileSystem(MemoryFileSystem):
         @classmethod
@@ -292,13 +287,7 @@ def _memory_remote(protocol: str, monkeypatch) -> None:
 
 @pytest.mark.parametrize("protocol", ["gs", "s3"])
 def test_completed_trial_is_durable_across_driver_termination_and_restored(protocol, tmp_path, monkeypatch):
-    """A trial that finishes before the driver dies is durable at the remote path and restored intact.
-
-    Harbor writes each trial straight to the ``output_dir`` jobs tree, so a driver killed before it
-    returns leaves the completed trial on durable storage. A resumed run whose driver produces nothing
-    new must still report that trial, proving the runner reads it back from the durable path rather
-    than depending on a clean full-job return or a post-run upload sweep.
-    """
+    """Read completed trials after a driver failure and a resumed run that writes no new trials."""
     _memory_remote(protocol, monkeypatch)
     output_dir = f"{protocol}://eval-bucket-{tmp_path.name}/run"
     executor = _harbor_executor(f"resume-{tmp_path.name}")
