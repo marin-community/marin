@@ -1,28 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A toy item run through the stage functions by ``run_item``.
+"""Exercise the coordinator with a two-step toy item and controlled stage failures.
 
-The program has two steps: ``numbers`` writes ``/workspace/numbers.txt``, and the sink ``task``
-assembles the ``TaskSpec`` from that file and the proposal. ``SOURCE`` holds the same program as
-module text, as an author writing Python would return it. Validation returns a fixed summary and
-review accepts it, unless a test passes other functions. Reading top to bottom:
-
-1. ``run_item`` records an event per stage, and a relaunch of the finished item changes no byte;
-   a retry after a failed save of the finished log writes it;
-2. an author returning source runs once, and the build loads the program from
-   ``authored/<k>/program.py``;
-3. a relaunch with another proposal, budget or model digest is refused, as is a program other than
-   the authored one, from the author or from ``program.py``;
-4. a build failure costs a revision, and the failure after the last revision rejects the item; the
-   failure text starts with the step and the program line the failure came from, also when library
-   code called from that line raised;
-5. an author reply cut at the output limit after its repairs costs a revision the same way, and the
-   author is asked again with the failure, while an unavailable model fails the item at the author;
-6. a failed build host, a missing file or a corrupt memo fails the item at build without spending a
-   revision, and a relaunch resumes there, even after a killed process re-authored the item;
-7. an unavailable model fails the item at validation, and a relaunch resumes there;
-8. a ``Modify`` decision sends the item back to the author in round 1 with the findings.
+``numbers`` writes a resource used by the ``task`` sink. ``SOURCE`` holds the same program as
+module text, as an author writing Python would return it.
 """
 
 import base64
@@ -272,7 +254,6 @@ ACCEPTED_EXITS = [
 
 
 async def test_run_item_records_an_event_per_stage_and_a_relaunch_changes_nothing(tmp_path):
-    # 1. The coordinator calls the stage functions, one event per stage, and writes the round's files.
     log = InMemoryEventLog()
     assert await run_item(coordinator(tmp_path), ITEM, PROPOSAL, log) is Terminal.ACCEPTED
 
@@ -291,7 +272,6 @@ async def test_run_item_records_an_event_per_stage_and_a_relaunch_changes_nothin
 
 
 async def test_a_retry_after_a_failed_save_of_a_finished_item_writes_its_events(tmp_path):
-    # 1. The finished log survives in the caller's log, and the retry saves it without running a stage.
     store = SaveFailsOnce(tmp_path)
     log = InMemoryEventLog()
     with pytest.raises(OSError, match="unreachable"):
@@ -306,7 +286,6 @@ async def test_a_retry_after_a_failed_save_of_a_finished_item_writes_its_events(
 
 
 async def test_an_author_returning_source_runs_once_and_the_build_loads_its_program_file(tmp_path):
-    # 2. The author stage writes the source to authored/0/program.py, and the build loads the program from it.
     author = SourceAuthor()
     loaded: list[str] = []
 
@@ -336,7 +315,6 @@ async def test_an_author_returning_source_runs_once_and_the_build_loads_its_prog
 async def test_a_relaunch_with_another_proposal_budget_or_model_digest_is_refused(
     tmp_path, proposal, budget, digest, refusal
 ):
-    # 3. The OPENED event holds the digests of the proposal, the budget and the model.
     await run_item(coordinator(tmp_path), ITEM, PROPOSAL, InMemoryEventLog())
     before = tree_bytes(tmp_path)
 
@@ -346,7 +324,6 @@ async def test_a_relaunch_with_another_proposal_budget_or_model_digest_is_refuse
 
 
 async def test_a_program_other_than_the_authored_one_fails_the_item_at_build(tmp_path):
-    # 3. Without source, the build asks the author again and refuses a program with another digest.
     stages = replace(STAGES, author=RecordingAuthor(PROGRAM, FAILING))
     with pytest.raises(ValueError, match="now returns program"):
         await run_item(coordinator(tmp_path, stages), ITEM, PROPOSAL, InMemoryEventLog())
@@ -356,7 +333,6 @@ async def test_a_program_other_than_the_authored_one_fails_the_item_at_build(tmp
 
 
 async def test_a_program_file_changed_on_disk_fails_the_item_at_build(tmp_path):
-    # 3. With source, the build refuses a program.py holding another program than the authored one.
     stages = replace(STAGES, author=SourceAuthor(), build=FailsOnce())
     with pytest.raises(BuildInfrastructureFailure):
         await run_item(coordinator(tmp_path, stages), ITEM, PROPOSAL, InMemoryEventLog())
@@ -370,7 +346,6 @@ async def test_a_program_file_changed_on_disk_fails_the_item_at_build(tmp_path):
 
 
 async def test_a_build_failure_costs_a_revision_and_the_next_one_rejects_the_item(tmp_path):
-    # 4. With one revision in the budget, the second build failure closes the item on its budget.
     author = RecordingAuthor(FAILING)
     log = InMemoryEventLog()
     terminal = await run_item(coordinator(tmp_path, replace(STAGES, author=author)), ITEM, PROPOSAL, log)
@@ -425,7 +400,6 @@ async def failure_first_lines(root: Path, source: str) -> tuple[str, str, str]:
 
 
 async def test_a_name_error_in_a_step_reports_its_program_line_to_the_author(tmp_path):
-    # 4. The loaded program's numbers step reads an undefined name, and the first line points at it.
     source = SOURCE.replace(NUMBERS_FILE, "InlineFile(content_base64=encoded_numbers)")
     assert source != SOURCE
     expected = "NameError: name 'encoded_numbers' is not defined at numbers, " + program_line(
@@ -435,7 +409,6 @@ async def test_a_name_error_in_a_step_reports_its_program_line_to_the_author(tmp
 
 
 async def test_a_library_error_called_from_a_step_still_reports_the_program_line(tmp_path):
-    # 4. pydantic raises inside TaskResource, and the first line names the step's call into it.
     source = SOURCE.replace(NUMBERS_FILE, '"6 7"')
     assert source != SOURCE
     first_line, detail_line, attr = await failure_first_lines(tmp_path, source)
@@ -476,7 +449,6 @@ class CutAuthor:
 
 
 async def test_an_author_reply_cut_after_its_repairs_costs_a_revision_and_the_author_samples_again(tmp_path):
-    # 5. The cut reply spends the one revision, and the next author call receives the failure.
     author = CutAuthor(cuts=1)
     log = InMemoryEventLog()
 
@@ -493,7 +465,6 @@ async def test_an_author_reply_cut_after_its_repairs_costs_a_revision_and_the_au
 
 
 async def test_author_replies_cut_past_the_budget_reject_the_item_on_its_budget(tmp_path):
-    # 5. With one revision in the budget, the second cut reply closes the item.
     author = CutAuthor(cuts=2)
     log = InMemoryEventLog()
 
@@ -518,7 +489,6 @@ async def unavailable_author(proposal: object, revision: Revision | None) -> Aut
 
 
 async def test_an_unavailable_model_fails_the_item_at_the_author_with_its_revisions_unspent(tmp_path):
-    # 5. ModelUnavailable from the author is not the author's failure, so the item fails in place.
     with pytest.raises(ModelUnavailable):
         await run_item(
             coordinator(tmp_path, replace(STAGES, author=unavailable_author)), ITEM, PROPOSAL, InMemoryEventLog()
@@ -534,7 +504,6 @@ async def test_an_unavailable_model_fails_the_item_at_the_author_with_its_revisi
     ids=["build host", "missing file"],
 )
 async def test_a_failure_outside_the_program_fails_the_item_at_build_and_a_relaunch_resumes_there(tmp_path, error):
-    # 6. BuildInfrastructureFailure or an OSError saves the item as failed in place with its revisions unspent.
     stages = replace(STAGES, author=SourceAuthor(), build=FailsOnce(error))
     with pytest.raises(type(error), match=str(error)):
         await run_item(coordinator(tmp_path, stages), ITEM, PROPOSAL, InMemoryEventLog())
@@ -553,7 +522,6 @@ async def builds_then_the_host_fails(*args: Any) -> TaskDraft:
 
 
 async def test_a_corrupt_memo_fails_the_item_at_build_with_its_revisions_unspent(tmp_path):
-    # 6. The program built, so a truncated memo is a storage fault: no BUILD_FAILED, no failure file.
     stages = replace(STAGES, build=builds_then_the_host_fails)
     with pytest.raises(BuildInfrastructureFailure):
         await run_item(coordinator(tmp_path, stages), ITEM, PROPOSAL, InMemoryEventLog())
@@ -573,7 +541,6 @@ async def fails_in_the_program(*args: Any) -> TaskDraft:
 
 
 async def test_a_relaunch_after_a_killed_re_author_builds_the_program_its_authored_event_records(tmp_path):
-    # 6. A re-author killed before the save leaves authored/1/, and the relaunch loads authored/0/.
     first = replace(STAGES, author=SourceAuthor(), build=FailsOnce())
     with pytest.raises(BuildInfrastructureFailure):
         await run_item(coordinator(tmp_path, first), ITEM, PROPOSAL, InMemoryEventLog())
@@ -606,7 +573,6 @@ class UnavailableOnce:
 
 
 async def test_an_unavailable_model_fails_the_item_at_validation_and_a_relaunch_resumes_there(tmp_path):
-    # 7. ModelUnavailable saves the item as failed in place, and the next run_item re-enters validation.
     validate_once = UnavailableOnce()
     with pytest.raises(ModelUnavailable):
         await run_item(
@@ -622,7 +588,6 @@ async def test_an_unavailable_model_fails_the_item_at_validation_and_a_relaunch_
 
 
 async def test_a_modify_decision_re_authors_the_item_in_round_one_with_the_findings(tmp_path):
-    # 8. The author of the next round receives review's findings.
     decisions: list[Decision] = [Modify(findings=("the file states the product",)), Accept(band=BandOutcome.IN_BAND)]
     author = RecordingAuthor(PROGRAM)
 

@@ -169,5 +169,4 @@ uv run --package marin-taskforge --frozen --group test pytest -c lib/taskforge/p
 cd lib/taskforge && uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
-`tests/test_pipeline_walkthrough.py` runs a toy item through the stage functions with `run_item`,
-and is the place to start reading.
+`tests/test_pipeline_walkthrough.py` exercises `run_item` with a two-step toy program.
