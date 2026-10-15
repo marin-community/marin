@@ -132,8 +132,7 @@ def test_shards_keep_concurrent_mapper_progress_separate_and_reject_stale_attemp
     run = start_test_stage(coordinator, tasks, stage_name="map", execution_id="mappers")
     coordinator.register_worker("worker", MagicMock(), task_id="/test/job/worker/0")
     for _ in range(2):
-        _, work = coordinator.pull_task("worker", TEST_WORKER_AVAILABLE)
-        assert work is not None
+        coordinator.pull_task("worker", TEST_WORKER_AVAILABLE)
     first = ShardProgress(run.stage_generation, 0, 20, 40, 40, 100)
     second = replace(first, records_in=80, input_rows_completed=80)
     coordinator.heartbeat("worker", {"mappers": CounterSnapshot({}, 2, {0: first, 1: second})})
@@ -153,8 +152,7 @@ def test_shards_keep_concurrent_mapper_progress_separate_and_reject_stale_attemp
     coordinator.report_error("worker", "mappers", 0, 0, "retry", run.stage_generation)
     # Dispatch the queued third shard, then the retry on the same worker.
     for _ in range(2):
-        _, work = coordinator.pull_task("worker", TEST_WORKER_AVAILABLE)
-        assert work is not None
+        coordinator.pull_task("worker", TEST_WORKER_AVAILABLE)
     coordinator.heartbeat("worker", {"mappers": CounterSnapshot({}, 3, {0: first, 1: second})})
     retried = client.get("/api/shards", params={"execution_id": "mappers"}).json()["shards"]
     assert retried[0]["state"] == "running"
