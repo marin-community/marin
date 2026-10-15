@@ -253,7 +253,7 @@ def _failed_evaluation(
     )
 
 
-def _evaluation(root: Path, name: str, executor, endpoint_route: EndpointRoute = EndpointRoute.PROVIDED) -> Evaluation:
+def _evaluation(root: Path, name: str, executor, endpoint_route: EndpointRoute = EndpointRoute.CAPABILITY) -> Evaluation:
     return Evaluation(
         identity=EvaluationIdentity(
             run_id=f"run-{name}",
@@ -612,7 +612,7 @@ def test_evaluate_batch_gates_transport_failure_coverage(tmp_path, monkeypatch, 
 @pytest.mark.parametrize("failure_mode", ["none", "reported", "cached", "existing"])
 @pytest.mark.parametrize(
     ("entrypoint", "endpoint_route"),
-    [("batch", EndpointRoute.DIRECT), ("batch", EndpointRoute.PROVIDED), ("served", EndpointRoute.DIRECT)],
+    [("batch", EndpointRoute.DIRECT), ("batch", EndpointRoute.CAPABILITY), ("served", EndpointRoute.DIRECT)],
 )
 def test_evaluation_resumes_one_archive_and_rejects_saved_transport_failures(
     tmp_path, monkeypatch, recovered_before_result, failure_mode, entrypoint, endpoint_route
@@ -1281,7 +1281,7 @@ def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_b
             eval_runtime="test-runtime",
         ),
         executor=_successful_evaluation,
-        endpoint_route=EndpointRoute.PROVIDED,
+        endpoint_route=EndpointRoute.CAPABILITY,
     )
     batch = EvaluationBatch(
         group_id="group",
@@ -1490,7 +1490,7 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
         )
     }
     assert {evaluation.identity.eval_runtime for evaluation in batch.evaluations} == {HARBOR_RUNTIME}
-    assert all(evaluation.endpoint_route is EndpointRoute.PROVIDED for evaluation in batch.evaluations)
+    assert all(evaluation.endpoint_route is EndpointRoute.CAPABILITY for evaluation in batch.evaluations)
     assert all(evaluation.identity.eval_ref.harbor.config_digest for evaluation in batch.evaluations)
     assert all(evaluation.identity.eval_ref.harbor.task_limit == 1 for evaluation in batch.evaluations)
 

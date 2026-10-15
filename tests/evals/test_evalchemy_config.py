@@ -113,7 +113,7 @@ def test_failed_child_cancellation_does_not_start_a_same_archive_retry(tmp_path,
         pytest.fail("the child should not finish successfully")
 
     with pytest.raises(ConnectionError, match="cancellation failed"):
-        run_evaluation(executor, session, str(tmp_path / "cancel-failed"), {}, endpoint_route=EndpointRoute.PROVIDED)
+        run_evaluation(executor, session, str(tmp_path / "cancel-failed"), {}, endpoint_route=EndpointRoute.CAPABILITY)
 
 
 def _payload(config: EvalchemyRunConfig | None = None) -> dict:

@@ -189,7 +189,7 @@ class EndpointRoute(StrEnum):
     """Resolve a current Iris worker address, or keep the supplied endpoint."""
 
     DIRECT = "direct"
-    PROVIDED = "provided"
+    CAPABILITY = "capability"
 
 
 @dataclass(frozen=True)
