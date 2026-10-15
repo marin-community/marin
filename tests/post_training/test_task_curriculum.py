@@ -4,7 +4,7 @@
 from dataclasses import replace
 
 import pytest
-from taskcompendium.pipeline.curriculum_alignment import CurriculumFacet
+from taskcompendium.pipeline.curriculum.alignment import CurriculumFacet
 
 from experiments.post_training.task_curriculum.models import (
     BlindFitReview,

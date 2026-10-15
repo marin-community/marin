@@ -21,7 +21,7 @@ from zephyr.dataset import Dataset, ShardInfo
 from zephyr.shard_keys import deterministic_hash
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.pipeline.curriculum_models import EmbeddingSpec
+from taskcompendium.pipeline.curriculum.models import EmbeddingSpec
 from taskcompendium.pipeline.semantics import DescriptionStatus
 
 EMBEDDING_INSTRUCTION = (

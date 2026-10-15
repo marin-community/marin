@@ -16,11 +16,11 @@ from click.testing import CliRunner
 from marin.execution.lazy import ArtifactStep, run
 from taskcompendium.convert.answers import numeric_answer_task
 from taskcompendium.models import Source
-from taskcompendium.pipeline import task_embeddings
-from taskcompendium.pipeline.curriculum_models import EmbeddingSpec
+from taskcompendium.pipeline.curriculum import embedding
+from taskcompendium.pipeline.curriculum.embedding import text_record
+from taskcompendium.pipeline.curriculum.models import EmbeddingSpec
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.semantics import DescriptionModel
-from taskcompendium.pipeline.task_embeddings import text_record
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
@@ -34,7 +34,7 @@ from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
 @pytest.fixture(autouse=True)
 def cache_partitions(monkeypatch):
-    monkeypatch.setattr(task_embeddings, "EMBEDDING_CACHE_SHARDS", 2)
+    monkeypatch.setattr(embedding, "EMBEDDING_CACHE_SHARDS", 2)
 
 
 class DescriptionServer(ThreadingHTTPServer):

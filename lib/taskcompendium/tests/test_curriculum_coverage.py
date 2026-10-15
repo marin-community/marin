@@ -8,9 +8,9 @@ import pyarrow.parquet as pq
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
-from taskcompendium.pipeline.curriculum_coverage import build_curriculum_coverage
-from taskcompendium.pipeline.curriculum_models import CurriculumNode
-from taskcompendium.pipeline.task_alignment import TaskAlignment
+from taskcompendium.pipeline.curriculum.coverage import build_curriculum_coverage
+from taskcompendium.pipeline.curriculum.models import CurriculumNode
+from taskcompendium.pipeline.curriculum.task_alignment import TaskAlignment
 
 
 def test_atlas_counts_full_instances_and_keeps_bounded_overlapping_samples(tmp_path: Path):

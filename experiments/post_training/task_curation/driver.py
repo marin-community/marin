@@ -28,7 +28,7 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.assessment import AssessmentSampling
 from taskcompendium.pipeline.assessment_review import ASSESSMENT_RUBRIC, AssessmentModel
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
-from taskcompendium.pipeline.curriculum_models import EmbeddingSpec
+from taskcompendium.pipeline.curriculum.models import EmbeddingSpec
 from taskcompendium.pipeline.query_cache import compact_query_cache
 from taskcompendium.pipeline.semantics import DescriptionModel
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
@@ -149,7 +149,7 @@ def _quick_conversion(
     stage: str | None,
     do_run: bool,
 ) -> dict[str, str] | None:
-    local_quick = not StoragePath(output_root).is_remote
+    local = not StoragePath(output_root).is_remote
     report_path = str(StoragePath(output_root) / "campaign.json")
     if not do_run:
         plan = {
@@ -166,11 +166,11 @@ def _quick_conversion(
             "max_workers": pool.max_workers,
             "embedding_stage": stage,
         }
-        if not local_quick:
+        if not local:
             plan.update(campaign_plan(list(steps.values()), pool))
         click.echo(json.dumps(plan, indent=2))
         return None
-    if local_quick:
+    if local:
         assert cache_dir is not None
         outcomes = run_local_steps(
             steps,
@@ -190,7 +190,7 @@ def _quick_conversion(
             source_ids={steps[name].name: source.info.id for name, source in selected.items()},
             mode=options.mode,
         )
-    identifiers = {steps[name].name if not local_quick else name: source.info.id for name, source in selected.items()}
+    identifiers = {name if local else steps[name].name: source.info.id for name, source in selected.items()}
     roots = {identifiers[outcome.name]: outcome.path for outcome in outcomes}
     return roots
 
@@ -497,17 +497,10 @@ def main(
         raise click.UsageError("--curation-attempt requires a SAMPLE/FULL curation run")
     if cache_dir is not None:
         cache_dir = cache_dir.expanduser().resolve()
-    local_quick = (
-        processing_mode == SourceProcessingMode.QUICK
-        and output_root is not None
-        and not StoragePath(output_root).is_remote
-    )
-    if local_quick and cache_dir is None:
+    if output_root is not None and not StoragePath(output_root).is_remote and cache_dir is None:
         cache_dir = Path.home() / ".cache/marin"
-    if not local_quick and cache_dir is None and (input_root is not None or local_files or auxiliary):
+    if cache_dir is None and (input_root is not None or local_files or auxiliary):
         raise click.UsageError("Local input options require local execution")
-    if not local_quick and processing_mode == SourceProcessingMode.QUICK and cache_dir is not None and corpus is None:
-        raise click.UsageError("Remote QUICK outputs do not accept --cache-dir")
     if embed is not None:
         review_cache = review_cache or (str(cache_dir / "review-cache") if cache_dir else None)
         if review_cache is None:
@@ -582,12 +575,15 @@ def main(
             raise click.UsageError("Assessment requires SAMPLE or FULL")
         if output_root is None:
             raise click.UsageError("QUICK requires --output-root")
-        if local_quick and sources:
+        local = not StoragePath(output_root).is_remote
+        if not local and cache_dir is not None:
+            raise click.UsageError("Remote QUICK outputs do not accept --cache-dir")
+        if local and sources:
             selected = {name: selected[name] for name in dict.fromkeys(sources)}
         options = PipelineOptions(processing_mode, runtime, inputs=inputs)
         steps = (
             {name: cast(CurationPipeline, source.pipeline)(source, options) for name, source in selected.items()}
-            if local_quick
+            if local
             else _conversion_steps(selected, options)
         )
         roots = _quick_conversion(
@@ -603,7 +599,7 @@ def main(
         if roots is None:
             return
         report_path = str(StoragePath(output_root) / "campaign.json")
-        if not local_quick or embed is not None:
+        if not local or embed is not None:
             _write_corpus(roots, inventory, report_path, "converted")
         if embedding is not None:
             embedding(roots, inventory=inventory, population="converted", do_run=True)

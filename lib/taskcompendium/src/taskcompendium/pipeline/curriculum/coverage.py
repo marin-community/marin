@@ -13,9 +13,9 @@ from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 
-from taskcompendium.pipeline.curriculum_models import CurriculumNode, CurriculumStatistic
+from taskcompendium.pipeline.curriculum.models import CurriculumNode, CurriculumStatistic
+from taskcompendium.pipeline.curriculum.task_alignment import TaskAlignment
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
-from taskcompendium.pipeline.task_alignment import TaskAlignment
 
 SUBJECT_DISTANCE = 0.45
 CAPABILITY_DISTANCE = 0.25

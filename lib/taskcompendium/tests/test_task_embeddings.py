@@ -17,15 +17,23 @@ from zephyr.stage_io import ZephyrWorkerError
 
 from taskcompendium.convert.answers import numeric_answer_task
 from taskcompendium.models import Source
-from taskcompendium.pipeline import task_embeddings
-from taskcompendium.pipeline.curriculum_alignment import (
+from taskcompendium.pipeline.curriculum import embedding
+from taskcompendium.pipeline.curriculum.alignment import (
     AnchorKind,
     CurriculumAnchor,
     CurriculumFacet,
     CurriculumVectors,
     rank_task_batch,
 )
-from taskcompendium.pipeline.curriculum_models import EmbeddingSpec
+from taskcompendium.pipeline.curriculum.embedding import (
+    embed_texts,
+    embedding_cache_partition,
+    embedding_cache_path,
+    task_text_records,
+    text_record,
+)
+from taskcompendium.pipeline.curriculum.models import EmbeddingSpec
+from taskcompendium.pipeline.curriculum.task_alignment import align_tasks, count_alignment_sources
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.review_requests import RequestObservation, RequestOutput
 from taskcompendium.pipeline.semantics import (
@@ -36,19 +44,11 @@ from taskcompendium.pipeline.semantics import (
     prepare_semantic_inputs,
     task_semantic_input,
 )
-from taskcompendium.pipeline.task_alignment import align_tasks, count_alignment_sources
-from taskcompendium.pipeline.task_embeddings import (
-    embed_texts,
-    embedding_cache_partition,
-    embedding_cache_path,
-    task_text_records,
-    text_record,
-)
 
 
 @pytest.fixture(autouse=True)
 def cache_partitions(monkeypatch):
-    monkeypatch.setattr(task_embeddings, "EMBEDDING_CACHE_SHARDS", 2)
+    monkeypatch.setattr(embedding, "EMBEDDING_CACHE_SHARDS", 2)
 
 
 @pytest.fixture

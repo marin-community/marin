@@ -14,7 +14,7 @@ import click
 import pyarrow.parquet as pq
 from marina.client import DEFAULT_MARINA_URL
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.pipeline.curriculum_models import AlignmentRelease, CurriculumCoverage, CurriculumStatistic
+from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage, CurriculumStatistic
 
 from infra.marina.applets.rl_data_catalog.load import Query, applet_query, batches, insert_rows
 

@@ -20,23 +20,30 @@ from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.chat_requests import chat_output
-from taskcompendium.pipeline.curriculum_alignment import (
+from taskcompendium.pipeline.curriculum.alignment import (
     CurriculumAnchor,
     CurriculumVectors,
 )
-from taskcompendium.pipeline.curriculum_coverage import (
+from taskcompendium.pipeline.curriculum.coverage import (
     AREA_SAMPLE_SIZE,
     CAPABILITY_DISTANCE,
     SOURCE_SAMPLE_SIZE,
     SUBJECT_DISTANCE,
     build_curriculum_coverage,
 )
-from taskcompendium.pipeline.curriculum_models import (
+from taskcompendium.pipeline.curriculum.embedding import (
+    TextEmbedder,
+    embed_texts,
+    task_text_records,
+    text_record,
+)
+from taskcompendium.pipeline.curriculum.models import (
     AlignmentRelease,
     AlignmentSource,
     CurriculumCoverage,
     EmbeddingSpec,
 )
+from taskcompendium.pipeline.curriculum.task_alignment import align_tasks, count_alignment_sources
 from taskcompendium.pipeline.semantics import (
     DESCRIPTION_PROMPT_VERSION,
     DescriptionModel,
@@ -44,13 +51,6 @@ from taskcompendium.pipeline.semantics import (
     describe_tasks,
     prepare_instruction_texts,
     prepare_semantic_inputs,
-)
-from taskcompendium.pipeline.task_alignment import align_tasks, count_alignment_sources
-from taskcompendium.pipeline.task_embeddings import (
-    TextEmbedder,
-    embed_texts,
-    task_text_records,
-    text_record,
 )
 from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet

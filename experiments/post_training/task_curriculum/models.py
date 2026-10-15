@@ -10,8 +10,8 @@ from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from taskcompendium.pipeline.curriculum_alignment import AnchorKind, CurriculumAnchor, CurriculumFacet
-from taskcompendium.pipeline.curriculum_models import CurriculumNode as AtlasCurriculumNode
+from taskcompendium.pipeline.curriculum.alignment import AnchorKind, CurriculumAnchor, CurriculumFacet
+from taskcompendium.pipeline.curriculum.models import CurriculumNode as AtlasCurriculumNode
 
 
 class StrictModel(BaseModel):

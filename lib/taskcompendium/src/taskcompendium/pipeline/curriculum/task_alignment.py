@@ -21,14 +21,14 @@ from zephyr.readers import load_parquet
 from zephyr.worker_context import zephyr_worker_ctx
 
 from taskcompendium.models import ConversationInput, format_conversation
-from taskcompendium.pipeline.curriculum_alignment import (
+from taskcompendium.pipeline.curriculum.alignment import (
     CurriculumVectors,
     TaskMatches,
     rank_task_batch,
 )
-from taskcompendium.pipeline.curriculum_models import EmbeddingSpec
+from taskcompendium.pipeline.curriculum.embedding import text_record
+from taskcompendium.pipeline.curriculum.models import EmbeddingSpec
 from taskcompendium.pipeline.semantics import DescriptionStatus, TaskDescription
-from taskcompendium.pipeline.task_embeddings import text_record
 
 PREVIEW_CHARACTERS = 8192
 

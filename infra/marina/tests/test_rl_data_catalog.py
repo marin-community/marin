@@ -35,7 +35,7 @@ from finestore.store import DataStore
 from marina.applets import AppletServices, validate_query
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
-from taskcompendium.pipeline.curriculum_models import AlignmentRelease, CurriculumCoverage
+from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 
 from infra.marina.applets.rl_data_catalog.load import load_catalog
 from infra.marina.applets.rl_data_catalog.load_curriculum import load_curriculum

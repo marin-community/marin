@@ -11,7 +11,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.pipeline.task_embeddings import normalized_vectors
+from taskcompendium.pipeline.curriculum.embedding import normalized_vectors
 
 TOP_K = 3
 
