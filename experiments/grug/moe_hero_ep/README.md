@@ -43,6 +43,10 @@ Bounded diagnostics write metrics only by default. `--save-checkpoints` writes c
 
 ## Inference export
 
+Inference and export restore the stored router bias, matching in-training evaluation. The separate
+pending QB estimate is applied only when pretraining resumes its next update. It is not applied to
+the inference model.
+
 Choose a permanent checkpoint and fresh destination in the same region.
 Copy `model` from the training run's recorded `config.yaml` artifact or resolved
 launch configuration into `export.yaml`:
