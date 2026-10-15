@@ -1,0 +1,37 @@
+{
+  "scope": "Full original-grader replay for the declared Qwen engineering segment only; no scientific comparison endpoint.",
+  "run_id": "sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "first_step": 1,
+  "last_step": 2,
+  "records": 1024,
+  "record_payloads_sha256": "b5624f105e95bf7560b20bc5bf2d482f36d4dff3d81245e6ba73a4e388d017cd",
+  "grader_files_sha256": {
+    "skyrl-gym/skyrl_gym/envs/aime/utils.py": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+    "skyrl-gym/skyrl_gym/envs/gsm8k/utils.py": "16680a223ba876ff0a51184db6863b1527c84ba87fc3cf19f92a376652394115",
+    "skyrl-gym/skyrl_gym/envs/reasoning_gym/scoring.py": "8b9f61cf4ad560dff639e8c6425a838f04d94c4eb175b547efa0d20d1c884d3c",
+    "skyrl-gym/skyrl_gym/envs/nemotron_ultra/answer_extraction.py": "1d48e25122f452147e795eb6e8e21eea217654756ece9e918fe0a8ece2ab108e"
+  },
+  "source_sha256": {
+    "train": "b0397b09bc4e8dd2b01b96cdf729268ade10c7839ab4193f94479b016b1400b1",
+    "eval": "e3b1ca83df0fb193413caad7396f35b4cd29d9f45f6f8561e761818e42e0f79b"
+  },
+  "preserve_full_response_text": true,
+  "tokenizer_eos_text": "<|im_end|>",
+  "workers": 2,
+  "quality": [
+    {
+      "step": 1,
+      "responses": 512,
+      "replayed_quality": 0.07421875
+    },
+    {
+      "step": 2,
+      "responses": 512,
+      "replayed_quality": 0.068359375
+    }
+  ],
+  "discrepancies": [],
+  "native_failures_not_regraded": [],
+  "regrading_passed": true
+}

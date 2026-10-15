@@ -1,0 +1,74 @@
+{
+  "old_job": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a2-01a126ce",
+  "old_terminal_attempt": 14,
+  "failure": "Required trajectory retention initialization exceeded600seconds before learner update1. Actual native Ray trace retained.",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "old_existing_archive_objects": 4364,
+  "old_existing_archive_bytes": 295552841,
+  "source_observation": "Required TrajectorySink initialization runs _reconciled_ledger. Its prior append-only namespace has4364 archive objects/295552841bytes and no retained ledger index, so the source reconstructs historical archive records before training. The actual failure is the600second initialization deadline; the exact time split across storage, parsing and process startup was not isolated.",
+  "diagnosis_boundary": "Accumulated append-only archive reconstruction is an identified startup workload. No isolated end-to-end bottleneck timing or broader storage outage claim.",
+  "replacement_job": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a3-01a126ce",
+  "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v2/batching-sc-s2.yaml",
+  "configuration_sha256": "8aa2ffacb69ea6cb935a8586b47f5de3b9585a9465c6414d477625ef33d63464",
+  "prepare_configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v2/batching-sc-s2-prepare.yaml",
+  "all_scientific_fields_unchanged": true,
+  "actual_changes": "Fresh run-owned ID and output/archive/group/Ray namespaces only; same frozen source,seed2,model,data,noise,loss,optimizer,batching,capture and1200-update horizon.",
+  "status": "Native preparation passed on the unchanged frozen0212 runtime; three fresh output prefixes were verified empty. Replacement remains unsubmitted pending publication and resource announcement.",
+  "submission_confirmed": false,
+  "old_retention_ledger": {
+    "present": false
+  },
+  "old_retention_ledger_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s2-main-rno-a2-01a126ce/attempts/trajectories/schema_v5/_retention_ledger.json",
+  "replacement_empty_output_roots": [
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s2-main-rno-a3-01a126ce",
+      "observed_empty": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-batching-sc-s2-main-rno-a3-01a126ce",
+      "observed_empty": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-batching-sc-s2-main-rno-a3-01a126ce/groups",
+      "observed_empty": true
+    }
+  ],
+  "empty_root_observed_at": "2026-10-15T18:13:32.802500+00:00",
+  "native_preparation_passed": true,
+  "native_preparation_log_sha256": "11178c9c6ef649c617e7ce009341e014518aa20545b8ce7beaad732095069fc7",
+  "native_failure_evidence_retained": [
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s2-main-rno-a2-01a126ce/retention-initialization-failure-attempt14/diagnostic.json",
+      "bytes": 1813834,
+      "sha256": "3e7370ccc062cdcc6e0a19334e5d93153fcf60c53914c0f3baa94deafad115ea",
+      "etag": "\"99b4ca596ce2bd36d7d252c010f47125\""
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s2-main-rno-a2-01a126ce/retention-initialization-failure-attempt14/193526deadcf79c345f5663adecb5181dcb3b5f092e0744712825a217239d324.err",
+      "bytes": 40707,
+      "sha256": "30958b58603bfdf127b5e92ec51280c2a5ddaf3f77f5cc445453ee96b30a565c",
+      "etag": "\"6eea1dbf67e963c596756426f631c40f\""
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s2-main-rno-a2-01a126ce/retention-initialization-failure-attempt14/e5305649902833a6662ba92bb065ba44537dfd0f52a909f99f73c4b0602f64c0.err",
+      "bytes": 2854,
+      "sha256": "fee6a61fc60f0e5ffb41fd6980b6a8f85d98c651799accde4da8161a9d9bf371",
+      "etag": "\"85de862e248bffccf02b4372dcddcb91\""
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s2-main-rno-a2-01a126ce/retention-initialization-failure-attempt14/a7c724a10749b7ee5b76918024a8f08bd5c7b8abd2b7d6bbbaf44fd28d711145.err",
+      "bytes": 1006,
+      "sha256": "1cdbf2606903b8d0dbf9ebc43510d3a22070a54dd0393efc0455ce48d1015426",
+      "etag": "\"c70cd8fe0d8d62d6f7e175b83c73661b\""
+    }
+  ],
+  "before_submit_controller_rows": [
+    {
+      "job_id": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a2-01a126ce",
+      "state": "5",
+      "num_tasks": "2",
+      "priority_band": "3",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+    }
+  ]
+}

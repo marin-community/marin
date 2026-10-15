@@ -1,0 +1,35 @@
+{
+  "scope": "Completed original frozen0212 clean/no-noise checkpoint save2 and restore2-to5 engineering qualification. It does not qualify periodic/noisy recovery or replace scientific300/1200/130 comparisons.",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "sampler_refresh_period": 1,
+  "sampler_noise_scale": 0.0,
+  "phases": [
+    {
+      "run_id": "sc-qwen-checkpoint-save-qual-sc-s0-rno-a0-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "first_step": 1,
+      "last_step": 2,
+      "actual_original_grade_replays": 1024,
+      "record_payloads_sha256": "b5624f105e95bf7560b20bc5bf2d482f36d4dff3d81245e6ba73a4e388d017cd",
+      "report": "qwen_clean_checkpoint_save2_full_response_replay.json",
+      "report_sha256": "fa8e4b4d83da1f0c5ad8836419d0f3a901d12cce7695f40fd5afb4bac2d95819"
+    },
+    {
+      "run_id": "sc-qwen-checkpoint-resume-qual-sc-s0-rno-a0-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "first_step": 3,
+      "last_step": 5,
+      "actual_original_grade_replays": 1536,
+      "record_payloads_sha256": "55f92077ae8f5fbd656636d7f6278340d568c599e04e4e7fba22921221cdeece",
+      "report": "qwen_clean_checkpoint_restore5_full_response_replay.json",
+      "report_sha256": "c0133e9bc40f43d6bc7ca82a206fdc2c57b6852ec2cb20c29ef0d7009a9d3c5a"
+    }
+  ],
+  "actual_original_response_grade_replays": 2560,
+  "native_failures": 0,
+  "grade_discrepancies": 0,
+  "all_response_replays_passed": true,
+  "native_save2_controls": "qwen_clean_checkpoint_save2_control_audit.json",
+  "native_restore5_audit": "qwen_clean_checkpoint_restore5_native_audit.json.gz",
+  "allocated_h100_hours": 5.329991111111111
+}
