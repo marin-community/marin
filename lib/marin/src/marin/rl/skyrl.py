@@ -263,7 +263,7 @@ class SkyRLSpec:
     seed: int
 
     def __post_init__(self) -> None:
-        recipe = SkyRLRecipe.combine(authored=self.recipe, marin=MARIN_RECIPE_POLICY)
+        recipe = SkyRLRecipe.combine(base=self.recipe, authored=self.recipe, marin=MARIN_RECIPE_POLICY)
         object.__setattr__(self, "recipe", recipe)
         trainer, generator = recipe.trainer, recipe.generator
         placement = trainer.placement

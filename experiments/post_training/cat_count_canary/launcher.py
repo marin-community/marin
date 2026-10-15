@@ -398,7 +398,7 @@ def build_run(
     prefetch_rows = config.trainer.rollout_buffer.max_staleness_steps * batch_size
     train_rows = batch_size * max_steps + prefetch_rows
     retention = SkyRLRetentionPolicy(resume_checkpoint_count=1)
-    identity_document = SkyRLRecipe.combine(authored=config, marin=MARIN_RECIPE_POLICY).to_skyrl()
+    identity_document = SkyRLRecipe.combine(base=config, authored=config, marin=MARIN_RECIPE_POLICY).to_skyrl()
     identity_document["trainer"].update(seed=seed, max_ckpts_to_keep=retention.resume_checkpoint_count)
     identity = f"{model}-{lane}-{preset}-{fingerprint_hash(yaml.safe_dump(identity_document) + repr(train_ns))}"
     data_identity = fingerprint_hash(repr((train_ns, train_rows, seed)))

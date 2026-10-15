@@ -166,7 +166,7 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
     download = model.build_config(StepContext.for_fingerprint(model.runtime_args, model.deps))
     adopted_model = ArtifactStep.adopt(model.name, model.version, QWEN_SOURCE, kind=model.artifact_type)
     retention = SkyRLRetentionPolicy(resume_checkpoint_count=1)
-    identity_document = SkyRLRecipe.combine(authored=recipe, marin=MARIN_RECIPE_POLICY).to_skyrl()
+    identity_document = SkyRLRecipe.combine(base=recipe, authored=recipe, marin=MARIN_RECIPE_POLICY).to_skyrl()
     identity_document["trainer"].update(seed=SEED, max_ckpts_to_keep=retention.resume_checkpoint_count)
     recipe_fingerprint = fingerprint_hash(canonical_json({"config": identity_document, "data": data_identity}))
     run = skyrl_step(
