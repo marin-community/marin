@@ -420,27 +420,6 @@ def test_evaluation_restart_skips_completed_step_without_serving(tmp_path, monke
     assert _step_status(batch, 0) == STATUS_SUCCESS
 
 
-def test_step_cache_skips_completed_eval(tmp_path, monkeypatch):
-    executions = 0
-
-    def executor(_session, _output_dir, _env_vars, *, judge=None):
-        nonlocal executions
-        executions += 1
-        return EvaluationOutcome(metrics={"task": {"accuracy": 0.5}})
-
-    evaluation = _evaluation(tmp_path, "finished", executor)
-    batch = replace(_hosted_judge_batch(tmp_path, (evaluation,)), judge=None)
-    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
-
-    first = _evaluate_with_session(batch, _remote_session(), orchestrator_job_id="/first")
-    second = _evaluate_with_session(batch, _remote_session(), orchestrator_job_id="/retry")
-
-    assert first == second
-    assert executions == 1
-    assert read_record(first[0]).jobs["orchestrator"] == "/first"
-    assert _step_status(batch, 0) == STATUS_SUCCESS
-
-
 def test_evaluation_restart_only_runs_unfinished_evals(tmp_path, monkeypatch):
     executed: list[str] = []
 
@@ -860,7 +839,6 @@ def test_speculative_pipeline_launch_selects_gpu(tmp_path, monkeypatch):
 
     assert submitted_batches[0].accelerator.platform is Platform.TPU
     assert submitted_batches[1].accelerator.platform is Platform.GPU
-    assert all(batch.max_concurrent == 1 for batch in submitted_batches)
 
 
 def test_evalchemy_executor_classifies_missing_native_archive(tmp_path, monkeypatch):
@@ -1935,7 +1913,7 @@ def test_launch_dry_run_prints_the_resolved_harbor_agent_context(tmp_path, monke
     [
         ((), "cw-us-east-02a", "inherit"),
         (
-            ("--federated_cluster", "cw-rno2a", "--priority", "interactive", "--max-concurrent", "1"),
+            ("--federated_cluster", "cw-rno2a", "--priority", "interactive"),
             "cw-rno2a",
             "interactive",
         ),

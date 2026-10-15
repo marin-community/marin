@@ -51,7 +51,6 @@ from marin.evaluation.records import EvalRunRecord, RunStatus
 # Capped-instance launcher validation runs; kept out of the headline panel (they stay visible in the
 # runs list and history).
 SMOKE_SUFFIX = "-smoke"
-# Status-file wire value; the dashboard image does not vendor the execution package.
 _STEP_SUCCESS = "SUCCESS"
 
 # Presentation grouping of eval columns into suites for the dashboard's column tree. This mirrors the
