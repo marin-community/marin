@@ -1,0 +1,134 @@
+{
+  "scope": "Prepared, unsubmitted five-node engineering qualification for the current checkpoint-recovery candidate. It cannot replace scientific main1200 or stale calibration130.",
+  "source": "a1c31f04da2295cca2eaef0e82262c4f493304c5",
+  "status": "prepared; all phases unsubmitted",
+  "prerequisite": "Complete bounded Qwen periodic/noisy save2, restore2-to5, restore5-to7 qualification with real native state and behavior evidence.",
+  "geometry": {
+    "cluster": "cw-us-east-02a",
+    "priority": "batch",
+    "total_nodes": 5,
+    "learner_nodes": 4,
+    "inference_nodes": 1,
+    "h100_per_node": 8,
+    "learner_h100": 32,
+    "total_h100": 40,
+    "PP": 2,
+    "EP": 8,
+    "TP": 1,
+    "CP": 1,
+    "SP": 1
+  },
+  "recipe": "Actual frozen Snowball qualification model/data/native learning recipe. Deliberate diagnostic fixed noise.05 and sampler refresh3; checkpoint every3 plus each phase endpoint, keep2 plus referenced sampler dependencies. Explicit constant scheduler matches the native default and makes continuation independent of changing short horizons. NaturalK128/chosen-q, TIS2 plus score centering, full512-response batches, real expert-block weight sync and FlashAttention profiling on ranks0/16.",
+  "phases": [
+    {
+      "phase": "save5",
+      "run_id": "sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce",
+      "source": "a1c31f04da2295cca2eaef0e82262c4f493304c5",
+      "new_completed_updates": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "from_checkpoint": null,
+      "checkpoint_root": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints",
+      "checkpoint_cadence": 3,
+      "final_checkpoint": 5,
+      "final_sampler_completed_updates": 3,
+      "clean_evaluation_points": [
+        0,
+        5
+      ],
+      "controller_confirmed": false,
+      "submission_gate": "All three Qwen periodic save/restore phases must pass actual native optimizer/loader/sampler/evidence gates before this five-node initial qualification may submit."
+    },
+    {
+      "phase": "restore5",
+      "run_id": "sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce",
+      "source": "a1c31f04da2295cca2eaef0e82262c4f493304c5",
+      "new_completed_updates": [
+        6,
+        7
+      ],
+      "from_checkpoint": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5",
+      "checkpoint_root": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/checkpoints",
+      "checkpoint_cadence": 3,
+      "final_checkpoint": 7,
+      "final_sampler_completed_updates": 6,
+      "clean_evaluation_points": [
+        5,
+        7
+      ],
+      "controller_confirmed": false,
+      "submission_gate": "Previous five-node phase must pass complete native checkpoint, applied-step, serving/noise/version, full response and evaluation audits before this phase may submit."
+    },
+    {
+      "phase": "restore7",
+      "run_id": "sc-snowball-checkpoint-periodic3-restore7-noise005-sc-s0-a0-01a126ce",
+      "source": "a1c31f04da2295cca2eaef0e82262c4f493304c5",
+      "new_completed_updates": [
+        8,
+        9
+      ],
+      "from_checkpoint": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_7",
+      "checkpoint_root": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-restore7-noise005-sc-s0-a0-01a126ce/checkpoints",
+      "checkpoint_cadence": 3,
+      "final_checkpoint": 9,
+      "final_sampler_completed_updates": 9,
+      "clean_evaluation_points": [
+        7,
+        9
+      ],
+      "controller_confirmed": false,
+      "submission_gate": "Previous five-node phase must pass complete native checkpoint, applied-step, serving/noise/version, full response and evaluation audits before this phase may submit."
+    }
+  ],
+  "required_evidence": [
+    "Initial uninterrupted five-update exact-head real pipeline/expert-parallel qualification, clean evaluations0/5, checkpoint5 and real CUDA FlashAttention execution on both pipeline stages.",
+    "Later processes restore actual sampler3 with learner/optimizer5, then sampler6 with learner/optimizer7, retaining the original model-derived fixed noise and correct global expert identities.",
+    "First newly applied updates6 then8, with all declared steps finite/applied and no replay of the already committed learner prefix.",
+    "All32 DCP rank shards, native serialized optimizer and scheduler update counts, RNG and rollout loader state at endpoints5/7/9; required anchors3/6/9 retained.",
+    "Every selected native training/evaluation response and exact membership, sampled tensor/head alignment, actual generating versions/ages, probability mismatch and all original failures retained.",
+    "Record physical setup, failed/preempted and successful allocated H100 time; no positive quality threshold or acceptable-loss margin."
+  ],
+  "limits": [
+    "Different per-phase run-owned roots isolate this bounded diagnostic. Source inspection confirms fresh generation, UUID lease payload objects and content-addressed native archive identities. Actual automatic retry still requires explicit committed-checkpoint and scientific per-update lineage validation; no per-boot payload namespace change is needed for the examined source path.",
+    "Current live0212 jobs and all predeclared300/1200/130 horizons remain unchanged.",
+    "A prepared plan or successful process exit is not qualification.",
+    "No five-node job may use interactive priority under the four-node campaign cap."
+  ],
+  "payload_identity_source_inspection": {
+    "scope": "Current-source inspection, not a GPU restart result. Corrects an unverified concern before adding unnecessary namespace or cache changes.",
+    "source": "a1c31f04da2295cca2eaef0e82262c4f493304c5",
+    "findings": [
+      "Each newly dispatched task invokes generation before it writes a rollout group.",
+      "Each group payload URI uses a newly generated UUID lease ID. Existing objects are fetched only by admitted or explicitly restored checkpoint references.",
+      "Native archive record identity hashes the complete serialized record, including response and provenance. Different response content receives a different identity; identical-content deduplication does not demonstrate reuse of an older generating policy."
+    ],
+    "conclusion": "No cross-attempt generation cache or deterministic payload-key collision is established. A per-boot payload namespace change is unnecessary for the examined path and has not been implemented.",
+    "remaining_resume_gate": "Validate actual saved learner/optimizer/sampler/loader state and select explicit committed checkpoint lineage plus per-update segments across physical attempts. Export filenames can repeat across attempts, so authoritative time-bounded snapshots and segment identity remain required.",
+    "source_files": [
+      {
+        "file": "skyrl-train/skyrl_train/rollouts/task_worker.py",
+        "sha256": "28c574107cacc4634096a5a9feae1053ba7ee82220caae7cebc58fb09cb33944",
+        "source_url": "https://github.com/marin-community/MarinSkyRL/blob/a1c31f04da2295cca2eaef0e82262c4f493304c5/skyrl-train/skyrl_train/rollouts/task_worker.py"
+      },
+      {
+        "file": "skyrl-train/skyrl_train/rollouts/buffer.py",
+        "sha256": "67d7bad2097bc5b927bd9d4474d4e1a635d0d1267adfdc8740ecbc2f4d0f8d3b",
+        "source_url": "https://github.com/marin-community/MarinSkyRL/blob/a1c31f04da2295cca2eaef0e82262c4f493304c5/skyrl-train/skyrl_train/rollouts/buffer.py"
+      },
+      {
+        "file": "skyrl-train/skyrl_train/rollouts/payloads.py",
+        "sha256": "7c03304e291e2fb9f6f3e8445975f6adc2c67399f41d1b23fd7a0da2c0d3ee99",
+        "source_url": "https://github.com/marin-community/MarinSkyRL/blob/a1c31f04da2295cca2eaef0e82262c4f493304c5/skyrl-train/skyrl_train/rollouts/payloads.py"
+      },
+      {
+        "file": "skyrl-train/skyrl_train/trajectory_runners/trajectory_retention.py",
+        "sha256": "5dfb2ee5777b08c29690455104059ac3bcfa7f04066820c8ed4f505bff30e262",
+        "source_url": "https://github.com/marin-community/MarinSkyRL/blob/a1c31f04da2295cca2eaef0e82262c4f493304c5/skyrl-train/skyrl_train/trajectory_runners/trajectory_retention.py"
+      }
+    ]
+  }
+}
