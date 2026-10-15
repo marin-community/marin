@@ -61,10 +61,10 @@ def _finish(df: pd.DataFrame, ctx: ExportContext) -> pd.DataFrame:
 
 
 def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
-    weights = pd.read_csv(paths.require(paths.MIXSEL / "data/swarm_weights.csv"))
-    outcomes = pd.read_csv(paths.require(paths.MIXSEL / "data/swarm_outcomes.csv")).set_index("run")
-    packet = pd.read_csv(paths.require(PACKET))[["row_id", "candidate_kind"]]
-    inventory = pd.read_csv(paths.require(INVENTORY))
+    weights = tables.read_csv(paths.require(paths.MIXSEL / "data/swarm_weights.csv"))
+    outcomes = tables.read_csv(paths.require(paths.MIXSEL / "data/swarm_outcomes.csv")).set_index("run")
+    packet = tables.read_csv(paths.require(PACKET))[["row_id", "candidate_kind"]]
+    inventory = tables.read_csv(paths.require(INVENTORY))
     inventory = inventory[inventory.panel == "p2_one_phase_swarm"][
         ["run_name", "anchor_or_design_id", "data_seed", "trainer_seed"]
     ]
@@ -109,15 +109,15 @@ def _repeats(ctx: ExportContext, proportional: pd.DataFrame) -> pd.DataFrame:
     the swarm's `baseline_proportional`, so it is left out.
     """
     assert len(proportional) == 1, f"expected one baseline_proportional fit row, found {len(proportional)}"
-    t9 = pd.read_csv(paths.require(NOISE / "noise_component_matrix.csv"), index_col=0)  # 10 rows, index = letter
-    panel = pd.read_csv(paths.require(NOISE / "noise_panel.csv"), index_col="letter")
-    unch = pd.read_csv(paths.require(UNCH_REPEATS))
+    t9 = tables.read_csv(paths.require(NOISE / "noise_component_matrix.csv"), index_col=0)  # 10 rows, index = letter
+    panel = tables.read_csv(paths.require(NOISE / "noise_panel.csv"), index_col="letter")
+    unch = tables.read_csv(paths.require(UNCH_REPEATS))
     unch["letter"] = unch.run.str.extract(REPEAT_RUN)["letter"]
     unch = unch.dropna(subset=["letter"]).set_index("letter")
     assert len(t9) == 10 and sorted(unch.index) == sorted(t9.index), f"repeat letters {sorted(unch.index)}"
     # noise_panel.csv records each letter's pooled Uncheatable BPB; equality with the named runs confirms the pairing.
     assert np.allclose(unch[UNCH_POOLED], panel.uncheatable_bpb.reindex(unch.index), rtol=0, atol=1e-12)
-    recorded = pd.read_csv(
+    recorded = tables.read_csv(
         paths.require(REPEAT_SEEDS),
         usecols=["wandb_run_name", "data_seed", "trainer_seed", "fit_panel_run_name", "fit_panel_max_abs_distance"],
     ).set_index("wandb_run_name")

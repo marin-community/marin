@@ -51,7 +51,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from experiments.domain_phase_mix.release import naming, paths
+from experiments.domain_phase_mix.release import naming, paths, tables
 from experiments.domain_phase_mix.release.configs import heldout, validation
 from experiments.domain_phase_mix.release.context import ExportContext
 
@@ -193,7 +193,7 @@ def required_sources() -> list[Path]:
 
 
 def _csv(path: Path, **kwargs) -> pd.DataFrame:
-    return pd.read_csv(paths.require(path), float_precision="round_trip", **kwargs)
+    return tables.read_csv(paths.require(path), **kwargs)
 
 
 def _json(path: Path) -> dict:

@@ -5,11 +5,12 @@
 
 import pandas as pd
 
-from experiments.domain_phase_mix.release import naming, paths
+from experiments.domain_phase_mix.release import naming, paths, tables
 
 
 def export(ctx) -> dict[str, pd.DataFrame]:
-    buckets = pd.read_csv(paths.require(paths.MIXSEL / "data/buckets.csv"))  # bucket,pool_tokens,epochs_per_unit_weight
+    # Columns: bucket, pool_tokens, epochs_per_unit_weight.
+    buckets = tables.read_csv(paths.require(paths.MIXSEL / "data/buckets.csv"))
     buckets["bucket_id"] = buckets.bucket.map(naming.bucket_public)
     names = naming.bucket_table()
     partition = names.merge(buckets[["bucket_id", "pool_tokens"]], on="bucket_id", how="left")

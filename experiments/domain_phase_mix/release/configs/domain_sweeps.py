@@ -66,7 +66,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from experiments.domain_phase_mix.release import naming, paths
+from experiments.domain_phase_mix.release import naming, paths, tables
 from experiments.domain_phase_mix.release.context import ExportContext
 
 SOURCES = paths.REPO / "experiments/domain_phase_mix/release/configs/domain_sweeps_sources.json"
@@ -158,8 +158,7 @@ def _source_frame(entry: dict) -> pd.DataFrame:
     """A source file's runs, one row each, under the source's own column names."""
     path = paths.require(paths.REPO / entry["original"])
     if entry["reader"] == "measurements":
-        # pandas' default float parser misreads some 17-digit values by one ulp; the figure's builder parses exactly.
-        return pd.read_csv(path, float_precision="round_trip")
+        return tables.read_csv(path)
     if entry["reader"] == "math_receipt":
         rows = json.loads(path.read_text())["rows"]
         return pd.json_normalize([row for group in entry["groups"] for row in rows[group]])

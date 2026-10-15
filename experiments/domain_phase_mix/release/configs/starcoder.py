@@ -69,7 +69,7 @@ import re
 import numpy as np
 import pandas as pd
 
-from experiments.domain_phase_mix.release import paths
+from experiments.domain_phase_mix.release import paths, tables
 from experiments.domain_phase_mix.release.context import ExportContext
 
 ATLAS = paths.RO / "starcoder_all_tied_curves_canonical_dsp_20260902"
@@ -155,7 +155,7 @@ def _curve_designs(curves: pd.DataFrame, dense: dict) -> pd.DataFrame:
     protocol = json.loads(paths.require(ATLAS / "protocol.json").read_text())
     if hashlib.sha256(paths.require(INVENTORY).read_bytes()).hexdigest() != protocol["input_hashes"][INVENTORY.name]:
         raise ValueError(f"{INVENTORY.name} is not the inventory the atlas fitted")
-    inventory = pd.read_csv(INVENTORY).set_index("curve_id").loc[curves.curve_id]
+    inventory = tables.read_csv(INVENTORY).set_index("curve_id").loc[curves.curve_id]
     if not (inventory.family == curves.family.to_numpy()).all():
         raise ValueError("the inventory and the atlas disagree on a curve's family")
     axis = protocol["materialized_epoch_axis"]
@@ -212,7 +212,7 @@ def _atlas_runs(
 
     `designs` is `_curve_designs`'s table and `aliases` the dense-support design's `deterministic_aliases`.
     """
-    pred = pd.read_csv(paths.require(ATLAS / "predictions.csv"))
+    pred = tables.read_csv(paths.require(ATLAS / "predictions.csv"))
     source, run = pred.training_run_id.str.split(":", n=1, expand=True).T.to_numpy()
     if (
         not pd.Series(source).isin(ATLAS_RUN_SOURCES).all()
@@ -248,8 +248,8 @@ def _atlas_runs(
 
 def _diagonal(ctx: ExportContext) -> pd.DataFrame:
     """The TPP-5 diagonal's runs with each cell's measured optimum; the cell constants the two files share must agree."""
-    runs = pd.read_csv(paths.require(DIAGONAL / "observations.csv"))
-    cells = pd.read_csv(paths.require(DIAGONAL / "curve_summary.csv"))
+    runs = tables.read_csv(paths.require(DIAGONAL / "observations.csv"))
+    cells = tables.read_csv(paths.require(DIAGONAL / "curve_summary.csv"))
     table = runs.merge(cells, on="cell_id", how="left", validate="many_to_one", suffixes=("", "_cell"))
     assert table.observed_optimum_bpb.notna().all(), "a diagonal run's cell has no summary"
     shared = [c for c in cells if c != "cell_id" and c in runs]
@@ -264,7 +264,7 @@ def _transition(ctx: ExportContext) -> pd.DataFrame:
     """The switch study's tables stacked under a `table` column, with run names replaced by observation ids."""
     parts = []
     for name in TRANSITION_TABLES:
-        part = pd.read_csv(paths.require(TRANSITION / f"{name}.csv"))
+        part = tables.read_csv(paths.require(TRANSITION / f"{name}.csv"))
         if name == "ramp_eval_history":
             part = part[["run_name", "step", *EVAL_HISTORY_METRICS]].rename(columns=EVAL_HISTORY_METRICS)
         for column in [c for c in RUN_NAME_COLUMNS if c in part]:
@@ -278,8 +278,8 @@ def _transition(ctx: ExportContext) -> pd.DataFrame:
 
 def _matched_confirmation(ctx: ExportContext) -> pd.DataFrame:
     """The matched-N,D confirmation pairs, each run keyed by its training run name."""
-    pairs = pd.read_csv(paths.require(MATCHED_CONFIRMATION / "confirmation_pairs.csv"))
-    runs = pd.read_csv(paths.require(MATCHED_CONFIRMATION / "confirmation_observations.csv"))
+    pairs = tables.read_csv(paths.require(MATCHED_CONFIRMATION / "confirmation_pairs.csv"))
+    runs = tables.read_csv(paths.require(MATCHED_CONFIRMATION / "confirmation_observations.csv"))
     # The last component of a W&B run URL is the run's id, which for these runs is the training run name.
     if not (runs.wandb_url.str.rsplit("/", n=1).str[-1] == runs.run_name).all():
         raise ValueError("a confirmation run's W&B id differs from its run name")
@@ -329,8 +329,8 @@ def _trajectories(ctx: ExportContext) -> pd.DataFrame:
 
 
 def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
-    curves = pd.read_csv(paths.require(ATLAS / "curve_reference.csv")).merge(
-        pd.read_csv(paths.require(ATLAS / "metrics.csv")),
+    curves = tables.read_csv(paths.require(ATLAS / "curve_reference.csv")).merge(
+        tables.read_csv(paths.require(ATLAS / "metrics.csv")),
         on=["curve_id", "curve_number", "curve_ref", "family"],
         how="left",
         validate="one_to_one",
@@ -341,25 +341,25 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     obs, membership = _atlas_runs(ctx, curves, designs, pd.DataFrame(dense["deterministic_aliases"]))
     curves = curves.merge(designs[DESIGN], left_on="curve_id", right_index=True, how="left", validate="one_to_one")
     curves["fitter"], curves["grid_points"] = FITTER, GRID_POINTS
-    params = pd.read_csv(paths.require(ATLAS / "full_fit_parameters.csv"))
-    grid = pd.read_csv(paths.require(ATLAS / "dense_curves.csv"))
+    params = tables.read_csv(paths.require(ATLAS / "full_fit_parameters.csv"))
+    grid = tables.read_csv(paths.require(ATLAS / "dense_curves.csv"))
     if not grid.groupby("curve_id").size().eq(GRID_POINTS).all() or set(grid.curve_id) != set(curves.curve_id):
         raise ValueError(f"the dense grid must hold {GRID_POINTS} weights for each atlas curve")
-    tables = {
+    out = {
         "starcoder_observations": obs,
         "starcoder_curve_membership": membership,
         "starcoder_curves": curves,
         "starcoder_fit_parameters": params,
         "starcoder_dense_grid": grid,
         "starcoder_diagonal": _diagonal(ctx),
-        "starcoder_curricula": pd.read_csv(paths.require(CURRICULA)),
-        "starcoder_curricula_matched_nd": pd.read_csv(paths.require(MATCHED_OPTIMA)),
+        "starcoder_curricula": tables.read_csv(paths.require(CURRICULA)),
+        "starcoder_curricula_matched_nd": tables.read_csv(paths.require(MATCHED_OPTIMA)),
         "starcoder_curricula_matched_nd_confirmation": _matched_confirmation(ctx),
         "starcoder_transition": _transition(ctx),
         "starcoder_ramp_designs": _ramp_designs(ctx),
         "starcoder_trajectories": _trajectories(ctx),
     }
-    for name, t in tables.items():
+    for name, t in out.items():
         drop = [c for c in t.columns if c in INTERNAL_COLUMNS or c.endswith(("_url", "_uri"))]
-        tables[name] = t.drop(columns=drop)
-    return tables
+        out[name] = t.drop(columns=drop)
+    return out

@@ -99,7 +99,7 @@ EXAMPLE_ROW = re.compile(r"\\quad (?P<name>.+?) & (?P<n>\d[\d,]*) & ")
 
 def _policy_weights(ctx: ExportContext) -> pd.DataFrame:
     """Public bucket weights (`w__<bucket>`) of each ladder mixture, indexed by its POLICY name."""
-    long = pd.concat([pd.read_csv(paths.require(path)) for path in CANDIDATE_WEIGHTS], ignore_index=True)
+    long = pd.concat([tables.read_csv(paths.require(path)) for path in CANDIDATE_WEIGHTS], ignore_index=True)
     long = long[long.candidate_id.isin(POLICY)]
     wide = long.pivot(index="candidate_id", columns="domain", values="weight")  # raises on a repeated pair
     wide.columns = [f"w__{naming.bucket_public(c)}" for c in wide.columns]
@@ -126,7 +126,7 @@ def _table9_components(folder: Path, run: Any) -> dict[str, float]:
 
 def _audited(folder: Path) -> pd.DataFrame:
     """One scaling launch's measured MARINER or Olmix runs with their 58 per-task BPB."""
-    results = pd.read_csv(paths.require(folder / "audited_measured_results.csv"))
+    results = tables.read_csv(paths.require(folder / "audited_measured_results.csv"))
     results = results[results.status == "measured"].reset_index(drop=True)
     if [run_names.training_run_name_from_uri(uri) for uri in results.eval_metrics_uri] != list(results.run_name):
         raise ValueError(f"{folder.name}: run names differ from the evaluation-metrics URIs")
@@ -150,7 +150,7 @@ def _audited(folder: Path) -> pd.DataFrame:
 def _baselines(accuracy: pd.DataFrame) -> pd.DataFrame:
     """The June ladder's proportional and UniMax-8 runs with their Uncheatable components, and at 1e21 the
     OlmoBaseEval Easy components of the accuracy table (`accuracy`, components.csv)."""
-    wandb = pd.read_csv(paths.require(PROGRESS))
+    wandb = tables.read_csv(paths.require(PROGRESS))
     wandb = wandb[wandb.mixture.isin(BASELINES)].reset_index(drop=True)
     assert wandb.is_completed.all() and set(wandb.mixture) == set(BASELINES)
     # A training run's W&B id, the last component of its W&B URL, is its hashed run name.
@@ -269,7 +269,7 @@ def _accuracy(accuracy: pd.DataFrame, ladder_table: pd.DataFrame) -> pd.DataFram
 
 
 def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
-    accuracy = pd.read_csv(paths.require(ACCURACY / "components.csv"))
+    accuracy = tables.read_csv(paths.require(ACCURACY / "components.csv"))
     if sorted(accuracy.component) != sorted(OBE_TASKS):
         raise ValueError("components.csv must hold each of the 51 OlmoBaseEval Easy tasks once")
     runs = pd.concat([*(_audited(folder) for folder in AUDITED), _baselines(accuracy)], ignore_index=True)

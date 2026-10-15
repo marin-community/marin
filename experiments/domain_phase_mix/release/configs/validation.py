@@ -56,7 +56,7 @@ RESULT_META.update(
 
 def _csv(cell: str) -> pd.DataFrame:
     """The tables named by one manifest cell, stacked."""
-    return pd.concat([pd.read_csv(paths.require(paths.REPO / path)) for path in cell.split(";")], ignore_index=True)
+    return pd.concat([tables.read_csv(paths.require(paths.REPO / path)) for path in cell.split(";")], ignore_index=True)
 
 
 def _weights(candidates: pd.DataFrame, ctx: ExportContext) -> pd.DataFrame:
@@ -73,7 +73,7 @@ def _components(path: Path) -> pd.DataFrame:
     public id; the frozen held-out registry's heldout_components.csv keys runs by `row_id` and names all 58 tasks by
     internal metric.
     """
-    long = pd.read_csv(path)
+    long = tables.read_csv(path)
     public = {c: c if c in naming.TASKS else naming.task_public(c) for c in long.component.unique()}
     long["task"] = long.component.map(public)
     wide = long.pivot(index="row_id" if "row_id" in long else "candidate_id", columns="task", values="bpb")
@@ -115,7 +115,7 @@ def _per_candidate(spec: str, candidates: pd.Series) -> list[str]:
 
 def _launch(ctx: ExportContext, launch: Any) -> pd.DataFrame:
     """One launch's measured runs with metadata, weights and per-task BPB; raises ValueError naming the launch."""
-    results = pd.read_csv(paths.require(paths.REPO / launch.results_csv))
+    results = tables.read_csv(paths.require(paths.REPO / launch.results_csv))
     if "status" in results:  # a results file without status lists measured runs only
         results = results[results.status == "measured"].reset_index(drop=True)
     weights = _weights(_csv(launch.candidates_csv), ctx)
@@ -186,4 +186,4 @@ def export_launches(ctx: ExportContext, manifest: pd.DataFrame) -> pd.DataFrame:
 
 
 def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
-    return {TABLE: export_launches(ctx, pd.read_csv(paths.require(MANIFEST)))}
+    return {TABLE: export_launches(ctx, tables.read_csv(paths.require(MANIFEST)))}

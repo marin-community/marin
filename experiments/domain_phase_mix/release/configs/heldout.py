@@ -61,7 +61,7 @@ VALIDATION_LAUNCHES = {
 
 def _frozen_components() -> pd.DataFrame:
     """Run-level components of the frozen cohort, which its builder checked against each run's recorded aggregates."""
-    long = pd.read_csv(paths.require(FROZEN / "heldout_components.csv"))
+    long = tables.read_csv(paths.require(FROZEN / "heldout_components.csv"))
     return pd.DataFrame({"row_id": long.row_id, "task": long.component.map(naming.task_public), "bpb": long.bpb})
 
 
@@ -75,7 +75,7 @@ def _launch_results(launch: str, folder: str) -> pd.DataFrame:
 
     A launch that repeats candidates over trainer seeds names each run `<candidate>@t<seed>`, otherwise `<candidate>`.
     """
-    results = pd.read_csv(paths.require(paths.RO / folder / "measured_results.csv"))
+    results = tables.read_csv(paths.require(paths.RO / folder / "measured_results.csv"))
     results = results[results.status == "measured"]
     run = list(results.candidate_id)
     if "trainer_seed" in results:
@@ -93,7 +93,7 @@ def _validation_components(ctx: ExportContext) -> pd.DataFrame:
     frames = []
     for launch, folder in VALIDATION_LAUNCHES.items():
         uncheatable = _launch_results(launch, folder)[list(uncheatable_columns)].rename(columns=uncheatable_columns)
-        obe = pd.read_csv(paths.require(paths.RO / folder / "measured_table9_components.csv"))
+        obe = tables.read_csv(paths.require(paths.RO / folder / "measured_table9_components.csv"))
         assert set(obe.component) == set(ctx.tasks[7:]), f"{launch}: unexpected OlmoBaseEval Easy components"
         rows = pd.MultiIndex.from_arrays([[_validation_row_id(launch, r) for r in obe.candidate_id], obe.component])
         both = pd.concat([uncheatable.stack(), obe.bpb.set_axis(rows)])
@@ -116,7 +116,7 @@ def _components(ctx: ExportContext, runs: pd.DataFrame) -> pd.DataFrame:
     long = pd.concat([_frozen_components(), _validation_components(ctx)], ignore_index=True)
     coordinate = long.row_id.map(runs.set_index("row_id").coordinate_id).rename("coordinate_id")
     means = long.groupby([coordinate, long.task]).bpb.mean()
-    published = pd.read_csv(paths.require(EXPANDED / "heldout_coordinate_components.csv"))
+    published = tables.read_csv(paths.require(EXPANDED / "heldout_coordinate_components.csv"))
     published = published.set_index([published.coordinate_id, published.component.map(naming.task_public)]).bpb_mean
     assert set(means.index) == set(published.index), "run-level components cover other coordinates than the registry"
     assert np.allclose(means, published.reindex(means.index), rtol=0, atol=1e-12), "components differ from the registry"
@@ -131,7 +131,7 @@ def observation_keys(runs: pd.DataFrame) -> pd.Series:
     The training run name wherever one is known (the module docstring gives the sources), else the registry's row_id.
     `fits` keys its held-out predictions with the same rule.
     """
-    frozen_ids = set(pd.read_csv(paths.require(FROZEN / "heldout_runs.csv")).row_id)
+    frozen_ids = set(tables.read_csv(paths.require(FROZEN / "heldout_runs.csv")).row_id)
     names = _validation_run_names()
     assert set(runs.row_id) - frozen_ids <= set(names.index), "every expanded run needs its training run name"
     recorded = runs.training_wandb_run_id
@@ -140,10 +140,10 @@ def observation_keys(runs: pd.DataFrame) -> pd.Series:
 
 
 def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
-    runs = pd.read_csv(paths.require(EXPANDED / "heldout_runs.csv"))
+    runs = tables.read_csv(paths.require(EXPANDED / "heldout_runs.csv"))
     assert runs.eligible.all() and runs.exclusion_reason.isna().all()
     assert set(runs.panel) == set(SWARM), f"panels {sorted(set(runs.panel))}"
-    frozen_ids = set(pd.read_csv(paths.require(FROZEN / "heldout_runs.csv")).row_id)
+    frozen_ids = set(tables.read_csv(paths.require(FROZEN / "heldout_runs.csv")).row_id)
 
     out = pd.DataFrame({"observation_id": observation_keys(runs).map(ctx.registry.id_for)})
     out["swarm"] = runs.panel.map(SWARM)

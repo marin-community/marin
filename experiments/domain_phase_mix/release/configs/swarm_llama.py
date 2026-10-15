@@ -196,24 +196,24 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
 def _export_160(ctx: ExportContext) -> pd.DataFrame:
     fit = _fit_160(ctx)
     proportional = _proportional(fit, ctx)
-    native = pd.read_csv(paths.require(NATIVE_160), low_memory=False)
+    native = tables.read_csv(paths.require(NATIVE_160), low_memory=False)
     native = native[native.scale == "60m_1p2b"]
     parts = [fit, _deletions_160(ctx, native, proportional), _repeats_160(ctx, native, proportional)]
     return _finish(pd.concat(parts, ignore_index=True), SMALL, ctx)
 
 
 def _fit_160(ctx: ExportContext) -> pd.DataFrame:
-    fit = pd.read_csv(paths.require(AUDIT_160 / "fit_single_phase.csv"))
+    fit = tables.read_csv(paths.require(AUDIT_160 / "fit_single_phase.csv"))
     assert len(fit) == 242 and (fit.run_name == "singleavg_" + fit.paired_run_name).all()
     hashed = fit.checkpoint_root.map(run_names.training_run_name_from_uri)  # `singleavg_run_00125-9ca4a6`
 
-    gap = _join(fit.run_name, pd.read_csv(paths.require(GAP_160)), "run_name", "160M OlmoBaseEval Easy")
+    gap = _join(fit.run_name, tables.read_csv(paths.require(GAP_160)), "run_name", "160M OlmoBaseEval Easy")
     obe = _metrics(gap, [c for c in gap if c.startswith("table9/")], ctx.tasks[7:])
     assert np.allclose(obe.mean(axis=1), fit.table9_macro_bpb, rtol=0, atol=1e-12), "components differ from the audit"
-    unch = pd.read_csv(paths.require(UNCHEATABLE / "60m_uncheatable_components.csv"))
+    unch = tables.read_csv(paths.require(UNCHEATABLE / "60m_uncheatable_components.csv"))
     unch = _join(hashed, unch, "wandb_run_id", "160M Uncheatable")
     assert np.allclose(unch[UNCH_POOLED], fit.uncheatable_bpb, rtol=0, atol=1e-12), "endpoints differ from the audit"
-    launch = _join(fit.run_name, pd.read_csv(paths.require(LAUNCH_160)), "run_name", "160M launch manifest")
+    launch = _join(fit.run_name, tables.read_csv(paths.require(LAUNCH_160)), "run_name", "160M launch manifest")
     assert (launch.num_train_steps == SETUP[SMALL]["train_steps"]).all()
 
     return _rows(
@@ -232,7 +232,7 @@ def _fit_160(ctx: ExportContext) -> pd.DataFrame:
 
 def _deletions_160(ctx: ExportContext, native: pd.DataFrame, proportional: pd.Series) -> pd.DataFrame:
     """The 39 single-bucket deletions. No launch manifest of theirs is among the sources, so their seeds stay null."""
-    audit = pd.read_csv(paths.require(AUDIT_160 / "heldout_observations.csv"))
+    audit = tables.read_csv(paths.require(AUDIT_160 / "heldout_observations.csv"))
     deletions = audit[audit.run_name.str.startswith("p60_del_")].reset_index(drop=True)
     assert len(deletions) == 39 and (deletions.intervention_type == "domain_deletion").all()
     hashed = deletions.checkpoint_root.map(run_names.training_run_name_from_uri)  # `p60_del_00-1035b3`
@@ -242,7 +242,7 @@ def _deletions_160(ctx: ExportContext, native: pd.DataFrame, proportional: pd.Se
     evaluations = _join(deletions.run_name, native, "run_name", "160M deletion evaluations")
     obe = _native_obe(evaluations, ctx)
     assert np.allclose(obe.mean(axis=1), deletions.table9_macro_bpb, rtol=0, atol=1e-12), "components differ"
-    frozen = pd.read_csv(paths.require(FROZEN_COMPONENTS))
+    frozen = tables.read_csv(paths.require(FROZEN_COMPONENTS))
     frozen = frozen[frozen.target == "uncheatable"].pivot(index="row_id", columns="component", values="bpb")
     unch = _join("60m::" + deletions.observation_id, frozen.reset_index(), "row_id", "160M deletion Uncheatable")
 
@@ -263,7 +263,7 @@ def _deletions_160(ctx: ExportContext, native: pd.DataFrame, proportional: pd.Se
 def _repeats_160(ctx: ExportContext, native: pd.DataFrame, proportional: pd.Series) -> pd.DataFrame:
     """The ten proportional repeats, independently trained; the audit's other repeat rows mirror fit runs or repeat
     other mixtures. Their launch set trainer seeds and no data seed, so data order follows the trainer seed."""
-    audit = pd.read_csv(paths.require(AUDIT_160 / "repeat_observations.csv"))
+    audit = tables.read_csv(paths.require(AUDIT_160 / "repeat_observations.csv"))
     repeats = audit[(audit.source_kind == "proportional_noise") & ~audit.is_fit_source_alias].reset_index(drop=True)
     assert len(repeats) == 10
     hashed = repeats.checkpoint_root.map(run_names.training_run_name_from_uri)
@@ -273,7 +273,7 @@ def _repeats_160(ctx: ExportContext, native: pd.DataFrame, proportional: pd.Seri
     evaluations = _join(repeats.run_name, native, "run_name", "160M repeat evaluations")
     obe = _native_obe(evaluations, ctx)
     assert np.allclose(obe.mean(axis=1), repeats.table9_macro_bpb, rtol=0, atol=1e-12), "components differ"
-    endpoints = pd.read_csv(paths.require(REPEATS / "noise_baseline_proportional_variable_subset_60m_1p2b.csv"))
+    endpoints = tables.read_csv(paths.require(REPEATS / "noise_baseline_proportional_variable_subset_60m_1p2b.csv"))
     endpoints = _join(hashed, endpoints, "wandb_run_id", "160M repeat endpoints")
     assert np.allclose(endpoints[UNCH_POOLED], repeats.uncheatable_bpb, rtol=0, atol=1e-12), "endpoints differ"
 
@@ -298,7 +298,7 @@ def _export_200(ctx: ExportContext) -> pd.DataFrame:
 
 
 def _fit_200(ctx: ExportContext) -> pd.DataFrame:
-    panel = pd.read_csv(paths.require(PARITY_200 / "one_phase_augmented_fit_panel.csv"))
+    panel = tables.read_csv(paths.require(PARITY_200 / "one_phase_augmented_fit_panel.csv"))
     assert len(panel) == 280 and panel.run_name.is_unique
     trained = panel.panel_source == "single_phase_qsplit_signal"
     alias = panel.is_shared_checkpoint_alias  # the stratified baseline, which is also a two-phase swarm row
@@ -307,7 +307,7 @@ def _fit_200(ctx: ExportContext) -> pd.DataFrame:
     # The packet and the component file prefix the deletions' names (`singleavg_pctrl_del_<bucket>`).
     row_id = "singleavg_" + panel.run_name.str.removeprefix("singleavg_")
 
-    unch = pd.read_csv(paths.require(UNCHEATABLE / "300m_uncheatable_components.csv"))
+    unch = tables.read_csv(paths.require(UNCHEATABLE / "300m_uncheatable_components.csv"))
     unch = _join(row_id, unch, "row_id", "200M Uncheatable")
     hashed = unch.wandb_run_id  # `singleavg_run_00002-f84c49`, `pctrl_del_dolma3_arxiv-079b36`
     physical = panel.shared_checkpoint_run_name.fillna(panel.run_name)
@@ -318,25 +318,25 @@ def _fit_200(ctx: ExportContext) -> pd.DataFrame:
 
     obe_columns = [c for c in panel if c.startswith(OBE_200)]
     panel_obe = _metrics(panel, obe_columns, ctx.tasks[7:])
-    native = pd.read_csv(paths.require(PARITY_200 / "single_phase_table9_wide.csv"))
+    native = tables.read_csv(paths.require(PARITY_200 / "single_phase_table9_wide.csv"))
     native = _join(panel.run_name[trained], native, "run_name", "200M native OlmoBaseEval Easy")
     native_obe = _metrics(native, obe_columns, ctx.tasks[7:])
     replaced = (panel_obe[trained] - native_obe).abs().max(axis=1) > 1e-12
     assert panel.run_name[trained][replaced].tolist() == [PROPORTIONAL_200], "the panel replaced other runs' values"
-    references = pd.read_csv(paths.require(PARITY_200 / "proportional_reference_table9.csv"))
+    references = tables.read_csv(paths.require(PARITY_200 / "proportional_reference_table9.csv"))
     replaced_macro = panel.table9_macro_bpb[panel.run_name == PROPORTIONAL_200]
     assert len(references) == 11 and np.allclose(replaced_macro, references.table9_macro_bpb.mean(), rtol=0, atol=1e-12)
     # Native evaluations: the wide file's for the 240 trained runs, the panel's for the 40 reused ones.
     obe = pd.concat([native_obe, panel_obe[~trained]]).loc[panel.index]
     obe_source = pd.concat([native.native_table9_macro_bpb, panel.table9_macro_bpb[~trained]]).loc[panel.index]
 
-    packet = _join(row_id, pd.read_csv(paths.require(PACKET / "300m_one_phase_fit.csv")), "row_id", "200M packet")
+    packet = _join(row_id, tables.read_csv(paths.require(PACKET / "300m_one_phase_fit.csv")), "row_id", "200M packet")
     own = panel.run_name != PROPORTIONAL_200
     assert np.allclose(packet.uncheatable_bpb[own], unch[UNCH_POOLED][own], rtol=0, atol=1e-12)
     assert np.allclose(packet.table9_macro_bpb[own], obe_source[own], rtol=0, atol=1e-12)
 
     # The stratified baseline's two-phase launch left no manifest in the sources, so its seeds stay null.
-    launches = pd.concat([pd.read_csv(paths.require(LAUNCH_200)), pd.read_csv(paths.require(DELETIONS_200))])
+    launches = pd.concat([tables.read_csv(paths.require(LAUNCH_200)), tables.read_csv(paths.require(DELETIONS_200))])
     launch = _join(panel.run_name[~alias], launches, "run_name", "200M launch manifests")
     assert (launch.num_train_steps == SETUP[LARGE]["train_steps"]).all()
     seeds = launch[["data_seed"]].assign(trainer_seed=launch.trainer_seed.fillna(DEFAULT_TRAINER_SEED))
@@ -358,10 +358,10 @@ def _fit_200(ctx: ExportContext) -> pd.DataFrame:
 def _repeats_200(ctx: ExportContext, proportional: pd.Series) -> pd.DataFrame:
     """The ten proportional repeats. The parity panel averaged them with the two-phase swarm's proportional run
     (`panel == "parity"`), a different run from the fit row; the paper counts the ten repeats only."""
-    references = pd.read_csv(paths.require(PARITY_200 / "proportional_reference_table9.csv"))
+    references = tables.read_csv(paths.require(PARITY_200 / "proportional_reference_table9.csv"))
     repeats = references[references.panel == "proportional_noise"].reset_index(drop=True)
     assert len(repeats) == 10
-    endpoints = pd.read_csv(paths.require(REPEATS / "noise_baseline_proportional_variable_subset_300m_6b.csv"))
+    endpoints = tables.read_csv(paths.require(REPEATS / "noise_baseline_proportional_variable_subset_300m_6b.csv"))
     endpoints = _join(repeats.run_name, endpoints, "run_name", "200M repeat endpoints")
     weights = _single_phase_weights(endpoints, ctx)
     assert np.allclose(weights, proportional[weights.columns], rtol=0, atol=1e-12), "repeats train the proportional mix"

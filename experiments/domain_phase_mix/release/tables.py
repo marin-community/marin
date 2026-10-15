@@ -1,9 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Column conventions shared by every run table."""
+"""Column conventions shared by every run table, and the CSV reader every exporter uses."""
+
+from pathlib import Path
 
 import pandas as pd
+
+
+def read_csv(path: Path, **kwargs) -> pd.DataFrame:
+    """`pd.read_csv` with exact float parsing, so exported values are bit-identical to their sources.
+
+    pandas' default float parser misreads some 17-digit values by one ulp.
+    """
+    return pd.read_csv(path, float_precision="round_trip", **kwargs)
 
 
 def order_columns(df: pd.DataFrame, buckets: list[str], tasks: list[str]) -> pd.DataFrame:

@@ -43,7 +43,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import wandb
 
-from experiments.domain_phase_mix.release import paths
+from experiments.domain_phase_mix.release import paths, tables
 
 TRANSITION = paths.RO / "starcoder_wsd80_transition_transient_20261006"
 ENTITY_PROJECT = "marin-community/marin"
@@ -96,7 +96,7 @@ def series() -> pd.DataFrame:
                 }
             )
         )
-    manifest = pd.read_csv(paths.require(GRADIENT_CONFLICT_MANIFEST))
+    manifest = tables.read_csv(paths.require(GRADIENT_CONFLICT_MANIFEST))
     for label, selector in GRADIENT_CONFLICT.items():
         runs = manifest[np.logical_and.reduce([manifest[column] == value for column, value in selector.items()])]
         parts.append(
