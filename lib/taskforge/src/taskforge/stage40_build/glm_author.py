@@ -218,7 +218,11 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
         program_module,
         ("rl_env_build_step", "rl_env_build_sink", "rl_env_build_program", "PROPOSAL_INPUT"),
     ),
-    ("The step context", context_module, ("RLEnvBuildContext", "BuildFailure", "BuildInfrastructureFailure")),
+    (
+        "The step context",
+        context_module,
+        ("RLEnvBuildContext", "BuildFailure", "BuildInfrastructureFailure", "BuildExpired", "ExpiredClock"),
+    ),
     (
         "Step outputs",
         outputs,

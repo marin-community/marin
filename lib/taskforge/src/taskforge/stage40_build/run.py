@@ -12,7 +12,9 @@ and records one ``STEP`` ledger span tagged with its key digest and cache status
 A step that fails because of the host raises ``BuildInfrastructureFailure``
 (``infrastructure.py``), even when the program caught the host's error and raised its own. No
 revision of the program can fix the host, so the caller retries or abandons the item without
-asking the author.
+asking the author. A step that runs past ``STEP_TIMEOUT`` raises ``BuildExpired`` naming the step:
+whether the step or Taskforge was slow is unknown, so the caller holds the item rather than asking for
+a revision.
 
 ``run_build`` computes the model part of every key (``build_model_digest``), runs the program for
 one proposal, applies the research requirement, and writes the sink's ``TaskSpec`` with the
@@ -39,7 +41,13 @@ from taskforge.llm.client import Completion, ModelClient, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.program import PROPOSAL_INPUT, RLEnvBuildProgram, RLEnvBuildSink, RLEnvBuildStep
-from taskforge.stage40_build.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
+from taskforge.stage40_build.context import (
+    BuildExpired,
+    BuildFailure,
+    BuildInfrastructureFailure,
+    ExpiredClock,
+    RLEnvBuildContext,
+)
 from taskforge.stage40_build.infrastructure import infrastructure_failure
 from taskforge.stage40_build.outputs import SOURCES_STEP, Sources
 from taskforge.stage40_build.services import RLEnvBuildServices
@@ -59,8 +67,8 @@ PROVENANCE_FILE = "provenance.json"
 BUILD_STAGE = "build"
 """The ``step`` of the ``STAGE`` ledger span ``run_build`` records around a build."""
 STEP_TIMEOUT = 1800.0
-"""Seconds one step may run before the build fails as the program's; a step that never returns would otherwise
-hold its item for good."""
+"""Seconds one step may run before the build expires (``BuildExpired``); a step that never returns would
+otherwise hold its item for good."""
 
 
 class ResearchRequirement(StrEnum):
@@ -196,6 +204,8 @@ async def run_program(
     Raises:
         BuildFailure: a step raised one. When the step left ``step`` unset, the runner sets it to
             the step's name.
+        BuildExpired: a step ran past ``STEP_TIMEOUT``, or raised one; the runner sets ``step`` as
+            for ``BuildFailure``.
         BuildInfrastructureFailure: a step failed because of the host, anywhere in the cause chain
             of what it raised.
     """
@@ -232,7 +242,9 @@ async def run_program(
             except TimeoutError as error:
                 if not deadline.expired():
                     raise
-                raise BuildFailure(f"ran for more than {STEP_TIMEOUT:.0f} seconds without returning", name) from error
+                raise BuildExpired(
+                    f"ran for more than {STEP_TIMEOUT:.0f} seconds without returning", ExpiredClock.STEP, name
+                ) from error
             except Exception as error:
                 infrastructure = infrastructure_failure(error)
                 if infrastructure is not None:
@@ -242,6 +254,8 @@ async def run_program(
                     raise infrastructure from error
                 if isinstance(error, BuildFailure) and error.step is None:
                     raise BuildFailure(error.message, name) from error
+                if isinstance(error, BuildExpired) and error.step is None:
+                    raise BuildExpired(error.message, error.clock, name) from error
                 raise
             fields.attrs["cache"] = status
             fields.output_hash = memo.output_digest
@@ -322,6 +336,8 @@ async def run_build(
 
     Raises:
         BuildFailure: the research requirement fails, or a step failed.
+        BuildExpired: a step ran past ``STEP_TIMEOUT``, or raised one (the standard grader step does for a grader
+            that timed out twice).
         BuildInfrastructureFailure: a step failed because of the host.
         ValueError: ``check_item_id`` refused ``item_id``.
     """

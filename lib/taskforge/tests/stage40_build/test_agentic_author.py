@@ -44,7 +44,7 @@ from taskforge.stage40_build.agentic_author import (
     author_round,
     plan_session,
 )
-from taskforge.stage40_build.context import BuildInfrastructureFailure
+from taskforge.stage40_build.context import BuildExpired, BuildInfrastructureFailure, ExpiredClock
 from taskforge.stage40_build.glm_author import AUTHOR_DIR, GlmAuthor
 from taskforge.stage40_build.infrastructure import InfrastructureCause
 from taskforge.stage40_build.run import ResearchRequirement, TaskDraft, run_build
@@ -536,6 +536,35 @@ async def test_a_grade_the_host_keeps_failing_ends_the_round_unseen_by_the_autho
     assert graded == ["41"] * (1 + aa.HOST_RETRIES)
     assert tool_outputs(model)[1].startswith("built: program ")
     assert not any("grading failed" in text or "infrastructure" in text for text in tool_texts(model))
+
+
+async def test_a_build_past_its_clock_ends_the_round_unseen_by_the_author_and_unretried(
+    tmp_path, services, proposal, ledger
+):
+    builds: list[Path] = []
+
+    async def expiring(source: str, run_dir: Path, *, invalidate: frozenset[str]) -> TaskDraft:
+        builds.append(run_dir)
+        raise BuildExpired("ran for more than 1800 seconds without returning", ExpiredClock.STEP, "grader")
+
+    item = tmp_path / "item"
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": "n"})),
+    )
+    build = replace(session_build(tmp_path, model, services, proposal, 0), builder=expiring)
+
+    with pytest.raises(BuildExpired) as raised:
+        await author_round(CONFIG, model, LLMPolicy(), ledger, build, item, ITEM, 0, proposal, None)
+
+    assert (raised.value.clock, raised.value.step) == (ExpiredClock.STEP, "grader") and len(builds) == 1
+    run = read(agentic(item, 0, 0) / "runs" / "0" / "run.json")
+    assert (run["status"], run["clock"], run["step"]) == ("expired", "step", "grader")
+    assert run["text"] == "ran for more than 1800 seconds without returning"
+    assert len(model.replies) == 1, "the session ended at the build"
+    assert not any("ran for more than" in text for text in tool_texts(model))
+    assert not (authored(item, 0, 0) / "author.json").exists(), "the round wrote no record and spent no revision"
 
 
 async def test_tools_refuse_paths_outside_the_workspace_and_writes_to_the_reference(tmp_path, author):

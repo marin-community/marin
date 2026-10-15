@@ -22,7 +22,7 @@ src/taskforge/
   stage30_author/  program.py: build steps and the DAG they form;
                    author.py: Revision, the Author protocol, AuthoredProgram, `static_author`, the program manifest;
                    loader.py: `load_program_source`, the restricted loader of authored programs
-  stage40_build/   context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure;
+  stage40_build/   context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure, BuildExpired;
                    services.py: RLEnvBuildServices, AgentLimits;
                    outputs.py: the step outputs (Sources, Fixtures, Grader, Instructions, ...);
                    sandbox_effects.py: `build_machine`, `grade_candidate`, `publish_image`;
@@ -247,6 +247,14 @@ the grader command timed out, and returns the second grade. A step-store memo or
 unreadable or altered raises `step_store.StoreCorruption`, an `OSError`, which the build child
 reports as a storage fault.
 
+A build that runs past a clock raises `BuildExpired`, a third outcome beside `BuildFailure` (the
+program's) and `BuildInfrastructureFailure` (the host's), carrying the `ExpiredClock` it ran past and
+the step: `WALL` when `build_process.run_build_in_process` kills the build at its wall clock, `STEP`
+when a step runs past `run.STEP_TIMEOUT`, and `GRADER` when the standard grader step's reference
+timed out on both of `grade_candidate`'s gradings. Until someone reads the record nobody knows whether
+Taskforge or the program was slow, so the library does not presume: the driver holds the item as
+abandoned, spends no revision, does not rebuild it on its own and asks the author for no rewrite.
+
 `stage40_build/template/standard.py` is the standard program: five steps and the sink `assemble`.
 
 ```
@@ -261,8 +269,8 @@ sources(proposal) -> fixtures(proposal, sources) -> requirements(proposal, fixtu
 sends a failing grader back to the model, and after `sdk.ATTEMPTS` requests fails the build, so a
 grader that rejects its own reference, returns a reward outside its score range, or credits the
 empty answer above its declared `rejection_ceiling` is a build failure. A reference whose grader
-timed out on both of `grade_candidate`'s gradings fails the build at once instead of going back to the
-model, so the revision names the timeout. The `Grader` it returns
+timed out on both of `grade_candidate`'s gradings raises `BuildExpired` (`GRADER`) at once instead of
+going back to the model, and the driver holds the item as abandoned. The `Grader` it returns
 holds the reference answer, the ceiling (the most a submission wrong in substance can earn under
 its partial-credit scheme) and every candidate it graded. The agentic author's `run_build` tool
 grades the empty answer in the library after every build, whatever the program did, and fails the
@@ -294,7 +302,10 @@ caller's event loop. Every tool result is cut to 6,000 characters, head and tail
 reaches the model: `run_build` and `run_grade_candidate` retry a `BuildInfrastructureFailure` up to
 `HOST_RETRIES` times with a doubling backoff (at once re-raising a cause in `HOST_REJECTIONS`), then
 re-raise it like `ModelUnavailable`, so the round ends without a record and spends no revision; a
-loader child the host killed raises it with cause `BUILD_PROCESS`.
+loader child the host killed raises it with cause `BUILD_PROCESS`. A `BuildExpired` from `run_build`
+never reaches the model either: the tool writes `run.json` with `status: "expired"`, the `clock`, the
+`step` and the message as `text`, and re-raises it at once, so the round ends the same way and the
+driver holds the item as abandoned.
 `submit(path, notes)` loads the file and refuses a loader failure or notes over 4,000 characters; a
 program that never built in the session is refused once and handed in untested when submitted again;
 an accepted submission ends the loop through `run_agent`'s `stop` callback. The session also stops
@@ -316,7 +327,8 @@ rounds/<n>/authored/<k>/
 rounds/<n>/agentic/<k>/
   conversation.json  the messages as sent, read by a same-session revision
   workspace/         program.py, proposal.md, notes.md, reference/
-  runs/<j>/          one per in-session build: draft/ and run.json
+  runs/<j>/          one per in-session build: draft/ and run.json (status built, build_failure,
+                     crash, infrastructure, or expired with its clock)
 ```
 
 Round 0 starts a fresh session. After a build failure, the session that submitted the program

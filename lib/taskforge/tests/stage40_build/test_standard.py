@@ -24,7 +24,7 @@ from taskforge.spec import draft
 from taskforge.spec.draft import VERDICT_REWARD, answer_grader
 from taskforge.stage10_proposal.model import Environment
 from taskforge.stage30_author.loader import load_program_source
-from taskforge.stage40_build.context import BuildFailure
+from taskforge.stage40_build.context import BuildExpired, BuildFailure, ExpiredClock
 from taskforge.stage40_build.outputs import Fixtures, Grader
 from taskforge.stage40_build.run import ResearchRequirement, run_build, step_output
 from taskforge.stage40_build.sdk import (
@@ -226,17 +226,19 @@ async def test_the_grader_step_keeps_the_declared_rejection_ceiling(context, pro
     assert "declare rejection_ceiling" in fake_glm.requests[0]["messages"][-2]["content"]
 
 
-async def test_a_grader_that_times_out_twice_fails_the_build_instead_of_going_back_to_the_model(
+async def test_a_grader_that_times_out_twice_expires_the_build_instead_of_going_back_to_the_model(
     context, proposal, fake_glm
 ):
     slow = SlowGraderFactory(timeouts=2)
     fake_glm.stream(content=json.dumps(grader_call(GOOD_GRADER)))
 
-    with pytest.raises(BuildFailure, match="the grader timed out on the reference answer twice"):
+    with pytest.raises(BuildExpired, match="the grader command timed out on the reference answer twice") as expired:
         await standard.grader.fn(
             context(factories={**FACTORIES, Backend.DOCKER.value: slow}), proposal, FIXTURES, SHELLSIM
         )
 
+    assert expired.value.clock is ExpiredClock.GRADER
+    assert "the item is held for inspection" in expired.value.message
     assert len(fake_glm.requests) == 1
     assert slow.grader_runs == 2
 

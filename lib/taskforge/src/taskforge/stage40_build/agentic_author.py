@@ -18,13 +18,16 @@ the session is refused once, with the loader's result and the reason, and accept
 again; an accepted submission ends the loop through ``run_agent``'s ``stop`` callback.
 
 The model sees a build's failure (the step's message, or the crashing program line first) and a
-grade's diagnostics, never a host failure. A ``BuildInfrastructureFailure`` in ``run_build`` or
-``run_grade_candidate`` is run again up to ``HOST_RETRIES`` times with a doubling backoff from
-``HOST_RETRY_BACKOFF`` inside the tool, at once re-raised for a cause in ``HOST_REJECTIONS``, and
-then re-raised like ``ModelUnavailable``: ``author_round`` ends without a record, so the round
-spends no revision and a relaunch hands the workspace to a fresh session. A failed build still
-writes its ``run.json``, ``status: "infrastructure"`` for the host's. A loader child the host
-killed (``LoaderProcessFailed``) raises the same failure with cause ``BUILD_PROCESS``.
+grade's diagnostics, never a host failure or an expired clock. A ``BuildInfrastructureFailure`` in
+``run_build`` or ``run_grade_candidate`` is run again up to ``HOST_RETRIES`` times with a doubling
+backoff from ``HOST_RETRY_BACKOFF`` inside the tool, at once re-raised for a cause in
+``HOST_REJECTIONS``, and then re-raised like ``ModelUnavailable``: ``author_round`` ends without a
+record, so the round spends no revision and a relaunch hands the workspace to a fresh session. A
+``BuildExpired`` in ``run_build`` (a wall, step or grader clock) is re-raised at once, without a
+retry, and ends the round the same way, so the driver holds the item as abandoned instead of asking
+for a rewrite. A failed build still writes its ``run.json``, ``status: "infrastructure"`` for the
+host's and ``status: "expired"`` with its ``clock`` for an expiry. A loader child the host killed
+(``LoaderProcessFailed``) raises the same failure with cause ``BUILD_PROCESS``.
 
 ``author_round`` is the author stage. It writes the AUTHORED record from the submitted file's bytes
 into ``rounds/<n>/authored/<k>/`` (``program.py``, ``program.json``, ``author.json``, ``record.json``),
@@ -81,7 +84,7 @@ from taskforge.stage30_author.author import (
 )
 from taskforge.stage30_author.load_process import LoaderProcessFailed, ProgramManifest, load_program_in_process
 from taskforge.stage30_author.loader import GRADER_STEP
-from taskforge.stage40_build.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
+from taskforge.stage40_build.context import BuildExpired, BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
 from taskforge.stage40_build.glm_author import RECORD_FILE, REVISION_PROMPT, author_messages, sdk_reference
 from taskforge.stage40_build.infrastructure import HOST_REJECTIONS, InfrastructureCause
 from taskforge.stage40_build.outputs import GradedCandidate, Grader
@@ -236,7 +239,8 @@ class ProgramBuilder(Protocol):
         ``run_dir``.
 
         Raises what the build raises; the session turns ``BuildFailure`` and other exceptions into text for the
-        model, re-raises ``ModelUnavailable``, and retries a ``BuildInfrastructureFailure`` before re-raising it.
+        model, re-raises ``ModelUnavailable`` and ``BuildExpired``, and retries a ``BuildInfrastructureFailure``
+        before re-raising it.
         """
         ...
 
@@ -352,7 +356,8 @@ def _traceback_tail(error: BaseException) -> str:
 
 
 def _failure_text(error: Exception) -> tuple[str, str | None, str]:
-    """A failed in-session build the host did not fail, as (status, step, text) for ``run.json`` and the model."""
+    """A failed in-session build the host did not fail and no clock ended, as (status, step, text) for ``run.json``
+    and the model."""
     if isinstance(error, BuildFailure):
         return "build_failure", error.step, error.message
     return "crash", None, _traceback_tail(error)
@@ -587,6 +592,12 @@ class AuthorSession:
         except BuildInfrastructureFailure as error:
             record |= {"status": "infrastructure", "step": None, "wall": time.monotonic() - started}
             record |= {"steps": ledger_steps(ledger, offset), "text": str(error)}
+            _write_json(run_dir / RUN_FILE, record)
+            self.builds.append(record)
+            raise
+        except BuildExpired as error:
+            record |= {"status": "expired", "clock": error.clock, "step": error.step, "wall": time.monotonic() - started}
+            record |= {"steps": ledger_steps(ledger, offset), "text": error.message}
             _write_json(run_dir / RUN_FILE, record)
             self.builds.append(record)
             raise
@@ -1180,6 +1191,7 @@ async def author_round(
     Raises:
         ModelUnavailable: the model or an in-session build or grade ran out of retries.
         BuildInfrastructureFailure: the host failed an in-session load, or a build or grade past its retries.
+        BuildExpired: an in-session build ran past a wall, step or grader clock.
     """
     plan = plan_session(item_dir, round_no, proposal, revision, config)
     rdir = _round_dir(item_dir, round_no)

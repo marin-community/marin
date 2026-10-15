@@ -19,18 +19,20 @@ the GLM token and the Parallel key. The child calls ``run_build``, which writes 
 ``round_dir`` as it does in process, writes a ``BuildResult`` to ``<round_dir>/build-result.json``
 and exits 0. Its log goes to ``<round_dir>/build-process.log``.
 
-Two deadlines bound a build. ``STEP_TIMEOUT`` is the first, inside the child: a step that awaits
-past it fails as the program's, naming the step. The wall clock of ``run_build_in_process`` is the
-last, and it holds against a step that never yields. When it expires, the child's process group
-receives SIGTERM and, ``TERMINATE_GRACE`` seconds later, SIGKILL, and the call raises a
-``BuildFailure`` naming no step. A call cancelled while it waits stops the child the same way.
+Two deadlines bound a build, and neither presumes whose fault an expiry is: each raises
+``BuildExpired``, which a driver holds as abandoned for someone to read. ``STEP_TIMEOUT`` is the
+first, inside the child: a step that awaits past it expires with clock ``STEP``, naming the step.
+The wall clock of ``run_build_in_process`` is the last, and it holds against a step that never
+yields. When it expires, the child's process group receives SIGTERM and, ``TERMINATE_GRACE`` seconds
+later, SIGKILL, and the call raises ``BuildExpired`` with clock ``WALL``, naming no step. A call
+cancelled while it waits stops the child the same way.
 
 ``run_build_in_process`` raises what ``run_build`` would have raised in process, so a caller
-handles the two alike: ``BuildFailure`` with its step, ``BuildInfrastructureFailure`` with its
-cause, ``ModelUnavailable`` and ``OSError`` with their messages, and for any other exception a
-``RuntimeError`` whose first line is the exception's type and message, followed by the child's
-traceback. A child that exits without a result raises ``BuildInfrastructureFailure`` with cause
-``BUILD_PROCESS`` and the end of its log.
+handles the two alike: ``BuildFailure`` with its step, ``BuildExpired`` with its clock and step,
+``BuildInfrastructureFailure`` with its cause, ``ModelUnavailable`` and ``OSError`` with their
+messages, and for any other exception a ``RuntimeError`` whose first line is the exception's type and
+message, followed by the child's traceback. A child that exits without a result raises
+``BuildInfrastructureFailure`` with cause ``BUILD_PROCESS`` and the end of its log.
 
 The child calls the model at the fixed ``BuildModelConfig.base_url``. A driver behind an Iris relay
 resolves the relay's endpoint for each request, so every build starts wherever the relay is now.
@@ -69,7 +71,7 @@ from taskforge.sandbox.factories import MachineHost, machine_factories
 from taskforge.sandbox.image_builder import IrisImageBuilder
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.loader import load_program_source
-from taskforge.stage40_build.context import BuildFailure, BuildInfrastructureFailure
+from taskforge.stage40_build.context import BuildExpired, BuildFailure, BuildInfrastructureFailure, ExpiredClock
 from taskforge.stage40_build.infrastructure import InfrastructureCause
 from taskforge.stage40_build.run import DRAFT_DIR, ResearchRequirement, TaskDraft, load_draft, run_build
 from taskforge.stage40_build.services import AgentLimits, RLEnvBuildServices
@@ -145,7 +147,7 @@ class BuildRequest:
 
 
 class Raised(StrEnum):
-    """The kind of exception other than a build failure that ended a build in the child."""
+    """The kind of exception other than a build failure, expiry or host failure that ended a build in the child."""
 
     MODEL_UNAVAILABLE = "model_unavailable"
     OS_ERROR = "os_error"
@@ -169,6 +171,16 @@ class Failed:
 
 
 @dataclass(frozen=True)
+class Expired:
+    """``run_build`` raised ``BuildExpired``."""
+
+    clock: ExpiredClock
+    step: str | None
+    message: str
+    kind: Literal["expired"] = "expired"
+
+
+@dataclass(frozen=True)
 class HostFailed:
     """``run_build`` raised ``BuildInfrastructureFailure``."""
 
@@ -189,7 +201,7 @@ class Crashed:
     kind: Literal["crashed"] = "crashed"
 
 
-BuildResult = Annotated[Built | Failed | HostFailed | Crashed, Field(discriminator="kind")]
+BuildResult = Annotated[Built | Failed | Expired | HostFailed | Crashed, Field(discriminator="kind")]
 
 REQUEST: TypeAdapter[BuildRequest] = TypeAdapter(BuildRequest)
 RESULT: TypeAdapter[BuildResult] = TypeAdapter(BuildResult)
@@ -199,7 +211,8 @@ async def run_build_in_process(request: BuildRequest, *, wall_timeout: float) ->
     """Run ``request`` in a child process for at most ``wall_timeout`` seconds and return its draft.
 
     Raises:
-        BuildFailure: the build failed as the program's, or ran past ``wall_timeout``.
+        BuildFailure: the build failed as the program's.
+        BuildExpired: the build ran past ``wall_timeout`` (``WALL``), or raised one in the child.
         BuildInfrastructureFailure: the host failed, or the child wrote no result.
         ModelUnavailable: the model stayed unreachable.
         OSError: the child hit a storage fault.
@@ -224,7 +237,7 @@ async def run_build_in_process(request: BuildRequest, *, wall_timeout: float) ->
     try:
         await asyncio.wait_for(process.wait(), wall_timeout)
     except TimeoutError:
-        raise BuildFailure(f"the build ran for more than {wall_timeout:.0f} seconds") from None
+        raise BuildExpired(f"the build ran for more than {wall_timeout:.0f} seconds", ExpiredClock.WALL) from None
     finally:
         await stop_process_group(process)
     if not result_path.exists():
@@ -239,6 +252,8 @@ async def run_build_in_process(request: BuildRequest, *, wall_timeout: float) ->
         return load_draft(round_dir / DRAFT_DIR)
     if isinstance(result, Failed):
         raise BuildFailure(result.message, result.step)
+    if isinstance(result, Expired):
+        raise BuildExpired(result.message, result.clock, result.step)
     if isinstance(result, HostFailed):
         raise BuildInfrastructureFailure(result.cause, result.message)
     if result.raised is Raised.MODEL_UNAVAILABLE:
@@ -310,6 +325,8 @@ async def build_result(request: BuildRequest) -> BuildResult:
             )
         except BuildFailure as error:
             return Failed(error.message, error.step)
+        except BuildExpired as error:
+            return Expired(error.clock, error.step, error.message)
         except BuildInfrastructureFailure as error:
             return HostFailed(error.cause, error.message)
         except ModelUnavailable as error:
