@@ -1,7 +1,14 @@
 # EvalDash
 
 A benchmark panel and browsable run log over every Marin eval run, served by the Marina kernel at
-`/evaldash/`.
+`/evaldash/` on `marina.oa.dev`. The legacy `evaldash.oa.dev` hostname routes to
+the same Marina service.
+
+Cloud Run has a `marina` web service and a separate `marina-evaldash` job.
+The job is the scheduled ingestion worker; it scans evaluation records and
+updates the serving catalog. It serves no web traffic. Both use the Marina
+base image, while the released EvalDash package supplies the UI, API and
+ingestion module.
 
 Eval runs write one canonical JSON record per run under `gs://marin-eval-metadata/evals` for GCP or
 `s3://marin-us-east-02a/marin/evals` for CoreWeave. The run directory also holds the evaluator's
@@ -267,16 +274,13 @@ EVALDASH_STORE=local RECORDS_PREFIXES="$preview_records" \
 Click `Rescan` to load the records. Fixture cohorts predate verified policies; select
 `Newest per benchmark (all cohorts)*` to view them. To inspect real
 runs, point `RECORDS_PREFIXES` at a local copy of their run directories. Keep dev storage
-local to avoid production writes. After frontend edits, rerun `marina build --only evaldash`
-and reload the browser; this command does not hot-reload the frontend.
+local to avoid production writes. After edits, stop the preview with Ctrl-C and
+rerun the `release --local` command to build and install the new package.
 
-For a Postgres-backed preview, generate fixtures as above, then run from `infra/marina`.
-Release installs the schema in the disposable database:
-
-```bash
-EVALDASH_STORE=postgres RECORDS_PREFIXES="$preview_records" \
-  uv run marina release apps/evaldash --local
-```
+The browser journeys below exercise the Postgres serving catalog. Their fixtures
+install the schema and ingest local records before opening the browser. A plain
+Postgres `release --local` starts with an empty catalog; it does not start an
+ingestion worker, and `Rescan` returns 503 without a configured job.
 
 ## Test
 
@@ -299,8 +303,12 @@ uv run marina release-status infra/marina/apps/evaldash --json
 uv run marina release infra/marina/apps/evaldash --base-version CURRENT_VERSION
 ```
 
-Release from clean current main. The release transaction applies application
+Release from clean current main by default. The release transaction applies application
 migrations before selecting the package. `/evaldash/`, the `evaldash` schema and
 `EVALDASH_INGEST_JOB` stay stable. The scheduled base-image runner snapshots and
 executes the package's `ingest` module; running jobs keep their selected code.
 Marina deployment and restart do not publish EvalDash or run its migrations.
+
+Pass `--allow-dirty` to explicitly release branch or uncommitted source
+without verified Git provenance; `release-status` then reports `unrecorded` from a clean checkout.
+Use `--local` to preview in a disposable stack.

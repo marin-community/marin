@@ -6,6 +6,10 @@
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated
+
+from pydantic import ConfigDict, Field, StrictInt, StrictStr, StringConstraints, TypeAdapter
+from pydantic.dataclasses import dataclass as validated_dataclass
 
 MANIFEST_FILE = "applet.toml"
 APP_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
@@ -14,67 +18,44 @@ ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 MODULE_PATTERN = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
 
 
-@dataclass(frozen=True)
+AppName = Annotated[StrictStr, StringConstraints(pattern=APP_NAME_PATTERN)]
+ModuleName = Annotated[StrictStr, StringConstraints(pattern=MODULE_PATTERN)]
+EnvironmentName = Annotated[StrictStr, StringConstraints(pattern=ENV_NAME_PATTERN)]
+NonemptyString = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1)]
+Starter = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)]
+
+
+@validated_dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class AppJob:
-    name: str
-    runner: str
-    module: str
-    timeout: int
-    args: tuple[str, ...] = ()
-    secrets: tuple[str, ...] = ()
+    name: AppName
+    runner: AppName
+    module: ModuleName
+    timeout: Annotated[StrictInt, Field(gt=0)]
+    args: tuple[StrictStr, ...] = ()
+    secrets: tuple[EnvironmentName, ...] = ()
 
 
-@dataclass(frozen=True)
+@validated_dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class AgentPanelManifest:
-    profile: str
-    repository: str
-    starters: tuple[str, ...] = ()
+    profile: NonemptyString
+    repository: NonemptyString
+    starters: Annotated[tuple[Starter, ...], Field(max_length=3)] = ()
+
+
+JOBS = TypeAdapter(tuple[AppJob, ...])
+AGENT_PANEL = TypeAdapter(AgentPanelManifest)
 
 
 def app_jobs(raw: object) -> tuple[AppJob, ...]:
     """Parse jobs whose modules run from the selected immutable package."""
-    if not isinstance(raw, list):
-        raise ValueError("jobs must be an array of tables")
-    jobs = []
-    for job in raw:
-        if not isinstance(job, dict) or set(job) - {"name", "runner", "module", "timeout", "args", "secrets"}:
-            raise ValueError("job contains unknown fields")
-        for key in ("name", "runner"):
-            if not isinstance(job.get(key), str) or not APP_NAME_PATTERN.fullmatch(job[key]):
-                raise ValueError(f"job {key} must be a lowercase application name")
-        if not isinstance(job.get("module"), str) or not MODULE_PATTERN.fullmatch(job["module"]):
-            raise ValueError("job module must be a Python module within the package")
-        timeout = job.get("timeout")
-        if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
-            raise ValueError("job timeout must be a positive integer")
-        args = job.get("args", [])
-        secrets = job.get("secrets", [])
-        if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
-            raise ValueError("job args must be strings")
-        if not isinstance(secrets, list) or any(
-            not isinstance(secret, str) or not ENV_NAME_PATTERN.fullmatch(secret) for secret in secrets
-        ):
-            raise ValueError("job secrets must be environment variable names")
-        jobs.append(AppJob(job["name"], job["runner"], job["module"], timeout, tuple(args), tuple(secrets)))
+    jobs = JOBS.validate_python(raw)
     if len({job.name for job in jobs}) != len(jobs):
         raise ValueError("job names must be unique")
-    return tuple(jobs)
+    return jobs
 
 
 def agent_panel(raw: object) -> AgentPanelManifest:
-    if not isinstance(raw, dict) or set(raw) - {"profile", "repository", "starters"}:
-        raise ValueError("agent must contain profile, repository and optional starters")
-    for field in ("profile", "repository"):
-        if not isinstance(raw.get(field), str) or not raw[field].strip():
-            raise ValueError(f"agent {field} must be a nonempty string")
-    starters = raw.get("starters", [])
-    if (
-        not isinstance(starters, list)
-        or len(starters) > 3
-        or any(not isinstance(starter, str) or not 1 <= len(starter.strip()) <= 160 for starter in starters)
-    ):
-        raise ValueError("agent starters must contain at most three strings of 1 to 160 characters")
-    return AgentPanelManifest(raw["profile"], raw["repository"], tuple(starters))
+    return AGENT_PANEL.validate_python(raw)
 
 
 @dataclass(frozen=True)

@@ -292,6 +292,9 @@ def _serve_local_applet(payload: bytes, *, applet_id: str, mode: AppletMode | No
 @click.option("--mode", type=click.Choice([mode.value for mode in AppletMode]), default=None)
 @click.option("--local", is_flag=True, help="Preview using disposable Postgres and Marina.")
 @click.option("--dry-run", is_flag=True, help="Build and validate without releasing.")
+@click.option(
+    "--allow-dirty", is_flag=True, help="Release branch or uncommitted source without verified Git provenance."
+)
 @click.option("--json", "json_output", is_flag=True)
 def release(
     app_dir: Path,
@@ -301,6 +304,7 @@ def release(
     mode: str | None,
     local: bool,
     dry_run: bool,
+    allow_dirty: bool,
     json_output: bool,
 ) -> None:
     """Build and release one application to its declared stable UUID."""
@@ -310,7 +314,7 @@ def release(
         raise click.UsageError("Supply --base-version; use 0 for the first release")
     publishing = not local and not dry_run
     registered = (app_dir / RELEASE_CONFIG).exists()
-    guarded = publishing and registered
+    guarded = publishing and registered and not allow_dirty
     try:
         source = release_source(app_dir) if guarded else None
         if guarded:

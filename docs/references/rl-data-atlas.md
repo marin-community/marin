@@ -71,11 +71,13 @@ uv run python infra/marina/applets/rl_data_catalog/load.py \
   --applet-id fb11c931-5861-4878-8bb5-a964d652b45f
 ```
 
-`release.toml` binds this directory to the existing applet. Production release requires a
-clean checkout at the current remote main and the applet's publisher or a
-configured operator. A Marina image deployment does not publish Atlas. The
-release records its source commit and subtree hash in the immutable package;
+`release.toml` binds this directory to the existing applet. Releases require the
+applet's publisher or a configured operator. By default, source must be a clean
+checkout at the current remote main. A Marina image deployment does not publish Atlas. A
+default release records its source commit and subtree hash in the immutable package;
 `release-status` reports whether that tree matches this checkout.
+Use `--allow-dirty` to explicitly release branch or uncommitted source without
+verified Git provenance; `release-status` then reports `unrecorded` from a clean checkout.
 
 Coordinate the code release and data load: the new API returns 503 until a
 catalog has been selected. Run the loader in the

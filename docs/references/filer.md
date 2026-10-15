@@ -81,9 +81,11 @@ uv run marina release infra/marina/applets/filer --base-version <current>
 ```
 
 Replace `<current>` with the current version reported by `marina applets versions`.
-Production release requires a clean checkout at the current remote main. `release.toml`
-binds this directory to its UUID; the release records the source commit and
+Production release defaults to a clean checkout at the current remote main.
+`release.toml` binds this directory to its UUID; a default release records the source commit and
 subtree hash. `release-status` compares that tree with the local checkout.
+Use `--allow-dirty` to release branch or uncommitted source without verified Git
+provenance; `release-status` then reports `unrecorded` from a clean checkout.
 
 Keep the applet private: its backend uses Marina's storage credentials. Backend
 code runs as a trusted plugin in Marina's process. It needs no database tables or

@@ -39,13 +39,17 @@ uv run marina release my-app --local --json
 
 Preview opens a disposable Postgres-backed local stack. Exercise the UI and API at
 the printed revision URL, then stop the stack with Ctrl-C. Production releases from
-maintained source require a clean checkout at the current remote main:
+maintained source default to a clean checkout at the current remote main:
 
 ```bash
 uv run marina release-status my-app --json
 uv run marina applets versions UUID --json
 uv run marina release my-app --base-version CURRENT_VERSION --json
 ```
+
+Add `--allow-dirty` to release branch or uncommitted source to the selected
+server. This bypasses the Git checks and omits verified source metadata, so
+`release-status` reports `unrecorded` from a clean checkout. Use `--local` for a disposable preview.
 
 The first release uses `--base-version 0`. Each later release requires the inspected
 current revision. Release builds from empty output, validates Python imports, runs

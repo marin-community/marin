@@ -21,14 +21,16 @@ RELEASE_METADATA = "dist/marina-release.json"
 def require_current_main(repo_dir: Path) -> str:
     """Require a clean checkout at origin's current main and return its full commit."""
     if git_output(["status", "--porcelain", "--untracked-files=all"], repo_dir):
-        raise RuntimeError("Production releases require a clean checkout; use a local preview for branch work.")
+        raise RuntimeError(
+            "Releases require a clean checkout by default; use --allow-dirty to override or --local to preview."
+        )
     commit = git_output(["rev-parse", "HEAD"], repo_dir)
     # Query the remote directly: tracking refs and rerun CI checkouts may be stale.
     remote = git_output(["ls-remote", "--exit-code", "origin", "refs/heads/main"], repo_dir, timeout=30)
     if commit != remote.split()[0]:
         raise RuntimeError(
-            "Production releases require origin's current main commit; "
-            "update the checkout or dispatch the production workflow on main."
+            "Releases require origin's current main commit by default; "
+            "update the checkout or use --allow-dirty to override."
         )
     return commit
 

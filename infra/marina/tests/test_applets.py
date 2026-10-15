@@ -143,6 +143,58 @@ def test_release_requires_expected_revision_and_supports_validation(release_chec
 
 
 @pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
+@pytest.mark.parametrize("committed", [False, True])
+def test_release_allow_dirty_uploads_local_source_without_claiming_verified_provenance(
+    release_checkout: Path, committed: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    html = b"<h1>Branch preview</h1>"
+    (release_checkout / "dist/index.html").write_bytes(html)
+    (release_checkout / "dist/extra.js").write_text("branch()")
+    if committed:
+        for args in (["add", "."], ["commit", "-m", "branch work"]):
+            subprocess.run(["git", *args], cwd=release_checkout, check=True, capture_output=True)
+    uploads = []
+
+    def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
+        if method == "POST":
+            package = read_applet_package(kwargs["data"])
+            uploads.append(package)
+            assert kwargs["params"] == {"base_version": 7}
+            assert package.files["dist/index.html"] == html
+            assert package.files["dist/extra.js"] == b"branch()"
+            assert "dist/marina-release.json" not in package.files
+            return json_response({"id": "id", "version": 8, "path": "/a/id/v/8/"})
+        if url.endswith("marina-release.json"):
+            response = json_response({"detail": "applet file not found"})
+            response.status_code = 404
+            return response
+        return json_response({"current_version": 8, "authenticated_url": "http://localhost:8080/a/id/"})
+
+    monkeypatch.setattr("marina.client.requests.request", http_request)
+    runner = CliRunner()
+    args = ["release", str(release_checkout), "--base-version", "7", "--url", "http://localhost:8080", "--json"]
+    assert runner.invoke(cli, args).exit_code == 1
+    assert not uploads
+    released = runner.invoke(cli, [*args, "--allow-dirty"])
+    assert released.exit_code == 0, released.output
+    assert len(uploads) == 1
+    assert "source" not in json.loads(released.output)
+    if not committed:
+        dirty_status = runner.invoke(
+            cli, ["release-status", str(release_checkout), "--url", "http://localhost:8080", "--json"]
+        )
+        assert dirty_status.exit_code == 0, dirty_status.output
+        assert json.loads(dirty_status.output)["state"] == "modified"
+        subprocess.run(["git", "add", "."], cwd=release_checkout, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "capture local source"], cwd=release_checkout, check=True, capture_output=True
+        )
+    status = runner.invoke(cli, ["release-status", str(release_checkout), "--url", "http://localhost:8080", "--json"])
+    assert status.exit_code == 0, status.output
+    assert json.loads(status.output)["state"] == "unrecorded"
+
+
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
 def test_release_rejects_ignored_files_in_static_package(
     release_checkout: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

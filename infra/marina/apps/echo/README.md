@@ -153,7 +153,11 @@ uv run marina release-status infra/marina/apps/echo --json
 uv run marina release infra/marina/apps/echo --base-version CURRENT_VERSION
 ```
 
-Use a clean checkout at current remote main. Release runs pending schema migrations
+Use a clean checkout at current remote main by default. Release runs pending schema migrations
 in its transaction and updates only Echo. Its existing `/echo/` routes, MCP namespace
 and `echo` schema remain stable. A Marina runtime rollout preserves Echo's selected
 revision. Search model instances are shared across loaded revisions within each worker.
+
+Pass `--allow-dirty` to explicitly release branch or uncommitted source
+without verified Git provenance; `release-status` then reports `unrecorded` from a clean checkout.
+Use `--local` to preview in a disposable stack.

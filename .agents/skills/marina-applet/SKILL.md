@@ -90,13 +90,17 @@ and perform the requested schema/data writes. Honor requests for PR-only work,
 local previews, drafts or review before release. Rollback, archive and unrelated
 data mutations still require authorization within the request.
 
-For maintained source, merge first and use a clean checkout at current remote main:
+For maintained source, use a clean checkout at current remote main by default:
 
 ```bash
 uv run marina release-status my-app --json
 uv run marina applets versions UUID --json
 uv run marina release my-app --base-version CURRENT_VERSION --json
 ```
+
+Use `--allow-dirty` to explicitly release branch or uncommitted source without
+verified Git provenance; `release-status` then reports `unrecorded` from a clean checkout. Use `--local`
+for a disposable preview.
 
 Use zero for a new declared UUID. Version conflicts mean the live selection changed;
 inspect the new revision before retrying. Do not blindly reread the version and

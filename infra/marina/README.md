@@ -80,13 +80,22 @@ changes and leaves the previous revision current.
 Frontend builds start with empty `dist/`. The builder restores existing local
 output after packaging, including on failure. Production releases always build;
 there is no `--no-build` release path. Backend files and unbuilt static files must
-be tracked. A release declaration requires clean current main before and after
-the build and records its commit, source path and hashes of the app and declared shared inputs in
+be tracked by default. A release declaration checks clean current main before
+and after the build and records its commit, source path and hashes of the app
+and declared shared inputs in
 `dist/marina-release.json`. The metadata contains no publisher identity and is
 public when the applet is public.
 
+Use `--allow-dirty` to explicitly release from a branch or uncommitted checkout.
+It bypasses the Git and tracked-file checks and omits verified source metadata;
+`release-status` reports `unrecorded` from a clean checkout. Package validation,
+expected-revision checks and server authorization still apply. Use `--local`
+for a disposable preview that leaves production unchanged.
+
 `release-status` compares the published source with the checkout. It reports
 `current`, `different`, `modified`, or `unrecorded` for packages without provenance.
+Local edits take precedence: a dirty checkout reports `modified` even if the
+released package has no source metadata.
 Fetch main before assessing freshness. Declare repository-relative shared build inputs in `source_paths`; the five named
 apps include `infra/marina/web`. Runtime dependencies can also affect behavior.
 
@@ -205,8 +214,24 @@ Backends are trusted Python plugins sharing Marina's process, installed packages
 network and service identity. They are not security or failure sandboxes. The
 backend factory must not depend on lifespan events or persistent local files.
 Factories that fail are retried on the next request. Shared model instances belong
-in `marina.models`, keyed by their specification, so retained Echo revisions do
-not each load another ONNX model set.
+in `marina.process_cache.process_cache`. Applications own construction and choose
+a namespace and key containing all resource settings. The cache serializes
+initialization, retries failed factories and retains values until worker exit.
+Echo uses it for ONNX models shared by retained revisions.
+
+```python
+from functools import partial
+from marina.process_cache import process_cache
+
+model = process_cache.get_or_create(
+    "my-app.embedding", (model_name, threads), partial(load_model, model_name, threads)
+)
+```
+
+Retained revisions using the same namespace and settings receive the same object.
+Include a format version in the key if a new revision changes the resource's type
+or construction contract. Resource construction functions passed to
+`get_or_create` must not call the process cache.
 
 ## MCP and agent panels
 
