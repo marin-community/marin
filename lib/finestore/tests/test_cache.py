@@ -163,10 +163,11 @@ def test_blob_lookup_avoids_remote_readahead_of_unmatched_row_groups(tmp_path, m
         for index in range(16):
             store.write_object(f"unmatched-{index:02d}", random_bytes.randbytes(1024 * 1024))
         store.flush()
+        snapshot = read_snapshot(FineStoreLayout(root))
 
     filesystem = _RangeFileSystem(skip_instance_cache=True)
     monkeypatch.setattr(factory, "url_to_fs", lambda path: (filesystem, path))
-    view = ReadView(root)
+    view = ReadView(root, snapshot=snapshot)
     assert view.read_blobs(["matched", "absent", "matched"]) == {"matched": b"latest"}
     diagnostics = view.read_diagnostics()
     bounded_bytes = filesystem.fetched_bytes

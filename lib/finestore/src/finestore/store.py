@@ -20,7 +20,7 @@ from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.timing import ExponentialBackoff
 
 from finestore.commit import ClearSeal, CommitCoordinator, CommitDelta, TableAddition, initialize_archive, write_schema
-from finestore.compaction import CompactionResult, compact_table
+from finestore.compaction import CompactionResult, compact_table, compact_writer_tables
 from finestore.layout import (
     CHUNKED_BLOBS_FEATURE,
     RESERVED_COLUMNS,
@@ -44,6 +44,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_FLUSH_INTERVAL = 5.0
 DEFAULT_MAX_BUFFER_BYTES = ROW_GROUP_TARGET_BYTES
 DEFAULT_COMPACTION_LEVELS = (16, 4, 4)
+_CLOSE_COMPACTION_MAX_INPUT_BYTES = 64 * 1024 * 1024
+_CLOSE_COMPACTION_MAX_INPUT_ROWS = 16_384
 OBJECT_PART_BYTES = 8 * 1024 * 1024
 INLINE_BLOB_BYTES = 128 * 1024
 _MAINTENANCE_BACKOFF_INITIAL = 1.0
@@ -378,6 +380,7 @@ class DataStore:
         return self._commits.commit(CommitDelta(seal_update=SealMarker(writer=self.writer_id, superseded=superseded)))
 
     def close(self) -> None:
+        """Flush pending writes and compact bounded groups of this writer's level-zero shards."""
         if self._closed:
             return
         self._closed = True
@@ -385,6 +388,15 @@ class DataStore:
         self._wake.set()
         self._thread.join()
         self.flush()
+        with self._commit_lock:
+            compact_writer_tables(
+                self.root,
+                list(self._tables),
+                writer_id=self.writer_id,
+                max_input_bytes=_CLOSE_COMPACTION_MAX_INPUT_BYTES,
+                max_input_rows=_CLOSE_COMPACTION_MAX_INPUT_ROWS,
+                coordinator=self._commits,
+            )
 
     def __enter__(self) -> DataStore:
         return self
