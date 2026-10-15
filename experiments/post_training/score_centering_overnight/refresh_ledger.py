@@ -49,6 +49,14 @@ def main() -> None:
     parser.add_argument("--attempts", type=Path, required=True)
     parser.add_argument("--cluster", default="cw-us-east-02a")
     args = parser.parse_args()
+    with args.jobs.open() as snapshot:
+        observed_jobs = list(csv.DictReader(snapshot))
+    with args.attempts.open() as snapshot:
+        observed_attempts = list(csv.DictReader(snapshot))
+    observed_job_ids = {row["job_id"] for row in observed_jobs}
+    assert len(observed_job_ids) == len(observed_jobs), "Duplicate jobs in controller snapshot"
+    unknown_jobs = {row["task_id"].rsplit("/", 1)[0] for row in observed_attempts} - observed_job_ids
+    assert not unknown_jobs, f"Attempt snapshot contains jobs absent from this cluster snapshot: {sorted(unknown_jobs)}"
     campaign = Path(__file__).resolve().parent
     repository = campaign.parents[2]
     registry = json.loads((campaign / "registry.json").read_text())
@@ -74,11 +82,14 @@ def main() -> None:
                 "completed_updates": value["completed_updates"],
             }
 
-    for observed in csv.DictReader(args.jobs.open()):
+    for observed in observed_jobs:
         job_id = observed["job_id"]
+        if job_id in jobs:
+            assert jobs[job_id]["cluster"] == args.cluster, f"Job belongs to another cluster: {job_id}"
         row = jobs.setdefault(job_id, {"job_id": job_id})
         if job_id in frozen:
             path, config = frozen[job_id]
+            assert config["iris"]["cluster"] == args.cluster, f"Configuration belongs to another cluster: {path}"
             checksum = hashlib.sha256(path.read_bytes()).hexdigest()
             if "configuration" in row:
                 assert row["configuration_sha256"] == checksum, f"submitted config changed: {path}"
@@ -115,7 +126,6 @@ def main() -> None:
     costs = read_json(campaign / "costs.json.gz")
     attempts = {(row["task_id"], row["attempt_uid"]): row for row in costs["attempts"]}
     active = [row for row in costs.get("active_attempts", []) if row["cluster"] != args.cluster]
-    observed_attempts = list(csv.DictReader(args.attempts.open()))
     starts = defaultdict(list)
     for observed in observed_attempts:
         if observed["started_at_ms"]:

@@ -1,0 +1,20 @@
+{
+  "scope": "Reject actual captured controller snapshots from the wrong cluster before writing registry or allocation ledger.",
+  "observed_at": "2026-10-15T03:15:17Z",
+  "bad_east_attempts_sha256": "8142ce0c351c964b81a7089b6a3125367323eaba3b893225d6e3c38de839a040",
+  "observation": "East and RNO attempts CSVs were byte-identical RNO data. Concurrent CLI stdout reported both attempt-query tunnels at127.0.0.1:10002.",
+  "cause": "Tunnel-port collision is inferred from the simultaneous identical endpoints; underlying SDK cause is not proven.",
+  "mitigation": "Run all Iris CLI controller queries sequentially and verify task-parent membership plus frozen/registered cluster identity before ledger writes.",
+  "actual_mismatched_attempt_snapshot_rejected_before_writes": true,
+  "actual_wrong_cluster_whole_snapshot_rejected_before_writes": true,
+  "sequential_east_attempt_rows": 298,
+  "sequential_rno_attempt_rows": 321,
+  "real_correct_snapshot_refresh_exit_codes": [
+    0,
+    0
+  ],
+  "all_previous_570_terminal_costs_clusters_sources_identical": true,
+  "active_attempt_ids_unique_after_refresh": true,
+  "scientific_training_outputs_changed": false,
+  "invalid_derived_observations": "03:15 own progress log and uncommitted active-cost view were superseded by verified03:20 snapshots; no quality endpoint was admitted from them."
+}
