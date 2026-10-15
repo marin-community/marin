@@ -138,7 +138,7 @@ def _copy(source: Path, target: Path) -> None:
 def _remove(path: Path) -> None:
     """Remove a machine's directory, including the work directory that overlayfs leaves without permissions."""
 
-    def unlock(function, failed: str, error: BaseException) -> None:
+    def unlock(_, failed: str, error: BaseException) -> None:
         if not isinstance(error, PermissionError) or not os.path.isdir(failed):
             raise error
         os.chmod(failed, 0o700)
@@ -609,19 +609,8 @@ class LocalMachineFactory:
             workdir.is_relative_to(mount.guest) for mount in mounts
         ):
             raise UnsupportedMachineSpec(f"The local backend's workdir {spec.workdir} is a read-only host path")
-        root = Path(tempfile.mkdtemp(prefix="shellbox-local-"))
-        layers = None
-        try:
-            # A workdir in an overlaid directory is made by a command below, so that it lands in the layer.
-            _prepare_root(root, None if overlaid_workdir else workdir)
-            if copy_on_write:
-                layers = Path(tempfile.mkdtemp(prefix="shellbox-layers-"))
-                _prepare_layers(layers)
-        except BaseException:
-            _remove(root)
-            if layers is not None:
-                _remove(layers)
-            raise
+        # A workdir in an overlaid directory is made by a command once the machine runs, so it lands in the layer.
+        root, layers = _machine_directories(None if overlaid_workdir else workdir, copy_on_write=copy_on_write)
         environment = {
             "PATH": os.pathsep.join(
                 [
@@ -637,28 +626,49 @@ class LocalMachineFactory:
             environment["PYTHONHASHSEED"] = self.hash_seed
         machine = LocalMachine(spec, bwrap=self.bwrap, root=root, layers=layers, mounts=mounts, environment=environment)
         tools = source.tools if isinstance(source, PackageSpec) else ()
-        if not overlaid_workdir and not tools:
-            return machine
         try:
-            if overlaid_workdir:
-                made = await machine.run(Command(("mkdir", "-p", "--", str(workdir)), cwd="/"))
-                if made.exit_code != 0:
-                    raise RuntimeError(f"Cannot create workdir {workdir}: {made.stderr.decode(errors='replace')}")
-            if tools:
-                result = await machine.run(
-                    Command(
-                        (
-                            "/bin/sh",
-                            "-c",
-                            'for tool do path=$(command -v "$tool") && test -x "$path" || exit; done',
-                            "sh",
-                            *tools,
-                        )
-                    )
-                )
-                if result.exit_code != 0:
-                    raise UnsupportedMachineSpec("Requested tools must be executable in the sandbox PATH")
+            await _start(machine, workdir if overlaid_workdir else None, tools)
         except BaseException:
             await machine.close()
             raise
         return machine
+
+
+def _machine_directories(workdir: PurePosixPath | None, *, copy_on_write: bool) -> tuple[Path, Path | None]:
+    """A new machine's root, with ``workdir`` made in it, and its layers when its system directories are overlaid."""
+    root = Path(tempfile.mkdtemp(prefix="shellbox-local-"))
+    layers = None
+    try:
+        _prepare_root(root, workdir)
+        if copy_on_write:
+            layers = Path(tempfile.mkdtemp(prefix="shellbox-layers-"))
+            _prepare_layers(layers)
+    except BaseException:
+        _remove(root)
+        if layers is not None:
+            _remove(layers)
+        raise
+    return root, layers
+
+
+async def _start(machine: LocalMachine, overlaid_workdir: PurePosixPath | None, tools: tuple[str, ...]) -> None:
+    """Make a workdir that lies in the machine's layer, then check that each requested tool runs."""
+    if overlaid_workdir is not None:
+        made = await machine.run(Command(("mkdir", "-p", "--", str(overlaid_workdir)), cwd="/"))
+        if made.exit_code != 0:
+            raise RuntimeError(f"Cannot create workdir {overlaid_workdir}: {made.stderr.decode(errors='replace')}")
+    if not tools:
+        return
+    result = await machine.run(
+        Command(
+            (
+                "/bin/sh",
+                "-c",
+                'for tool do path=$(command -v "$tool") && test -x "$path" || exit; done',
+                "sh",
+                *tools,
+            )
+        )
+    )
+    if result.exit_code != 0:
+        raise UnsupportedMachineSpec("Requested tools must be executable in the sandbox PATH")
