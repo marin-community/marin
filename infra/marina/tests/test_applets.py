@@ -166,6 +166,7 @@ def test_release_rejects_ignored_files_in_static_package(
     (release_checkout / "dist/extra.js").write_text("unreviewed()")
     result = CliRunner().invoke(cli, args)
     assert result.exit_code == 1
+    assert "absent from Git" in result.output
     assert len(requests) == 1
 
 
