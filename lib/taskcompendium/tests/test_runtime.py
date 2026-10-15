@@ -61,7 +61,6 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.models import CheckStatus
 from taskcompendium.pipeline.verification import verify_task
-from taskcompendium.runtime import shell
 from taskcompendium.runtime.episode import ScriptedActor, run_episode
 from taskcompendium.runtime.grading import SPEC_PATH, STAGING_ARCHIVE, grade_empty_in_sandbox, grade_in_sandbox
 from taskcompendium.runtime.models import RuntimeEvidence, Termination, grading_attempt
@@ -69,10 +68,8 @@ from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import (
     CONTROL_PATH,
     OUTPUT_PATH,
-    BoundShellTool,
     ShellFactory,
     ShellToolConfig,
-    run_shell_call,
     upload_resources,
 )
 from taskcompendium.runtime.task_grading import grade_task
@@ -190,73 +187,6 @@ def test_resource_upload_preserves_nested_bytes_executable_modes_and_last_write(
             )
             assert remaining.exit_code == 0
             assert remaining.stdout == b""
-        finally:
-            await machine.close()
-
-    asyncio.run(scenario())
-
-
-SPILL_BYTES = 64
-
-
-def test_spilled_shell_streams_keep_full_output_in_machine_files(local_machine_environment):
-    _, factory = local_machine_environment
-    tool = BoundShellTool(FunctionDefinition(name="shell", parameters={"type": "object"}), "command")
-    command = "seq 1 3000; seq 1 2000 >&2; exit 3"
-
-    async def call(machine, command):
-        arguments = {"command": command}
-        return json.loads(
-            await run_shell_call(
-                machine, FunctionCall(name="shell", arguments=arguments), tool, timeout=10, spill_bytes=SPILL_BYTES
-            )
-        )
-
-    async def scenario():
-        machine = await factory.create(MachineSpec(HostImage()))
-        try:
-            expected = await machine.run(Command(("bash", "-c", command)))
-            spilled = await call(machine, command)
-            small = await call(machine, "echo ok")
-            assert spilled["exit_code"] == expected.exit_code == 3
-            for stream in ("stdout", "stderr"):
-                full = getattr(expected, stream)
-                assert spilled[stream] == full[:SPILL_BYTES].decode()
-                assert spilled[f"{stream}_truncated"] is True
-                saved = await machine.run(Command(("cat", spilled[f"{stream}_path"])))
-                assert saved.stdout == full
-            assert (small["stdout"], small["stdout_path"], small["stderr_path"]) == ("ok\n", None, None)
-            remaining = await machine.run(Command(("ls", "/tmp/tool-output")))
-            assert sorted(remaining.stdout.split()) == sorted(
-                Path(spilled[f"{stream}_path"]).name.encode() for stream in ("stdout", "stderr")
-            )
-        finally:
-            await machine.close()
-
-    asyncio.run(scenario())
-
-
-def test_spilled_stream_files_stop_at_the_cap_while_the_command_runs_on(local_machine_environment, monkeypatch):
-    _, factory = local_machine_environment
-    tool = BoundShellTool(FunctionDefinition(name="shell", parameters={"type": "object"}), "command")
-    monkeypatch.setattr(shell, "SPILL_FILE_BYTES", 1000)
-    command = "yes | head -c 100000; echo finished >&2"
-
-    async def scenario():
-        machine = await factory.create(MachineSpec(HostImage()))
-        try:
-            spilled = json.loads(
-                await run_shell_call(
-                    machine,
-                    FunctionCall(name="shell", arguments={"command": command}),
-                    tool,
-                    timeout=10,
-                    spill_bytes=SPILL_BYTES,
-                )
-            )
-            assert (spilled["exit_code"], spilled["stderr"]) == (0, "finished\n")
-            saved = await machine.run(Command(("wc", "-c", spilled["stdout_path"])))
-            assert int(saved.stdout.split()[0]) == 1000
         finally:
             await machine.close()
 

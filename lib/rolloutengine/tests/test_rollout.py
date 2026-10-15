@@ -67,7 +67,6 @@ from rolloutengine.contracts import (
     GenerationLimitReached,
     Graded,
     MachineReady,
-    ModelRequest,
     ModelTurn,
     ModelTurnCompleted,
     RolloutContractError,
@@ -1170,57 +1169,6 @@ async def test_tool_turn_cannot_preempt_command_timeout_feedback(tool_turn_timeo
         )
     assert factory.machines == []
     assert model.requests == []
-
-
-@pytest.mark.parametrize("spill_bytes", [None, 100])
-async def test_large_shell_output_spills_to_a_machine_file_only_when_enabled(spill_bytes):
-    full_output = "".join(f"{line}\n" for line in range(1, 2001))
-    model = ReplayModel([shell_call("seq 1 2000; echo warning >&2"), {"role": "assistant", "content": "Done."}])
-
-    @dataclass
-    class InspectingModel:
-        """Read the spilled file in a follow-up command, as an agent would."""
-
-        requests: list[ModelRequest] = field(default_factory=list)
-
-        async def complete(self, request: ModelRequest) -> ModelTurn:
-            self.requests.append(request)
-            if spill_bytes is not None and len(self.requests) == 2:
-                path = json.loads(request.messages[-1]["content"])["stdout_path"]
-                model.messages.insert(1, shell_call(f"wc -c < {path}; tail -n 1 {path}", call_id="read"))
-            return await model.complete(request)
-
-    inspecting = InspectingModel()
-    await engine(inspecting, {"local": FixtureImageFactory()}).run(
-        lowered(
-            file_task(),
-            machine=machine_runtime(),
-            verifier_machine=machine_runtime(),
-            tool_output_spill_bytes=spill_bytes,
-        )
-    )
-
-    observation = json.loads(model.requests[1].messages[-1]["content"])
-    if spill_bytes is None:
-        assert observation == {
-            "exit_code": 0,
-            "reason": "exited",
-            "stdout": full_output,
-            "stderr": "warning\n",
-            "stdout_truncated": False,
-            "stderr_truncated": False,
-        }
-        return
-    assert observation["stdout"] == full_output[:spill_bytes]
-    assert observation["stdout_truncated"] is True
-    assert observation["stdout_path"].startswith("/tmp/tool-output/")
-    assert (observation["stderr"], observation["stderr_truncated"], observation["stderr_path"]) == (
-        "warning\n",
-        False,
-        None,
-    )
-    read = json.loads(model.requests[2].messages[-1]["content"])
-    assert read["stdout"].split() == [str(len(full_output)), "2000"]
 
 
 async def test_answer_call_retains_submission_tool_and_finishes():

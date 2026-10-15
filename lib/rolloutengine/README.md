@@ -21,8 +21,6 @@ An optional `RolloutObserver` passed as `RolloutEngine(..., observer=...)` recei
 from `rolloutengine.contracts` while the attempt runs, so callers can log or trace a rollout before `run()` returns.
 Each event carries the `run_key` passed to `run()`, which defaults to the task id.
 The engine delivers events from a queue and never awaits the observer, so a slow or failing observer does not change the rollout.
-With `TaskSessionSpec.tool_output_spill_bytes` set, a shell stream longer than that limit is saved
-to a file in the task machine; the observation holds a preview of that size and the file path.
 
 `RolloutEngine.run(lowered)` accepts a `LoweredTaskSpec` and asynchronously returns one rollout.
 The lowered record preserves its `TaskSpec` and adds machine selections and session limits.
