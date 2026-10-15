@@ -17,8 +17,6 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.chat_requests import chat_output
 from taskcompendium.pipeline.curriculum_alignment import (
-    MAX_CAPABILITY_DISTANCE,
-    MAX_SUBJECT_DISTANCE,
     CurriculumAnchor,
     CurriculumVectors,
 )
@@ -48,7 +46,7 @@ from experiments.post_training.task_curriculum.models import CurriculumCatalog
 INPUTS_VERSION = "2026.10.14.1"
 DESCRIPTIONS_VERSION = "2026.10.14.5"
 EMBEDDINGS_VERSION = "2026.10.14.4"
-ALIGNMENT_VERSION = "2026.10.14.2"
+ALIGNMENT_VERSION = "2026.10.14.3"
 
 
 class SemanticArtifact(Artifact):
@@ -183,8 +181,6 @@ def _align(
     task_vectors_root: str,
     curriculum_vectors_root: str,
     spec: EmbeddingSpec,
-    max_subject_distance: float,
-    max_capability_distance: float,
     cache_root: str,
     output_root: str,
 ) -> SemanticArtifact:
@@ -218,8 +214,6 @@ def _align(
         ),
         cache_root=cache_root,
         spec=spec,
-        max_subject_distance=max_subject_distance,
-        max_capability_distance=max_capability_distance,
         output_root=output_root,
     )
     (StoragePath(output_root) / "alignment.json").write_text(
@@ -229,8 +223,6 @@ def _align(
                 "descriptions_root": descriptions_root,
                 "task_vectors_root": task_vectors_root,
                 "curriculum_vectors_root": curriculum_vectors_root,
-                "max_subject_distance": max_subject_distance,
-                "max_capability_distance": max_capability_distance,
                 "spec": spec.model_dump(mode="json"),
                 "paths": paths,
             },
@@ -320,8 +312,6 @@ def curation_embedding_pipeline(
             task_vectors_root=vectors,
             curriculum_vectors_root=anchors,
             spec=spec,
-            max_subject_distance=MAX_SUBJECT_DISTANCE,
-            max_capability_distance=MAX_CAPABILITY_DISTANCE,
             cache_root=str(StoragePath(cache_root) / "vectors"),
             output_root=OUT,
         )

@@ -135,7 +135,7 @@ Task mapping uses a curriculum-independent description and two routing stages:
 ```text
 task instructions and public contract -> short core-work description -> one cached Harrier vector
 curriculum root scopes               -> cached anchor vectors       -> primary subject per facet
-curriculum capabilities              -> cached anchor vectors       -> optional capability in that subject
+curriculum capabilities              -> cached anchor vectors       -> ranked capabilities in that subject
 ```
 
 The description names the required knowledge or tool environment, then the decisive operation and object type in
@@ -158,11 +158,10 @@ changed anchors, then realigns cached task vectors. Changing the description pro
 changing the embedding specification requires new vectors. Outputs remain outside the curriculum JSON.
 
 Exact cosine scoring ranks subjects and capabilities in bounded task batches. The nearest subject per routing facet
-is the primary placement. Two code constants, `MAX_SUBJECT_DISTANCE` and `MAX_CAPABILITY_DISTANCE`, control accepted
-cosine distance at each level. Subject matches with weak capability matches remain subject-only placements.
-The three highest-ranked subject and capability candidates include the nearest match. Capability score margins
-support inspection. Mapping remains a
-diagnostic signal and is excluded from the curriculum promotion gate.
+is the primary match. It retains the three highest-ranked subject and capability candidates, including the nearest
+match, their similarities, winning anchors and capability margins. No acceptance threshold is applied during matching.
+Aggregation and display apply runtime distance cutoffs to these stored scores. Changing a cutoff does not recompute
+matches or embeddings. Mapping remains a diagnostic signal and is excluded from the curriculum promotion gate.
 
 ## Experiment history
 

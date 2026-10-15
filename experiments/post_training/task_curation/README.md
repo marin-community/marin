@@ -280,14 +280,15 @@ inside a GPU-equipped Iris job. This runs local Zephyr workers in that job and
 keeps Harrier resident on its GPU. Compare against CPU using identical inputs and
 precision in separate cache roots before sharing vectors across backends.
 
-Alignment selects the nearest subject within each declared curriculum routing
-facet. `MAX_SUBJECT_DISTANCE` and `MAX_CAPABILITY_DISTANCE` in
-`taskcompendium.pipeline.curriculum_alignment` control accepted cosine distance
-at each level. Changing either constant invalidates alignment without recomputing
-task or curriculum embeddings. The three highest-ranked subject and capability candidates, including the nearest
-match, and capability score margins remain available for inspection. Out-of-scope tasks and
-subject matches with weak capability matches remain explicit outcomes. This pass
-does not change curation admission or train/eval use.
+Matching selects the nearest subject within each declared curriculum routing
+facet and writes its membership score and nearest capability. The three
+highest-ranked subject and capability candidates, including the nearest match,
+retain their scores and winning anchors. Weak matches are retained too.
+
+Acceptance thresholds belong to aggregation and display. Changing a cutoff
+reuses the scored matches and embeddings; it does not rerun matching. Missing
+task meaning remains `insufficient_context`. This pass does not change curation
+admission or train/eval use.
 
 ## Declaring a dataset
 

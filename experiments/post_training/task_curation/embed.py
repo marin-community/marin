@@ -16,7 +16,6 @@ from marin.processing.embeddings.harrier import HARRIER_DIMENSIONS, HARRIER_MODE
 from marin.processing.embeddings.tei import TeiEmbeddingClient
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.pipeline.curriculum_alignment import MAX_CAPABILITY_DISTANCE, MAX_SUBJECT_DISTANCE
 from taskcompendium.pipeline.semantics import DescriptionModel
 from taskcompendium.pipeline.task_embeddings import EmbeddingSpec
 from zephyr.context import ZephyrContext
@@ -149,8 +148,6 @@ def main(
                 {
                     "stages": plan,
                     "spec": spec.model_dump(mode="json"),
-                    "max_subject_distance": MAX_SUBJECT_DISTANCE,
-                    "max_capability_distance": MAX_CAPABILITY_DISTANCE,
                     "sample_size": sample_size,
                     "population": population,
                     "stage": stage,

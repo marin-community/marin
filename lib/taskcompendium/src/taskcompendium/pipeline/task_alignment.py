@@ -21,7 +21,7 @@ from zephyr.worker_context import zephyr_worker_ctx
 
 from taskcompendium.pipeline.curriculum_alignment import (
     CurriculumVectors,
-    SubjectAssignment,
+    SubjectMatch,
     rank_task_batch,
 )
 from taskcompendium.pipeline.semantics import DescriptionStatus
@@ -40,7 +40,7 @@ class TaskAlignment(BaseModel):
     reason: str
     description: str
     task_preview: str
-    assignments: list[SubjectAssignment]
+    matches: list[SubjectMatch]
 
 
 @dataclass(frozen=True)
@@ -75,8 +75,6 @@ def _align_batches(
     shared_key: str,
     cache_root: str,
     spec: EmbeddingSpec,
-    max_subject_distance: float,
-    max_capability_distance: float,
 ) -> Iterator[dict]:
     curriculum: CurriculumVectors = zephyr_worker_ctx().get_shared(shared_key)
     view = ReadView(cache_root)
@@ -91,8 +89,6 @@ def _align_batches(
             rank_task_batch(
                 curriculum,
                 np.stack([np.frombuffer(cached[key], dtype="<f4") for key in requests]),
-                max_subject_distance=max_subject_distance,
-                max_capability_distance=max_capability_distance,
             )
             if ready
             else []
@@ -116,11 +112,10 @@ def _align_batches(
                 description_status=row["status"],
                 description=row["description"],
                 task_preview=row["public_input"][:4096],
-                assignments=assigned,
+                matches=assigned,
             )
             counters.current_stage().update_counter("alignment/tasks", 1)
-            for assignment in assigned:
-                counters.current_stage().update_counter(f"alignment/{assignment.status}", 1)
+            counters.current_stage().update_counter("alignment/subject_matches", len(assigned))
             yield result.model_dump(mode="json")
 
 
@@ -133,8 +128,6 @@ def align_tasks(
     curriculum_key: str,
     cache_root: str,
     spec: EmbeddingSpec,
-    max_subject_distance: float,
-    max_capability_distance: float,
     output_root: str,
     batch_size: int = 256,
 ) -> list[str]:
@@ -156,8 +149,6 @@ def align_tasks(
                 shared_key=shared_key,
                 cache_root=cache_root,
                 spec=spec,
-                max_subject_distance=max_subject_distance,
-                max_capability_distance=max_capability_distance,
             )
         )
         .write_parquet(

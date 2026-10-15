@@ -205,7 +205,7 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
         built = run(first.assignments, max_concurrent=1)[0]
         rows = [row for path in built.paths for row in load_parquet(path)]
         assert {row["task_id"] for row in rows} == {"a", "b"}
-        assert all(row["assignments"][0]["capability_id"] == "math.addition" for row in rows)
+        assert all(row["matches"][0]["capability_id"] == "math.addition" for row in rows)
         batches = [json.loads(line) for line in Path(provider.calls).read_text().splitlines()]
         expected = {text_record(anchor.text, spec)["text"] for anchor in curriculum_anchors(first_catalog)}
         assert any(set(batch) == expected for batch in batches)

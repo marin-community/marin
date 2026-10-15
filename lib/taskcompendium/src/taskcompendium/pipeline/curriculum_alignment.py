@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exact curriculum retrieval with one primary subject per routing facet."""
+"""Threshold-independent curriculum retrieval with primary subjects and scored candidates."""
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -12,9 +12,6 @@ from pydantic import BaseModel, ConfigDict
 
 from taskcompendium.pipeline.task_embeddings import normalized_vectors
 
-# Root scopes and precise capabilities occupy different similarity ranges in the sample fit.
-MAX_SUBJECT_DISTANCE = 0.45
-MAX_CAPABILITY_DISTANCE = 0.25
 TOP_K = 3
 
 
@@ -39,12 +36,6 @@ class CurriculumAnchor(BaseModel):
     text: str
 
 
-class AssignmentStatus(StrEnum):
-    ASSIGNED = "assigned"
-    SUBJECT_ONLY = "subject_only"
-    OUT_OF_SCOPE = "out_of_scope"
-
-
 class CapabilityCandidate(BaseModel):
     capability_id: str
     similarity: float
@@ -57,13 +48,12 @@ class SubjectCandidate(BaseModel):
     anchor_id: str
 
 
-class SubjectAssignment(BaseModel):
+class SubjectMatch(BaseModel):
     subject_id: str
     facet: CurriculumFacet
-    status: AssignmentStatus
     membership_similarity: float
     membership_anchor_id: str
-    capability_id: str | None
+    capability_id: str
     margin: float
     candidates: list[CapabilityCandidate]
     subject_candidates: list[SubjectCandidate]
@@ -169,11 +159,8 @@ class CurriculumVectors:
 def rank_task_batch(
     curriculum: CurriculumVectors,
     task_vectors: np.ndarray,
-    *,
-    max_subject_distance: float,
-    max_capability_distance: float,
-) -> list[list[SubjectAssignment]]:
-    """Select a primary subject per facet and optionally its nearest capability."""
+) -> list[list[SubjectMatch]]:
+    """Score primary subjects and nearest capabilities without applying acceptance thresholds."""
     row_count = len(task_vectors)
     dimensions = curriculum.vectors.shape[1]
     tasks = normalized_vectors(task_vectors, row_count, dimensions)
@@ -229,22 +216,15 @@ def rank_task_batch(
                     )
                 )
             member = _cosine(graph_scores[row, subject_index])
-            if 1 - member > max_subject_distance:
-                status = AssignmentStatus.OUT_OF_SCOPE
-            elif 1 - candidates[0].similarity > max_capability_distance:
-                status = AssignmentStatus.SUBJECT_ONLY
-            else:
-                status = AssignmentStatus.ASSIGNED
             membership_anchors = reference.anchor_positions
             best_anchor = membership_anchors[int(np.argmax(membership_scores[subject_index][row]))]
             assignments.append(
-                SubjectAssignment(
+                SubjectMatch(
                     subject_id=subject,
                     facet=reference.facet,
-                    status=status,
                     membership_similarity=member,
                     membership_anchor_id=curriculum.anchors[best_anchor].anchor_id,
-                    capability_id=candidates[0].capability_id if status == AssignmentStatus.ASSIGNED else None,
+                    capability_id=candidates[0].capability_id,
                     margin=margin,
                     candidates=candidates,
                     subject_candidates=subject_candidates,

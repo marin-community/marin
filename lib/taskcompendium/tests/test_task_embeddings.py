@@ -19,7 +19,6 @@ from taskcompendium.convert.answers import numeric_answer_task
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.curriculum_alignment import (
     AnchorKind,
-    AssignmentStatus,
     CurriculumAnchor,
     CurriculumFacet,
     CurriculumVectors,
@@ -250,8 +249,6 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
         description_paths=descriptions,
         curriculum=reference,
         curriculum_key="fixture",
-        max_subject_distance=0.5,
-        max_capability_distance=0.3,
         cache_root=vector_cache,
         spec=spec,
         output_root=str(tmp_path / "aligned"),
@@ -259,10 +256,10 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
     output = {row["task_id"]: row for row in rows(assigned)}
     assert set(output) == {"a", "b", "c"}
     assert output["a"]["description"] == "Elementary arithmetic: count apples."
-    assert output["a"]["assignments"] == output["b"]["assignments"]
-    assert output["a"]["assignments"][0]["membership_similarity"] == pytest.approx(1.0)
+    assert output["a"]["matches"] == output["b"]["matches"]
+    assert output["a"]["matches"][0]["membership_similarity"] == pytest.approx(1.0)
     assert output["c"]["description_status"] == "insufficient_context"
-    assert output["c"]["assignments"] == []
+    assert output["c"]["matches"] == []
 
     changed_anchor = text_record("Count and compare items", spec)
     embed_texts(
@@ -286,7 +283,7 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
     assert len(Path(provider.calls).read_text().splitlines()) == 4
 
 
-def test_exact_alignment_selects_one_subject_per_facet_and_rejects_weak_capabilities():
+def test_exact_matching_preserves_primary_candidates_and_weak_scores():
     anchors = (
         CurriculumAnchor(
             anchor_id="domain",
@@ -345,19 +342,18 @@ def test_exact_alignment_selects_one_subject_per_facet_and_rejects_weak_capabili
     output = rank_task_batch(
         CurriculumVectors((*anchors, *neighbor), np.concatenate([references, [[0, 0, 1], [0, 0, 1]]])),
         tasks,
-        max_subject_distance=0.5,
-        max_capability_distance=0.1,
     )
-    assert {row.subject_id for row in output[0] if row.status == AssignmentStatus.ASSIGNED} == {"math", "practice"}
+    assert {row.subject_id for row in output[0]} == {"math", "practice"}
     math = next(row for row in output[0] if row.subject_id == "math")
     assert math.capability_id == "count"
     assert [candidate.subject_id for candidate in math.subject_candidates] == ["math", "neighbor"]
     tied = next(row for row in output[1] if row.subject_id == "math")
-    assert tied.status == AssignmentStatus.SUBJECT_ONLY
-    assert tied.capability_id is None
+    assert tied.capability_id == "compare"
+    assert tied.margin == pytest.approx(0)
     assert [candidate.capability_id for candidate in tied.candidates] == ["compare", "count"]
-    assert all(row.status == AssignmentStatus.SUBJECT_ONLY for row in output[2])
-    assert all(row.status == AssignmentStatus.OUT_OF_SCOPE for row in output[3])
+    assert all(row.candidates[0].similarity == pytest.approx(0.8) for row in output[2])
+    assert all(row.membership_similarity == pytest.approx(-1) for row in output[3])
+    assert all(row.capability_id for row in output[3])
 
 
 @dataclass(frozen=True)
