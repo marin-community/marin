@@ -172,6 +172,11 @@ _ATTN_RES_Z = "attn_res_z_term"
 _ATTN_RES_W_ATTN = "attn_res_weights_attn"
 _ATTN_RES_W_MLP = "attn_res_weights_mlp"
 _ATTN_RES_W_V = "attn_res_weights_v"
+# MSAR (``attn_res_streams``): a layer's token-mean stream-mixer weights [2, m] (attn, mlp gate), popped into logs.
+_ATTN_RES_STREAM_MIX = "attn_res_stream_mix"
+_ATTN_RES_STREAM_GATES = ("attn", "mlp")
+# Initial scale of the MSAR stream-mixer logits (the paper's alpha).
+_STREAM_MIX_ALPHA_INIT = 0.01
 # Per-layer extras key carrying ``LayerSkip.keep`` into a skipped layer.
 _SKIP_KEEP = "layer_skip_keep"
 # Per-layer extras key carrying the extra-MLP token mask (``extra_mlp_layers``), and the entropy head's prediction.
@@ -867,6 +872,17 @@ class GrugModelConfig:
     extra_mlp_frac: float = 0.25
     attn_res_kv_source_layers: int | None = None
     """How many leading layers' outputs ``attn_res_kv_layers`` may read (None: ``num_layers // 2``)."""
+    attn_res_streams: int = 1
+    """Multi-Stream Attention Residuals (MSAR, arXiv 2610.13630): AttnRes streams per layer gate (1: off). Stream 0
+    is the plain gate; stream ``r >= 1`` reads every source through a zero-init causal depthwise token conv (taps
+    per source slot, ``attn_res_stream_kernels[r - 1]`` long, within documents) and mixes those with its own
+    zero-init pseudo-query; ``attn_res_stream_mixer`` fuses the streams' mixes into the sublayer input. The final
+    gate stays single-stream."""
+    attn_res_stream_kernels: tuple[int, ...] = (4, 8, 12)
+    """Token-conv lengths of MSAR streams ``1..attn_res_streams - 1``."""
+    attn_res_stream_mixer: bool = True
+    """MSAR stream fusion ``h = sum_r H_r z_r`` with ``H = sigmoid(alpha rms_norm([z_0; ...]) W + b)`` per gate
+    (alpha init 0.01, b init 0); False sums the streams (the paper's "w/o H^pre" ablation)."""
     attn_res_partial_scale: bool = False
     """Learned scalars ``(a_attn, a_mlp)`` per layer, init 1: each sublayer adds ``a * out`` to its block's partial,
     so a block (and the MLP gate's in-layer partial) weights its attention and MLP outputs."""
@@ -1071,6 +1087,21 @@ class GrugModelConfig:
                 raise ValueError("mid_head_layer needs attn_res, the unrolled layer loop and 0 < layer < num_layers")
             if not isinstance(self.logit_soft_cap, float | None):
                 raise ValueError("mid_head_layer needs a scalar logit_soft_cap")
+        if self.attn_res_streams < 1:
+            raise ValueError(f"attn_res_streams must be >= 1, got {self.attn_res_streams}")
+        if self.attn_res_streams > 1:
+            if not self.attn_res or self.scan_layers:
+                raise ValueError("attn_res_streams needs attn_res and the unrolled layer loop (scan_layers=false)")
+            if self.attn_res_plain_sum or self.attn_res_shared_query or self.attn_res_kv_layers:
+                raise ValueError(
+                    "attn_res_streams supports only the attention and MLP gates: no attn_res_plain_sum, "
+                    "attn_res_shared_query or attn_res_kv_layers"
+                )
+            kernels = self.attn_res_stream_kernels
+            if len(kernels) != self.attn_res_streams - 1 or min(kernels) < 1:
+                raise ValueError(
+                    f"attn_res_stream_kernels needs {self.attn_res_streams - 1} lengths >= 1, got {kernels}"
+                )
         if self.attn_res_kv_layers:
             if not self.attn_res or self.scan_layers:
                 raise ValueError("attn_res_kv_layers needs attn_res and the unrolled layer loop (scan_layers=false)")
@@ -3323,6 +3354,11 @@ class Block(eqx.Module):
     extra_mlp: DenseMLP | None  # cfg.extra_mlp_layers (every layer carries one; those use it)
     extra_mlp_gain: Float[Array, ""] | None
     attn_res_partial_scale: Float[Array, " 2"] | None  # cfg.attn_res_partial_scale: (a_attn, a_mlp)
+    # MSAR (cfg.attn_res_streams = m): the (attn, mlp) gates' pseudo-queries of streams 1..m-1 and stream mixers.
+    attn_res_query_stream: Float[Array, "2 R D"] | None
+    attn_res_stream_mix_w: Float[Array, "2 MD M"] | None  # cfg.attn_res_stream_mixer
+    attn_res_stream_mix_alpha: Float[Array, " 2"] | None
+    attn_res_stream_mix_b: Float[Array, "2 M"] | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, layer_index: jax.Array, use_kda: bool = False) -> "Block":
@@ -3337,6 +3373,8 @@ class Block(eqx.Module):
         use_attn_sconv = cfg.sconv and "attn" in cfg.sconv_sites and not use_kda
         # Zero-init: every source scores 0, so each gate starts as a uniform average of its sources.
         attn_res_query = reshard(jnp.zeros((_attn_res_key_dim(cfg),), jnp.float32), P(None)) if cfg.attn_res else None
+        streams = cfg.attn_res_streams
+        mixer = streams > 1 and cfg.attn_res_stream_mixer
         if cfg.dense_mlp:
             # Dense block: one SwiGLU DenseMLP(hidden, intermediate_dim), no MoE and no shared experts.
             mlp = DenseMLP.init(cfg.hidden_dim, cfg.intermediate_dim, cfg.initializer_std, key=mlp_key)
@@ -3392,6 +3430,23 @@ class Block(eqx.Module):
             attn_res_partial_scale=(
                 reshard(jnp.ones((2,), jnp.float32), P(None)) if cfg.attn_res and cfg.attn_res_partial_scale else None
             ),
+            attn_res_query_stream=(
+                reshard(jnp.zeros((2, streams - 1, _attn_res_key_dim(cfg)), jnp.float32), P(None, None, None))
+                if streams > 1
+                else None
+            ),
+            attn_res_stream_mix_w=(
+                reshard(
+                    _init_weight(random.fold_in(key, 78), (2, streams * cfg.hidden_dim, streams), cfg.initializer_std),
+                    P(None, None, None),
+                )
+                if mixer
+                else None
+            ),
+            attn_res_stream_mix_alpha=(
+                reshard(jnp.full((2,), _STREAM_MIX_ALPHA_INIT, jnp.float32), P(None)) if mixer else None
+            ),
+            attn_res_stream_mix_b=reshard(jnp.zeros((2, streams), jnp.float32), P(None, None)) if mixer else None,
         )
 
     def _attn_input(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
@@ -4285,13 +4340,99 @@ def _gate_z(logits: list[jax.Array]) -> jax.Array:
     return jnp.mean(jnp.square(jax.nn.logsumexp(jnp.stack(logits), axis=0)))
 
 
+class _AttnResStreams(NamedTuple):
+    """One layer's MSAR (``attn_res_streams``) history: ``blocks[n][r - 1]`` is stream ``r`` of history source ``n``
+    (the history's order: extra sources, the embedding, the completed blocks), computed once when the source joins
+    the history; ``partial_taps[r - 1]`` are stream ``r``'s conv taps ``[K_r, D]`` of the slot the running partial
+    will be rolled into, so each gate convolves the partial it reads."""
+
+    blocks: tuple[tuple[jax.Array, ...], ...]
+    partial_taps: tuple[jax.Array, ...]
+
+
+def _attn_res_stream_slots(cfg: GrugModelConfig) -> int:
+    """MSAR conv-tap slots: one per history source of the last layer (extra sources, the embedding, the blocks) plus
+    the slot of its running partial (the next block, or with a capped history the partial that is never rolled)."""
+    schedule = _BlockSchedule(
+        int(cfg.second_embed), max(1, cfg.num_layers // cfg.attn_res_num_blocks), cfg.attn_res_num_blocks
+    )
+    return schedule.num_sources(cfg.num_layers - 1) + 1
+
+
+def _stream_convs(
+    source: Float[Array, "B S D"], taps: tuple[jax.Array, ...], segment_ids: Int[Array, "B S"] | None
+) -> tuple[Float[Array, "B S D"], ...]:
+    """MSAR streams ``r >= 1`` of one AttnRes source: ``sum_lag taps[r - 1][lag] * source[t - lag]``, the depthwise
+    causal token conv of ``ShortConv``, which drops every tap reaching into a previous packed document."""
+    return tuple(
+        short_conv(reshard(w.astype(source.dtype), P(None, None)), source, segment_ids, batch_axes=_BATCH_AXES)
+        for w in taps
+    )
+
+
+def _attn_res_stream_gate(
+    layer: "Block",
+    gate: int,
+    mix0: Float[Array, "B S D"],
+    partial: Float[Array, "B S D"] | None,
+    streams: _AttnResStreams,
+    segment_ids: Int[Array, "B S"] | None,
+    eps: float,
+) -> tuple[Float[Array, "B S D"], jax.Array]:
+    """One MSAR gate (``gate`` 0: attention, 1: MLP) on stream 0's AttnRes mix ``mix0``.
+
+    Stream ``r >= 1`` is a softmax over its conv streams of the sources (and of ``partial``), scored by the gate's
+    stream-``r`` query against their RMS-normed values; the streams' mixes ``z_r`` fuse into ``sum_r H_r z_r`` with
+    ``H = sigmoid(alpha rms_norm([z_0; ...; z_{m-1}]) W + b)`` per token (``attn_res_stream_mixer``; else the plain
+    sum). Returns the sublayer input and the token-mean ``H`` ``[m]`` (ones for the plain sum)."""
+    assert layer.attn_res_query_stream is not None
+    queries = layer.attn_res_query_stream[gate]
+    partial_streams = () if partial is None else _stream_convs(partial, streams.partial_taps, segment_ids)
+    mixes = [mix0]
+    for r in range(queries.shape[0]):
+        sources = [block[r] for block in streams.blocks]
+        if partial_streams:
+            sources.append(partial_streams[r])
+        logits = [_attn_res_source_logits(src, queries[r][None], eps)[0] for src in sources]
+        _, mixed = _softmax_mix(logits, sources)
+        mixes.append(reshard(mixed.astype(mix0.dtype), _batch_spec()))
+    if layer.attn_res_stream_mix_w is None:
+        return _stream_sum(tuple(mixes)), jnp.ones((len(mixes),), jnp.float32)
+    assert layer.attn_res_stream_mix_alpha is not None and layer.attn_res_stream_mix_b is not None
+    w = rearrange(layer.attn_res_stream_mix_w[gate], "(m d) k -> m d k", m=len(mixes))
+    # rms_norm of the concatenated mixes: one per-token scalar over all m * D channels, applied after the projection.
+    mean_square = sum(jnp.mean(jnp.square(z.astype(jnp.float32)), axis=-1) for z in mixes) / len(mixes)
+    proj = sum(
+        jnp.einsum("bsd,dk->bsk", z, w[r].astype(z.dtype), preferred_element_type=jnp.float32)
+        for r, z in enumerate(mixes)
+    )
+    alpha = layer.attn_res_stream_mix_alpha[gate].astype(jnp.float32)
+    weights = jax.nn.sigmoid(
+        alpha * proj * jax.lax.rsqrt(mean_square + eps)[..., None]
+        + layer.attn_res_stream_mix_b[gate].astype(jnp.float32)
+    )
+    fused = weights[..., 0:1] * mixes[0].astype(jnp.float32)
+    for r in range(1, len(mixes)):
+        fused = fused + weights[..., r : r + 1] * mixes[r].astype(jnp.float32)
+    mean_weights = jax.lax.stop_gradient(jnp.mean(weights, axis=(0, 1)))
+    return reshard(fused.astype(mix0.dtype), _batch_spec()), mean_weights
+
+
 GateMix = Callable[..., tuple[jax.Array, jax.Array, jax.Array]]
 """``mix(partial, gate_index, attn_gate, leading_sources_only=False) -> (h, z, mean_weights)``: one AttnRes gate over a
 layer's history (``leading_sources_only``: only the ``attn_res_kv_source_layers`` sources, no partial)."""
 
 
 def _attn_res_layer(
-    diff_args: tuple[Block, tuple[jax.Array, ...], tuple[jax.Array, ...], jax.Array | None, jax.Array, jax.Array | None],
+    diff_args: tuple[
+        Block,
+        tuple[jax.Array, ...],
+        tuple[jax.Array, ...],
+        jax.Array | None,
+        jax.Array,
+        jax.Array | None,
+        _AttnResStreams | None,
+    ],
     mask: AttentionMask,
     token_ids: Int[Array, "B S"],
     use_long: bool,
@@ -4300,20 +4441,29 @@ def _attn_res_layer(
     noise_key: jax.Array | None = None,
     kv_share: dict[str, jax.Array] | None = None,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-    """One Block AttnRes layer on ``diff_args = (layer, blocks, block_logits, partial, queries)``.
+    """One Block AttnRes layer on ``diff_args = (layer, blocks, block_logits, partial, queries, logit_bias,
+    streams)``; ``streams`` is the MSAR history (``attn_res_streams``), None when off.
 
     ``partial`` is None right after a block boundary (it was just rolled into ``blocks``), in which
     case this layer starts a fresh partial sum.
     """
-    layer, blocks, block_logits, partial, queries, logit_bias = diff_args
+    layer, blocks, block_logits, partial, queries, logit_bias, streams = diff_args
+    stream_mix: list[jax.Array] = []
 
     def mix(p: jax.Array | None, gate_index: int, attn_gate: bool, leading_sources_only: bool = False):
         del attn_gate
         cfg = layer.attn.cfg
         if not leading_sources_only:
-            return _attn_res_mix(
+            h, z, weights = _attn_res_mix(
                 blocks, block_logits, p, queries, gate_index, eps, logit_bias, plain_sum=cfg.attn_res_plain_sum
             )
+            if streams is None:
+                return h, z, weights
+            h, mean_mix = _attn_res_stream_gate(
+                layer, gate_index - 2 * layer_index, h, p, streams, _sconv_segment_ids(mask), eps
+            )
+            stream_mix.append(mean_mix)
+            return h, z, weights
         # The leading layers' sources: the extra sources, then the blocks rolled at layers 0, seg, ... <= the
         # cutoff (each holds only earlier layers); the partial and later blocks are later layers' work.
         seg = max(1, cfg.num_layers // cfg.attn_res_num_blocks)
@@ -4331,9 +4481,12 @@ def _attn_res_layer(
             plain_sum=cfg.attn_res_plain_sum,
         )
 
-    return _attn_res_sublayers(
+    partial, stats = _attn_res_sublayers(
         layer, partial, mix, mask, token_ids, use_long, layer_index, noise_key, kv_share, logit_bias
     )
+    if stream_mix:
+        stats = {**stats, _ATTN_RES_STREAM_MIX: jnp.stack(stream_mix)}
+    return partial, stats
 
 
 def _attn_res_sublayers(
@@ -4545,7 +4698,7 @@ def _stream_sum(sources: tuple[jax.Array, ...]) -> jax.Array:
 def _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_index, eps, noise_key=None, kv_share=None):
     """``_attn_res_layer`` returning ``(partial, blocks, block_logits, router_stats)``: the history is
     passed through so ``_attn_res_layer_remat`` can thread each block's cotangent layer to layer."""
-    _, blocks, block_logits, _, _, _ = diff_args
+    _, blocks, block_logits, _, _, _, _ = diff_args
     partial, router_stats = _attn_res_layer(diff_args, mask, token_ids, use_long, layer_index, eps, noise_key, kv_share)
     return partial, blocks, block_logits, router_stats
 
@@ -4581,7 +4734,7 @@ def _attn_res_layer_remat_bwd(
     # lm_head-only slice (lm_head_extra_dim).
     d_partial, d_blocks, d_block_logits, d_stats = grad_out
     diff_keys = [k for k in _DIFFERENTIABLE_STATS if isinstance(d_stats, dict) and d_stats.get(k) is not None]
-    _, blocks, block_logits, _, _, _ = diff_args
+    _, blocks, block_logits, _, _, _, _ = diff_args
     d_blocks = jax.tree.map(lambda d, x: jnp.zeros_like(x) if d is None else d, d_blocks, blocks, is_leaf=_is_none)
     d_block_logits = jax.tree.map(
         lambda d, x: jnp.zeros_like(x) if d is None else d, d_block_logits, block_logits, is_leaf=_is_none
@@ -4603,12 +4756,16 @@ def _attn_res_layer_remat_bwd(
 
             _, vjp_fn = jax.vjp(with_stats, diff_args)
             cotangent = (d_partial, tuple(d_stats[k] for k in diff_keys))
-        ((d_layer, d_blocks_own, d_block_logits_own, d_partial_in, d_queries, d_logit_bias),) = vjp_fn(cotangent)
+        ((d_layer, d_blocks_own, d_block_logits_own, d_partial_in, d_queries, d_logit_bias, d_streams),) = vjp_fn(
+            cotangent
+        )
         d_blocks = tuple(a + b for a, b in zip(d_blocks, d_blocks_own, strict=True))
         d_block_logits = jax.tree.map(jnp.add, d_block_logits, d_block_logits_own)
         # One barrier over every cotangent: the weight gradients are off the critical path, and without
         # it XLA defers them past later layers' backward and keeps their inputs alive.
-        return jax.lax.optimization_barrier((d_layer, d_blocks, d_block_logits, d_partial_in, d_queries, d_logit_bias))
+        return jax.lax.optimization_barrier(
+            (d_layer, d_blocks, d_block_logits, d_partial_in, d_queries, d_logit_bias, d_streams)
+        )
 
 
 def _is_none(x) -> bool:
@@ -5210,6 +5367,9 @@ class Transformer(eqx.Module):
     final_gated_norm: GatedNorm | None
     attn_res_query_final: Float[Array, " D"] | None
     """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
+    attn_res_stream_conv: tuple[Float[Array, "N K D"], ...] | None
+    """MSAR (``attn_res_streams``): stream ``r``'s causal token-conv taps ``[K_r, D]`` per source slot (zero-init), at
+    entry ``r - 1``; ``_attn_res_stream_slots`` maps the history's sources to slots."""
     entropy_head: Float[Array, " D"] | None  # cfg.entropy_head_layers: predicts the next-token entropy
     entropy_head_bias: Float[Array, ""] | None
     skip_adapter: DenseMLP | None  # cfg.skip_adapter_dim: the skipped tokens' readout MLP
@@ -5311,6 +5471,16 @@ class Transformer(eqx.Module):
             ),
             attn_res_query_final=(
                 reshard(jnp.zeros((_attn_res_key_dim(cfg),), jnp.float32), P(None)) if cfg.attn_res else None
+            ),
+            attn_res_stream_conv=(
+                tuple(
+                    reshard(
+                        jnp.zeros((_attn_res_stream_slots(cfg), k, cfg.hidden_dim), jnp.float32), P(None, None, None)
+                    )
+                    for k in cfg.attn_res_stream_kernels
+                )
+                if cfg.attn_res_streams > 1
+                else None
             ),
             entropy_head=(
                 reshard(jnp.zeros((cfg.hidden_dim,), jnp.float32), P(None)) if cfg.entropy_head_layers else None
@@ -5687,6 +5857,11 @@ class Transformer(eqx.Module):
                 layer_logs[f"{name}_L{eff}"] = stats.pop(name)
             weight_logs[2 * eff] = (stats.pop(_ATTN_RES_W_ATTN), has_partial_attn)
             weight_logs[2 * eff + 1] = (stats.pop(_ATTN_RES_W_MLP), True)
+            if _ATTN_RES_STREAM_MIX in stats:
+                stream_mix = stats.pop(_ATTN_RES_STREAM_MIX)
+                for g, gate in enumerate(_ATTN_RES_STREAM_GATES):
+                    for r in range(stream_mix.shape[1]):
+                        layer_logs[f"attn_res_stream_mix_L{eff}_{gate}_r{r}"] = stream_mix[g, r]
             if _ATTN_RES_W_V in stats:
                 # V-gate query rows follow the per-layer gates (loop_passes == 1).
                 weight_logs[2 * num_layers + eff] = (stats.pop(_ATTN_RES_W_V), has_partial_attn)
@@ -5695,10 +5870,17 @@ class Transformer(eqx.Module):
         stats_out: list[dict[str, jax.Array]] = []
         z_out: list[jax.Array] = []
         extra_state: dict[str, jax.Array] = {}
+        stream_taps = self.attn_res_stream_conv
+        stream_segments = _sconv_segment_ids(long_layer_mask)
+
+        def slot_taps(slot: int) -> tuple[jax.Array, ...]:
+            """Every MSAR stream's conv taps of source slot ``slot`` (``_attn_res_stream_slots``)."""
+            assert stream_taps is not None
+            return tuple(taps[slot] for taps in stream_taps)
 
         def run_pass(state, pass_index, start=0):
             """One pass over the physical layers from ``start``, extending the history; returns the new state."""
-            blocks, block_logits, partial = state
+            blocks, block_logits, partial, block_streams = state
             kv_share: dict[str, jax.Array] | None = None
             for i in range(start, num_layers):
                 layer = layers[i]
@@ -5711,6 +5893,11 @@ class Transformer(eqx.Module):
                         *block_logits,
                         _logit_rows(_attn_res_source_logits(partial, queries[2 * eff :], eps, (False))),
                     )
+                    if block_streams is not None:
+                        block_streams = (
+                            *block_streams,
+                            _stream_convs(partial, slot_taps(len(blocks) - 1), stream_segments),
+                        )
                     partial = None
                 use_long = _is_long_layer(i, num_layers, cfg.global_every, (None))
                 partial_before = partial
@@ -5769,8 +5956,9 @@ class Transformer(eqx.Module):
                 skip_keep = functools.reduce(jnp.multiply, keeps) if keeps else None
                 if skip_keep is not None:
                     layer_extras = {**(layer_extras or {}), _SKIP_KEEP: skip_keep}
+                streams = None if block_streams is None else _AttnResStreams(block_streams, slot_taps(len(blocks)))
                 layer_args = (
-                    (layer, blocks, block_logits, partial, queries, layer_extras),
+                    (layer, blocks, block_logits, partial, queries, layer_extras, streams),
                     long_layer_mask if use_long else short_layer_mask,
                     token_ids,
                     use_long,
@@ -5783,10 +5971,10 @@ class Transformer(eqx.Module):
                 else:
                     partial, blocks, block_logits, stats = _attn_res_layer_passthrough(*layer_args, kv_share)
                 absorb(eff, stats, partial_before is not None)
-            return blocks, block_logits, partial
+            return blocks, block_logits, partial, block_streams
 
         def final_gate(state):
-            blocks, block_logits, partial = state
+            blocks, block_logits, partial, _ = state
             final_index = queries.shape[0] - 1
             logits = [_block_logit(bl, queries, final_index) for bl in block_logits]
             logits.append(_attn_res_source_logits(partial, queries[final_index][None], eps, (False))[0])
@@ -5847,6 +6035,7 @@ class Transformer(eqx.Module):
                 _logit_rows(history.sources),
                 tuple(_logit_rows(rows) for rows in _logit_rows(history.logits)),
                 history.partial,
+                None,  # attn_res_streams needs the unrolled loop
             )
             state = run_pass(state, 0, start=scan.num_layers)
         else:
@@ -5854,6 +6043,11 @@ class Transformer(eqx.Module):
                 extra_sources,
                 tuple(_attn_res_source_logits(src, queries, eps, (False)) for src in extra_sources),
                 hidden,
+                (
+                    None
+                    if stream_taps is None
+                    else tuple(_stream_convs(src, slot_taps(n), stream_segments) for n, src in enumerate(extra_sources))
+                ),
             )
             state = run_pass(state, 0)
         mixed, layer_stats, z_total, max_weight, entropy = finish(state, [stats_out], z_out)
