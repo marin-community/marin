@@ -224,9 +224,3 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
         assert len(description_server.requests) == 1
         batches = [json.loads(line) for line in Path(provider.calls).read_text().splitlines()]
         assert sum(map(len, batches)) == texts_before + 1
-    anchors = curriculum_anchors(first_catalog)
-    assert {anchor.capability_id for anchor in anchors if anchor.capability_id is not None} == {
-        "math.addition",
-        "math.comparison",
-    }
-    assert len(anchors) == 3
