@@ -13,7 +13,7 @@
   "prepare_configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v2/batching-sc-s2-prepare.yaml",
   "all_scientific_fields_unchanged": true,
   "actual_changes": "Fresh run-owned ID and output/archive/group/Ray namespaces only; same frozen source,seed2,model,data,noise,loss,optimizer,batching,capture and1200-update horizon.",
-  "status": "Replacement namespace now has actual native learning: physical2 running both ranks,19 updates observed20:29UTC with finite gradient and zero retention timeouts/write errors. Physical0/1 were priority preempted during startup. Same frozen0212 recipe remains full1200; no scientific endpoint yet.",
+  "status": "Replacement namespace now has actual native learning: physical2 running both ranks,19 updates observed20:29UTC with finite gradient and zero retention timeouts/write errors. Physical0/1 were priority preempted. Same frozen0212 recipe remains full1200; no scientific endpoint yet.",
   "submission_confirmed": true,
   "old_retention_ledger": {
     "present": false

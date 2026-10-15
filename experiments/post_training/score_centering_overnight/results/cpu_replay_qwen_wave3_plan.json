@@ -68,7 +68,25 @@
         "node_name": "ge6b2c0",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending.",
+      "archive_downloads_complete": true,
+      "download_manifest": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s2-a0-01a126ce/download-manifest.json.gz",
+        "bytes": 1369885,
+        "etag": "\"7e35e4e3bd9089cb8826a2c08d9c0ad9\"",
+        "sha256": "411d9cc3fb06bc203daebcc2c8447f4b8495d9819bb6da3a5b6c46c814439422",
+        "modified": "2026-10-15T20:43:53+00:00"
+      },
+      "progress_at_download_release": {
+        "job_id": "/romain/score-grader-qwen-curriculum-tis-s2-a0-01a126ce",
+        "started": true,
+        "archive_downloads_complete": true,
+        "records": 16384,
+        "discrepancies": 0,
+        "native_failures": 0,
+        "result_passed": null,
+        "failure_published": false
+      }
     },
     {
       "job_id": "/romain/score-grader-qwen-advantages-sc-s0-a0-01a126ce",
@@ -137,7 +155,25 @@
         "node_name": "gb95c40",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending.",
+      "archive_downloads_complete": true,
+      "download_manifest": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-advantages-sc-s0-a0-01a126ce/download-manifest.json.gz",
+        "bytes": 1369490,
+        "etag": "\"56ddc34f2a74008e7f7410058672e238\"",
+        "sha256": "5bd06beeb0cc5ef633dbaa6f9ea6fc3a27f04832cb697792ebea792e71458e6e",
+        "modified": "2026-10-15T20:43:59+00:00"
+      },
+      "progress_at_download_release": {
+        "job_id": "/romain/score-grader-qwen-advantages-sc-s0-a0-01a126ce",
+        "started": true,
+        "archive_downloads_complete": true,
+        "records": 16384,
+        "discrepancies": 0,
+        "native_failures": 0,
+        "result_passed": null,
+        "failure_published": false
+      }
     },
     {
       "job_id": "/romain/score-grader-qwen-advantages-sc-s1-a0-01a126ce",
@@ -206,7 +242,25 @@
         "node_name": "gb95f20",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending.",
+      "archive_downloads_complete": true,
+      "download_manifest": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-advantages-sc-s1-a0-01a126ce/download-manifest.json.gz",
+        "bytes": 1369658,
+        "etag": "\"31997b264901544caf037852e9b60369\"",
+        "sha256": "0b70f8b939cee65f29fc6288ba918be259e826dd26dfb7cd3e8de937c11c5c65",
+        "modified": "2026-10-15T20:43:58+00:00"
+      },
+      "progress_at_download_release": {
+        "job_id": "/romain/score-grader-qwen-advantages-sc-s1-a0-01a126ce",
+        "started": true,
+        "archive_downloads_complete": true,
+        "records": 16384,
+        "discrepancies": 0,
+        "native_failures": 0,
+        "result_passed": null,
+        "failure_published": false
+      }
     }
   ],
   "total_requested_cpu": 96,
@@ -214,7 +268,7 @@
   "total_requested_gpu": 0,
   "maximum_archive_io_workers": 6,
   "first_complete_cpu_replay_proof": "qwen_curriculum300_first_cpu_complete_response_replay.json",
-  "status": "All3 wave3 tasks controller-running: unstarted curriculumTISseed2 and advantagesSCseeds0/1.96CPU/192GiB/0GPU,6archiveIO workers; frozen input packages read back and fullSHA verified. Further waves wait for these downloads.",
+  "status": "All3 wave3 native archive downloads complete and all identities verified;6IO workers released. Each currently has16384 physical records processed,zero discrepancies/native failures,20:50UTC. Full original-grade results remain pending; next bounded wave may submit.",
   "native_bundle_validation_passed": true,
   "resource_board_ids": [
     1067,
