@@ -144,6 +144,39 @@ def test_cache_hf_model_streams_one_file_at_a_time(tmp_path, monkeypatch):
     assert json.loads(Path(f"{cache_path}{DEFAULT_COMPLETE_MARKER}").read_text()) == {"source_revision": None}
 
 
+def test_cache_hf_model_does_not_copy_repository_completion_marker(tmp_path, monkeypatch):
+    """An interrupted mirror must not look complete because the repo contains Marin's marker."""
+    revision = "a" * 40
+    cache_path = str(tmp_path / "cache" / "model")
+    fail_weight_download = True
+
+    monkeypatch.setattr(
+        model_cache,
+        "list_repo_files",
+        lambda model_id, revision=None: [DEFAULT_COMPLETE_MARKER, "model.safetensors"],
+    )
+
+    def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
+        if filename == "model.safetensors" and fail_weight_download:
+            raise OSError("interrupted weight download")
+        local_path = Path(local_dir, filename)
+        local_path.write_text('{"source_revision": "parent"}' if filename == DEFAULT_COMPLETE_MARKER else "weights")
+        return str(local_path)
+
+    monkeypatch.setattr(model_cache, "hf_hub_download", fake_hf_hub_download)
+
+    with pytest.raises(OSError, match="interrupted weight download"):
+        cache_hf_model(cache_path, "org/model", revision=revision)
+
+    assert not Path(cache_path, DEFAULT_COMPLETE_MARKER).exists()
+
+    fail_weight_download = False
+    cache_hf_model(cache_path, "org/model", revision=revision)
+
+    assert Path(cache_path, "model.safetensors").read_text() == "weights"
+    assert json.loads(Path(cache_path, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": revision}
+
+
 @pytest.mark.parametrize(
     "path",
     [

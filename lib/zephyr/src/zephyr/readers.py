@@ -112,6 +112,8 @@ _READ_MAX_BLOCKS = 2
 # Small cache blocks keep footer reads and filtered payloads from fetching many
 # unrelated row groups. Unfiltered scans retain the larger streaming blocks.
 _PARQUET_READ_BLOCK_SIZE = 1_048_576
+# Bound the index array and result materialized by each Vortex read.
+_VORTEX_READ_BATCH_ROWS = 65_536
 
 
 def _as_spec(source: str | InputFileSpec) -> InputFileSpec:
@@ -442,15 +444,22 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
         num_rows = dataset.count_rows()
         start = 0 if spec.row_start is None else spec.row_start
         end = num_rows if spec.row_end is None else min(spec.row_end, num_rows)
-        indices = pa.array(np.arange(start, end, dtype=np.uint64))
-        table = dataset.take(indices, columns=columns, filter=pa_filter)
+        batches = (
+            dataset.take(
+                pa.array(np.arange(batch_start, min(batch_start + _VORTEX_READ_BATCH_ROWS, end), dtype=np.uint64)),
+                columns=columns,
+                filter=pa_filter,
+            )
+            for batch_start in range(start, end, _VORTEX_READ_BATCH_ROWS)
+        )
     else:
-        table = dataset.to_table(columns=columns, filter=pa_filter)
+        batches = dataset.to_batches(columns=columns, filter=pa_filter, batch_size=_VORTEX_READ_BATCH_ROWS)
 
-    if empty_projection:
-        table = table.select([])
-    counters.pipeline.update_counter(counters.RECORDS_IN, len(table))
-    yield from table.to_pylist()
+    for batch in batches:
+        if empty_projection:
+            batch = batch.select([])
+        counters.pipeline.update_counter(counters.RECORDS_IN, len(batch))
+        yield from batch.to_pylist()
 
 
 SUPPORTED_EXTENSIONS = tuple(
