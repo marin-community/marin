@@ -114,14 +114,8 @@ def budget_arguments(config: dict, task: dict, max_length: int | None) -> tuple[
 
 
 @contextmanager
-def endpoint_relay(endpoint_name: str) -> Iterator[str]:
-    """Run the Iris endpoint relay for ``endpoint_name`` and yield its loopback origin.
-
-    This client runs in Evalchemy's isolated uvx environment, which does not install Iris.
-    Start the relay in the task's Iris interpreter instead of importing it here; the relay
-    itself serves on threads and also exposes a context manager to in-process Iris callers.
-    """
-    python = Path(os.environ["IRIS_VENV"]) / "bin" / "python"
+def endpoint_relay(endpoint_name: str, *, python: Path) -> Iterator[str]:
+    """Yield the relay's loopback origin using an interpreter with Iris installed."""
     with tempfile.TemporaryDirectory() as tmp:
         port_file = Path(tmp) / "port"
         relay = subprocess.Popen([str(python), "-m", _RELAY_MODULE, endpoint_name, "--port-file", str(port_file)])
@@ -280,7 +274,9 @@ def main() -> None:
     config = json.loads(os.environ[CONFIG_ENV_KEY])
     if not config["tasks"]:
         raise SystemExit("run_evalchemy_client requires at least one task")
-    with endpoint_relay(config["endpoint_name"]) as origin:
+    # uvx isolates Evalchemy's dependencies; the registry client is installed in the task's Iris venv.
+    python = Path(os.environ["IRIS_VENV"]) / "bin" / "python"
+    with endpoint_relay(config["endpoint_name"], python=python) as origin:
         run_tasks(relayed_config(config, origin))
 
 

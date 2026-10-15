@@ -121,7 +121,7 @@ class _Upstream:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
-                pass
+                logger.debug("Could not shut down socket for %s; closing connection", self.address, exc_info=True)
         self.connection.close()
 
 

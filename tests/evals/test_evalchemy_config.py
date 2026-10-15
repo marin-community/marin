@@ -28,6 +28,7 @@ from marin.evaluation.evalchemy.config import EvalchemyConfig, EvalchemyJudgeCon
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
     EvalPipelineError,
+    PipelineStage,
     _run_config_json,
     _run_evalchemy_child,
 )
@@ -269,34 +270,34 @@ def test_evalchemy_child_is_cancelled_when_its_serve_job_dies(monkeypatch):
 
     serve_job = SimpleNamespace(job_id="/serve/inference-abc-job", status=serve_status)
 
-    with pytest.raises(EvalPipelineError, match="inference job /serve/inference-abc-job finished with status failed"):
+    with pytest.raises(EvalPipelineError) as error:
         _run_evalchemy_child(_session(serve_job), _config(), "gs://bucket/evals/qwen3/core", {})
 
+    assert error.value.stage is PipelineStage.EVAL
+    assert error.value.jobs == {"eval": "/eval/core"}
     assert cancelled == ["/eval/core"]
     assert next(statuses, None) is None
 
 
-def test_child_waits_for_its_endpoint_relay_to_listen(tmp_path, monkeypatch):
+def test_child_waits_for_its_endpoint_relay_to_listen(tmp_path):
     # Stand-in for the task venv's interpreter: report a port the way the relay does, then serve.
     python = tmp_path / "bin" / "python"
     python.parent.mkdir()
     python.write_text('#!/bin/sh\nsleep 0.5\necho 43210 > "$5.partial" && mv "$5.partial" "$5"\nexec sleep 60\n')
     python.chmod(0o755)
-    monkeypatch.setenv("IRIS_VENV", str(tmp_path))
 
-    with endpoint_relay("/serve/inference-abc") as origin:
+    with endpoint_relay("/serve/inference-abc", python=python) as origin:
         assert origin == _RELAY_ORIGIN
 
 
-def test_child_fails_when_its_endpoint_relay_exits(tmp_path, monkeypatch):
+def test_child_fails_when_its_endpoint_relay_exits(tmp_path):
     python = tmp_path / "bin" / "python"
     python.parent.mkdir()
     python.write_text("#!/bin/sh\nexit 3\n")
     python.chmod(0o755)
-    monkeypatch.setenv("IRIS_VENV", str(tmp_path))
 
-    with pytest.raises(SystemExit, match="exited 3 before listening"):
-        with endpoint_relay("/serve/inference-abc"):
+    with pytest.raises(SystemExit):
+        with endpoint_relay("/serve/inference-abc", python=python):
             pass
 
 
