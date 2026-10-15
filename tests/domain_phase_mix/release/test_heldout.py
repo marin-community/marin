@@ -4,18 +4,25 @@
 import re
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from experiments.domain_phase_mix.release import context, naming, paths
 from experiments.domain_phase_mix.release.configs import heldout
+from experiments.domain_phase_mix.release.run_names import training_run_name_from_uri
 
 SRC = paths.RO / "single_phase_heldout_benchmark_expanded_20260913"
 pytestmark = pytest.mark.skipif(not SRC.exists(), reason="held-out registry absent")
 
 
 @pytest.fixture(scope="module")
-def table(tmp_path_factory):
-    return heldout.export(context.build(private_dir=tmp_path_factory.mktemp("private")))["heldout"]
+def ctx(tmp_path_factory):
+    return context.build(private_dir=tmp_path_factory.mktemp("private"))
+
+
+@pytest.fixture(scope="module")
+def table(ctx):
+    return heldout.export(ctx)["heldout"]
 
 
 def test_cohorts_and_swarms(table):
@@ -24,6 +31,23 @@ def test_cohorts_and_swarms(table):
     qwen = table[table.swarm == "qwen3_360m_1p6b"]
     assert qwen.cohort.value_counts().to_dict() == {"frozen": 505, "expanded": 116}
     assert (table[table.swarm != "qwen3_360m_1p6b"].cohort == "frozen").all()
+
+
+def test_expanded_rows_key_on_training_run_names(ctx, table):
+    # validation_3e18 keys these runs on their training run names; the table keeps the registry's row order.
+    runs = pd.read_csv(SRC / "heldout_runs.csv")
+    expanded = runs[table.cohort == "expanded"]
+    names = {}
+    for source, group in expanded.groupby("source"):
+        folder = heldout.VALIDATION_LAUNCHES[source.removeprefix("validation::")]
+        results = pd.read_csv(paths.RO / folder / "measured_results.csv")
+        results = results[results.status == "measured"].rename(columns={"candidate_id": "source_row_id"})
+        on = ["source_row_id", "trainer_seed"] if "trainer_seed" in results else ["source_row_id"]
+        uris = group[on].merge(results[[*on, "eval_metrics_uri"]], on=on, how="left", validate="one_to_one")
+        names.update(zip(group.index, map(training_run_name_from_uri, uris.eval_metrics_uri), strict=True))
+    expected = pd.Series({i: ctx.registry.id_for(name) for i, name in names.items()})
+    assert len(expected) == 116 and (table.observation_id[expected.index] == expected).all()
+    assert not table.observation_id[expanded.index].isin([ctx.registry.id_for(r) for r in expanded.row_id]).any()
 
 
 def test_exposure_ids_split_what_mixture_ids_merge(table):

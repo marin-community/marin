@@ -1,12 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The cumulative held-out registry: frozen (September 2) and expanded (September 13) cohorts of all three swarms."""
+"""The cumulative held-out registry: frozen (September 2) and expanded (September 13) cohorts of all three swarms.
+
+The 116 runs of the validation launches key their observation ids on their training run names, read from each run's
+evaluation-metrics URI, because `validation_3e18` exports the same runs; the other 813 runs key on the registry's
+`row_id`.
+"""
 
 import numpy as np
 import pandas as pd
 
-from experiments.domain_phase_mix.release import keys, naming, paths, tables
+from experiments.domain_phase_mix.release import keys, naming, paths, run_names, tables
 from experiments.domain_phase_mix.release.context import ExportContext
 
 EXPANDED = paths.RO / "single_phase_heldout_benchmark_expanded_20260913"
@@ -58,30 +63,46 @@ def _frozen_components() -> pd.DataFrame:
     return pd.DataFrame({"row_id": long.row_id, "task": long.component.map(naming.task_public), "bpb": long.bpb})
 
 
-def _validation_components(ctx: ExportContext) -> pd.DataFrame:
-    """Run-level components of the validation launches, keyed as the expanded registry's builder keyed them.
+def _validation_row_id(launch: str, run: str) -> str:
+    """The expanded registry's key of a validation run."""
+    return f"delphi_validation::{launch}::{run}"
+
+
+def _launch_results(launch: str, folder: str) -> pd.DataFrame:
+    """A validation launch's measured runs, indexed by the expanded registry's key of each run.
 
     A launch that repeats candidates over trainer seeds names each run `<candidate>@t<seed>`, otherwise `<candidate>`.
-    Uncheatable components are `uncheatable_<corpus>_bpb` result columns; the OlmoBaseEval Easy file is long and names
-    each component by its public task id.
+    """
+    results = pd.read_csv(paths.require(paths.RO / folder / "measured_results.csv"))
+    results = results[results.status == "measured"]
+    run = list(results.candidate_id)
+    if "trainer_seed" in results:
+        run = [f"{c}@t{int(s)}" for c, s in zip(run, results.trainer_seed, strict=True)]
+    return results.set_axis([_validation_row_id(launch, r) for r in run])
+
+
+def _validation_components(ctx: ExportContext) -> pd.DataFrame:
+    """Run-level components of the validation launches (long), keyed by the expanded registry's row_id.
+
+    Uncheatable components are `uncheatable_<corpus>_bpb` result columns. The OlmoBaseEval Easy file is long; it names
+    each run as the results do and each component by its public task id.
     """
     uncheatable_columns = {f"uncheatable_{t.removeprefix('uncheatable/')}_bpb": t for t in ctx.tasks[:7]}
     frames = []
     for launch, folder in VALIDATION_LAUNCHES.items():
-        results = pd.read_csv(paths.require(paths.RO / folder / "measured_results.csv"))
-        results = results[results.status == "measured"]
-        run = list(results.candidate_id)
-        if "trainer_seed" in results:
-            run = [f"{c}@t{int(s)}" for c, s in zip(run, results.trainer_seed, strict=True)]
-        uncheatable = results[list(uncheatable_columns)].rename(columns=uncheatable_columns).set_axis(run)
+        uncheatable = _launch_results(launch, folder)[list(uncheatable_columns)].rename(columns=uncheatable_columns)
         obe = pd.read_csv(paths.require(paths.RO / folder / "measured_table9_components.csv"))
         assert set(obe.component) == set(ctx.tasks[7:]), f"{launch}: unexpected OlmoBaseEval Easy components"
-        both = pd.concat([uncheatable.stack(), obe.set_index(["candidate_id", "component"]).bpb])
-        both = both.rename_axis(["run", "task"]).reset_index(name="bpb")
-        frames.append(
-            pd.DataFrame({"row_id": f"delphi_validation::{launch}::" + both.run, "task": both.task, "bpb": both.bpb})
-        )
+        rows = pd.MultiIndex.from_arrays([[_validation_row_id(launch, r) for r in obe.candidate_id], obe.component])
+        both = pd.concat([uncheatable.stack(), obe.bpb.set_axis(rows)])
+        frames.append(both.rename_axis(["row_id", "task"]).reset_index(name="bpb"))
     return pd.concat(frames, ignore_index=True)
+
+
+def _validation_run_names() -> pd.Series:
+    """Training run name of each validation run, from its evaluation-metrics URI, indexed by the registry's row_id."""
+    uris = [_launch_results(launch, folder).eval_metrics_uri for launch, folder in VALIDATION_LAUNCHES.items()]
+    return pd.concat(uris).map(run_names.training_run_name_from_uri)
 
 
 def _components(ctx: ExportContext, runs: pd.DataFrame) -> pd.DataFrame:
@@ -107,8 +128,11 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     assert runs.eligible.all() and runs.exclusion_reason.isna().all()
     assert set(runs.panel) == set(SWARM), f"panels {sorted(set(runs.panel))}"
     frozen_ids = set(pd.read_csv(paths.require(FROZEN / "heldout_runs.csv")).row_id)
+    names = _validation_run_names()
+    assert set(runs.row_id) - frozen_ids <= set(names.index), "every expanded run needs its training run name"
 
-    out = pd.DataFrame({"observation_id": runs.row_id.map(ctx.registry.id_for)})
+    key = runs.row_id.map(names).fillna(runs.row_id)  # training run name where the launch files give one
+    out = pd.DataFrame({"observation_id": key.map(ctx.registry.id_for)})
     out["swarm"] = runs.panel.map(SWARM)
     out["cohort"] = ["frozen" if r in frozen_ids else "expanded" for r in runs.row_id]
     for src, dst in META.items():
