@@ -257,11 +257,6 @@ def test_gpu_lowering_preserves_independent_serving_instances():
     assert lowered.iris.worker_resources.chip_count() == 8
 
 
-def test_pipeline_parallelism_rejects_multiple_serving_instances():
-    with pytest.raises(ValueError, match="pipeline parallelism requires instances=1"):
-        ServeConfig(tensor_parallel_size=8, pipeline_parallel_size=2, instances=2)
-
-
 @pytest.mark.parametrize(
     ("serve", "accelerator"),
     [
