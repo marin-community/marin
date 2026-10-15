@@ -119,18 +119,16 @@ _HEALTH_METRIC_NAMES = (
 _METRIC_NAMES = (*_SERVING_METRIC_NAMES, *_HEALTH_METRIC_NAMES)
 _HISTOGRAM_BOUND_ORDER_SQL = "CAST(upper_bound AS DOUBLE)"
 _PUBLICATION_ID_JSON_FIELD_RE = r'"histogram_publication_id":"(?:\\.|[^"\\])*"'
+_SUMMARY_HISTOGRAM_BASE_NAMES = ("time_to_first_token_seconds", "inter_token_latency_seconds")
 _SUMMARY_HISTOGRAM_NAMES = tuple(
-    f"{family}_{component}"
-    for family in ("time_to_first_token_seconds", "inter_token_latency_seconds")
-    for component in _HISTOGRAM_COMPONENTS
+    f"{family}_{component}" for family in _SUMMARY_HISTOGRAM_BASE_NAMES for component in _HISTOGRAM_COMPONENTS
 )
 _SUMMARY_METRIC_NAMES = (
     *_TOKEN_COUNTERS,
     *_PREEMPTION_COUNTERS,
     *_OUTCOME_COUNTERS,
     *_SUMMARY_HISTOGRAM_NAMES,
-    "time_to_first_token_seconds",
-    "inter_token_latency_seconds",
+    *_SUMMARY_HISTOGRAM_BASE_NAMES,
     "num_requests_waiting",
     "kv_cache_usage_perc",
     "gpu_cache_usage_perc",
@@ -477,7 +475,6 @@ WITH base AS MATERIALIZED (
            ) AS previous_value
     FROM base
     WHERE json_get(attributes_json, 'source_temporality') = 'cumulative_snapshot'
-      -- Reject legacy mixed-engine histograms before computing their unused deltas.
       AND name NOT IN ({histogram_names}, {histogram_base_names})
 ), increments AS (
     SELECT origin_cluster,
@@ -1386,7 +1383,7 @@ WITH base AS MATERIALIZED (
            producer_epoch, source_sequence, histogram_bounds AS schema_key,
            producer_epoch || ':' || CAST(source_sequence AS VARCHAR) AS publication_id
     FROM base
-    WHERE name IN ('time_to_first_token_seconds', 'inter_token_latency_seconds')
+    WHERE name IN ({sql_values(_SUMMARY_HISTOGRAM_BASE_NAMES)})
       AND kind = 'histogram' AND histogram_count IS NOT NULL
       AND (service = 'vllm' OR json_get(attributes_json, 'engine_index') IS NOT NULL)
     {_histogram_publication_filter(("count", "total", "schema_key", "histogram_bins"))}
