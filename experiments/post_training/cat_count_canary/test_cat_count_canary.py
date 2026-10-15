@@ -92,16 +92,19 @@ def test_both_lanes_render_megatron_launch_with_complete_custom_eval_mix():
 
 
 @pytest.mark.parametrize(
-    "setting",
+    ("setting", "error"),
     (
-        "trainer.policy={megatron_config: {tensor_model_parallel_size: 2}}",
-        "trainer.seed=23",
-        "trainer.max_ckpts_to_keep=2",
-        "generator.chat_template={source: name, name_or_path: other}",
+        (
+            'trainer.policy={"megatron_config": {"tensor_model_parallel_size": 2}}',
+            "trainer.policy.megatron_config.tensor_model_parallel_size",
+        ),
+        ("trainer.seed=23", "trainer.seed"),
+        ("trainer.max_ckpts_to_keep=2", "trainer.max_ckpts_to_keep"),
+        ('generator.chat_template={"source": "name", "name_or_path": "other"}', "generator.chat_template.name_or_path"),
     ),
 )
-def test_owned_settings_reject_parent_and_canonical_overrides(setting):
-    with pytest.raises(ValueError):
+def test_owned_settings_reject_parent_and_canonical_overrides(setting, error):
+    with pytest.raises(ValueError, match=error):
         training_recipe(settings=(setting,))
 
 

@@ -557,7 +557,7 @@ def validate_marinskyrl_environment(project: ExternalProject) -> None:
 
 
 def synchronize_recipe_package(dependency: LockedDependency, *, check: bool) -> bool:
-    """Keep Marin's recipe requirement and root lock at the launcher's commit."""
+    """Synchronize the recipe pin, returning True if requirement and lock already matched."""
     requirement = (
         f"{RECIPE_DISTRIBUTION} @ git+{dependency.repository}@{dependency.commit}" f"#subdirectory={RECIPE_SUBDIRECTORY}"
     )

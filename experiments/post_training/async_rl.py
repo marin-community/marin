@@ -159,9 +159,9 @@ class AsyncPreset:
     max_new_tokens: int
     # Evaluation suites the ``evaluation`` stage scores the terminal export on, comma separated.
     evals: str
-    # Export the telemetry the async RL dashboard reads.
     clear_kv_cache_on_weight_sync: bool = True
     batch_policy: str = "rolling"
+    # Export the telemetry the async RL dashboard reads.
     telemetry: bool = True
 
 
