@@ -13,6 +13,7 @@ import tempfile
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path, PurePosixPath
+from typing import NoReturn
 
 import pytest
 from shellbox.backends.local.launch import COMMAND_NICENESS
@@ -133,6 +134,13 @@ def test_recursive_download_preserves_hardlinks_as_files_and_literal_names(facto
     asyncio.run(check())
 
 
+def skip_without_python_download(error: UvError) -> NoReturn:
+    """Skip when uv could not fetch the managed CPython; any other failure is a bug in the builder."""
+    if not str(error).startswith("uv python install") or "Failed to download" not in str(error):
+        raise error
+    pytest.skip(f"uv could not download a managed CPython {PYTHON_VERSION}: {error}")
+
+
 @pytest.fixture(scope="session")
 def python_environment(tmp_path_factory) -> PythonEnvironment:
     lock = tmp_path_factory.mktemp("lock") / "requirements.lock"
@@ -142,10 +150,7 @@ def python_environment(tmp_path_factory) -> PythonEnvironment:
             Path.home() / ".cache/shellbox/python/test-locked-six" / PYTHON_VERSION, lock, PYTHON_VERSION
         )
     except UvError as error:
-        # uv reports an unreachable or failed fetch this way; any other failure is a bug in the builder.
-        if not str(error).startswith("uv python install") or "Failed to download" not in str(error):
-            raise
-        pytest.skip(f"uv could not download a managed CPython {PYTHON_VERSION}: {error}")
+        skip_without_python_download(error)
 
 
 @pytest.fixture
@@ -496,9 +501,7 @@ def test_an_environment_without_requirements_runs_its_own_interpreter(tmp_path):
     try:
         environment = resolve_python_environment(tmp_path / "cache", (), PYTHON_VERSION)
     except UvError as error:
-        if "Failed to download" not in str(error):
-            raise
-        pytest.skip(f"uv could not download a managed CPython {PYTHON_VERSION}: {error}")
+        skip_without_python_download(error)
     factory = make_factory(read_only=(environment.root,), bin_dirs=(environment.bin_dir,))
     result = run_command(factory, Command(("python3", "-c", "import sys; print(sys.version.split()[0])")))
     assert (result.exit_code, result.stdout) == (0, f"{PYTHON_VERSION}\n".encode()), result.stderr
