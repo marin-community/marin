@@ -158,7 +158,7 @@ AGREEMENT = 1e-12  # two folders' predictions of one proposal by one model
 # for bit; earlier runs of the additive response, Olmix and the linear model, and the first two 2026-09-16 runs of the
 # convex per-bucket models, report other values.
 OBSERVATORY = "single_phase_observatory_{}/aggregate_metrics.csv"
-MARINER_VARIANT = "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap{}"
+MARINER_VARIANT = MARINER_SURROGATE + "{}"  # MARINER and its variants
 SURROGATE_BENCHMARK = {
     MARINER_VARIANT.format(""): "comparators_20260908",
     MARINER_VARIANT.format("_kappa1"): "comparators_20260908",

@@ -349,6 +349,8 @@ def _compute_equivalence() -> pd.DataFrame:
     matches["objective"] = matches.target.map(naming.objective_public)
     matches["baseline"] = matches.baseline.map(EQUIVALENCE_BASELINES)
     table = matches.merge(laws, on=["objective", "baseline"], how="left", validate="many_to_one")
+    if table[["baseline", "law_e"]].isna().any().any():
+        raise ValueError("a compute-equivalence row names a baseline without a fitted law")
     table = table.rename(columns={"mariner_compute": "compute_flops", "mariner_loss": "mariner_bpb"})
     columns = ["objective", "baseline", *laws.columns[2:], "compute_flops", "mariner_bpb", "baseline_compute_to_match"]
     return table[[*columns, "multiplier", "compute_saved_pct", "loss_improvement_pct", "extrapolated"]]
