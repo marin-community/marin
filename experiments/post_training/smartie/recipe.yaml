@@ -74,7 +74,7 @@ trainer:
   policy:
     optimizer_config:
       optimizer: AdamW
-      lr: 1.0e-06
+      lr: 5.0e-07
       weight_decay: 0.0
       max_grad_norm: 0.5
   rollout_buffer:
