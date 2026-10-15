@@ -112,7 +112,7 @@ class RemoteInferenceSession:
     metrics_url: str | None = None
 
     def check_alive(self) -> None:
-        """Raise when any inference worker has reached a terminal state."""
+        """Raise when any serving job has reached a terminal state."""
         for job in self.jobs:
             status = job.status()
             if JobStatus.finished(status):
@@ -258,7 +258,7 @@ def _resolved_engine(
     engine: VllmEngineConfig | LevanterEngineConfig,
     iris: IrisConfig,
 ) -> VllmEngineConfig | LevanterEngineConfig:
-    """Resolve model locators owned by an inference engine inside its worker."""
+    """Resolve the speculative vLLM model URI inside its worker."""
     if not isinstance(engine, VllmEngineConfig) or engine.speculative is None:
         return engine
 
