@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlparse
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import click
 import pytest
@@ -414,6 +414,47 @@ def _applet_origin(service_url: str, details: dict[str, object]) -> str:
     assert isinstance(details["authenticated_url"], str)
     parsed = urlparse(details["authenticated_url"])
     return f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
+
+
+@applets.group("hosts")
+def applet_hosts() -> None:
+    """Manage vanity hostname bindings as an applet operator; DNS is managed by Pulumi."""
+
+
+@applet_hosts.command("list")
+@click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
+def list_applet_hosts(service_url: str) -> None:
+    try:
+        result = marina_request(service_url, "GET", "/api/marina/applet-hosts")
+    except RuntimeError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(json.dumps(result, indent=2))
+
+
+@applet_hosts.command("bind")
+@click.argument("hostname")
+@click.argument("applet_id", type=click.UUID)
+@click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
+def bind_applet_host(hostname: str, applet_id: UUID, service_url: str) -> None:
+    """Assign an already-provisioned hostname to an applet."""
+    try:
+        result = marina_request(
+            service_url, "PUT", f"/api/marina/applet-hosts/{hostname}", json_body={"applet_id": str(applet_id)}
+        )
+    except RuntimeError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(json.dumps(result, indent=2))
+
+
+@applet_hosts.command("unbind")
+@click.argument("hostname")
+@click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
+def unbind_applet_host(hostname: str, service_url: str) -> None:
+    try:
+        marina_request(service_url, "DELETE", f"/api/marina/applet-hosts/{hostname}")
+    except RuntimeError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(f"unbound {hostname}")
 
 
 @applets.command("list")

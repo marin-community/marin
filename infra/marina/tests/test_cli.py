@@ -14,6 +14,8 @@ from marina.applets import AppletStore, package_applet, read_applet_package
 from marina.cli import cli
 from marina.database_setup import ensure_applet_provisioning
 from marina.db import UrlDatabase
+from marina.journeys import running_kernel
+from marina.server import MarinaConfig
 from marina.testing import isolated_database
 
 
@@ -173,3 +175,31 @@ def test_runner_uses_snapshot_when_an_earlier_job_releases_new_code(tmp_path: Pa
     second_run = runner.invoke(cli, args, env=env)
     assert second_run.exit_code == 0, second_run.output
     assert output.read_text() == "new"
+
+
+def test_applet_host_commands_change_persisted_binding(tmp_path: Path, database_url: str) -> None:
+    store = AppletStore(UrlDatabase(database_url))
+    ensure_applet_provisioning(store.engine)
+    store.migrate()
+    package = read_applet_package(package_applet(Path(__file__).parents[1] / "examples" / "static-html-applet"))
+    published = store.publish(package, "anonymous")
+    config = MarinaConfig(
+        data_root=str(tmp_path),
+        iap_audience=None,
+        database=store.database,
+        applet_operators=frozenset({"anonymous"}),
+        applet_domains=frozenset({"cli.example"}),
+    )
+    with running_kernel(config) as kernel:
+        runner = CliRunner()
+        bound = runner.invoke(
+            cli, ["applets", "hosts", "bind", "cli.example", str(published.applet_id), "--url", kernel.origin]
+        )
+        assert bound.exit_code == 0, bound.output
+        assert store.host_applet("cli.example") == published.applet_id
+        listed = runner.invoke(cli, ["applets", "hosts", "list", "--url", kernel.origin])
+        assert listed.exit_code == 0, listed.output
+        assert json.loads(listed.output)["hosts"]["cli.example"] == str(published.applet_id)
+        unbound = runner.invoke(cli, ["applets", "hosts", "unbind", "cli.example", "--url", kernel.origin])
+        assert unbound.exit_code == 0, unbound.output
+        assert store.host_bindings()["cli.example"] is None

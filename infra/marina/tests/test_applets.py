@@ -595,12 +595,13 @@ def test_named_applet_host_pins_revisions_and_isolates_routes(tmp_path: Path, da
     first = publisher.post("/api/marina/applets", content=package).json()
     other = publisher.post("/api/marina/applets", content=package).json()
     applet_id = first["id"]
+    store.bind_host("zephyr.example", uuid.UUID(applet_id))
     config = MarinaConfig(
         data_root=str(tmp_path / "data"),
         iap_audience=None,
         database=store.database,
         applet_origin="https://applets.example",
-        applet_hosts={"zephyr.example": uuid.UUID(applet_id)},
+        applet_domains=frozenset({"zephyr.example"}),
     )
     named = TestClient(create_app(config), base_url="https://zephyr.example", client=("127.0.0.1", 40000))
     root = named.get("/", follow_redirects=False)
@@ -609,6 +610,7 @@ def test_named_applet_host_pins_revisions_and_isolates_routes(tmp_path: Path, da
     assert root.headers["cache-control"] == "no-cache"
     page = named.get("/")
     assert page.url == "https://zephyr.example/v/1/"
+    assert page.headers["cache-control"] == "private, no-cache"
     assert "Problem sets" in page.text
     assert "script-src 'self'" in page.headers["content-security-policy"]
     asset = named.get("/v/1/app.js")
@@ -639,17 +641,100 @@ def test_named_applet_host_pins_revisions_and_isolates_routes(tmp_path: Path, da
     "method,path",
     [("GET", "/"), ("GET", "/v/1/"), ("GET", "/v/1/app.js"), ("GET", "/v/1/api/identity"), ("POST", "/v/1/query")],
 )
-def test_named_applet_host_authenticates_rewritten_routes(tmp_path: Path, method: str, path: str) -> None:
-    apps_dir = tmp_path / "apps"
-    apps_dir.mkdir()
+def test_named_applet_host_authenticates_rewritten_routes(
+    tmp_path: Path, database_url: str, method: str, path: str
+) -> None:
+    publisher, store = applet_client_and_store(tmp_path, database_url)
+    published = publisher.post("/api/marina/applets", content=package_applet(DEMO_APPLET)).json()
+    store.bind_host("zephyr.example", uuid.UUID(published["id"]))
     config = MarinaConfig(
         data_root=str(tmp_path / "data"),
         iap_audience="test-audience",
+        database=store.database,
         applet_origin="https://applets.example",
-        applet_hosts={"zephyr.example": uuid.uuid4()},
+        applet_domains=frozenset({"zephyr.example"}),
     )
     remote = TestClient(create_app(config), base_url="https://zephyr.example", client=("10.0.0.7", 40000))
     assert remote.request(method, path).status_code == 401
+
+
+def test_host_binding_changes_reach_running_servers_and_require_operator(tmp_path: Path, database_url: str) -> None:
+    publisher, store = applet_client_and_store(tmp_path, database_url)
+    package = package_applet(DEMO_APPLET)
+    first = publisher.post("/api/marina/applets", content=package).json()
+    second = publisher.post("/api/marina/applets", content=package).json()
+    config = MarinaConfig(
+        data_root=str(tmp_path / "data"),
+        iap_audience=None,
+        database=store.database,
+        canonical_origin="https://marina.example",
+        applet_origin="https://applets.example",
+        applet_operators=frozenset({"anonymous"}),
+        applet_domains=frozenset({"live.example"}),
+    )
+    operator = TestClient(create_app(config), base_url="https://marina.example", client=("127.0.0.1", 40000))
+    servers = [
+        TestClient(create_app(config), base_url="https://live.example", client=("127.0.0.1", 40000)) for _ in range(2)
+    ]
+    binding_path = "/api/marina/applet-hosts/live.example"
+    body = {"applet_id": first["id"]}
+    for server in servers:
+        assert server.get("/").status_code == 404
+        assert server.get("/api/marina/apps").status_code == 404
+    assert operator.delete(binding_path).status_code == 404
+    assert publisher.put(binding_path, json=body).status_code == 403
+    assert operator.put(binding_path, json=body).status_code == 200
+    assert operator.get("/api/marina/applet-hosts").json()["hosts"]["live.example"] == first["id"]
+    for server in servers:
+        assert server.get("/api/revision").json() == {"version": 1}
+        assert server.get("/api/marina/apps").status_code == 404
+
+    publisher.post(f"/api/marina/applets/{second['id']}?base_version=1", content=package)
+    rebound = {"applet_id": second["id"]}
+    assert operator.put(binding_path, json=rebound).status_code == 200
+    for server in servers:
+        assert server.get("/api/revision").json() == {"version": 2}
+        assert server.get("/", follow_redirects=False).headers["location"] == "/v/2/"
+    assert publisher.delete(binding_path).status_code == 403
+    assert operator.put("/api/marina/applet-hosts/marina.example", json=body).status_code == 400
+    assert operator.put("/api/marina/applet-hosts/unprovisioned.example", json=body).status_code == 400
+    assert operator.delete("/api/marina/applet-hosts/typo.example").status_code == 404
+    assert operator.delete(binding_path).status_code == 204
+    for server in servers:
+        assert server.get("/").status_code == 404
+        assert server.get("/api/marina/apps").status_code == 404
+
+
+def test_host_migration_preserves_filer_and_does_not_restore_changed_bindings(database_url: str) -> None:
+    store = AppletStore(UrlDatabase(database_url))
+    ensure_applet_provisioning(store.engine)
+    store.migrate()
+    filer_id = uuid.UUID("7f536ce3-0562-40f1-b209-e6110d8ab4e8")
+    with store.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO applets (id, title, description, owner, current_version) "
+                "VALUES (:id, 'Filer', '', 'owner', 4) ON CONFLICT DO NOTHING"
+            ),
+            {"id": filer_id},
+        )
+        # Model the pre-registry schema while retaining the existing production applet.
+        connection.execute(text("DROP TABLE applet_hosts"))
+        connection.execute(text("DELETE FROM schema_migrations WHERE name = 'm0001_applet_hosts'"))
+    store.migrate()
+    assert store.host_applet("filer.marina.oa.dev") == filer_id
+    replacement = store.publish(read_applet_package(package_applet(DEMO_APPLET)), "owner")
+    store.bind_host("filer.marina.oa.dev", replacement.applet_id)
+    store.migrate()
+    assert store.host_applet("filer.marina.oa.dev") == replacement.applet_id
+    store.unbind_host("filer.marina.oa.dev")
+    store.migrate()
+    assert store.host_bindings()["filer.marina.oa.dev"] is None
+    # A deliberately removed row must not be recreated by the seed on later deployments.
+    with store.engine.begin() as connection:
+        connection.execute(text("DELETE FROM applet_hosts WHERE hostname = 'filer.marina.oa.dev'"))
+    store.migrate()
+    assert "filer.marina.oa.dev" not in store.host_bindings()
 
 
 def test_store_rejects_non_owner_and_allows_operator(tmp_path: Path, database_url: str) -> None:

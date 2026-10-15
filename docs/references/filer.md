@@ -90,8 +90,12 @@ code runs as a trusted plugin in Marina's process. It needs no database tables o
 migrations. Frontend dependencies are bundled; PDF rendering uses a packaged worker.
 
 `infra/marina/Pulumi.marin-marina.yaml` declares `filer.marina.oa.dev` in
-`marin-marina:applet_hosts`. The Marina stack manages its DNS and domain mapping
-and sets `MARINA_APPLET_HOSTS`. The named host redirects its root to the current revision at `/v/<revision>/`.
+`marin-marina:applet_domains`. The Marina stack manages its DNS and domain mapping.
+The hostname-to-applet binding lives in Postgres's `marina.applet_hosts` table
+and is resolved on each request, independently of the serving Cloud Run revision.
+The deployment migration preserves the existing Filer binding. Applet operators
+can change it with `uv run marina applets hosts bind <hostname> <applet-id>`.
+The named host redirects its root to the current applet revision at `/v/<revision>/`.
 Release selects a new current revision for new visits; existing revision URLs
 continue to serve that revision while it is retained.
 It uses the existing Marina IAP authentication. Production rollouts load the DNS

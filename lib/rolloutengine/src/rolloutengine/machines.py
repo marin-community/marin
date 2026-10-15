@@ -32,6 +32,9 @@ from taskcompendium.runtime.resources import resource_bytes
 from rolloutengine.cleanup import _Cleanup, _retain_task
 from rolloutengine.spec import MachineRuntimeSpec
 
+SETUP_OUTPUT_CHARS = 2000
+"""How much of a failed setup command's stdout and stderr the error keeps, from the end."""
+
 
 @dataclass(frozen=True)
 class _UserMachine:
@@ -117,6 +120,14 @@ async def _acquire_machine(
     return machine if runtime.user is None else _UserMachine(machine, runtime.user)
 
 
+def _output_tail(output: bytes) -> str:
+    """The last ``SETUP_OUTPUT_CHARS`` characters of a command's output, for an error message."""
+    text = output.decode(errors="replace").strip()
+    if len(text) <= SETUP_OUTPUT_CHARS:
+        return repr(text)
+    return repr(f"...{text[-SETUP_OUTPUT_CHARS:]}")
+
+
 async def _prepare_machine(
     requirements: EnvironmentRequirements,
     runtime: MachineRuntimeSpec | None,
@@ -143,7 +154,10 @@ async def _prepare_machine(
             if result.reason == ExitReason.TIMED_OUT:
                 raise TimeoutError("Environment setup command timed out")
             if result.exit_code != 0:
-                raise RuntimeError(f"Environment setup command failed: {result.reason}, exit={result.exit_code}")
+                raise RuntimeError(
+                    f"Environment setup command failed: {result.reason}, exit={result.exit_code}; "
+                    f"command: {command!r}; stdout: {_output_tail(result.stdout)}; stderr: {_output_tail(result.stderr)}"
+                )
         if runtime.user is not None:
             result = await machine.run(Command(("true",), timeout=runtime.startup_timeout))
             if result.reason == ExitReason.TIMED_OUT:

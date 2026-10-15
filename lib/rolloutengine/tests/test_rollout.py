@@ -1551,6 +1551,46 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
     assert closed.is_set()
 
 
+async def test_a_failed_setup_command_names_itself_and_keeps_its_output_tail():
+    """A setup command that exits non-zero fails the start with the command and its output in the error."""
+    stderr = b"mkdir: cannot create directory '/opt/gen': Read-only file system\n"
+
+    class ReadOnlyMachine:
+        async def run(self, command):
+            if command.argv[:2] == ("sh", "-c"):
+                return Result(1, b"made /workspace", stderr, False, False, ExitReason.EXITED)
+            return Result(0, b"", b"", False, False, ExitReason.EXITED)
+
+        async def close(self):
+            pass
+
+    class Factory(DockerMachineFactory):
+        backend = Backend.DOCKER
+
+        async def create(self, spec):
+            return ReadOnlyMachine()
+
+    task = arithmetic_task().model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+                docker_image=FIXTURE_IMAGE,
+                setup_commands=("mkdir -p /workspace /opt/gen",),
+            )
+        }
+    )
+    with pytest.raises(RolloutInterrupted) as caught:
+        await engine(ReplayModel([]), {"local": Factory()}).run(lowered(task, machine=machine_runtime()))
+
+    assert caught.value.operation == RolloutOperation.START
+    cause = caught.value.__cause__
+    assert isinstance(cause, RuntimeError)
+    assert str(cause) == (
+        "Environment setup command failed: exited, exit=1; command: 'mkdir -p /workspace /opt/gen'; "
+        "stdout: 'made /workspace'; stderr: \"mkdir: cannot create directory '/opt/gen': Read-only file system\""
+    )
+
+
 @pytest.mark.parametrize(
     "result,cause_type",
     [

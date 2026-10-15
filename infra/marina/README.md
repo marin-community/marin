@@ -295,6 +295,43 @@ use `https://public.applets.marina.oa.dev`; that service admits only GET and HEA
 and exposes no SQL, publication, MCP or named-app routes. Marina cannot prove that
 a GET handler is free of side effects.
 
+## Named applet hosts
+
+Named applet hosts are stored in `marina.applet_hosts` in Postgres. Every request
+resolves the hostname there, so rebinding a host reaches all serving Cloud Run
+revisions without a deployment. Each bound host serves only its assigned applet
+behind the same authentication. Its root redirects to `/v/<current>/`; assets,
+queries, and Python APIs remain pinned to that applet revision. Existing URLs on
+`MARINA_APPLET_ORIGIN` remain valid.
+Named-host files require cache revalidation because a different applet can reuse
+the same `/v/<revision>/` paths after a binding changes.
+
+Pulumi's `marin-marina:applet_domains` lists only the hostnames whose DNS records
+and Cloud Run domain mappings it provisions. Provision a new hostname through
+Pulumi, then bind it with an identity listed in `MARINA_APPLET_OPERATORS`:
+
+```bash
+uv run marina applets hosts list
+uv run marina applets hosts bind filer.marina.oa.dev 7f536ce3-0562-40f1-b209-e6110d8ab4e8
+uv run marina applets hosts unbind filer.marina.oa.dev
+```
+
+The operator list is configured with `marin-marina:applet_operators`. An empty
+list disables host management through the API. The commands use
+`/api/marina/applet-hosts` on the canonical Marina origin. Rebinding and unbinding
+do not change DNS. Unbinding retains a disabled hostname record that returns 404,
+so the hostname cannot expose Marina's control routes. Marina's canonical, shared
+applet, public applet, and legacy app hosts cannot be rebound through this API.
+
+Pulumi passes the provisioned hostname list as `MARINA_APPLET_DOMAINS`, without
+applet UUIDs. A listed hostname returns 404 until it has an enabled database
+binding. Other hosts bypass the registry lookup. Binding an unprovisioned
+hostname is rejected; unbinding an unknown binding returns 404.
+
+The deployment migration imports the existing Filer binding once, before the
+new service takes traffic. It leaves subsequent rebindings and deletions alone.
+Fresh databases without the production Filer applet start with no bindings.
+
 ## Base runtime deployment and first cutover
 
 The `marin-marina` Pulumi stack owns the authenticated service, public reader,
