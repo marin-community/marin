@@ -25,7 +25,6 @@ exposes only dynamic applet routes on that host.
 """
 
 from pathlib import Path
-from uuid import UUID
 
 import pulumi
 import pulumi_cloudflare as cloudflare
@@ -34,6 +33,7 @@ import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 from iac.gcp.marina import PUBLIC_APPLET_SERVICE
 from marina.database_setup import LOOM_DATABASE_USER
+from marina.host_bindings import normalize_hostname
 from marina.manifest import JobRunner, discover_apps, job_runners
 
 PROJECT = "hai-gcp-models"
@@ -126,13 +126,10 @@ def main() -> None:
     applet_operators = config.get_object("applet_operators") or []
     if not isinstance(applet_operators, list) or not all(isinstance(item, str) for item in applet_operators):
         raise ValueError("marin-marina:applet_operators must be a list of user IDs")
-    applet_hosts = config.get_object("applet_hosts") or {}
-    if not isinstance(applet_hosts, dict):
-        raise ValueError("marin-marina:applet_hosts must map host names to applet UUIDs")
-    for host, applet_id in applet_hosts.items():
-        if not isinstance(host, str) or host != host.lower() or any(c in host for c in "/:=, "):
-            raise ValueError("applet host names must be lowercase DNS names")
-        UUID(applet_id)
+    applet_domains = config.get_object("applet_domains") or []
+    if not isinstance(applet_domains, list) or not all(isinstance(host, str) for host in applet_domains):
+        raise ValueError("marin-marina:applet_domains must be a list of host names")
+    applet_domains = [normalize_hostname(host) for host in applet_domains]
     gcp_provider = gcp.Provider("gcp", project=PROJECT)
     child = pulumi.ResourceOptions(provider=gcp_provider)
 
@@ -267,7 +264,7 @@ def main() -> None:
                 "MARINA_APPLET_ORIGIN": f"https://{APPLET_HOST}",
                 "MARINA_PUBLIC_APPLET_ORIGIN": f"https://{PUBLIC_APPLET_HOST}",
                 "MARINA_APPLET_OPERATORS": ",".join(applet_operators),
-                "MARINA_APPLET_HOSTS": ",".join(f"{host}={applet_id}" for host, applet_id in applet_hosts.items()),
+                "MARINA_APPLET_DOMAINS": ",".join(applet_domains),
                 "MARINA_AGENT_ORIGIN": "https://loom.oa.dev",
                 **DATABASE_ENV,
                 **runner_env,
@@ -374,7 +371,7 @@ def main() -> None:
             APPLET_HOST: (SERVICE, service),
             PUBLIC_APPLET_HOST: (PUBLIC_APPLET_SERVICE, public_applet_service),
             **{host: (SERVICE, service) for host in HOST_APPS},
-            **{host: (SERVICE, service) for host in applet_hosts},
+            **{host: (SERVICE, service) for host in applet_domains},
         }
         for host, (route_name, route_service) in hosts.items():
             slug = host.split(".")[0]
