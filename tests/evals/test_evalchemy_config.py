@@ -1,14 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The parent builds the Evalchemy child's config; the child turns each task into an ``evalchemy`` argv.
-
-These are the pure pieces of the serve->eval handoff that do not need a cluster: the JSON payload
-the parent hands the eval child (one upload dir per task-config, kept distinct so shot variants of a
-task do not collide), the lm-eval command the child runs per task (route selection between the
-completions and chat APIs included), and the empty-results guard. Everything else (job submission,
-serving, the eval itself) is exercised by the cluster smoke.
-"""
+"""Test Evalchemy configuration, command construction, and child cancellation."""
 
 import base64
 import json
@@ -23,7 +16,9 @@ from marin.evaluation.evalchemy.runner import (
     _run_evalchemy_child,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.runner import InferenceBackendFinished, InferenceUnavailable, run_evaluation
 from marin.evaluation.serving_config import _auto_serve_overrides_from_config, auto_serve_overrides
+from marin.inference.iris import InferenceBackendState
 from marin.inference.types import OpenAIEndpoint, RunningModel
 
 _MODEL = RunningModel(
@@ -35,6 +30,44 @@ _MODEL = RunningModel(
 )
 
 
+@pytest.mark.parametrize(
+    "backend_state, expected_error",
+    [
+        (InferenceBackendState.RECOVERING, InferenceUnavailable),
+        (InferenceBackendState.FINISHED, InferenceBackendFinished),
+    ],
+)
+def test_evalchemy_cancels_active_child_when_inference_disappears(monkeypatch, backend_state, expected_error):
+    state = InferenceBackendState.READY
+
+    class EvalJob:
+        job_id = "/eval/interrupted"
+        cancelled = False
+        stopped = False
+
+        def wait(self, timeout, *, raise_on_failure=True):
+            nonlocal state
+            if self.cancelled:
+                self.stopped = True
+                return
+            state = backend_state
+            raise TimeoutError("evaluator is still running")
+
+        def cancel(self):
+            self.cancelled = True
+
+    job = EvalJob()
+    client = SimpleNamespace(submit=lambda **_kwargs: job)
+    monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
+    session = SimpleNamespace(backend_state=lambda: state, preemption_count=lambda: 0)
+
+    with pytest.raises(expected_error):
+        _run_evalchemy_child(_MODEL, _config(), "memory://interrupted", {}, inference_sessions=(session,))
+
+    assert job.cancelled
+    assert job.stopped
+
+
 def _config(**overrides) -> EvalchemyRunConfig:
     base = dict(
         name="core",
@@ -43,6 +76,36 @@ def _config(**overrides) -> EvalchemyRunConfig:
     )
     base.update(overrides)
     return EvalchemyRunConfig(**base)
+
+
+def test_failed_child_cancellation_does_not_start_a_same_archive_retry(tmp_path, monkeypatch):
+    state = InferenceBackendState.READY
+
+    class EvalJob:
+        job_id = "/eval/cancel-failed"
+
+        def wait(self, timeout, **_kwargs):
+            nonlocal state
+            state = InferenceBackendState.RECOVERING
+            raise TimeoutError("still running")
+
+        def cancel(self):
+            raise ConnectionError("cancellation failed")
+
+    client = SimpleNamespace(submit=lambda **_kwargs: EvalJob())
+    monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
+    session = SimpleNamespace(
+        backend_state=lambda: state,
+        preemption_count=lambda: 0,
+        wait_until_ready=lambda **_kwargs: pytest.fail("must not retry while child cancellation is unconfirmed"),
+    )
+
+    def executor(session, output_dir, env_vars, *, judge=None):
+        _run_evalchemy_child(_MODEL, _config(), output_dir, env_vars, inference_sessions=(session,))
+        pytest.fail("the child should not finish successfully")
+
+    with pytest.raises(ConnectionError, match="cancellation failed"):
+        run_evaluation(executor, session, str(tmp_path / "cancel-failed"), {})
 
 
 def _payload(config: EvalchemyRunConfig | None = None) -> dict:
@@ -214,7 +277,7 @@ def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypa
         job_id = "/eval/financebench"
 
         def wait(self, timeout):
-            assert timeout == float("inf")
+            pass
 
     client = SimpleNamespace(submit=lambda **kwargs: submitted.append(kwargs) or FakeJob())
     monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
@@ -237,6 +300,7 @@ def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypa
         config,
         "gs://bucket/evals/qwen3/financebench",
         {"JUDGE_API_KEY": "judge-key", "HF_TOKEN": "candidate-runtime-token"},
+        inference_sessions=(),
     )
 
     env = submitted[0]["environment"].env_vars
@@ -259,7 +323,7 @@ def test_evalchemy_child_rejects_a_missing_judge_secret():
     )
 
     with pytest.raises(ValueError, match="requires JUDGE_API_KEY"):
-        _run_evalchemy_child(_MODEL, config, "gs://bucket/evals/qwen3/financebench", {})
+        _run_evalchemy_child(_MODEL, config, "gs://bucket/evals/qwen3/financebench", {}, inference_sessions=())
 
 
 def test_task_dirs_distinguish_shot_variants_of_one_task():

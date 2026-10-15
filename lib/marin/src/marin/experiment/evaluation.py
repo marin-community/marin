@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reusable lazy evaluation steps built on endpoint-oriented mechanisms."""
+"""Build lazy evaluation and report artifacts."""
 
 import logging
 import tempfile
@@ -14,6 +14,7 @@ from fray.cluster import ResourceConfig
 from iris.rpc import job_pb2
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.secrets import resolve_secret_spec
 
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.evalchemy.result import (
@@ -24,15 +25,16 @@ from marin.evaluation.evalchemy.result import (
     compile_eval_report,
 )
 from marin.evaluation.evalchemy.runner import (
+    EvalchemyExecutor,
     EvalchemyRunConfig,
-    run_evalchemy,
 )
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.lm_eval import LM_EVAL_UV_PACKAGES, LmEvalResults, LmEvalRun, run_lm_eval
 from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
+from marin.evaluation.runner import run_evaluation
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.evaluation.utils import discover_hf_checkpoints
-from marin.execution.artifact import result_type_name
+from marin.execution.artifact import result_type_name, write_artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
@@ -59,14 +61,6 @@ class EvalchemyEvalConfig:
 
 
 @dataclass(frozen=True)
-class ServedEvalchemyRun:
-    """Durable output and child jobs from one self-contained Evalchemy build."""
-
-    out_path: str
-    jobs: dict[str, str]
-
-
-@dataclass(frozen=True)
 class _EvalReportConfig:
     entries: tuple[ReportEntry, ...]
     out_path: str
@@ -90,7 +84,7 @@ def _durable_output_dir(output_dir: str | None, run_id: str) -> str:
     return durable
 
 
-def run_served_evalchemy(config: EvalchemyEvalConfig) -> ServedEvalchemyRun:
+def run_served_evalchemy(config: EvalchemyEvalConfig) -> FineStoreEvalchemyResult:
     """Start inference, run one Evalchemy task group, and tear inference down."""
     if not config.run.tasks:
         raise ValueError("Evalchemy requires at least one task")
@@ -98,6 +92,11 @@ def run_served_evalchemy(config: EvalchemyEvalConfig) -> ServedEvalchemyRun:
     if config.model.tokenizer is None and "://" in config.model.location:
         raise ValueError(f"model {config.model.location!r} is an object-store path; set tokenizer to an HF tokenizer id")
     runtime_env = env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS)
+    evaluation_env = (
+        {**runtime_env, "JUDGE_API_KEY": resolve_secret_spec(config.run.judge.api_key).value}
+        if config.run.judge is not None
+        else runtime_env
+    )
     inference = inference_config_for_model(
         config.model,
         config.accelerator,
@@ -105,15 +104,17 @@ def run_served_evalchemy(config: EvalchemyEvalConfig) -> ServedEvalchemyRun:
         priority=job_pb2.PRIORITY_BAND_INHERIT,
     )
     with remote_inference(inference) as session:
-        outcome = run_evalchemy(
-            session.model,
-            config.run,
+        outcome = run_evaluation(
+            EvalchemyExecutor(config.run),
+            session,
             output_dir,
-            env_vars=runtime_env,
+            evaluation_env,
         )
         jobs = {f"serve-{index}" if index else "serve": str(job.job_id) for index, job in enumerate(session.jobs)}
         jobs |= outcome.jobs
-    return ServedEvalchemyRun(out_path=output_dir, jobs=jobs)
+    result = FineStoreEvalchemyResult(path=output_dir, jobs=jobs)
+    write_artifact(result.result_payload(), output_dir)
+    return result
 
 
 @dataclass(frozen=True)
@@ -267,7 +268,7 @@ def lm_eval_step(
     version: str,
     parent_env_vars: Mapping[str, str],
 ) -> ArtifactStep[LmEvalResults]:
-    """Build an lm-eval artifact using the shared remote-inference lifecycle."""
+    """Build a lazy lm-eval result artifact."""
     worker_resources = inference.iris.worker_resources
     if inference.broker is not None:
         eval_run = replace(
