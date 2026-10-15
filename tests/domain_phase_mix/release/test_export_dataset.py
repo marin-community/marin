@@ -118,9 +118,20 @@ def test_figures_tables_lists_every_figure_and_table_of_the_paper(manifest):
 
 
 def test_write_refuses_to_replace_a_data_folder_it_did_not_write(tmp_path):
-    stray = tmp_path / "data/notes.txt"
-    stray.parent.mkdir()
+    stray = tmp_path / "build/data/notes.txt"
+    stray.parent.mkdir(parents=True)
     stray.write_text("not an export")
     with pytest.raises(ValueError, match=r"MANIFEST\.json"):
-        export_dataset.write({}, tmp_path, tmp_path / "private")
+        export_dataset.write({}, tmp_path / "build", tmp_path / "private")
     assert stray.read_text() == "not an export"
+
+
+@pytest.mark.parametrize("private", ["private", "."], ids=["inside", "same"])
+def test_private_dir_must_lie_outside_the_build(tmp_path, private):
+    # The salt, the run-name map and SOURCES.json must never reach the uploaded tree.
+    out = tmp_path / "build"
+    with pytest.raises(ValueError, match="inside the build"):
+        export_dataset.main(["--out", str(out), "--private-dir", str(out / private)])
+    with pytest.raises(ValueError, match="inside the build"):
+        export_dataset.write({}, out, out / private)
+    assert not out.exists()  # refused before the salt or any file was written

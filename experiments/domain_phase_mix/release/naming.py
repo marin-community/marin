@@ -39,8 +39,8 @@ _TASK_PATTERNS = [
 
 
 # Public names of the objective a run's mixture was proposed for: the two objectives, the subsets of their tasks that
-# some proposals optimized, `none` for the scaling baselines (proportional, UniMax-8), and the held-out registry's labels
-# of its baselines (`baseline`), of designs built for both objectives and of runs whose names name no objective.
+# some proposals optimized, `none` for baselines that optimize no objective (proportional, UniMax-8), and the held-out
+# registry's labels of designs built for both objectives and of runs whose names name no objective.
 OBJECTIVES = frozenset(
     {
         "uncheatable",
@@ -52,16 +52,17 @@ OBJECTIVES = frozenset(
         "obe_easy_snr5",
         "obe_easy_snr8",
         "none",
-        "baseline",
         "uncheatable_and_obe_easy",
         "other",
     }
 )
-# Sources name OlmoBaseEval Easy `table9` (and its subsets `table9_<subset>`); some name an objective by its metric.
+# Sources name OlmoBaseEval Easy `table9` (and its subsets `table9_<subset>`); some name an objective by its metric, and
+# the held-out registry calls a baseline's objective `baseline`.
 _OBJECTIVE_ALIASES = {
     "table9_macro_bpb": "obe_easy",
     "uncheatable_bpb": "uncheatable",
     "uncheatable_and_table9": "uncheatable_and_obe_easy",
+    "baseline": "none",
 }
 
 

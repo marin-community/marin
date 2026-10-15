@@ -107,15 +107,16 @@ def test_validation_join_reports_unmatched_candidates(tmp_path):
 
 def test_runs_shared_with_heldout_keep_their_ids_and_values(ctx, table):
     # Both tables key a run on its hashed training run name, so the 116 validation runs of the expanded held-out
-    # cohort and the ladder's UniMax-8 seed-0 run (a frozen archive row) get one id and one set of values. The seeds
-    # differ: `heldout` leaves them empty for 75 of these runs (a Task 4 follow-up).
+    # cohort and the ladder's UniMax-8 seed-0 run (a frozen archive row) get one id, one set of values and one
+    # objective and epoch cap. The seeds differ: `heldout` leaves them empty for 75 of these runs (a Task 4 follow-up).
     held = heldout.export(ctx)["heldout"]
     expanded = held[(held.swarm == "qwen3_360m_1p6b") & (held.cohort == "expanded")]
     assert len(expanded) == 116 and expanded.observation_id.isin(table.observation_id).all()
     shared = held.merge(table, on="observation_id", suffixes=("_heldout", "_validation"), validate="one_to_one")
     assert len(shared) == 117 and set(shared.cohort) == {"expanded", "frozen"}
-    for column in ["mixture_id", "exposure_id", "aggregate_version"]:
+    for column in ["mixture_id", "exposure_id", "aggregate_version", "proposal_objective"]:
         assert (shared[f"{column}_heldout"] == shared[f"{column}_validation"]).all()
+    pd.testing.assert_series_equal(shared.epoch_cap_heldout, shared.epoch_cap_validation, check_names=False)
     aggregates = ["bpb__uncheatable_source", "bpb__obe_easy_source", "bpb__uncheatable_fixed", "bpb__obe_easy"]
     for column in [f"bpb__{t}" for t in naming.TASKS] + aggregates:
         values = shared[[f"{column}_heldout", f"{column}_validation"]].dropna()

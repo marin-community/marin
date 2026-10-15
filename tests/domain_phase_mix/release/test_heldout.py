@@ -74,8 +74,8 @@ def test_exposure_ids_split_what_mixture_ids_merge(table):
 
 def test_labels_are_kept_and_aggregates_versioned(table):
     assert table.proposal_method.notna().all()
-    # Objectives take their public names (the registry's `table9`, `table9_macro_bpb` and `uncheatable_and_table9`
-    # among them); the Llama panels record none.
+    # Objectives take their public names (the registry's `table9`, `table9_macro_bpb`, `uncheatable_and_table9` and
+    # `baseline` among them); the Llama panels record none.
     qwen = table.swarm == "qwen3_360m_1p6b"
     assert table.proposal_objective[~qwen].isna().all()
     assert set(table.proposal_objective[qwen]) == {
@@ -83,9 +83,13 @@ def test_labels_are_kept_and_aggregates_versioned(table):
         "uncheatable",
         "uncheatable_worsened",
         "uncheatable_and_obe_easy",
-        "baseline",
+        "none",
         "other",
     }
+    # The registry's one baseline is the UniMax-8 construction's 3e18 ladder run, labeled as validation_3e18 labels
+    # it: no objective and the construction's epoch cap of 8.
+    baseline = table[table.proposal_objective == "none"]
+    assert len(baseline) == 1 and baseline.epoch_cap.tolist() == [8.0]
     assert set(table.aggregate_version) == {"fixed_20260927", "legacy", "pooled_schema2"}
     assert (table.loc[table.swarm != "qwen3_360m_1p6b", "aggregate_version"] == "legacy").all()
     # The path-midpoint and RegMix-reference launches recorded the BPB-schema-2 pooled Uncheatable aggregate, about

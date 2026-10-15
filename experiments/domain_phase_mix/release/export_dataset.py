@@ -10,8 +10,8 @@
 rest, so every value is bit-identical to the exported one), copies figures_tables.csv and writes the public manifest:
 per table its config, path, format, rows, columns, bytes, SHA-256, the string its observation ids hash (`keying`),
 notes and repository-relative sources, and the cross-table consistency problems. The salt, the run-name map and
-SOURCES.json (every table's absolute source paths) go to the private directory, never into the build. The command
-exits non-zero, after writing the manifest, when two tables disagree about a run.
+SOURCES.json (every table's absolute source paths) go to the private directory, which must lie outside the build. The
+command exits non-zero, after writing the manifest, when two tables disagree about a run.
 """
 
 import argparse
@@ -145,7 +145,8 @@ NOTES = {
     "heldout": [
         "The 39 Llama 160M single-bucket deletions are also fit rows of swarm_llama_160m_1p2b, and 117 Qwen3 runs "
         "(the 116 expanded-cohort validation runs and the UniMax-8 seed-0 run) are also rows of validation_3e18; each "
-        "such run has one observation id and equal values in both tables.",
+        "such run has one observation id and equal BPB, weights and pool fractions in both tables (seeds and labels "
+        "may differ).",
         "Ten frozen archive runs, in four exposure groups, are deterministic re-trainings: their aggregates are "
         "bit-identical within each group.",
         "628 of the 929 runs (455 Qwen3, 117 Llama 200M and 56 Llama 160M runs) have all 58 per-task values.",
@@ -153,8 +154,9 @@ NOTES = {
         "path-midpoint and RegMix-reference runs (pooled_schema2), whose recorded Uncheatable aggregate is the "
         "BPB-schema-2 pooled value, 0.008 to 0.011 BPB above bpb__uncheatable_fixed; compare runs on "
         "bpb__uncheatable_fixed.",
-        "proposal_objective uses the public objective names; uncheatable_and_obe_easy marks designs built for both "
-        "objectives, baseline and other are the registry's labels, and the Llama panels record none.",
+        "proposal_objective uses the public objective names: none for the UniMax-8 baseline (epoch cap 8, as in "
+        "validation_3e18), uncheatable_and_obe_easy for designs built for both objectives, and other where the "
+        "registry's run names name no objective; the Llama panels leave it null.",
     ],
     "validation_3e18": [
         "UniMax-8 trainer seeds 1 and 2 carry source aggregates only; their per-task values are not among the sources.",
@@ -270,12 +272,19 @@ def _commit() -> str:
     ).stdout.strip()
 
 
+def _require_private_outside(out: Path, private_dir: Path) -> None:
+    """The salt, the run-name map and SOURCES.json must never land in the build, which is uploaded."""
+    if private_dir.resolve().is_relative_to(out.resolve()):
+        raise ValueError(f"the private directory {private_dir} is inside the build {out}")
+
+
 def write(tables: dict[str, pd.DataFrame], out: Path, private_dir: Path) -> dict:
     """Write the build under `out` and SOURCES.json under `private_dir`; return the manifest.
 
     The data folder is replaced only when a previous build's MANIFEST.json sits beside it, so the export never
     deletes a folder it did not write.
     """
+    _require_private_outside(out, private_dir)
     undocumented = sorted(set(tables) - set(KEYING))
     if undocumented:
         raise ValueError(f"tables without a keying sentence: {undocumented}")
@@ -334,6 +343,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--out", type=Path, default=paths.BUILD)
     parser.add_argument("--private-dir", type=Path, default=paths.PRIVATE)
     args = parser.parse_args(argv)
+    _require_private_outside(args.out, args.private_dir)  # before the context creates a salt there
     ctx = context.build(private_dir=args.private_dir)
     manifest = write(build_tables(ctx), args.out, args.private_dir)
     ctx.registry.save()

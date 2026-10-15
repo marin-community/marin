@@ -4,10 +4,14 @@
 """The cumulative held-out registry: frozen (September 2) and expanded (September 13) cohorts of all three swarms.
 
 Observation ids key on each run's training run name with its six-hex-digit hash (as W&B records it) wherever one is
-derivable. The swarm tables key on hash-less training names; no held-out run is in a swarm table. The 116
-validation-launch runs take the name from their evaluation-metrics URI, as `validation_3e18` does. 679 frozen runs take
-the registry's W&B training run id; for the 187 `delphi_archive::` rows that is the row_id without its prefix. The 134
-Llama 200M runs record no run name and key on the registry's `row_id`.
+derivable. The Llama swarm tables key on the same names, so the 39 Llama 160M deletions, rows of both tables, share
+their ids; the Qwen3 swarm's fit rows key on hash-less names and are in no held-out cohort. The 116 validation-launch
+runs take the name from their evaluation-metrics URI, as `validation_3e18` does. 679 frozen runs take the registry's
+W&B training run id; for the 187 `delphi_archive::` rows that is the row_id without its prefix. The 134 Llama 200M runs
+record no run name and key on the registry's `row_id`.
+
+Objectives take their public names (`naming.objective_public`): the registry's one baseline, the UniMax-8 run of the
+June ladder at 3e18, has objective `none` and, as in `validation_3e18`, its construction's epoch cap of 8.
 """
 
 from pathlib import Path
@@ -22,6 +26,10 @@ EXPANDED = paths.RO / "single_phase_heldout_benchmark_expanded_20260913"
 FROZEN = paths.RO / "single_phase_heldout_benchmark_20260902"
 FROZEN_FILES = ("heldout_runs.csv", "heldout_components.csv")
 EXPANDED_FILES = ("heldout_runs.csv", "heldout_coordinate_components.csv")
+# The UniMax-8 construction, which validation_3e18 and the ladder also read: a baseline training it has its epoch cap.
+# No other baseline's cap is known.
+UNIMAX8_WEIGHTS = paths.REPO / "experiments/domain_phase_mix/release/unimax8_weights.csv"
+UNIMAX8_EPOCH_CAP = 8.0
 LAUNCH_FILES = ("measured_results.csv", "measured_table9_components.csv")  # in each validation launch's folder
 SWARM = {"delphi_3e18_39bucket": "qwen3_360m_1p6b", "60m_39bucket": "llama_160m_1p2b", "300m_39bucket": "llama_200m_6b"}
 META = {
@@ -66,7 +74,13 @@ VALIDATION_LAUNCHES = {
 
 def required_sources() -> list[Path]:
     launches = [paths.RO / folder / name for folder in VALIDATION_LAUNCHES.values() for name in LAUNCH_FILES]
-    return [*(FROZEN / name for name in FROZEN_FILES), *(EXPANDED / name for name in EXPANDED_FILES), *launches]
+    frozen = [FROZEN / name for name in FROZEN_FILES]
+    return [*frozen, *(EXPANDED / name for name in EXPANDED_FILES), *launches, UNIMAX8_WEIGHTS]
+
+
+def _unimax8_mixture() -> str:
+    weights = tables.read_csv(paths.require(UNIMAX8_WEIGHTS))
+    return keys.mixture_id(dict(zip(weights.domain.map(naming.bucket_public), weights.weight, strict=True)))
 
 
 def _frozen_components() -> pd.DataFrame:
@@ -185,6 +199,8 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
             strict=True,
         )
     ]
+    unimax8 = (out.proposal_objective == "none") & (out.mixture_id == _unimax8_mixture())
+    out.loc[unimax8, "epoch_cap"] = UNIMAX8_EPOCH_CAP
     out["aggregate_version"] = runs.panel.map(AGGREGATE_VERSION).mask(runs.source.isin(POOLED_SOURCES), POOLED_VERSION)
     out = out.join(_components(ctx, runs).reindex(runs.row_id).reset_index(drop=True))
     out = tables.add_aggregates(out, ctx.weights)  # NaN where components are missing; the manifest records coverage

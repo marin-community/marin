@@ -48,6 +48,7 @@ def test_objective_public_maps_every_source_spelling():
     assert naming.objective_public("table9_macro_bpb") == "obe_easy"
     assert naming.objective_public("uncheatable_bpb") == "uncheatable"
     assert naming.objective_public("uncheatable_and_table9") == "uncheatable_and_obe_easy"
+    assert naming.objective_public("baseline") == "none"  # the held-out registry's label of its baselines
     assert all(naming.objective_public(name) == name for name in naming.OBJECTIVES)
     with pytest.raises(ValueError):  # an unknown spelling must never reach a public table
         naming.objective_public("table9_macro")
