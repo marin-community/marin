@@ -11,13 +11,17 @@ the local backend while the same task runs in a container.
 
 ``preflight`` lowers the task, and when its task machine lands on the local backend it runs the
 engine's own preparation once (machine start, resources, setup commands) by rolling out a probe that
-answers at once, then grades. A preparation failure (``PREPARATION_CAUSES``) moves the task machine
-alone to the container backend: the task is lowered again with the local backend withheld, and its
-verifier machine and grader requirements are taken from the first lowering, so a grader-base verifier
-stays local. The result carries a ``BackendFallback`` for the lower record. Any other outcome of the
-probe, a grade included, keeps the first lowering: what the probe says about the grader the trials
-will say again. A verifier machine never falls back: its preparation failure is a task defect the
-trials report.
+answers at once, then grades. A failure only the task or the backend explains (``FALLBACK_CAUSES``: a
+setup command that failed, or a spec the backend refuses) moves the task machine alone to the
+container backend: the task is lowered again with the local backend withheld, and its verifier
+machine and grader requirements are taken from the first lowering, so a grader-base verifier stays
+local. The result carries a ``BackendFallback`` for the lower record. A machine that did not start or
+did not start in time (``HOST_CAUSES``) is as often the host's state at probe time as the task's, and
+the solver's machine must not depend on it: the probe runs once more, and a second such failure
+raises ``BuildInfrastructureFailure``, so the item ends as the host's and is retried later rather than
+moved. Any other outcome of the probe, a grade included, keeps the first lowering: what the probe says
+about the grader the trials will say again. A verifier machine never falls back: its preparation
+failure is a task defect the trials report.
 
 The probe is not evidence: it records no attempt file and no ledger span.
 """
@@ -33,15 +37,20 @@ from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import TaskSpec
 
 from taskforge.sandbox.factories import MachineHost
+from taskforge.stage40_build.context import BuildInfrastructureFailure
+from taskforge.stage40_build.infrastructure import InfrastructureCause
 from taskforge.stage50_validate.classify import trial_outcome
 from taskforge.stage50_validate.lowering import lower
 from taskforge.stage50_validate.outcome import Cause, Ungraded
 from taskforge.stage50_validate.trials import Deadlines, EngineSettings
 
-PREPARATION_CAUSES = frozenset(
-    {Cause.MACHINE_START, Cause.MACHINE_START_TIMEOUT, Cause.MACHINE_UNSUPPORTED, Cause.TASK_SETUP}
-)
-"""The probe outcomes that mean the task machine could not be prepared on its backend."""
+FALLBACK_CAUSES = frozenset({Cause.MACHINE_UNSUPPORTED, Cause.TASK_SETUP})
+"""The probe outcomes that mean the task cannot be prepared on the local backend: the task machine moves."""
+HOST_CAUSES = {
+    Cause.MACHINE_START: InfrastructureCause.MACHINE_CREATE_FAILED,
+    Cause.MACHINE_START_TIMEOUT: InfrastructureCause.SANDBOX_DEADLINE,
+}
+"""The probe outcomes the host causes as readily as the task, with the infrastructure cause a repeat raises."""
 PROBE_REPLY = ""
 PROBE_TOKEN = 0
 """The one token id the probe's reply carries: the engine requires token evidence, and the probe is never recorded."""
@@ -87,17 +96,26 @@ async def preflight(
     settings: EngineSettings,
     deadlines: Deadlines,
 ) -> Preflight:
-    """Lower ``task`` for ``host``, probing a local task machine and falling back to a container when it cannot start.
+    """Lower ``task`` for ``host``, probing a local task machine and falling back to a container when the task
+    cannot be prepared there.
 
     Raises:
         ValueError: RolloutEngine rejects the lowered spec (``lowering.lower``).
+        BuildInfrastructureFailure: the local task machine did not start, or not in time, on two probes.
     """
     lowered = lower(task, host, factories)
     machine = lowered.runtime.task_machine
     if machine is None or machine.backend != Backend.LOCAL.value:
         return Preflight(lowered, None)
     outcome = await _probe(lowered, settings, deadlines)
-    if not isinstance(outcome, Ungraded) or outcome.cause not in PREPARATION_CAUSES:
+    if isinstance(outcome, Ungraded) and outcome.cause in HOST_CAUSES:
+        outcome = await _probe(lowered, settings, deadlines)
+        if isinstance(outcome, Ungraded) and outcome.cause in HOST_CAUSES:
+            raise BuildInfrastructureFailure(
+                HOST_CAUSES[outcome.cause],
+                f"the preflight probe's {machine.backend} task machine failed twice ({outcome.cause}): {outcome.detail}",
+            )
+    if not isinstance(outcome, Ungraded) or outcome.cause not in FALLBACK_CAUSES:
         return Preflight(lowered, None)
     fallback = _task_machine_fallback(task, host, factories, lowered)
     assert fallback.runtime.task_machine is not None
