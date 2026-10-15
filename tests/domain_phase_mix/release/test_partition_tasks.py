@@ -20,6 +20,18 @@ def test_partition_has_39_buckets_with_consistent_epochs():
     assert set(out.quality_tier.dropna()) == {"high", "low"}
 
 
+def test_partition_names_each_pools_license_and_citation():
+    out = partition_tasks.export(None)["partition"]
+    assert out.pool_license.notna().all() and out.pool_citation_key.notna().all()
+    # The licenses that the pools' Hugging Face cards, allenai/dolma3_pool and allenai/dolma3_dolmino_pool, declared on
+    # 2026-10-15; the paper cites Olmo 3 for both pools.
+    by_pool = out.groupby("pool")[["pool_license", "pool_citation_key"]].agg(lambda c: sorted(set(c)))
+    assert by_pool.to_dict("index") == {
+        "dolma3": {"pool_license": ["odc-by"], "pool_citation_key": ["olmoOlmo32025"]},
+        "dolmino": {"pool_license": ["odc-by"], "pool_citation_key": ["olmoOlmo32025"]},
+    }
+
+
 def test_tasks_have_58_rows_and_objective_weights_sum_to_one():
     out = partition_tasks.export(None)["tasks"]
     assert len(out) == 58 and out.task_id.is_unique

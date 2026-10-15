@@ -7,8 +7,8 @@
 [--card DRAFT] [--sections DIR] [--registry CSV] [--dry-run | --confirm]`
 
 Every run writes the dataset card into the build as README.md: a YAML header generated from MANIFEST.json (license,
-size category, one config per table), then the prose of the card draft in the paper folder, whose own YAML header, if
-any, it drops. An upload sends exactly the manifest's tables, MANIFEST.json, figures_tables.csv and README.md. The run
+size category, one config per CSV table), then the prose of the card draft in the paper folder, whose own YAML header,
+if any, it drops. An upload sends exactly the manifest's tables, MANIFEST.json, figures_tables.csv and README.md. The run
 stops when the build root holds any other entry except fits/ (the inputs and outputs of the archived-swarm refits, which
 it skips), when the files under data/ differ from the manifest's tables in name, size or SHA-256, when the manifest
 records consistency problems, or when the privacy scan of the files it would send finds anything. It then prints the
@@ -38,6 +38,7 @@ CARD = "README.md"
 DATA = "data"
 TOP_LEVEL = (MANIFEST, "figures_tables.csv", CARD)  # sent with every file under data/
 SKIPPED = ("fits",)  # regenerate_mixture_selection_data's refit inputs and outputs; never sent
+CONFIG_FORMAT = "csv"  # the only table format the card lists as configs; see card_configs
 # The Hub's size categories by row count: each name applies below its bound, and "n>1T" above the last.
 SIZE_CATEGORIES = (
     (10**3, "n<1K"),
@@ -65,9 +66,15 @@ class Upload:
 
 
 def card_configs(manifest: dict) -> str:
-    """The card's YAML `configs:` block: one config per table, named after it, whose train split is its file."""
+    """The card's YAML `configs:` block: one config per CSV table, named after it, whose train split is its file.
+
+    `datasets` (4.8.5) reads every config of a repository with the one builder that the first config's files select,
+    so a Parquet table listed beside CSV tables fails to load. The card's prose lists the Parquet tables as files.
+    """
     configs = [
-        {"config_name": t["table"], "data_files": [{"split": "train", "path": t["path"]}]} for t in manifest["tables"]
+        {"config_name": t["table"], "data_files": [{"split": "train", "path": t["path"]}]}
+        for t in manifest["tables"]
+        if t["format"] == CONFIG_FORMAT
     ]
     return yaml.safe_dump({"configs": configs}, sort_keys=False)
 

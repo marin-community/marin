@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 import yaml
+from datasets import get_dataset_config_names, load_dataset
 from huggingface_hub import CommitOperationAdd, CommitOperationDelete
 
 from experiments.domain_phase_mix.release import upload, verify_paper_numbers
@@ -105,6 +106,7 @@ def _write_build(build: Path, tables: dict[str, pd.DataFrame], **manifest: objec
                 "config": file.parent.name,
                 "table": file.stem,
                 "path": path,
+                "format": file.suffix.removeprefix("."),
                 "rows": len(df),
                 "bytes": len(content),
                 "sha256": hashlib.sha256(content).hexdigest(),
@@ -168,29 +170,41 @@ def _offline() -> None:
     raise AssertionError("a dry run must not reach the Hub")
 
 
-def test_card_configs_cover_every_table():
+def test_card_configs_cover_exactly_the_csv_tables():
     manifest = {
         "tables": [
-            {"config": "partition", "table": "partition", "path": "data/partition/partition.csv"},
-            {"config": "fits", "table": "fits_learning_curves", "path": "data/fits/fits_learning_curves.parquet"},
-            {"config": "fits", "table": "fits_task_parameters", "path": "data/fits/fits_task_parameters.parquet"},
+            {"config": "partition", "table": "partition", "path": "data/partition/partition.csv", "format": "csv"},
+            {
+                "config": "fits",
+                "table": "fits_learning_curves",
+                "path": "data/fits/fits_learning_curves.parquet",
+                "format": "parquet",
+            },
+            {"config": "heldout", "table": "heldout", "path": "data/heldout/heldout.csv", "format": "csv"},
+            {
+                "config": "fits",
+                "table": "fits_task_parameters",
+                "path": "data/fits/fits_task_parameters.parquet",
+                "format": "parquet",
+            },
         ]
     }
-    block = yaml.safe_load(upload.card_configs(manifest))
-    names = {c["config_name"] for c in block["configs"]}
-    assert names == {"partition", "fits_learning_curves", "fits_task_parameters"}
-    fits = next(c for c in block["configs"] if c["config_name"] == "fits_learning_curves")
-    assert fits["data_files"] == [{"split": "train", "path": "data/fits/fits_learning_curves.parquet"}]
+    configs = yaml.safe_load(upload.card_configs(manifest))["configs"]
+    assert [c["config_name"] for c in configs] == ["partition", "heldout"]
+    assert not any(f["path"].endswith(".parquet") for c in configs for f in c["data_files"])
+    heldout = next(c for c in configs if c["config_name"] == "heldout")
+    assert heldout["data_files"] == [{"split": "train", "path": "data/heldout/heldout.csv"}]
 
 
 @pytest.mark.parametrize("draft", [PROSE, "---\nlicense: other\n---\n" + PROSE], ids=["prose", "own-header"])
 def test_build_card_generates_the_header_and_keeps_the_prose(draft: str):
     manifest = {
         "tables": [
-            {"table": "heldout", "path": "data/heldout/heldout.csv", "rows": 929},
+            {"table": "heldout", "path": "data/heldout/heldout.csv", "format": "csv", "rows": 929},
             {
                 "table": "starcoder_trajectories",
                 "path": "data/starcoder/starcoder_trajectories.parquet",
+                "format": "parquet",
                 "rows": 1409700,
             },
         ]
@@ -198,8 +212,8 @@ def test_build_card_generates_the_header_and_keeps_the_prose(draft: str):
     header, prose = re.fullmatch(r"---\n(.*?)---\n(.*)", upload.build_card(manifest, draft), re.S).groups()
     meta = yaml.safe_load(header)
     assert meta["license"] == "apache-2.0"
-    assert meta["size_categories"] == ["1M<n<10M"]  # 1,410,629 rows
-    assert [c["config_name"] for c in meta["configs"]] == ["heldout", "starcoder_trajectories"]
+    assert meta["size_categories"] == ["1M<n<10M"]  # 1,410,629 rows, the Parquet table's included
+    assert [c["config_name"] for c in meta["configs"]] == ["heldout"]
     assert prose.strip() == PROSE.strip()  # the draft's own header is dropped
 
 
@@ -215,6 +229,15 @@ def test_prepare_scans_what_an_upload_sends_and_reports_the_audit(tree, capsys):
     )
     assert upload_plan.audit == capsys.readouterr().out.splitlines()[-1]
     assert upload_plan.audit == "1 differences, 1 untraced cells, 1 registered skips"
+
+
+def test_every_listed_config_loads_with_datasets(tree, tmp_path):
+    # datasets reads all of a repository's configs with the one builder that the first config's files select, so a
+    # Parquet table listed beside CSV tables fails to load; the card lists the CSV tables only.
+    upload.prepare(tree.build, tree.card, tree.sections, tree.registry)
+    assert get_dataset_config_names(str(tree.build)) == ["heldout"]
+    heldout = load_dataset(str(tree.build), "heldout", split="train", cache_dir=str(tmp_path / "cache"))
+    assert heldout.num_rows == len(TABLES["data/heldout/heldout.csv"])
 
 
 def _add_top_level_file(tree: Tree) -> None:
