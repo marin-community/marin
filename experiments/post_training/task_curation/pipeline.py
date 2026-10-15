@@ -182,7 +182,7 @@ class HarborSource:
 
     @property
     def files(self) -> tuple[str, ...]:
-        return ("tasks.jsonl",)
+        return ("tasks/*.jsonl",)
 
     @property
     def format(self) -> SourceFormat:
@@ -593,7 +593,7 @@ def download_identity(source: HfSource | UrlSource | HarborSource) -> dict[str, 
             ),
         }
     if isinstance(source, HarborSource):
-        return {"harbor": source.name, "revision": source.revision, "export_revision": "1"}
+        return {"harbor": source.name, "revision": source.revision, "export_revision": "2"}
     return {"url": source.url, "sha256": source.sha256, "filename": source.filename}
 
 

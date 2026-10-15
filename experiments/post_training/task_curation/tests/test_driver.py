@@ -115,8 +115,8 @@ def test_source_option_selects_catalog_order_without_changing_identity(tmp_path,
 @pytest.mark.parametrize("mode", ["quick", "sample", "full"])
 def test_prepared_source_requires_inputs_and_hashes_the_supplied_export(tmp_path, catalog, mode):
     staged = tmp_path / "prepared"
-    staged.mkdir()
-    payload = staged / "tasks.jsonl"
+    (staged / "tasks").mkdir(parents=True)
+    payload = staged / "tasks" / "fixture.jsonl"
     payload.write_text('{"problem": "Two plus two?", "answer": "4"}\n')
     args = [
         "--mode",

@@ -24,16 +24,19 @@ from taskcompendium.models import (
     TextMessage,
     require_resolved_environment,
 )
-from taskcompendium.pipeline.conversion import convert_row
+from taskcompendium.pipeline.conversion import convert_record, convert_row
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import NormalizedTask, RawRow
+from taskcompendium.pipeline.sources import conversion_shards, staged_file_rows
 from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets.skill2env.conversion import RELEASE, convert_task
+from experiments.post_training.task_curation.datasets.skill2env.tasks import sources
+from experiments.post_training.task_curation.pipeline import source_recipe
 
 
-def exported_row() -> RawRow:
+def exported_row(name: str = "fixture") -> RawRow:
     files = {
         "instruction.md": b"Repair the answer and keep the checker intact.",
         "environment/Dockerfile": b"FROM python:3.12-slim\nWORKDIR /workspace\n",
@@ -70,6 +73,7 @@ storage_mb = 4096
 """
         ),
     }
+    files["task.toml"] = files["task.toml"].replace(b"skill2env/fixture", f"skill2env/{name}".encode())
     digest = hashlib.sha256()
     for path in sorted(files):
         digest.update(f"{path}\0{hashlib.sha256(files[path]).hexdigest()}\n".encode())
@@ -78,16 +82,43 @@ storage_mb = 4096
         Source(
             dataset="skill2env/skill2env",
             revision=RELEASE.split("@")[1],
-            row="tasks.jsonl:0",
+            row=f"tasks/{digest.hexdigest()}.jsonl:0",
             importer_revision="fixture",
         ),
         {
             "release": RELEASE,
-            "task_ref": f"skill2env/fixture@sha256:{digest.hexdigest()}",
+            "task_ref": f"skill2env/{name}@sha256:{digest.hexdigest()}",
             "files": {path: base64.b64encode(blob).decode() for path, blob in files.items()},
             "modes": {path: "644" for path in files},
         },
     )
+
+
+def test_prepared_selections_keep_distinct_stable_task_ids(tmp_path):
+    config = sources()[0].config
+    assert config is not None
+    recipe = source_recipe(config, {}, None)
+    context = ConversionContext({}, None)
+    first, second = exported_row("first"), exported_row("second")
+    selections = ((first,), (second,), (second, first))
+    identities = []
+    for index, selection in enumerate(selections):
+        root = tmp_path / str(index)
+        (root / "tasks").mkdir(parents=True)
+        for row in selection:
+            digest = row.data["task_ref"].split("@sha256:")[1]
+            (root / "tasks" / f"{digest}.jsonl").write_text(json.dumps(row.data) + "\n")
+        tasks = {}
+        for shard in conversion_shards(str(root), recipe.source):
+            for record in staged_file_rows(str(root), shard, recipe.source, context):
+                converted = convert_record(record, recipe)
+                assert isinstance(converted.result, NormalizedTask)
+                tasks[record["data"]["task_ref"]] = converted.result.task.id
+        assert len(tasks) == len(selection)
+        identities.append(tasks)
+    first_ids, second_ids, combined_ids = identities
+    assert len(combined_ids) == len(set(combined_ids.values())) == 2
+    assert combined_ids == {**first_ids, **second_ids}
 
 
 def test_conversion_retains_hidden_files_and_detects_modified_exports():

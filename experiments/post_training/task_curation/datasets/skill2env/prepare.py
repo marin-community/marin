@@ -89,15 +89,18 @@ async def prepare(release: str, output: Path, selected: list[str]) -> None:
         + "\n"
     )
     client = TaskClient()
-    with (output / "tasks.jsonl").open("w") as stream:
-        for ref in selected_refs:
-            with TemporaryDirectory(prefix="skill2env-task-") as directory:
-                downloaded = await client.download_tasks([refs[ref]], output_dir=Path(directory), export=True)
-                root = downloaded.results[0].path
-                row = export_task(root, ref)
-                row["release"] = release
-                stream.write(json.dumps(row) + "\n")
-                LOGGER.info("Exported %s", ref)
+    task_output = output / "tasks"
+    task_output.mkdir()
+    for ref in selected_refs:
+        with TemporaryDirectory(prefix="skill2env-task-") as directory:
+            downloaded = await client.download_tasks([refs[ref]], output_dir=Path(directory), export=True)
+            root = downloaded.results[0].path
+            row = export_task(root, ref)
+            row["release"] = release
+            # The shared pipeline uses filename and row index as the task identity.
+            task_digest = ref.rsplit("@sha256:", 1)[1]
+            (task_output / f"{task_digest}.jsonl").write_text(json.dumps(row) + "\n")
+            LOGGER.info("Exported %s", ref)
 
 
 def main() -> None:

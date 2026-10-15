@@ -19,6 +19,8 @@ uv run --project config/external/harbor --frozen python \
 ```
 
 Repeat `--task` for more tasks; `--all` selects the release's complete population.
+Each task is exported to `tasks/<native-content-digest>.jsonl`, so its pipeline
+identity stays the same across selections.
 Conversion retains the native `environment/` files as an
 unresolved `DockerBuildContext`. The verifier context adds workspace clearing
 so submitted deletions are preserved. Private tests and reference solutions
