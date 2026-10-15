@@ -36,6 +36,7 @@ from marina.database_setup import (
     PROVISION_APPLET_FUNCTION,
 )
 from marina.db import DatabaseSpec, engine_for, engine_for_role, grant_read_on_connection
+from marina.host_bindings import migrate_host_bindings, normalize_hostname
 
 APPLET_MANIFEST = "applet.toml"
 DIST_PREFIX = "dist/"
@@ -423,6 +424,53 @@ class AppletStore:
         with self.engine.begin() as connection:
             for statement in statements:
                 connection.execute(text(statement))
+            migrate_host_bindings(connection)
+
+    def host_applet(self, hostname: str) -> uuid.UUID | None:
+        """Resolve a hostname; disabled hosts raise to keep their origins isolated."""
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT applet_id FROM applet_hosts WHERE hostname = :hostname"),
+                {"hostname": hostname},
+            ).first()
+        if row is None:
+            return None
+        if row.applet_id is None:
+            raise AppletNotFound(hostname)
+        return row.applet_id
+
+    def host_bindings(self) -> dict[str, str | None]:
+        with self.engine.connect() as connection:
+            return {
+                row.hostname: str(row.applet_id) if row.applet_id is not None else None
+                for row in connection.execute(text("SELECT hostname, applet_id FROM applet_hosts ORDER BY hostname"))
+            }
+
+    def bind_host(self, hostname: str, applet_id: uuid.UUID) -> None:
+        """Bind a hostname to an active applet; callers must authorize the operator."""
+        hostname = normalize_hostname(hostname)
+        with self.engine.begin() as connection:
+            applet = connection.execute(
+                text("SELECT id FROM applets WHERE id = :id AND archived_at IS NULL FOR UPDATE"),
+                {"id": applet_id},
+            ).scalar()
+            if applet is None:
+                raise AppletNotFound(str(applet_id))
+            connection.execute(
+                text(
+                    "INSERT INTO applet_hosts (hostname, applet_id) VALUES (:hostname, :id) "
+                    "ON CONFLICT (hostname) DO UPDATE SET applet_id = EXCLUDED.applet_id, updated_at = now()"
+                ),
+                {"hostname": hostname, "id": applet_id},
+            )
+
+    def unbind_host(self, hostname: str) -> None:
+        """Disable routing while reserving the hostname's isolated applet origin."""
+        with self.engine.begin() as connection:
+            connection.execute(
+                text("UPDATE applet_hosts SET applet_id = NULL, updated_at = now() WHERE hostname = :hostname"),
+                {"hostname": normalize_hostname(hostname)},
+            )
 
     def publish(
         self,

@@ -1,11 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import sys
 from pathlib import Path
 
 from click.testing import CliRunner
+from marina.applets import AppletStore, package_applet, read_applet_package
 from marina.cli import cli
+from marina.database_setup import ensure_applet_provisioning
+from marina.db import UrlDatabase
+from marina.journeys import running_kernel
+from marina.server import MarinaConfig
 
 
 def write_job(apps_dir: Path, app: str, name: str, code: str, *, secrets: tuple[str, ...] = ()) -> None:
@@ -62,3 +68,33 @@ def test_run_migrate_only_does_not_execute_jobs(tmp_path: Path, database_url: st
 
     assert result.exit_code == 0
     assert not output.exists()
+
+
+def test_applet_host_commands_change_persisted_binding(tmp_path: Path, database_url: str) -> None:
+    store = AppletStore(UrlDatabase(database_url))
+    ensure_applet_provisioning(store.engine)
+    store.migrate()
+    package = read_applet_package(package_applet(Path(__file__).parents[1] / "examples" / "static-html-applet"))
+    published = store.publish(package, "anonymous")
+    apps_dir = tmp_path / "apps"
+    apps_dir.mkdir()
+    config = MarinaConfig(
+        apps_dir=apps_dir,
+        data_root=str(tmp_path),
+        iap_audience=None,
+        database=store.database,
+        applet_operators=frozenset({"anonymous"}),
+    )
+    with running_kernel(config) as kernel:
+        runner = CliRunner()
+        bound = runner.invoke(
+            cli, ["applets", "hosts", "bind", "cli.example", str(published.applet_id), "--url", kernel.origin]
+        )
+        assert bound.exit_code == 0, bound.output
+        assert store.host_applet("cli.example") == published.applet_id
+        listed = runner.invoke(cli, ["applets", "hosts", "list", "--url", kernel.origin])
+        assert listed.exit_code == 0, listed.output
+        assert json.loads(listed.output)["hosts"]["cli.example"] == str(published.applet_id)
+        unbound = runner.invoke(cli, ["applets", "hosts", "unbind", "cli.example", "--url", kernel.origin])
+        assert unbound.exit_code == 0, unbound.output
+        assert store.host_bindings()["cli.example"] is None
