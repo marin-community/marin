@@ -111,10 +111,15 @@ class RolloutEngine:
         """
         validate_lowered_task(lowered, factories=self.factories, sessions=self.sessions, providers=self.providers)
         events = _EventDelivery(self.observer, lowered.task.id if run_key is None else run_key, lowered.task.id)
+        started = time.monotonic()
         try:
             events.emit(AttemptStarted())
             record, operation, cause = await self._run_attempt(lowered, events)
-            events.emit(AttemptEnded(None if operation is not None else record.stop_reason, operation))
+            duration = time.monotonic() - started
+            if operation is None:
+                events.emit(AttemptEnded(record.stop_reason, None, None, duration))
+            else:
+                events.emit(AttemptEnded(None, operation, None if cause is None else repr(cause), duration))
             delivery = await events.close(lowered.session.cleanup_timeout)
         finally:
             events.cancel()
@@ -223,7 +228,7 @@ class RolloutEngine:
             start = await session.prepare()
         except Exception as error:
             raise RolloutInterrupted(completed, RolloutOperation.PREPARE) from error
-        events.emit(SessionPrepared(len(start.messages), time.monotonic() - started))
+        events.emit(SessionPrepared(start.messages, start.options, time.monotonic() - started))
         messages = list(start.messages)
         options = start.options
         replay_prompt_token_ids = start.prompt_token_ids
@@ -285,9 +290,11 @@ class RolloutEngine:
                     events.emit(
                         ModelTurnCompleted(
                             index,
+                            turn.message,
                             turn.stop_reason,
                             len(turn.prompt_token_ids),
                             len(turn.response_token_ids),
+                            turn.usage,
                             turn.metadata,
                             time.monotonic() - started,
                         ),
@@ -324,7 +331,11 @@ class RolloutEngine:
                     trace.check_transition(turn, transition)
                     events.emit(
                         TransitionCompleted(
-                            index, transition.done, len(transition.observations), time.monotonic() - started
+                            index,
+                            transition.done,
+                            transition.observations,
+                            transition.reset_conversation,
+                            time.monotonic() - started,
                         ),
                     )
                     stop_reason = turn.stop_reason
@@ -379,6 +390,7 @@ class RolloutEngine:
             if not completed.steps:
                 raise RolloutInterrupted(completed, RolloutOperation.MODEL) from model_error
             messages = list(completed.messages)
+        started = time.monotonic()
         try:
             async with asyncio.timeout(limits.verifier_timeout):
                 outputs = await _captured_outputs(lowered, machine)
@@ -398,7 +410,7 @@ class RolloutEngine:
             raise RolloutInterrupted(completed, RolloutOperation.GRADE) from error
         except Exception as error:
             raise RolloutInterrupted(completed, RolloutOperation.GRADE) from error
-        events.emit(Graded(grade.status, grade.reward))
+        events.emit(Graded(grade.status, grade.reward, grade.error, grade.failure, time.monotonic() - started))
         completed = replace(completed, grade=grade, stop_reason=stop_reason)
         if model_error is not None:
             raise RolloutInterrupted(completed, RolloutOperation.MODEL) from model_error
