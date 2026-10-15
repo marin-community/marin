@@ -16,6 +16,12 @@ direct address. An evaluation failure is recorded and later evaluations continue
 the current and remaining evaluations are recorded as infrastructure failures. This directory holds
 the model and suite catalogs, Marin fleet policy, and CLI choices.
 
+While Iris restarts preempted candidate or hosted-judge inference jobs, Marin stops running
+evaluators and waits for inference readiness. Harbor resumes unfinished trials. Evalchemy restarts
+the interrupted benchmark with a new results archive for each attempt. Completed benchmark results
+remain unchanged. If either inference job reaches a terminal state, Marin records the current and
+remaining benchmarks as infrastructure failures.
+
 The user-facing [evaluation guide](../../docs/tutorials/run-lm-evals.md) contains model-specific
 commands, suite constraints, launch controls, and result locations.
 

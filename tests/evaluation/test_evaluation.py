@@ -17,6 +17,7 @@ import pytest
 from click.testing import CliRunner
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
+    ARCHIVE_SAMPLES_TABLE,
     EvalSample,
     EvaluationStore,
     Grading,
@@ -24,9 +25,12 @@ from finestore.eval import (
     sample_from_archive_row,
 )
 from finestore.reader import ReadView
+from fray.types import JobStatus
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
+from iris.resources.state import JobState, TaskState
 from iris.rpc import job_pb2
 from marin.evaluation.eval_policy import HARBOR_COMMIT, SEPTEMBER_16_VERSION, source_config_digest
+from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig, _coverage_with_aggregate_counts
 from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -40,6 +44,7 @@ from marin.evaluation.harbor.driver_config import (
 )
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.inference_recovery import InferenceBackendFinished, run_with_inference_recovery
 from marin.evaluation.lm_eval_samples import samples_from_lm_eval
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.records import (
@@ -66,6 +71,7 @@ from marin.evaluation.runner import (
     submit_evaluation_batch,
 )
 from marin.evaluation.serving_config import inference_config_for_model
+from marin.experiment.evaluation import EvalchemyEvalConfig, run_served_evalchemy
 from marin.external_dependencies import EVALCHEMY, HARBOR
 from marin.inference.config import (
     EffectiveServing,
@@ -599,6 +605,141 @@ def test_evaluate_batch_gates_transport_failure_coverage(tmp_path, monkeypatch, 
     assert record.coverage["math500"].n_scored == n_scored
 
 
+@pytest.mark.parametrize("recovered_before_result", [False, True])
+@pytest.mark.parametrize("partial_result", [False, True])
+@pytest.mark.parametrize("entrypoint", ["batch", "served"])
+def test_evaluate_batch_recovers_repeated_preemptions_without_mixing_attempts(
+    tmp_path, monkeypatch, recovered_before_result, partial_result, entrypoint
+):
+    controller = SimpleNamespace(ready=False, preemptions=0)
+
+    def job_status(_job_id):
+        return SimpleNamespace(
+            state=JobState.RUNNING,
+            task_count=1,
+            task_state_counts={TaskState.RUNNING: int(controller.ready)},
+            preemption_count=controller.preemptions,
+        )
+
+    client = SimpleNamespace(
+        job_status=job_status,
+        list_endpoint_instances=lambda _name: [object()] if controller.ready else [],
+        resolve_endpoint=lambda _name: f"http://10.0.0.{controller.preemptions + 1}:8000",
+    )
+    monkeypatch.setattr("marin.inference.iris.iris_ctx", lambda: SimpleNamespace(client=client))
+    monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
+    monkeypatch.setattr("marin.inference.iris.time.sleep", lambda _seconds: setattr(controller, "ready", True))
+    monkeypatch.setattr("marin.inference.iris.requests.get", lambda *_args, **_kwargs: SimpleNamespace(status_code=200))
+    session = replace(
+        _remote_session(),
+        jobs=(SimpleNamespace(job_id="/test/inference", status=lambda: JobStatus.RUNNING),),
+    )
+    abandoned_paths = []
+
+    def run_child(_model, _config, output_dir, _env_vars, **_kwargs):
+        assert controller.ready
+        assert _model.endpoint.base_url == f"http://10.0.0.{controller.preemptions + 1}:8000/v1"
+        interrupted = controller.preemptions < 3
+        rows = [_lm_eval_generation(0, "accuracy", 1.0, "4")]
+        if interrupted:
+            failed = _lm_eval_generation(1, "accuracy", 0.0, "")
+            failed["failure_category"] = "model_transport"
+            rows.append(failed)
+        _write_evalchemy_output(output_dir, "task", {"task": {"accuracy": 0.5 if interrupted else 1.0}}, {"task": rows})
+        if interrupted:
+            abandoned_paths.append(output_dir)
+            controller.preemptions += 1
+            controller.ready = recovered_before_result
+            if not partial_result:
+                raise EvaluationError("endpoint unavailable", status=RunStatus.INFRA_FAILED)
+        return "/eval/child"
+
+    monkeypatch.setattr("marin.evaluation.evalchemy.runner._run_evalchemy_child", run_child)
+    executor = EvalchemyExecutor(EvalchemyRunConfig(name="task", tasks=(EvalTaskConfig(name="task", num_fewshot=0),)))
+    evaluation = _evaluation(tmp_path, "interrupted", executor)
+    evaluation = replace(
+        evaluation, identity=replace(evaluation.identity, output_dir=f"file://{tmp_path / 'interrupted'}")
+    )
+    batch = replace(
+        _hosted_judge_batch(
+            tmp_path,
+            (
+                _evaluation(tmp_path, "before", _successful_evaluation),
+                evaluation,
+                _evaluation(tmp_path, "after", _successful_evaluation),
+            ),
+        ),
+        judge=None,
+    )
+    catalog_rows = []
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", catalog_rows.append)
+
+    if entrypoint == "batch":
+        evaluate_batch(batch, session, orchestrator_job_id="/orchestrator", env_vars={})
+        assert [(row.run_id, row.status) for row in catalog_rows] == [
+            ("run-before", "succeeded"),
+            ("run-interrupted", "succeeded"),
+            ("run-after", "succeeded"),
+        ]
+        record = read_record(str(tmp_path / "records" / "run-interrupted" / "record.json"))
+        assert record.coverage["task"].n_scored == 1
+        final_path = record.results_path
+    else:
+        monkeypatch.setattr("marin.experiment.evaluation.remote_inference", lambda _config: nullcontext(session))
+        monkeypatch.setattr("marin.experiment.evaluation.env_vars_from_keys", lambda _keys: {})
+        result = run_served_evalchemy(
+            EvalchemyEvalConfig(
+                model=replace(
+                    batch.model,
+                    serve=ServeConfig(auto_overrides=False),
+                    resource_hint=ResourceHint(gpu={"H100": 1}, memory="16g"),
+                ),
+                accelerator=batch.accelerator,
+                run=executor.config,
+                out_path=evaluation.identity.output_dir,
+            )
+        )
+        assert result.archive_path is not None
+        final_path = result.archive_path
+        assert result.jobs["eval"] == "/eval/child"
+        restored = FineStoreEvalchemyResult.raw_load(result.path)
+        assert restored.task_metrics()["task"]["accuracy"] == 1.0
+    assert len(set(abandoned_paths)) == 3
+    assert final_path not in abandoned_paths
+    assert [row["doc_id"] for row in ReadView(final_path).iter_rows(ARCHIVE_SAMPLES_TABLE)] == ["0"]
+    for path in abandoned_paths:
+        assert {row["doc_id"] for row in ReadView(path).iter_rows(ARCHIVE_SAMPLES_TABLE)} == {"0", "1"}
+
+
+def test_inference_recovery_stops_when_judge_fails_while_model_is_rebuilding(monkeypatch):
+    judge_failed = False
+
+    def job_status(job_id):
+        is_judge = str(job_id) == "/test/judge"
+        return SimpleNamespace(
+            state=JobState.FAILED if is_judge and judge_failed else JobState.RUNNING,
+            task_count=1,
+            task_state_counts={TaskState.RUNNING: int(is_judge)},
+        )
+
+    def advance_recovery(_seconds):
+        nonlocal judge_failed
+        judge_failed = True
+
+    client = SimpleNamespace(job_status=job_status, list_endpoint_instances=lambda _name: [object()])
+    monkeypatch.setattr("marin.inference.iris.iris_ctx", lambda: SimpleNamespace(client=client))
+    monkeypatch.setattr("marin.inference.iris.time.sleep", advance_recovery)
+    sessions = tuple(
+        replace(_remote_session(), jobs=(SimpleNamespace(job_id=f"/test/{name}"),)) for name in ("model", "judge")
+    )
+
+    def attempt():
+        pytest.fail("evaluation must not start against an unavailable model")
+
+    with pytest.raises(InferenceBackendFinished):
+        run_with_inference_recovery(attempt, lambda: None, sessions)
+
+
 def test_evaluate_batch_persists_run_scoped_speculative_metrics(tmp_path, monkeypatch):
     def scrape(prompt: int, generated: int, drafts: int, draft_tokens: int, accepted: int):
         return tuple(
@@ -743,7 +884,7 @@ def test_evalchemy_executor_classifies_missing_native_archive(tmp_path, monkeypa
     output_dir = str(StoragePath("memory://evalchemy-export-failure") / tmp_path.name)
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
-        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+        lambda _model, _config, _output_dir, _env_vars, **_kwargs: "/eval/completed",
     )
     session = _remote_session()
     executor = EvalchemyExecutor(
@@ -791,7 +932,7 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
     )
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
-        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+        lambda _model, _config, _output_dir, _env_vars, **_kwargs: "/eval/completed",
     )
     executor = EvalchemyExecutor(
         EvalchemyRunConfig(
@@ -874,7 +1015,7 @@ def test_evalchemy_executor_preserves_native_transport_failure_when_rebuilding(
     )
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
-        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+        lambda _model, _config, _output_dir, _env_vars, **_kwargs: "/eval/completed",
     )
     executor = EvalchemyExecutor(
         EvalchemyRunConfig(
@@ -922,7 +1063,7 @@ def test_evalchemy_executor_excludes_failed_multiple_choice_request(tmp_path, mo
     )
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
-        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+        lambda _model, _config, _output_dir, _env_vars, **_kwargs: "/eval/completed",
     )
     executor = EvalchemyExecutor(EvalchemyRunConfig(name="mmlu", tasks=(EvalTaskConfig(name="mmlu", num_fewshot=0),)))
 
@@ -961,7 +1102,7 @@ def test_evalchemy_executor_uses_aggregate_count_when_custom_task_omits_sample_s
     )
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
-        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+        lambda _model, _config, _output_dir, _env_vars, **_kwargs: "/eval/completed",
     )
     executor = EvalchemyExecutor(
         EvalchemyRunConfig(name="mmlu-pro", tasks=(EvalTaskConfig(name="MMLUPro", num_fewshot=0),))
@@ -1003,7 +1144,7 @@ def test_evalchemy_executor_uses_code_task_scored_count_when_samples_omit_scores
     )
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
-        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+        lambda _model, _config, _output_dir, _env_vars, **_kwargs: "/eval/completed",
     )
     executor = EvalchemyExecutor(
         EvalchemyRunConfig(name="humanevalplus", tasks=(EvalTaskConfig(name="HumanEvalPlus", num_fewshot=0),))
@@ -1055,7 +1196,7 @@ def test_evalchemy_executor_rebuilds_native_prompts_before_normalizing_rollouts(
         store.seal()
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
-        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+        lambda _model, _config, _output_dir, _env_vars, **_kwargs: "/eval/completed",
     )
     executor = EvalchemyExecutor(
         EvalchemyRunConfig(

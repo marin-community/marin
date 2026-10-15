@@ -24,7 +24,9 @@ from marin.evaluation.evalchemy.runner import (
     _run_evalchemy_child,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.inference_recovery import InferenceBackendFinished, InferenceUnavailable
 from marin.evaluation.serving_config import _auto_serve_overrides_from_config, auto_serve_overrides
+from marin.inference.iris import InferenceBackendState
 from marin.inference.types import OpenAIEndpoint, RunningModel
 
 _MODEL = RunningModel(
@@ -34,6 +36,44 @@ _MODEL = RunningModel(
     ),
     tokenizer="Qwen/Qwen3-0.6B",
 )
+
+
+@pytest.mark.parametrize(
+    "backend_state, expected_error",
+    [
+        (InferenceBackendState.RECOVERING, InferenceUnavailable),
+        (InferenceBackendState.FINISHED, InferenceBackendFinished),
+    ],
+)
+def test_evalchemy_cancels_active_child_when_inference_disappears(monkeypatch, backend_state, expected_error):
+    state = InferenceBackendState.READY
+
+    class EvalJob:
+        job_id = "/eval/interrupted"
+        cancelled = False
+        stopped = False
+
+        def wait(self, timeout, *, raise_on_failure=True):
+            nonlocal state
+            if self.cancelled:
+                self.stopped = True
+                return
+            state = backend_state
+            raise TimeoutError("evaluator is still running")
+
+        def cancel(self):
+            self.cancelled = True
+
+    job = EvalJob()
+    client = SimpleNamespace(submit=lambda **_kwargs: job)
+    monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
+    session = SimpleNamespace(backend_state=lambda: state)
+
+    with pytest.raises(expected_error):
+        _run_evalchemy_child(_MODEL, _config(), "memory://interrupted", {}, inference_sessions=(session,))
+
+    assert job.cancelled
+    assert job.stopped
 
 
 def _config(**overrides) -> EvalchemyRunConfig:
@@ -171,7 +211,7 @@ def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypa
         job_id = "/eval/financebench"
 
         def wait(self, timeout):
-            assert timeout == float("inf")
+            pass
 
     client = SimpleNamespace(submit=lambda **kwargs: submitted.append(kwargs) or FakeJob())
     monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
@@ -190,6 +230,7 @@ def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypa
         config,
         "gs://bucket/evals/qwen3/financebench",
         {"JUDGE_API_KEY": "judge-key", "HF_TOKEN": "candidate-runtime-token"},
+        inference_sessions=(),
     )
 
     env = submitted[0]["environment"].env_vars
@@ -212,7 +253,7 @@ def test_evalchemy_child_rejects_a_missing_judge_secret():
     )
 
     with pytest.raises(ValueError, match="requires JUDGE_API_KEY"):
-        _run_evalchemy_child(_MODEL, config, "gs://bucket/evals/qwen3/financebench", {})
+        _run_evalchemy_child(_MODEL, config, "gs://bucket/evals/qwen3/financebench", {}, inference_sessions=())
 
 
 def test_task_dirs_distinguish_shot_variants_of_one_task():

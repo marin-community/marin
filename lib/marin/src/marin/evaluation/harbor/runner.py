@@ -29,16 +29,16 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.harbor.dataset import local_harbor_dataset_path
 from marin.evaluation.harbor.driver_config import (
-    HarborBackendsUnavailable,
     HarborErrorTaxonomy,
     HarborRuntimeOverlay,
     ValidatedHarborConfig,
     run_harbor_driver,
 )
+from marin.evaluation.inference_recovery import inference_backend_state, run_with_inference_recovery
 from marin.evaluation.records import BenchmarkMetadataRef, EvalTaskRef, RunStatus, TaskCoverage
 from marin.evaluation.rollouts import normalize_rollouts
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
-from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
+from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
@@ -313,15 +313,6 @@ def _aggregate(
     )
 
 
-def _backend_state(inference_sessions: tuple[RemoteInferenceSession, ...]) -> InferenceBackendState:
-    states = tuple(session.backend_state() for session in inference_sessions)
-    if InferenceBackendState.FINISHED in states:
-        return InferenceBackendState.FINISHED
-    if InferenceBackendState.RECOVERING in states:
-        return InferenceBackendState.RECOVERING
-    return InferenceBackendState.READY
-
-
 def _run_harbor_job(
     *,
     job_name: str,
@@ -337,16 +328,11 @@ def _run_harbor_job(
 ) -> HarborRunResult:
     job_dir = _job_dir(output_dir, job_name)
     logger.info("starting Harbor job %s (dataset=%s env=%s jobs_dir=%s)", job_name, dataset, environment, job_dir)
-    while True:
-        try:
-            run_harbor_driver(config, overlay, driver_env, lambda: _backend_state(inference_sessions))
-            break
-        except HarborBackendsUnavailable as exc:
-            logger.warning("pausing Harbor job %s while inference recovers: %s", job_name, exc)
-            _remove_unscored_trials(job_dir, config.error_taxonomy)
-            for inference_session in inference_sessions:
-                inference_session.wait_until_ready()
-            logger.info("inference recovered; resuming Harbor job %s", job_name)
+    run_with_inference_recovery(
+        lambda: run_harbor_driver(config, overlay, driver_env, lambda: inference_backend_state(inference_sessions)),
+        lambda: _remove_unscored_trials(job_dir, config.error_taxonomy),
+        inference_sessions,
+    )
 
     normalize_rollouts(output_dir, writer_id=f"marin-harbor-rollouts-{job_name}")
     trials = _read_trials(job_dir, config.error_taxonomy)

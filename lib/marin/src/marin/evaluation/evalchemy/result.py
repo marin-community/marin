@@ -102,11 +102,16 @@ class EvalchemyResult(EvalResult):
 class FineStoreEvalchemyResult(EvalResult):
     """Per-task metrics from Evalchemy results artifacts stored in FineStore."""
 
+    archive_path: str | None = None
+    """Completed archive when recovery moved it outside the artifact's provenance directory."""
+    jobs: dict[str, str] = Field(default_factory=dict)
+
     @functools.cached_property
     def _task_metrics(self) -> dict[str, dict[str, float]]:
-        result_payloads = read_native_evalchemy_artifacts(self.path).result_payloads
+        archive_path = self.archive_path or self.path
+        result_payloads = read_native_evalchemy_artifacts(archive_path).result_payloads
         if not result_payloads:
-            raise FileNotFoundError(f"no Evalchemy results artifacts in FineStore archive {self.path}")
+            raise FileNotFoundError(f"no Evalchemy results artifacts in FineStore archive {archive_path}")
 
         metrics: dict[str, dict[str, float]] = {}
         for name, payload in sorted(result_payloads.items()):
