@@ -16,6 +16,7 @@ from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
     ConversationInput,
+    DockerBuildContext,
     EnvironmentRequirements,
     FileReward,
     PlainText,
@@ -32,6 +33,7 @@ from taskcompendium.pipeline.models import ImportRejection, OracleCommand, RawRo
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from experiments.post_training.task_curation.datasets.skill2env import grade
+from experiments.post_training.task_curation.datasets.skill2env.native_images import verifier_dockerfile
 
 WORKSPACE = "/workspace"
 ADAPTER_PATH = "curation-adapter.py"
@@ -76,19 +78,40 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
         return unsupported("native_commands", "Expected native verifier and reference solution scripts")
     if any(path in files for path in (f"tests/{ADAPTER_PATH}", f"tests/{CONTRACT_PATH}")):
         return unsupported("adapter_collision", "Native tests occupy the adapter's private paths")
-    if "image" not in data or "grader_image" not in data:
-        return unsupported("native_images_unbuilt", "Prepare native actor and empty-workspace verifier images first")
+    if ("image" in data) != ("grader_image" in data):
+        raise ValueError("Prepared images must include both actor and verifier digests")
+    actor_build = None
+    grader_build = None
+    if "image" not in data:
+        context = tuple(
+            native_resource(files, data["modes"], path, path.removeprefix("environment/"))
+            for path in sorted(files)
+            if path.startswith("environment/")
+        )
+        actor_build = DockerBuildContext(files=context)
+        grader_build = DockerBuildContext(
+            files=tuple(
+                (
+                    inline_resource("Dockerfile", verifier_dockerfile(dockerfile).encode())
+                    if resource.path == "Dockerfile"
+                    else resource
+                )
+                for resource in context
+            )
+        )
     environment_variables = dict(config["environment"].get("env", {}))
     actor = EnvironmentRequirements(
         capabilities=("shell", "filesystem"),
         command_semantics=CommandSemantics.LINUX_PROCESS,
-        docker_image=data["image"],
+        docker_image=data.get("image"),
+        docker_build=actor_build,
         working_directory=WORKSPACE,
         environment_variables={**environment_variables, **config["agent"].get("env", {})},
     )
     verifier_environment = EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS,
-        docker_image=data["grader_image"],
+        docker_image=data.get("grader_image"),
+        docker_build=grader_build,
         working_directory=WORKSPACE,
         environment_variables=environment_variables,
     )
@@ -106,7 +129,7 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
     }
     return TaskSpec(
         id=row.id,
-        source=row.source.model_copy(update={"row": data["task_ref"]}),
+        source=row.source,
         context=ConversationInput(events=(TextMessage(role="user", content=files["instruction.md"].decode()),)),
         environment_requirements=actor,
         resources=ResourceGroups(

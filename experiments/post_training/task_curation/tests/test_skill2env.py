@@ -3,26 +3,30 @@
 
 import base64
 import hashlib
+import json
 import sys
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavailable
-from shellbox.machine import HostImage, MachineSpec, NetworkPolicy, PackageSpec
+from shellbox.machine import HostImage, MachineSpec, NetworkPolicy, PackageSpec, UnsupportedMachineSpec
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     CommandSemantics,
     ConversationTrace,
+    DockerBuildContext,
     EnvironmentRequirements,
     GradingAttempt,
     ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
+    require_resolved_environment,
 )
+from taskcompendium.pipeline.conversion import convert_row
 from taskcompendium.pipeline.inputs import ConversionContext
-from taskcompendium.pipeline.models import ImportRejection, RawRow
+from taskcompendium.pipeline.models import NormalizedTask, RawRow
 from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -93,28 +97,53 @@ storage_mb = 4096
 
 def test_conversion_retains_hidden_files_and_detects_modified_exports():
     row = exported_row()
-    task = convert_task(row, ConversionContext({}, None))
-    assert isinstance(task, TaskSpec)
-    restored = TaskSpec.model_validate_json(task.model_dump_json())
+    result = convert_row(row, convert_task, ConversionContext({}, None))
+    assert isinstance(result, NormalizedTask)
+    restored = TaskSpec.model_validate_json(result.task.model_dump_json())
     assert (
         resource_bytes(next(file for file in restored.resources.verifier if file.path == "test.sh"))
         == b"python3 /tests/check.py\nexit 1\n"
     )
     assert not restored.resources.all and not restored.resources.worker
     assert [file.path for file in restored.resources.oracle] == ["solution/solve.sh"]
-    assert restored.source.row == row.data["task_ref"]
+    assert restored.source == row.source
+    contract = next(resource for resource in restored.resources.verifier if resource.path == "curation-contract.json")
+    assert json.loads(resource_bytes(contract))["task_ref"] == row.data["task_ref"]
     changed = {**row.data, "files": {**row.data["files"], "tests/test.sh": base64.b64encode(b"exit 0").decode()}}
     with pytest.raises(ValueError, match="differ from the pinned task"):
         convert_task(replace(row, data=changed), ConversionContext({}, None))
 
 
-def test_unbuilt_export_is_deferred_instead_of_assuming_a_host_environment():
+def test_unbuilt_export_preserves_contexts_and_private_roles_but_cannot_execute():
     row = exported_row()
     result = convert_task(
-        replace(row, data={key: value for key, value in row.data.items() if key != "image"}), ConversionContext({}, None)
+        replace(row, data={key: value for key, value in row.data.items() if key not in ("image", "grader_image")}),
+        ConversionContext({}, None),
     )
-    assert isinstance(result, ImportRejection)
-    assert result.reason == "native_images_unbuilt"
+    assert isinstance(result, TaskSpec)
+    task = TaskSpec.model_validate_json(result.model_dump_json())
+    assert isinstance(task.grader, ScriptGrader) and task.grader.environment is not None
+    actor = task.environment_requirements
+    grader = task.grader.environment
+    assert isinstance(actor.docker_build, DockerBuildContext)
+    assert isinstance(grader.docker_build, DockerBuildContext)
+    actor_files = {resource.path: resource_bytes(resource) for resource in actor.docker_build.files}
+    grader_files = {resource.path: resource_bytes(resource) for resource in grader.docker_build.files}
+    assert actor_files == {
+        "Dockerfile": b"FROM python:3.12-slim\nWORKDIR /workspace\n",
+        "workspace/checker.txt": b"original",
+    }
+    assert grader_files["workspace/checker.txt"] == b"original"
+    assert grader_files["Dockerfile"] == (
+        actor_files["Dockerfile"] + b"USER root\nRUN rm -rf /workspace && mkdir -p /workspace\nWORKDIR /workspace\n"
+    )
+    assert not task.resources.all and not task.resources.worker
+    assert {resource.path for resource in task.resources.oracle} == {"solution/solve.sh"}
+    assert {"test.sh", "check.py"} <= {resource.path for resource in task.resources.verifier}
+    # An inspection artifact must never silently execute in a substitute host environment.
+    for environment in (actor, grader):
+        with pytest.raises(UnsupportedMachineSpec, match="Unresolved Docker build context"):
+            require_resolved_environment(environment)
 
 
 @pytest.mark.parametrize(
