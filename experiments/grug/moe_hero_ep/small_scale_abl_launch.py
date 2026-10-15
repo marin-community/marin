@@ -6,7 +6,7 @@
 These runs mirror the EP hero: 384 routed experts, top-8 routing, hidden/2-wide experts in a hidden/2
 latent, two shared experts, and the pooled-wave all-to-all transport at receiver/sender capacity 1.15.
 Each run uses the small sweep width and 750 tokens per active parameter. The runs use the Harrier
-2026.08.17.1 mixture.
+2026.08.18 mixture, the hero's data on store ``store_4d2e363d``.
 
 Each ``--size`` submits one job on the fleet named by ``--target``. The target sets default
 expert-axis and cell sizes; ``--expert-axis-size`` overrides the expert axis. See ``TARGETS``.
@@ -33,10 +33,10 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
-from experiments.grug.moe_hero_ep.harrier_mix_2026_08_17_1 import (
-    HARRIER_MIX_2026_08_17_1_STORE,
-    HARRIER_MIX_2026_08_17_1_TAG,
-    harrier_mix_2026_08_17_1_data_config,
+from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
+    HARRIER_MIX_2026_08_18_STORE,
+    HARRIER_MIX_2026_08_18_TAG,
+    harrier_mix_2026_08_18_data_config,
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
@@ -52,6 +52,7 @@ from experiments.grug.moe_hero_ep.train import (
     GrugRunConfig,
     GrugTrainerConfig,
     TrainingDataMode,
+    _compute_flops,
     grug_trainer_mesh_config,
     run_grug,
 )
@@ -459,7 +460,7 @@ def build_small_run(
                     "hero",
                     "ep",
                     "small-abl",
-                    HARRIER_MIX_2026_08_17_1_TAG,
+                    HARRIER_MIX_2026_08_18_TAG,
                     f"shape-{size}",
                     f"capacity-{capacity_factor:g}",
                     f"seq{seq_len}",
@@ -491,11 +492,13 @@ def build_small_run(
                 keep_last_temporary_checkpoints=1,
             ),
         )
-        data = harrier_mix_2026_08_17_1_data_config(
+        flops_per_example, _ = _compute_flops(model_config=model)
+        data = harrier_mix_2026_08_18_data_config(
             ctx=ctx,
             total_steps=num_steps,
             batch_size=batch_size,
             max_seq_len=seq_len,
+            experiment_flops=flops_per_example * batch_size * num_steps,
             validation=_VALIDATION,
         )
         return GrugRunConfig(
@@ -525,7 +528,7 @@ def build_small_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(HARRIER_MIX_2026_08_17_1_STORE, *_VALIDATION),
+        deps=(HARRIER_MIX_2026_08_18_STORE, *_VALIDATION),
         runtime_args={"train_resources": train_resources},
     )
 
