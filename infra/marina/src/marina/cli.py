@@ -8,6 +8,7 @@ import os
 import subprocess
 import tempfile
 import threading
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -16,7 +17,6 @@ from urllib.parse import urlparse
 import click
 import pytest
 import uvicorn
-from rigging.provenance import require_current_main
 
 from marina.applets import (
     APPLET_MANIFEST,
@@ -49,8 +49,10 @@ from marina.releases import (
     RELEASE_CONFIG,
     RELEASE_METADATA,
     ReleaseSource,
+    clean_frontend_build,
     release_applet_id,
     release_source,
+    require_current_main,
     require_tracked_package,
     source_status,
 )
@@ -387,9 +389,12 @@ def release(app_dir: Path, base_version: int, service_url: str, json_output: boo
         applet_id = release_applet_id(app_dir)
         require_current_main(app_dir)
         source = release_source(app_dir)
-        payload, package = _publish_package(
-            app_dir, build=True, extra_files={RELEASE_METADATA: json.dumps(asdict(source)).encode()}
-        )
+        manifest = parse_applet_manifest((app_dir / APPLET_MANIFEST).read_bytes())
+        build_context = clean_frontend_build(app_dir) if manifest.build_command is not None else nullcontext()
+        with build_context:
+            payload, package = _publish_package(
+                app_dir, build=True, extra_files={RELEASE_METADATA: json.dumps(asdict(source)).encode()}
+            )
         require_tracked_package(
             app_dir, package.files.keys() - {RELEASE_METADATA}, build_command=package.manifest.build_command
         )
@@ -399,7 +404,10 @@ def release(app_dir: Path, base_version: int, service_url: str, json_output: boo
         if require_current_main(app_dir) != source.commit:
             raise RuntimeError("The checkout changed while building; retry the release.")
         result = publish_applet(service_url, payload, applet_id=applet_id, base_version=base_version)
-    except (RuntimeError, ValueError) as error:
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.decode(errors="replace").strip() if isinstance(error.stderr, bytes) else error.stderr
+        raise click.ClickException(detail or str(error)) from error
+    except (OSError, RuntimeError, ValueError) as error:
         raise click.ClickException(str(error)) from error
     result["source"] = asdict(source)
     _print_publish_result(result, service_url, json_output=json_output)
@@ -411,22 +419,24 @@ def release(app_dir: Path, base_version: int, service_url: str, json_output: boo
 @click.option("--json", "json_output", is_flag=True)
 def release_status(app_dir: Path, service_url: str, json_output: bool) -> None:
     """Compare an applet's live source tree with this checkout's committed source."""
-    applet_id = release_applet_id(app_dir)
-    details = marina_request(service_url, "GET", f"/api/marina/applets/{applet_id}")
-    assert isinstance(details, dict)
-    version = details["current_version"]
-    parsed = urlparse(details["authenticated_url"])
-    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
     try:
-        metadata = marina_request(origin, "GET", f"/a/{applet_id}/v/{version}/marina-release.json")
-    except MarinaRequestError as error:
-        if error.status_code != 404:
-            raise
-        metadata = None
-    if metadata is not None:
-        assert isinstance(metadata, dict)
-    actual = ReleaseSource(**metadata) if metadata is not None else None
-    result = source_status(app_dir, applet_id, version, actual)
+        applet_id = release_applet_id(app_dir)
+        details = _applet_details(service_url, applet_id)
+        version = details["current_version"]
+        assert isinstance(version, int)
+        origin = _applet_origin(service_url, details)
+        try:
+            metadata = marina_request(origin, "GET", f"/a/{applet_id}/v/{version}/marina-release.json")
+        except MarinaRequestError as error:
+            if error.status_code != 404:
+                raise
+            metadata = None
+        if metadata is not None:
+            assert isinstance(metadata, dict)
+        actual = ReleaseSource(**metadata) if metadata is not None else None
+        result = source_status(app_dir, applet_id, version, actual)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise click.ClickException(str(error)) from error
     if json_output:
         click.echo(json.dumps(asdict(result), sort_keys=True))
     else:
@@ -442,10 +452,15 @@ def applets() -> None:
     """Inspect and manage published applets."""
 
 
-def _applet_origin(service_url: str, applet_id: str) -> str:
+def _applet_details(service_url: str, applet_id: str) -> dict[str, object]:
     details = marina_request(service_url, "GET", f"/api/marina/applets/{applet_id}")
     if not isinstance(details, dict) or not isinstance(details.get("authenticated_url"), str):
         raise RuntimeError("Marina returned invalid applet details")
+    return details
+
+
+def _applet_origin(service_url: str, details: dict[str, object]) -> str:
+    assert isinstance(details["authenticated_url"], str)
     parsed = urlparse(details["authenticated_url"])
     return f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
 
@@ -562,7 +577,7 @@ def applet_sql(applet_id: str, sql: str, parameters: str, service_url: str) -> N
         values = json.loads(parameters)
         if not isinstance(values, dict):
             raise ValueError("--parameters must be a JSON object")
-        origin = _applet_origin(service_url, applet_id)
+        origin = _applet_origin(service_url, _applet_details(service_url, applet_id))
         result = marina_request(
             origin,
             "POST",
@@ -590,7 +605,7 @@ def load_applet_table(applet_id: str, table_name: str, source: Path, replace: bo
     try:
         table = read_table(source)
         schema_sql, inserts = table_statements(table_name, table, replace=replace)
-        origin = _applet_origin(service_url, applet_id)
+        origin = _applet_origin(service_url, _applet_details(service_url, applet_id))
         for statement in schema_sql:
             marina_request(
                 origin,

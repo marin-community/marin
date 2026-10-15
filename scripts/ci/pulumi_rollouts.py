@@ -111,31 +111,28 @@ def rollout_item(rollout: Rollout, deploy_generation: str = "") -> dict[str, obj
     return item
 
 
-def workflow_payload(
-    rollouts: Iterable[Rollout], deploy_generation: str = "", *, test_rollouts: Iterable[Rollout] | None = None
-) -> dict[str, object]:
+def workflow_payload(rollouts: Iterable[Rollout], deploy_generation: str = "") -> dict[str, object]:
     items = [rollout_item(rollout, deploy_generation) for rollout in rollouts]
-    test_items = items if test_rollouts is None else [rollout_item(rollout) for rollout in test_rollouts]
     return {
         "deploy": {"include": items},
-        "test": {"include": [item for item in test_items if item["test_path"]]},
+        "test": {"include": [item for item in items if item["test_path"]]},
     }
+
+
+def deploys(rollout: Rollout, paths: tuple[str, ...]) -> bool:
+    return any(
+        any(path_is_under(path, root) for root in (rollout.work_dir, *rollout.source_roots))
+        and not any(path_is_under(path, root) for root in rollout.deploy_excluded_roots)
+        for path in paths
+    )
 
 
 def workflow_payload_for_paths(paths: Iterable[str]) -> dict[str, object]:
     changed_paths = tuple(paths)
     selected = rollouts_for_paths(changed_paths)
-    deploy = [
-        rollout
-        for rollout in selected
-        if rollout
-        in rollouts_for_paths(
-            path
-            for path in changed_paths
-            if not any(path_is_under(path, root) for root in rollout.deploy_excluded_roots)
-        )
-    ]
-    return workflow_payload(deploy, test_rollouts=selected)
+    payload = workflow_payload(selected)
+    payload["deploy"] = {"include": [rollout_item(rollout) for rollout in selected if deploys(rollout, changed_paths)]}
+    return payload
 
 
 def main() -> None:

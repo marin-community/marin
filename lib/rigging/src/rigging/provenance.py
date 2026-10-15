@@ -41,28 +41,6 @@ submission's provenance — :meth:`Provenance.capture` prefers it over shelling 
 """
 
 
-def require_current_main(repo_dir: Path) -> str:
-    """Require a clean checkout at origin's current main and return its full commit."""
-    if git_output(["status", "--porcelain", "--untracked-files=all"], repo_dir):
-        raise RuntimeError("Production releases require a clean checkout; use a local preview for branch work.")
-    commit = git_output(["rev-parse", "HEAD"], repo_dir)
-    # Query the remote directly: tracking refs and rerun CI checkouts may be stale.
-    remote = subprocess.run(
-        ["git", "ls-remote", "--exit-code", "origin", "refs/heads/main"],
-        cwd=repo_dir,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=True,
-    )
-    if commit != remote.stdout.split()[0]:
-        raise RuntimeError(
-            "Production releases require origin's current main commit; "
-            "update the checkout or dispatch the production workflow on main."
-        )
-    return commit
-
-
 @dataclass(frozen=True)
 class Provenance:
     """Identity, human context, and launch context of a built artifact.
@@ -95,18 +73,17 @@ class Provenance:
         Strict: raises if git is unavailable, since the content-addressed
         ``tree_hash`` is the reason to build at all.
         """
-        cwd = repo_dir
         # `git stash create` captures any dirty state as a transient commit whose
         # tree we deref below — dropping the per-call timestamp a commit hash
         # would carry, so tree_hash stays purely content-addressed. Empty (no
         # output) means a clean tree, so fall back to HEAD.
-        stash = git_output(["stash", "create"], cwd)
+        stash = git_output(["stash", "create"], repo_dir)
         ref = stash or "HEAD"
         return cls(
-            tree_hash=git_output(["rev-parse", "--short", f"{ref}^{{tree}}"], cwd),
-            base_commit=git_output(["rev-parse", "--short", "HEAD"], cwd),
-            dirty=bool(git_output(["status", "--porcelain", "--untracked-files=all"], cwd)),
-            branch=git_output(["symbolic-ref", "--short", "-q", "HEAD"], cwd, check=False) or None,
+            tree_hash=git_output(["rev-parse", "--short", f"{ref}^{{tree}}"], repo_dir),
+            base_commit=git_output(["rev-parse", "--short", "HEAD"], repo_dir),
+            dirty=bool(git_output(["status", "--porcelain", "--untracked-files=all"], repo_dir)),
+            branch=git_output(["symbolic-ref", "--short", "-q", "HEAD"], repo_dir, check=False) or None,
             built_by=_getuser(),
         )
 
@@ -125,13 +102,11 @@ class Provenance:
         if published is not None:
             return published
 
-        cwd = repo_dir
-
         def g(*args: str) -> str:
             # A missing `git` binary (bundle image without git) degrades like being outside
             # a checkout: git fields empty, launch context still captured.
             try:
-                return git_output(list(args), cwd, check=False)
+                return git_output(list(args), repo_dir, check=False)
             except FileNotFoundError:
                 return ""
 
@@ -218,9 +193,12 @@ def launch_provenance() -> Provenance:
         return _capture_once()
 
 
-def git_output(args: list[str], cwd: Path | None, *, check: bool = True) -> str:
+def git_output(args: list[str], cwd: Path | None, *, check: bool = True, timeout: float | None = None) -> str:
     """Run Git and return stdout, raising with stderr on failure."""
-    result = subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd)
+    try:
+        result = subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(f"git {' '.join(args)} timed out after {timeout} seconds") from error
     if check and result.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
     return result.stdout.strip()

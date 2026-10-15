@@ -3,8 +3,10 @@
 
 """Source identity for independently released, checked-in applets."""
 
+import tempfile
 import tomllib
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -14,6 +16,39 @@ from rigging.provenance import git_output
 
 RELEASE_CONFIG = "release.toml"
 RELEASE_METADATA = "dist/marina-release.json"
+
+
+def require_current_main(repo_dir: Path) -> str:
+    """Require a clean checkout at origin's current main and return its full commit."""
+    if git_output(["status", "--porcelain", "--untracked-files=all"], repo_dir):
+        raise RuntimeError("Production releases require a clean checkout; use a local preview for branch work.")
+    commit = git_output(["rev-parse", "HEAD"], repo_dir)
+    # Query the remote directly: tracking refs and rerun CI checkouts may be stale.
+    remote = git_output(["ls-remote", "--exit-code", "origin", "refs/heads/main"], repo_dir, timeout=30)
+    if commit != remote.split()[0]:
+        raise RuntimeError(
+            "Production releases require origin's current main commit; "
+            "update the checkout or dispatch the production workflow on main."
+        )
+    return commit
+
+
+@contextmanager
+def clean_frontend_build(app_dir: Path) -> Iterator[None]:
+    """Build with empty output and restore preexisting local assets on exit."""
+    dist = app_dir / "dist"
+    # A sibling backup can be renamed without copying large local build outputs.
+    with tempfile.TemporaryDirectory(prefix=".marina-release-", dir=app_dir) as directory:
+        backup = Path(directory) / "dist"
+        if dist.exists() or dist.is_symlink():
+            dist.rename(backup)
+        try:
+            yield
+        finally:
+            if dist.exists() or dist.is_symlink():
+                dist.rename(Path(directory) / "built")
+            if backup.exists() or backup.is_symlink():
+                backup.rename(dist)
 
 
 @dataclass(frozen=True)

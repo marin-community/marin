@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance, require_current_main, username_segment
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance, username_segment
 
 
 def test_str_clean_shows_commit_branch_user():
@@ -105,43 +105,6 @@ def _init_repo(tmp_path: Path) -> Path:
     _run(["git", "add", "f.txt"], tmp_path)
     _run(["git", "commit", "-m", "init"], tmp_path)
     return tmp_path
-
-
-@pytest.fixture
-def release_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "checkout"
-    repo.mkdir()
-    _init_repo(repo)
-    remote = tmp_path / "origin.git"
-    _run(["git", "init", "--bare", str(remote)], tmp_path)
-    _run(["git", "remote", "add", "origin", str(remote)], repo)
-    _run(["git", "push", "origin", "HEAD:main"], repo)
-    return repo
-
-
-def test_require_current_main_allows_detached_ci_checkout(release_repo: Path) -> None:
-    _run(["git", "checkout", "--detach"], release_repo)
-    commit = require_current_main(release_repo)
-    assert subprocess.check_output(["git", "show", f"{commit}:f.txt"], cwd=release_repo) == b"hello\n"
-
-
-@pytest.mark.parametrize("change", ["untracked", "modified", "staged", "unmerged", "old_ci_rerun"])
-def test_require_current_main_rejects_unreleased_source(release_repo: Path, change: str) -> None:
-    if change == "untracked":
-        (release_repo / "extra.txt").write_text("unreviewed")
-    else:
-        _run(["git", "checkout", "-b", "branch"], release_repo)
-        (release_repo / "f.txt").write_text("new\n")
-        if change != "modified":
-            _run(["git", "add", "f.txt"], release_repo)
-        if change in {"unmerged", "old_ci_rerun"}:
-            _run(["git", "commit", "-m", "change"], release_repo)
-        if change == "old_ci_rerun":
-            _run(["git", "push", "origin", "HEAD:main"], release_repo)
-            _run(["git", "checkout", "--detach", "HEAD^"], release_repo)
-            _run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], release_repo)
-    with pytest.raises(RuntimeError):
-        require_current_main(release_repo)
 
 
 def test_from_git_clean(tmp_path):

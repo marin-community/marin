@@ -16,6 +16,7 @@ from marina.applets import AppletForbidden, AppletMode, AppletStore, package_app
 from marina.cli import cli
 from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
 from marina.db import UrlDatabase, grant_read
+from marina.releases import require_current_main
 from marina.server import MarinaConfig, MarinaSurface, create_app
 from marina.table_load import read_table, table_statements
 from requests import Response as RequestsResponse
@@ -36,9 +37,10 @@ def release_checkout(tmp_path: Path, request: pytest.FixtureRequest) -> Path:
     if request.param == "build":
         manifest += 'build_command = "python build.py"\n'
         (app / ".gitignore").write_text("dist/\n")
+        (app / "dist/stale.js").write_text("stale()")
         (app / "build.py").write_text(
-            "import shutil\nfrom pathlib import Path\n"
-            "shutil.rmtree('dist')\nPath('dist').mkdir()\n"
+            "from pathlib import Path\n"
+            "Path('dist').mkdir(exist_ok=True)\n"
             "Path('dist/index.html').write_text('<h1>Built app</h1>')\n"
         )
     (app / "applet.toml").write_text(manifest)
@@ -67,6 +69,7 @@ def test_release_records_source_and_status_ignores_unrelated_commits(
             assert url.endswith("/api/marina/applets/00000000-0000-0000-0000-000000000001")
             assert kwargs["params"] == {"base_version": 7}
             package = read_applet_package(kwargs["data"])
+            assert "dist/stale.js" not in package.files
             metadata = json.loads(package.files["dist/marina-release.json"])
             assert package.files["dist/index.html"] in {b"<h1>Released app</h1>", b"<h1>Built app</h1>"}
             return json_response({"id": "00000000-0000-0000-0000-000000000001", "version": 8, "path": "/a/id/v/8/"})
@@ -90,6 +93,9 @@ def test_release_records_source_and_status_ignores_unrelated_commits(
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["source"] == metadata
     assert not (release_checkout / "dist/marina-release.json").exists()
+    assert (release_checkout / "dist/index.html").read_text() == "<h1>Released app</h1>"
+    if (release_checkout / "build.py").exists():
+        assert (release_checkout / "dist/stale.js").read_text() == "stale()"
     status = runner.invoke(cli, status_args)
     assert json.loads(status.output)["state"] == "current"
 
@@ -130,6 +136,7 @@ def test_publish_registered_applet_requires_release_and_keeps_dry_run(
     assert "package" in json.loads(preview.output)["checks"]
 
 
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
 def test_release_rejects_ignored_files_in_static_package(
     release_checkout: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -153,7 +160,86 @@ def test_release_rejects_ignored_files_in_static_package(
     )
 
     assert result.exit_code == 1
+    assert "absent from Git" in result.output
     assert requests == []
+
+
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
+def test_require_current_main_allows_detached_ci_checkout(release_checkout: Path) -> None:
+    subprocess.run(["git", "checkout", "--detach"], cwd=release_checkout, check=True, capture_output=True)
+    commit = require_current_main(release_checkout)
+    assert subprocess.check_output(["git", "show", f"{commit}:demo/dist/index.html"], cwd=release_checkout) == (
+        b"<h1>Released app</h1>"
+    )
+
+
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
+@pytest.mark.parametrize("change", ["untracked", "modified", "staged", "unmerged", "old_ci_rerun"])
+def test_require_current_main_rejects_unreleased_source(release_checkout: Path, change: str) -> None:
+    if change == "untracked":
+        (release_checkout / "extra.txt").write_text("unreviewed")
+    else:
+        (release_checkout / "applet.toml").write_text('title = "Changed"\n')
+        arguments = []
+        if change != "modified":
+            arguments.append(["add", "."])
+        if change in {"unmerged", "old_ci_rerun"}:
+            arguments.append(["commit", "-m", "change"])
+        if change == "old_ci_rerun":
+            arguments.extend(
+                [
+                    ["push", "origin", "HEAD:main"],
+                    ["checkout", "--detach", "HEAD^"],
+                    ["update-ref", "refs/remotes/origin/main", "HEAD"],
+                ]
+            )
+        for command in arguments:
+            subprocess.run(["git", *command], cwd=release_checkout, check=True, capture_output=True)
+    with pytest.raises(RuntimeError):
+        require_current_main(release_checkout)
+
+
+@pytest.mark.parametrize("release_checkout", ["build"], indirect=True)
+def test_failed_release_build_restores_existing_output(release_checkout: Path) -> None:
+    (release_checkout / "build.py").write_text("from pathlib import Path\nPath('dist').mkdir()\nraise SystemExit(7)\n")
+    for arguments in (["add", "."], ["commit", "-m", "failing build"], ["push", "origin", "HEAD:main"]):
+        subprocess.run(["git", *arguments], cwd=release_checkout, check=True, capture_output=True)
+
+    result = CliRunner().invoke(cli, ["release", str(release_checkout), "--base-version", "7"])
+
+    assert result.exit_code == 1
+    assert "exit status 7" in result.output
+    assert (release_checkout / "dist/index.html").read_text() == "<h1>Released app</h1>"
+    assert (release_checkout / "dist/stale.js").read_text() == "stale()"
+    assert subprocess.check_output(["git", "status", "--porcelain"], cwd=release_checkout) == b""
+
+
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
+@pytest.mark.parametrize("failure", ["unreachable", "timeout"])
+def test_release_reports_remote_git_failures(
+    release_checkout: Path, failure: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if failure == "unreachable":
+        subprocess.run(
+            ["git", "remote", "set-url", "origin", str(release_checkout / "missing.git")],
+            cwd=release_checkout,
+            check=True,
+            capture_output=True,
+        )
+    else:
+        run = subprocess.run
+
+        def remote_timeout(arguments, **kwargs):
+            if arguments[1] == "ls-remote":
+                raise subprocess.TimeoutExpired(arguments, 30)
+            return run(arguments, **kwargs)
+
+        monkeypatch.setattr("rigging.provenance.subprocess.run", remote_timeout)
+
+    result = CliRunner().invoke(cli, ["release", str(release_checkout), "--base-version", "7"])
+
+    assert result.exit_code == 1
+    assert "Error: git ls-remote" in result.output
 
 
 def json_response(value: object) -> RequestsResponse:

@@ -302,6 +302,8 @@ uv run marina release my-applet --base-version <current> --json
 
 `release` builds the frontend, validates the package and backend import, and
 updates only the configured UUID with the explicit expected current version.
+Frontend builds start with an empty `dist/`; existing local output is restored
+after packaging, including when a build fails. Stale ignored assets are excluded.
 It preserves the applet's access mode. Static bundles without a build command
 must have all packaged files tracked in Git; backend files must always be
 tracked. It adds `marina-release.json` to the immutable frontend package with

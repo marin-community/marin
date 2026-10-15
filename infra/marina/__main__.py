@@ -35,7 +35,7 @@ from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 from iac.gcp.marina import PUBLIC_APPLET_SERVICE
 from marina.database_setup import LOOM_DATABASE_USER
 from marina.manifest import JobRunner, discover_apps, job_runners
-from rigging.provenance import require_current_main
+from marina.releases import require_current_main
 
 PROJECT = "hai-gcp-models"
 REGION = "us-central1"
