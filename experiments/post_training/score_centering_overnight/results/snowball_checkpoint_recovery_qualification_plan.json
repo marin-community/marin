@@ -1,6 +1,6 @@
 {
   "scope": "Prepared, unsubmitted five-node engineering qualification for the current checkpoint-recovery candidate. It cannot replace scientific main1200 or stale calibration130.",
-  "source": "a1c31f04da2295cca2eaef0e82262c4f493304c5",
+  "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
   "status": "prepared; all phases unsubmitted",
   "prerequisite": "Complete bounded Qwen periodic/noisy save2, restore2-to5, restore5-to7 qualification with real native state and behavior evidence.",
   "geometry": {
@@ -23,7 +23,7 @@
     {
       "phase": "save5",
       "run_id": "sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce",
-      "source": "a1c31f04da2295cca2eaef0e82262c4f493304c5",
+      "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
       "new_completed_updates": [
         1,
         2,
@@ -41,12 +41,13 @@
         5
       ],
       "controller_confirmed": false,
-      "submission_gate": "All three Qwen periodic save/restore phases must pass actual native optimizer/loader/sampler/evidence gates before this five-node initial qualification may submit."
+      "submission_gate": "All three Qwen periodic save/restore phases must pass actual native optimizer/loader/sampler/evidence gates before this five-node initial qualification may submit.",
+      "prepared_configuration_sha256": "42c43a99d27932e4bc4bd15729d6c05e8a15c7ff0765c2e757f720b9c0e7f5bb"
     },
     {
       "phase": "restore5",
       "run_id": "sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce",
-      "source": "a1c31f04da2295cca2eaef0e82262c4f493304c5",
+      "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
       "new_completed_updates": [
         6,
         7
@@ -57,16 +58,16 @@
       "final_checkpoint": 7,
       "final_sampler_completed_updates": 6,
       "clean_evaluation_points": [
-        5,
         7
       ],
       "controller_confirmed": false,
-      "submission_gate": "Previous five-node phase must pass complete native checkpoint, applied-step, serving/noise/version, full response and evaluation audits before this phase may submit."
+      "submission_gate": "Previous five-node phase must pass complete native checkpoint, applied-step, serving/noise/version, full response and evaluation audits before this phase may submit.",
+      "prepared_configuration_sha256": "1decc2376d42b74b588c8370a66acaffc23e07e2b152c9c2ce2f0844ed54bfd0"
     },
     {
       "phase": "restore7",
       "run_id": "sc-snowball-checkpoint-periodic3-restore7-noise005-sc-s0-a0-01a126ce",
-      "source": "a1c31f04da2295cca2eaef0e82262c4f493304c5",
+      "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
       "new_completed_updates": [
         8,
         9
@@ -77,11 +78,11 @@
       "final_checkpoint": 9,
       "final_sampler_completed_updates": 9,
       "clean_evaluation_points": [
-        7,
         9
       ],
       "controller_confirmed": false,
-      "submission_gate": "Previous five-node phase must pass complete native checkpoint, applied-step, serving/noise/version, full response and evaluation audits before this phase may submit."
+      "submission_gate": "Previous five-node phase must pass complete native checkpoint, applied-step, serving/noise/version, full response and evaluation audits before this phase may submit.",
+      "prepared_configuration_sha256": "1e72bc00924af1a15845ba395063b3f8ddf12e41b3e351e6a8f7a2f4370cd35b"
     }
   ],
   "required_evidence": [
@@ -130,5 +131,15 @@
         "source_url": "https://github.com/marin-community/MarinSkyRL/blob/a1c31f04da2295cca2eaef0e82262c4f493304c5/skyrl-train/skyrl_train/trajectory_runners/trajectory_retention.py"
       }
     ]
-  }
+  },
+  "source_policy": "The submitted initial save remains frozen on afbe6cc36. Only the unsubmitted continuations use 173f626e6, which adds the tested native parser classification and optional evaluation-resume bookkeeping. The six listed noise, loss, context, Megatron strategy, original grader utility and dependency-lock files remain byte-identical; trainer.py deliberately changes checkpoint evaluation metadata and is not claimed identical.",
+  "source_compatibility_sha256": {
+    "skyrl-train/skyrl_train/inference_engines/vllm/fixed_sampler_noise.py": "2e86d08aa514608890b342f43df85322a2f599461c6c152bc26be46f3c7c0bca",
+    "skyrl-train/skyrl_train/objective/score_centering.py": "bdfa50f95408da1e229eed83a15cac9bba3f8782516381ddf56d2877b6708871",
+    "skyrl-train/skyrl_train/rollouts/context.py": "22635bf4890631b2e837fa3f8b7ff7ca0ab1d247fc66dfd3e0b5ccbbf8e7aed3",
+    "skyrl-train/skyrl_train/distributed/megatron/megatron_strategy.py": "35a3570d48dd9796414f956861fd08e2c5530281f11963234b6a9cd78c07890f",
+    "skyrl-gym/skyrl_gym/envs/aime/utils.py": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+    "uv.lock": "c9ff3b70074681e62f2683acd7b4b9487c9dc222d6065f61198c6e5e5d9ae891"
+  },
+  "evaluation_resume_policy": "All evaluation callbacks set eval_on_resume=false: fresh save evaluates0/5, restore5 evaluates7, restore7 evaluates9. Restored starts5 and7 do not create supplemental evaluation cohorts or overwrite their original scheduled metrics."
 }

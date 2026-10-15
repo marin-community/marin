@@ -6,7 +6,7 @@ run:
   submission: prepare
   export_hf: false
 runtime:
-  launcher_commit: a1c31f04da2295cca2eaef0e82262c4f493304c5
+  launcher_commit: 173f626e668ba9284e7a9a42354c1505cab22ad1
   profile: megatron
 iris:
   cluster: cw-rno2a
@@ -151,6 +151,7 @@ skyrl:
       eval_steps: 10000
       eval_before_train: false
       eval_on_train_end: false
+      eval_on_resume: false
     max_ckpts_to_keep: 2
     restore_dataloader_state: true
     reset_global_step_on_resume: false

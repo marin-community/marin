@@ -1,0 +1,87 @@
+{
+  "scope": "Completed per-arm40-update pilot replay gates only. Remaining7 pilot arm replays continue; n=1 pilot effects do not establish equivalence or a population effect.",
+  "planned_arms": 10,
+  "completed_arms": 3,
+  "actual_response_grade_replays": 115656,
+  "discrepancies": 0,
+  "runs": [
+    {
+      "run_id": "sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "completed_updates": 40,
+      "physical_records": 38552,
+      "actual_response_grade_replays": 38552,
+      "native_failures_not_regraded": [],
+      "discrepancies": 0,
+      "evaluation_points_crosschecked": 3,
+      "all_replayed_evaluation_scores_match_native": true,
+      "record_payloads_sha256": "83f28e884a751cef6927600b4c7a8242ca8aed66f6b21ef2fdf36f0561484881",
+      "replay_report": "sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce-regrading.json.gz",
+      "replay_report_sha256": "51fa6eb4e3f50ea80adea49fbc49518bc91e2a3dd5b67a455a5283b64b1b802d",
+      "grader_files_sha256": {
+        "skyrl-gym/skyrl_gym/envs/aime/utils.py": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+        "skyrl-gym/skyrl_gym/envs/gsm8k/utils.py": "16680a223ba876ff0a51184db6863b1527c84ba87fc3cf19f92a376652394115",
+        "skyrl-gym/skyrl_gym/envs/reasoning_gym/scoring.py": "8b9f61cf4ad560dff639e8c6425a838f04d94c4eb175b547efa0d20d1c884d3c",
+        "skyrl-gym/skyrl_gym/envs/nemotron_ultra/answer_extraction.py": "1d48e25122f452147e795eb6e8e21eea217654756ece9e918fe0a8ece2ab108e"
+      },
+      "source_sha256": {
+        "train": "b0397b09bc4e8dd2b01b96cdf729268ade10c7839ab4193f94479b016b1400b1",
+        "eval": "e3b1ca83df0fb193413caad7396f35b4cd29d9f45f6f8561e761818e42e0f79b"
+      },
+      "stage": "curriculum",
+      "arm": "sc"
+    },
+    {
+      "run_id": "sc-qwen-transfer-curriculum-tis-s0-pilot-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "completed_updates": 40,
+      "physical_records": 38552,
+      "actual_response_grade_replays": 38552,
+      "native_failures_not_regraded": [],
+      "discrepancies": 0,
+      "evaluation_points_crosschecked": 3,
+      "all_replayed_evaluation_scores_match_native": true,
+      "record_payloads_sha256": "a994ebc302e91267f46ed0359dd0661c83405293e694630853099aba1d492dd6",
+      "replay_report": "sc-qwen-transfer-curriculum-tis-s0-pilot-a4-01a126ce-regrading.json.gz",
+      "replay_report_sha256": "3582dd9b015a5f99223842f59a629df779104a4831977ba7b55e7d1fc7531f47",
+      "grader_files_sha256": {
+        "skyrl-gym/skyrl_gym/envs/aime/utils.py": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+        "skyrl-gym/skyrl_gym/envs/gsm8k/utils.py": "16680a223ba876ff0a51184db6863b1527c84ba87fc3cf19f92a376652394115",
+        "skyrl-gym/skyrl_gym/envs/reasoning_gym/scoring.py": "8b9f61cf4ad560dff639e8c6425a838f04d94c4eb175b547efa0d20d1c884d3c",
+        "skyrl-gym/skyrl_gym/envs/nemotron_ultra/answer_extraction.py": "1d48e25122f452147e795eb6e8e21eea217654756ece9e918fe0a8ece2ab108e"
+      },
+      "source_sha256": {
+        "train": "b0397b09bc4e8dd2b01b96cdf729268ade10c7839ab4193f94479b016b1400b1",
+        "eval": "e3b1ca83df0fb193413caad7396f35b4cd29d9f45f6f8561e761818e42e0f79b"
+      },
+      "stage": "curriculum",
+      "arm": "tis"
+    },
+    {
+      "run_id": "sc-qwen-transfer-optimizer-sc-s0-pilot-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "completed_updates": 40,
+      "physical_records": 38552,
+      "actual_response_grade_replays": 38552,
+      "native_failures_not_regraded": [],
+      "discrepancies": 0,
+      "evaluation_points_crosschecked": 3,
+      "all_replayed_evaluation_scores_match_native": true,
+      "record_payloads_sha256": "dba117c886f91f0d9106e44c40881a5529dfdfa30cbd24e5d2f8b6a00eba97a6",
+      "replay_report": "sc-qwen-transfer-optimizer-sc-s0-pilot-a4-01a126ce-regrading.json.gz",
+      "replay_report_sha256": "4a83eb6e7fe2be4a7cafc1c76085e3a60629993dd121c6566db7272f0596f77d",
+      "grader_files_sha256": {
+        "skyrl-gym/skyrl_gym/envs/aime/utils.py": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+        "skyrl-gym/skyrl_gym/envs/gsm8k/utils.py": "16680a223ba876ff0a51184db6863b1527c84ba87fc3cf19f92a376652394115",
+        "skyrl-gym/skyrl_gym/envs/reasoning_gym/scoring.py": "8b9f61cf4ad560dff639e8c6425a838f04d94c4eb175b547efa0d20d1c884d3c",
+        "skyrl-gym/skyrl_gym/envs/nemotron_ultra/answer_extraction.py": "1d48e25122f452147e795eb6e8e21eea217654756ece9e918fe0a8ece2ab108e"
+      },
+      "source_sha256": {
+        "train": "b0397b09bc4e8dd2b01b96cdf729268ade10c7839ab4193f94479b016b1400b1",
+        "eval": "e3b1ca83df0fb193413caad7396f35b4cd29d9f45f6f8561e761818e42e0f79b"
+      },
+      "stage": "optimizer",
+      "arm": "sc"
+    }
+  ]
+}

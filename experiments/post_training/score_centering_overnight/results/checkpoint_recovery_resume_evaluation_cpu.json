@@ -1,0 +1,47 @@
+{
+  "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+  "branch": "experiments/score-centering-resume-eval-01a126ce",
+  "scope": "CPU checkpoint/evaluation regression proof; no GPU qualification or scientific-source promotion.",
+  "default_behavior": "eval_on_resume defaults true. Existing resumed before-training evaluation remains enabled unless explicitly disabled.",
+  "opt_in_behavior": "With eval_on_resume=false, fresh step0 still evaluates, resumed completed steps skip before-training evaluation, and last evaluated progress is restored only when every configured EvaluationCallback opts out and the step counter is not reset.",
+  "regression_before": {
+    "failed": 8,
+    "passed": 1,
+    "artifact": "checkpoint-resume-evaluation-regression-before.log"
+  },
+  "affected_suites": {
+    "passed": 85,
+    "artifact": "checkpoint-resume-evaluation-final-affected-suites.log"
+  },
+  "lint": {
+    "passed": true,
+    "artifact": "checkpoint-resume-evaluation-final-lint.log"
+  },
+  "evidence": [
+    "Real persisted metric-file regression checks fresh step0, resumed step20 with opt-out, and legacy default step20 overwrite behavior.",
+    "Six actual serialized checkpoint/noise/optimizer round trips preserve last_evaluated_step.",
+    "Last evaluation metadata describes the checkpoint snapshot, not later activity."
+  ],
+  "updated_unsubmitted_configurations": [
+    "qwen_checkpoint_periodic_recovery_v1/restore2-prepare.yaml",
+    "qwen_checkpoint_periodic_recovery_v1/restore5-prepare.yaml",
+    "snowball_checkpoint_recovery_qualification_v1/save5-prepare.yaml",
+    "snowball_checkpoint_recovery_qualification_v1/save5-detach.yaml",
+    "snowball_checkpoint_recovery_qualification_v1/restore5-prepare.yaml",
+    "snowball_checkpoint_recovery_qualification_v1/restore7-prepare.yaml"
+  ],
+  "submitted_initial_periodic_save_unchanged_sha256": {
+    "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_checkpoint_periodic_recovery_v1/save-detach.yaml": "04e8a019e58c19249334f8eea551548411d89757b9170b828508be3fc21176e5",
+    "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_checkpoint_periodic_recovery_v1/save-prepare.yaml": "fc56870fe1f7820d4c36a7a796a32f2490e1cfd65ee61f24106408e4cfd8ba51"
+  },
+  "limits": [
+    "CPU tests use fake serving and policy boundaries; actual GPU Qwen periodic and five-node Snowball qualifications remain mandatory.",
+    "No live frozen0212 scientific configuration was changed."
+  ],
+  "native_prepare": {
+    "prepared_configurations": 5,
+    "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+    "artifact": "resume-evaluation-qualification-native-preflight.log",
+    "submitted": false
+  }
+}
