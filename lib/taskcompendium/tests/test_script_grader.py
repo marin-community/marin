@@ -494,6 +494,24 @@ DETAIL = {"cases": [{"passed": True}]}
             id="json-file-detail",
         ),
         pytest.param(
+            FileReward(files=JSON_FILE, passed_key="passed"),
+            f"printf '%s' '{json.dumps({'reward': 0.9999999998, 'passed': False, 'detail': DETAIL})}' > {REWARD_JSON}",
+            (Outcome.GRADED, 0.9999999998, False, DETAIL, None),
+            id="component-verdict-independent-of-mean",
+        ),
+        pytest.param(
+            FileReward(files=JSON_FILE, passed_key="passed"),
+            f"printf '%s' '{json.dumps({'reward': 1.0, 'passed': True})}' > {REWARD_JSON}",
+            (Outcome.GRADED, 1.0, True, None, None),
+            id="explicit-full-pass",
+        ),
+        pytest.param(
+            FileReward(files=JSON_FILE, passed_key="passed"),
+            f"printf '%s' '{json.dumps({'reward': 1.0, 'passed': 'false'})}' > {REWARD_JSON}",
+            (Outcome.INFRA_ERROR, None, None, None, GradingFailure.INVALID_REWARD),
+            id="reject-truthy-string-verdict",
+        ),
+        pytest.param(
             FileReward(files=(*JSON_FILE, *NUMBER_FILE)),
             f"echo 0.5 > {REWARD_TXT}",
             (Outcome.GRADED, 0.5, None, None, None),

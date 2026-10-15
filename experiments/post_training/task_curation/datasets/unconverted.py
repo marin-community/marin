@@ -23,26 +23,6 @@ def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
             info=SourceInfo(
-                id="Harbor Hub:skill2env",
-                title="skill2env/skill2env",
-                origin="Harbor Hub",
-                family="terminal-agent",
-                tags=("agentic", "multi-turn"),
-                count=7496,
-                notes=(
-                    "Native Harbor training tasks with reference solutions and programmatic component-reward verifiers. "
-                    "The paper's private S2EBench is a separate evaluation set. "
-                    "Project-owned source is Apache-2.0; third-party skills and assets retain their own terms."
-                ),
-                dataset=SourceReference(
-                    "skill2env/skill2env",
-                    "sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c",
-                    "https://hub.harborframework.com/datasets/skill2env/skill2env",
-                ),
-            )
-        ),
-        RlDataSource(
-            info=SourceInfo(
                 id="Task Trove:AweAI-Team__CalibForge",
                 title="AweAI-Team/CalibForge",
                 origin="Task Trove",

@@ -307,9 +307,13 @@ async def _file_reward(machine: Machine, reward: FileReward, timeout: float, dia
             return _infra_error(f"Empty reward file: {file.path}", GradingFailure.EMPTY_REWARD, diagnostics)
         try:
             value, detail = _reward_value(result.stdout, file.format, file.key)
+            passed = None if reward.pass_above is None else value > reward.pass_above
+            if reward.passed_key is not None:
+                passed = json.loads(result.stdout)[reward.passed_key]
+                if not isinstance(passed, bool):
+                    raise ValueError("The explicit pass field must be a boolean")
         except (UnicodeError, ValueError, TypeError, KeyError) as error:
             return _infra_error(f"Invalid reward file {file.path}: {error}", GradingFailure.INVALID_REWARD, diagnostics)
-        passed = None if reward.pass_above is None else value > reward.pass_above
         return GradeResult(Outcome.GRADED, value, detail=detail, passed=passed, diagnostics=diagnostics)
     return _infra_error("Grader did not write a reward file", GradingFailure.MISSING_REWARD, diagnostics)
 

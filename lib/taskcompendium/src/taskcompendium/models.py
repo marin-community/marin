@@ -496,6 +496,7 @@ class FileReward(BaseModel):
     """The first existing file supplies the score; a missing, empty, or invalid file is a grading failure.
 
     A JSON file's ``detail`` object, when present, becomes the grade detail.
+    ``passed_key`` reads an explicit boolean verdict independently of the scalar score.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -503,6 +504,14 @@ class FileReward(BaseModel):
     kind: Literal["file"] = "file"
     files: tuple[RewardFile, ...] = Field(min_length=1)
     pass_above: float | None = Field(default=None, allow_inf_nan=False)
+    passed_key: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_pass_rule(self) -> "FileReward":
+        if self.passed_key is not None:
+            if self.pass_above is not None or any(file.format != RewardFileFormat.JSON for file in self.files):
+                raise ValueError("An explicit pass field requires JSON rewards and no scalar pass threshold")
+        return self
 
 
 def _require_grader_environment(environment: EnvironmentRequirements) -> None:
