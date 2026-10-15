@@ -11,7 +11,7 @@ import io
 import logging
 import zipfile
 from collections.abc import Iterator
-from contextlib import closing, contextmanager
+from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
 from typing import BinaryIO, Literal
@@ -28,7 +28,7 @@ from rigging.filesystem.factory import open_url, url_to_fs
 
 from zephyr.expr import Expr, referenced_columns, to_pyarrow_expr
 from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
-from zephyr.reader import Reader
+from zephyr.reader import Reader, flat_map_reader
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +115,12 @@ _READ_MAX_BLOCKS = 2
 _PARQUET_READ_BLOCK_SIZE = 1_048_576
 # Bound the index array and result materialized by each Vortex read.
 _VORTEX_READ_BATCH_ROWS = 65_536
+
+
+def _input_row_range(spec: InputFileSpec, num_rows: int) -> range:
+    start = spec.row_start or 0
+    end = min(spec.row_end, num_rows) if spec.row_end is not None else num_rows
+    return range(start, end)
 
 
 def _as_spec(source: str | InputFileSpec) -> InputFileSpec:
@@ -352,9 +358,7 @@ def _iter_parquet_batch(spec: InputFileSpec, reader: Reader[pa.RecordBatch]):
     block_size = _PARQUET_READ_BLOCK_SIZE if spec.filter_expr is not None else _READ_BLOCK_SIZE
     with open_file(spec.path, "rb", block_size=block_size) as stream:
         parquet = pq.ParquetFile(stream)
-        start = spec.row_start or 0
-        end = min(spec.row_end, parquet.metadata.num_rows) if spec.row_end is not None else parquet.metadata.num_rows
-        reader.total_rows = max(0, end - start)
+        reader.total_rows = len(_input_row_range(spec, parquet.metadata.num_rows))
         matching = (
             _matching_row_groups(stream, parquet.schema_arrow, spec.filter_expr)
             if spec.filter_expr is not None
@@ -399,15 +403,7 @@ def load_parquet(source: str | InputFileSpec) -> Reader[dict]:
         ... )
         >>> output_files = ctx.execute(ds).results
     """
-    return Reader(partial(_iter_parquet, load_parquet_batch(source)))
-
-
-def _iter_parquet(batches: Reader[pa.RecordBatch], reader: Reader[dict]):
-    with closing(batches):
-        for batch in batches:
-            reader.total_rows = batches.total_rows
-            yield from batch.to_pylist()
-        reader.total_rows = batches.total_rows
+    return flat_map_reader(load_parquet_batch(source), lambda batch: batch.to_pylist())
 
 
 def load_vortex(source: str | InputFileSpec) -> Reader[dict]:
@@ -448,9 +444,9 @@ def _iter_vortex(spec: InputFileSpec, reader: Reader[dict]):
     vf = vortex.open(spec.path)
     dataset = vf.to_dataset()
     num_rows = dataset.count_rows()
-    start = 0 if spec.row_start is None else spec.row_start
-    end = num_rows if spec.row_end is None else min(spec.row_end, num_rows)
-    reader.total_rows = max(0, end - start)
+    row_range = _input_row_range(spec, num_rows)
+    start, end = row_range.start, row_range.stop
+    reader.total_rows = len(row_range)
     # Schema-less empty files cannot be projected by Vortex.
     if not dataset.schema.names and num_rows == 0:
         return
@@ -570,18 +566,14 @@ def load_file(
 
     if not include_file_paths:
         return records
-    return Reader(partial(_iter_file_with_paths, records, spec.path, file_path_column))
+    return flat_map_reader(records, partial(_with_file_path, spec.path, file_path_column))
 
 
-def _iter_file_with_paths(records: Reader[dict], path: str, file_path_column: str, reader: Reader[dict]):
-    with closing(records):
-        for record in records:
-            reader.total_rows = records.total_rows
-            if file_path_column in record:
-                raise RuntimeError(f"Cannot add file path column '{file_path_column}': key already exists in record")
-            record[file_path_column] = path
-            yield record
-        reader.total_rows = records.total_rows
+def _with_file_path(path: str, file_path_column: str, record: dict) -> tuple[dict]:
+    if file_path_column in record:
+        raise RuntimeError(f"Cannot add file path column '{file_path_column}': key already exists in record")
+    record[file_path_column] = path
+    return (record,)
 
 
 def load_file_batch(
@@ -620,21 +612,13 @@ def load_file_batch(
     batches = load_parquet_batch(spec)
     if not include_file_paths:
         return batches
-    return Reader(partial(_iter_batches_with_paths, batches, spec.path, file_path_column), rows_per_item=len)
+    return flat_map_reader(batches, partial(_batch_with_file_path, spec.path, file_path_column), rows_per_item=len)
 
 
-def _iter_batches_with_paths(
-    batches: Reader[pa.RecordBatch], path: str, file_path_column: str, reader: Reader[pa.RecordBatch]
-):
-    with closing(batches):
-        for batch in batches:
-            reader.total_rows = batches.total_rows
-            if file_path_column in batch.schema.names:
-                raise RuntimeError(
-                    f"Cannot add file path column '{file_path_column}': column already exists in batch schema"
-                )
-            yield batch.append_column(file_path_column, pa.array([path] * len(batch), type=pa.string()))
-        reader.total_rows = batches.total_rows
+def _batch_with_file_path(path: str, file_path_column: str, batch: pa.RecordBatch) -> tuple[pa.RecordBatch]:
+    if file_path_column in batch.schema.names:
+        raise RuntimeError(f"Cannot add file path column '{file_path_column}': column already exists in batch schema")
+    return (batch.append_column(file_path_column, pa.array([path] * len(batch), type=pa.string())),)
 
 
 def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Reader[dict]:

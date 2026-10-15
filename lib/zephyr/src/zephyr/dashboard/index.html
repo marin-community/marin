@@ -137,6 +137,7 @@ function startDashboard() {
   const maxHeatCells = 32;
   const refreshDelay = 5000;
   const requestTimeout = 15000;
+  const staleHeartbeatSeconds = 15;
   const chartLeft = 65;
   const colors = ['#4079c9', '#be6a28', '#40956d', '#a46cc2', '#cf556c', '#718d26'];
   const sortFields = {
@@ -615,7 +616,7 @@ function startDashboard() {
       }
       if (shard.last_seen_age_seconds !== null) {
         const age = element('p', `Worker heartbeat: ${number(shard.last_seen_age_seconds)} s ago`);
-        if (shard.last_seen_age_seconds > 15) { age.className = 'stale'; age.append(' · Progress may be stale'); }
+        if (shard.last_seen_age_seconds > staleHeartbeatSeconds) { age.className = 'stale'; age.append(' · Progress may be stale'); }
         detail.append(age);
       }
     };

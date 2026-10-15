@@ -3,7 +3,9 @@
 
 """Data-only reader contract shared by file and shuffle inputs."""
 
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
+from contextlib import closing
+from functools import partial
 from typing import Any
 
 
@@ -35,3 +37,18 @@ class Reader[T](Iterator[T]):
 
     def close(self) -> None:
         self._items.close()
+
+
+def flat_map_reader[T, U](
+    source: Reader[T], fn: Callable[[T], Iterable[U]], *, rows_per_item: Callable[[U], int] = _single_row
+) -> Reader[U]:
+    """Adapt reader output while retaining its row total and resource lifetime."""
+    return Reader(partial(_mapped_items, source, fn), rows_per_item=rows_per_item)
+
+
+def _mapped_items[T, U](source: Reader[T], fn: Callable[[T], Iterable[U]], reader: Reader[U]):
+    with closing(source):
+        for item in source:
+            reader.total_rows = source.total_rows
+            yield from fn(item)
+        reader.total_rows = source.total_rows

@@ -122,7 +122,7 @@ class ShardProgress:
 
 @dataclass
 class CounterSnapshot:
-    """Bundled counter values and monotonically increasing generation tag.
+    """Counter values, per-shard progress, and a monotonic generation tag.
 
     The generation increments on every snapshot, so each heartbeat and
     report_result carries a unique tag.  The coordinator uses strict
