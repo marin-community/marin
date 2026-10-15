@@ -265,6 +265,16 @@ def test_factorial_predictions_reproduce_the_predicted_effects(out):
             assert f"{corners[upper].mean() - corners[~upper].mean():+.4f}" == effect
 
 
+def test_surrogate_benchmark_holds_every_model_on_every_swarm(out):
+    bench = out["fits_surrogate_benchmark"]
+    assert len(bench) == 28 * 6 and not bench.duplicated(["model", "swarm", "objective"]).any()
+    assert set(bench.swarm) == set(heldout.SWARM.values()) and set(bench.objective) == {"obe_easy", "uncheatable"}
+    # Epochs rescale weights invertibly, so the two linear models fit identically (the paper's two linear rows).
+    linear = bench[bench.model.str.startswith("linear_")].pivot(index=["swarm", "objective"], columns="model")
+    weight, exposure = (linear.xs(model, axis=1, level=1) for model in ("linear_weight", "linear_exposure"))
+    assert np.allclose(weight, exposure, rtol=0, atol=1e-12) and (weight.spearman == exposure.spearman).all()
+
+
 def test_no_run_names_or_internal_strings(out, heldout_table):
     names = set(pd.read_csv(paths.MIXSEL / "data/swarm_weights.csv").run)
     runs = pd.read_csv(heldout.EXPANDED / "heldout_runs.csv", usecols=["row_id", "training_wandb_run_id"])

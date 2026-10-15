@@ -118,6 +118,7 @@ KEYING = {
     "fits_learning_curves": NO_IDS,
     "fits_proposal_predictions": "The validation_3e18 ids of every run of each predicted proposal's mixture.",
     "fits_olmix_task_laws": NO_IDS,
+    "fits_surrogate_benchmark": NO_IDS,
     "run_sets": "The ids of the run tables.",
 }
 NOTES = {

@@ -42,6 +42,13 @@ same runs; tasks by the paper's task ids (`naming.task_public`); objectives as `
   matched Olmix proposals minimized their aggregate under the `tasks` objective weights, and the held-out analysis
   evaluates single laws at held-out mixtures for Olmix's per-task predictions. The JSON lists coefficients in the
   folder's bucket order, which its `solutions.csv` records.
+- `fits_surrogate_benchmark`: the out-of-fold comparison of appendix table tab:a-ablations-full on all three swarms: per
+  model, swarm and objective, the RMSE, MAE, Spearman correlation, calibration, selection regret and basin metrics over
+  five mixture-blocked folds of one fold assignment, which score every fit row but the proportional anchor. `model`
+  keeps the observatory's registry name: MARINER is `weibull_softplus_unscaled@kappa_floor_link_flat15_nocap` and its
+  variants add a suffix (`_raw_epoch_hinge` is the fully convex objective, `_kappa1` the exponential benefit); the
+  additive response is `weibull_softplus_unscaled`; `_exposure` models read materialized epochs; `lightgbm_regmix` is
+  tuned RegMix. Each model comes from the observatory run that the paper's table reports (SURROGATE_BENCHMARK).
 """
 
 import json
@@ -146,6 +153,53 @@ THREE_COMPONENT_FILES = (
 )
 FACTORIAL = paths.RO / "factorial_vs_mariner_20260928/predicted_vs_measured.csv"
 AGREEMENT = 1e-12  # two folders' predictions of one proposal by one model
+# The models of appendix table tab:a-ablations-full and the single-phase observatory run whose aggregate metrics the
+# table reports for each. Later runs re-fit several models bit for bit; the 2 September benchmark ran an earlier
+# protocol, whose metrics the paper does not report.
+OBSERVATORY = "single_phase_observatory_{}/aggregate_metrics.csv"
+MARINER_VARIANT = "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap{}"
+SURROGATE_BENCHMARK = {
+    MARINER_VARIANT.format(""): "comparators_20260908",
+    MARINER_VARIANT.format("_kappa1"): "comparators_20260908",
+    MARINER_VARIANT.format("_per_bucket_shape"): "shape_sharing_20260908",
+    MARINER_VARIANT.format("_per_bucket_threshold"): "per_bucket_partial_20260908",
+    MARINER_VARIANT.format("_per_bucket_rate"): "per_bucket_partial_20260908",
+    MARINER_VARIANT.format("_per_bucket_power"): "per_bucket_partial_20260908",
+    MARINER_VARIANT.format("_fine_threshold"): "fine_threshold_20260908",
+    MARINER_VARIANT.format("_signed_head"): "mariner_ablations_20260908",
+    "weibull_softplus_unscaled": "mariner_ablations_20260908",
+    MARINER_VARIANT.format("_raw_epoch_hinge"): "convex_harm_20260914",
+    MARINER_VARIANT.format("_raw_epoch_harm"): "convex_harm_20260914",
+    MARINER_VARIANT.format("_raw_epoch_hinge_per_bucket_threshold"): "convex_per_bucket_20260916c",
+    MARINER_VARIANT.format("_raw_epoch_hinge_per_bucket_shape"): "convex_per_bucket_20260916c",
+    MARINER_VARIANT.format("_no_harm"): "mariner_ablations_20260908",
+    MARINER_VARIANT.format("_row_scrambled_harm"): "mariner_ablations_20260908",
+    MARINER_VARIANT.format("_weight_coordinate"): "mariner_ablations_20260908",
+    MARINER_VARIANT.format("_permuted_inventory"): "mariner_ablations_20260908",
+    MARINER_VARIANT.format("_common_inventory"): "mariner_ablations_20260908",
+    MARINER_VARIANT.format("_outcome_permutation"): "mariner_ablations_20260908",
+    "olmix_loglinear_taskwise": "coordinate_rows_20260908",
+    "olmix_loglinear_taskwise_exposure": "coordinate_rows_20260908",
+    "linear_weight": "coordinate_rows_20260908",
+    "linear_exposure": "coordinate_rows_20260908",
+    "quadratic_log_epoch@kappa_floor_link_flat15_nocap": "comparators_20260908",
+    "spline_log_epoch@kappa_floor_link_flat15_nocap": "comparators_20260908",
+    "hellinger_krr": "comparators_20260908",
+    "lightgbm_regmix": "comparators_20260908",
+    "lightgbm_regmix_released": "regmix_released_20260926",
+}
+BENCHMARK_METRICS = [
+    "rmse",
+    "mae",
+    "spearman",
+    "calibration_intercept",
+    "calibration_slope",
+    "regret_at_1",
+    "regret_at_top_k",
+    "selection_optimism",
+    "basin_rmse",
+    "basin_spearman",
+]
 
 
 def required_sources() -> list[Path]:
@@ -177,6 +231,7 @@ def required_sources() -> list[Path]:
             *(RELIABILITY / f"{table}.csv" for table in RELIABILITY_TABLES),
             *LEARNING_CURVES.values(),
             *proposals,
+            *(paths.RO / OBSERVATORY.format(run) for run in SURROGATE_BENCHMARK.values()),
         }
     )
 
@@ -285,6 +340,23 @@ def _learning_curves(exposures: pd.Series) -> pd.DataFrame:
     df["selected_coordinate_id"] = df.selected_coordinate_id.map(exposures)
     df = df.rename(columns={"selected_coordinate_id": "selected_exposure_id"})
     return df.astype({"n_basin": "Int64", "n_failed": "Int64", "basin_hit": "boolean"})
+
+
+def _surrogate_benchmark() -> pd.DataFrame:
+    """Each benchmarked model's out-of-fold metrics on the three swarms, from the observatory run that holds it."""
+    frames = []
+    for run in sorted(set(SURROGATE_BENCHMARK.values())):
+        f = _csv(paths.RO / OBSERVATORY.format(run))
+        models = [model for model, source in SURROGATE_BENCHMARK.items() if source == run]
+        frames.append(f[f.model.isin(models) & f.panel.isin(heldout.SWARM) & f.target.isin(MIXSEL_OBJECTIVES)])
+    table = pd.concat(frames, ignore_index=True)
+    if len(table) != 6 * len(SURROGATE_BENCHMARK) or table.duplicated(["model", "panel", "target"]).any():
+        raise ValueError("every benchmarked model needs one row per swarm and objective")
+    if not (table.repeats == 1).all():
+        raise ValueError("the benchmark scores one fold assignment")
+    table["swarm"] = table.panel.map(heldout.SWARM)
+    table["objective"] = table.target.map(naming.objective_public)
+    return table[["model", "swarm", "objective", *BENCHMARK_METRICS]]
 
 
 def _row(variant: str, objective: str, predictor: str, own: bool, predicted: float) -> dict:
@@ -560,4 +632,5 @@ def export(
         "fits_learning_curves": _learning_curves(exposures),
         "fits_proposal_predictions": _proposal_predictions(validation_table),
         "fits_olmix_task_laws": _olmix_task_laws(ctx),
+        "fits_surrogate_benchmark": _surrogate_benchmark(),
     }
