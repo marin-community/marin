@@ -1,0 +1,51 @@
+{
+  "run_id": "sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce",
+  "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+  "controller_attempt": 1,
+  "profiles": [
+    {
+      "key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/rendezvous/debug_artifacts/rank1-g1cc352/attention-profile/prof_rank_0.txt",
+      "rank": 0,
+      "bytes": 48771,
+      "etag": "\"f09b3eb13dad8e1b6e3b2cacb60cf674\"",
+      "last_modified_ms": 1792091011959,
+      "sha256": "9a1d904846a28b4f26c5ce2cd33339aa572b53eec2f7bb10594a89ae7dae09ee",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-flash-rank0.txt",
+      "operator_lines": [
+        "                        flash_attn::_flash_attn_forward         0.63%       1.289ms         0.93%       1.912ms     147.099us     148.512us         0.16%     148.512us      11.424us            13  "
+      ],
+      "actual_cuda_kernel_lines": [
+        "void flash::flash_fwd_kernel<Flash_fwd_kernel_traits...         0.00%       0.000us         0.00%       0.000us       0.000us     148.512us         0.16%     148.512us      11.424us            13  "
+      ],
+      "durable_raw_profile": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/qualification-proof/attempt1/flash-rank0.txt",
+        "bytes": 48771,
+        "etag": "\"f09b3eb13dad8e1b6e3b2cacb60cf674\"",
+        "sha256": "9a1d904846a28b4f26c5ce2cd33339aa572b53eec2f7bb10594a89ae7dae09ee"
+      }
+    },
+    {
+      "key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/rendezvous/debug_artifacts/rank2-g82196a/attention-profile/prof_rank_16.txt",
+      "rank": 16,
+      "bytes": 49167,
+      "etag": "\"777fd021835417161d84839fe5600923\"",
+      "last_modified_ms": 1792091009085,
+      "sha256": "29255cbe1c46aeccc89413c18c484236524bc7c03d22b1110dc00d95a57473a9",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-flash-rank16.txt",
+      "operator_lines": [
+        "                        flash_attn::_flash_attn_forward         0.60%       1.169ms         0.88%       1.728ms     132.893us     147.423us         0.28%     147.423us      11.340us            13  "
+      ],
+      "actual_cuda_kernel_lines": [
+        "void flash::flash_fwd_kernel<Flash_fwd_kernel_traits...         0.00%       0.000us         0.00%       0.000us       0.000us     147.423us         0.28%     147.423us      11.340us            13  "
+      ],
+      "durable_raw_profile": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/qualification-proof/attempt1/flash-rank16.txt",
+        "bytes": 49167,
+        "etag": "\"777fd021835417161d84839fe5600923\"",
+        "sha256": "29255cbe1c46aeccc89413c18c484236524bc7c03d22b1110dc00d95a57473a9"
+      }
+    }
+  ],
+  "both_pipeline_stages_execute_actual_flash_cuda_kernels": true,
+  "scope": "Actual current173 five-node save5 CUDA profiler tables at logical learner ranks0/16; source21 profiler evidence is not substituted."
+}

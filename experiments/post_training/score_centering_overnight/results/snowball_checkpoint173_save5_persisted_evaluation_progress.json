@@ -1,0 +1,10 @@
+{
+  "global_step": 5,
+  "last_evaluated_step": 5,
+  "sampler_state": {
+    "completed_updates": 3,
+    "checkpoint_path": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy"
+  },
+  "actual_persisted_evaluation_progress_verified": true,
+  "scope": "Actual saved evaluation progress only; second-process restore/skip still pending."
+}

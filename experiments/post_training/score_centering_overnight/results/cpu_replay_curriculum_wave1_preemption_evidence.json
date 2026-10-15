@@ -1,0 +1,78 @@
+{
+  "cases": [
+    {
+      "job_id": "/romain/score-grader-qwen-curriculum-sc-s1-a0-01a126ce",
+      "terminal_state": "Priority preempted during archive download; budgets0, no final result.",
+      "returned_controller_bytes": {
+        "cpu-replay-curriculum-sc-s1-a0-attempt0.events": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-sc-s1-a0-01a126ce/preserved-terminal-evidence/cpu-replay-curriculum-sc-s1-a0-attempt0.events",
+          "bytes": 691,
+          "etag": "\"638f9669d9c23eda096625e7fb6935c4\"",
+          "sha256": "cf30c7f6105bd539d0ab9e507957c52d62ac64e35d75493560fb841f5a995bca"
+        },
+        "cpu-replay-curriculum-sc-s1-a0-attempt0.events.err": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-sc-s1-a0-01a126ce/preserved-terminal-evidence/cpu-replay-curriculum-sc-s1-a0-attempt0.events.err",
+          "bytes": 508,
+          "etag": "\"8446b493a14871f4bd78f9c3a53585d4\"",
+          "sha256": "cb183759735c042c16ce077698492e6dff88ce05d3dac27114c2eeb54e8b35ab"
+        },
+        "cpu-replay-curriculum-sc-s1-a0-attempt0.log": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-sc-s1-a0-01a126ce/preserved-terminal-evidence/cpu-replay-curriculum-sc-s1-a0-attempt0.log",
+          "bytes": 0,
+          "etag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "cpu-replay-curriculum-sc-s1-a0-attempt0.log.err": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-sc-s1-a0-01a126ce/preserved-terminal-evidence/cpu-replay-curriculum-sc-s1-a0-attempt0.log.err",
+          "bytes": 478,
+          "etag": "\"e28f2a2ffa120f6de885538428d27d2f\"",
+          "sha256": "180155c91240debdfb12de0dc335b91cc477004948e4bf1847ba86fb1421928d"
+        },
+        "score-grader-qwen-curriculum-sc-s1-a0-01a126ce-started.json": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-sc-s1-a0-01a126ce/preserved-terminal-evidence/score-grader-qwen-curriculum-sc-s1-a0-01a126ce-started.json",
+          "bytes": 604,
+          "etag": "\"f80a7c5dbd132109b4b5f770cb7b72f7\"",
+          "sha256": "18870e0f591e4458fb1141ef1cb5dcbdd5aff8edd07e76fa7880d37912338d67"
+        }
+      },
+      "coverage": "Exact returned native events, empty workload logs and client diagnostics preserved; empty Finelog results are not proof of complete stdout capture."
+    },
+    {
+      "job_id": "/romain/score-grader-qwen-curriculum-tis-s0-a0-01a126ce",
+      "terminal_state": "Priority preempted during archive download; budgets0, no final result.",
+      "returned_controller_bytes": {
+        "cpu-replay-curriculum-tis-s0-a0-attempt0.events": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s0-a0-01a126ce/preserved-terminal-evidence/cpu-replay-curriculum-tis-s0-a0-attempt0.events",
+          "bytes": 692,
+          "etag": "\"3f42eaacdb4847fda64a24a3526a0f7c\"",
+          "sha256": "50ea1a174f5ba2a24bdb63bfafc2555a1aea31a9f59dfdd8c8cd9d0218d2ebd2"
+        },
+        "cpu-replay-curriculum-tis-s0-a0-attempt0.events.err": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s0-a0-01a126ce/preserved-terminal-evidence/cpu-replay-curriculum-tis-s0-a0-attempt0.events.err",
+          "bytes": 508,
+          "etag": "\"af58d2a9eb8bf5c666405602a799dafc\"",
+          "sha256": "7eab4c362a520512aa11b7a25d1a34f644d25c1fdbda9e9bfc3322882efb07a4"
+        },
+        "cpu-replay-curriculum-tis-s0-a0-attempt0.log": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s0-a0-01a126ce/preserved-terminal-evidence/cpu-replay-curriculum-tis-s0-a0-attempt0.log",
+          "bytes": 0,
+          "etag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "cpu-replay-curriculum-tis-s0-a0-attempt0.log.err": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s0-a0-01a126ce/preserved-terminal-evidence/cpu-replay-curriculum-tis-s0-a0-attempt0.log.err",
+          "bytes": 478,
+          "etag": "\"408d4991dd442bd5be40347f57954140\"",
+          "sha256": "0b4ba12aedc3b2a99cb26c6f386d2b430d2b2edd8451efb57e1ebafed9ef3915"
+        },
+        "score-grader-qwen-curriculum-tis-s0-a0-01a126ce-started.json": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s0-a0-01a126ce/preserved-terminal-evidence/score-grader-qwen-curriculum-tis-s0-a0-01a126ce-started.json",
+          "bytes": 613,
+          "etag": "\"8c1ed7cf64fd97b0f0c377a6c446cfa7\"",
+          "sha256": "51eebbff3c63dde746c246c481524298f25088efee8c62259df978868c686430"
+        }
+      },
+      "coverage": "Exact returned native events, empty workload logs and client diagnostics preserved; empty Finelog results are not proof of complete stdout capture."
+    }
+  ]
+}

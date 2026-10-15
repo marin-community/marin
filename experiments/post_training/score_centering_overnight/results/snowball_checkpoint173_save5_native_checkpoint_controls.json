@@ -1,0 +1,1101 @@
+{
+  "scope": "Actual native checkpoint control-state and all-rank DCP inventory audit. Rank tensor bytes remain remote; native optimizer step is read from its actual serialized DCP range. This alone does not prove a second process loaded the checkpoint.",
+  "run_id": "sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce",
+  "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+  "configuration_sha256": "400b4cb3079fb8948e696e4159bc4f247816055eb796469b62f4c91b7c7952d1",
+  "completed_updates": 5,
+  "latest_marker": 5,
+  "trainer_global_step": 5,
+  "scheduler_num_steps": 5,
+  "optimizer_steps": {
+    "chained_0.optimizer.distributed.dp_group_idx_0.optimizer/shard_0_1.0.param_groups.0.step": 5,
+    "chained_1.optimizer.distributed.dp_group_idx_0.optimizer/shard_0_1.0.param_groups.0.step": 5,
+    "chained_1.optimizer.distributed.dp_group_idx_1.optimizer/shard_0_1.0.param_groups.0.step": 5,
+    "chained_1.optimizer.distributed.dp_group_idx_2.optimizer/shard_0_1.0.param_groups.0.step": 5,
+    "chained_1.optimizer.distributed.dp_group_idx_3.optimizer/shard_0_1.0.param_groups.0.step": 5,
+    "chained_1.optimizer.distributed.dp_group_idx_4.optimizer/shard_0_1.0.param_groups.0.step": 5,
+    "chained_1.optimizer.distributed.dp_group_idx_5.optimizer/shard_0_1.0.param_groups.0.step": 5,
+    "chained_1.optimizer.distributed.dp_group_idx_6.optimizer/shard_0_1.0.param_groups.0.step": 5,
+    "chained_1.optimizer.distributed.dp_group_idx_7.optimizer/shard_0_1.0.param_groups.0.step": 5,
+    "chained_0.optimizer.distributed.dp_group_idx_1.optimizer/shard_0_1.0.param_groups.0.step": 5,
+    "chained_1.optimizer.distributed.dp_group_idx_8.optimizer/shard_0_1.0.param_groups.0.step": 5,
+    "chained_1.optimizer.distributed.dp_group_idx_9.optimizer/shard_0_1.0.param_groups.0.step": 5,
+    "chained_1.optimizer.distributed.dp_group_idx_10.optimizer/shard_0_1.0.param_groups.0.step": 5,
+    "chained_1.optimizer.distributed.dp_group_idx_11.optimizer/shard_0_1.0.param_groups.0.step": 5,
+    "chained_1.optimizer.distributed.dp_group_idx_12.optimizer/shard_0_1.0.param_groups.0.step": 5,
+    "chained_1.optimizer.distributed.dp_group_idx_13.optimizer/shard_0_1.0.param_groups.0.step": 5,
+    "chained_1.optimizer.distributed.dp_group_idx_14.optimizer/shard_0_1.0.param_groups.0.step": 5,
+    "chained_1.optimizer.distributed.dp_group_idx_15.optimizer/shard_0_1.0.param_groups.0.step": 5
+  },
+  "optimizer_sharding_types": {
+    "optimizer.0.param_state_sharding_type": "dp_reshardable",
+    "optimizer.1.param_state_sharding_type": "dp_reshardable"
+  },
+  "fp32_moment_entries": [
+    "chained_0.optimizer.distributed.dp_group_idx_0.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_0.optimizer.distributed.dp_group_idx_0.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq",
+    "chained_1.optimizer.distributed.dp_group_idx_0.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_1.optimizer.distributed.dp_group_idx_0.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq",
+    "chained_1.optimizer.distributed.dp_group_idx_1.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_1.optimizer.distributed.dp_group_idx_1.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq",
+    "chained_1.optimizer.distributed.dp_group_idx_2.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_1.optimizer.distributed.dp_group_idx_2.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq",
+    "chained_1.optimizer.distributed.dp_group_idx_3.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_1.optimizer.distributed.dp_group_idx_3.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq",
+    "chained_1.optimizer.distributed.dp_group_idx_4.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_1.optimizer.distributed.dp_group_idx_4.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq",
+    "chained_1.optimizer.distributed.dp_group_idx_5.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_1.optimizer.distributed.dp_group_idx_5.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq",
+    "chained_1.optimizer.distributed.dp_group_idx_6.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_1.optimizer.distributed.dp_group_idx_6.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq",
+    "chained_1.optimizer.distributed.dp_group_idx_7.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_1.optimizer.distributed.dp_group_idx_7.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq",
+    "chained_0.optimizer.distributed.dp_group_idx_1.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_0.optimizer.distributed.dp_group_idx_1.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq",
+    "chained_1.optimizer.distributed.dp_group_idx_8.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_1.optimizer.distributed.dp_group_idx_8.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq",
+    "chained_1.optimizer.distributed.dp_group_idx_9.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_1.optimizer.distributed.dp_group_idx_9.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq",
+    "chained_1.optimizer.distributed.dp_group_idx_10.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_1.optimizer.distributed.dp_group_idx_10.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq",
+    "chained_1.optimizer.distributed.dp_group_idx_11.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_1.optimizer.distributed.dp_group_idx_11.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq",
+    "chained_1.optimizer.distributed.dp_group_idx_12.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_1.optimizer.distributed.dp_group_idx_12.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq",
+    "chained_1.optimizer.distributed.dp_group_idx_13.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_1.optimizer.distributed.dp_group_idx_13.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq",
+    "chained_1.optimizer.distributed.dp_group_idx_14.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_1.optimizer.distributed.dp_group_idx_14.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq",
+    "chained_1.optimizer.distributed.dp_group_idx_15.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg",
+    "chained_1.optimizer.distributed.dp_group_idx_15.gbuf_idx_0.dtype_(torch.bfloat16, torch.float32).bucket_idx_0.exp_avg_sq"
+  ],
+  "rng_present": true,
+  "sampler_state": {
+    "completed_updates": 3,
+    "checkpoint_path": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy"
+  },
+  "rollout_state": {
+    "type": "TrainingContextState",
+    "order": {
+      "epoch": 0,
+      "position": 640
+    },
+    "retry_count": 0,
+    "ready_group_count": 0,
+    "retry_uids": [],
+    "ready_uids": [],
+    "object_store_root": "s3://marin-us-east-02a/tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/groups"
+  },
+  "rank_shards": [
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__0_0.distcp",
+      "bytes": 29905174150,
+      "etag": "\"04e31747fd4f090fd566db49b0d49045-446\"",
+      "last_modified_ms": 1792090968804
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__10_0.distcp",
+      "bytes": 29311319980,
+      "etag": "\"d4e3ef6647ca3dff52b46985cff32cc8-437\"",
+      "last_modified_ms": 1792090921009
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__11_0.distcp",
+      "bytes": 29311319980,
+      "etag": "\"50dc78d78c9dc8d92fafd33b5451e686-437\"",
+      "last_modified_ms": 1792090921321
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__12_0.distcp",
+      "bytes": 29311319980,
+      "etag": "\"c1333413f41b21f0294565f388581485-437\"",
+      "last_modified_ms": 1792090919571
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__13_0.distcp",
+      "bytes": 29311326288,
+      "etag": "\"f5617c219759027acae45cd2ad919c7f-437\"",
+      "last_modified_ms": 1792090919950
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__14_0.distcp",
+      "bytes": 29312487872,
+      "etag": "\"c6231094b580e057800455fb7750f485-437\"",
+      "last_modified_ms": 1792090919298
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__15_0.distcp",
+      "bytes": 29312487872,
+      "etag": "\"1e9b1dbc0342731755b6f425b2d7fe44-437\"",
+      "last_modified_ms": 1792090923059
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__16_0.distcp",
+      "bytes": 29905098454,
+      "etag": "\"b905bf43d41690dc592e41f76194ebb1-446\"",
+      "last_modified_ms": 1792090965939
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__17_0.distcp",
+      "bytes": 29320380215,
+      "etag": "\"0d0e043500159f26b245d4a7fec7e0b0-437\"",
+      "last_modified_ms": 1792090959801
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__18_0.distcp",
+      "bytes": 29320380215,
+      "etag": "\"763536c6bf264dc05087898069a1e920-437\"",
+      "last_modified_ms": 1792090961396
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__19_0.distcp",
+      "bytes": 29320380215,
+      "etag": "\"1eb14845004c500442ab65480cef828a-437\"",
+      "last_modified_ms": 1792090965171
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__1_0.distcp",
+      "bytes": 29320465373,
+      "etag": "\"b253b39c92e21e1ccf5cad3aef4996ab-437\"",
+      "last_modified_ms": 1792090966440
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__20_0.distcp",
+      "bytes": 29312731734,
+      "etag": "\"a397bbd7a8f02607bc7d7b639b477e40-437\"",
+      "last_modified_ms": 1792090953404
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__21_0.distcp",
+      "bytes": 29312731734,
+      "etag": "\"677e944c61e1aa5172cc5e2ed8da5980-437\"",
+      "last_modified_ms": 1792090950855
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__22_0.distcp",
+      "bytes": 29312788506,
+      "etag": "\"cfbe43f528073fc43ff338e4c4c92321-437\"",
+      "last_modified_ms": 1792090923587
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__23_0.distcp",
+      "bytes": 29312741751,
+      "etag": "\"16405f1a4be654f74062b70d7566f6b5-437\"",
+      "last_modified_ms": 1792090953858
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__24_0.distcp",
+      "bytes": 29311381483,
+      "etag": "\"544a649c53796ac954f454dbe502bfb8-437\"",
+      "last_modified_ms": 1792090968322
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__25_0.distcp",
+      "bytes": 29311405138,
+      "etag": "\"dfd5840cfe48fb5af254e36189641524-437\"",
+      "last_modified_ms": 1792090960754
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__26_0.distcp",
+      "bytes": 29311400407,
+      "etag": "\"b71913f40ba05da12e9d1006176523a7-437\"",
+      "last_modified_ms": 1792090966774
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__27_0.distcp",
+      "bytes": 29311405138,
+      "etag": "\"5d46b366af5ea9180f056f2882e158f8-437\"",
+      "last_modified_ms": 1792090969972
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__28_0.distcp",
+      "bytes": 29311381483,
+      "etag": "\"4c41205e4a92cd96fd47b05f1de6ef02-437\"",
+      "last_modified_ms": 1792090956649
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__29_0.distcp",
+      "bytes": 29311406715,
+      "etag": "\"3c531d5e88edb4f14f4fe524c980c17e-437\"",
+      "last_modified_ms": 1792090931813
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__2_0.distcp",
+      "bytes": 29320460642,
+      "etag": "\"201b729b1a7aeb9b5fab28e1decbc057-437\"",
+      "last_modified_ms": 1792090967188
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__30_0.distcp",
+      "bytes": 29312573030,
+      "etag": "\"d7a2a51a7d32c00045b5a85793991a80-437\"",
+      "last_modified_ms": 1792090946863
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__31_0.distcp",
+      "bytes": 29312563568,
+      "etag": "\"ab41736039d19d3f554919ed6cda2d21-437\"",
+      "last_modified_ms": 1792090953560
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__3_0.distcp",
+      "bytes": 29320441718,
+      "etag": "\"507ed96be978da4fa8946f2720311ec5-437\"",
+      "last_modified_ms": 1792090966500
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__4_0.distcp",
+      "bytes": 29312816892,
+      "etag": "\"9e97ea2285696dd56ad041d8054a54bf-437\"",
+      "last_modified_ms": 1792090955349
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__5_0.distcp",
+      "bytes": 29312812161,
+      "etag": "\"89a9e3c2600348248168104535085f4f-437\"",
+      "last_modified_ms": 1792090954763
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__6_0.distcp",
+      "bytes": 29312793237,
+      "etag": "\"35eb3806d572ef49e4592dc1c174b89c-437\"",
+      "last_modified_ms": 1792090953304
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__7_0.distcp",
+      "bytes": 29312746482,
+      "etag": "\"da29b54c78f7fe2665139afab7be65b8-437\"",
+      "last_modified_ms": 1792090955279
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__8_0.distcp",
+      "bytes": 29311400407,
+      "etag": "\"60c2ef74ca33b68b3bc275d5f09e43d2-437\"",
+      "last_modified_ms": 1792090920626
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__9_0.distcp",
+      "bytes": 29311376752,
+      "etag": "\"271ceb6513dc79f59e55b9499c24e58d-437\"",
+      "last_modified_ms": 1792090923332
+    }
+  ],
+  "checkpoint_objects": [
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/data.pt",
+      "bytes": 1645,
+      "etag": "\"794e8428d057908897efa14524a0c620\"",
+      "last_modified_ms": 1792088488135
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/.metadata",
+      "bytes": 11730355,
+      "etag": "\"916d420a90dc611f677f0aba205b0377\"",
+      "last_modified_ms": 1792088480752
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__0_0.distcp",
+      "bytes": 29905174150,
+      "etag": "\"a5eee2a6caa2936aa5ad5453f1c440d1-446\"",
+      "last_modified_ms": 1792087883866
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__10_0.distcp",
+      "bytes": 29311319980,
+      "etag": "\"21b5388bc22a6b1010df7a9d877f5b3e-437\"",
+      "last_modified_ms": 1792087867561
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__11_0.distcp",
+      "bytes": 29311319980,
+      "etag": "\"6e2941b50dd61615e1f5f94edbb76e3f-437\"",
+      "last_modified_ms": 1792087868161
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__12_0.distcp",
+      "bytes": 29311319980,
+      "etag": "\"b3eb56cd94e2fae1f1050ef7434e6a2f-437\"",
+      "last_modified_ms": 1792087866934
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__13_0.distcp",
+      "bytes": 29311326288,
+      "etag": "\"1d5da4d8b54fb7bf853e7f9c7c219300-437\"",
+      "last_modified_ms": 1792087865114
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__14_0.distcp",
+      "bytes": 29312487872,
+      "etag": "\"65605b3185fa5e25da446aaa0f6c31c0-437\"",
+      "last_modified_ms": 1792087867092
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__15_0.distcp",
+      "bytes": 29312487872,
+      "etag": "\"7e911bcf60a7b000dd48dedc40439a3d-437\"",
+      "last_modified_ms": 1792087869003
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__16_0.distcp",
+      "bytes": 29905098454,
+      "etag": "\"8e5c17be0c11479bde4ca080351db6a8-446\"",
+      "last_modified_ms": 1792087871152
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__17_0.distcp",
+      "bytes": 29320380215,
+      "etag": "\"53117d6094cbd18277ee44a42f44b424-437\"",
+      "last_modified_ms": 1792087868862
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__18_0.distcp",
+      "bytes": 29320380215,
+      "etag": "\"a5a64a77540800d7f66076fc99761b00-437\"",
+      "last_modified_ms": 1792088475695
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__19_0.distcp",
+      "bytes": 29320380215,
+      "etag": "\"d3f84ee76f820947d9caeb4fef9bfdf2-437\"",
+      "last_modified_ms": 1792087868637
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__1_0.distcp",
+      "bytes": 29320465373,
+      "etag": "\"8e63aff45b38c35d9772204b207089a7-437\"",
+      "last_modified_ms": 1792087881951
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__20_0.distcp",
+      "bytes": 29312731734,
+      "etag": "\"f9c9864f44c6e09a8fe0871661e4628a-437\"",
+      "last_modified_ms": 1792087869526
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__21_0.distcp",
+      "bytes": 29312731734,
+      "etag": "\"1542fa1e030edc377aeca31c9383fa8b-437\"",
+      "last_modified_ms": 1792087867733
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__22_0.distcp",
+      "bytes": 29312788506,
+      "etag": "\"a85eedfd59097076ff4f241033ba9154-437\"",
+      "last_modified_ms": 1792087867263
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__23_0.distcp",
+      "bytes": 29312741751,
+      "etag": "\"70d49f2d705614ce4becdd2e233d3a9f-437\"",
+      "last_modified_ms": 1792087868700
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__24_0.distcp",
+      "bytes": 29311381483,
+      "etag": "\"5143543935c4493002f341a076ee0335-437\"",
+      "last_modified_ms": 1792087869810
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__25_0.distcp",
+      "bytes": 29311405138,
+      "etag": "\"d9443cbe21d5c73b88b239fcb3e00817-437\"",
+      "last_modified_ms": 1792087869819
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__26_0.distcp",
+      "bytes": 29311400407,
+      "etag": "\"a93b1c0aebd788d69e562c4d90b0c8f8-437\"",
+      "last_modified_ms": 1792087870166
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__27_0.distcp",
+      "bytes": 29311405138,
+      "etag": "\"0b4df2c4185fb806fbc9e47c08c11124-437\"",
+      "last_modified_ms": 1792087871708
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__28_0.distcp",
+      "bytes": 29311381483,
+      "etag": "\"4f7ecde393d1f7c2a6f3228688bdda1d-437\"",
+      "last_modified_ms": 1792087867150
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__29_0.distcp",
+      "bytes": 29311406715,
+      "etag": "\"17360d983652d5d64c5eca5b20896e60-437\"",
+      "last_modified_ms": 1792087867471
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__2_0.distcp",
+      "bytes": 29320460642,
+      "etag": "\"91cbf5d05c9c10db7e71c631d0f2dfdc-437\"",
+      "last_modified_ms": 1792087882752
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__30_0.distcp",
+      "bytes": 29312573030,
+      "etag": "\"bffcb9a78cea56699309c8615c15cc3f-437\"",
+      "last_modified_ms": 1792087868224
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__31_0.distcp",
+      "bytes": 29312563568,
+      "etag": "\"ab68352c46a32264bd4eef5501f25945-437\"",
+      "last_modified_ms": 1792087866621
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__3_0.distcp",
+      "bytes": 29320441718,
+      "etag": "\"49ec743bd7eac95522e9cec8bd319b91-437\"",
+      "last_modified_ms": 1792087881504
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__4_0.distcp",
+      "bytes": 29312816892,
+      "etag": "\"4be81a0325af0a2c203b75d5f281d34c-437\"",
+      "last_modified_ms": 1792087869440
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__5_0.distcp",
+      "bytes": 29312812161,
+      "etag": "\"4f5d1c6156ddb51ede06e1271b983c63-437\"",
+      "last_modified_ms": 1792087872463
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__6_0.distcp",
+      "bytes": 29312793237,
+      "etag": "\"a8f729d754515da5a142ee288ee5e783-437\"",
+      "last_modified_ms": 1792087871674
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__7_0.distcp",
+      "bytes": 29312746482,
+      "etag": "\"5a14dde1166cd81e2be2f12decf53862-437\"",
+      "last_modified_ms": 1792087869636
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__8_0.distcp",
+      "bytes": 29311400407,
+      "etag": "\"f074414126d0229dd6c794e1b28e5938-437\"",
+      "last_modified_ms": 1792087868585
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/__9_0.distcp",
+      "bytes": 29311376752,
+      "etag": "\"dc657daf89767dbc3cfdf64eab37929a-437\"",
+      "last_modified_ms": 1792087866771
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/common.pt",
+      "bytes": 14941,
+      "etag": "\"593607a0801df093db016d40fb00ce33\"",
+      "last_modified_ms": 1792088485734
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/extra_state.pt",
+      "bytes": 1261,
+      "etag": "\"8bcc7a1b6f1d63fa2c5fbbff6d195edb\"",
+      "last_modified_ms": 1792088485755
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/huggingface/chat_template.jinja",
+      "bytes": 5112,
+      "etag": "\"68c9d6ece093c5f82e07cc1618068984\"",
+      "last_modified_ms": 1792088485686
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/huggingface/config.json",
+      "bytes": 1516,
+      "etag": "\"1ac5ec528040de83e7b7c49fbf7a700d\"",
+      "last_modified_ms": 1792088485665
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/huggingface/generation_config.json",
+      "bytes": 113,
+      "etag": "\"7920fdf2581fc30a2ab8b301af001392\"",
+      "last_modified_ms": 1792088485751
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/huggingface/tokenizer.json",
+      "bytes": 17209892,
+      "etag": "\"f4c6bdd3f418a243639b75fd5d21f423\"",
+      "last_modified_ms": 1792088486471
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/huggingface/tokenizer_config.json",
+      "bytes": 363,
+      "etag": "\"03f6b308b264795e153c6c680a995b34\"",
+      "last_modified_ms": 1792088485727
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/policy/metadata.json",
+      "bytes": 119,
+      "etag": "\"d102bc956936ac1a049d295fae8b9a18\"",
+      "last_modified_ms": 1792088485765
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/trainer_state.pt",
+      "bytes": 107245,
+      "etag": "\"90d40c4e44e360c98ea591c53ca312c8\"",
+      "last_modified_ms": 1792088487872
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/data.pt",
+      "bytes": 1645,
+      "etag": "\"3f4605df937bf07e531a9c75b91d2045\"",
+      "last_modified_ms": 1792090976704
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/.metadata",
+      "bytes": 11730355,
+      "etag": "\"8bb7c325c43b5293fd9ec3849b08dbdb\"",
+      "last_modified_ms": 1792090973023
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__0_0.distcp",
+      "bytes": 29905174150,
+      "etag": "\"04e31747fd4f090fd566db49b0d49045-446\"",
+      "last_modified_ms": 1792090968804
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__10_0.distcp",
+      "bytes": 29311319980,
+      "etag": "\"d4e3ef6647ca3dff52b46985cff32cc8-437\"",
+      "last_modified_ms": 1792090921009
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__11_0.distcp",
+      "bytes": 29311319980,
+      "etag": "\"50dc78d78c9dc8d92fafd33b5451e686-437\"",
+      "last_modified_ms": 1792090921321
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__12_0.distcp",
+      "bytes": 29311319980,
+      "etag": "\"c1333413f41b21f0294565f388581485-437\"",
+      "last_modified_ms": 1792090919571
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__13_0.distcp",
+      "bytes": 29311326288,
+      "etag": "\"f5617c219759027acae45cd2ad919c7f-437\"",
+      "last_modified_ms": 1792090919950
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__14_0.distcp",
+      "bytes": 29312487872,
+      "etag": "\"c6231094b580e057800455fb7750f485-437\"",
+      "last_modified_ms": 1792090919298
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__15_0.distcp",
+      "bytes": 29312487872,
+      "etag": "\"1e9b1dbc0342731755b6f425b2d7fe44-437\"",
+      "last_modified_ms": 1792090923059
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__16_0.distcp",
+      "bytes": 29905098454,
+      "etag": "\"b905bf43d41690dc592e41f76194ebb1-446\"",
+      "last_modified_ms": 1792090965939
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__17_0.distcp",
+      "bytes": 29320380215,
+      "etag": "\"0d0e043500159f26b245d4a7fec7e0b0-437\"",
+      "last_modified_ms": 1792090959801
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__18_0.distcp",
+      "bytes": 29320380215,
+      "etag": "\"763536c6bf264dc05087898069a1e920-437\"",
+      "last_modified_ms": 1792090961396
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__19_0.distcp",
+      "bytes": 29320380215,
+      "etag": "\"1eb14845004c500442ab65480cef828a-437\"",
+      "last_modified_ms": 1792090965171
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__1_0.distcp",
+      "bytes": 29320465373,
+      "etag": "\"b253b39c92e21e1ccf5cad3aef4996ab-437\"",
+      "last_modified_ms": 1792090966440
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__20_0.distcp",
+      "bytes": 29312731734,
+      "etag": "\"a397bbd7a8f02607bc7d7b639b477e40-437\"",
+      "last_modified_ms": 1792090953404
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__21_0.distcp",
+      "bytes": 29312731734,
+      "etag": "\"677e944c61e1aa5172cc5e2ed8da5980-437\"",
+      "last_modified_ms": 1792090950855
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__22_0.distcp",
+      "bytes": 29312788506,
+      "etag": "\"cfbe43f528073fc43ff338e4c4c92321-437\"",
+      "last_modified_ms": 1792090923587
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__23_0.distcp",
+      "bytes": 29312741751,
+      "etag": "\"16405f1a4be654f74062b70d7566f6b5-437\"",
+      "last_modified_ms": 1792090953858
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__24_0.distcp",
+      "bytes": 29311381483,
+      "etag": "\"544a649c53796ac954f454dbe502bfb8-437\"",
+      "last_modified_ms": 1792090968322
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__25_0.distcp",
+      "bytes": 29311405138,
+      "etag": "\"dfd5840cfe48fb5af254e36189641524-437\"",
+      "last_modified_ms": 1792090960754
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__26_0.distcp",
+      "bytes": 29311400407,
+      "etag": "\"b71913f40ba05da12e9d1006176523a7-437\"",
+      "last_modified_ms": 1792090966774
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__27_0.distcp",
+      "bytes": 29311405138,
+      "etag": "\"5d46b366af5ea9180f056f2882e158f8-437\"",
+      "last_modified_ms": 1792090969972
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__28_0.distcp",
+      "bytes": 29311381483,
+      "etag": "\"4c41205e4a92cd96fd47b05f1de6ef02-437\"",
+      "last_modified_ms": 1792090956649
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__29_0.distcp",
+      "bytes": 29311406715,
+      "etag": "\"3c531d5e88edb4f14f4fe524c980c17e-437\"",
+      "last_modified_ms": 1792090931813
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__2_0.distcp",
+      "bytes": 29320460642,
+      "etag": "\"201b729b1a7aeb9b5fab28e1decbc057-437\"",
+      "last_modified_ms": 1792090967188
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__30_0.distcp",
+      "bytes": 29312573030,
+      "etag": "\"d7a2a51a7d32c00045b5a85793991a80-437\"",
+      "last_modified_ms": 1792090946863
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__31_0.distcp",
+      "bytes": 29312563568,
+      "etag": "\"ab41736039d19d3f554919ed6cda2d21-437\"",
+      "last_modified_ms": 1792090953560
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__3_0.distcp",
+      "bytes": 29320441718,
+      "etag": "\"507ed96be978da4fa8946f2720311ec5-437\"",
+      "last_modified_ms": 1792090966500
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__4_0.distcp",
+      "bytes": 29312816892,
+      "etag": "\"9e97ea2285696dd56ad041d8054a54bf-437\"",
+      "last_modified_ms": 1792090955349
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__5_0.distcp",
+      "bytes": 29312812161,
+      "etag": "\"89a9e3c2600348248168104535085f4f-437\"",
+      "last_modified_ms": 1792090954763
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__6_0.distcp",
+      "bytes": 29312793237,
+      "etag": "\"35eb3806d572ef49e4592dc1c174b89c-437\"",
+      "last_modified_ms": 1792090953304
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__7_0.distcp",
+      "bytes": 29312746482,
+      "etag": "\"da29b54c78f7fe2665139afab7be65b8-437\"",
+      "last_modified_ms": 1792090955279
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__8_0.distcp",
+      "bytes": 29311400407,
+      "etag": "\"60c2ef74ca33b68b3bc275d5f09e43d2-437\"",
+      "last_modified_ms": 1792090920626
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__9_0.distcp",
+      "bytes": 29311376752,
+      "etag": "\"271ceb6513dc79f59e55b9499c24e58d-437\"",
+      "last_modified_ms": 1792090923332
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/common.pt",
+      "bytes": 14941,
+      "etag": "\"c69950386f767c0b2fcd81c227fd09d5\"",
+      "last_modified_ms": 1792090975927
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/extra_state.pt",
+      "bytes": 1261,
+      "etag": "\"8bcc7a1b6f1d63fa2c5fbbff6d195edb\"",
+      "last_modified_ms": 1792090975961
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/huggingface/chat_template.jinja",
+      "bytes": 5112,
+      "etag": "\"68c9d6ece093c5f82e07cc1618068984\"",
+      "last_modified_ms": 1792090975960
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/huggingface/config.json",
+      "bytes": 1516,
+      "etag": "\"1ac5ec528040de83e7b7c49fbf7a700d\"",
+      "last_modified_ms": 1792090975956
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/huggingface/generation_config.json",
+      "bytes": 113,
+      "etag": "\"7920fdf2581fc30a2ab8b301af001392\"",
+      "last_modified_ms": 1792090975935
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/huggingface/tokenizer.json",
+      "bytes": 17209892,
+      "etag": "\"f4c6bdd3f418a243639b75fd5d21f423\"",
+      "last_modified_ms": 1792090975982
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/huggingface/tokenizer_config.json",
+      "bytes": 363,
+      "etag": "\"03f6b308b264795e153c6c680a995b34\"",
+      "last_modified_ms": 1792090975957
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/metadata.json",
+      "bytes": 119,
+      "etag": "\"d102bc956936ac1a049d295fae8b9a18\"",
+      "last_modified_ms": 1792090975970
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/trainer_state.pt",
+      "bytes": 107245,
+      "etag": "\"8e282ef812dfe6ae12777a481011eb59\"",
+      "last_modified_ms": 1792090976438
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/latest_ckpt_global_step.txt",
+      "bytes": 1,
+      "etag": "\"e4da3b7fbbce2345d7772b0674a318d5\"",
+      "last_modified_ms": 1792090976976
+    }
+  ],
+  "retained_control_bytes": [
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/latest_ckpt_global_step.txt",
+      "bytes": 1,
+      "etag": "\"e4da3b7fbbce2345d7772b0674a318d5\"",
+      "last_modified_ms": 1792090976976,
+      "read_bytes": 1,
+      "range": null,
+      "sha256_of_retained_bytes": "ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/latest_ckpt_global_step.txt"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/trainer_state.pt",
+      "bytes": 107245,
+      "etag": "\"8e282ef812dfe6ae12777a481011eb59\"",
+      "last_modified_ms": 1792090976438,
+      "read_bytes": 107245,
+      "range": null,
+      "sha256_of_retained_bytes": "5df44a0efbee421b53fcb4d4558d3372e85afe47249f25d6221e7dbb98d8b882",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/trainer_state.pt"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/data.pt",
+      "bytes": 1645,
+      "etag": "\"3f4605df937bf07e531a9c75b91d2045\"",
+      "last_modified_ms": 1792090976704,
+      "read_bytes": 1645,
+      "range": null,
+      "sha256_of_retained_bytes": "f4dab7ad91048d8815b0edf5b3e342cf0d3910747d54c18edbaf5e08ba5f21ce",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/data.pt"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/common.pt",
+      "bytes": 14941,
+      "etag": "\"c69950386f767c0b2fcd81c227fd09d5\"",
+      "last_modified_ms": 1792090975927,
+      "read_bytes": 14941,
+      "range": null,
+      "sha256_of_retained_bytes": "b2c5eeb5e19a50f2bd846b10d189c596338bf51ba8d9dfaf357132faeead1830",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/common.pt"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/.metadata",
+      "bytes": 11730355,
+      "etag": "\"8bb7c325c43b5293fd9ec3849b08dbdb\"",
+      "last_modified_ms": 1792090973023,
+      "read_bytes": 11730355,
+      "range": null,
+      "sha256_of_retained_bytes": "a065d485b42242d236c6aa8945fa5377f83afaad22b51d3566ef584f86eeb4ad",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/.metadata"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__0_0.distcp",
+      "bytes": 29905174150,
+      "etag": "\"04e31747fd4f090fd566db49b0d49045-446\"",
+      "last_modified_ms": 1792090968804,
+      "read_bytes": 1581,
+      "range": [
+        1398012,
+        1581
+      ],
+      "sha256_of_retained_bytes": "a00472f79e18a6d7355acb0c7cac5255b062aca76268db66ee1b6285aa34cb67",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__0_0.distcp.range-1398012-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__0_0.distcp",
+      "bytes": 29905174150,
+      "etag": "\"04e31747fd4f090fd566db49b0d49045-446\"",
+      "last_modified_ms": 1792090968804,
+      "read_bytes": 1581,
+      "range": [
+        1402243,
+        1581
+      ],
+      "sha256_of_retained_bytes": "953897f69e8b28672a66435d4ba2db263783208dac0c46a7ff73c45d066212dc",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__0_0.distcp.range-1402243-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__1_0.distcp",
+      "bytes": 29320465373,
+      "etag": "\"b253b39c92e21e1ccf5cad3aef4996ab-437\"",
+      "last_modified_ms": 1792090966440,
+      "read_bytes": 1581,
+      "range": [
+        1258816,
+        1581
+      ],
+      "sha256_of_retained_bytes": "953897f69e8b28672a66435d4ba2db263783208dac0c46a7ff73c45d066212dc",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__1_0.distcp.range-1258816-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__2_0.distcp",
+      "bytes": 29320460642,
+      "etag": "\"201b729b1a7aeb9b5fab28e1decbc057-437\"",
+      "last_modified_ms": 1792090967188,
+      "read_bytes": 1581,
+      "range": [
+        1258816,
+        1581
+      ],
+      "sha256_of_retained_bytes": "953897f69e8b28672a66435d4ba2db263783208dac0c46a7ff73c45d066212dc",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__2_0.distcp.range-1258816-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__3_0.distcp",
+      "bytes": 29320441718,
+      "etag": "\"507ed96be978da4fa8946f2720311ec5-437\"",
+      "last_modified_ms": 1792090966500,
+      "read_bytes": 1581,
+      "range": [
+        1258816,
+        1581
+      ],
+      "sha256_of_retained_bytes": "953897f69e8b28672a66435d4ba2db263783208dac0c46a7ff73c45d066212dc",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__3_0.distcp.range-1258816-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__4_0.distcp",
+      "bytes": 29312816892,
+      "etag": "\"9e97ea2285696dd56ad041d8054a54bf-437\"",
+      "last_modified_ms": 1792090955349,
+      "read_bytes": 1581,
+      "range": [
+        1258816,
+        1581
+      ],
+      "sha256_of_retained_bytes": "953897f69e8b28672a66435d4ba2db263783208dac0c46a7ff73c45d066212dc",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__4_0.distcp.range-1258816-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__5_0.distcp",
+      "bytes": 29312812161,
+      "etag": "\"89a9e3c2600348248168104535085f4f-437\"",
+      "last_modified_ms": 1792090954763,
+      "read_bytes": 1581,
+      "range": [
+        1258816,
+        1581
+      ],
+      "sha256_of_retained_bytes": "953897f69e8b28672a66435d4ba2db263783208dac0c46a7ff73c45d066212dc",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__5_0.distcp.range-1258816-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__6_0.distcp",
+      "bytes": 29312793237,
+      "etag": "\"35eb3806d572ef49e4592dc1c174b89c-437\"",
+      "last_modified_ms": 1792090953304,
+      "read_bytes": 1581,
+      "range": [
+        1258816,
+        1581
+      ],
+      "sha256_of_retained_bytes": "953897f69e8b28672a66435d4ba2db263783208dac0c46a7ff73c45d066212dc",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__6_0.distcp.range-1258816-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__7_0.distcp",
+      "bytes": 29312746482,
+      "etag": "\"da29b54c78f7fe2665139afab7be65b8-437\"",
+      "last_modified_ms": 1792090955279,
+      "read_bytes": 1581,
+      "range": [
+        1258816,
+        1581
+      ],
+      "sha256_of_retained_bytes": "953897f69e8b28672a66435d4ba2db263783208dac0c46a7ff73c45d066212dc",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__7_0.distcp.range-1258816-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__16_0.distcp",
+      "bytes": 29905098454,
+      "etag": "\"b905bf43d41690dc592e41f76194ebb1-446\"",
+      "last_modified_ms": 1792090965939,
+      "read_bytes": 1581,
+      "range": [
+        1398012,
+        1581
+      ],
+      "sha256_of_retained_bytes": "a00472f79e18a6d7355acb0c7cac5255b062aca76268db66ee1b6285aa34cb67",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__16_0.distcp.range-1398012-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__16_0.distcp",
+      "bytes": 29905098454,
+      "etag": "\"b905bf43d41690dc592e41f76194ebb1-446\"",
+      "last_modified_ms": 1792090965939,
+      "read_bytes": 1581,
+      "range": [
+        1402243,
+        1581
+      ],
+      "sha256_of_retained_bytes": "953897f69e8b28672a66435d4ba2db263783208dac0c46a7ff73c45d066212dc",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__16_0.distcp.range-1402243-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__17_0.distcp",
+      "bytes": 29320380215,
+      "etag": "\"0d0e043500159f26b245d4a7fec7e0b0-437\"",
+      "last_modified_ms": 1792090959801,
+      "read_bytes": 1581,
+      "range": [
+        1258816,
+        1581
+      ],
+      "sha256_of_retained_bytes": "953897f69e8b28672a66435d4ba2db263783208dac0c46a7ff73c45d066212dc",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__17_0.distcp.range-1258816-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__18_0.distcp",
+      "bytes": 29320380215,
+      "etag": "\"763536c6bf264dc05087898069a1e920-437\"",
+      "last_modified_ms": 1792090961396,
+      "read_bytes": 1581,
+      "range": [
+        1258816,
+        1581
+      ],
+      "sha256_of_retained_bytes": "953897f69e8b28672a66435d4ba2db263783208dac0c46a7ff73c45d066212dc",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__18_0.distcp.range-1258816-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__19_0.distcp",
+      "bytes": 29320380215,
+      "etag": "\"1eb14845004c500442ab65480cef828a-437\"",
+      "last_modified_ms": 1792090965171,
+      "read_bytes": 1581,
+      "range": [
+        1258816,
+        1581
+      ],
+      "sha256_of_retained_bytes": "953897f69e8b28672a66435d4ba2db263783208dac0c46a7ff73c45d066212dc",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__19_0.distcp.range-1258816-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__20_0.distcp",
+      "bytes": 29312731734,
+      "etag": "\"a397bbd7a8f02607bc7d7b639b477e40-437\"",
+      "last_modified_ms": 1792090953404,
+      "read_bytes": 1581,
+      "range": [
+        1258816,
+        1581
+      ],
+      "sha256_of_retained_bytes": "953897f69e8b28672a66435d4ba2db263783208dac0c46a7ff73c45d066212dc",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__20_0.distcp.range-1258816-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__21_0.distcp",
+      "bytes": 29312731734,
+      "etag": "\"677e944c61e1aa5172cc5e2ed8da5980-437\"",
+      "last_modified_ms": 1792090950855,
+      "read_bytes": 1581,
+      "range": [
+        1258816,
+        1581
+      ],
+      "sha256_of_retained_bytes": "953897f69e8b28672a66435d4ba2db263783208dac0c46a7ff73c45d066212dc",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__21_0.distcp.range-1258816-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__22_0.distcp",
+      "bytes": 29312788506,
+      "etag": "\"cfbe43f528073fc43ff338e4c4c92321-437\"",
+      "last_modified_ms": 1792090923587,
+      "read_bytes": 1581,
+      "range": [
+        1258816,
+        1581
+      ],
+      "sha256_of_retained_bytes": "953897f69e8b28672a66435d4ba2db263783208dac0c46a7ff73c45d066212dc",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__22_0.distcp.range-1258816-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_5/policy/__23_0.distcp",
+      "bytes": 29312741751,
+      "etag": "\"16405f1a4be654f74062b70d7566f6b5-437\"",
+      "last_modified_ms": 1792090953858,
+      "read_bytes": 1581,
+      "range": [
+        1258816,
+        1581
+      ],
+      "sha256_of_retained_bytes": "953897f69e8b28672a66435d4ba2db263783208dac0c46a7ff73c45d066212dc",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/global_step_5/policy/__23_0.distcp.range-1258816-1581"
+    },
+    {
+      "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/checkpoints/global_step_3/trainer_state.pt",
+      "bytes": 107245,
+      "etag": "\"90d40c4e44e360c98ea591c53ca312c8\"",
+      "sha256_of_retained_bytes": "349fc8bb77589463e18a41068daac9c66f25f9813845d7576c2bf112099e1601",
+      "local_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-checkpoint173-save5-a1-native-checkpoint-controls-native-control-bytes/referenced-sampler-trainer-state.pt"
+    }
+  ],
+  "all_checks_passed": true
+}

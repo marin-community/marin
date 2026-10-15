@@ -1,0 +1,38 @@
+{
+  "run_id": "sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce",
+  "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+  "configuration_sha256": "400b4cb3079fb8948e696e4159bc4f247816055eb796469b62f4c91b7c7952d1",
+  "resolved_launch_sha256": "ee95287c07a2d4c78ffc441e11ef9fe9a00267dbd6bf112ff94be95062de17bd",
+  "entire_native_resolved_config_matches": true,
+  "normalization": "Native load_launch_config composition; native apply_task_local_values data paths; exact immutable tokenizer metadata cache path and cleared local tokenizer revision as in task_runtime.py. OmegaConf loads both sides with the native scalar types.",
+  "model": {
+    "chat_template": null,
+    "identity": "models/snowball-67b-a2b-sft-s2-thinking@2026.08.30:c6168770",
+    "local_path": "/tmp/marinskyrl/models/snowball-67b-a2b-sft-s2-thinking",
+    "tokenizer_revision": "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2",
+    "tokenizer_uri": "marin-community/marin-tokenizer",
+    "uri": "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b-sft-s2-thinking/step-630/hf-bf16-vllm/"
+  },
+  "train_data": [
+    {
+      "identity": "curriculum-rl-pool@2026.09.18:seed0:01a126ce",
+      "kind": "directory",
+      "local_path": "/tmp/marinskyrl/data/snowball-curriculum-s0",
+      "relative_path": "train.parquet",
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/snowball-inputs-01a126ce/seed0"
+    }
+  ],
+  "validation_data": [
+    {
+      "identity": "curriculum-rl-pool@2026.09.18:seed0:01a126ce",
+      "kind": "directory",
+      "local_path": "/tmp/marinskyrl/data/snowball-curriculum-s0",
+      "relative_path": "validation.parquet",
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/snowball-inputs-01a126ce/seed0"
+    }
+  ],
+  "tokenizer_metadata_path": "/tmp/marinskyrl/model_metadata/d42f2392996e9216e91892577212d1cee2a3b8a8fc7324556e7f1d5e3d1637db",
+  "scope": "Exact source/config/model/tokenizer/data declarations and all resolved training settings checked. This does not claim a new full-weight content SHA.",
+  "native_compiler_file_sha256": "cddd77ae43d3bbce305ace7e398aa9796626dc04c5d89e0a69cd6abac1977e08",
+  "native_compiler_head": "173f626e668ba9284e7a9a42354c1505cab22ad1"
+}

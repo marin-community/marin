@@ -1,7 +1,7 @@
 {
   "scope": "Three-phase five-node engineering qualification for the checkpoint-recovery candidate. Initial save5 is submitted; both restore phases remain gated. It cannot replace scientific main1200 or stale calibration130.",
   "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
-  "status": "All Qwen GPU/native/full3584replay prerequisites pass. Exact173 save5 attempt0 was preempted; automatic attempt1 is running and has native update1 plus clean eval0. Subsequent noise evidence at sync0/3 matches all8 original worker fingerprints. Native fullsave5 and both restore gates remain incomplete.",
+  "status": "Exact173 initial five-node save5 passes all native and all12152 original-response gates. All5 native ranks exit0, full recipe/32-rank checkpoint controls/real Flash/noise/eval progress verified. Restore5-to7 is now eligible; restore7-to9 remains gated. This is engineering qualification, not a scientific1200-update comparison.",
   "prerequisite": "Complete bounded Qwen periodic/noisy save2, restore2-to5, restore5-to7 qualification with real native state and behavior evidence.",
   "geometry": {
     "cluster": "cw-rno2a",
@@ -124,10 +124,10 @@
           "task_id": "/romain/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/0",
           "attempt_id": "1",
           "attempt_uid": "ba35a394e9b60fd3",
-          "state": "3",
-          "exit_code": "",
+          "state": "4",
+          "exit_code": "0",
           "started_at_ms": "1792083910768",
-          "finished_at_ms": "",
+          "finished_at_ms": "1792091095341",
           "node_name": "g1cc242",
           "terminal_reason": ""
         },
@@ -135,10 +135,10 @@
           "task_id": "/romain/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/1",
           "attempt_id": "1",
           "attempt_uid": "32ca0ddfec5f6487",
-          "state": "3",
-          "exit_code": "",
+          "state": "4",
+          "exit_code": "0",
           "started_at_ms": "1792083892529",
-          "finished_at_ms": "",
+          "finished_at_ms": "1792091095341",
           "node_name": "g1cc352",
           "terminal_reason": ""
         },
@@ -146,10 +146,10 @@
           "task_id": "/romain/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/2",
           "attempt_id": "1",
           "attempt_uid": "ff5f9ec4be6b6e78",
-          "state": "3",
-          "exit_code": "",
+          "state": "4",
+          "exit_code": "0",
           "started_at_ms": "1792083910768",
-          "finished_at_ms": "",
+          "finished_at_ms": "1792091095341",
           "node_name": "g82196a",
           "terminal_reason": ""
         },
@@ -157,10 +157,10 @@
           "task_id": "/romain/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/3",
           "attempt_id": "1",
           "attempt_uid": "133d153ece88016c",
-          "state": "3",
-          "exit_code": "",
+          "state": "4",
+          "exit_code": "0",
           "started_at_ms": "1792083910768",
-          "finished_at_ms": "",
+          "finished_at_ms": "1792091095341",
           "node_name": "gb9a8e0",
           "terminal_reason": ""
         },
@@ -168,14 +168,59 @@
           "task_id": "/romain/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce/4",
           "attempt_id": "1",
           "attempt_uid": "a2c7f9e25336b031",
-          "state": "3",
-          "exit_code": "",
+          "state": "4",
+          "exit_code": "0",
           "started_at_ms": "1792083892529",
-          "finished_at_ms": "",
+          "finished_at_ms": "1792091095341",
           "node_name": "gf62afe",
           "terminal_reason": ""
         }
-      ]
+      ],
+      "native_process_complete": true,
+      "full_response_replay_complete": true,
+      "native_proofs": {
+        "full-native-audit.json.gz": {
+          "report": "snowball_checkpoint173_save5_full_native_audit.json.gz",
+          "sha256": "4b3a4c9961febc7fd94709f50795abe06c6f545d34c84a969b9d18288a24cff7"
+        },
+        "entire-native-resolved-recipe.json": {
+          "report": "snowball_checkpoint173_save5_entire_native_resolved_recipe.json",
+          "sha256": "3e3611ebfe8b431cdc9215f9c4c1089aab10e5024f5a94820c5207cec33bc796"
+        },
+        "native-checkpoint-controls.json": {
+          "report": "snowball_checkpoint173_save5_native_checkpoint_controls.json",
+          "sha256": "57c55c410f08f96c5d2c425b40524ac1a07831186994730c273a1854e85d709f"
+        },
+        "persisted-evaluation-progress.json": {
+          "report": "snowball_checkpoint173_save5_persisted_evaluation_progress.json",
+          "sha256": "af2d921e69ca541738f743c9717081d5a7134a4409a984076f6d3d5124a9896c"
+        },
+        "real-flash-proof.json": {
+          "report": "snowball_checkpoint173_save5_real_flash_proof.json",
+          "sha256": "008250218cd04e1f983d8f690dcd53befab038220ee2cdad0abbe8cadada61e8"
+        },
+        "fixed-noise-observed.json": {
+          "report": "snowball_checkpoint173_save5_fixed_noise_observed.json",
+          "sha256": "fad799c8f0ae07d04a5d6ed8cf42c2e35ad2815fece368a64d147d2b060548e5"
+        }
+      },
+      "actual_attempt_h100_hours": 79.9096511111111,
+      "cpu_replay_plan": "cpu_replay_snowball_checkpoint_save5_plan.json",
+      "native_quality": [
+        {
+          "completed_updates": 0,
+          "responses": 4796,
+          "quality": 0.2957543560577845
+        },
+        {
+          "completed_updates": 5,
+          "responses": 4796,
+          "quality": 0.35175525140153024
+        }
+      ],
+      "noise_reference_representation_note": "The original source21 proof flattens DP8/TP1 worker fingerprints; this helper preserves the8x1 nesting. Comparing the same8 worker dictionaries after shape normalization passes. The original failed shape-only comparison is retained in the native session.",
+      "full_response_replay_proof": "snowball_checkpoint173_save5_complete_response_replay_proof.json",
+      "all_phase_gates_passed": true
     },
     {
       "phase": "restore5",
@@ -195,7 +240,10 @@
       ],
       "controller_confirmed": false,
       "submission_gate": "Previous five-node phase must pass complete native checkpoint, applied-step, serving/noise/version, full response and evaluation audits before this phase may submit.",
-      "prepared_configuration_sha256": "351dd38266fb993c36bb8867e1fb2e7babd3ee6242444bd343d96ff4b4909fa4"
+      "prepared_configuration_sha256": "351dd38266fb993c36bb8867e1fb2e7babd3ee6242444bd343d96ff4b4909fa4",
+      "submission_gate_passed": true,
+      "submitted_configuration": "snowball_checkpoint_recovery_qualification_v1/restore5-detach.yaml",
+      "configuration_sha256": "9651656a94a0997b8c36bbf53d69bb42c7cd1054ab02b310db9a1e0ecb440eab"
     },
     {
       "phase": "restore7",
