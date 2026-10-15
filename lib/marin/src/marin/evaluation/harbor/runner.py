@@ -34,10 +34,9 @@ from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
     run_harbor_driver,
 )
-from marin.evaluation.inference_recovery import inference_backend_state, run_with_inference_recovery
 from marin.evaluation.records import BenchmarkMetadataRef, EvalTaskRef, RunStatus, TaskCoverage
 from marin.evaluation.rollouts import normalize_rollouts
-from marin.evaluation.runner import EvaluationError, EvaluationOutcome
+from marin.evaluation.runner import EvaluationError, EvaluationOutcome, InferenceUnavailable, inference_attempt_state
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
 
@@ -328,11 +327,12 @@ def _run_harbor_job(
 ) -> HarborRunResult:
     job_dir = _job_dir(output_dir, job_name)
     logger.info("starting Harbor job %s (dataset=%s env=%s jobs_dir=%s)", job_name, dataset, environment, job_dir)
-    run_with_inference_recovery(
-        lambda: run_harbor_driver(config, overlay, driver_env, lambda: inference_backend_state(inference_sessions)),
-        lambda: _remove_unscored_trials(job_dir, config.error_taxonomy),
-        inference_sessions,
-    )
+    before = tuple(session.preemption_count() for session in inference_sessions)
+    try:
+        run_harbor_driver(config, overlay, driver_env, lambda: inference_attempt_state(inference_sessions, before))
+    except InferenceUnavailable:
+        _remove_unscored_trials(job_dir, config.error_taxonomy)
+        raise
 
     normalize_rollouts(output_dir, writer_id=f"marin-harbor-rollouts-{job_name}")
     trials = _read_trials(job_dir, config.error_taxonomy)
@@ -389,6 +389,8 @@ def _evaluation_outcome(
     """
     try:
         result = run()
+    except InferenceUnavailable:
+        raise
     except Exception as exc:
         raise EvaluationError(str(exc), status=RunStatus.FAILED) from exc
     unknown_errors = {name: count for name, count in result.errors.items() if name.startswith(_UNKNOWN_ERROR_PREFIX)}

@@ -93,11 +93,11 @@ def test_finestore_evalchemy_result_reads_evalchemy_results_artifacts(tmp_path):
     assert report.task_metrics == expected
 
 
-def test_missing_results_identify_the_recovered_archive(tmp_path):
-    archive_path = str(tmp_path / "recovered")
+def test_missing_results_identify_the_archive(tmp_path):
+    archive_path = str(tmp_path / "archive")
     with EvaluationStore.open(archive_path, writer_id="empty-attempt") as store:
         store.seal()
-    result = FineStoreEvalchemyResult(path=str(tmp_path / "original"), archive_path=archive_path)
+    result = FineStoreEvalchemyResult(path=archive_path)
 
     with pytest.raises(FileNotFoundError) as exc_info:
         result.task_metrics()

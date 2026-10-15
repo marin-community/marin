@@ -26,9 +26,8 @@ from marin.evaluation.harbor.runner import (
     _read_trial,
     _read_trials,
 )
-from marin.evaluation.inference_recovery import InferenceUnavailable
 from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind, RunStatus
-from marin.evaluation.runner import EvaluationError
+from marin.evaluation.runner import EvaluationError, InferenceUnavailable, run_evaluation
 from marin.external_dependencies import HARBOR
 from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
@@ -350,6 +349,9 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
         recovery_waits = 0
         unavailable = False
 
+        def preemption_count(self) -> int:
+            return 0
+
         def backend_state(self) -> InferenceBackendState:
             if self.unavailable:
                 return InferenceBackendState.RECOVERING
@@ -420,7 +422,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
 
     monkeypatch.setattr(runner, "run_harbor_driver", run_driver)
 
-    outcome = executor(session, output_dir, {})
+    outcome = run_evaluation(executor, session, output_dir, {})
 
     assert session.recovery_waits == 1
     assert driver_starts == 2
@@ -520,8 +522,9 @@ exec "$IRIS_UV_EXECUTABLE" "$@"
     assert completed.stdout == str(tmp_path)
 
 
-def test_harbor_driver_classifies_fast_failure_from_unavailable_dependency(tmp_path, monkeypatch):
-    monkeypatch.setattr(driver_config, "_driver_command", lambda *_args: ["false"])
+@pytest.mark.parametrize("command", ["true", "false"])
+def test_harbor_driver_classifies_fast_exit_from_unavailable_dependency(tmp_path, monkeypatch, command):
+    monkeypatch.setattr(driver_config, "_driver_command", lambda *_args: [command])
 
     def backend_state() -> InferenceBackendState:
         return InferenceBackendState.RECOVERING

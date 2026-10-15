@@ -4,11 +4,12 @@
 """Serve one model and run a batch of endpoint-oriented evaluations."""
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from typing import Protocol
 
+from finestore.reader import ReadView
 from fray.client import JobHandle
 from iris.client.client import IrisClient, Job, iris_ctx
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
@@ -20,7 +21,6 @@ from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_
 from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.inference_metrics import InferenceMetricWindow
-from marin.evaluation.inference_recovery import InferenceUnavailable, run_with_inference_recovery
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import (
@@ -43,7 +43,12 @@ from marin.evaluation.records import (
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.backend import OPENAI_API_SUFFIX
-from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
+from marin.inference.iris import (
+    InferenceBackendState,
+    RemoteInferenceSession,
+    RemoteInferenceStartupError,
+    remote_inference,
+)
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 
 logger = logging.getLogger(__name__)
@@ -58,6 +63,81 @@ _UNCONSTRAINED = "unconstrained"
 _REPORT_TAIL_LINES = 15
 
 
+# Stop evaluator attempts before their HTTP retries exhaust during a model reload.
+BACKEND_POLL_SECONDS = 5.0
+
+
+class InferenceUnavailable(RuntimeError):
+    """An evaluator attempt must stop while its inference backends recover."""
+
+
+class InferenceBackendFinished(RuntimeError):
+    """Inference ended permanently while an evaluator depended on it."""
+
+
+def inference_backend_state(sessions: tuple[RemoteInferenceSession, ...]) -> InferenceBackendState:
+    """Combine dependency states, with terminal failure taking precedence over recovery."""
+    states = tuple(session.backend_state() for session in sessions)
+    if InferenceBackendState.FINISHED in states:
+        return InferenceBackendState.FINISHED
+    if InferenceBackendState.RECOVERING in states:
+        return InferenceBackendState.RECOVERING
+    return InferenceBackendState.READY
+
+
+def check_inference_backend(state: InferenceBackendState) -> None:
+    """Interrupt an attempt on a recoverable outage; fail on a terminal backend."""
+    if state is InferenceBackendState.RECOVERING:
+        raise InferenceUnavailable("inference backends are not ready")
+    if state is InferenceBackendState.FINISHED:
+        raise InferenceBackendFinished("inference backend finished while evaluation was running")
+
+
+def inference_attempt_state(
+    sessions: tuple[RemoteInferenceSession, ...], before: tuple[int, ...]
+) -> InferenceBackendState:
+    """Include preemptions that recovered between evaluator health polls."""
+    state = inference_backend_state(sessions)
+    if state is InferenceBackendState.READY and before != tuple(session.preemption_count() for session in sessions):
+        return InferenceBackendState.RECOVERING
+    return state
+
+
+def run_with_inference_recovery[T](
+    attempt: Callable[[int], T],
+    sessions: tuple[RemoteInferenceSession, ...],
+) -> T:
+    """Wait through outages and retry with the adapter's durable progress preserved.
+
+    The attempt must monitor dependencies and cancel its work before raising
+    InferenceUnavailable. This function does not monitor a running attempt.
+    The zero-based attempt number is passed explicitly to each attempt.
+    Other errors propagate without retry.
+    """
+
+    def check_dependencies() -> None:
+        if inference_backend_state(sessions) is InferenceBackendState.FINISHED:
+            check_inference_backend(InferenceBackendState.FINISHED)
+
+    def wait_for_backends() -> None:
+        for session in sessions:
+            session.wait_until_ready(check_dependencies=check_dependencies)
+
+    attempt_number = 0
+    while True:
+        state = inference_backend_state(sessions)
+        if state is InferenceBackendState.RECOVERING:
+            wait_for_backends()
+        else:
+            check_inference_backend(state)
+        try:
+            return attempt(attempt_number)
+        except InferenceUnavailable:
+            logger.warning("pausing evaluation while inference recovers")
+            wait_for_backends()
+            attempt_number += 1
+
+
 @dataclass(frozen=True)
 class EvaluationOutcome:
     metrics: dict[str, dict[str, float]]
@@ -66,8 +146,6 @@ class EvaluationOutcome:
     jobs: dict[str, str] = field(default_factory=dict)
     coverage: dict[str, TaskCoverage] = field(default_factory=dict)
     """Per-task item coverage for mechanisms that report an attempted-item count; empty otherwise."""
-    results_path: str | None = None
-    """Final archive when the executor redirects output during recovery."""
 
 
 class EvaluationError(RuntimeError):
@@ -79,7 +157,6 @@ class EvaluationError(RuntimeError):
         jobs: dict[str, str] | None = None,
         log_tails: dict[str, tuple[str, ...]] | None = None,
         coverage: dict[str, TaskCoverage] | None = None,
-        results_path: str | None = None,
     ):
         super().__init__(message)
         self.status = status
@@ -88,15 +165,10 @@ class EvaluationError(RuntimeError):
         self.coverage = coverage or {}
         """Coverage measured before the failure, so a rejected run records why it was rejected as
         structured counts rather than only as an error string."""
-        self.results_path = results_path
 
 
 class EvalExecutor(Protocol):
-    """Execute against an inference session, raising EvaluationError on failure.
-
-    The outcome or error's results_path identifies the final archive when recovery
-    redirects output; otherwise callers use the requested output_dir.
-    """
+    """Execute one resumable attempt at output_dir; raise EvaluationError on failure."""
 
     def __call__(
         self,
@@ -193,7 +265,6 @@ def _record(
     tasks: tuple[EvalTaskRef, ...] | None = None,
     serving: ServingParams | None = None,
     inference_metrics: InferenceMetrics | None = None,
-    results_path: str | None = None,
 ) -> str:
     evaluation = identity.eval_ref
     if tasks is not None:
@@ -261,7 +332,7 @@ def _record(
         serving=serving,
         inference_metrics=inference_metrics,
         error=error,
-        results_path=results_path or identity.output_dir,
+        results_path=identity.output_dir,
         metrics=metrics,
         canonical_metrics=canonical_metrics or {},
         coverage=coverage or {},
@@ -336,25 +407,39 @@ class _EvaluationExecution:
     log_tails: dict[str, tuple[str, ...]]
 
 
-def _execute_evaluation(
-    evaluation: Evaluation,
+def run_evaluation(
+    executor: EvalExecutor,
     session: RemoteInferenceSession,
+    output_dir: str,
     env_vars: Mapping[str, str],
-    judge: RemoteInferenceSession | None,
+    *,
+    judge: RemoteInferenceSession | None = None,
+    endpoint_route: EndpointRoute = EndpointRoute.CAPABILITY,
 ) -> EvaluationOutcome:
+    """Supervise one evaluator and resume the same archive after inference outages."""
     sessions = (session,) if judge is None else (session, judge)
+    resuming_archive = bool(ReadView(output_dir).table_names())
 
-    def attempt() -> EvaluationOutcome:
-        execution_session = (
-            _local_endpoint_session(session) if evaluation.endpoint_route is EndpointRoute.DIRECT else session
+    def attempt(attempt_number: int) -> EvaluationOutcome:
+        before = tuple(inference.preemption_count() for inference in sessions)
+        execution_session = _local_endpoint_session(session) if endpoint_route is EndpointRoute.DIRECT else session
+        # Only the adapter may authorize retry, after its child has stopped.
+        outcome = executor(execution_session, output_dir, env_vars, judge=judge)
+        transport_failures = any(
+            entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for entry in outcome.coverage.values()
         )
-        return evaluation.executor(execution_session, evaluation.identity.output_dir, env_vars, judge=judge)
+        interrupted = inference_attempt_state(sessions, before) is InferenceBackendState.RECOVERING
+        if transport_failures and (resuming_archive or attempt_number > 0 or interrupted):
+            # Evalchemy restores saved transport failures; replay cannot repair those requests.
+            raise EvaluationError(
+                "saved transport failures cannot be safely resumed after an inference interruption",
+                status=RunStatus.INFRA_FAILED,
+                jobs=outcome.jobs,
+                coverage=outcome.coverage,
+            )
+        return outcome
 
-    return run_with_inference_recovery(
-        attempt,
-        lambda: None,
-        sessions,
-    )
+    return run_with_inference_recovery(attempt, sessions)
 
 
 def _run_one_evaluation(
@@ -365,7 +450,6 @@ def _run_one_evaluation(
     env_vars: Mapping[str, str],
     judge: RemoteInferenceSession | None,
 ) -> _EvaluationExecution:
-    results_path = evaluation.identity.output_dir
     jobs = {_ORCHESTRATOR_ROLE: orchestrator_job_id}
     jobs.update(_session_job_ids(session, _INFERENCE_ROLE))
     if judge is not None:
@@ -399,8 +483,14 @@ def _run_one_evaluation(
                 )
         allowed_env_keys = (*EVAL_RUNTIME_ENV_KEYS, *evaluation.secret_env_keys)
         evaluation_env = {key: env_vars[key] for key in allowed_env_keys if key in env_vars}
-        outcome = _execute_evaluation(evaluation, session, evaluation_env, judge)
-        results_path = outcome.results_path or results_path
+        outcome = run_evaluation(
+            evaluation.executor,
+            session,
+            evaluation.identity.output_dir,
+            evaluation_env,
+            judge=judge,
+            endpoint_route=evaluation.endpoint_route,
+        )
         metrics = outcome.metrics
         coverage = outcome.coverage
         canonical_metrics = outcome.canonical_metrics
@@ -419,7 +509,6 @@ def _run_one_evaluation(
             error = f"infrastructure coverage below {DEFAULT_MIN_COVERAGE:.0%}: {', '.join(low_coverage)}"
     except Exception as exc:
         if isinstance(exc, EvaluationError):
-            results_path = exc.results_path or results_path
             status = exc.status
             jobs |= exc.jobs
             tails = exc.log_tails
@@ -469,7 +558,6 @@ def _run_one_evaluation(
         tasks,
         serving=serving,
         inference_metrics=inference_metrics,
-        results_path=results_path,
     )
     record_rollout_run(
         rollout_run_record(
@@ -477,7 +565,7 @@ def _run_one_evaluation(
             run_kind=RolloutRunKind.EVALUATION,
             producer=evaluation.identity.eval_ref.mechanism,
             status=status.value,
-            rollout_uri=results_path,
+            rollout_uri=evaluation.identity.output_dir,
             storage_format="finestore",
             artifact_uri=path,
             model=batch.model.name,

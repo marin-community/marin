@@ -30,6 +30,7 @@ from marin.evaluation.evalchemy.runner import (
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.lm_eval import LM_EVAL_UV_PACKAGES, LmEvalResults, LmEvalRun, run_lm_eval
 from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
+from marin.evaluation.runner import run_evaluation
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import result_type_name, write_artifact
@@ -97,14 +98,15 @@ def run_served_evalchemy(config: EvalchemyEvalConfig) -> FineStoreEvalchemyResul
         priority=job_pb2.PRIORITY_BAND_INHERIT,
     )
     with remote_inference(inference) as session:
-        outcome = EvalchemyExecutor(config.run)(
+        outcome = run_evaluation(
+            EvalchemyExecutor(config.run),
             session,
             output_dir,
             runtime_env,
         )
         jobs = {f"serve-{index}" if index else "serve": str(job.job_id) for index, job in enumerate(session.jobs)}
         jobs |= outcome.jobs
-    result = FineStoreEvalchemyResult(path=output_dir, archive_path=outcome.results_path, jobs=jobs)
+    result = FineStoreEvalchemyResult(path=output_dir, jobs=jobs)
     write_artifact(result.result_payload(), output_dir)
     return result
 

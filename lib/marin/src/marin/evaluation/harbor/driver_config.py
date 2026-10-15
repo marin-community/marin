@@ -19,8 +19,8 @@ from rigging.tunnel import terminate_process_group
 
 from marin.evaluation.eval_env import env_vars_from_keys
 from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_LENGTH
-from marin.evaluation.inference_recovery import BACKEND_POLL_SECONDS, check_inference_backend
 from marin.evaluation.records import BenchmarkMetadataRef
+from marin.evaluation.runner import BACKEND_POLL_SECONDS, check_inference_backend
 from marin.external_dependencies import HARBOR
 from marin.inference.iris import InferenceBackendState
 
@@ -250,8 +250,8 @@ def _stream_driver(
         terminate_process_group(process, grace_period=_DRIVER_TERMINATION_GRACE_SECONDS)
         raise
 
+    check_inference_backend(backend_state())
     if return_code:
-        check_inference_backend(backend_state())
         exc = subprocess.CalledProcessError(return_code, command)
         raise _driver_failure(exc) from exc
 
