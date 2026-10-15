@@ -72,6 +72,7 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.fast_track.host_stall import HostStallSampler
 from experiments.grug.fast_track.library_kernels import load_library_kernels
 from experiments.grug.fast_track.model import (
+    PARAM_DTYPE_LEAVES,
     DenseMLP,
     GrugModelConfig,
     LayerSkip,
@@ -548,8 +549,13 @@ def _layer_stacks(model: Transformer):
 
 def _cast_to_compute(mp: jmp.Policy, model: Transformer) -> Transformer:
     """The compute-dtype model. Under ``scan_layers`` the layer stacks stay in the param dtype: the scan casts one
-    unit's weights at a time, so the step never holds a compute copy (or its gradient) of every layer's weights."""
-    compute = mp.cast_to_compute(model)
+    unit's weights at a time, so the step never holds a compute copy (or its gradient) of every layer's weights.
+    ``PARAM_DTYPE_LEAVES`` always stay in the param dtype."""
+    compute = jax.tree_util.tree_map_with_path(
+        lambda path, c, p: p if getattr(path[-1], "name", None) in PARAM_DTYPE_LEAVES else c,
+        mp.cast_to_compute(model),
+        model,
+    )
     if not model.config.scan_layers:
         return compute
     return eqx.tree_at(_layer_stacks, compute, replace=_layer_stacks(model), is_leaf=lambda x: x is None)

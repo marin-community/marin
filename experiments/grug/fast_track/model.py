@@ -177,6 +177,11 @@ _ATTN_RES_STREAM_MIX = "attn_res_stream_mix"
 _ATTN_RES_STREAM_GATES = ("attn", "mlp")
 # Initial scale of the MSAR stream-mixer logits (the paper's alpha).
 _STREAM_MIX_ALPHA_INIT = 0.01
+# Leaves the train step keeps in the param dtype (float32) under a bf16 compute policy: the MSAR mixers' per-layer
+# alpha [2] and b [2, m]. As bf16 their gradients join XLA GPU's combined float32 gradient all-reduce on 8 H100s and
+# come back through ``bf16[2] bitcast(f32[2])`` instead of a convert, i.e. as raw float32 bit halves (0, 1e18, inf,
+# NaN), and Adam's moments overflow within ~10-70 steps.
+PARAM_DTYPE_LEAVES = frozenset({"attn_res_stream_mix_alpha", "attn_res_stream_mix_b"})
 # Per-layer extras key carrying ``LayerSkip.keep`` into a skipped layer.
 _SKIP_KEEP = "layer_skip_keep"
 # Per-layer extras key carrying the extra-MLP token mask (``extra_mlp_layers``), and the entropy head's prediction.
