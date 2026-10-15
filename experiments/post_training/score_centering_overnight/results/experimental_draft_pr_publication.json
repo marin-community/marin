@@ -21,6 +21,50 @@
   "base_head": "117d0598dd017749a301e0374ef9db530fd8d8de",
   "stacked_on_core_pr": true,
   "initial_main_target_conflicts": true,
-  "current_mergeability": "Unknown immediately after retarget; recheck after GitHub recomputes.",
-  "checks_note": "Only skipped prose-cleanup checks reported initially; no CPU workflow conclusion claimed."
+  "current_mergeability": "MERGEABLE",
+  "checks_note": "Stacked draft is mergeable/clean. Only skipped prose-cleanup checks currently exist; no CPU workflow conclusion is claimed. Core968sixCPUchecks separatelySUCCESS.",
+  "merge_state": "CLEAN",
+  "observed_at": "2026-10-15T00:15:43Z",
+  "current_checks": [
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-14T23:55:25Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/marin-community/MarinSkyRL/actions/runs/38656994347/job/116168998280",
+      "name": "request-cleanup",
+      "startedAt": "2026-10-14T23:55:26Z",
+      "status": "COMPLETED",
+      "workflowName": "Ops - Agent Prose Cleanup (disabled)"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-14T23:55:26Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/marin-community/MarinSkyRL/actions/runs/38656994681/job/116169040340",
+      "name": "request-cleanup",
+      "startedAt": "2026-10-14T23:55:34Z",
+      "status": "COMPLETED",
+      "workflowName": "Ops - Agent Prose Cleanup (disabled)"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-14T23:59:49Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/marin-community/MarinSkyRL/actions/runs/38657409390/job/116170358778",
+      "name": "request-cleanup",
+      "startedAt": "2026-10-14T23:59:49Z",
+      "status": "COMPLETED",
+      "workflowName": "Ops - Agent Prose Cleanup (disabled)"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-15T00:00:24Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/marin-community/MarinSkyRL/actions/runs/38657473426/job/116170553354",
+      "name": "request-cleanup",
+      "startedAt": "2026-10-15T00:00:25Z",
+      "status": "COMPLETED",
+      "workflowName": "Ops - Agent Prose Cleanup (disabled)"
+    }
+  ]
 }
