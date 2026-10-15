@@ -4,14 +4,17 @@
 """Run endpoint-oriented evaluations as independent steps."""
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
+from functools import partial
 from typing import NoReturn, Protocol
 
 from fray.client import JobHandle
 from iris.client.client import Job, iris_ctx
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import SecretSpec
 
 from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
@@ -39,7 +42,7 @@ from marin.evaluation.records import (
     write_record,
 )
 from marin.evaluation.serving_config import inference_config_for_model
-from marin.execution.step_runner import StepRunner
+from marin.execution.step_runner import StepRunner, check_cache
 from marin.execution.step_spec import StepSpec
 from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
@@ -122,6 +125,9 @@ class Evaluation:
     executor: EvalExecutor
     endpoint_route: EndpointRoute
     secret_env_keys: tuple[str, ...] = ()
+
+
+type EvaluationStep = Callable[[Evaluation, str], dict[str, str]]
 
 
 @dataclass(frozen=True)
@@ -321,7 +327,7 @@ def _run_one_evaluation(
             execution_session = _local_endpoint_session(session)
         else:
             execution_session = session
-        if session.metrics_url is not None:
+        if session.metrics_url is not None and batch.max_concurrent == 1:
             try:
                 metric_session = execution_session
                 if evaluation.endpoint_route is EndpointRoute.CAPABILITY:
@@ -434,8 +440,10 @@ def _run_one_evaluation(
 
 
 def _record_startup_failure(
-    batch: EvaluationBatch,
     evaluation: Evaluation,
+    _output_path: str,
+    *,
+    batch: EvaluationBatch,
     orchestrator_job_id: str,
     exc: RemoteInferenceStartupError,
     role: str,
@@ -449,41 +457,40 @@ def _record_startup_failure(
     raise RuntimeError(f"{evaluation.identity.eval_ref.name} {subject} failed: {exc}") from exc
 
 
-def _evaluate_with_hosted_judge(
-    batch: EvaluationBatch,
+def run_evaluation_step(
     evaluation: Evaluation,
+    _output_path: str,
+    *,
+    batch: EvaluationBatch,
     session: RemoteInferenceSession,
+    judge: RemoteInferenceSession | None,
     orchestrator_job_id: str,
-    runtime_env: Mapping[str, str],
     evaluation_env: Mapping[str, str],
-) -> str:
-    if batch.judge is None:
-        return _run_one_evaluation(batch, evaluation, session, orchestrator_job_id, evaluation_env, None)
-    judge_inference = inference_config_for_model(
-        batch.judge.model,
-        batch.judge.accelerator,
-        env_vars=runtime_env,
-        capability_origin=batch.capability_origin,
-        api_model=batch.judge.api_model,
-        priority=batch.priority_band,
-    )
-    try:
-        with remote_inference(judge_inference) as judge:
-            return _run_one_evaluation(batch, evaluation, session, orchestrator_job_id, evaluation_env, judge)
-    except RemoteInferenceStartupError as exc:
-        _record_startup_failure(
-            batch,
-            evaluation,
-            orchestrator_job_id,
-            exc,
-            _JUDGE_ROLE,
-            _session_job_ids(session, _INFERENCE_ROLE),
-        )
+) -> dict[str, str]:
+    """Run one evaluator against the supplied sessions and write its result record."""
+    path = _run_one_evaluation(batch, evaluation, session, orchestrator_job_id, evaluation_env, judge)
+    return {"record_path": path}
 
 
-def run_evaluation_step(batch: EvaluationBatch, evaluation: Evaluation, _output_path: str) -> dict[str, str]:
-    """Serve one evaluation inside its StepSpec and write its result record."""
+def run_evaluation_steps(
+    batch: EvaluationBatch,
+    build_steps: Callable[[EvaluationStep], tuple[StepSpec, ...]],
+    _output_path: str,
+) -> None:
+    """Run pending evaluation steps against shared candidate and optional judge sessions."""
     configure_coreweave_s3()
+    if not batch.evaluations:
+        raise ValueError("an evaluation batch requires at least one evaluation")
+    if batch.max_concurrent < 1:
+        raise ValueError("max_concurrent must be at least 1")
+    if all(
+        check_cache(prefix_join(batch.records_prefix, evaluation.identity.run_id)) for evaluation in batch.evaluations
+    ):
+        return
+
+    def run(execute: EvaluationStep) -> None:
+        StepRunner().run(build_steps(execute), max_concurrent=batch.max_concurrent)
+
     orchestrator_job_id = str(iris_ctx().job_id)
     runtime_env = env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS)
     evaluation_env = {
@@ -498,28 +505,54 @@ def run_evaluation_step(batch: EvaluationBatch, evaluation: Evaluation, _output_
         api_model=batch.api_model,
         priority=batch.priority_band,
     )
-    try:
-        with remote_inference(inference) as session:
-            path = _evaluate_with_hosted_judge(
-                batch,
-                evaluation,
-                session,
-                orchestrator_job_id,
-                runtime_env,
-                evaluation_env,
+    with ExitStack() as stack:
+        try:
+            session = stack.enter_context(remote_inference(inference))
+        except RemoteInferenceStartupError as exc:
+            run(
+                partial(
+                    _record_startup_failure,
+                    batch=batch,
+                    orchestrator_job_id=orchestrator_job_id,
+                    exc=exc,
+                    role=_INFERENCE_ROLE,
+                )
             )
-    except RemoteInferenceStartupError as exc:
-        _record_startup_failure(batch, evaluation, orchestrator_job_id, exc, _INFERENCE_ROLE)
-    return {"record_path": path}
-
-
-def run_evaluation_steps(steps: tuple[StepSpec, ...], max_concurrent: int) -> None:
-    """Run each independent evaluation step, skipping successful steps on restart."""
-    if not steps:
-        raise ValueError("an evaluation batch requires at least one evaluation")
-    if max_concurrent < 1:
-        raise ValueError("max_concurrent must be at least 1")
-    StepRunner().run(steps, max_concurrent=max_concurrent)
+            return
+        judge = None
+        if batch.judge is not None:
+            judge_inference = inference_config_for_model(
+                batch.judge.model,
+                batch.judge.accelerator,
+                env_vars=runtime_env,
+                capability_origin=batch.capability_origin,
+                api_model=batch.judge.api_model,
+                priority=batch.priority_band,
+            )
+            try:
+                judge = stack.enter_context(remote_inference(judge_inference))
+            except RemoteInferenceStartupError as exc:
+                run(
+                    partial(
+                        _record_startup_failure,
+                        batch=batch,
+                        orchestrator_job_id=orchestrator_job_id,
+                        exc=exc,
+                        role=_JUDGE_ROLE,
+                        existing_jobs=_session_job_ids(session, _INFERENCE_ROLE),
+                    )
+                )
+                return
+        run(
+            partial(
+                run_evaluation_step,
+                batch=batch,
+                session=session,
+                judge=judge,
+                orchestrator_job_id=orchestrator_job_id,
+                evaluation_env=evaluation_env,
+            )
+        )
 
 
 def _local_endpoint_session(session: RemoteInferenceSession) -> RemoteInferenceSession:
