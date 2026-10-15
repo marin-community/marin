@@ -144,6 +144,15 @@ def local_machine(
     return machine, job
 
 
+def test_an_empty_workdir_is_refused_before_any_job_is_submitted():
+    """Iris launches every task container in /app, so an empty workdir cannot mean the image's own directory."""
+    factory = IrisMachineFactory(controller_url="http://controller")
+    spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir="")
+
+    with pytest.raises(UnsupportedMachineSpec, match="image's own working directory"):
+        asyncio.run(factory.create(spec))
+
+
 @pytest.mark.parametrize("resource", ["cpus", "storage_mb"])
 def test_zero_resource_requests_cannot_silently_select_iris_defaults(resource):
     with pytest.raises(ValueError, match=resource):
