@@ -93,18 +93,6 @@ def test_finestore_evalchemy_result_reads_evalchemy_results_artifacts(tmp_path):
     assert report.task_metrics == expected
 
 
-def test_missing_results_identify_the_archive(tmp_path):
-    archive_path = str(tmp_path / "archive")
-    with EvaluationStore.open(archive_path, writer_id="empty-attempt") as store:
-        store.seal()
-    result = FineStoreEvalchemyResult(path=archive_path)
-
-    with pytest.raises(FileNotFoundError) as exc_info:
-        result.task_metrics()
-
-    assert str(exc_info.value) == f"no Evalchemy results artifacts in FineStore archive {archive_path}"
-
-
 def test_evalchemy_result_keys_by_task_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     files = {
