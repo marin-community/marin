@@ -146,73 +146,86 @@ class TaskSession(Protocol):
     async def close(self) -> None: ...
 
 
+class RolloutEventType(StrEnum):
+    """Names each event payload, so a serialized event keeps its type."""
+
+    ATTEMPT_STARTED = "attempt_started"
+    MACHINE_READY = "machine_ready"
+    SESSION_PREPARED = "session_prepared"
+    MODEL_TURN_COMPLETED = "model_turn_completed"
+    TOOL_CALL_COMPLETED = "tool_call_completed"
+    TRANSITION_COMPLETED = "transition_completed"
+    GRADED = "graded"
+    ATTEMPT_ENDED = "attempt_ended"
+
+
 @dataclass(frozen=True)
 class AttemptStarted:
-    task_id: str
+    type: RolloutEventType = field(default=RolloutEventType.ATTEMPT_STARTED, init=False)
 
 
 @dataclass(frozen=True)
 class MachineReady:
     """The task machine is created, its resources installed, and its setup commands run."""
 
-    task_id: str
     duration: float
+    type: RolloutEventType = field(default=RolloutEventType.MACHINE_READY, init=False)
 
 
 @dataclass(frozen=True)
 class SessionPrepared:
-    task_id: str
     message_count: int
     duration: float
+    type: RolloutEventType = field(default=RolloutEventType.SESSION_PREPARED, init=False)
 
 
 @dataclass(frozen=True)
 class ModelTurnCompleted:
-    task_id: str
     turn_index: int
     stop_reason: str
     prompt_token_count: int
     response_token_count: int
     metadata: dict[str, Any]
     duration: float
+    type: RolloutEventType = field(default=RolloutEventType.MODEL_TURN_COMPLETED, init=False)
 
 
 @dataclass(frozen=True)
 class ToolCallCompleted:
     """A session tool call returned an observation to the model."""
 
-    task_id: str
     name: str
     observation_bytes: int
     duration: float
+    type: RolloutEventType = field(default=RolloutEventType.TOOL_CALL_COMPLETED, init=False)
 
 
 @dataclass(frozen=True)
 class TransitionCompleted:
-    task_id: str
     turn_index: int
     done: bool
     observation_count: int
     duration: float
+    type: RolloutEventType = field(default=RolloutEventType.TRANSITION_COMPLETED, init=False)
 
 
 @dataclass(frozen=True)
 class Graded:
-    task_id: str
     status: Outcome
     reward: float | None
+    type: RolloutEventType = field(default=RolloutEventType.GRADED, init=False)
 
 
 @dataclass(frozen=True)
 class AttemptEnded:
     """The attempt returned with ``stop_reason``, or was interrupted during ``operation``."""
 
-    task_id: str
     stop_reason: str | None
     operation: RolloutOperation | None
+    type: RolloutEventType = field(default=RolloutEventType.ATTEMPT_ENDED, init=False)
 
 
-RolloutEvent = (
+RolloutEventPayload = (
     AttemptStarted
     | MachineReady
     | SessionPrepared
@@ -222,6 +235,15 @@ RolloutEvent = (
     | Graded
     | AttemptEnded
 )
+
+
+@dataclass(frozen=True)
+class RolloutEvent:
+    """One event of the attempt that ``RolloutEngine.run`` started with ``run_key`` for task ``task_id``."""
+
+    run_key: str
+    task_id: str
+    payload: RolloutEventPayload
 
 
 class RolloutObserver(Protocol):
@@ -234,9 +256,9 @@ class RolloutObserver(Protocol):
 
 
 class EventSink(Protocol):
-    """Queue a rollout event for delivery; never blocks."""
+    """Queue an event payload for delivery as a ``RolloutEvent`` of the current attempt; never blocks."""
 
-    def emit(self, event: RolloutEvent) -> None: ...
+    def emit(self, payload: RolloutEventPayload) -> None: ...
 
 
 class TaskGrader(Protocol):

@@ -81,18 +81,20 @@ class RolloutEngine:
         self.sessions = {} if sessions is None else sessions
         self.observer = observer
 
-    async def run(self, lowered: LoweredTaskSpec) -> RolloutData:
+    async def run(self, lowered: LoweredTaskSpec, run_key: str | None = None) -> RolloutData:
         """Run one attempt; release its resources outside the attempt deadline.
 
+        Every event of the attempt carries ``run_key``, which defaults to the task id; callers that run
+        a task more than once pass a key per attempt to tell the attempts' events apart.
         Queued events are delivered within the cleanup deadline after the attempt's resources are
         released; events the observer did not receive are counted in ``RolloutData.metrics``.
         """
         validate_lowered_task(lowered, factories=self.factories, sessions=self.sessions)
-        events = _EventDelivery(self.observer)
+        events = _EventDelivery(self.observer, lowered.task.id if run_key is None else run_key, lowered.task.id)
         try:
-            events.emit(AttemptStarted(lowered.task.id))
+            events.emit(AttemptStarted())
             record, operation, cause = await self._run_attempt(lowered, events)
-            events.emit(AttemptEnded(record.task_id, None if operation is not None else record.stop_reason, operation))
+            events.emit(AttemptEnded(None if operation is not None else record.stop_reason, operation))
             delivery = await events.close(lowered.session.cleanup_timeout)
         finally:
             events.cancel()
@@ -157,7 +159,7 @@ class RolloutEngine:
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.START) from error
         if machine is not None:
-            events.emit(MachineReady(task.id, time.monotonic() - started))
+            events.emit(MachineReady(time.monotonic() - started))
 
         async def grade(messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult:
             return await _grade_rollout(
@@ -192,7 +194,7 @@ class RolloutEngine:
             start = await session.prepare()
         except Exception as error:
             raise RolloutInterrupted(completed, RolloutOperation.PREPARE) from error
-        events.emit(SessionPrepared(task.id, len(start.messages), time.monotonic() - started))
+        events.emit(SessionPrepared(len(start.messages), time.monotonic() - started))
         messages = list(start.messages)
         options = start.options
         replay_prompt_token_ids = start.prompt_token_ids
@@ -252,7 +254,6 @@ class RolloutEngine:
                         raise RolloutContractError("Model transport changed the served token prefix")
                     events.emit(
                         ModelTurnCompleted(
-                            task.id,
                             index,
                             turn.stop_reason,
                             len(turn.prompt_token_ids),
@@ -304,7 +305,7 @@ class RolloutEngine:
                             )
                     events.emit(
                         TransitionCompleted(
-                            task.id, index, transition.done, len(transition.observations), time.monotonic() - started
+                            index, transition.done, len(transition.observations), time.monotonic() - started
                         ),
                     )
                     stop_reason = turn.stop_reason
@@ -374,7 +375,7 @@ class RolloutEngine:
             raise RolloutInterrupted(completed, RolloutOperation.GRADE) from error
         except Exception as error:
             raise RolloutInterrupted(completed, RolloutOperation.GRADE) from error
-        events.emit(Graded(task.id, grade.status, grade.reward))
+        events.emit(Graded(grade.status, grade.reward))
         completed = replace(completed, grade=grade, stop_reason=stop_reason)
         if model_error is not None:
             raise RolloutInterrupted(completed, RolloutOperation.MODEL) from model_error

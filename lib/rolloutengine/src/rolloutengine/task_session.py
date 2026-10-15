@@ -117,9 +117,7 @@ class _ShellboxTaskSession:
                     timeout=self.lowered.session.command_timeout,
                 )
             self.events.emit(
-                ToolCallCompleted(
-                    self.lowered.task.id, call.name, len(observation.encode()), time.monotonic() - started
-                ),
+                ToolCallCompleted(call.name, len(observation.encode()), time.monotonic() - started),
             )
             observations.append(
                 {

@@ -17,6 +17,7 @@ Importers retain the task problem without these interface instructions.
 The engine owns model calls, conversation and token accumulation, deadlines, and resource cleanup.
 An optional `RolloutObserver` passed as `RolloutEngine(..., observer=...)` receives typed progress events
 from `rolloutengine.contracts` while the attempt runs, so callers can log or trace a rollout before `run()` returns.
+Each event carries the `run_key` passed to `run()`, which defaults to the task id.
 The engine delivers events from a queue and never awaits the observer, so a slow or failing observer does not change the rollout.
 
 `RolloutEngine.run(lowered)` accepts a `LoweredTaskSpec` and asynchronously returns one rollout.

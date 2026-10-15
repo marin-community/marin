@@ -6,7 +6,7 @@
 import asyncio
 import logging
 
-from rolloutengine.contracts import RolloutEvent, RolloutObserver
+from rolloutengine.contracts import RolloutEvent, RolloutEventPayload, RolloutObserver
 
 logger = logging.getLogger(__name__)
 
@@ -17,13 +17,16 @@ EVENT_QUEUE_CAPACITY = 1024
 class _EventDelivery:
     """Queue one attempt's events and deliver them in order from a single task.
 
-    ``emit`` never blocks. When the queue is full, the event is dropped and counted. An observer
+    ``emit`` wraps each payload in a ``RolloutEvent`` with the attempt's ``run_key`` and ``task_id``
+    and never blocks. When the queue is full, the event is dropped and counted. An observer
     exception is logged and ends delivery for the attempt; it never reaches the rollout. ``close``
     delivers what is queued within a deadline and returns the counts of events the observer did not
     receive, keyed for ``RolloutData.metrics``.
     """
 
-    def __init__(self, observer: RolloutObserver | None):
+    def __init__(self, observer: RolloutObserver | None, run_key: str, task_id: str):
+        self.run_key = run_key
+        self.task_id = task_id
         self.queue: asyncio.Queue[RolloutEvent] = asyncio.Queue(EVENT_QUEUE_CAPACITY)
         self.emitted = 0
         self.delivered = 0
@@ -31,7 +34,7 @@ class _EventDelivery:
         self.failed = False
         self.task = None if observer is None else asyncio.create_task(self._deliver(observer))
 
-    def emit(self, event: RolloutEvent) -> None:
+    def emit(self, payload: RolloutEventPayload) -> None:
         if self.task is None:
             return
         self.emitted += 1
@@ -39,7 +42,7 @@ class _EventDelivery:
         if self.failed:
             return
         try:
-            self.queue.put_nowait(event)
+            self.queue.put_nowait(RolloutEvent(self.run_key, self.task_id, payload))
         except asyncio.QueueFull:
             self.dropped += 1
 
@@ -51,7 +54,7 @@ class _EventDelivery:
                 self.delivered += 1
             except Exception:
                 # Telemetry must not change a rollout, so the failure is logged and counted, not raised.
-                logger.exception("Rollout observer failed on %s; delivery stops for this attempt", type(event).__name__)
+                logger.exception("Rollout observer failed on %s; delivery stops for this attempt", event.payload.type)
                 self.failed = True
                 return
             finally:

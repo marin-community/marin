@@ -6,7 +6,7 @@
 import asyncio
 import json
 import tarfile
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -69,6 +69,8 @@ from rolloutengine.contracts import (
     ModelTurnCompleted,
     RolloutContractError,
     RolloutEvent,
+    RolloutEventPayload,
+    RolloutEventType,
     RolloutInterrupted,
     RolloutOperation,
     SessionPrepared,
@@ -1852,23 +1854,29 @@ class RecordingObserver:
     async def on_event(self, event: RolloutEvent) -> None:
         self.events.append(event)
 
-    def untimed(self) -> list[RolloutEvent]:
+    def payloads(self, run_key: str) -> list[RolloutEventPayload]:
+        """The untimed payloads, after checking that every event belongs to ``run_key`` of the arithmetic task."""
+        assert {(event.run_key, event.task_id) for event in self.events} == {(run_key, "arithmetic")}
         return [
-            replace(event, duration=0.0) if "duration" in {item.name for item in fields(event)} else event
+            (
+                replace(event.payload, duration=0.0)
+                if "duration" in {item.name for item in fields(event.payload)}
+                else event.payload
+            )
             for event in self.events
         ]
 
 
-def shell_turn_events(model: ReplayModel) -> list[RolloutEvent]:
-    """Events through the first turn of a rollout whose first response writes the answer file."""
+def shell_turn_payloads(model: ReplayModel) -> list[RolloutEventPayload]:
+    """Payloads through the first turn of a rollout whose first response writes the answer file."""
     observation = model.requests[1].messages[-1]["content"]
     return [
-        AttemptStarted("arithmetic"),
-        MachineReady("arithmetic", 0.0),
-        SessionPrepared("arithmetic", len(model.requests[0].messages), 0.0),
-        ModelTurnCompleted("arithmetic", 0, "stop", 2, 1, {}, 0.0),
-        ToolCallCompleted("arithmetic", "shell", len(observation.encode()), 0.0),
-        TransitionCompleted("arithmetic", 0, False, 1, 0.0),
+        AttemptStarted(),
+        MachineReady(0.0),
+        SessionPrepared(len(model.requests[0].messages), 0.0),
+        ModelTurnCompleted(0, "stop", 2, 1, {}, 0.0),
+        ToolCallCompleted("shell", len(observation.encode()), 0.0),
+        TransitionCompleted(0, False, 1, 0.0),
     ]
 
 
@@ -1876,16 +1884,21 @@ async def test_observer_receives_ordered_events_for_a_multi_turn_shell_rollout()
     observer = RecordingObserver()
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
     record = await RolloutEngine(model.complete, {"local": FixtureImageFactory()}, observer=observer).run(
-        lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
+        lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()), run_key="arithmetic/3"
     )
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
-    assert observer.untimed() == [
-        *shell_turn_events(model),
-        ModelTurnCompleted("arithmetic", 1, "stop", 5, 1, {}, 0.0),
-        TransitionCompleted("arithmetic", 1, True, 0, 0.0),
-        Graded("arithmetic", Outcome.GRADED, 1.0),
-        AttemptEnded("arithmetic", "stop", None),
+    assert observer.payloads("arithmetic/3") == [
+        *shell_turn_payloads(model),
+        ModelTurnCompleted(1, "stop", 5, 1, {}, 0.0),
+        TransitionCompleted(1, True, 0, 0.0),
+        Graded(Outcome.GRADED, 1.0),
+        AttemptEnded("stop", None),
     ]
+    assert asdict(observer.events[-1]) == {
+        "run_key": "arithmetic/3",
+        "task_id": "arithmetic",
+        "payload": {"stop_reason": "stop", "operation": None, "type": RolloutEventType.ATTEMPT_ENDED},
+    }
 
 
 async def test_observer_receives_interrupted_operation_after_grading_completed_turns():
@@ -1903,17 +1916,18 @@ async def test_observer_receives_interrupted_operation_after_grading_completed_t
             lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
         )
     assert interrupted.value.operation == RolloutOperation.MODEL
-    assert observer.untimed() == [
-        *shell_turn_events(model),
-        Graded("arithmetic", Outcome.GRADED, 1.0),
-        AttemptEnded("arithmetic", None, RolloutOperation.MODEL),
+    # Without a run key, events carry the task id.
+    assert observer.payloads("arithmetic") == [
+        *shell_turn_payloads(model),
+        Graded(Outcome.GRADED, 1.0),
+        AttemptEnded(None, RolloutOperation.MODEL),
     ]
 
 
 async def test_observer_failure_leaves_the_rollout_unchanged():
     class FailingObserver:
         async def on_event(self, event: RolloutEvent) -> None:
-            if isinstance(event, ModelTurnCompleted):
+            if event.payload.type == RolloutEventType.MODEL_TURN_COMPLETED:
                 raise RuntimeError("telemetry sink unavailable")
 
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
