@@ -1,7 +1,7 @@
 {
   "scope": "Bounded real-GPU engineering qualification; no scientific comparison endpoint or new main-source qualification.",
   "source_branch": "experiments/score-centering-resume-eval-01a126ce",
-  "status": "Initial save completed2updates and passed native checkpoint/optimizer/loader/head/full-response replay gates. Restore phases remain unsubmitted until actual submission is confirmed.",
+  "status": "Actual save2 and noisy periodic restore2-to5 native/optimizer/loader/sampler/head/full-response replay gates pass. Final trained-sampler restore5-to7 is prepared and remains unsubmitted.",
   "geometry": {
     "cluster": "cw-rno2a",
     "priority": "batch",
@@ -81,12 +81,77 @@
       "checkpoint_root": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-periodic3-restore2-noise005-sc-s0-rno-a0-01a126ce/checkpoints",
       "first_new_sampler_completed_updates": 0,
       "final_saved_sampler_completed_updates": 3,
-      "controller_confirmed": false,
+      "controller_confirmed": true,
       "submission_gate": "Previous phase must complete with full native checkpoint/optimizer/loader and frozen-sampler identity audit before this phase may submit.",
       "prepared_configuration_sha256": "dac9c7a24a8b0e1b9ea97f9035534ee4947d5cea0c07ba8f71c6e70ae68c38a5",
       "prepared_detach_configuration": "qwen_checkpoint_periodic_recovery_v1/restore2-detach.yaml",
       "detach_configuration_sha256": "63b44a6e3972e0b8ee7d8e3571bf37985cf99c492e8f569b07d473dbd651c940",
-      "save_phase_gate_passed": true
+      "save_phase_gate_passed": true,
+      "controller_job": {
+        "job_id": "/romain/sc-qwen-checkpoint-periodic3-restore2-noise005-sc-s0-rno-a0-01a126ce",
+        "state": "3",
+        "num_tasks": "2",
+        "priority_band": "3",
+        "bundle_id": "3279c979a43fbd8ea5c92a27ee7980b81ddbb8045151a63e78d25f2806df290b",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "initial_task_attempts": [
+        {
+          "task_id": "/romain/sc-qwen-checkpoint-periodic3-restore2-noise005-sc-s0-rno-a0-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "328705d29186f84c",
+          "state": "3",
+          "exit_code": "",
+          "started_at_ms": "1792073966248",
+          "finished_at_ms": "",
+          "node_name": "gb95e10",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-checkpoint-periodic3-restore2-noise005-sc-s0-rno-a0-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "a39418aea61c8d7f",
+          "state": "3",
+          "exit_code": "",
+          "started_at_ms": "1792073934899",
+          "finished_at_ms": "",
+          "node_name": "gb97250",
+          "terminal_reason": ""
+        }
+      ],
+      "submitted_configuration": "qwen_checkpoint_periodic_recovery_v1/restore2-detach.yaml",
+      "configuration_sha256": "63b44a6e3972e0b8ee7d8e3571bf37985cf99c492e8f569b07d473dbd651c940",
+      "controller_completed": true,
+      "completed_updates": 5,
+      "new_completed_update_count": 3,
+      "native_restore_phase_passed": true,
+      "native_restore_audit": "results/qwen_periodic_checkpoint_restore5_native_audit.json.gz",
+      "full_response_grade_replays": 1536,
+      "final_task_attempts": [
+        {
+          "task_id": "/romain/sc-qwen-checkpoint-periodic3-restore2-noise005-sc-s0-rno-a0-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "328705d29186f84c",
+          "state": "4",
+          "exit_code": "0",
+          "started_at_ms": "1792073966248",
+          "finished_at_ms": "1792074667068",
+          "node_name": "gb95e10",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-checkpoint-periodic3-restore2-noise005-sc-s0-rno-a0-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "a39418aea61c8d7f",
+          "state": "4",
+          "exit_code": "0",
+          "started_at_ms": "1792073934899",
+          "finished_at_ms": "1792074677552",
+          "node_name": "gb97250",
+          "terminal_reason": ""
+        }
+      ]
     },
     {
       "phase": "restore5",
@@ -103,7 +168,10 @@
       "final_saved_sampler_completed_updates": 6,
       "controller_confirmed": false,
       "submission_gate": "Previous phase must complete with full native checkpoint/optimizer/loader and frozen-sampler identity audit before this phase may submit.",
-      "prepared_configuration_sha256": "c7042bb323865e5e3e857bf9d7271c348c9e579a74a89ad180d9c277d511a4d4"
+      "prepared_configuration_sha256": "c7042bb323865e5e3e857bf9d7271c348c9e579a74a89ad180d9c277d511a4d4",
+      "prior_phase_gate_passed": true,
+      "prepared_detach_configuration": "qwen_checkpoint_periodic_recovery_v1/restore5-detach.yaml",
+      "detach_configuration_sha256": "28b68f20a55b49e6967a2473a883dec3e386ef5b550f68ed98150af08bd86ddf"
     }
   ],
   "required_evidence": [

@@ -2,33 +2,33 @@
   "run_id": "sc-snowball-runtime-qual-rno-noise005-sc-s0-a0-01a126ce",
   "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
   "cluster": "cw-rno2a",
-  "controller_attempt": 3,
-  "archive_after_ms": 1792026730951,
+  "controller_attempt": 6,
+  "archive_after_ms": 1792066929399,
   "profiles": [
     {
-      "key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-runtime-qual-rno-noise005-sc-s0-a0-01a126ce/rendezvous/debug_artifacts/rank1-g5b9592/attention-profile/prof_rank_16.txt",
-      "etag": "\"f30279d6ea3eb5b213974e6ac54a4d9f\"",
-      "last_modified_ms": 1792030502812,
-      "sha256": "6c4c3be7d3ad79c8e1f45b2754407ad81615e2124442e3efb130f147951be88a",
-      "rank": 16,
+      "key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-runtime-qual-rno-noise005-sc-s0-a0-01a126ce/rendezvous/debug_artifacts/rank2-gb95e10/attention-profile/prof_rank_0.txt",
+      "etag": "\"b0667f80ef807d0f700e509b5ce87d36\"",
+      "last_modified_ms": 1792073377711,
+      "sha256": "701d4a750da6fbbdda85d2633e9c5a2fd40f206810f98011cfe81b96d26d0fbd",
+      "rank": 0,
       "operator_lines": [
-        "                        flash_attn::_flash_attn_forward         0.59%     896.019us         0.89%       1.349ms     103.737us     150.782us         0.84%     150.782us      11.599us            13  "
+        "                        flash_attn::_flash_attn_forward         0.78%     798.840us         1.16%       1.185ms      91.171us     149.821us         1.16%     149.821us      11.525us            13  "
       ],
       "cuda_kernel_lines": [
-        "void flash::flash_fwd_kernel<Flash_fwd_kernel_traits...         0.00%       0.000us         0.00%       0.000us       0.000us     150.782us         0.84%     150.782us      11.599us            13  "
+        "void flash::flash_fwd_kernel<Flash_fwd_kernel_traits...         0.00%       0.000us         0.00%       0.000us       0.000us     149.821us         1.16%     149.821us      11.525us            13  "
       ]
     },
     {
-      "key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-runtime-qual-rno-noise005-sc-s0-a0-01a126ce/rendezvous/debug_artifacts/rank2-g779de0/attention-profile/prof_rank_0.txt",
-      "etag": "\"2402ecaf9665a3c376cf07fdc37a1100\"",
-      "last_modified_ms": 1792030503041,
-      "sha256": "8a43255e0fa5d93bb252851e63891da5ec9b48c8b7ad04fef8369e38ef20b4ae",
-      "rank": 0,
+      "key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-runtime-qual-rno-noise005-sc-s0-a0-01a126ce/rendezvous/debug_artifacts/rank4-g543ab2/attention-profile/prof_rank_16.txt",
+      "etag": "\"3c8f4ae15067d54972e924c323e911af\"",
+      "last_modified_ms": 1792073369021,
+      "sha256": "b03c942e027a3aeaa403f11c69f7109924ec982f469987af2249bc34839424dd",
+      "rank": 16,
       "operator_lines": [
-        "                        flash_attn::_flash_attn_forward         0.37%     862.638us         0.56%       1.298ms      99.828us     150.463us         0.24%     150.463us      11.574us            13  "
+        "                        flash_attn::_flash_attn_forward         0.80%     844.206us         1.20%       1.267ms      97.451us     152.924us         1.13%     152.924us      11.763us            13  "
       ],
       "cuda_kernel_lines": [
-        "void flash::flash_fwd_kernel<Flash_fwd_kernel_traits...         0.00%       0.000us         0.00%       0.000us       0.000us     150.463us         0.24%     150.463us      11.574us            13  "
+        "void flash::flash_fwd_kernel<Flash_fwd_kernel_traits...         0.00%       0.000us         0.00%       0.000us       0.000us     152.924us         1.13%     152.924us      11.763us            13  "
       ]
     }
   ],
@@ -36,7 +36,10 @@
   "sync_steps": [
     0,
     1,
-    2
+    2,
+    3,
+    4,
+    5
   ],
   "worker_evidence": [
     {
@@ -357,14 +360,17 @@
   "matches_seed0_separate_noise005_calibration": true,
   "raw_evidence": [
     {
-      "key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-runtime-qual-rno-noise005-sc-s0-a0-01a126ce/ray-logs/rank0-g5b3dfe/session_2026-10-15_01-13-11_440549_975/worker-8c74454cc64b619fbfb3758a8fdf1178a00703a34f3eb28becada409-06000000-13997.err",
-      "etag": "\"7423f5071c84ba3ca13d232a1d04791a\"",
-      "sha256": "6c3c987fe513b7cd32149f2e8a8facf55f8b20f820db8d363aa47c17440a6008",
-      "local": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/rno0212-noise-dc7d46c30f0baa0a9d6d0f2633f8a4d193f9ae2421c058c9a1fd7523ebf56272.err",
+      "key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-runtime-qual-rno-noise005-sc-s0-a0-01a126ce/ray-logs/rank0-g463dd6/session_2026-10-15_12-23-24_467809_992/worker-92ce55c632cabc821275f6fd22f5c16bc197df5a6b03863aa9f8c93a-06000000-14145.err",
+      "etag": "\"ee042aeb56308b89cac0bbef3d76eaea\"",
+      "sha256": "60fdd86141287628b23c301c665723a1eb737cffa021038d37dfdad4da5f310c",
+      "local": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/rno0212-noise-39172db265a3fda3ca989789995dbdcc28f3f958626442bd7cf86c3094762982.err",
       "sync_steps": [
         0,
         1,
-        2
+        2,
+        3,
+        4,
+        5
       ]
     }
   ],

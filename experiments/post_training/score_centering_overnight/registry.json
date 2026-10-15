@@ -2614,11 +2614,13 @@
       "configuration_sha256": "060d669150560309ff2d9d424e0a60058693ab6fa86fe02893483f97bc639c0f",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-runtime-qual-rno-noise005-sc-s0-a0-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "bd07461c228816fb73f295fb7fdc953808c97c6ddf9e560fd3d16400e6baaa71",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_rno0212_qualification.json.gz",
+      "scientific_completed_updates": 5
     },
     {
       "job_id": "/romain/sc-qwen-transfer-native-window-sc-s2-main-rno-a3-01a126ce",
@@ -2869,12 +2871,29 @@
       "configuration_sha256": "440d5bc495a27e640eedae3b6c4b9d9aa395aeed2e58358ddac0586ea5f1e4f2",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-resume-qual-sc-s0-rno-a0-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "45e76774a60f2a271afaf9375430bd8e74ad67e0d41ceec1ccf978f197c0ccc7",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-qwen-checkpoint-periodic3-restore2-noise005-sc-s0-rno-a0-01a126ce",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "h100_nodes": 2,
+      "h100_per_node": 8,
+      "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_checkpoint_periodic_recovery_v1/restore2-detach.yaml",
+      "configuration_sha256": "63b44a6e3972e0b8ee7d8e3571bf37985cf99c492e8f569b07d473dbd651c940",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-periodic3-restore2-noise005-sc-s0-rno-a0-01a126ce",
+      "controller_state": 4,
+      "status": "terminal",
+      "priority_band": 3,
+      "bundle_id": "3279c979a43fbd8ea5c92a27ee7980b81ddbb8045151a63e78d25f2806df290b",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-15T14:01:47.477214+00:00"
+  "observed_at": "2026-10-15T14:46:23.792181+00:00"
 }

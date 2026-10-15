@@ -9,8 +9,8 @@ runtime:
   launcher_commit: 173f626e668ba9284e7a9a42354c1505cab22ad1
   profile: megatron
 iris:
-  cluster: cw-us-east-02a
-  cluster_config: /home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/cw-us-east-02a-client.yaml
+  cluster: cw-rno2a
+  cluster_config: /home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/cw-rno2a-client.yaml
   job_name: sc-snowball-checkpoint-periodic3-restore5-noise005-sc-s0-a0-01a126ce
   priority: batch
   max_retries: 0

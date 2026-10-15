@@ -4,7 +4,7 @@
   "status": "prepared; all phases unsubmitted",
   "prerequisite": "Complete bounded Qwen periodic/noisy save2, restore2-to5, restore5-to7 qualification with real native state and behavior evidence.",
   "geometry": {
-    "cluster": "cw-us-east-02a",
+    "cluster": "cw-rno2a",
     "priority": "batch",
     "total_nodes": 5,
     "learner_nodes": 4,
@@ -42,7 +42,7 @@
       ],
       "controller_confirmed": false,
       "submission_gate": "All three Qwen periodic save/restore phases must pass actual native optimizer/loader/sampler/evidence gates before this five-node initial qualification may submit.",
-      "prepared_configuration_sha256": "42c43a99d27932e4bc4bd15729d6c05e8a15c7ff0765c2e757f720b9c0e7f5bb"
+      "prepared_configuration_sha256": "22aad7abe7b6ecdbd4dbb87876e2e94a7cceeedb81cdc5e9b8db93a420bbfaea"
     },
     {
       "phase": "restore5",
@@ -62,7 +62,7 @@
       ],
       "controller_confirmed": false,
       "submission_gate": "Previous five-node phase must pass complete native checkpoint, applied-step, serving/noise/version, full response and evaluation audits before this phase may submit.",
-      "prepared_configuration_sha256": "1decc2376d42b74b588c8370a66acaffc23e07e2b152c9c2ce2f0844ed54bfd0"
+      "prepared_configuration_sha256": "351dd38266fb993c36bb8867e1fb2e7babd3ee6242444bd343d96ff4b4909fa4"
     },
     {
       "phase": "restore7",
@@ -82,7 +82,7 @@
       ],
       "controller_confirmed": false,
       "submission_gate": "Previous five-node phase must pass complete native checkpoint, applied-step, serving/noise/version, full response and evaluation audits before this phase may submit.",
-      "prepared_configuration_sha256": "1e72bc00924af1a15845ba395063b3f8ddf12e41b3e351e6a8f7a2f4370cd35b"
+      "prepared_configuration_sha256": "3c89c11eabc2153e445d62d4a6af8b825efb73069932890635cbe1008c3c8711"
     }
   ],
   "required_evidence": [
@@ -141,5 +141,21 @@
     "skyrl-gym/skyrl_gym/envs/aime/utils.py": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
     "uv.lock": "c9ff3b70074681e62f2683acd7b4b9487c9dc222d6065f61198c6e5e5d9ae891"
   },
-  "evaluation_resume_policy": "All evaluation callbacks set eval_on_resume=false: fresh save evaluates0/5, restore5 evaluates7, restore7 evaluates9. Restored starts5 and7 do not create supplemental evaluation cohorts or overwrite their original scheduled metrics."
+  "evaluation_resume_policy": "All evaluation callbacks set eval_on_resume=false: fresh save evaluates0/5, restore5 evaluates7, restore7 evaluates9. Restored starts5 and7 do not create supplemental evaluation cohorts or overwrite their original scheduled metrics.",
+  "placement_decision": {
+    "reason": "RNO frozen0212 fullfive-node run now completes5updates with native2560train/9592eval records, both PP FlashAttention stages,32DCPshards and18serialized optimizer counters at5. The new173f626e6 candidate must still pass its own complete five-node checkpoint qualification after all Qwen phases. At14:30UTC unreserved clusterqueue GPU quota was24 on RNO versus8 on EAST; this is no admission or node reservation guarantee.",
+    "capacity_evidence": [
+      "rno-clusterqueue-20261015T1430.json",
+      "east-clusterqueue-20261015T1430.json"
+    ],
+    "same_original_bucket": true,
+    "all_four_configurations_unsubmitted": true,
+    "source_unchanged": "173f626e668ba9284e7a9a42354c1505cab22ad1"
+  },
+  "native_rno_prepare": {
+    "source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+    "prepared_configurations": 3,
+    "artifact": "snowball-checkpoint-qualification-rno-native-preflight.log",
+    "submitted": false
+  }
 }
