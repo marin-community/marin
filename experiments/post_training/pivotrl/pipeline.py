@@ -9,6 +9,10 @@ selection artifact. Training consumes ``train.parquet`` from the selection, for 
 
 Print the plan with ``uv run python -m experiments.post_training.pivotrl.pipeline --version dev``,
 choose runs with ``--experiment``, and add ``--run`` to build them.
+
+For mixed-domain training, pass one ``--experiment`` and ``--curated-path``, the curated
+task-curation source of its candidate set (``data/rl/pivotrl-<set>-<hash>``), to add a ``tasks``
+stage: the selected pivots as lowered tasks in ``tasks.parquet`` (:mod:`.compendium`).
 """
 
 import click
@@ -24,6 +28,7 @@ from marin.rl.openhands_pivot import TOOLS_FILENAME, TRAJECTORIES_FILENAME, prep
 from marin.rl.pass_rates import measure_pass_rates
 
 from experiments.datasets.nemotron_pivot import nemotron_pivot_datasets
+from experiments.post_training.pivotrl.compendium import PivotSession, pivot_tasks
 from experiments.post_training.pivotrl.runs import (
     RUNS,
     NemotronPivotCandidates,
@@ -31,6 +36,9 @@ from experiments.post_training.pivotrl.runs import (
     PivotRLRun,
 )
 from experiments.post_training.pivotrl.selection import head_rows, select_pivots
+
+# MarinSkyRL's task-session defaults: no model-turn deadline and a 30-second cleanup.
+PIVOT_SESSION = PivotSession(model_turn_timeout=None, cleanup_timeout=30.0)
 
 
 def full_candidate_step(
@@ -49,8 +57,9 @@ def full_candidate_step(
                 urls_glob=(TRAJECTORIES_FILENAME, TOOLS_FILENAME),
             )
             return apply(
-                user_owned_name(f"pivotrl/{candidates.dataset}/candidates"),
+                f"processed/{candidates.dataset}-pivot-candidates",
                 remote(prepare_openhands_candidates, resources=ResourceConfig.with_cpu(cpu=8, ram="64g")),
+                version=candidates.version,
                 dataset_path=raw,
                 output_path=OUT,
                 trajectories=candidates.trajectories,
@@ -77,8 +86,8 @@ def candidate_step(
     )
 
 
-def pivot_steps(run: PivotRLRun) -> dict[str, ArtifactStep[Artifact]]:
-    """The pass-rate and selection artifacts for one run."""
+def pivot_steps(run: PivotRLRun, curated_path: str | None = None) -> dict[str, ArtifactStep[Artifact]]:
+    """The pass-rate and selection artifacts for one run, and its lowered tasks given its curated source."""
     dataset = run.candidates.label
     # Seeded runs of the same candidates and policy get their own artifacts.
     policy = run.model.name if run.sampling.seed is None else f"{run.model.name}/seed-{run.sampling.seed}"
@@ -102,15 +111,26 @@ def pivot_steps(run: PivotRLRun) -> dict[str, ArtifactStep[Artifact]]:
     )
     # Each criterion and lambda is its own small artifact over the same pass rates.
     criterion = "" if run.criterion == "passed" else f"/{run.criterion}"
+    selection = f"pivotrl/{dataset}/pivots/{policy}{criterion}/lambda-{run.difficulty_threshold}"
     pivots = apply(
-        user_owned_name(f"pivotrl/{dataset}/pivots/{policy}{criterion}/lambda-{run.difficulty_threshold}"),
+        user_owned_name(selection),
         remote(select_pivots, resources=ResourceConfig.with_cpu(cpu=2, ram="16g")),
         pass_rates_path=pass_rates,
         output_path=OUT,
         difficulty_threshold=run.difficulty_threshold,
         criterion=run.criterion,
     )
-    return {"pass-rates": pass_rates, "pivots": pivots}
+    steps = {"pass-rates": pass_rates, "pivots": pivots}
+    if curated_path is not None:
+        steps["tasks"] = apply(
+            user_owned_name(f"{selection}/tasks"),
+            remote(pivot_tasks, resources=ResourceConfig.with_cpu(cpu=2, ram="16g")),
+            curated_path=curated_path,
+            pivots_path=pivots,
+            output_path=OUT,
+            session=PIVOT_SESSION,
+        )
+    return steps
 
 
 @click.command(help=__doc__)
@@ -121,9 +141,20 @@ def pivot_steps(run: PivotRLRun) -> dict[str, ArtifactStep[Artifact]]:
     multiple=True,
     help="Run to build; repeatable. Default: every run.",
 )
+@click.option(
+    "--curated-path",
+    default=None,
+    help="Curated PivotRL source of the one --experiment's candidate set; adds its lowered-task stage.",
+)
 @build_options
-def main(names: tuple[str, ...]) -> dict[str, ArtifactStep[Artifact]]:
-    return {f"{name}/{stage}": step for name in names or RUNS for stage, step in pivot_steps(RUNS[name]).items()}
+def main(names: tuple[str, ...], curated_path: str | None) -> dict[str, ArtifactStep[Artifact]]:
+    if curated_path is not None and len(names) != 1:
+        raise click.UsageError("--curated-path belongs to exactly one --experiment")
+    return {
+        f"{name}/{stage}": step
+        for name in names or RUNS
+        for stage, step in pivot_steps(RUNS[name], curated_path).items()
+    }
 
 
 if __name__ == "__main__":

@@ -4,7 +4,8 @@
 """Grade an already extracted answer in process, without a sandbox or answer file.
 
 Callers own extraction: a text mode receives the answer text, ``structured_exact`` a decoded JSON
-value and ``predicted_action`` the final function calls. Files a specification names, such as a
+value, ``predicted_action`` the final function calls, and ``pivot-tool-call`` and ``next-action``
+the final OpenAI-style assistant message. Files a specification names, such as a
 JSON Schema, come from ``resources`` keyed by their path relative to the tests directory. Modes
 that execute code, call a model, or need a dataset package run only through the file grader.
 """
@@ -28,6 +29,7 @@ from verifyit.spec import (
     EmptyOutputPolicy,
     FunctionCall,
     JsonSchemaSpec,
+    MessageSpec,
     Mode,
     PredictedActionSpec,
     Spec,
@@ -79,6 +81,10 @@ def _grade(spec: Spec, candidate: Candidate, resources: Mapping[str, bytes]) -> 
     if isinstance(spec, PredictedActionSpec):
         if not isinstance(candidate, tuple) or not all(isinstance(call, FunctionCall) for call in candidate):
             raise TypeError("predicted_action grades a tuple of function calls")
+        return grader(spec, candidate)
+    if isinstance(spec, MessageSpec):
+        if not isinstance(candidate, dict) or candidate.get("role") != "assistant":
+            raise TypeError(f"Mode {mode} grades an assistant message")
         return grader(spec, candidate)
     if not isinstance(candidate, str):
         raise TypeError(f"Mode {mode_of(spec)} grades text, got {type(candidate).__name__}")

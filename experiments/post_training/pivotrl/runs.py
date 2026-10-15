@@ -48,6 +48,8 @@ class OpenHandsCandidates:
     hf_id: str
     revision: str
     raw_version: str
+    version: str
+    """Version of the prepared candidates, shared by every run and the curation catalog."""
     trajectories: int
     validation_trajectories: int
     seed: int
@@ -90,6 +92,7 @@ OPENHANDS_CANDIDATES = OpenHandsCandidates(
     hf_id="nebius/SWE-rebench-openhands-trajectories",
     revision="35455389ab51bf5e2306bfd436ef72d0f98bf882",
     raw_version="2026.10.08",
+    version="2026.10.15",
     trajectories=200,
     validation_trajectories=50,
     seed=42,

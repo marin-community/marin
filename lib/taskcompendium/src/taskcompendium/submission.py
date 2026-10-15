@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from verifyit.spec import ExactSpec, JudgeSpec, PredictedActionSpec, Spec, StructuredExactSpec
+from verifyit.spec import ExactSpec, JudgeSpec, MessageSpec, PredictedActionSpec, Spec, StructuredExactSpec
 
 from taskcompendium.direct_chat import unsupported_direct_chat_features
 from taskcompendium.models import (
@@ -61,7 +61,7 @@ def accepted_submission_types(verifier: Spec) -> tuple[type[Submission], ...]:
     """Declare the submissions a verifyit mode can grade."""
     if isinstance(verifier, StructuredExactSpec):
         return (JsonSubmission, StateSubmission)
-    if isinstance(verifier, PredictedActionSpec):
+    if isinstance(verifier, PredictedActionSpec | MessageSpec):
         return (ActionSubmission,)
     if isinstance(verifier, JudgeSpec):
         return (TextSubmission, ActionSubmission)

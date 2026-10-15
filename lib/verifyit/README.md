@@ -38,6 +38,9 @@ process exit after a verdict has been written.
 | `gotest` | `go test -json` events |
 | `judge` | reference-answer or checklist rubric through a configured model endpoint |
 | `script` | legacy `test.sh` fallback with normalized reward files and fail-closed errors |
+| `pivot-tool-call` | NeMo Gym's SWE pivot comparison of the final assistant message with an expert action |
+| `terminus` | Terminus-2 keystroke similarity of the reply to an expert action |
+| `next-action` | OpenHands functional next-action rules, from the turn's repository root and directory |
 
 The `pytest` mode scores startup and collection errors attributed to editable candidate code as failed attempts.
 `PytestSpec.candidate_modules` names modules the task asks the candidate to implement.
@@ -120,13 +123,17 @@ attempt can be scored.
 from a JSON table. `grade_candidate(spec, candidate, resources)` scores an answer the caller
 already extracted, with no filesystem or harness operations. `IN_PROCESS_MODES` lists the modes it
 accepts: `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`,
-`structured_exact` and `predicted_action`. Text modes take a string, `structured_exact` takes a
-decoded JSON value, and `predicted_action` takes a tuple of `FunctionCall`. A file the specification
+`structured_exact`, `predicted_action`, `pivot-tool-call`, `terminus` and `next-action`. Text modes
+take a string, `structured_exact` takes a decoded JSON value, `predicted_action` takes a tuple of
+`FunctionCall`, and `pivot-tool-call` and `next-action` take the final OpenAI-style assistant
+message, which file grading reads from the answer file as JSON. A file the specification
 names, such as the `json-schema` schema, comes from `resources`, keyed by its path relative to the
 tests directory. A specification the mode rejects yields an `invalid_task` reward; a candidate of
 the wrong type raises `TypeError`. Judge, Reasoning Gym, execution and script modes run only
 through the file grader. Predicted-action matching preserves duplicate calls and requires all calls
-to match one to one. Argument objects stay decoded in JSON tables; `render_spec` encodes each
+to match one to one. The three pivot modes apply PivotRL's graders without a judge, so their
+rewards are deterministic; `next-action` scores pairs its rules leave undecided 0 and needs the
+`judge` extra, whose client its adapter imports. Argument objects stay decoded in JSON tables; `render_spec` encodes each
 argument object as a JSON string in TOML so nested JSON null values survive `parse_spec`.
 
 ## Install and use
