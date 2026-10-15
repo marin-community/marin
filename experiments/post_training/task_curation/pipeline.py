@@ -645,7 +645,7 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
     """Stage a source's pinned files; a URL download must match its declared digest."""
     source = request.source
     if isinstance(source, HarborSource):
-        raise ValueError("Harbor releases need prepared native images; supply --input-root (see datasets/skill2env)")
+        raise ValueError("Harbor releases need exported task packages; supply --input-root (see datasets/skill2env)")
     if isinstance(source, HfSource):
         download = DownloadConfig(
             hf_dataset_id=source.repo,

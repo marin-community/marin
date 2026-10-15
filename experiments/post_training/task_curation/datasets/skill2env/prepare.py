@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run with config/external/harbor: export verified tasks, optionally building their native images."""
+"""Run with config/external/harbor: export digest-verified native tasks for conversion."""
 
 import argparse
 import asyncio
@@ -18,8 +18,6 @@ from harbor.models.task.id import PackageTaskId
 from harbor.publisher.packager import Packager
 from harbor.registry.client.package import PackageDatasetClient
 from harbor.tasks.client import TaskClient
-
-from experiments.post_training.task_curation.datasets.skill2env.native_images import build_image
 
 MAX_TASK_BYTES = 8 * 1024 * 1024
 # The published Hub release ID is not the current SDK's task-membership hash.
@@ -46,7 +44,7 @@ def export_task(root: Path, task_ref: str) -> dict:
     }
 
 
-async def prepare(release: str, output: Path, selected: list[str], build_repository: str | None) -> None:
+async def prepare(release: str, output: Path, selected: list[str]) -> None:
     name, digest = release.rsplit("@", 1)
     if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
         raise ValueError("Select a release by content digest, not a tag")
@@ -98,14 +96,6 @@ async def prepare(release: str, output: Path, selected: list[str], build_reposit
                 root = downloaded.results[0].path
                 row = export_task(root, ref)
                 row["release"] = release
-                if build_repository is not None and "unsupported" not in row:
-                    verified = Path(directory) / "verified"
-                    for name, encoded in row["files"].items():
-                        path = verified / name
-                        path.parent.mkdir(parents=True, exist_ok=True)
-                        path.write_bytes(base64.b64decode(encoded, validate=True))
-                        path.chmod(int(row["modes"][name], 8))
-                    row["image"], row["grader_image"] = build_image(verified, ref, build_repository)
                 stream.write(json.dumps(row) + "\n")
                 LOGGER.info("Exported %s", ref)
 
@@ -117,11 +107,10 @@ def main() -> None:
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--task", action="append", default=[], help="Immutable org/task@sha256:... reference")
     selection.add_argument("--all", action="store_true")
-    parser.add_argument("--build-repository", help="Explicitly build and push native task images to this repository")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    asyncio.run(prepare(args.release, args.output, args.task, args.build_repository))
+    asyncio.run(prepare(args.release, args.output, args.task))
 
 
 if __name__ == "__main__":

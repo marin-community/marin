@@ -16,10 +16,10 @@ sources = all_sources()  # stable Atlas ID -> RlDataSource
 Building the catalog performs no downloads, inference or job submission.
 The driver selects sources with automatic input preparation by default.
 Sources declaring `preparation=InputPreparation.EXPLICIT` remain available through
-`--source NAME` and require prepared primary inputs. For mixed local campaigns,
-`--source-input-root NAME PATH` overrides one selected source; `--input-root`
-and `--input-file` apply to all selected sources unless a scoped root overrides
-them. SAMPLE/FULL local input options also require `--cache-dir`.
+`--source NAME` and require prepared primary inputs through `--input-root` or
+`--input-file`. These input overrides apply to all selected sources; run a
+prepared source separately when other sources need their normal downloads.
+SAMPLE/FULL local input options also require `--cache-dir`.
 
 ## Dataset-owned invocation
 

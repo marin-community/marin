@@ -33,8 +33,6 @@ from taskcompendium.runtime.resources import resource_bytes
 from experiments.post_training.task_curation.datasets.skill2env.conversion import RELEASE, convert_task
 from experiments.post_training.task_curation.datasets.skill2env.grade import component_reward
 
-IMAGE = "fixture@sha256:" + "0" * 64
-
 
 def exported_row() -> RawRow:
     files = {
@@ -89,8 +87,6 @@ storage_mb = 4096
             "task_ref": f"skill2env/fixture@sha256:{digest.hexdigest()}",
             "files": {path: base64.b64encode(blob).decode() for path, blob in files.items()},
             "modes": {path: "644" for path in files},
-            "image": IMAGE,
-            "grader_image": IMAGE,
         },
     )
 
@@ -116,10 +112,7 @@ def test_conversion_retains_hidden_files_and_detects_modified_exports():
 
 def test_unbuilt_export_preserves_contexts_and_private_roles_but_cannot_execute():
     row = exported_row()
-    result = convert_task(
-        replace(row, data={key: value for key, value in row.data.items() if key not in ("image", "grader_image")}),
-        ConversionContext({}, None),
-    )
+    result = convert_task(row, ConversionContext({}, None))
     assert isinstance(result, TaskSpec)
     task = TaskSpec.model_validate_json(result.model_dump_json())
     assert isinstance(task.grader, ScriptGrader) and task.grader.environment is not None

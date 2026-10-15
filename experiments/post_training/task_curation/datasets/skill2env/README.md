@@ -19,7 +19,7 @@ uv run --project config/external/harbor --frozen python \
 ```
 
 Repeat `--task` for more tasks; `--all` selects the release's complete population.
-Without image builds, conversion retains the native `environment/` files as an
+Conversion retains the native `environment/` files as an
 unresolved `DockerBuildContext`. The verifier context adds workspace clearing
 so submitted deletions are preserved. Private tests and reference solutions
 remain separate from both build contexts. The runtime rejects unresolved
@@ -30,7 +30,7 @@ Convert the prepared selection with the existing driver:
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python \
   -m experiments.post_training.task_curation.driver --mode quick --run \
-  --source skill2env --source-input-root skill2env /tmp/skill2env-input \
+  --source skill2env --input-root /tmp/skill2env-input \
   --output-root /tmp/skill2env-converted
 ```
 
@@ -38,26 +38,18 @@ QUICK writes normalized TaskSpecs for inspection. It does not build images,
 run graders or admit training tasks. Retained build recipes do not freeze the
 results of package downloads during a later build.
 
-For executable tasks, run preparation on a Docker build host with
-`--build-repository ghcr.io/marin-community/iris-task` and a new output directory.
-This builds and pins actor and verifier images using the shared curation
-publisher's linux/amd64, gzip-layer and disabled-provenance settings. The
-verifier derives from the pinned actor image with `/workspace` cleared. Iris
-workers pull anonymously, so another repository must also be publicly readable.
-
-For reviewed SAMPLE/FULL execution, use the
-[campaign options](../../README.md#reviewed-local-loop-on-real-sources) with that
-built input root and an image backend supporting 2 CPUs, 4096 MiB RAM,
-4096 MiB storage and disabled network access.
+Building and pinning these images, configuring native resource limits, and
+validating grading in those containers are follow-up work. The converted tasks
+cannot execute in SAMPLE/FULL while their build contexts remain unresolved.
 
 Skill2Env is excluded from default campaigns because it requires prepared input.
-Select it explicitly with `--source skill2env`. In mixed campaigns,
-`--source-input-root skill2env PATH` leaves other sources' downloads unchanged.
-A missing input fails during planning, before workers start. Campaigns do not
-download or build this source automatically. A selected export is a
-subset, not evidence about all 7,496 tasks.
+Select it explicitly with `--source skill2env` and supply `--input-root PATH`.
+This existing input option applies to every selected source, so run Skill2Env
+separately from sources that need their normal downloads. Missing input fails
+during planning, before workers start. A selected export is a subset, not
+evidence about all 7,496 tasks.
 
-The grader runs the unchanged `tests/test.sh` in a separate sandbox. Private
+The grading definition invokes the unchanged `tests/test.sh` in a separate sandbox. Private
 tests and reference solutions are excluded from agent resources. It retains
 native components in grading details, reports their arithmetic mean, and marks
 full pass only when every component is within `1e-9` of one. These last two

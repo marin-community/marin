@@ -1,19 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Skill2Env's pinned native release, with explicit native-image preparation."""
+"""Skill2Env's pinned native release, with explicit package preparation."""
 
-from dataclasses import dataclass, replace
-from typing import Any
 
-from marin.execution.lazy import ArtifactStep
-from shellbox.machine import MachineFactory, MachineSpec
-from taskcompendium.models import EnvironmentRequirements
-from taskcompendium.pipeline.controls import GradingMachines
 from taskcompendium.pipeline.models import Controls, IntendedUse
 
-from experiments.post_training.task_curation.campaign import CampaignArtifact
-from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.datasets.skill2env.conversion import RELEASE, convert_task, golden
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HarborSource, process_rows
 from experiments.post_training.task_curation.source import InputPreparation, RlDataSource, SourceInfo
@@ -29,31 +21,6 @@ contracts need additional runtime support; do not infer equivalence from a passi
 The scalar reward is the arithmetic mean of native components; full pass requires every component to be one
 within 1e-9. The optional rubric.md reward is not executed. Distinguish curation opinions from executable rewards.
 """
-
-
-@dataclass(frozen=True)
-class NativeMachines:
-    machines: GradingMachines
-
-    def identity(self) -> dict[str, Any]:
-        return {"backend": self.machines.identity(), "cpus": 2, "memory_mb": 4096, "storage_mb": 4096}
-
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        factory, spec = self.machines.machine(environment, memory_mb)
-        return factory, replace(spec, cpus=2, memory_mb=4096, storage_mb=4096)
-
-
-def process_skill2env(source: RlDataSource[CurationRecipe], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
-    settings = options.recipe_settings
-    if settings is not None:
-        if settings.config is not None and settings.config.machines is not None:
-            settings = replace(
-                settings, config=replace(settings.config, machines=NativeMachines(settings.config.machines))
-            )
-        elif settings.machines is not None:
-            settings = replace(settings, machines=NativeMachines(settings.machines))
-        options = replace(options, recipe_settings=settings)
-    return process_rows(source, options)
 
 
 def sources() -> list[RlDataSource[CurationRecipe]]:
@@ -76,13 +43,13 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             config=CurationRecipe(
                 name="skill2env",
                 source=HarborSource(name, revision),
-                version="2",
+                version="3",
                 convert=convert_task,
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 controls=Controls(golden=golden, memory_mb=4096),
             ),
-            pipeline=process_skill2env,
+            pipeline=process_rows,
             preparation=InputPreparation.EXPLICIT,
         )
     ]

@@ -6,7 +6,6 @@
 import json
 import os
 from contextlib import ExitStack
-from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -175,13 +174,6 @@ def _publish_campaign(report_path: str, selected: dict[str, RlDataSource]) -> No
     help="Local runs: staged primary inputs instead of downloading the pinned source.",
 )
 @click.option(
-    "--source-input-root",
-    "source_input_roots",
-    type=(str, click.Path(exists=True, file_okay=False, path_type=Path)),
-    multiple=True,
-    help="Local runs: primary input directory for one selected source (NAME PATH); repeat for different sources.",
-)
-@click.option(
     "--input-file",
     "local_files",
     type=(str, click.Path(exists=True, dir_okay=False, path_type=Path)),
@@ -236,7 +228,6 @@ def main(
     report_path: str | None,
     sources: tuple[str, ...],
     input_root: Path | None,
-    source_input_roots: tuple[tuple[str, Path], ...],
     local_files: tuple[tuple[str, Path], ...],
     auxiliary: tuple[tuple[str, str], ...],
     output_root: Path | None,
@@ -258,22 +249,9 @@ def main(
         {name: file.resolve() for name, file in local_files},
         {name: str(Path(path).resolve()) for name, path in auxiliary},
     )
-    scoped_roots = {name: str(path.resolve()) for name, path in source_input_roots}
-    if len(scoped_roots) != len(source_input_roots):
-        raise click.UsageError("Repeat --source-input-root only for different sources")
-    unknown_roots = scoped_roots.keys() - selected.keys()
-    if unknown_roots:
-        raise click.UsageError(f"Input roots require selected sources: {', '.join(sorted(unknown_roots))}")
-    source_inputs = {
-        name: replace(inputs, root=scoped_roots[name], files={}) if name in scoped_roots else inputs for name in selected
-    }
     for name, source in selected.items():
-        if source.preparation == InputPreparation.EXPLICIT and not (
-            source_inputs[name].root is not None or source_inputs[name].files
-        ):
-            raise click.UsageError(
-                f"{name} requires prepared inputs; use --source-input-root {name} PATH (see dataset README)"
-            )
+        if source.preparation == InputPreparation.EXPLICIT and not (inputs.root is not None or inputs.files):
+            raise click.UsageError(f"{name} requires prepared inputs; use --input-root PATH (see dataset README)")
     if processing_mode == SourceProcessingMode.QUICK:
         if assess:
             raise click.UsageError("Assessment requires SAMPLE or FULL")
@@ -286,10 +264,7 @@ def main(
         max_workers = max_workers if max_workers is not None else LOCAL_MAX_WORKERS
         output_root = output_root.resolve()
         options = PipelineOptions(processing_mode, runtime, inputs=inputs)
-        steps = {
-            name: cast(CurationPipeline, source.pipeline)(source, replace(options, inputs=source_inputs[name]))
-            for name, source in selected.items()
-        }
+        steps = {name: cast(CurationPipeline, source.pipeline)(source, options) for name, source in selected.items()}
         if not do_run:
             plan = {
                 "mode": processing_mode,
@@ -297,7 +272,6 @@ def main(
                     {"name": name, "fingerprint": step.fingerprint(), "dependencies": [dep.name for dep in step.deps]}
                     for name, step in steps.items()
                 ],
-                "source_input_roots": scoped_roots,
                 "input_root": inputs.root,
                 "input_files": {name: str(file) for name, file in inputs.files.items()},
                 "inputs": dict(inputs.auxiliary),
@@ -318,7 +292,7 @@ def main(
         return
     if output_root is not None:
         raise click.UsageError("--output-root requires --mode quick; use --report-path for SAMPLE/FULL")
-    if cache_dir is None and (input_root is not None or local_files or auxiliary or scoped_roots):
+    if cache_dir is None and (input_root is not None or local_files or auxiliary):
         raise click.UsageError("Local input options require --cache-dir for SAMPLE/FULL")
     if cache_dir is not None and (
         worker_image is not None or container_profile is not None or coordinator_memory is not None
@@ -386,10 +360,7 @@ def main(
             scope.enter_context(local_artifact_prefix(str(cache_dir)))
             if report_path is None:
                 report_path = str(cache_dir / "campaigns/campaign.json")
-        steps = [
-            cast(CurationPipeline, source.pipeline)(source, replace(options, inputs=source_inputs[name]))
-            for name, source in selected.items()
-        ]
+        steps = [cast(CurationPipeline, source.pipeline)(source, options) for source in selected.values()]
         assessments = {}
         if assessment is not None:
             stages = [
