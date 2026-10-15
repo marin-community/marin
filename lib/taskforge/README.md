@@ -242,7 +242,10 @@ asking the author for a revision. A host fault is a machine the host could not c
 (classified by the message table in `sandbox.host_failures`, which validation's classifier reads too),
 an unreachable controller, or a startup or verifier deadline that expired while a sandbox started,
 received files or ran a command (`SANDBOX_DEADLINE`): the grader's own command has its own timeout,
-so the deadline is the sandbox's latency.
+so the deadline is the sandbox's latency. `grade_candidate` grades once more on fresh machines when
+the grader command timed out, and returns the second grade. A step-store memo or blob that reads back
+unreadable or altered raises `step_store.StoreCorruption`, an `OSError`, which the build child
+reports as a storage fault.
 
 `stage40_build/template/standard.py` is the standard program: five steps and the sink `assemble`.
 
@@ -257,7 +260,9 @@ sources(proposal) -> fixtures(proposal, sources) -> requirements(proposal, fixtu
 `grader` grades its own reference answer and the empty answer with `grade_candidate` before it returns,
 sends a failing grader back to the model, and after `sdk.ATTEMPTS` requests fails the build, so a
 grader that rejects its own reference, returns a reward outside its score range, or credits the
-empty answer above its declared `rejection_ceiling` is a build failure. The `Grader` it returns
+empty answer above its declared `rejection_ceiling` is a build failure. A reference whose grader
+timed out on both of `grade_candidate`'s gradings fails the build at once instead of going back to the
+model, so the revision names the timeout. The `Grader` it returns
 holds the reference answer, the ceiling (the most a submission wrong in substance can earn under
 its partial-credit scheme) and every candidate it graded. The agentic author's `run_build` tool
 grades the empty answer in the library after every build, whatever the program did, and fails the
@@ -285,7 +290,11 @@ candidate against the last draft the session built (`run_grade_candidate`), and 
 web when the proposal lists research. Every load of a program (`run_loader`, `run_build`, `submit`)
 goes through the session's `ProgramLoader`, by default `stage30_author.load_process` in a child process
 bounded by `LOAD_TIMEOUT`, so a module body that never returns is refused rather than holding the
-caller's event loop. Every tool result is cut to 6,000 characters, head and tail.
+caller's event loop. Every tool result is cut to 6,000 characters, head and tail. A host failure never
+reaches the model: `run_build` and `run_grade_candidate` retry a `BuildInfrastructureFailure` up to
+`HOST_RETRIES` times with a doubling backoff (at once re-raising a cause in `HOST_REJECTIONS`), then
+re-raise it like `ModelUnavailable`, so the round ends without a record and spends no revision; a
+loader child the host killed raises it with cause `BUILD_PROCESS`.
 `submit(path, notes)` loads the file and refuses a loader failure or notes over 4,000 characters; a
 program that never built in the session is refused once and handed in untested when submitted again;
 an accepted submission ends the loop through `run_agent`'s `stop` callback. The session also stops

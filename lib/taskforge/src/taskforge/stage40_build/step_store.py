@@ -23,7 +23,9 @@ A memo holds a step's stored output under one key. The ledger in a later PR call
 entries.
 
 The store writes the blob before the memo, so every memo points at a complete blob, and it
-writes each file to a temporary sibling before renaming it into place. On an object store the
+writes each file to a temporary sibling before renaming it into place. A memo or blob that reads back
+unreadable or altered raises ``StoreCorruption``, an ``OSError``, so a build reports it as the
+storage fault it is rather than as the program's. On an object store the
 rename is a copy and a delete, so a memo costs three requests and appears whole or not at all;
 CI exercises a ``file://`` root, and ``tests/stage40_build/test_step_store_live.py`` (marker
 ``manual``) runs the same round trip against a bucket. A step's output has to come
@@ -36,7 +38,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.storage_path import StoragePath
 
@@ -45,6 +47,13 @@ from taskforge.ledger.records import FILE_SAFE, check_item_id
 
 SDK_VERSION = "taskforge.builder/12"
 """Bump when a library change alters what an unchanged step would produce."""
+
+
+class StoreCorruption(OSError):
+    """A memo or blob in the store is unreadable or does not match its digest.
+
+    The store is a host fault, not the program's.
+    """
 
 
 class CacheStatus(StrEnum):
@@ -135,24 +144,34 @@ class RLEnvBuildStepStore:
             The memo and the decoded output, or ``None`` when no memo exists.
 
         Raises:
-            ValueError: the blob's content does not match the digest in the memo.
+            StoreCorruption: the memo does not validate, or its blob does not match the memo's digest or
+                does not decode as ``output_type``.
         """
         path = self._memo_path(key, name)
         if not path.exists():
             return None
-        memo = _MEMO.validate_json(path.read_bytes())
+        try:
+            memo = _MEMO.validate_json(path.read_bytes())
+        except ValidationError as error:
+            raise StoreCorruption(f"Memo {path} of step {name} is unreadable: {error}") from error
         return memo, self.read_output(memo, output_type)
 
     def read_output[T](self, memo: RLEnvBuildStepMemo, output_type: type[T]) -> T:
         """Decode the blob ``memo`` points at as ``output_type``.
 
         Raises:
-            ValueError: the blob's content does not match the digest in the memo.
+            StoreCorruption: the blob does not match the digest in the memo, or does not decode as
+                ``output_type``.
         """
         content = (self.root / "blobs" / memo.output_digest).read_bytes()
         if sha256_hex(content) != memo.output_digest:
-            raise ValueError(f"Blob {memo.output_digest} of step {memo.name} does not match its digest")
-        return TypeAdapter(output_type).validate_json(content)
+            raise StoreCorruption(f"Blob {memo.output_digest} of step {memo.name} does not match its digest")
+        try:
+            return TypeAdapter(output_type).validate_json(content)
+        except ValidationError as error:
+            raise StoreCorruption(
+                f"Blob {memo.output_digest} of step {memo.name} does not decode as {output_type}: {error}"
+            ) from error
 
     def store(self, key: RLEnvBuildStepKey, name: str, output: object) -> RLEnvBuildStepMemo:
         """Write ``output``'s blob unless it exists, then the memo for ``name`` under ``key``."""

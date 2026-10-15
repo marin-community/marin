@@ -28,6 +28,7 @@ from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.structured import complete_structured, response_format
 from taskforge.stage10_proposal.model import TaskProposal
+from taskforge.stage30_author import load_process
 from taskforge.stage30_author.author import Revision, RevisionKind, program_manifest
 from taskforge.stage30_author.load_process import ProgramManifest, load_program_in_process
 from taskforge.stage30_author.loader import load_program_source
@@ -36,13 +37,16 @@ from taskforge.stage40_build.agentic_author import (
     AgenticAuthorConfig,
     AuthorOutcome,
     AuthorStatus,
+    ProgramBuilder,
     SameSessionBounds,
     SessionBuild,
     SessionMode,
     author_round,
     plan_session,
 )
+from taskforge.stage40_build.context import BuildInfrastructureFailure
 from taskforge.stage40_build.glm_author import AUTHOR_DIR, GlmAuthor
+from taskforge.stage40_build.infrastructure import InfrastructureCause
 from taskforge.stage40_build.run import ResearchRequirement, TaskDraft, run_build
 from taskforge.stage40_build.services import RLEnvBuildServices
 from taskforge.stage40_build.template import standard
@@ -104,6 +108,10 @@ CONFIG = AgenticAuthorConfig(
 CALL_IDS = itertools.count()
 STRUCTURED_REPAIRS = 1
 FAILURE = Revision(RevisionKind.BUILD_FAILURE, "fixtures: KeyError 'rows'")
+SCHEDULING = BuildInfrastructureFailure(InfrastructureCause.SCHEDULING_TIMEOUT, "the machine factory gave up waiting")
+NO_FACTORY = BuildInfrastructureFailure(InfrastructureCause.NO_FACTORY, "this host has no docker machine factory")
+ALWAYS = 1_000
+"""A failure count no session reaches: the host fails every build."""
 
 
 @dataclass(frozen=True)
@@ -231,6 +239,27 @@ def read(path: Path) -> dict:
 def tool_outputs(model: ScriptedModel) -> list[str]:
     """The tool results the model saw, in order, from the last request's conversation."""
     return [str(m["content"]) for m in model.requests[-1].messages if m["role"] == "tool"]
+
+
+def tool_texts(model: ScriptedModel) -> list[str]:
+    """Every tool result any request of the session carried."""
+    return [str(m["content"]) for request in model.requests for m in request.messages if m["role"] == "tool"]
+
+
+@dataclass
+class HostFailingBuilder:
+    """A ``ProgramBuilder`` whose first ``failures`` builds the host fails with ``failure``; ``calls`` counts builds."""
+
+    builder: ProgramBuilder
+    failure: BuildInfrastructureFailure
+    failures: int
+    calls: int = 0
+
+    async def __call__(self, source: str, run_dir: Path, *, invalidate: frozenset[str]) -> TaskDraft:
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise BuildInfrastructureFailure(self.failure.cause, self.failure.message)
+        return await self.builder(source, run_dir, invalidate=invalidate)
 
 
 def step_statuses(path: Path) -> list[tuple[str, str]]:
@@ -405,6 +434,108 @@ async def test_a_module_body_that_never_returns_is_refused_by_the_loader_tool(tm
     cut = "the program's module body ran for more than 2 seconds without returning"
     assert loader.startswith(f"refused by the loader: {cut}")
     assert submitted.startswith(f"refused by the loader, nothing handed in: {cut}")
+
+
+async def test_a_loader_child_the_host_killed_ends_the_round_as_infrastructure(
+    tmp_path, services, proposal, ledger, monkeypatch
+):
+    """A loader child that dies before it writes a result, here because its module is missing, is the host's."""
+    monkeypatch.setattr(load_process, "MODULE", "taskforge.no_such_loader")
+    item = tmp_path / "item"
+    model = ScriptedModel(turn(("run_loader", {"path": "program.py"})), answer("done"))
+    build = replace(session_build(tmp_path, model, services, proposal, 0), loader=aa.load_in_child)
+
+    with pytest.raises(BuildInfrastructureFailure) as raised:
+        await author_round(CONFIG, model, LLMPolicy(), ledger, build, item, ITEM, 0, proposal, None)
+
+    assert raised.value.cause == InfrastructureCause.BUILD_PROCESS
+    assert "the program loader process exited with status 1" in raised.value.message
+    assert len(model.replies) == 1 and not tool_texts(model)
+
+
+async def test_a_build_the_host_failed_once_is_built_again_inside_the_tool(
+    tmp_path, services, proposal, ledger, monkeypatch
+):
+    monkeypatch.setattr(aa, "HOST_RETRY_BACKOFF", 0.0)
+    item = tmp_path / "item"
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": "n"})),
+    )
+    build = session_build(tmp_path, model, services, proposal, 0)
+    flaky = HostFailingBuilder(build.builder, SCHEDULING, failures=1)
+
+    outcome = await author_round(
+        CONFIG, model, LLMPolicy(), ledger, replace(build, builder=flaky), item, ITEM, 0, proposal, None
+    )
+
+    assert outcome.status is AuthorStatus.ACCEPTED and flaky.calls == 2
+    assert tool_outputs(model)[1].startswith("built: program ")
+    assert read(agentic(item, 0, 0) / "runs" / "0" / "run.json")["status"] == "built"
+
+
+@pytest.mark.parametrize(
+    ("failure", "builds"), [(SCHEDULING, 1 + aa.HOST_RETRIES), (NO_FACTORY, 1)], ids=["retried", "host-rejection"]
+)
+async def test_a_build_the_host_keeps_failing_ends_the_round_unseen_by_the_author(
+    tmp_path, services, proposal, ledger, monkeypatch, failure, builds
+):
+    monkeypatch.setattr(aa, "HOST_RETRY_BACKOFF", 0.0)
+    item = tmp_path / "item"
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": "n"})),
+    )
+    build = session_build(tmp_path, model, services, proposal, 0)
+    failing = HostFailingBuilder(build.builder, failure, failures=ALWAYS)
+
+    with pytest.raises(BuildInfrastructureFailure) as raised:
+        await author_round(
+            CONFIG, model, LLMPolicy(), ledger, replace(build, builder=failing), item, ITEM, 0, proposal, None
+        )
+
+    assert raised.value.cause == failure.cause and failing.calls == builds
+    assert read(agentic(item, 0, 0) / "runs" / "0" / "run.json")["status"] == "infrastructure"
+    assert len(model.replies) == 1, "the session ended at the build"
+    assert not any("infrastructure" in text for text in tool_texts(model))
+    assert not (authored(item, 0, 0) / "author.json").exists(), "the round wrote no record and spent no revision"
+
+
+async def test_a_grade_the_host_keeps_failing_ends_the_round_unseen_by_the_author(
+    tmp_path, services, proposal, ledger, monkeypatch
+):
+    monkeypatch.setattr(aa, "HOST_RETRY_BACKOFF", 0.0)
+    graded: list[str] = []
+    grade_candidate = aa.grade_candidate
+
+    async def host_down_for_candidates(
+        context, requirements, grader, answer_type, answer_format, instruction, reply, **kw
+    ):
+        if not reply:  # the library's own empty-answer grade after the build
+            return await grade_candidate(
+                context, requirements, grader, answer_type, answer_format, instruction, reply, **kw
+            )
+        graded.append(reply)
+        raise BuildInfrastructureFailure(InfrastructureCause.HOST_UNREACHABLE, "machine controller RPC failed")
+
+    monkeypatch.setattr(aa, "grade_candidate", host_down_for_candidates)
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("run_grade_candidate", {"reply": "41"})),
+        turn(("submit", {"path": "program.py", "notes": "n"})),
+    )
+    build = session_build(tmp_path, model, services, proposal, 0)
+
+    with pytest.raises(BuildInfrastructureFailure) as raised:
+        await author_round(CONFIG, model, LLMPolicy(), ledger, build, tmp_path / "item", ITEM, 0, proposal, None)
+
+    assert raised.value.cause == InfrastructureCause.HOST_UNREACHABLE
+    assert graded == ["41"] * (1 + aa.HOST_RETRIES)
+    assert tool_outputs(model)[1].startswith("built: program ")
+    assert not any("grading failed" in text or "infrastructure" in text for text in tool_texts(model))
 
 
 async def test_tools_refuse_paths_outside_the_workspace_and_writes_to_the_reference(tmp_path, author):

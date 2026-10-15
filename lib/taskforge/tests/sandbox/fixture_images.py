@@ -5,7 +5,7 @@
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from pydantic import JsonValue
@@ -18,6 +18,7 @@ from shellbox.machine import (
     CommandSemantics,
     DockerImage,
     ExecutionRequirements,
+    ExitReason,
     Machine,
     MachineSpec,
     PackageSpec,
@@ -115,6 +116,55 @@ class ShellGraderImageFactory:
 
     async def create(self, spec: MachineSpec) -> ShellGradedMachine:
         return ShellGradedMachine(await self.images.create(spec))
+
+
+@dataclass
+class SlowGraderMachine:
+    """A fixture machine whose grader command may come back ``TIMED_OUT``, as ``SlowGraderFactory`` decides."""
+
+    machine: Machine
+    factory: "SlowGraderFactory"
+
+    async def run(self, command: Command) -> Result:
+        if command.argv in (PYTHON_GRADER_ARGV, SHELL_GRADER_ARGV):
+            self.factory.grader_runs += 1
+            if self.factory.grader_runs <= self.factory.timeouts:
+                return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+        return await self.machine.run(command)
+
+    async def upload(self, source: Path, target: str) -> None:
+        await self.machine.upload(source, target)
+
+    async def download(self, source: str, target: Path) -> None:
+        await self.machine.download(source, target)
+
+    async def close(self) -> None:
+        await self.machine.close()
+
+
+@dataclass
+class SlowGraderFactory:
+    """``ShellGraderImageFactory`` machines on a sandbox too slow for the grader: the first ``timeouts`` grader
+    commands, counted across every machine it creates, come back ``TIMED_OUT`` without running.
+
+    ``machines`` and ``grader_runs`` count the machines created and the grader commands run.
+    """
+
+    timeouts: int
+    machines: int = 0
+    grader_runs: int = 0
+    images: ShellGraderImageFactory = field(default_factory=ShellGraderImageFactory)
+
+    @property
+    def backend(self) -> Backend:
+        return self.images.backend
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        self.images.check_environment(requirements, spec)
+
+    async def create(self, spec: MachineSpec) -> SlowGraderMachine:
+        self.machines += 1
+        return SlowGraderMachine(await self.images.create(spec), self)
 
 
 def shell_grader(

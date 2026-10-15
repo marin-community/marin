@@ -8,6 +8,11 @@ steps it runs, but a caller that only loads a program (the agentic author's load
 tools) would block its event loop on a module body that spins. ``load_program_in_process`` runs the
 loader in a child process for at most ``wall_timeout`` seconds, with the source on its stdin, and
 reads back the program's manifest (``author.program_manifest``) or the loader's refusal.
+
+A child that exits without a result, as when the kernel killed it for memory, raises
+``LoaderProcessFailed``: the host's fault, not the program's. This stage cannot import the build's
+``BuildInfrastructureFailure`` (stages import only lower stages), so the build's caller of the
+loader (``stage40_build.agentic_author.load_in_child``) raises that in its place.
 """
 
 import asyncio
@@ -23,6 +28,10 @@ from taskforge.stage30_author.loader import load_program_source
 
 MODULE = "taskforge.stage30_author.load_process"
 STDERR_TAIL = 2000
+
+
+class LoaderProcessFailed(RuntimeError):
+    """The loader child exited without writing a result; the host failed, not the program."""
 
 
 class StepManifest(BaseModel):
@@ -52,7 +61,7 @@ async def load_program_in_process(source: str, *, wall_timeout: float) -> Progra
     Raises:
         ValueError: the loader refuses ``source`` (its message), or the module body ran past
             ``wall_timeout`` seconds.
-        RuntimeError: the child exited without a result.
+        LoaderProcessFailed: the child exited without a result.
     """
     process = await asyncio.create_subprocess_exec(
         sys.executable, "-m", MODULE, stdin=PIPE, stdout=PIPE, stderr=PIPE, start_new_session=True
@@ -68,7 +77,9 @@ async def load_program_in_process(source: str, *, wall_timeout: float) -> Progra
         await stop_process_group(process)
     if process.returncode != 0 or not stdout:
         tail = stderr.decode(errors="replace")[-STDERR_TAIL:]
-        raise RuntimeError(f"the program loader process exited with status {process.returncode}; stderr ends:\n{tail}")
+        raise LoaderProcessFailed(
+            f"the program loader process exited with status {process.returncode}; stderr ends:\n{tail}"
+        )
     result = LoadResult.model_validate_json(stdout)
     if result.error is not None:
         raise ValueError(result.error)

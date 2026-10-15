@@ -24,7 +24,10 @@ The steps, in run order:
    the step grades its reference answer and the empty answer with ``grade_candidate``. A reference below
    ``FULL_CREDIT``, a reward outside the grader's score range, or an empty answer above the grader's
    declared ``rejection_ceiling`` goes back to the model, and after ``ATTEMPTS`` requests the build
-   fails. The returned ``Grader`` holds the reference answer, the ceiling and every graded candidate.
+   fails. A reference whose grader timed out fails the build at once: ``grade_candidate`` has already
+   graded it a second time on fresh machines, so the grader was slow twice, and a rewritten grader
+   would not tell the model why. The returned ``Grader`` holds the reference answer, the ceiling and
+   every graded candidate.
 5. ``instructions`` writes the solver-facing prompt around the grader's answer contract and sends
    back one that leaks a graded answer, runs past ``INSTRUCTION_WORD_LIMIT`` words, copies file
    lines, or asks for work by hand.
@@ -35,7 +38,7 @@ Validation lowers the task for its host and writes the controls from the ``Grade
 
 import asyncio
 
-from taskcompendium.grading_result import Outcome
+from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import AnswerType, EnvironmentRequirements, Source, TaskSpec
 
 from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
@@ -170,6 +173,11 @@ async def grader(
             )
         except (ValueError, BuildFailure) as error:
             return str(error)
+        if reference.status == Outcome.INFRA_ERROR and reference.failure is GradingFailure.TIMEOUT:
+            raise BuildFailure(
+                "the grader timed out on the reference answer twice, each time on fresh machines; it must finish "
+                f"within its timeout: {grade_diagnostics(reference)}"
+            )
         prototyped.append(graded_candidate(submitted.reference_reply, reference_files, reference))
         if reference.status == Outcome.GRADED and not reward_in_range(reference):
             return (

@@ -11,6 +11,7 @@ from taskforge.stage40_build.step_store import (
     CacheStatus,
     RLEnvBuildStepKey,
     RLEnvBuildStepStore,
+    StoreCorruption,
     memoized,
 )
 
@@ -88,7 +89,20 @@ def test_a_blob_altered_on_disk_is_refused(tmp_path):
     record = store.store(KEY, "fixtures", OUTPUT)
     (tmp_path / "blobs" / record.output_digest).write_text("{}")
 
-    with pytest.raises(ValueError, match="does not match its digest"):
+    with pytest.raises(StoreCorruption, match="does not match its digest"):
+        store.load(KEY, "fixtures", Fixture)
+
+
+def test_a_truncated_memo_or_a_blob_of_another_type_is_a_storage_fault(tmp_path):
+    """Both raise an ``OSError``, which the build child reports as a storage fault rather than a program crash."""
+    store = RLEnvBuildStepStore(str(tmp_path), "item-a")
+    store.store(KEY, "fixtures", OUTPUT)
+    with pytest.raises(StoreCorruption, match="does not decode as"):
+        store.load(KEY, "fixtures", Readings)
+
+    memo = tmp_path / "items" / "item-a" / "steps" / "fixtures" / f"{KEY.digest}.json"
+    memo.write_bytes(memo.read_bytes()[:40])
+    with pytest.raises(OSError, match="is unreadable"):
         store.load(KEY, "fixtures", Fixture)
 
 
