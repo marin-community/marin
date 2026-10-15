@@ -1,0 +1,26 @@
+{
+  "scope": "Actual complete six-arm optimizer300 analysis independently executed with original JSON and compressed ledger. This representation regression does not complete pending frozen native grader replay.",
+  "all_570_terminal_attempts_and_all_fields_identical": true,
+  "uncompressed_original_sha256": "7c12414cb8af49af73f21fc3893341b86477d16ea76a9237bfe4094393260794",
+  "uncompressed_restore_revision": "6ff535f5aaedb1d2f05e9d42b9b99a547c434b76",
+  "compressed_sha256": "339f64df70831a4edcbd369ebc20887bfaeffd78c609303615a0f7ff64cff3e6",
+  "original_bytes": 514078,
+  "compressed_bytes": 39392,
+  "terminal_attempts": 570,
+  "terminal_h100_hours": 9642.539819999993,
+  "actual_six_arm_analysis_outputs": [
+    {
+      "file": "curriculum_quality_and_stability.png",
+      "comparison": "byte-identical"
+    },
+    {
+      "file": "curriculum_quality_and_stability.svg",
+      "comparison": "identical after removing only creation date and consistent SVG ID renaming"
+    },
+    {
+      "file": "paired_curriculum_results.json.gz",
+      "comparison": "byte-identical"
+    }
+  ],
+  "both_entrypoints_exit0": true
+}

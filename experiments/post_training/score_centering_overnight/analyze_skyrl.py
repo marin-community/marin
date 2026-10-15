@@ -13,6 +13,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import yaml
+from analysis_json import read_json
 
 mpl.use("Agg")
 
@@ -93,7 +94,7 @@ def main() -> None:
     parser.add_argument("--costs", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    ledger = json.loads(args.costs.read_text())
+    ledger = read_json(args.costs)
     configs = [yaml.safe_load(path.read_text()) for path in sorted(args.config_dir.glob("*.yaml"))]
     assert len(configs) == 8
     runs = []

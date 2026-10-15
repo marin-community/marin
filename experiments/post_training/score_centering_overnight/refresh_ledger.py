@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
-from analysis_json import read_json
+from analysis_json import read_json, write_json
 
 
 def stage(job_id: str) -> str:
@@ -112,7 +112,7 @@ def main() -> None:
 
     now = datetime.now(UTC)
     registry.update(observed_at=now.isoformat(), jobs=list(jobs.values()))
-    costs = json.loads((campaign / "costs.json").read_text())
+    costs = read_json(campaign / "costs.json.gz")
     attempts = {(row["task_id"], row["attempt_uid"]): row for row in costs["attempts"]}
     active = [row for row in costs.get("active_attempts", []) if row["cluster"] != args.cluster]
     observed_attempts = list(csv.DictReader(args.attempts.open()))
@@ -175,7 +175,7 @@ def main() -> None:
         active_costs="Active intervals are partial observations and excluded from terminal stage totals.",
     )
     (campaign / "registry.json").write_text(json.dumps(registry, indent=2) + "\n")
-    (campaign / "costs.json").write_text(json.dumps(costs, indent=2) + "\n")
+    write_json(campaign / "costs.json.gz", costs)
     print(
         json.dumps(
             {"jobs": len(jobs), "terminal_attempts": len(attempts), "active_attempts": len(active), "hours": totals}

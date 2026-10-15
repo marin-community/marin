@@ -116,7 +116,7 @@ def main() -> None:
     parser.add_argument("--recovery-config", type=Path, action="append", default=[])
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    costs = json.loads(args.costs.read_text())
+    costs = read_json(args.costs)
     configs = [yaml.safe_load(path.read_text()) for path in sorted(args.config_dir.glob(args.pattern))]
     recoveries = {config["run"]["id"]: [] for config in configs}
     for path in args.recovery_config:
