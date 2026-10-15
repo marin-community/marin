@@ -108,6 +108,7 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
 
 RematMode = Literal["recompute_all", "save_moe", "offload_carry"]
 OFFLOAD_CARRY_REMAT_MODE: RematMode = "offload_carry"
+LM_LOSS_METRIC = "train/lm_loss"
 
 # The per-layer residual-stream input. Plain remat holds it as the checkpoint argument, which
 # pins about 39 GiB of HBM across the hero's 48 layers.
@@ -117,7 +118,7 @@ LAYER_CARRY_REMAT_NAME = "grug_layer_carry"
 # takes the routing-weight gradient on the expert side, so its backward reads neither the expert
 # down projection nor the return transport, and saving this value leaves the recompute only the
 # dispatch and the gate/up projection. This changes ordinary bf16 rounding in the routing-weight
-# gradient (about one ULP in #9833). Separately, a weighted cotangent below 2^-126 can underflow
+# gradient. Separately, a weighted cotangent below 2^-126 can underflow
 # and lose its contribution before division by the positive routing weight.
 MOE_OUTPUT_REMAT_NAME = "grug_moe_routed_output"
 
@@ -1446,7 +1447,7 @@ class Transformer(eqx.Module):
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)
             # Includes the optional final-logit z-loss; it is not an unregularized CE metric.
-            summarized_metrics["train/lm_loss"] = lm_loss
+            summarized_metrics[LM_LOSS_METRIC] = lm_loss
             num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
             summarized_metrics["train/router/z_loss_logging_only"] = (
                 jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
