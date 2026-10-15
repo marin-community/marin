@@ -99,6 +99,8 @@ PAPER_LABELS = {
     "tab:a-ablations-full",
 }
 SECTIONS = paths.DRIVE / "sections"
+# The numbers of the paper that differ from the build, as .agents/projects/mariner_release/AUDIT.md explains them.
+KNOWN_DIFFERENCES = {("tab:a-unimax-cap", 0, 4, 0)}
 
 
 def registry_frame(rows: list[dict]) -> pd.DataFrame:
@@ -310,3 +312,12 @@ def test_every_paper_table_is_parsed():
     tables = v.parse_tables(v.read_sections(SECTIONS))
     assert set(tables) == PAPER_LABELS
     assert all(tables[label] for label in PAPER_LABELS)
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.skipif(not (SECTIONS.exists() and paths.BUILD.exists()), reason="paper folder or build absent")
+def test_registry_checks_every_number_of_the_paper():
+    # Every registry row names a printed number and evaluates; every number is checked or a registered skip.
+    differences, untraced = v.audit(paths.BUILD, SECTIONS)
+    assert {(d.label, d.row, d.col, d.part) for d in differences} == KNOWN_DIFFERENCES
+    assert {u.kind for u in untraced} <= set(v.SKIP_KINDS)
