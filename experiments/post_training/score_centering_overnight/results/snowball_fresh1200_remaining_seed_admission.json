@@ -3,7 +3,6 @@
   "early_runtime_gate": "results/snowball_fresh1200_first_two_update_admission.json.gz",
   "exact_geometry": "4learner nodes +1inference node; PP2/EP8/TP1/CP1/SP1",
   "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-  "same_source_five_node_flashattention_qualification": "results/sc-snowball-runtime-qual-sc-s0-a3-01a126ce.json.gz",
   "matched_noisy_vs_fresh_recipe": {
     "pairs": [
       {
@@ -188,5 +187,7 @@
   "actual_native_callback_behavior": "Legacy callbacks constructed from native composed config, checkpoint fires at1200 and evaluation every20; checked behavior at20,40,600,1199,1200. Eval-on-train-end legacy defaulttrue retained, not silently changed.",
   "quality_endpoint": "Declared full1200 native clean-policy endpoint with complete raw response replays required. Neither first2 updates nor submissions satisfy completion.",
   "status": "admitted and prepared; remaining five not submitted yet",
-  "resource_board": 938
+  "resource_board": 938,
+  "same_source_five_node_native_qualification": "results/snowball0212_qualification.json.gz",
+  "same_source_both_pp_stages_cuda_flashattention_proof": "results/snowball0212_attention_proof.json"
 }
