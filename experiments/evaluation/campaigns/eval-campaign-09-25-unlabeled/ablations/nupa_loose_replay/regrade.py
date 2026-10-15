@@ -15,6 +15,7 @@ from importlib import import_module
 from finestore.reader import ReadView
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
 
 LOGGER = logging.getLogger(__name__)
 SCORER = import_module("eval.chat_benchmarks.NUPA-Loose.scorer")
@@ -60,7 +61,7 @@ def tracker_cells(tracker: str) -> list[dict]:
 
 
 def result_uri(output_prefix: str, model: str) -> str:
-    return f"{output_prefix.rstrip('/')}/results/nupa/{model.replace('/', '--')}.json"
+    return prefix_join(output_prefix, f"results/nupa/{model.replace('/', '--')}.json")
 
 
 def regrade(cell: dict) -> dict:
@@ -147,8 +148,8 @@ def main() -> None:
         if {cell["model"] for cell in cells} != requested:
             raise ValueError("requested model absent from sealed NUPA tracker cells")
 
-    prefix = args.output_prefix.rstrip("/")
-    provenance_uri = f"{prefix}/provenance.json"
+    prefix = args.output_prefix
+    provenance_uri = prefix_join(prefix, "provenance.json")
     filesystem, key = filesystem_for(provenance_uri)
     if not filesystem.exists(key):
         write_json(

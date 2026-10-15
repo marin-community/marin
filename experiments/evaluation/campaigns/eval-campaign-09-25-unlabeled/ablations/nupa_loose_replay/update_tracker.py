@@ -12,6 +12,7 @@ from pathlib import Path
 
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
 
 BENCHMARK = "NUPA"
 SCORE_CELL = re.compile(r"^([01](?:\.\d+)?)\s+\((s3://[^)]+)\)$")
@@ -24,7 +25,7 @@ def read_json(uri: str) -> dict:
 
 
 def result_uri(output_prefix: str, model: str) -> str:
-    return f"{output_prefix.rstrip('/')}/results/nupa/{model.replace('/', '--')}.json"
+    return prefix_join(output_prefix, f"results/nupa/{model.replace('/', '--')}.json")
 
 
 def update_tracker(tracker: Path, output_prefix: str) -> list[dict]:
