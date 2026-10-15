@@ -1,0 +1,12 @@
+id: X0217
+slug: muonh-momentum-warmup
+name: MuonH momentum warmup
+category: Optimizers
+summary: Warm MuonH Nesterov momentum up linearly from 0.85 over 10-20% of training, and test whether it makes a higher final
+  momentum (0.98) beat the default 0.95.
+source: intake
+status: approved
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6079384012
+  author: RavnaBergsndot
+  approved_by: ClassicLarry
