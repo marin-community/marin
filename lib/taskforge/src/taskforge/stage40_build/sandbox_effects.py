@@ -19,6 +19,10 @@ builds the task's ``TaskGrader`` inside ``run``, hands it to the session through
 ``build_machine`` prepares a machine through RolloutEngine's own ``_prepare_machine``, so files, setup
 commands, the execution user and the startup deadline behave as in a task attempt. RolloutEngine
 exposes no public form of it.
+
+A deadline that expires while a machine starts or a candidate is graded is the host's
+(``InfrastructureCause.SANDBOX_DEADLINE``): a grader command past its own timeout comes back as a
+result, so the deadline only expires when the sandbox is slow to start, transfer or answer.
 """
 
 import re
@@ -42,15 +46,27 @@ from taskforge.spec import draft
 from taskforge.spec.controls import candidate_turns
 from taskforge.spec.draft import MachineSettings, machine_runtime
 from taskforge.stage40_build.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
-from taskforge.stage40_build.infrastructure import InfrastructureCause, host_checked_factories, infrastructure_failure
+from taskforge.stage40_build.infrastructure import (
+    InfrastructureCause,
+    deadline_failure,
+    host_checked_factories,
+    infrastructure_failure,
+)
 from taskforge.stage40_build.sdk import GRADER_TIMEOUT
 from taskforge.stage40_build.services import RLEnvBuildServices
 from taskforge.stage40_build.step_store import SDK_VERSION
 
 MACHINE_CLEANUP_TIMEOUT = 120.0
 """Seconds ``build_machine`` and ``grade_candidate`` wait for a machine to close."""
-GRADE_CANDIDATE_MACHINE = draft.machine(startup_timeout=600.0)
-"""The task and verifier machine settings ``grade_candidate`` uses unless the step passes its own."""
+GRADE_CANDIDATE_PREPARATION_TIMEOUT = 300.0
+"""Seconds a grading machine's start allows past the factory's scheduling budget, for its files and setup commands."""
+GRADE_CANDIDATE_MACHINE = draft.machine(startup_timeout=SANDBOX_SCHEDULING_TIMEOUT + GRADE_CANDIDATE_PREPARATION_TIMEOUT)
+"""The task and verifier machine settings ``grade_candidate`` uses unless the step passes its own.
+
+The startup deadline outlasts ``SANDBOX_SCHEDULING_TIMEOUT``, as the verifier deadline does, so a
+sandbox that never starts surfaces as the factory's typed ``SCHEDULING_TIMEOUT`` rather than as an
+untyped startup deadline; the margin is the machine's preparation once it is scheduled.
+"""
 GRADE_CANDIDATE_VERIFIER_TIMEOUT = SANDBOX_SCHEDULING_TIMEOUT + GRADER_TIMEOUT
 """Seconds ``grade_candidate`` allows one grading: the verifier machine's scheduling budget, then the grader's own.
 
@@ -78,15 +94,23 @@ async def build_machine(
     loop a shell in it. Leaving the block closes it.
 
     Raises:
-        BuildInfrastructureFailure: the host failed to create or drive the machine.
+        BuildInfrastructureFailure: the host failed to create or drive the machine, or the machine did
+            not start within ``settings.startup_timeout`` (``SANDBOX_DEADLINE``).
     """
     factories = host_checked_factories(services.factories, services.host)
     hosted = draft.host_requirements(requirements, factories)
     runtime = machine_runtime(settings, hosted, services.host)
     async with AsyncExitStack() as owned:
-        prepared = await _prepare_machine(
-            hosted, runtime, tuple(files), factories, _Cleanup(MACHINE_CLEANUP_TIMEOUT), owned
-        )
+        try:
+            prepared = await _prepare_machine(
+                hosted, runtime, tuple(files), factories, _Cleanup(MACHINE_CLEANUP_TIMEOUT), owned
+            )
+        except TimeoutError as error:
+            raise BuildInfrastructureFailure(
+                InfrastructureCause.SANDBOX_DEADLINE,
+                f"machine start: the sandbox did not answer within the {settings.startup_timeout:.0f}-second "
+                "startup deadline",
+            ) from error
         assert prepared is not None, "a machine runtime always prepares a machine"
         yield prepared
 
@@ -140,7 +164,8 @@ async def grade_candidate(
         BuildFailure: ``spec.draft.assemble`` or ``spec.draft.lower`` rejects the provisional task,
             including an ``answer_format`` that cannot carry ``answer_type`` to ``grader``, or
             ``workspace`` is given without a task machine.
-        BuildInfrastructureFailure: the host failed to create or drive a grading machine.
+        BuildInfrastructureFailure: the host failed to create or drive a grading machine, or a machine
+            start or the grading outlasted its deadline (``SANDBOX_DEADLINE``).
     """
     if workspace and requirements is None:
         raise BuildFailure("grade_candidate: workspace files need a task machine")
@@ -185,7 +210,7 @@ async def grade_candidate(
     try:
         rollout = await RolloutEngine(_CandidateModel(turns), factories).run(lowered)
     except RolloutInterrupted as error:
-        failure = infrastructure_failure(error)
+        failure = infrastructure_failure(error) or deadline_failure(error)
         if failure is None:
             raise
         raise failure from error

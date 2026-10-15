@@ -17,6 +17,7 @@ from shellbox.machine import (
     ExecutionRequirements,
     Machine,
     MachineSpec,
+    MachineTerminated,
     Result,
     UnsupportedMachineSpec,
 )
@@ -27,10 +28,12 @@ from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT
 from taskforge.sandbox.images import DockerBuild
 from taskforge.spec import draft
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink
+from taskforge.stage40_build import sandbox_effects
 from taskforge.stage40_build.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
 from taskforge.stage40_build.infrastructure import InfrastructureCause
 from taskforge.stage40_build.run import DRAFT_DIR, ResearchRequirement, run_build
 from taskforge.stage40_build.sandbox_effects import (
+    GRADE_CANDIDATE_MACHINE,
     GRADE_CANDIDATE_VERIFIER_TIMEOUT,
     build_machine,
     grade_candidate,
@@ -38,7 +41,7 @@ from taskforge.stage40_build.sandbox_effects import (
 )
 from taskforge.stage40_build.sdk import GRADER_TIMEOUT
 from taskforge.stage50_validate.lowering import VERIFIER_TIMEOUT
-from tests.sandbox.fixture_images import PortlessShellSimFactory, shell_grader
+from tests.sandbox.fixture_images import PortlessShellSimFactory, ShellGraderImageFactory, shell_grader
 from tests.stage40_build.conftest import FACTORIES, ITEM, SAMPLING
 
 SHELLSIM = draft.requirements(image=None)
@@ -50,6 +53,23 @@ GRADER = shell_grader(
     FULL_CREDIT, {}, environment=draft.grader_environment(None), answer_path=draft.ANSWER_PATH, timeout=60
 )
 UNAVAILABLE = ConnectError(Code.UNAVAILABLE, "controller connection refused")
+FILES = (draft.file("workspace/data.txt", "40 2\n"),)
+DEADLINE = 0.3
+"""Seconds a test's startup or verifier deadline allows; a stalled machine stalls for longer."""
+PARENT_GONE = {
+    # The Iris factory's _create_sync when the sandbox task ended before it ran.
+    "sandbox-failed-before-running": RuntimeError("Iris sandbox task failed before running: Parent job terminated"),
+    # The controller refusing a sandbox under a parent job a shard relaunch killed.
+    "cannot-submit-job": ConnectError(
+        Code.FAILED_PRECONDITION,
+        "Cannot submit job: parent job /muchanem/gen1000-s1p has terminated (state=JOB_STATE_KILLED)",
+    ),
+}
+LOST = {
+    "machine-terminated": MachineTerminated("Iris sandbox task t/0 is TASK_STATE_KILLED: Parent job terminated"),
+    # ShellSim closes a machine after one command timeout; every later call raises this.
+    "shellsim-machine-closed": RuntimeError("Machine is closed"),
+}
 
 
 class FailingFactory:
@@ -81,6 +101,48 @@ class StalledFactory:
 
 
 SCHEDULING_TIMEOUT = FailingFactory(TimeoutError("Iris sandbox did not start within 600 seconds"))
+
+
+@dataclasses.dataclass
+class StallingMachine:
+    """A machine whose ``stalled`` operation (``run`` or ``upload``) never returns, as a sandbox that stops answering."""
+
+    machine: Machine
+    stalled: str
+
+    async def run(self, command: Command) -> Result:
+        if self.stalled == "run":
+            await asyncio.Event().wait()
+        return await self.machine.run(command)
+
+    async def upload(self, source, target) -> None:
+        if self.stalled == "upload":
+            await asyncio.Event().wait()
+        await self.machine.upload(source, target)
+
+    async def download(self, source, target) -> None:
+        await self.machine.download(source, target)
+
+    async def close(self) -> None:
+        await self.machine.close()
+
+
+@dataclasses.dataclass(frozen=True)
+class StallingFactory:
+    """The fixture container backend, whose machines never finish their ``stalled`` operation."""
+
+    stalled: str
+    images: ShellGraderImageFactory = dataclasses.field(default_factory=ShellGraderImageFactory)
+
+    @property
+    def backend(self) -> Backend:
+        return self.images.backend
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        self.images.check_environment(requirements, spec)
+
+    async def create(self, spec: MachineSpec) -> Machine:
+        return StallingMachine(await self.images.create(spec), self.stalled)
 
 
 @dataclasses.dataclass
@@ -125,6 +187,16 @@ class DroppingFactory:
         (FailingFactory(UNAVAILABLE), "host_unreachable"),
         (FailingFactory(ConnectionRefusedError("controller")), "host_unreachable"),
         (DroppingFactory(UNAVAILABLE), "host_unreachable"),
+        *((FailingFactory(error), "machine_create_failed") for error in PARENT_GONE.values()),
+        *((DroppingFactory(error), "machine_lost") for error in LOST.values()),
+    ],
+    ids=[
+        "scheduling-timeout",
+        "controller-unavailable",
+        "connection-refused",
+        "dropped-under-a-command",
+        *PARENT_GONE,
+        *LOST,
     ],
 )
 async def test_host_failures_in_a_machine_are_infrastructure(context, factory, cause):
@@ -175,6 +247,8 @@ async def test_a_host_without_an_image_builder_is_infrastructure(context):
         UnsupportedMachineSpec("Docker task images require setsid for command cancellation"),
         # The controller rejected the request itself, such as a malformed image reference.
         ConnectError(Code.INVALID_ARGUMENT, "invalid task image"),
+        # A precondition of the request, not the parent job's end.
+        ConnectError(Code.FAILED_PRECONDITION, "task image is not in the allowed registry"),
     ],
 )
 async def test_an_image_or_spec_the_program_chose_stays_the_programs_failure(context, error):
@@ -197,13 +271,41 @@ def test_verifier_deadlines_outlast_the_sandbox_scheduling_timeout():
     """
     assert GRADE_CANDIDATE_VERIFIER_TIMEOUT >= SANDBOX_SCHEDULING_TIMEOUT + GRADER_TIMEOUT
     assert VERIFIER_TIMEOUT >= SANDBOX_SCHEDULING_TIMEOUT + GRADER_TIMEOUT
+    assert GRADE_CANDIDATE_MACHINE.startup_timeout is not None
+    assert GRADE_CANDIDATE_MACHINE.startup_timeout > SANDBOX_SCHEDULING_TIMEOUT
 
 
-async def test_the_programs_own_startup_deadline_stays_the_programs_failure(context):
-    on_host = context(factories={Backend.SHELLSIM.value: StalledFactory()})
-    with pytest.raises(TimeoutError):
-        async with build_machine(on_host.services, SHELLSIM, draft.machine(startup_timeout=0.05)):
+@pytest.mark.parametrize("stalled", ["run", "upload"], ids=["command", "upload"])
+async def test_a_grading_deadline_on_a_stalled_verifier_is_infrastructure(context, monkeypatch, stalled):
+    """The grader's own command has its own timeout, so a verifier deadline that expires is the sandbox's latency."""
+    monkeypatch.setattr(sandbox_effects, "GRADE_CANDIDATE_VERIFIER_TIMEOUT", DEADLINE)
+    on_host = context(factories={**FACTORIES, Backend.DOCKER.value: StallingFactory(stalled)})
+    with pytest.raises(BuildInfrastructureFailure) as failure:
+        await grade_candidate(on_host, None, GRADER, AnswerType.TEXT, PLAIN, "question", "42")
+
+    assert failure.value.cause == InfrastructureCause.SANDBOX_DEADLINE
+
+
+@pytest.mark.parametrize(
+    ("factories", "requirements"),
+    [
+        ({Backend.SHELLSIM.value: StalledFactory()}, SHELLSIM),
+        ({Backend.DOCKER.value: StallingFactory("upload")}, DOCKER),
+    ],
+    ids=["never-scheduled", "stalled-upload"],
+)
+async def test_a_startup_deadline_on_a_stalled_machine_is_infrastructure(context, factories, requirements):
+    on_host = context(factories={**FACTORIES, **factories})
+    settings = draft.machine(startup_timeout=DEADLINE)
+    with pytest.raises(BuildInfrastructureFailure) as machine_failure:
+        async with build_machine(on_host.services, requirements, settings, FILES):
             pass
+    with pytest.raises(BuildInfrastructureFailure) as grader_failure:
+        await grade_candidate(
+            on_host, requirements, GRADER, AnswerType.TEXT, PLAIN, "question", "42", files=FILES, settings=settings
+        )
+
+    assert machine_failure.value.cause == grader_failure.value.cause == InfrastructureCause.SANDBOX_DEADLINE
 
 
 def grading_program(wrapped: bool):

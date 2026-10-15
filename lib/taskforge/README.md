@@ -12,7 +12,8 @@ src/taskforge/
   llm/             the ModelClient protocol, the GLM client and its token-id route, sampling policy,
                    structured output, call cache, ledger recording, agent loop, web tools,
                    the RolloutEngine model
-  sandbox/         MachineFactory selection per host, up-front task refusals, image builds
+  sandbox/         MachineFactory selection per host, up-front task refusals, image builds,
+                   the host-failure messages build and validation both classify
   spec/            TaskSpec assembly, lowering, fixed controls, grader verdicts
   stage10_proposal/ model.py: the TaskProposal document and its generation regex;
                    source.py: ProposalBatch, SlotFailure, the ProposalSource protocol
@@ -237,7 +238,11 @@ would, `grade_candidate` grades a candidate reply and workspace through `Rollout
 `publish_image` pushes a task image. `infrastructure.host_checked_factories` wraps the factories
 first, and `run_program` raises `BuildInfrastructureFailure` for a host fault anywhere in a step's
 cause chain, even one the program wrapped, so the caller retries or abandons the item instead of
-asking the author for a revision.
+asking the author for a revision. A host fault is a machine the host could not create or lost
+(classified by the message table in `sandbox.host_failures`, which validation's classifier reads too),
+an unreachable controller, or a startup or verifier deadline that expired while a sandbox started,
+received files or ran a command (`SANDBOX_DEADLINE`): the grader's own command has its own timeout,
+so the deadline is the sandbox's latency.
 
 `stage40_build/template/standard.py` is the standard program: five steps and the sink `assemble`.
 
