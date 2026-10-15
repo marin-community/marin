@@ -72,7 +72,15 @@ LOCAL_NORMALIZED_SHARDS = 4
 WORKER_CONTAINER_PROFILE = "CONTAINER_PROFILE_PRIVILEGED"
 IRIS_JOB_TTL = 1800
 CORPUS_CONVERSION_VERSION = "2026.10.14.1"
-EMBEDDING_STAGES = ("inputs", "descriptions", "task_embeddings", "curriculum_embeddings", "assignments", "publication")
+EMBEDDING_STAGES = (
+    "inputs",
+    "descriptions",
+    "task_embeddings",
+    "curriculum_embeddings",
+    "assignments",
+    "publication",
+    "coverage",
+)
 
 
 def _selected_sources(sources: tuple[str, ...]) -> dict[str, RlDataSource]:

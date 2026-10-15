@@ -51,7 +51,12 @@ CREATE TABLE IF NOT EXISTS curriculum_matches (
 );
 CREATE INDEX IF NOT EXISTS curriculum_match_area
     ON curriculum_matches (load_id, subject_id, capability_id, source_id, task_id);
-CREATE INDEX IF NOT EXISTS curriculum_task_content ON curriculum_tasks (load_id, content_hash);
+CREATE TABLE IF NOT EXISTS curriculum_statistics (
+    load_id TEXT NOT NULL, source_id TEXT NOT NULL, metric TEXT NOT NULL,
+    subject_id TEXT NOT NULL, node_id TEXT NOT NULL, instances BIGINT NOT NULL,
+    PRIMARY KEY (load_id, source_id, metric, subject_id, node_id),
+    FOREIGN KEY (load_id, source_id) REFERENCES curriculum_sources (load_id, source_id)
+);
 CREATE TABLE IF NOT EXISTS atlas_sources (
     load_id TEXT NOT NULL, id TEXT NOT NULL, declaration JSONB NOT NULL,
     assessment_key TEXT, latest_attempt_key TEXT, latest_attempt_status TEXT NOT NULL,

@@ -1,9 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stream a complete scored curriculum release into the checked-in Atlas app."""
+"""Load compact curriculum statistics and review samples into the checked-in Atlas app."""
 
-import hashlib
 import json
 import time
 import uuid
@@ -13,7 +12,7 @@ from typing import Any
 
 import click
 import pyarrow.parquet as pq
-from finestore.rl.curriculum import AlignmentRelease
+from finestore.rl.curriculum import AlignmentRelease, CurriculumCoverage, CurriculumStatistic
 from marina.client import DEFAULT_MARINA_URL
 from rigging.filesystem.storage_path import StoragePath
 
@@ -29,6 +28,7 @@ TABLE_COLUMNS = {
         "source_id TEXT, task_id TEXT, subject_id TEXT, capability_id TEXT, facet TEXT, "
         "membership_similarity DOUBLE PRECISION, capability_similarity DOUBLE PRECISION"
     ),
+    "statistics": "source_id TEXT, metric TEXT, subject_id TEXT, node_id TEXT, instances BIGINT",
 }
 
 
@@ -64,17 +64,24 @@ def release_tasks(paths: list[str]) -> Iterator[dict]:
                     }
 
 
-def load_curriculum(release_uri: str, query: Query) -> dict[str, Any]:
-    """Stage bounded batches, validate lineage and counts, then select atomically."""
+def load_curriculum(release_uri: str, coverage_uri: str, query: Query) -> dict[str, Any]:
+    """Load full-population statistics and bounded task examples, then select atomically."""
     started = time.monotonic()
     release = AlignmentRelease.model_validate_json(StoragePath(release_uri).read_text())
+    coverage = CurriculumCoverage.model_validate_json(StoragePath(coverage_uri).read_text())
+    if (coverage.alignment_release_id, coverage.curriculum_key, coverage.task_count) != (
+        release.release_id,
+        release.curriculum_key,
+        release.task_count,
+    ):
+        raise ValueError("Coverage statistics refer to a different alignment release")
     current = query(
         "SELECT l.release_id, l.release_uri FROM curriculum_current c JOIN curriculum_loads l USING (load_id) "
         "WHERE c.name = 'latest'",
         {},
     )["rows"]
-    if current and current[0] == {"release_id": release.release_id, "release_uri": release_uri}:
-        return {"changed": False, "release_id": release.release_id}
+    if current and current[0] == {"release_id": coverage.coverage_id, "release_uri": release_uri}:
+        return {"changed": False, "release_id": coverage.coverage_id}
     load_id = uuid.uuid4().hex
     requests = 1
 
@@ -93,7 +100,7 @@ def load_curriculum(release_uri: str, query: Query) -> dict[str, Any]:
         {},
     )["rows"]
     for row in stale:
-        for table in ("matches", "tasks", "ancestors", "nodes", "sources", "loads"):
+        for table in ("matches", "tasks", "statistics", "ancestors", "nodes", "sources", "loads"):
             while execute(
                 f"DELETE FROM curriculum_{table} WHERE ctid IN "
                 f"(SELECT ctid FROM curriculum_{table} WHERE load_id=:load_id LIMIT :limit)",
@@ -105,9 +112,9 @@ def load_curriculum(release_uri: str, query: Query) -> dict[str, Any]:
         "VALUES (:load_id, :release_id, :release_uri, CAST(:manifest AS JSONB))",
         {
             "load_id": load_id,
-            "release_id": release.release_id,
+            "release_id": coverage.coverage_id,
             "release_uri": release_uri,
-            "manifest": release.model_dump_json(),
+            "manifest": json.dumps({**release.model_dump(mode="json"), "coverage": coverage.model_dump(mode="json")}),
         },
     )
     selected = {row.source_id: row.model_dump(mode="json") for row in release.sources}
@@ -131,13 +138,9 @@ def load_curriculum(release_uri: str, query: Query) -> dict[str, Any]:
         "ancestors": insert("ancestors", ancestor_rows(nodes)),
     }
     node_kinds = {(row["subject_id"], row["node_id"]): row["kind"] for row in nodes}
-    source_counts: dict[str, Counter] = defaultdict(Counter)
-    source_content: dict[str, set[bytes]] = defaultdict(set)
-    content_hashes: set[bytes] = set()
-    embedding_texts: set[bytes] = set()
 
     def checked_tasks() -> Iterator[dict]:
-        for row in release_tasks(release.paths):
+        for row in release_tasks(coverage.sample_paths):
             detail = row["detail"]
             expected = selected.get(row["source_id"])
             subjects = (detail["matches"] or {}).get("subjects", [])
@@ -155,14 +158,6 @@ def load_curriculum(release_uri: str, query: Query) -> dict[str, Any]:
                     or node_kinds.get((subject_id, match["capability_id"])) != "capability"
                 ):
                     raise ValueError(f"Loaded task curriculum references are inconsistent: {row['task_id']}")
-            source = row["source_id"]
-            source_counts[source]["tasks"] += 1
-            source_counts[source][row["description_status"]] += 1
-            content = hashlib.sha256(row["content_hash"].encode()).digest()
-            source_content[source].add(content)
-            content_hashes.add(content)
-            if row["description_status"] == "ready":
-                embedding_texts.add(hashlib.sha256(row["description"].encode()).digest())
             yield row
 
     counts["tasks"] = 0
@@ -186,28 +181,49 @@ def load_curriculum(release_uri: str, query: Query) -> dict[str, Any]:
                 for match in (row["detail"]["matches"] or {}).get("subjects", [])
             ),
         )
+    if counts["tasks"] != coverage.sample_task_count:
+        raise ValueError("Loaded sample counts differ from coverage release")
+    full_counts: dict[str, Counter] = defaultdict(Counter)
+
+    def checked_statistics() -> Iterator[dict]:
+        for path in coverage.paths:
+            with StoragePath(path).open("rb") as stream:
+                for batch in pq.ParquetFile(stream).iter_batches(batch_size=256):
+                    for raw in batch.to_pylist():
+                        row = CurriculumStatistic.model_validate(raw)
+                        if row.source_id not in selected:
+                            raise ValueError(f"Statistics contain an unknown source: {row.source_id}")
+                        if row.metric in ("placement", "capability"):
+                            if (row.subject_id, row.node_id) not in node_kinds:
+                                raise ValueError(f"Statistics contain an unknown curriculum area: {row.node_id}")
+                        else:
+                            full_counts[row.source_id][row.metric] += row.instances
+                        yield row.model_dump(mode="json")
+
+    counts["statistics"] = insert("statistics", checked_statistics())
     for source, expected in selected.items():
-        actual = source_counts[source]
-        if (actual["tasks"], len(source_content[source]), actual["ready"], actual["insufficient_context"]) != (
-            expected["task_count"],
-            expected["unique_content_count"],
-            expected["ready_count"],
-            expected["insufficient_context_count"],
+        actual = full_counts[source]
+        if (
+            actual["denominator"] != expected["task_count"]
+            or actual["assigned"] + actual["subject_only"] + actual["out_of_scope"] != expected["ready_count"]
+            or actual["insufficient_context"] != expected["insufficient_context_count"]
+            or sum(
+                actual[metric]
+                for metric in ("assigned", "subject_only", "out_of_scope", "insufficient_context", "skipped")
+            )
+            != actual["denominator"]
         ):
-            raise ValueError(f"Loaded task counts differ from release: {source}")
-    if (counts["tasks"], len(content_hashes), len(embedding_texts)) != (
-        release.task_count,
-        release.unique_content_count,
-        release.unique_embedding_count,
-    ):
-        raise ValueError("Loaded corpus counts differ from release")
+            raise ValueError(f"Coverage population counts differ from release: {source}")
+    if sum(source_counts["denominator"] for source_counts in full_counts.values()) != release.task_count:
+        raise ValueError("Coverage population counts differ from release")
     execute(
         "UPDATE curriculum_current SET previous_load_id=load_id, load_id=:load_id WHERE name='latest'",
         {"load_id": load_id},
     )
     return {
         "changed": True,
-        "release_id": release.release_id,
+        "release_id": coverage.coverage_id,
+        "population_tasks": release.task_count,
         "counts": counts,
         "sql_requests": requests,
         "seconds": time.monotonic() - started,
@@ -216,10 +232,11 @@ def load_curriculum(release_uri: str, query: Query) -> dict[str, Any]:
 
 @click.command(help=__doc__)
 @click.option("--release", "release_uri", required=True, help="Immutable release.json; run in its storage region.")
+@click.option("--coverage", "coverage_uri", required=True, help="Compact coverage.json with statistics and samples.")
 @click.option("--applet-id", required=True)
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
-def main(release_uri: str, applet_id: str, service_url: str) -> None:
-    click.echo(json.dumps(load_curriculum(release_uri, applet_query(service_url, applet_id))))
+def main(release_uri: str, coverage_uri: str, applet_id: str, service_url: str) -> None:
+    click.echo(json.dumps(load_curriculum(release_uri, coverage_uri, applet_query(service_url, applet_id))))
 
 
 if __name__ == "__main__":

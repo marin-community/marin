@@ -31,7 +31,7 @@ from finestore.rl.curation import (
     SourceDeclaration,
     register_catalog,
 )
-from finestore.rl.curriculum import AlignmentRelease
+from finestore.rl.curriculum import AlignmentRelease, CurriculumCoverage
 from finestore.store import DataStore
 from marina.applets import AppletServices, validate_query
 from sqlalchemy import create_engine, event, text
@@ -249,9 +249,9 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
         curriculum_key="curriculum-1",
         population="converted",
         sample_size=None,
-        task_count=4,
-        ready_count=3,
-        insufficient_context_count=int(unavailable_status == "insufficient_context"),
+        task_count=400,
+        ready_count=300,
+        insufficient_context_count=100 * int(unavailable_status == "insufficient_context"),
         unique_content_count=3,
         unique_embedding_count=2,
         sources=[
@@ -265,7 +265,7 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
                 "insufficient_context_count": count - ready if unavailable_status == "insufficient_context" else 0,
                 "unique_content_count": count,
             }
-            for identifier, count, ready in (("a", 3, 2), ("b", 1, 1))
+            for identifier, count, ready in (("a", 300, 200), ("b", 100, 100))
         ],
         inventory=declarations,
         nodes=[
@@ -294,7 +294,7 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
                 "description": "Add numbers",
             },
         ],
-        paths=[str(data)],
+        paths=[str(tmp_path / "full-corpus-not-loaded-by-atlas.parquet")],
         lineage={"alignment_root": "fixture"},
         embedding_spec={
             "model": "fixture",
@@ -307,11 +307,44 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
     )
     path = tmp_path / "release.json"
     path.write_text(release.model_dump_json())
+    statistics = []
+    for source, denominator, assigned, subject_only, unavailable in (("a", 300, 100, 100, 100), ("b", 100, 100, 0, 0)):
+        for metric, count in (
+            ("denominator", denominator),
+            ("assigned", assigned),
+            ("subject_only", subject_only),
+            (unavailable_status, unavailable),
+        ):
+            if count:
+                statistics.append(dict(source_id=source, metric=metric, subject_id="", node_id="", instances=count))
+        for node_id, count in (("subject:D01", assigned + subject_only), ("arithmetic", assigned), ("add", assigned)):
+            statistics.append(
+                dict(source_id=source, metric="placement", subject_id="D01", node_id=node_id, instances=count)
+            )
+        statistics.append(
+            dict(source_id=source, metric="capability", subject_id="D01", node_id="subject:D01", instances=assigned)
+        )
+    statistics_path = tmp_path / "statistics.parquet"
+    pq.write_table(pa.Table.from_pylist(statistics), statistics_path)
+    coverage = CurriculumCoverage(
+        coverage_id="first",
+        alignment_release_id="first",
+        curriculum_key="curriculum-1",
+        subject_distance=0.45,
+        capability_distance=0.25,
+        task_count=400,
+        paths=[str(statistics_path)],
+        sample_paths=[str(data)],
+        sample_task_count=4,
+        source_sample_size=100,
+        area_sample_size=10,
+    )
+    (tmp_path / "coverage.json").write_text(coverage.model_dump_json())
     return path
 
 
 @pytest.mark.parametrize("unavailable_status", ["insufficient_context", "skipped"])
-def test_curriculum_runtime_cutoffs_dedup_pagination_and_atomic_load(
+def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
     catalog_database, tmp_path, monkeypatch, unavailable_status
 ):
     monkeypatch.setattr("infra.marina.applets.rl_data_catalog.load.MAX_BATCH_BYTES", 2500)
@@ -328,38 +361,32 @@ def test_curriculum_runtime_cutoffs_dedup_pagination_and_atomic_load(
             }
 
     path = curriculum_release(tmp_path, unavailable_status)
-    assert load_curriculum(str(path), query)["counts"]["tasks"] == 4
-    assert load_curriculum(str(path), query)["changed"] is False
+    coverage_path = tmp_path / "coverage.json"
+    assert load_curriculum(str(path), str(coverage_path), query)["counts"]["tasks"] == 4
+    assert load_curriculum(str(path), str(coverage_path), query)["changed"] is False
     with TestClient(create_api(cast(AppletServices, CatalogServices(engine)))) as client:
         first = client.get("/curriculum").json()
         assert first["totals"] == {
-            "denominator": 4,
-            "assigned": 2,
-            "subject_only": 1,
+            "denominator": 400,
+            "assigned": 200,
+            "subject_only": 100,
             "out_of_scope": 0,
-            "insufficient_context": int(unavailable_status == "insufficient_context"),
-            "skipped": int(unavailable_status == "skipped"),
+            "insufficient_context": 100 * int(unavailable_status == "insufficient_context"),
+            "skipped": 100 * int(unavailable_status == "skipped"),
         }
-        assert first["cells"][0]["count"] == 3
-        assert first["columns"][0]["denominator"] == 4
+        assert first["cells"][0]["count"] == 300
+        assert first["columns"][0]["denominator"] == 400
         assert first["columns"][0]["processed_sources"] == 2
         sources = client.get("/curriculum", params={"group_by": "source"}).json()["columns"]
         assert next(row for row in sources if row["column_id"] == "inventory")["denominator"] == 0
-        unique = client.get("/curriculum", params={"count_mode": "content"}).json()
-        assert unique["totals"]["denominator"] == 3
-        assert unique["cells"][0]["count"] == 2
+        assert first["examples"]["sample_task_count"] == 4
         default = client.get("/curriculum", params={"parent_id": "subject:D01", "subject_id": "D01"}).json()
-        assert default["cells"][0]["count"] == 2
-        assert default["scope_summary"] == {"subject_members": 3, "capability_matches": 2}
-        relaxed = client.get(
-            "/curriculum", params={"parent_id": "subject:D01", "subject_id": "D01", "capability_distance": 0.4}
-        ).json()
-        assert relaxed["cells"][0]["count"] == 3
-        assert relaxed["scope_summary"] == {"subject_members": 3, "capability_matches": 3}
-        assert relaxed["totals"]["denominator"] == 4
-        strict = client.get("/curriculum", params={"subject_distance": 0.05}).json()
-        assert strict["totals"]["out_of_scope"] == 3
-        assert strict["release_id"] == relaxed["release_id"] == "first"
+        assert default["cells"][0]["count"] == 200
+        assert default["scope_summary"] == {"subject_members": 300, "capability_matches": 200}
+        source_view = client.get("/curriculum", params={"source_id": "a"}).json()
+        assert source_view["totals"]["denominator"] == 300
+        assert source_view["cells"][0]["count"] == 200
+        assert client.get("/curriculum", params={"intended_use": "eval"}).json()["totals"]["denominator"] == 0
         params = {"node_id": "add", "subject_id": "D01", "limit": 1}
         page = client.get("/curriculum/tasks", params=params).json()
         next_page = client.get("/curriculum/tasks", params={**params, "cursor": page["next_cursor"]}).json()
@@ -370,15 +397,28 @@ def test_curriculum_runtime_cutoffs_dedup_pagination_and_atomic_load(
         assert not next_page["next_cursor"]
         assert client.get("/curriculum/task", params={"source_id": "a", "task_id": "one"}).json()["task"]["task_preview"]
         manifest = json.loads(path.read_text())
-        path.write_text(json.dumps({**manifest, "release_id": "bad", "task_count": 5}))
-        with pytest.raises(ValueError, match="corpus counts"):
-            load_curriculum(str(path), query)
+        coverage = json.loads(coverage_path.read_text())
+        path.write_text(json.dumps({**manifest, "release_id": "bad", "task_count": 401}))
+        coverage_path.write_text(
+            json.dumps({**coverage, "coverage_id": "bad", "alignment_release_id": "bad", "task_count": 401})
+        )
+        with pytest.raises(ValueError, match="population counts"):
+            load_curriculum(str(path), str(coverage_path), query)
         assert client.get("/curriculum").json()["release_id"] == "first"
         path.write_text(json.dumps({**manifest, "release_id": "next", "curriculum_key": "curriculum-2"}))
-        assert load_curriculum(str(path), query)["changed"]
+        coverage_path.write_text(
+            json.dumps(
+                {**coverage, "coverage_id": "next", "alignment_release_id": "next", "curriculum_key": "curriculum-2"}
+            )
+        )
+        assert load_curriculum(str(path), str(coverage_path), query)["changed"]
         shutil.rmtree(tmp_path)
         assert client.get("/curriculum").json()["release_id"] == "next"
         assert client.get("/curriculum", params={"release": "first"}).json()["release_id"] == "first"
+        with engine.begin() as connection:
+            connection.execute(text("DROP TABLE curriculum_matches"))
+            connection.execute(text("DROP TABLE curriculum_tasks"))
+        assert client.get("/curriculum").json()["totals"] == first["totals"]
 
 
 def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(catalog_database, tmp_path: Path) -> None:

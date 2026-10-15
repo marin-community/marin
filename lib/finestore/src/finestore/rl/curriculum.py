@@ -3,6 +3,7 @@
 
 """Immutable scored curriculum releases consumed by Atlas."""
 
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import Field
@@ -65,3 +66,36 @@ class AlignmentRelease(CatalogRecord):
     paths: list[str]
     lineage: dict[str, str]
     embedding_spec: EmbeddingSpec
+
+
+class CoverageMetric(StrEnum):
+    DENOMINATOR = "denominator"
+    ASSIGNED = "assigned"
+    SUBJECT_ONLY = "subject_only"
+    OUT_OF_SCOPE = "out_of_scope"
+    INSUFFICIENT_CONTEXT = "insufficient_context"
+    SKIPPED = "skipped"
+    PLACEMENT = "placement"
+    CAPABILITY = "capability"
+
+
+class CurriculumStatistic(CatalogRecord):
+    source_id: str
+    metric: CoverageMetric
+    subject_id: str
+    node_id: str
+    instances: int
+
+
+class CurriculumCoverage(CatalogRecord):
+    coverage_id: str
+    alignment_release_id: str
+    curriculum_key: str
+    subject_distance: float
+    capability_distance: float
+    task_count: int
+    paths: list[str]
+    sample_paths: list[str]
+    sample_task_count: int
+    source_sample_size: int
+    area_sample_size: int

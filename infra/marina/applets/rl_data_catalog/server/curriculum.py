@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Query saved scores with runtime cutoffs and stable task denominators."""
+"""Serve precomputed curriculum counts and a bounded set of review examples."""
 
 import base64
 import binascii
@@ -13,15 +13,11 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-SUBJECT_DISTANCE = 0.45
-CAPABILITY_DISTANCE = 0.25
+TOTAL_METRICS = ("denominator", "assigned", "subject_only", "out_of_scope", "insufficient_context", "skipped")
 
 
 @dataclass(frozen=True)
 class CoverageQuery:
-    subject_distance: float
-    capability_distance: float
-    count_mode: str
     group_by: str
     intended_use: str
     source_id: str
@@ -30,18 +26,13 @@ class CoverageQuery:
 
 
 def coverage_query(
-    subject_distance: float = Query(SUBJECT_DISTANCE, ge=0, le=2),
-    capability_distance: float = Query(CAPABILITY_DISTANCE, ge=0, le=2),
-    count_mode: Literal["instances", "content"] = "instances",
     group_by: Literal["family", "source"] = "family",
     intended_use: Literal["all", "train", "eval"] = "all",
     source_id: str = "",
     column: str = "",
     release: str = "",
 ) -> CoverageQuery:
-    return CoverageQuery(
-        subject_distance, capability_distance, count_mode, group_by, intended_use, source_id, column, release
-    )
+    return CoverageQuery(group_by, intended_use, source_id, column, release)
 
 
 def loaded_release(connection: Connection, release_id: str) -> dict[str, Any]:
@@ -65,49 +56,50 @@ def loaded_release(connection: Connection, release_id: str) -> dict[str, Any]:
     return dict(row)
 
 
-SCOPED_SQL = """
+SOURCES_SQL = """
 WITH selected_sources AS (
     SELECT s.*, CASE WHEN :group_by='source' THEN s.source_id ELSE s.family END AS column_id
     FROM curriculum_sources s WHERE s.load_id=:load_id
         AND (:source_id='' OR s.source_id=:source_id)
         AND (:intended_use='all' OR s.alignment IS NULL OR s.alignment->>'intended_use'=:intended_use)
         AND (:column='' OR CASE WHEN :group_by='source' THEN s.source_id ELSE s.family END=:column)
-), selected_tasks AS (
+ )
+"""
+
+SAMPLE_SQL = (
+    SOURCES_SQL
+    + """
+, selected_tasks AS (
     SELECT t.load_id,t.source_id,t.task_id,t.content_hash,t.description_status,s.column_id
     FROM curriculum_tasks t JOIN selected_sources s USING (load_id, source_id)
 ), members AS (
     SELECT t.source_id, t.task_id, t.content_hash, t.column_id, m.subject_id, m.capability_id,
         m.capability_similarity
     FROM selected_tasks t JOIN curriculum_matches m USING (load_id, source_id, task_id)
-    WHERE m.membership_similarity >= 1 - CAST(:subject_distance AS DOUBLE PRECISION)
+    WHERE m.membership_similarity >= CAST(:subject_similarity AS DOUBLE PRECISION)
 ), placements AS (
     SELECT source_id, task_id, content_hash, column_id, subject_id, 'subject:' || subject_id AS node_id FROM members
     UNION ALL
     SELECT m.source_id, m.task_id, m.content_hash, m.column_id, m.subject_id, a.ancestor_id AS node_id
     FROM members m JOIN curriculum_ancestors a ON a.load_id=:load_id
         AND a.subject_id=m.subject_id AND a.node_id=m.capability_id
-    WHERE m.capability_similarity >= 1 - CAST(:capability_distance AS DOUBLE PRECISION)
+    WHERE m.capability_similarity >= CAST(:capability_similarity AS DOUBLE PRECISION)
         AND a.ancestor_id <> 'subject:' || m.subject_id
 ), states AS (
     SELECT t.source_id, t.task_id, t.content_hash, CASE
         WHEN t.description_status='insufficient_context' THEN 'insufficient_context'
         WHEN t.description_status='skipped' THEN 'skipped'
         WHEN COUNT(m.task_id) FILTER (
-            WHERE m.membership_similarity >= 1 - CAST(:subject_distance AS DOUBLE PRECISION)
-            AND m.capability_similarity >= 1 - CAST(:capability_distance AS DOUBLE PRECISION))>0 THEN 'assigned'
+            WHERE m.membership_similarity >= CAST(:subject_similarity AS DOUBLE PRECISION)
+            AND m.capability_similarity >= CAST(:capability_similarity AS DOUBLE PRECISION))>0 THEN 'assigned'
         WHEN COUNT(m.task_id) FILTER (
-            WHERE m.membership_similarity >= 1 - CAST(:subject_distance AS DOUBLE PRECISION))>0 THEN 'subject_only'
+            WHERE m.membership_similarity >= CAST(:subject_similarity AS DOUBLE PRECISION))>0 THEN 'subject_only'
         ELSE 'out_of_scope' END AS outcome
     FROM selected_tasks t LEFT JOIN curriculum_matches m USING (load_id, source_id, task_id)
     GROUP BY t.source_id, t.task_id, t.content_hash, t.description_status
 )
 """
-
-
-def count_expression(alias: str, count_mode: str) -> str:
-    if count_mode == "content":
-        return f"COUNT(DISTINCT {alias}.content_hash)"
-    return f"COUNT({alias}.task_id)"
+)
 
 
 def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
@@ -148,11 +140,13 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                 dict(row)
                 for row in connection.execute(
                     text(
-                        SCOPED_SQL
-                        + f"""
-                SELECT p.subject_id,p.node_id,p.column_id,{count_expression('p', filters.count_mode)} AS count
-                FROM placements p WHERE p.node_id IN (SELECT jsonb_array_elements_text(CAST(:node_ids AS JSONB)))
-                GROUP BY p.subject_id,p.node_id,p.column_id
+                        SOURCES_SQL
+                        + """
+                SELECT c.subject_id,c.node_id,s.column_id,CAST(SUM(c.instances) AS BIGINT) AS count
+                FROM curriculum_statistics c JOIN selected_sources s USING (load_id,source_id)
+                WHERE c.load_id=:load_id AND c.metric='placement'
+                    AND c.node_id IN (SELECT jsonb_array_elements_text(CAST(:node_ids AS JSONB)))
+                GROUP BY c.subject_id,c.node_id,s.column_id
             """
                     ),
                     {**params, "node_ids": json.dumps(node_ids)},
@@ -162,51 +156,49 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                 dict(row)
                 for row in connection.execute(
                     text(
-                        SCOPED_SQL
-                        + f"""
+                        SOURCES_SQL
+                        + """
                 SELECT s.column_id, CASE WHEN :group_by='source' THEN MAX(s.declaration->>'display_name')
                     ELSE s.column_id END AS name,
-                    COUNT(DISTINCT s.source_id) AS sources,
-                    COUNT(DISTINCT s.source_id) FILTER (WHERE s.alignment IS NOT NULL) AS processed_sources,
-                    {count_expression('t', filters.count_mode)} AS denominator
-                FROM selected_sources s LEFT JOIN selected_tasks t ON t.source_id=s.source_id
+                    COUNT(s.source_id) AS sources,
+                    COUNT(s.source_id) FILTER (WHERE s.alignment IS NOT NULL) AS processed_sources,
+                    CAST(COALESCE(SUM(c.instances),0) AS BIGINT) AS denominator
+                FROM selected_sources s LEFT JOIN curriculum_statistics c
+                    ON c.load_id=s.load_id AND c.source_id=s.source_id AND c.metric='denominator'
                 GROUP BY s.column_id ORDER BY denominator DESC,s.column_id
             """
                     ),
                     params,
                 ).mappings()
             ]
-            totals = (
-                connection.execute(
-                    text(
-                        SCOPED_SQL
-                        + f"""
-                SELECT {count_expression('s', filters.count_mode)} AS denominator,
-                    {count_expression('s', filters.count_mode)} FILTER (WHERE s.outcome='assigned') AS assigned,
-                    {count_expression('s', filters.count_mode)} FILTER (WHERE s.outcome='subject_only') AS subject_only,
-                    {count_expression('s', filters.count_mode)} FILTER (WHERE s.outcome='out_of_scope') AS out_of_scope,
-                    {count_expression('s', filters.count_mode)} FILTER (WHERE s.outcome='insufficient_context')
-                        AS insufficient_context,
-                    {count_expression('s', filters.count_mode)} FILTER (WHERE s.outcome='skipped') AS skipped
-                FROM states s
+            totals = dict.fromkeys(TOTAL_METRICS, 0)
+            for row in connection.execute(
+                text(
+                    SOURCES_SQL
+                    + """
+                SELECT c.metric,CAST(SUM(c.instances) AS BIGINT) AS count
+                FROM curriculum_statistics c JOIN selected_sources s USING (load_id,source_id)
+                WHERE c.load_id=:load_id AND c.subject_id='' AND c.node_id=''
+                GROUP BY c.metric
             """
-                    ),
-                    params,
-                )
-                .mappings()
-                .one()
-            )
+                ),
+                params,
+            ).mappings():
+                totals[row["metric"]] = row["count"]
             scope_summary = None
             if subject_id:
-                scope = (
+                scope_summary = dict(
                     connection.execute(
                         text(
-                            SCOPED_SQL
-                            + f"""
-                    SELECT {count_expression('m', filters.count_mode)} AS subject_members,
-                        {count_expression('m', filters.count_mode)} FILTER (WHERE m.capability_similarity >=
-                            1 - CAST(:capability_distance AS DOUBLE PRECISION)) AS capability_matches
-                    FROM members m WHERE m.subject_id=:subject_id
+                            SOURCES_SQL
+                            + """
+                    SELECT CAST(COALESCE(SUM(c.instances) FILTER (WHERE c.metric='placement'),0)
+                            AS BIGINT) AS subject_members,
+                        CAST(COALESCE(SUM(c.instances) FILTER (WHERE c.metric='capability'),0)
+                            AS BIGINT) AS capability_matches
+                    FROM curriculum_statistics c JOIN selected_sources s USING (load_id,source_id)
+                    WHERE c.load_id=:load_id AND c.subject_id=:subject_id
+                        AND c.node_id='subject:' || :subject_id AND c.metric IN ('placement','capability')
                 """
                         ),
                         params,
@@ -214,7 +206,6 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                     .mappings()
                     .one()
                 )
-                scope_summary = dict(scope)
             sources = [
                 dict(row)
                 for row in connection.execute(
@@ -235,7 +226,11 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             "sample_size": manifest["sample_size"],
             "curriculum_key": manifest["curriculum_key"],
             "filters": asdict(filters),
-            "totals": dict(totals),
+            "totals": totals,
+            "thresholds": {key: manifest["coverage"][key] for key in ("subject_distance", "capability_distance")},
+            "examples": {
+                key: manifest["coverage"][key] for key in ("sample_task_count", "source_sample_size", "area_sample_size")
+            },
             "nodes": nodes,
             "cells": cells,
             "columns": columns,
@@ -273,12 +268,14 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                 "after_source": after_source,
                 "after_task": after_task,
                 "limit": limit + 1,
+                "subject_similarity": 1 - metadata["manifest"]["coverage"]["subject_distance"],
+                "capability_similarity": 1 - metadata["manifest"]["coverage"]["capability_distance"],
             }
             rows = [
                 dict(row)
                 for row in connection.execute(
                     text(
-                        SCOPED_SQL
+                        SAMPLE_SQL
                         + """
                 SELECT t.source_id,t.task_id,t.content_hash,d.description,t.description_status,s.outcome
                 FROM selected_tasks t JOIN states s USING (source_id,task_id,content_hash)

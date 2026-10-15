@@ -11,7 +11,7 @@ from functools import partial
 
 import numpy as np
 from finestore.rl.curation import SourceDeclaration
-from finestore.rl.curriculum import AlignmentRelease, AlignmentSource, EmbeddingSpec
+from finestore.rl.curriculum import AlignmentRelease, AlignmentSource, CurriculumCoverage, EmbeddingSpec
 from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
@@ -23,6 +23,13 @@ from taskcompendium.pipeline.chat_requests import chat_output
 from taskcompendium.pipeline.curriculum_alignment import (
     CurriculumAnchor,
     CurriculumVectors,
+)
+from taskcompendium.pipeline.curriculum_coverage import (
+    AREA_SAMPLE_SIZE,
+    CAPABILITY_DISTANCE,
+    SOURCE_SAMPLE_SIZE,
+    SUBJECT_DISTANCE,
+    build_curriculum_coverage,
 )
 from taskcompendium.pipeline.semantics import (
     DESCRIPTION_PROMPT_VERSION,
@@ -53,6 +60,7 @@ EMBEDDINGS_VERSION = "2026.10.15.2"
 CURRICULUM_EMBEDDINGS_VERSION = "2026.10.15.2"
 ALIGNMENT_VERSION = "2026.10.15.2"
 PUBLICATION_VERSION = "2026.10.15.1"
+COVERAGE_VERSION = "2026.10.15.1"
 
 
 class SemanticArtifact(Artifact):
@@ -67,6 +75,7 @@ class CurationEmbeddingStages:
     curriculum_embeddings: ArtifactStep[SemanticArtifact]
     assignments: ArtifactStep[SemanticArtifact]
     publication: ArtifactStep[SemanticArtifact]
+    coverage: ArtifactStep[SemanticArtifact]
 
 
 @dataclass(frozen=True)
@@ -336,6 +345,53 @@ def _publish(
     return SemanticArtifact(path=output_root, paths=data.paths)
 
 
+def _coverage(
+    runtime: CampaignRuntime,
+    *,
+    publication_root: str,
+    output_root: str,
+    subject_distance: float,
+    capability_distance: float,
+    source_sample_size: int,
+    area_sample_size: int,
+) -> SemanticArtifact:
+    release = AlignmentRelease.model_validate_json((StoragePath(publication_root) / "release.json").read_text())
+    data = build_curriculum_coverage(
+        runtime.context,
+        task_paths=release.paths,
+        nodes=release.nodes,
+        output_root=output_root,
+        subject_distance=subject_distance,
+        capability_distance=capability_distance,
+        source_sample_size=source_sample_size,
+        area_sample_size=area_sample_size,
+    )
+    coverage = CurriculumCoverage(
+        coverage_id=canonical_sha256(
+            {
+                "alignment_release_id": release.release_id,
+                "subject_distance": subject_distance,
+                "capability_distance": capability_distance,
+                "source_sample_size": source_sample_size,
+                "area_sample_size": area_sample_size,
+                "version": COVERAGE_VERSION,
+            }
+        ),
+        alignment_release_id=release.release_id,
+        curriculum_key=release.curriculum_key,
+        subject_distance=subject_distance,
+        capability_distance=capability_distance,
+        task_count=release.task_count,
+        paths=data.paths,
+        sample_paths=data.sample_paths,
+        sample_task_count=data.sample_task_count,
+        source_sample_size=source_sample_size,
+        area_sample_size=area_sample_size,
+    )
+    (StoragePath(output_root) / "coverage.json").write_text(coverage.model_dump_json(indent=2))
+    return SemanticArtifact(path=output_root, paths=data.paths)
+
+
 def curation_embedding_pipeline(
     *,
     curated: dict[str, ArtifactStep],
@@ -439,4 +495,18 @@ def curation_embedding_pipeline(
             output_root=OUT,
         )
     )
-    return CurationEmbeddingStages(inputs, descriptions, vectors, anchors, assignments, publication)
+    coverage = _named(
+        apply(
+            "rl-semantics/coverage",
+            partial(_coverage, runtime),
+            version=COVERAGE_VERSION,
+            artifact_type=SemanticArtifact,
+            publication_root=publication,
+            subject_distance=SUBJECT_DISTANCE,
+            capability_distance=CAPABILITY_DISTANCE,
+            source_sample_size=SOURCE_SAMPLE_SIZE,
+            area_sample_size=AREA_SAMPLE_SIZE,
+            output_root=OUT,
+        )
+    )
+    return CurationEmbeddingStages(inputs, descriptions, vectors, anchors, assignments, publication, coverage)

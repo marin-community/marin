@@ -254,7 +254,7 @@ def test_driver_converts_embeds_and_resumes_without_rereading_raw_inputs(
         "--cache-dir",
         str(cache),
         "--embed",
-        "publication",
+        "coverage",
         "--max-workers",
         "1",
         "--catalog-root",

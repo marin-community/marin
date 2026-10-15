@@ -235,7 +235,7 @@ uv run --with-editable './lib/taskcompendium[pipeline]' \
   -m experiments.post_training.task_curation.driver \
   --mode quick --source aime24 \
   --output-root /path/to/quick --cache-dir /path/to/persistent/cache \
-  --embed publication --embedding-sample-size 20
+  --embed coverage --embedding-sample-size 20
 ```
 
 Add `--run` to execute. AIME24 downloads its pinned inputs automatically. Direct
@@ -298,18 +298,25 @@ the pool independently of source-file count.
 The catalog declares subject-domain and task-mechanic routing facets. Matching
 selects one primary subject in each facet. It retains the three highest-ranked
 subjects per facet, three capabilities within each primary subject, and three
-capabilities across the whole catalog. Aggregation and display apply runtime
-distance cutoffs to stored scores. Adjust cutoffs in the Atlas coverage pane and press Apply; stored scores
-and embeddings are reused. Alignment does not
-change curation admission or train/eval use.
+capabilities across the whole catalog. The coverage export applies fixed
+maximum cosine distances of 0.45 for subjects and 0.25 for capabilities.
+Alignment does not change curation admission or train/eval use.
 
 The `publication` stage checks that every selected source/task ID has exactly one
-alignment row with matching lineage. It writes task Parquet and `release.json`
-for the Atlas loader. The manifest records source-instance, unique-public-input,
-unique-embedding-text and insufficient-context counts, the curriculum hierarchy,
-source inventory and upstream artifact roots. Missing or duplicate task rows fail
-the export. Complete converted releases must cover each conversion manifest's
-converted-task count; sampled releases retain their sample size.
+alignment row with matching lineage. It writes full task Parquet and
+`release.json`, preserving source inventory, population counts and upstream
+artifact roots. Complete converted releases cover each conversion manifest's
+converted-task count.
+
+The `coverage` stage reads those completed task outputs through Zephyr. Each
+shard counts task instances by source, outcome and curriculum node, then a
+small reduction combines the counts. A separate bounded sample keeps up to
+100 tasks per source and, independently, 10 per curriculum node (subject, group
+or capability). Their union is deduplicated by source/task identity. It writes statistics, sampled task Parquet
+and `coverage.json`. Atlas loads this compact dataset. The full task corpus,
+embeddings and assignments remain in object storage. Source-family and train/eval
+views sum the precomputed counts; browsing the heatmap does not aggregate task
+rows. Example lists show samples and retain full-population cell counts.
 
 ### Complete converted corpus
 
@@ -346,7 +353,7 @@ uv run iris --cluster=marin job run --target-cluster YOUR-CW-REGION \
   -e HF_HUB_DISABLE_XET 1 \
   -- python -m experiments.post_training.task_curation.driver \
   --corpus s3://YOUR-REGIONAL-BUCKET/corpus/corpus.json \
-  --embed publication --review-cache s3://YOUR-REGIONAL-BUCKET/semantic-cache \
+  --embed coverage --review-cache s3://YOUR-REGIONAL-BUCKET/semantic-cache \
   --max-workers 128 --worker-cpu 4 --worker-memory 8g --coordinator-memory 8g
 ```
 

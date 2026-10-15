@@ -7,8 +7,7 @@ const state = {data: null, parent: '', subject: '', nodes: new Map(), request: 0
 let searchTimer;
 
 function parameters() {
-  return new URLSearchParams({subject_distance: $('subject-distance').value, capability_distance: $('capability-distance').value,
-    count_mode: $('count-mode').value, group_by: $('group-by').value, intended_use: $('use').value, source_id: $('source').value});
+  return new URLSearchParams({group_by: $('group-by').value, intended_use: $('use').value, source_id: $('source').value});
 }
 function labelFor(id, subject) { return state.nodes.get(`${subject}/${id}`)?.name || id; }
 function button(text, className, action) { const item = node('button', text, className); item.type = 'button'; item.addEventListener('click', action); return item; }
@@ -20,7 +19,7 @@ async function loadCoverage() {
   $('task-detail').close();
   const params = parameters();
   params.set('parent_id', state.parent); params.set('subject_id', state.subject); params.set('search', $('search').value.trim());
-  $('message').textContent = 'Updating coverage from saved scores…';
+  $('message').textContent = 'Loading precomputed coverage…';
   $('heatmap').setAttribute('aria-busy', 'true');
   $('heatmap').inert = true; $('outcomes').inert = true;
   try {
@@ -68,7 +67,8 @@ function renderCoverage() {
   const total = data.totals.denominator;
   const mapped = data.totals.assigned + data.totals.subject_only;
   $('task-count').textContent = number.format(total);
-  $('count-label').textContent = $('count-mode').value === 'content' ? 'UNIQUE PUBLIC INPUTS' : 'TASK INSTANCES';
+  $('count-label').textContent = 'TASK INSTANCES';
+  $('sample-note').textContent = `Full-corpus counts · examples sampled up to ${data.examples.source_sample_size} per source and ${data.examples.area_sample_size} per curriculum area.`;
   $('mapped-count').textContent = total ? percent(mapped / total) : '—';
   $('capability-count').textContent = number.format(data.totals.assigned);
   $('broad-count').textContent = `${number.format(data.totals.subject_only)} with a subject-only match`;
@@ -138,7 +138,7 @@ async function openTasks(area, column, outcome = 'all') {
   state.taskQuery.set('outcome', outcome);
   state.next = ''; $('task-list').replaceChildren(); $('task-panel').hidden = false;
   $('task-heading').textContent = area?.name || (outcome === 'all' ? 'Tasks in this source group' : outcomes[outcome]);
-  $('task-scope').textContent = `${column?.name || 'Selected sources'} · ${state.data.population} population · source instances, including repeated public inputs`;
+  $('task-scope').textContent = `${column?.name || 'Selected sources'} · ${state.data.population} population · sampled task instances`;
   $('task-panel').scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start'});
   await loadTasks();
 }
@@ -157,7 +157,7 @@ async function loadTasks() {
       $('task-list').append(item);
     }
     state.next = data.next_cursor; $('more-tasks').hidden = !state.next;
-    $('task-message').textContent = `${number.format($('task-list').children.length)} task instances shown${state.next ? '; more available.' : '.'}`;
+    $('task-message').textContent = `${number.format($('task-list').children.length)} sampled task instances shown${state.next ? '; more samples available.' : '. This is a bounded review sample.'}`;
   } catch (error) { if (request === state.taskRequest) $('task-message').textContent = `Tasks could not be loaded. ${error.message}`; }
 }
 async function openDetail(task) {
@@ -174,27 +174,27 @@ async function openDetail(task) {
     $('detail-instructions').textContent = detail.task_preview;
     $('preview-note').textContent = detail.preview_truncated ? `Preview: ${number.format(detail.task_preview.length)} of ${number.format(detail.instruction_characters)} instruction characters.` : `${number.format(detail.instruction_characters)} instruction characters. Task files are not read for embeddings.`;
     for (const match of detail.matches?.subjects || []) {
-      const subjectInside = match.membership_similarity >= 1 - state.data.filters.subject_distance;
+      const subjectInside = match.membership_similarity >= 1 - state.data.thresholds.subject_distance;
       $('detail-matches').append(node('h3', `Primary subject · ${labelFor(`subject:${match.subject_id}`, match.subject_id)}`));
       scoreTable([{name: 'Subject membership', similarity: match.membership_similarity, status: subjectInside ? 'Within subject cutoff' : 'Outside subject cutoff'}, ...match.candidates.map((candidate, index) => ({name: labelFor(candidate.capability_id, candidate.subject_id), similarity: candidate.similarity,
-        status: !subjectInside ? 'Outside subject cutoff' : candidate.similarity < 1 - state.data.filters.capability_distance ? 'Outside capability cutoff' : index === 0 ? 'Primary capability match' : 'Alternative within cutoff'}))]);
+        status: !subjectInside ? 'Outside subject cutoff' : candidate.similarity < 1 - state.data.thresholds.capability_distance ? 'Outside capability cutoff' : index === 0 ? 'Primary capability match' : 'Alternative within cutoff'}))]);
     }
     if (detail.matches?.capabilities?.length) {
       const alternatives = node('details'); alternatives.append(node('summary', 'Nearest capabilities across all subjects'));
       scoreTable(detail.matches.capabilities.map(candidate => ({name: `${labelFor(`subject:${candidate.subject_id}`, candidate.subject_id)} / ${labelFor(candidate.capability_id, candidate.subject_id)}`, similarity: candidate.similarity,
-        status: candidate.similarity >= 1 - state.data.filters.capability_distance ? 'Alternative within capability cutoff' : 'Outside capability cutoff'})), alternatives);
+        status: candidate.similarity >= 1 - state.data.thresholds.capability_distance ? 'Alternative within capability cutoff' : 'Outside capability cutoff'})), alternatives);
       $('detail-matches').append(alternatives);
     }
     $('detail-provenance').textContent = JSON.stringify({source_id: detail.source_id, task_id: detail.task_id, source_key: detail.source_key, task_hash: detail.task_hash, content_hash: detail.content_hash, intended_use: detail.intended_use, population: detail.population, release_id: state.data.release_id}, null, 2);
   } catch (error) { $('detail-description').textContent = `Task could not be loaded. ${error.message}`; }
 }
 function scoreTable(scores, target = $('detail-matches')) {
-  const table = node('table'), head = node('tr'); for (const text of ['Area', 'Cosine', 'Distance', 'At active cutoffs']) head.append(node('th', text)); const thead = node('thead'); thead.append(head); table.append(thead);
+  const table = node('table'), head = node('tr'); for (const text of ['Area', 'Cosine', 'Distance', 'At release cutoffs']) head.append(node('th', text)); const thead = node('thead'); thead.append(head); table.append(thead);
   const body = node('tbody'); for (const score of scores) { const row = node('tr'); row.append(node('td', score.name), node('td', score.similarity.toFixed(3), 'score'), node('td', (1-score.similarity).toFixed(3), 'score'), node('td', score.status, 'score-status')); body.append(row); } table.append(body); target.append(table);
 }
 
 $('controls').addEventListener('submit', event => { event.preventDefault(); loadCoverage(); });
-for (const id of ['source', 'use', 'count-mode', 'group-by']) $(id).addEventListener('change', loadCoverage);
+for (const id of ['source', 'use', 'group-by']) $(id).addEventListener('change', loadCoverage);
 $('include-empty').addEventListener('change', renderCoverage);
 $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadCoverage, 300); });
 $('more-tasks').addEventListener('click', loadTasks);
@@ -202,7 +202,7 @@ $('close-tasks').addEventListener('click', () => { ++state.taskRequest; $('task-
 $('close-detail').addEventListener('click', () => $('task-detail').close());
 $('reset-view').addEventListener('click', () => { $('controls').reset(); $('search').value = ''; state.parent = ''; state.subject = ''; loadCoverage(); });
 const initial = new URLSearchParams(location.hash.slice(1));
-for (const [param, id] of Object.entries({subject_distance: 'subject-distance', capability_distance: 'capability-distance', count_mode: 'count-mode', group_by: 'group-by', intended_use: 'use', search: 'search'})) if (initial.has(param)) $(id).value = initial.get(param);
+for (const [param, id] of Object.entries({group_by: 'group-by', intended_use: 'use', search: 'search'})) if (initial.has(param)) $(id).value = initial.get(param);
 if (initial.get('source_id')) { const option = node('option', initial.get('source_id')); option.value = initial.get('source_id'); $('source').append(option); $('source').value = option.value; }
 state.parent = initial.get('parent_id') || ''; state.subject = initial.get('subject_id') || '';
 loadCoverage();

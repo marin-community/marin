@@ -26,8 +26,9 @@ flowchart LR
   H[Curriculum anchor embeddings] --> M[Zephyr: exact matches and scores]
   E --> M
   M --> R[Zephyr: validate task coverage and publish release]
-  R --> CL[Streaming curriculum loader]
-  CL --> CA[Postgres: runtime cutoffs and coverage]
+  R --> CS[Zephyr: coverage statistics and review samples]
+  CS --> CL[Compact curriculum loader]
+  CL --> CA[Postgres: compact statistics, curriculum and samples]
   CA --> A
 ```
 
@@ -117,52 +118,51 @@ instruction preview, embedding text, cosine scores and alternatives.
 Long instruction previews record the original character count and truncation.
 
 Displayed cosine scores are similarities; distance is `1 - similarity`.
-The subject and capability distance defaults are 0.45 and 0.25. Smaller values
-are stricter. **Apply cutoffs** runs new SQL queries over saved scores. It does
-not run inference or matching. A task can have a capability match, a subject-only
-match, no match within the cutoff, insufficient context, or a skipped embedding.
-The nearest capabilities across all subjects remain available as diagnostics.
+The export uses fixed maximum distances of 0.45 for subjects and 0.25 for
+capabilities. A task can have a capability match, a subject-only match, no
+match within the cutoff, insufficient context, or a skipped embedding.
+Alternative subject and capability matches remain available in sampled task details.
 
-Count task instances or unique public inputs. Public-input hashes cover
-instructions and public tool/answer contracts. For each column, the denominator
-includes every task selected for the release, including insufficient context
-and matches outside the cutoff. Sampled releases use the selected sample as
-the denominator. Unique mode deduplicates hashes within
-the selected sources for both numerator and denominator. Parent cells count a
-task once across descendants. Columns can overlap and must not be summed to
-recover the global unique count. Task drilldown always lists source instances.
+Heatmap cells, column denominators and outcome totals describe every task
+instance in the exported population. A Zephyr pass computes these counts by
+source and curriculum node, including hierarchy rollups. Postgres sums these
+small statistics for source-family and train/eval filters. Overview requests do
+not scan task or match tables.
+
+Examples combine two independent deterministic samples: up to 100 tasks per
+source and 10 per curriculum node, including subjects, groups and capabilities.
+The combined sample removes repeated source/task identities. The task list
+and details show this bounded review sample; their size does not change the
+full-population counts. Curriculum entries, statistics and samples form the
+compact serving dataset. The complete task and embedding outputs stay in
+object storage.
 
 Converted populations contain successfully converted TaskSpecs before admission.
-They retain training/evaluation intent. Input rows, conversion rejections, task
-instances and unique embedding texts are separate quantities. Selecting a source
-shows its full conversion ledger when available. A sampled release states its
-sample size. Sources outside the release remain in the inventory; enable
-**Show sources without processed tasks** to show their striped columns.
+They retain training/evaluation intent. Selecting a source shows its full
+conversion ledger when available. Sources outside the release remain in the
+inventory; enable **Show sources without processed tasks** to show their striped
+columns.
 
-The embedding command's default `publication` stage produces `release.json`.
-It validates task IDs and lineage against the selected population and requires
-full converted releases to match conversion-manifest counts. Run the loader
-process in the release's storage region:
+Run the embedding graph through `--embed coverage`. The `publication` stage
+checks every task in that release by source/task identity and lineage, then writes full task
+Parquet and `release.json`. The subsequent `coverage` stage writes aggregated
+statistics, bounded example Parquet and `coverage.json` without rerunning
+embeddings or matching. Load both manifests:
 
 ```bash
 uv run python -m infra.marina.applets.rl_data_catalog.load_curriculum \
   --release IMMUTABLE_RELEASE_ROOT/release.json \
+  --coverage IMMUTABLE_COVERAGE_ROOT/coverage.json \
   --applet-id APPLET_ID --url MARINA_ORIGIN
 ```
 
-The loader streams Parquet in bounded batches and checks each task's source key,
-converted/admitted population, training/evaluation use and curriculum references.
-It compares per-source and global counts against the release manifest, then
-switches the selected release atomically. The loader inserts tasks, then their
-match rows, using byte-bounded SQL requests. Compact hashes count
-distinct public inputs and embedding texts without a whole-release SQL scan.
-Failed loads preserve the selected release. The loader retains the selected
-release and its immediate predecessor; other abandoned or obsolete staged loads
-are removed in bounded batches at the next update. If the requested release is
-already selected, the loader skips loading. Run one curriculum loader per applet
-at a time.
-Curriculum-only updates do not require a grading-catalog reload. APIs read
-Postgres without cloud scans.
+The loader reads statistics and sampled task files. It checks sample lineage,
+training/evaluation use, curriculum references and sample counts. It reconciles
+statistics against complete-population totals in the task release manifest before atomically selecting
+the release. Byte-bounded SQL requests keep import work proportional to the
+compact export. Failed loads preserve the selected release; the current and
+previous releases are retained. Run one curriculum loader per applet at a time.
+APIs read Postgres without cloud scans.
 
 Start the local stack as shown in [Updating Atlas](#updating-atlas), then use the
 same curriculum-loader command with its printed ID and origin. Stop the stack
