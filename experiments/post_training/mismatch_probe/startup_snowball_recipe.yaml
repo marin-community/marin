@@ -56,7 +56,7 @@ generator:
   gpu_memory_utilization: 0.75
   chat_template:
     source: file
-    name_or_path: /tmp/marinskyrl/model_metadata/2b00011dc69414c122ea8f25b63e9ecb7649a539922d5129e9b9c6510eecc3dd/chat_template.jinja
+    name_or_path: /tmp/marinskyrl/model_metadata/ee39f1df5e1b55994ca349ea36776f518060e5a3704946f56b30ba752c80885f/chat_template.jinja
   engine_init_kwargs:
     moe_backend: triton
   trajectory_retention:
