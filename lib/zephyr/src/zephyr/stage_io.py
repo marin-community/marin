@@ -29,7 +29,7 @@ from zephyr.plan import ParquetOutput, PhysicalOp, Scatter
 from zephyr.readers import load_parquet_batch
 from zephyr.shuffle import ListShard, _write_scatter
 from zephyr.stats import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY, per_second
-from zephyr.worker_context import CounterEntry
+from zephyr.worker_context import CounterEntry, RunnerSnapshot
 from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify, ensure_parent_dir, write_parquet_file
 
 logger = logging.getLogger(__name__)
@@ -328,4 +328,4 @@ class StageRunner(Protocol):
         chunk_prefix: str,
         execution_id: str,
     ) -> tuple[TaskResult, dict[str, CounterEntry]]: ...
-    def live_counters(self) -> dict[str, CounterEntry]: ...
+    def live_snapshot(self) -> RunnerSnapshot: ...
