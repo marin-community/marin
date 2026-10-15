@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from marin.evaluation.campaign_policy import CAMPAIGNS, OCTOBER_14_VERSION
+from marin.evaluation.campaign_policy import CAMPAIGNS, OCTOBER_15_VERSION
 from marin.evaluation.eval_policy import source_config_digest
 from marin.evaluation.harbor.dataset import local_harbor_dataset_path
 from marin.evaluation.harbor.driver_config import _driver_environment, harbor_runtime_project, preflight_harbor_configs
@@ -49,7 +49,7 @@ _INVALID_SOURCE_DOCUMENTS = {
 
 
 def test_campaign_bfcl_preflight_preserves_the_pinned_pi_version():
-    profile = CAMPAIGNS[OCTOBER_14_VERSION]
+    profile = CAMPAIGNS[OCTOBER_15_VERSION]
     policy = _ROOT / "experiments/evaluation/campaigns/eval-campaign-09-25/harbor-configs/bfclparity-pi.yaml"
     (config,) = preflight_harbor_configs(
         [(policy, {"thinking_format": "chat-template"})],

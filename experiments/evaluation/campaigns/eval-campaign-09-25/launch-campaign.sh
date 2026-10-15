@@ -77,7 +77,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [[ "$version" = eval-policy-2026-10-14-verified ]]; then
+if [[ "$version" = eval-policy-2026-10-15-verified ]]; then
   read -r CAMPAIGN_SHA_HARBOR CAMPAIGN_SHA_EVALCHEMY HARBOR_RUNTIME_PROJECT < <(
     uv run --project "$MARIN_DIR" python -c '
 import sys
