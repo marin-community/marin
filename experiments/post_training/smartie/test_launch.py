@@ -12,6 +12,7 @@ from marin.execution.lazy import StepContext
 from experiments.post_training.smartie.launch import build_run
 
 COMPOSE_LAUNCH = """
+import importlib.metadata
 import json
 import sys
 from cloud.iris.launch_config import load_launch_config
@@ -19,6 +20,8 @@ from marinskyrl.runtime_options import reference_model_required
 from skyrl_train.config.ftpo import ftpo_config, validate_ftpo
 
 launch = load_launch_config(sys.argv[1])
+installed = json.loads(importlib.metadata.distribution("marinskyrl").read_text("direct_url.json"))
+assert launch.runtime.launcher_commit == installed["vcs_info"]["commit_id"]
 validate_ftpo(launch.skyrl)
 objective = ftpo_config(launch.skyrl.trainer.algorithm)
 print(json.dumps({
