@@ -154,8 +154,9 @@ THREE_COMPONENT_FILES = (
 FACTORIAL = paths.RO / "factorial_vs_mariner_20260928/predicted_vs_measured.csv"
 AGREEMENT = 1e-12  # two folders' predictions of one proposal by one model
 # The models of appendix table tab:a-ablations-full and the single-phase observatory run whose aggregate metrics the
-# table reports for each. Later runs re-fit several models bit for bit; the 2 September benchmark ran an earlier
-# protocol, whose metrics the paper does not report.
+# table reports for each. Runs of 2026-09-08 and later re-fit MARINER, Olmix, the linear model and the comparators bit
+# for bit; earlier runs of the additive response, Olmix and the linear model, and the first two 2026-09-16 runs of the
+# convex per-bucket models, report other values.
 OBSERVATORY = "single_phase_observatory_{}/aggregate_metrics.csv"
 MARINER_VARIANT = "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap{}"
 SURROGATE_BENCHMARK = {
