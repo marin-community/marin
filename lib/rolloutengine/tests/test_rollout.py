@@ -42,6 +42,7 @@ from taskcompendium.models import (
     FunctionDefinition,
     JsonValueAnswer,
     NoGrader,
+    ProviderRequirement,
     ResourceGroups,
     RewardFile,
     RewardFileFormat,
@@ -77,6 +78,8 @@ from rolloutengine.contracts import (
     SessionPrepared,
     SessionStart,
     ToolCallCompleted,
+    ToolCallResult,
+    ToolContext,
     Transition,
     TransitionCompleted,
 )
@@ -715,7 +718,14 @@ async def test_lowering_preserves_task_and_produces_private_grade_with_training_
     spec = lowered(task)
     model = ReplayModel([{"role": "assistant", "content": answer}])
     runner = engine(model)
-    selected = lower_task(task, spec.runtime, spec.session, factories=runner.factories, sessions=runner.sessions)
+    selected = lower_task(
+        task,
+        spec.runtime,
+        spec.session,
+        factories=runner.factories,
+        sessions=runner.sessions,
+        providers=runner.providers,
+    )
     reloaded = LoweredTaskSpec.model_validate_json(selected.model_dump_json())
 
     result = await runner.run(reloaded)
@@ -751,7 +761,12 @@ async def test_unresolved_recipe_rejected_before_fallback_machine_or_model_start
     with pytest.raises(UnsupportedMachineSpec):
         if entrypoint == "lower":
             lower_task(
-                reloaded.task, reloaded.runtime, reloaded.session, factories=runner.factories, sessions=runner.sessions
+                reloaded.task,
+                reloaded.runtime,
+                reloaded.session,
+                factories=runner.factories,
+                sessions=runner.sessions,
+                providers=runner.providers,
             )
         else:
             await runner.run(reloaded)
@@ -926,6 +941,142 @@ async def test_shell_binding_collision_rejects_before_machine_or_model_start():
                 verifier_machine=machine_runtime(),
                 shell_tool=ShellToolConfig(name="terminal"),
             )
+        )
+    assert factory.machines == []
+    assert model.requests == []
+
+
+CHECK_TOOL = FunctionDefinition(
+    name="check",
+    description="Read a workspace file and submit it.",
+    parameters={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+)
+CHECKER = ProviderRequirement(action_interface="checker:v1", initial_state={"attempts": 1})
+
+
+@dataclass
+class CheckSession:
+    context: ToolContext
+    state: dict
+    calls: list[tuple[str, dict]] = field(default_factory=list)
+    closed: bool = False
+
+    async def call(self, name, arguments):
+        self.calls.append((name, arguments))
+        if self.context.machine is None:
+            self.state["attempts"] += 1
+            return ToolCallResult(json.dumps(self.state))
+        result = await self.context.machine.run(Command(("cat", arguments["path"])))
+        return ToolCallResult(result.stdout.decode(), done=True)
+
+    async def close(self):
+        self.closed = True
+
+
+@dataclass
+class CheckProvider:
+    definition: FunctionDefinition = CHECK_TOOL
+    sessions: list[CheckSession] = field(default_factory=list)
+
+    def tools(self, requirement):
+        return (self.definition,)
+
+    async def open(self, context):
+        session = CheckSession(context, dict(context.requirement.initial_state))
+        self.sessions.append(session)
+        return session
+
+
+def tool_message(*calls: tuple[str, str, str]) -> dict:
+    return {
+        "role": "assistant",
+        "tool_calls": [
+            {"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}
+            for call_id, name, arguments in calls
+        ],
+    }
+
+
+async def test_shell_and_provider_calls_share_one_dispatch_and_a_done_result_ends_the_rollout():
+    task = file_task(
+        environment_requirements=file_task().environment_requirements.model_copy(
+            update={"tool_providers": {"checker": CHECKER}}
+        )
+    )
+    provider = CheckProvider()
+    model = ReplayModel(
+        [
+            tool_message(
+                ("write", "shell", json.dumps({"command": "echo 12 > /workspace/answer"})),
+                ("rejected", "check", '["/workspace/answer"]'),
+                ("missing", "lookup", "{}"),
+            ),
+            tool_message(("submit", "check", json.dumps({"path": "/workspace/answer"}))),
+            {"role": "assistant", "content": "Not requested."},
+        ]
+    )
+    record = await engine(model, {"local": FixtureImageFactory()}, providers={"checker:v1": provider}).run(
+        lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
+
+    assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["shell", "check"]
+    observations = model.requests[1].messages[-3:]
+    assert json.loads(observations[0]["content"])["exit_code"] == 0
+    assert json.loads(observations[1]["content"]) == {"error": "Tool arguments must be a JSON object"}
+    assert json.loads(observations[2]["content"]) == {"error": "Unknown tool: lookup"}
+    [session] = provider.sessions
+    assert (session.context.requirement, session.calls) == (CHECKER, [("check", {"path": "/workspace/answer"})])
+    assert session.closed
+    assert len(model.requests) == 2
+    assert record.steps[-1].transition.done
+    assert record.steps[-1].transition.observations[0]["content"] == "12\n"
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+
+
+async def test_provider_tools_run_on_the_host_without_a_task_machine():
+    task = arithmetic_task(environment_requirements=EnvironmentRequirements(tool_providers={"checker": CHECKER}))
+    provider = CheckProvider()
+    model = ReplayModel(
+        [
+            tool_message(("lookup", "check", json.dumps({"path": "/state"}))),
+            {"role": "assistant", "content": "12"},
+        ]
+    )
+    record = await engine(model, providers={"checker:v1": provider}).run(lowered(task))
+
+    assert provider.sessions[0].context.machine is None
+    assert json.loads(model.requests[1].messages[-1]["content"]) == {"attempts": 2}
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+
+
+async def test_each_attempt_opens_and_closes_its_own_provider_session():
+    task = arithmetic_task(environment_requirements=EnvironmentRequirements(tool_providers={"checker": CHECKER}))
+    provider = CheckProvider()
+    for _ in range(2):
+        model = ReplayModel(
+            [tool_message(("lookup", "check", json.dumps({"path": "/state"}))), {"role": "assistant", "content": "12"}]
+        )
+        await engine(model, providers={"checker:v1": provider}).run(lowered(task))
+        # State from the earlier attempt does not leak: each attempt starts from initial_state.
+        assert json.loads(model.requests[1].messages[-1]["content"]) == {"attempts": 2}
+
+    assert [session.closed for session in provider.sessions] == [True, True]
+
+
+@pytest.mark.parametrize("interface,tool_name", [("missing:v1", "check"), ("checker:v1", "shell")])
+async def test_unregistered_or_colliding_provider_rejects_before_machine_or_model_start(interface, tool_name):
+    requirement = ProviderRequirement(action_interface=interface, initial_state={})
+    task = file_task(
+        environment_requirements=file_task().environment_requirements.model_copy(
+            update={"tool_providers": {"checker": requirement}}
+        )
+    )
+    provider = CheckProvider(CHECK_TOOL.model_copy(update={"name": tool_name}))
+    factory = RecordingShellSimFactory()
+    model = ReplayModel([])
+    with pytest.raises(ValueError):
+        await engine(model, {"local": factory}, providers={"checker:v1": provider}).run(
+            lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
         )
     assert factory.machines == []
     assert model.requests == []

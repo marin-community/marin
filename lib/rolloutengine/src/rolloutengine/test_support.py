@@ -90,5 +90,5 @@ def lowered(task: TaskSpec, *, machine=None, verifier_machine=None, **limits) ->
     )
 
 
-def engine(model, factories=None, *, sessions=None) -> RolloutEngine:
-    return RolloutEngine(model.complete, {} if factories is None else factories, sessions=sessions)
+def engine(model, factories=None, *, sessions=None, providers=None) -> RolloutEngine:
+    return RolloutEngine(model.complete, {} if factories is None else factories, sessions=sessions, providers=providers)

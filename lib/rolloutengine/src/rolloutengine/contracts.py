@@ -8,8 +8,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
 
+from pydantic import JsonValue
 from shellbox.machine import Machine
 from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.models import FunctionDefinition, ProviderRequirement
 
 from rolloutengine.spec import LoweredTaskSpec
 
@@ -299,3 +301,39 @@ class TaskSessionContext:
 
 
 TaskSessionFactory = Callable[[TaskSessionContext], TaskSession]
+
+
+@dataclass(frozen=True)
+class ToolContext:
+    """The attempt's task machine and the task requirement a provider session serves."""
+
+    machine: Machine | None
+    requirement: ProviderRequirement
+
+
+@dataclass(frozen=True)
+class ToolCallResult:
+    """A tool observation; ``done`` ends the rollout after this call, and later calls of the turn do not run."""
+
+    content: str
+    done: bool = False
+
+
+class ToolProviderSession(Protocol):
+    """One attempt's provider state for one task requirement."""
+
+    async def call(self, name: str, arguments: dict[str, JsonValue]) -> ToolCallResult: ...
+
+    async def close(self) -> None: ...
+
+
+class ToolProvider(Protocol):
+    """Host tools for one action interface, served beside the built-in shell tool."""
+
+    def tools(self, requirement: ProviderRequirement) -> tuple[FunctionDefinition, ...]:
+        """The functions advertised to the model for one task requirement."""
+        ...
+
+    async def open(self, context: ToolContext) -> ToolProviderSession:
+        """Start the state of one attempt, typically from ``context.requirement.initial_state``."""
+        ...
