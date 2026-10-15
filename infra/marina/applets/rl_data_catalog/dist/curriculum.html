@@ -30,7 +30,7 @@
         <span>Maximum cosine distance <small>Smaller is stricter</small></span>
         <label>Subject<input id="subject-distance" type="number" min="0" max="2" step="0.01" value="0.45" required></label>
         <label>Capability<input id="capability-distance" type="number" min="0" max="2" step="0.01" value="0.25" required></label>
-        <button class="primary" type="submit">Apply cutoffs</button><button id="reset-view" class="text-button" type="button">Reset</button>
+        <span class="cutoff-actions"><button class="primary" type="submit">Apply cutoffs</button><button id="reset-view" class="text-button" type="button">Reset</button></span>
         <span class="cutoff-note">Uses saved scores; no embedding or matching rerun.</span>
       </div>
     </form>
@@ -48,6 +48,6 @@
   <section class="notes"><div><p><b>Coverage describes the selected population.</b> Converted tasks have passed format conversion, before curation admission. Training and evaluation use remain separate. Unique public inputs deduplicate instructions and public contracts across the selected sources; cells and columns need not add up.</p></div><div><p><b>Similarity is a retrieval score.</b> A broad subject match can remain useful when the nearest capability is weak. Inspect instructions, descriptions and alternatives. Cutoffs change coverage; they do not change curation decisions.</p></div></section>
   <details class="release-details"><summary>Release and provenance</summary><pre id="provenance"></pre></details>
 </main>
-<dialog id="task-detail"><div class="drawer-header"><p class="eyebrow">TASK AND CURRICULUM MATCHES</p><button id="close-detail" class="close" aria-label="Close task details">×</button></div><h2 id="detail-title">Task details</h2><span id="detail-status" class="population-chip"></span><p id="detail-source"></p><p id="detail-task-id"></p><h3>Core work</h3><p id="detail-description" class="description"></p><div id="detail-matches"></div><h3>Public instructions</h3><p id="preview-note"></p><pre id="detail-instructions"></pre><details><summary>Task lineage</summary><pre id="detail-provenance"></pre></details></dialog>
+<dialog id="task-detail"><div class="drawer-header"><p class="eyebrow">TASK AND CURRICULUM MATCHES</p><button id="close-detail" class="close" aria-label="Close task details">×</button></div><h2 id="detail-title">Task details</h2><span id="detail-status" class="population-chip"></span><p id="detail-source"></p><p id="detail-task-id"></p><details><summary>Embedding text</summary><p id="detail-description" class="description"></p></details><div id="detail-matches"></div><h3>Public instructions</h3><p id="preview-note"></p><pre id="detail-instructions"></pre><details><summary>Task lineage</summary><pre id="detail-provenance"></pre></details></dialog>
 </body>
 </html>

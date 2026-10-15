@@ -22,7 +22,7 @@ flowchart LR
   K --> L[Explicit loader: stage and check]
   L --> D[Select Postgres load]
   D --> A[Atlas: SQL reads]
-  T[Public TaskSpec instructions and contracts] --> E[Zephyr: cached descriptions and CPU Harrier embeddings]
+  T[Public TaskSpec instructions and contracts] --> E[Zephyr: bounded public text and cached CPU Harrier embeddings]
   H[Curriculum anchor embeddings] --> M[Zephyr: exact matches and scores]
   E --> M
   M --> R[Zephyr: validate task coverage and publish release]
@@ -113,14 +113,14 @@ Open **Curriculum coverage** from the source inventory. The heatmap starts with
 subjects and source families. Open a subject or group to descend through the
 hierarchy, or search names and descriptions across the curriculum. Search returns
 at most 100 areas. Select a cell for its task instances and a task for its public
-instruction preview, core-work description, cosine scores and alternatives.
+instruction preview, embedding text, cosine scores and alternatives.
 Long instruction previews record the original character count and truncation.
 
 Displayed cosine scores are similarities; distance is `1 - similarity`.
 The subject and capability distance defaults are 0.45 and 0.25. Smaller values
 are stricter. **Apply cutoffs** runs new SQL queries over saved scores. It does
 not run inference or matching. A task can have a capability match, a subject-only
-match, no match within the cutoff, or insufficient context for a description.
+match, no match within the cutoff, insufficient context, or a skipped embedding.
 The nearest capabilities across all subjects remain available as diagnostics.
 
 Count task instances or unique public inputs. Public-input hashes cover

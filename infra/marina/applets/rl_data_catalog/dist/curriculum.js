@@ -123,7 +123,9 @@ function renderCoverage() {
   $('matrix-body').replaceChildren(...rows);
   $('empty').hidden = rows.length > 0;
   $('level-help').textContent = $('search').value ? 'Showing up to 100 matching areas. Open a group or select a cell.' : 'Open a row to explore. Select a count to inspect source task instances.';
-  $('matrix-summary').textContent = `Curriculum areas: ${data.nodes.length} · Source ${$('group-by').value === 'source' ? 'columns' : 'families'}: ${columns.length}${$('matrix-body').parentElement.parentElement.scrollHeight > $('matrix-body').parentElement.parentElement.clientHeight ? ' · Scroll within the table for all rows' : ''}`;
+  const scroller = $('matrix-body').parentElement.parentElement;
+  const scrolls = scroller.scrollHeight > scroller.clientHeight || scroller.scrollWidth > scroller.clientWidth;
+  $('matrix-summary').textContent = `Curriculum areas: ${data.nodes.length} · Source ${$('group-by').value === 'source' ? 'columns' : 'families'}: ${columns.length}${scrolls ? ' · Scroll within the table for more rows or columns' : ''}`;
   $('outcomes').replaceChildren(...Object.entries(outcomes).map(([value, text]) => {
     const item = button('', 'outcome-button', () => openTasks(null, null, value)); item.append(node('span', text), node('b', number.format(data.totals[value]))); return item;
   }));
@@ -170,7 +172,7 @@ async function openDetail(task) {
     const {task: detail} = await json(`api/curriculum/task?${params}`);
     $('detail-description').textContent = detail.description || detail.reason;
     $('detail-instructions').textContent = detail.task_preview;
-    $('preview-note').textContent = detail.preview_truncated ? `Preview: ${number.format(detail.task_preview.length)} of ${number.format(detail.instruction_characters)} instruction characters.` : `${number.format(detail.instruction_characters)} instruction characters. Public task files are not read for this description.`;
+    $('preview-note').textContent = detail.preview_truncated ? `Preview: ${number.format(detail.task_preview.length)} of ${number.format(detail.instruction_characters)} instruction characters.` : `${number.format(detail.instruction_characters)} instruction characters. Task files are not read for embeddings.`;
     for (const match of detail.matches?.subjects || []) {
       const subjectInside = match.membership_similarity >= 1 - state.data.filters.subject_distance;
       $('detail-matches').append(node('h3', `Primary subject · ${labelFor(`subject:${match.subject_id}`, match.subject_id)}`));
