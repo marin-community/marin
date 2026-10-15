@@ -19,6 +19,7 @@ checking each run's aggregate.
 """
 
 import re
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -74,6 +75,28 @@ SETUP = {
 DESIGN_KINDS = {"run_": "sampled", "baseline_": "baseline", "pctrl_del_": "deletion", "proportional_repeat_": "repeat"}
 # The launch manifests leave trainer_seed unset, which trains with Marin's default seed (experiments/defaults.py).
 DEFAULT_TRAINER_SEED = 0
+
+
+def required_sources() -> list[Path]:
+    return [
+        AUDIT_160 / "fit_single_phase.csv",
+        AUDIT_160 / "heldout_observations.csv",
+        AUDIT_160 / "repeat_observations.csv",
+        GAP_160,
+        LAUNCH_160,
+        NATIVE_160,
+        FROZEN_COMPONENTS,
+        UNCHEATABLE / "60m_uncheatable_components.csv",
+        UNCHEATABLE / "300m_uncheatable_components.csv",
+        REPEATS / "noise_baseline_proportional_variable_subset_60m_1p2b.csv",
+        REPEATS / "noise_baseline_proportional_variable_subset_300m_6b.csv",
+        PARITY_200 / "one_phase_augmented_fit_panel.csv",
+        PARITY_200 / "single_phase_table9_wide.csv",
+        PARITY_200 / "proportional_reference_table9.csv",
+        PACKET / "300m_one_phase_fit.csv",
+        LAUNCH_200,
+        DELETIONS_200,
+    ]
 
 
 def _join(key: pd.Series, source: pd.DataFrame, on: str, label: str) -> pd.DataFrame:

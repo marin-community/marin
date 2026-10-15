@@ -57,6 +57,13 @@ RESULT_META.update(
 )
 
 
+def required_sources() -> list[Path]:
+    """The manifest and every file its launches name."""
+    manifest = tables.read_csv(paths.require(MANIFEST))
+    cells = [*manifest.results_csv, *manifest.components_csv, *manifest.candidates_csv]
+    return [MANIFEST, *sorted({paths.REPO / path for cell in cells for path in cell.split(";")})]
+
+
 def _csv(cell: str) -> pd.DataFrame:
     """The tables named by one manifest cell, stacked."""
     return pd.concat([tables.read_csv(paths.require(paths.REPO / path)) for path in cell.split(";")], ignore_index=True)

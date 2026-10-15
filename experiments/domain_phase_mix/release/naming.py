@@ -11,16 +11,19 @@ import pandas as pd
 from experiments.domain_phase_mix.release import paths, tables
 
 HERE = paths.REPO / "experiments/domain_phase_mix/release"
+BUCKET_NAMES = HERE / "bucket_names.csv"
+TASK_METADATA = HERE / "task_metadata.csv"
+OBJECTIVE_WEIGHTS = paths.MIXSEL / "data/objectives.csv"
 
 
 @cache
 def bucket_table() -> pd.DataFrame:
-    return tables.read_csv(HERE / "bucket_names.csv")
+    return tables.read_csv(paths.require(BUCKET_NAMES))
 
 
 @cache
 def task_table() -> pd.DataFrame:
-    return tables.read_csv(HERE / "task_metadata.csv")
+    return tables.read_csv(paths.require(TASK_METADATA))
 
 
 BUCKETS: list[str] = list(bucket_table().bucket_id)
@@ -88,7 +91,7 @@ def objective_public(internal: str) -> str:
 
 @cache
 def task_weights() -> dict[str, dict[str, float]]:
-    objectives = tables.read_csv(paths.require(paths.MIXSEL / "data/objectives.csv"))
+    objectives = tables.read_csv(paths.require(OBJECTIVE_WEIGHTS))
     unch = objectives[objectives.objective == "uncheatable"]
     t9 = objectives[objectives.objective == "table9"]
     return {

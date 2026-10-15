@@ -10,6 +10,8 @@ the registry's W&B training run id; for the 187 `delphi_archive::` rows that is 
 Llama 200M runs record no run name and key on the registry's `row_id`.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -18,6 +20,9 @@ from experiments.domain_phase_mix.release.context import ExportContext
 
 EXPANDED = paths.RO / "single_phase_heldout_benchmark_expanded_20260913"
 FROZEN = paths.RO / "single_phase_heldout_benchmark_20260902"
+FROZEN_FILES = ("heldout_runs.csv", "heldout_components.csv")
+EXPANDED_FILES = ("heldout_runs.csv", "heldout_coordinate_components.csv")
+LAUNCH_FILES = ("measured_results.csv", "measured_table9_components.csv")  # in each validation launch's folder
 SWARM = {"delphi_3e18_39bucket": "qwen3_360m_1p6b", "60m_39bucket": "llama_160m_1p2b", "300m_39bucket": "llama_200m_6b"}
 META = {
     "proposal_model": "proposal_method",
@@ -57,6 +62,11 @@ VALIDATION_LAUNCHES = {
     "three_component_optimum": "delphi_three_component_optimum_3e18_20260908",
     "factorial": "delphi_frontier_factorial_design_20260906",
 }
+
+
+def required_sources() -> list[Path]:
+    launches = [paths.RO / folder / name for folder in VALIDATION_LAUNCHES.values() for name in LAUNCH_FILES]
+    return [*(FROZEN / name for name in FROZEN_FILES), *(EXPANDED / name for name in EXPANDED_FILES), *launches]
 
 
 def _frozen_components() -> pd.DataFrame:

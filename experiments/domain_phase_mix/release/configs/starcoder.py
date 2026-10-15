@@ -65,6 +65,7 @@ import gzip
 import hashlib
 import json
 import re
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -148,6 +149,16 @@ FIT_PREDICTIONS = [
     "weibull_softplus_unscaled_full_fit_prediction_bpb",
     "olmix_full_fit_prediction_bpb",
 ]
+
+
+def required_sources() -> list[Path]:
+    atlas = [ATLAS / name for name in ("protocol.json", "curve_reference.csv", "metrics.csv", "predictions.csv")]
+    fits = [ATLAS / "full_fit_parameters.csv", ATLAS / "dense_curves.csv"]
+    transition = [*(TRANSITION / f"{name}.csv" for name in TRANSITION_TABLES), TRANSITION / "trajectories.parquet"]
+    confirmation = [MATCHED_CONFIRMATION / name for name in ("confirmation_pairs.csv", "confirmation_observations.csv")]
+    designs = [INVENTORY, DENSE_DESIGN, COUPLED_DESIGN, *RAMP_DESIGNS]
+    diagonal = [DIAGONAL / "observations.csv", DIAGONAL / "curve_summary.csv"]
+    return [*atlas, *fits, *designs, *diagonal, CURRICULA, MATCHED_OPTIMA, *confirmation, *transition]
 
 
 def _curve_designs(curves: pd.DataFrame, dense: dict) -> pd.DataFrame:

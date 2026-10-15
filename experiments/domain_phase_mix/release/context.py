@@ -17,6 +17,11 @@ class ExportContext:
     weights: dict[str, dict[str, float]]
 
 
+def required_sources() -> list[Path]:
+    """The files behind every exporter's names and aggregate weights (`naming`)."""
+    return [naming.BUCKET_NAMES, naming.TASK_METADATA, naming.OBJECTIVE_WEIGHTS]
+
+
 def build(private_dir: Path = paths.PRIVATE) -> ExportContext:
     salt = keys.load_salt(private_dir / "salt")
     registry = keys.ObservationRegistry(salt=salt, map_path=private_dir / "observation_map.csv")

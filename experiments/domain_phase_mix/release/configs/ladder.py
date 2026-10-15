@@ -45,6 +45,8 @@ ACCURACY_TABLE = "ladder_accuracy"
 FROZEN = paths.RO / "frozen_scaling_update_20260913"
 # Each holds audited_measured_results.csv and every run's Table 9 result, `<run name>_table9.json`.
 AUDITED = (FROZEN / "mariner", FROZEN / "matched_olmix")
+AUDIT_FILE = "audited_measured_results.csv"
+TABLE9_RESULT = "{run}_table9.json"
 PROGRESS = paths.RO / "delphi_scaling_progress_20260625/delphi_scaling_completed_wandb.csv"
 CANDIDATE_WEIGHTS = (
     paths.RO / "delphi_frozen_procedure_validation_3e18_20260908/runtime_materialization/candidate_weights.csv",
@@ -61,6 +63,21 @@ AGGREGATE_VERSION = "fixed_20260927"
 SWARM_FLOPS = 3e18
 ACCURACY_FLOPS = 1e21
 SEEDS = ["data_seed", "trainer_seed"]
+
+
+def required_sources() -> list[Path]:
+    """The files the export reads; each audited folder's per-run Table 9 results are the ones present."""
+    per_run = [path for folder in AUDITED for path in sorted(folder.glob(TABLE9_RESULT.format(run="*")))]
+    audits = [folder / AUDIT_FILE for folder in AUDITED]
+    return [
+        *CANDIDATE_WEIGHTS,
+        *audits,
+        *per_run,
+        PROGRESS,
+        ACCURACY / "components.csv",
+        ACCURACY / "rows.tex",
+        CAP_SWEEP_TABLE9,
+    ]
 
 
 def _scale(total_parameters: int, non_embedding_parameters: int, train_tokens: int) -> dict[str, float]:
@@ -130,7 +147,7 @@ def _policy_weights(ctx: ExportContext) -> pd.DataFrame:
 
 def _table9_components(folder: Path, run: Any) -> dict[str, float]:
     """A run's 51 OlmoBaseEval Easy BPB from the Table 9 result saved beside its audited row."""
-    record = json.loads(paths.require(folder / f"{run.run_name}_table9.json").read_text())
+    record = json.loads(paths.require(folder / TABLE9_RESULT.format(run=run.run_name)).read_text())
     evaluated = record["provenance"]["source_run_name"], record["provenance"]["mixture"]
     if evaluated != (run.run_name.rsplit("-", 1)[0], run.policy):
         raise ValueError(f"{run.run_name}: its Table 9 result evaluated {evaluated}")
@@ -142,7 +159,7 @@ def _table9_components(folder: Path, run: Any) -> dict[str, float]:
 
 def _audited(folder: Path) -> pd.DataFrame:
     """One scaling launch's measured MARINER or Olmix runs with their 58 per-task BPB."""
-    results = tables.read_csv(paths.require(folder / "audited_measured_results.csv"))
+    results = tables.read_csv(paths.require(folder / AUDIT_FILE))
     results = results[results.status == "measured"].reset_index(drop=True)
     if [run_names.training_run_name_from_uri(uri) for uri in results.eval_metrics_uri] != list(results.run_name):
         raise ValueError(f"{folder.name}: run names differ from the evaluation-metrics URIs")

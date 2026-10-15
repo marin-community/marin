@@ -3,14 +3,22 @@
 
 """The `partition` (39 buckets) and `tasks` (58 evaluations) configs."""
 
+from pathlib import Path
+
 import pandas as pd
 
 from experiments.domain_phase_mix.release import naming, paths, tables
 
+BUCKET_POOLS = paths.MIXSEL / "data/buckets.csv"  # bucket, pool_tokens, epochs_per_unit_weight
+
+
+def required_sources() -> list[Path]:
+    """The files the export reads besides the context's (`context.required_sources`)."""
+    return [BUCKET_POOLS]
+
 
 def export(ctx) -> dict[str, pd.DataFrame]:
-    # Columns: bucket, pool_tokens, epochs_per_unit_weight.
-    buckets = tables.read_csv(paths.require(paths.MIXSEL / "data/buckets.csv"))
+    buckets = tables.read_csv(paths.require(BUCKET_POOLS))
     buckets["bucket_id"] = buckets.bucket.map(naming.bucket_public)
     names = naming.bucket_table()
     partition = names.merge(buckets[["bucket_id", "pool_tokens"]], on="bucket_id", how="left")

@@ -3,6 +3,8 @@
 
 """The main swarm: 280 fit rows from the mixture-selection bundle plus the ten proportional repeats."""
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -10,6 +12,8 @@ from experiments.domain_phase_mix.release import keys, naming, paths, tables
 from experiments.domain_phase_mix.release.context import ExportContext
 
 TABLE = "swarm_qwen3_360m_1p6b"
+SWARM_WEIGHTS = paths.MIXSEL / "data/swarm_weights.csv"
+SWARM_OUTCOMES = paths.MIXSEL / "data/swarm_outcomes.csv"
 PACKET = paths.RO / "two_phase_surrogate_collaborator_packet_20260721/data/canonical/delphi_3e18_one_phase_fit.csv"
 INVENTORY = paths.AG / "sft_midtraining_probe/checkpoint_inventory.csv"
 NOISE = paths.RO / "delphi_3e18_proportional_noise_floor_20260703"
@@ -25,6 +29,19 @@ META = ["observation_id", "run_label", "design_kind", "fit_inclusion", "data_see
 # checkpoints are the two-phase swarm's runs; the design name separates the 3 baselines from the 39 deletions.
 NEW_TRAINING = "scheduled_new_training"
 TWO_PHASE_ALIAS = "reused_exact_phase_tied_alias"
+
+
+def required_sources() -> list[Path]:
+    return [
+        SWARM_WEIGHTS,
+        SWARM_OUTCOMES,
+        PACKET,
+        INVENTORY,
+        NOISE / "noise_component_matrix.csv",
+        NOISE / "noise_panel.csv",
+        UNCH_REPEATS,
+        REPEAT_SEEDS,
+    ]
 
 
 def _public_weights(frame: pd.DataFrame, internal_cols: list[str], prefix: str = "w__") -> pd.DataFrame:
@@ -61,8 +78,8 @@ def _finish(df: pd.DataFrame, ctx: ExportContext) -> pd.DataFrame:
 
 
 def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
-    weights = tables.read_csv(paths.require(paths.MIXSEL / "data/swarm_weights.csv"))
-    outcomes = tables.read_csv(paths.require(paths.MIXSEL / "data/swarm_outcomes.csv")).set_index("run")
+    weights = tables.read_csv(paths.require(SWARM_WEIGHTS))
+    outcomes = tables.read_csv(paths.require(SWARM_OUTCOMES)).set_index("run")
     packet = tables.read_csv(paths.require(PACKET))[["row_id", "candidate_kind"]]
     inventory = tables.read_csv(paths.require(INVENTORY))
     inventory = inventory[inventory.panel == "p2_one_phase_swarm"][
