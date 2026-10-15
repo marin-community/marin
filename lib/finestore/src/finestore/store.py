@@ -384,8 +384,7 @@ class DataStore:
         if self._closed:
             return
         self._closed = True
-        self._stop.set()
-        self._wake.set()
+        self.request_stop()
         self._thread.join()
         self.flush()
         with self._commit_lock:
@@ -397,6 +396,14 @@ class DataStore:
                 max_input_rows=_CLOSE_COMPACTION_MAX_INPUT_ROWS,
                 coordinator=self._commits,
             )
+
+    def request_stop(self) -> None:
+        """Request maintenance shutdown without waiting or performing storage I/O.
+
+        Use ``close()`` for normal shutdown that flushes pending writes.
+        """
+        self._stop.set()
+        self._wake.set()
 
     def __enter__(self) -> DataStore:
         return self

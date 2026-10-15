@@ -1258,6 +1258,58 @@ def test_close_compaction_failure_leaves_flushed_data_readable(tmp_path, monkeyp
     assert len(view.list_shards(BlobTables.DESCRIPTORS)) == 2
 
 
+def test_close_prioritizes_descriptors_over_chunked_payloads(tmp_path, monkeypatch):
+    root = str(tmp_path / "run")
+    monkeypatch.setattr(store_module, "INLINE_BLOB_BYTES", 64)
+    monkeypatch.setattr(store_module, "OBJECT_PART_BYTES", 64)
+    payload = random.Random(0).randbytes(128)
+    with DataStore.open(root, flush_interval=3600) as store:
+        for name in ("first", "last"):
+            store.write_object(name, payload)
+            store.flush()
+        before = ReadView(root)
+        # Either group fits, but both together exceed the close budget.
+        limit = max(
+            sum(shard.size_bytes for shard in before.list_shards(table))
+            for table in (BlobTables.DESCRIPTORS, BlobTables.PARTS)
+        )
+        monkeypatch.setattr(store_module, "_CLOSE_COMPACTION_MAX_INPUT_BYTES", limit)
+    final = ReadView(root)
+    assert len(final.list_shards(BlobTables.DESCRIPTORS)) == 1
+    assert final.list_shards(BlobTables.PARTS) == before.list_shards(BlobTables.PARTS)
+    assert final.read_blobs(["first", "last"]) == {"first": payload, "last": payload}
+
+
+@pytest.mark.parametrize("failures", [1, 100], ids=["recovers", "exhausted"])
+def test_close_retries_transient_storage_and_propagates_exhaustion(tmp_path, monkeypatch, failures):
+    root = str(tmp_path / "run")
+    slowdown = ClientError({"Error": {"Code": "SlowDown", "Message": "reduce request rate"}}, "PutObject")
+    real_open = LocalFileSystem.open
+    attempts = 0
+
+    def flaky_compaction_write(filesystem, path, mode="rb", *args, **kwargs):
+        nonlocal attempts
+        if "/w=compactor/" in str(path) and "w" in mode:
+            attempts += 1
+            if attempts <= failures:
+                raise slowdown
+        return real_open(filesystem, path, mode, *args, **kwargs)
+
+    with DataStore.open(root, flush_interval=3600) as store:
+        store.write_object("first", b"committed")
+        store.flush()
+        store.write_object("last", b"buffered")
+        monkeypatch.setattr(LocalFileSystem, "open", flaky_compaction_write)
+        if failures == 1:
+            store.close()
+        else:
+            with pytest.raises(ClientError):
+                store.close()
+    view = ReadView(root)
+    assert view.read_blobs(["first", "last"]) == {"first": b"committed", "last": b"buffered"}
+    assert len(view.list_shards(BlobTables.DESCRIPTORS)) == (1 if failures == 1 else 2)
+
+
 def test_maintenance_compaction_levels_are_terminal(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1", flush_interval=3600, compaction_levels=(2, 1, 1)) as store:

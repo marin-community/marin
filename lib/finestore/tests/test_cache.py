@@ -62,6 +62,49 @@ _CACHE_PROCESS = textwrap.dedent(
     """
 )
 
+_CACHE_EXIT_COMPACTION_PROCESS = textwrap.dedent(
+    """
+    import sys
+    import threading
+
+    import finestore.cache as cache_module
+    from finestore.cache import PersistentKvCache
+    from finestore.layout import FineStoreLayout
+    from fsspec.implementations.local import LocalFileSystem
+    from rigging.filesystem.conditional_object import LocalConditionalObject
+    from rigging.filesystem.storage_path import StoragePath
+
+    root = sys.argv[1]
+    StoragePath.is_remote = property(lambda self: True)
+    cache_module._EXIT_FLUSH_TIMEOUT = 0.05
+    committed = threading.Event()
+    real_write = LocalConditionalObject.write
+
+    def observe_commit(head, data, *, expected_version):
+        version = real_write(head, data, expected_version=expected_version)
+        if head.path == FineStoreLayout(root).head_path:
+            committed.set()
+        return version
+
+    LocalConditionalObject.write = observe_commit
+    cache = PersistentKvCache.at(root)
+    for index in range(2):
+        committed.clear()
+        cache.store(str(index), b"object-code")
+        if not committed.wait(timeout=3):
+            raise RuntimeError("cache batch did not commit")
+
+    real_open = LocalFileSystem.open
+
+    def stall_compaction(filesystem, path, mode="rb", *args, **kwargs):
+        if "/w=compactor/" in str(path) and "w" in mode:
+            threading.Event().wait()
+        return real_open(filesystem, path, mode, *args, **kwargs)
+
+    LocalFileSystem.open = stall_compaction
+    """
+)
+
 
 class _RangeFile(AbstractBufferedFile):
     def _fetch_range(self, start, end):
@@ -198,6 +241,7 @@ def test_persistent_cache_round_trips_and_supersedes_named_bytes(tmp_path):
     cache.store("kernel", b"first")
     cache.store("kernel", b"second")
     cache.close()
+    assert len(ReadView(root).list_shards(BlobTables.DESCRIPTORS)) == 1
 
     reader = PersistentKvCache.at(root)
     assert reader.load("kernel") == b"second"
@@ -380,3 +424,11 @@ def test_cache_process_exit_abandons_stalled_remote_commit(tmp_path):
     result = subprocess.run([sys.executable, "-c", _CACHE_PROCESS, root, "stall"], timeout=10)
 
     assert result.returncode == 0
+
+
+def test_cache_process_exit_does_not_start_remote_compaction(tmp_path):
+    root = str(tmp_path / "cache")
+    subprocess.run([sys.executable, "-c", _CACHE_EXIT_COMPACTION_PROCESS, root], check=True, timeout=10)
+    view = ReadView(root)
+    assert view.read_blobs(["0", "1"]) == {"0": b"object-code", "1": b"object-code"}
+    assert len(view.list_shards(BlobTables.DESCRIPTORS)) == 2

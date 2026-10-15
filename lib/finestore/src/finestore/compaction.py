@@ -9,6 +9,7 @@ import logging
 import uuid
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from functools import partial
 from itertools import chain
 from typing import Protocol
 
@@ -16,15 +17,18 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import rigging.filesystem.factory as factory
 from pyarrow.fs import FSSpecHandler, PyFileSystem
+from rigging.filesystem.s3_errors import is_transient_s3_error
+from rigging.timing import retry_with_backoff
 
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
-from finestore.layout import CommitToken, FineStoreLayout, Shard, SystemColumns
+from finestore.layout import BlobTables, CommitToken, FineStoreLayout, Shard, SystemColumns
 from finestore.reader import ReadView, iter_shard_rows, merge_deduplicated_rows
 from finestore.shard_writer import ShardWriter, table_row_groups
 
 logger = logging.getLogger(__name__)
 
 _COMPACTOR = "compactor"
+_CLOSE_COMPACTION_MAX_ATTEMPTS = 3
 
 
 class CompactionCoordinator(Protocol):
@@ -72,8 +76,13 @@ def compact_writer_tables(
     coordinator: CompactionCoordinator,
 ) -> None:
     """Merge a writer's residual level-zero groups within an aggregate input budget."""
-    for table in sorted(tables):
-        snapshot = coordinator.snapshot()
+    for table in sorted(tables, key=lambda name: (name != BlobTables.DESCRIPTORS, name)):
+        snapshot = retry_with_backoff(
+            coordinator.snapshot,
+            retryable=is_transient_s3_error,
+            max_attempts=_CLOSE_COMPACTION_MAX_ATTEMPTS,
+            operation=f"FineStore close snapshot at {root}",
+        )
         shards = tuple(
             shard
             for shard in ReadView(root, snapshot).list_shards(table)
@@ -86,7 +95,12 @@ def compact_writer_tables(
         if input_bytes > max_input_bytes or input_rows > max_input_rows:
             continue
         # Filter the merge inputs, keeping the full publication base and unrelated shards.
-        _compact_shards(root, table, shards, snapshot=snapshot, coordinator=coordinator)
+        retry_with_backoff(
+            partial(_compact_shards, root, table, shards, snapshot=snapshot, coordinator=coordinator),
+            retryable=is_transient_s3_error,
+            max_attempts=_CLOSE_COMPACTION_MAX_ATTEMPTS,
+            operation=f"FineStore close compaction at {root} table={table}",
+        )
         max_input_bytes -= input_bytes
         max_input_rows -= input_rows
 
