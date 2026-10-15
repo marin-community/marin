@@ -20,8 +20,12 @@ import jax.numpy as jnp
 import cutlass
 import cutlass.cute as cute
 import cutlass.jax as cjax
+from quack.activation import dswiglu
 from quack.cute_dsl_utils import get_max_active_clusters
+from quack.epilogue.frontend import gemm_epilogue
 from quack.epilogue.library import linear_act_mod
+from quack.epilogue.math import pack, unpack
+from quack.epilogue.ops import ColVecReduce
 from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
 from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
@@ -62,11 +66,20 @@ def _max_active_clusters(cluster_mnk) -> int:
 
 @cute_launcher_factory
 def _build_launcher(
-    *, a_dtype, tile_mn, cluster_mnk, activation, max_active_clusters, max_swizzle, use_clc_persistence=False
+    *,
+    a_dtype,
+    tile_mn,
+    cluster_mnk,
+    activation,
+    max_active_clusters,
+    max_swizzle,
+    store_preact,
+    use_clc_persistence=False,
 ):
     """Return a ``@cute.jit`` launcher with the cutlass_call signature.
 
-    Signature: (stream, mA, mB, mCuSeqlens, mD, mPostAct)
+    Signature: (stream, mA, mB, mCuSeqlens, mD, mPostAct), or without ``mD`` when ``store_preact``
+    is false, in which case the kernel never writes the pre-activations.
       mA:[M,K] tokens (k-major)  mB:[E,K,2N] weights  mCuSeqlens:[E+1] int32
       mD:[M,2N] preact out (n-major)  mPostAct:[M,N] swiglu out (n-major)
     """
@@ -84,8 +97,7 @@ def _build_launcher(
         add_to_output=False,
     )
 
-    @cute.jit
-    def launcher(stream, mA, mB, mCuSeqlens, mD, mPostAct):
+    def launch(stream, mA, mB, mCuSeqlens, mD, mPostAct):
         gemm = gemm_type(
             _ACC,
             a_dtype,
@@ -99,6 +111,18 @@ def _build_launcher(
         scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
         varlen_args = make_varlen_args(mCuSeqlens, None, None)
         gemm(mA, mB, mD, None, epi_args, scheduler_args, varlen_args, stream)
+
+    if store_preact:
+
+        @cute.jit
+        def launcher(stream, mA, mB, mCuSeqlens, mD, mPostAct):
+            launch(stream, mA, mB, mCuSeqlens, mD, mPostAct)
+
+    else:
+
+        @cute.jit
+        def launcher(stream, mA, mB, mCuSeqlens, mPostAct):
+            launch(stream, mA, mB, mCuSeqlens, None, mPostAct)
 
     return launcher
 
@@ -118,7 +142,8 @@ def quack_gated_grouped_gemm(
     """Grouped SwiGLU expert GEMM via QuACK's SM100 kernel.
 
     x_sort: [M, K] tokens sorted by expert. w_gate_up: [E, K, 2N]. cu_seqlens: [E+1] int32.
-    Returns postact [M, N].
+    Returns postact [M, N], or ``(preact [M, 2N], postact)`` with ``return_preact``. Without it the
+    kernel does not write the pre-activations at all, which saves their HBM traffic.
     """
     M, K = x_sort.shape
     N2 = w_gate_up.shape[2]
@@ -132,6 +157,7 @@ def quack_gated_grouped_gemm(
         activation=activation,
         max_active_clusters=max_active_clusters,
         max_swizzle=max_swizzle,
+        store_preact=return_preact,
         use_clc_persistence=use_clc_persistence,
     )
     ts = cjax.TensorSpec
@@ -143,18 +169,18 @@ def quack_gated_grouped_gemm(
     cu_spec = ts(static=False)  # [E+1] int32
     d_spec = ts(divisibility=(1, 8), static=False)  # [M,2N] n-major
     p_spec = ts(divisibility=(1, 8), static=False)  # [M,N]  n-major
+    preact_shape = jax.ShapeDtypeStruct((M, N2), x_sort.dtype)
+    postact_shape = jax.ShapeDtypeStruct((M, N), x_sort.dtype)
+    # A single output is passed bare, as `_grouped_gemm_call` does.
     call = cutlass_call(
         launcher,
-        output_shape_dtype=(
-            jax.ShapeDtypeStruct((M, N2), x_sort.dtype),
-            jax.ShapeDtypeStruct((M, N), x_sort.dtype),
-        ),
+        output_shape_dtype=(preact_shape, postact_shape) if return_preact else postact_shape,
         input_spec=(a_spec, b_spec, cu_spec),
-        output_spec=(d_spec, p_spec),
+        output_spec=(d_spec, p_spec) if return_preact else (p_spec,),
         use_static_tensors=False,
     )
-    preact, postact = call(x_sort, w_gate_up, cu_seqlens.astype(jnp.int32))
-    return (preact, postact) if return_preact else postact
+    outputs = call(x_sort, w_gate_up, cu_seqlens.astype(jnp.int32))
+    return tuple(outputs) if return_preact else outputs
 
 
 @cute_launcher_factory
@@ -253,6 +279,112 @@ def quack_grouped_gemm(
         max_swizzle=max_swizzle,
         use_clc_persistence=use_clc_persistence,
     )
+
+
+@gemm_epilogue(reduces={"row_dot": ColVecReduce("row_dot", scaled=True)}, mode="packed_cd_b16x2")
+def _dswiglu_row_dot_epilogue(acc, c):
+    """SwiGLU backward on the accumulator ``dh`` and the packed ``(gate, up)`` preactivations.
+
+    D is the packed ``(d_gate, d_up)``; ``row_dot`` accumulates ``<silu(gate) * up, dh>`` per row.
+    """
+    gate, up = unpack(c)
+    d_gate, d_up, postact = dswiglu(gate, up, acc)
+    return {"D": pack(d_gate, d_up), "row_dot": (postact, acc)}
+
+
+@cute_launcher_factory
+def _build_dswiglu_launcher(
+    *, a_dtype, tile_mn, cluster_mnk, max_active_clusters, max_swizzle, use_clc_persistence=False
+):
+    """Return a ``@cute.jit`` grouped dh GEMM launcher with the SwiGLU backward as its epilogue.
+
+    Signature: (stream, mA, mB, mCuSeqlens, mC, mD, mRowDot)
+      mA:[M,K] dy (k-major)  mB:[E,N,K] W2 (k-major)  mCuSeqlens:[E+1] int32
+      mC:[M,2N] packed gate/up preactivations  mD:[M,2N] packed d_gate/d_up  mRowDot:[M,N/tile_n] f32
+    """
+    gemm_type = _dswiglu_row_dot_epilogue._mint(
+        kind_sig=(("c", "c"),),
+        sm=10,
+        paired_acc=False,
+        packed_c=True,
+        prepass_sig=(),
+        rounding=RoundingMode.RN,
+        arg_forms=(),
+        add_to_output=False,
+    )
+
+    @cute.jit
+    def launcher(stream, mA, mB, mCuSeqlens, mC, mD, mRowDot):
+        gemm = gemm_type(
+            _ACC,
+            a_dtype,
+            tile_mn,
+            cluster_mnk,
+            gather_A=False,
+            use_clc_persistence=use_clc_persistence,
+            use_pdl=_QUACK_USE_PDL,
+        )
+        # C and D cross in their 16-bit dtype, two lanes per packed 32-bit element along N.
+        gemm.cd_packed = "n"
+        gemm.implicit_dtype = a_dtype
+        epi_args = gemm_type.EpilogueArguments(row_dot=mRowDot)
+        scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
+        varlen_args = make_varlen_args(mCuSeqlens, None, None)
+        gemm(mA, mB, mD, mC, epi_args, scheduler_args, varlen_args, stream)
+
+    return launcher
+
+
+def quack_grouped_dswiglu_gemm(
+    dy,
+    w,
+    gate_up,
+    cu_seqlens,
+    *,
+    tile_mn=(256, 128),
+    cluster_mnk=(2, 1, 1),
+    max_swizzle=8,
+    use_clc_persistence=False,
+):
+    """``dh = dy @ w^T`` per expert group, followed in the epilogue by the SwiGLU backward.
+
+    dy: [M, K] rows grouped by ``cu_seqlens`` (varlen_m). w: [E, N, K] (k-major, as ``b_major='k'``).
+    gate_up: [M, 2N] interleaved gate/up preactivations from ``quack_gated_grouped_gemm``.
+    Returns ``(d_gate_up, row_dot)``: the interleaved preactivation cotangent [M, 2N] and each
+    row's ``<silu(gate) * up, dh>`` [M] in fp32. The SwiGLU backward runs in fp32 on the fp32
+    accumulator. Rows past ``cu_seqlens[-1]`` are unspecified in both outputs.
+    """
+    M = dy.shape[0]
+    N = w.shape[1]
+    if gate_up.shape != (M, 2 * N):
+        raise ValueError(f"gate_up must be [{M}, {2 * N}], got {gate_up.shape}")
+    launcher = _build_dswiglu_launcher(
+        a_dtype=_cute_dtype(dy.dtype),
+        tile_mn=tile_mn,
+        cluster_mnk=cluster_mnk,
+        max_active_clusters=_max_active_clusters(cluster_mnk),
+        max_swizzle=max_swizzle,
+        use_clc_persistence=use_clc_persistence,
+    )
+    ts = cjax.TensorSpec
+    row_dot_tiles = -(-N // tile_mn[1])
+    call = cutlass_call(
+        launcher,
+        output_shape_dtype=(
+            jax.ShapeDtypeStruct((M, 2 * N), gate_up.dtype),
+            jax.ShapeDtypeStruct((M, row_dot_tiles), jnp.float32),
+        ),
+        input_spec=(
+            ts(divisibility=(1, _FEATURE_ALIGNMENT), static=False),
+            ts(mode=(0, 1, 2), divisibility=(1, 1, _FEATURE_ALIGNMENT), static=False),
+            ts(static=False),
+            ts(divisibility=(1, _FEATURE_ALIGNMENT), static=False),
+        ),
+        output_spec=(ts(divisibility=(1, _FEATURE_ALIGNMENT), static=False), ts(static=False)),
+        use_static_tensors=False,
+    )
+    d_gate_up, row_dot_partials = call(dy, w, cu_seqlens.astype(jnp.int32), gate_up)
+    return d_gate_up, jnp.sum(row_dot_partials, axis=-1)
 
 
 def quack_grouped_wgrad(

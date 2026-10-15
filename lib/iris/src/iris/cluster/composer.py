@@ -131,6 +131,7 @@ def make_task_backend(
                 kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
                 priority_class_names=pod_priority_classes,
             ),
+            node_health=kp.node_health,
             task_event_table=task_event_table,
             profile_table=profile_table,
         )
@@ -258,6 +259,7 @@ def make_backend(
             scale_groups=config.scale_groups,
             label_prefix=config.platform.label_prefix or "iris",
             base_worker_config=base_worker_config,
+            worker_token_provider=auth.worker_token_provider,
             provisioning_table=log_stack.provisioning_table,
         )
         logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))

@@ -14,6 +14,7 @@ API = "/evaldash/api"
 
 
 def test_the_run_log_lists_launches_and_one_run_opens(journey: Journey) -> None:
+    journey.page.route(f"**{API}/runs/*/jobs", lambda route: route.fulfill(json={"roles": []}))
     journey.visit("/runs").shoot("runs")
     # Every facet value is also a hidden <option> in the filter bar, so read the page rather than
     # look for the first element carrying the text.
@@ -24,7 +25,9 @@ def test_the_run_log_lists_launches_and_one_run_opens(journey: Journey) -> None:
     newest: str = cast(list[dict[str, Any]], journey.api(f"{API}/runs?limit=1"))[0]["run_id"]
 
     journey.click("detail →")
-    journey.sees(newest).sees("Grade").sees("Metrics").shoot("run-detail")
+    journey.sees(newest)
+    expect(journey.page.get_by_text("Grade", exact=True)).to_be_visible()
+    journey.sees("Metrics").shoot("run-detail")
     assert journey.page.url == journey.url(f"/runs/{newest}")
 
 
@@ -32,20 +35,21 @@ def test_the_shell_bar_carries_the_app_and_its_own_navigation(journey: Journey) 
     journey.visit("/runs")
     assert journey.api("/api/marina/me") == {"user": "anonymous", "role": "admin"}
     offers = journey.offers()
-    assert "a:EvalDash" in offers
+    expect(journey.page.get_by_role("banner").get_by_text("EvalDash", exact=True)).to_be_visible()
+    expect(journey.page.get_by_role("button", name="Open apps")).to_be_visible()
     assert {"a:Panel", "a:Runs", "a:Debug"} <= set(offers)
 
 
 def test_the_panel_serves_the_committed_catalog(journey: Journey) -> None:
-    journey.visit("/").shoot("panel")
+    journey.visit("/?cohort=2026.07.20").shoot("panel")
     assert "snowball" in journey.reads()
     store = cast(dict[str, Any], journey.api(f"{API}/status"))["store"]
     assert store["backend"] == "postgres"
-    assert store["record_count"] == 17
+    assert store["record_count"] == 21
 
 
 def test_a_benchmark_family_variant_survives_a_shared_panel_url(journey: Journey) -> None:
-    journey.visit("/")
+    journey.visit("/?cohort=2026.07.20")
     picker = journey.page.locator("select[title^='Which setting of this benchmark']").first
 
     picker.select_option("gsm8k-0shot")

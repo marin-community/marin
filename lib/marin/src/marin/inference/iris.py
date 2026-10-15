@@ -18,6 +18,7 @@ from fray.client import JobHandle
 from fray.current_client import current_client
 from fray.types import ActorConfig, Entrypoint, JobRequest, JobStatus
 from iris.client.client import iris_ctx
+from iris.client.workload import TaskStatus
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName
 from iris.resources.state import TaskState, is_job_finished
@@ -129,8 +130,7 @@ class RemoteInferenceSession:
             status = client.job_status(job_id)
             if is_job_finished(status.state):
                 return InferenceBackendState.FINISHED
-            tasks = client.list_tasks(job_id)
-            if not tasks or any(task.state is not TaskState.RUNNING for task in tasks):
+            if not status.task_count or status.task_state_counts.get(TaskState.RUNNING, 0) != status.task_count:
                 state = InferenceBackendState.RECOVERING
         if state is InferenceBackendState.READY and not client.list_endpoint_instances(self.endpoint_name):
             state = InferenceBackendState.RECOVERING
@@ -540,15 +540,23 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
 _PLACED_TASK_STATES = frozenset({TaskState.ASSIGNED, TaskState.BUILDING, TaskState.RUNNING})
 
 
+def _task_is_placed(task: TaskStatus) -> bool:
+    if task.state not in _PLACED_TASK_STATES:
+        return False
+    if task.state is TaskState.RUNNING:
+        return True
+    # Task worker_id can be a peer label, and earlier attempts retain placement details.
+    return any(
+        attempt.attempt_number == task.current_attempt_number and bool(attempt.worker_id or attempt.node_name)
+        for attempt in task.attempts
+    )
+
+
 def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: float) -> tuple[str, dict[str, str]]:
     """Wait for the serving job to register its endpoint.
 
-    ``timeout_seconds`` budgets server startup and counts only while a task of
-    the serving job is placed (assigned, building, or running); queue time is
-    bounded separately so a long scheduling wait cannot consume the startup
-    budget, and a preemption requeue resets the startup clock. Placement is
-    read from task state because Iris keeps a started job RUNNING while a
-    preempted task requeues.
+    ``timeout_seconds`` budgets server startup after placement. Queue time is
+    bounded separately, and requeue resets the startup clock.
     """
     ctx = iris_ctx()
     job_name = JobName.from_string(str(job.job_id))
@@ -558,9 +566,14 @@ def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: floa
         endpoints = ctx.client.list_endpoint_instances(endpoint_name)
         if endpoints:
             return endpoints[0].address, dict(endpoints[0].metadata)
-        if job.status().value in {"succeeded", "failed", "stopped"}:
+        job_state = job.status()
+        if job_state.value in {"succeeded", "failed", "stopped"}:
             raise RuntimeError(f"Inference job {job.job_id} finished before registering {endpoint_name!r}")
-        if any(task.state in _PLACED_TASK_STATES for task in ctx.client.list_tasks(job_name)):
+        placed = False
+        # Iris keeps the job RUNNING after a task requeues.
+        if job_state is JobStatus.RUNNING:
+            placed = any(_task_is_placed(task) for task in ctx.client.list_tasks(job_name))
+        if placed:
             if ready_deadline is None:
                 ready_deadline = Deadline.from_seconds(timeout_seconds)
             if ready_deadline.expired():

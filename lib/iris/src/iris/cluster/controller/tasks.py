@@ -139,14 +139,12 @@ def get_task_status(
         task_id.require_task()
     except ValueError as error:
         raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from error
-    task = read_task_with_attempts(dependencies.db, task_id)
-    if task is None:
-        raise ConnectError(Code.NOT_FOUND, f"Task {task_id} not found")
-
-    worker_id = task_worker_id(task)
-    task_proto = task_to_proto(task, worker_address=worker_address(dependencies.db, worker_id) if worker_id else "")
-    job_resources = None
     with dependencies.db.read_snapshot() as tx:
+        task = read_task_with_attempts(tx, task_id)
+        if task is None:
+            raise ConnectError(Code.NOT_FOUND, f"Task {task_id} not found")
+        worker_id = task_worker_id(task)
+        address = worker_address(tx, worker_id) if worker_id else ""
         job_config = tx.execute(
             select(
                 job_config_table.c.res_cpu_millicores,
@@ -156,6 +154,9 @@ def get_task_status(
                 job_config_table.c.task_image,
             ).where(job_config_table.c.job_id == task.job_id)
         ).first()
+
+    task_proto = task_to_proto(task, worker_address=address)
+    job_resources = None
     if job_config is not None:
         if (
             job_config.res_cpu_millicores
@@ -245,21 +246,19 @@ def kick_tasks(
     return controller_pb2.Controller.KickTasksResponse(results=results)
 
 
-def read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskWithAttempts | None:
-    with db.read_snapshot() as tx:
-        task_row = tx.execute(reads.task_detail_query().where(tasks_table.c.task_id == task_id)).first()
-        if task_row is None:
-            return None
-        attempt_rows = tx.execute(
-            reads.attempt_select()
-            .where(task_attempts_table.c.task_id == task_id)
-            .order_by(task_attempts_table.c.attempt_id.asc())
-        ).all()
+def read_task_with_attempts(tx: Tx, task_id: JobName) -> TaskWithAttempts | None:
+    task_row = tx.execute(reads.task_detail_query().where(tasks_table.c.task_id == task_id)).first()
+    if task_row is None:
+        return None
+    attempt_rows = tx.execute(
+        reads.attempt_select()
+        .where(task_attempts_table.c.task_id == task_id)
+        .order_by(task_attempts_table.c.attempt_id.asc())
+    ).all()
     return TaskWithAttempts.from_row(task_row, tuple(AttemptDetailRow.from_row(row) for row in attempt_rows))
 
 
 def tasks_for_listing(tx: Tx, *, job_id: JobName) -> list[TaskWithAttempts]:
-    job_task_ids = select(tasks_table.c.task_id).where(tasks_table.c.job_id == job_id)
     task_rows = tx.execute(
         reads.task_detail_query()
         .where(tasks_table.c.job_id == job_id)
@@ -275,27 +274,33 @@ def tasks_for_listing(tx: Tx, *, job_id: JobName) -> list[TaskWithAttempts]:
             )
         )
     ).all()
-    latest_failed = (
-        select(
-            task_attempts_table.c.task_id.label("task_id"),
-            func.max(task_attempts_table.c.attempt_id).label("attempt_id"),
+    failed_attempt_rows = []
+    # Attempt zero has no earlier failures to include in the bounded listing.
+    if any(row.current_attempt_id > 0 for row in task_rows):
+        retried_task_ids = select(tasks_table.c.task_id).where(
+            tasks_table.c.job_id == job_id, tasks_table.c.current_attempt_id > 0
         )
-        .where(
-            task_attempts_table.c.task_id.in_(job_task_ids),
-            task_attempts_table.c.state.in_(_LISTING_FAILURE_STATES),
-        )
-        .group_by(task_attempts_table.c.task_id, task_attempts_table.c.state)
-        .subquery()
-    )
-    failed_attempt_rows = tx.execute(
-        reads.attempt_select(
-            reads.ATTEMPTS_WITH_OUTPUT.join(
-                latest_failed,
-                (task_attempts_table.c.task_id == latest_failed.c.task_id)
-                & (task_attempts_table.c.attempt_id == latest_failed.c.attempt_id),
+        latest_failed = (
+            select(
+                task_attempts_table.c.task_id.label("task_id"),
+                func.max(task_attempts_table.c.attempt_id).label("attempt_id"),
             )
+            .where(
+                task_attempts_table.c.task_id.in_(retried_task_ids),
+                task_attempts_table.c.state.in_(_LISTING_FAILURE_STATES),
+            )
+            .group_by(task_attempts_table.c.task_id, task_attempts_table.c.state)
+            .subquery()
         )
-    ).all()
+        failed_attempt_rows = tx.execute(
+            reads.attempt_select(
+                reads.ATTEMPTS_WITH_OUTPUT.join(
+                    latest_failed,
+                    (task_attempts_table.c.task_id == latest_failed.c.task_id)
+                    & (task_attempts_table.c.attempt_id == latest_failed.c.attempt_id),
+                )
+            )
+        ).all()
     attempts_by_task: dict[JobName, dict[int, AttemptDetailRow]] = {}
     for row in (*current_attempt_rows, *failed_attempt_rows):
         attempt = AttemptDetailRow.from_row(row)
@@ -378,9 +383,8 @@ def task_worker_id(task: TaskWithAttempts) -> WorkerId | None:
     return task.current_worker_id
 
 
-def worker_address(db: ControllerDB, worker_id: WorkerId) -> str:
-    with db.read_snapshot() as tx:
-        row = tx.execute(select(workers_table.c.address).where(workers_table.c.worker_id == worker_id)).first()
+def worker_address(tx: Tx, worker_id: WorkerId) -> str:
+    row = tx.execute(select(workers_table.c.address).where(workers_table.c.worker_id == worker_id)).first()
     return str(row.address) if row else ""
 
 

@@ -200,8 +200,8 @@ class StepRunner:
         scheduled in post-order before the step itself (deduped by
         ``output_path`` across the whole run). Already-succeeded deps
         (``STATUS_SUCCESS`` on disk) resolve via the cache check.
-        Concurrency is bounded by the thread pool (``max_concurrent``
-        workers, default 8).
+        Submit at most ``max_concurrent`` steps (default 8). Keep other ready
+        steps in graph order so newly ready dependents can use the next slot.
         """
         # Make step progress visible by default. Idempotent and non-clobbering:
         # skipped when the driver (or a wrapping app) already installed handlers.
@@ -280,7 +280,7 @@ class StepRunner:
                 if any(d in failed for d in step.dep_paths):
                     waiting.pop(i)
                     failed.add(path)
-                elif all(d in completed for d in step.dep_paths):
+                elif len(running) < max_workers and all(d in completed for d in step.dep_paths):
                     waiting.pop(i)
                     _do_launch(step)
                 else:
@@ -335,7 +335,7 @@ class StepRunner:
                     _confirm_pruned(step)
                 elif any(d in failed for d in step.dep_paths):
                     failed.add(path)
-                elif all(d in completed for d in step.dep_paths):
+                elif len(running) < max_workers and all(d in completed for d in step.dep_paths):
                     _do_launch(step)
                 else:
                     waiting.append(step)
@@ -488,13 +488,15 @@ def _submit_iris_job(
 
     ``raw_fn`` is wrapped to also persist its return value via
     :func:`~marin.execution.artifact.write_step_record` inside the submitted job, since Fray
-    jobs cannot return values back to the caller.
+    jobs cannot return values back to the caller. Steps that already write their own full
+    record (``writes_record``) skip that write.
     """
     identity = _step_record_identity(step)
 
     def _fn_with_artifact_save() -> None:
         result = raw_fn(output_path)
-        write_step_record(identity, output_path=output_path, result=result)
+        if not step.writes_record:
+            write_step_record(identity, output_path=output_path, result=result)
 
     job_name = sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")
     dependency_groups = dependency_groups_for_resources(resources, pip_dependency_groups)

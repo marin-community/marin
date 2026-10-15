@@ -19,6 +19,13 @@ embeddings collapses to one super-token: plain ``mean`` / ``max``, the
 multi-statistic ``meanmaxmin`` concat (captures spread, not just centroid, which
 a bag-of-words mean cannot), or a learned ``attn`` pool.
 
+A model with ``doc_embed_dim > 0`` is a fusion scorer: it also reads one
+document embedding per row (a 1024-d Harrier vector), projected and layer-normed
+to ``hidden_dim``. That vector enters twice: as a gated extra super-token the real
+tokens attend to when ``doc_embed_super_token`` is set, and always as a head-side
+skip whose zero-initialized weights make the forward exactly the text-only model
+at step 0.
+
 The model is written batched (leading ``B`` axis) with explicit einsums and a
 bf16 matmul cast so XLA emits dense MXU matmuls on TPU. ``PAD_ID`` (0) positions
 are masked everywhere: pooling ignores them, empty windows become inactive
@@ -54,6 +61,11 @@ class FastTransformerConfig:
     mlp_ratio: int = 4
     dropout: float = 0.1
     final_pool: str = "mean"
+    # Per-document embedding side input. 0 disables it; a non-zero dim makes
+    # ``doc_embed`` a required forward input, so a checkpoint that was trained with
+    # doc embeddings fails loudly when scored without them.
+    doc_embed_dim: int = 0
+    doc_embed_super_token: bool = False
 
     def __post_init__(self) -> None:
         if self.max_tokens % self.pool_window != 0:
@@ -64,6 +76,8 @@ class FastTransformerConfig:
             raise ValueError(f"final_pool={self.final_pool} not in {FINAL_POOLS}")
         if self.hidden_dim % self.num_heads != 0:
             raise ValueError(f"hidden_dim={self.hidden_dim} not divisible by num_heads={self.num_heads}")
+        if self.doc_embed_super_token and not self.doc_embed_dim:
+            raise ValueError("doc_embed_super_token requires doc_embed_dim > 0")
 
     @property
     def num_super_tokens(self) -> int:
@@ -169,6 +183,55 @@ class TransformerLayer(eqx.Module):
         return x
 
 
+class DocSuperToken(eqx.Module):
+    """A gated extra super-token carrying the document vector, which the real tokens attend to."""
+
+    type_embed: Array  # [D], marks the appended super-token
+    gate: Array  # scalar, zero-init so the token starts silent
+
+    def __init__(self, dim: int, *, key: PRNGKeyArray):
+        self.type_embed = jax.random.normal(key, (dim,)) * 0.02
+        self.gate = jnp.zeros(())
+
+    def __call__(self, doc_vec: Array) -> Array:
+        return self.gate * (doc_vec + self.type_embed)
+
+
+class DocFusion(eqx.Module):
+    """The document-embedding side input of a fusion scorer.
+
+    Projects and layer-norms one embedding per row to ``hidden_dim``, optionally
+    appends it as a :class:`DocSuperToken`, and adds it to the logit through a
+    zero-initialized head skip. Field order is the serialized leaf order of the
+    deployed checkpoints; keep it.
+    """
+
+    proj_w: Array  # [doc_embed_dim, D]
+    proj_b: Array  # [D]
+    ln_g: Array  # [D]
+    ln_b: Array  # [D]
+    head_w: Array  # [D, 1], zero-init so training starts as the base model
+    super_token: DocSuperToken | None
+
+    def __init__(self, doc_embed_dim: int, dim: int, super_token: bool, *, key: PRNGKeyArray):
+        kproj, ktype = jax.random.split(key)
+        self.proj_w = _glorot(kproj, (doc_embed_dim, dim))
+        self.proj_b = jnp.zeros(dim)
+        self.ln_g = jnp.ones(dim)
+        self.ln_b = jnp.zeros(dim)
+        # Zero-init head skip and super-token gate: the forward is exactly the
+        # base model at step 0, and the doc-embedding path fades in by gradient.
+        self.head_w = jnp.zeros((dim, 1))
+        self.super_token = DocSuperToken(dim, key=ktype) if super_token else None
+
+    def vector(self, doc_embed: Array) -> Array:
+        """The projected, layer-normed document vector, ``[b, D]``."""
+        return _layer_norm(_matmul(doc_embed, self.proj_w) + self.proj_b, self.ln_g, self.ln_b)
+
+    def head_logit(self, doc_vec: Array) -> Array:
+        return _matmul(doc_vec, self.head_w)[:, 0]
+
+
 class FastTransformer(eqx.Module):
     config: FastTransformerConfig = eqx.field(static=True)
     embed: Array  # [vocab, E]
@@ -181,6 +244,8 @@ class FastTransformer(eqx.Module):
     head_g: Array
     head_b: Array
     head_w: Array  # [D, 1]
+    # Per-document embedding side input (None unless config.doc_embed_dim > 0).
+    doc_fusion: DocFusion | None
 
     def __init__(self, config: FastTransformerConfig, *, key: PRNGKeyArray):
         ke, kpq, kpr, kpos, klayers, kfq, khead = jax.random.split(key, 7)
@@ -199,6 +264,15 @@ class FastTransformer(eqx.Module):
         self.head_g = jnp.ones(config.hidden_dim)
         self.head_b = jnp.zeros(config.hidden_dim)
         self.head_w = _glorot(khead, (config.hidden_dim, 1))
+        # Folded rather than added to the split so the base weight stream (and thus
+        # any retrain of an existing arm) is unchanged when doc embeddings are off.
+        self.doc_fusion = (
+            DocFusion(
+                config.doc_embed_dim, config.hidden_dim, config.doc_embed_super_token, key=jax.random.fold_in(key, 7)
+            )
+            if config.doc_embed_dim
+            else None
+        )
 
     def _pool_windows(self, emb: Array, mask: Array) -> tuple[Array, Array]:
         """Collapse windows of ``pool_window`` tokens. Returns (pooled, valid)."""
@@ -230,18 +304,44 @@ class FastTransformer(eqx.Module):
             pooled = jnp.where(valid[..., None] > 0, pooled, 0.0)
         return pooled, valid
 
-    def __call__(self, ids: Array, *, key: PRNGKeyArray | None = None, inference: bool = True) -> Array:
+    def __call__(
+        self,
+        ids: Array,
+        *,
+        doc_embed: Array | None = None,
+        key: PRNGKeyArray | None = None,
+        inference: bool = True,
+    ) -> Array:
         cfg = self.config
+        if bool(cfg.doc_embed_dim) != (doc_embed is not None):
+            raise ValueError(
+                f"model has doc_embed_dim={cfg.doc_embed_dim} but doc_embed "
+                f"{'is missing' if doc_embed is None else 'was passed'}; the two must agree"
+            )
         mask = (ids != PAD_ID).astype(jnp.float32)  # [b, t]
         emb = jnp.take(self.embed, ids, axis=0)  # [b, t, e]
 
         pooled, valid = self._pool_windows(emb, mask)  # [b, s, pool_out], [b, s]
         h = _matmul(pooled, self.proj_w) + self.proj_b + self.pos_embed  # [b, s, d]
 
+        doc_vec = None
+        if self.doc_fusion is not None and doc_embed is not None:  # agreement checked above
+            doc_vec = self.doc_fusion.vector(doc_embed)
+            if self.doc_fusion.super_token is not None:
+                token = self.doc_fusion.super_token(doc_vec)  # [b, d]
+                h = jnp.concatenate([h, token[:, None, :]], axis=1)  # [b, s+1, d]
+                valid = jnp.concatenate([valid, jnp.ones((valid.shape[0], 1))], axis=1)
+
         n = cfg.num_layers
         layer_keys = [None] * n if key is None else list(jax.random.split(key, n)) if n else []
         for layer, lk in zip(self.layers, layer_keys, strict=True):
             h = layer(h, valid, key=lk, inference=inference)
+
+        if self.doc_fusion is not None and self.doc_fusion.super_token is not None:
+            # The doc token is a conditioning input the real tokens attend to, not
+            # document content: keep it out of the final pool so the head-side skip
+            # stays the only direct readout of the embedding.
+            h, valid = h[:, : cfg.num_super_tokens], valid[:, : cfg.num_super_tokens]
 
         if cfg.final_pool == "mean":
             pooled_doc = (h * valid[..., None]).sum(axis=1) / jnp.maximum(valid.sum(axis=1, keepdims=True), 1.0)
@@ -252,7 +352,13 @@ class FastTransformer(eqx.Module):
             pooled_doc = jnp.einsum("bs,bsd->bd", attn, h)
 
         normed = _layer_norm(pooled_doc, self.head_g, self.head_b)
-        return _matmul(normed, self.head_w)[:, 0]  # [b]
+        logit = _matmul(normed, self.head_w)[:, 0]  # [b]
+        if self.doc_fusion is not None and doc_vec is not None:
+            # Head-side skip: the concat([pooled_doc, doc_vec]) head, decomposed into
+            # a sum of two linears so the base head (and its zero-init identity to
+            # the no-embedding model) is untouched.
+            logit = logit + self.doc_fusion.head_logit(doc_vec)
+        return logit
 
 
 def count_params(model: FastTransformer) -> int:

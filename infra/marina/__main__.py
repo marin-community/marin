@@ -8,18 +8,19 @@ codehealth review workbench (infra/codehealth) uses directly, and the group logi
 read the apps' schemas with.
 
 The stack owns what the apps share: the ``marina`` database on the ``marin-metadata`` Cloud
-SQL instance (one schema per Python app, all owned by the service account), the
+SQL instance (one schema and role per Python app), the
 ``marin-marina`` bucket the data root points at, the IAP-gated service, the public
-read-only applet service, and the Cloud Run runners declared by app manifests. A runner
-uses the service image and account, runs migrations first, and then executes its app
-commands. The public service admits only GET and HEAD routes for applets marked public.
+read-only applet service, and the Cloud Run capacity declared in runtime.toml. Runners
+execute modules from current Postgres packages. A registry migration and registration
+gate precedes service and runner updates. Application release owns schema migrations.
+The public service admits only GET and HEAD routes for applets marked public.
 IAM grants live in the ``marin`` stack (iac.gcp.marina).
 
 Vanity hosts: the apps are served from ``marina.oa.dev``. ``echo.oa.dev`` and
 ``evaldash.oa.dev`` map to the authenticated service. Legacy API paths route to the corresponding
 app without a redirect; pages redirect to ``marina.oa.dev/echo/`` or
 ``marina.oa.dev/evaldash/`` with their path, so old links keep resolving and one origin
-holds the checked-in apps. ``applets.marina.oa.dev`` maps to the service but the kernel
+holds the named apps. ``applets.marina.oa.dev`` maps to the service but the kernel
 exposes only dynamic applet routes on that host.
 ``public.applets.marina.oa.dev`` maps to the unauthenticated public applet reader.
 """
@@ -33,7 +34,9 @@ import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 from iac.gcp.marina import PUBLIC_APPLET_SERVICE
 from marina.database_setup import LOOM_DATABASE_USER
-from marina.manifest import JobRunner, discover_apps, job_runners
+from marina.host_bindings import normalize_hostname
+from marina.releases import require_current_main
+from marina.runtime import JobRunner, load_runtime_config
 
 PROJECT = "hai-gcp-models"
 REGION = "us-central1"
@@ -49,7 +52,7 @@ DATABASE_USER = SERVICE_ACCOUNT.removesuffix(".gserviceaccount.com")
 # The codehealth workbench's database and its writer (infra/codehealth/review_store.py).
 CODEHEALTH_DATABASE = "context"
 # Cloud SQL group login for people: members read any app's schema under their own Google
-# identity, without a database user each. ``marina migrate`` grants it.
+# identity, without a database user each. Named application releases preserve its grants.
 READER_GROUP = "eng-all@openathena.ai"
 # marinmirror bearer token: a GitHub PAT (read:org) of an Open-Athena member.
 MARINMIRROR_TOKEN_SECRET = "marinmirror-token"
@@ -60,7 +63,7 @@ MARINA_HOST = "marina.oa.dev"
 APPLET_HOST = "applets.marina.oa.dev"
 PUBLIC_APPLET_HOST = "public.applets.marina.oa.dev"
 GRANTS_SCRIPT = Path(__file__).parent / "database_grants.py"
-APPS_DIR = Path(__file__).parent / "apps"
+RUNTIME_CONFIG = load_runtime_config(Path(__file__).parent / "runtime.toml")
 DATABASE_SETUP_SCRIPT = Path(__file__).parent / "src" / "marina" / "database_setup.py"
 
 DATABASE_ENV = {"CLOUDSQL_CONNECTION": CONNECTION_NAME, "PGDATABASE": DATABASE, "PGUSER": DATABASE_USER}
@@ -121,10 +124,16 @@ def job_template(
 
 
 def main() -> None:
+    if pulumi.get_stack() == "marin-marina" and not pulumi.runtime.is_dry_run():
+        require_current_main(Path(__file__).resolve().parents[2])
     config = pulumi.Config()
     applet_operators = config.get_object("applet_operators") or []
     if not isinstance(applet_operators, list) or not all(isinstance(item, str) for item in applet_operators):
         raise ValueError("marin-marina:applet_operators must be a list of user IDs")
+    applet_domains = config.get_object("applet_domains") or []
+    if not isinstance(applet_domains, list) or not all(isinstance(host, str) for host in applet_domains):
+        raise ValueError("marin-marina:applet_domains must be a list of host names")
+    applet_domains = [normalize_hostname(host) for host in applet_domains]
     gcp_provider = gcp.Provider("gcp", project=PROJECT)
     child = pulumi.ResourceOptions(provider=gcp_provider)
 
@@ -197,17 +206,12 @@ def main() -> None:
         opts=pulumi.ResourceOptions(depends_on=[database_user, loom_user, reader_group, database, codehealth_database]),
     )
 
-    runners = job_runners(discover_apps(APPS_DIR))
-    if not runners:
-        raise ValueError("Marina requires at least one app-declared runner")
+    runners = RUNTIME_CONFIG.runners
     deploy_runner = max(runners, key=lambda runner: runner.timeout)
-    runner_env: dict[str, str] = {}
-    for runner in runners:
-        resource_name = f"projects/{PROJECT}/locations/{REGION}/jobs/{SERVICE}-{runner.name}"
-        for bound in runner.jobs:
-            previous = runner_env.setdefault(bound.resource_env, resource_name)
-            if previous != resource_name:
-                raise ValueError(f"job resource environment name {bound.resource_env!r} is ambiguous")
+    runner_env = {
+        variable: f"projects/{PROJECT}/locations/{REGION}/jobs/{SERVICE}-{runner}"
+        for variable, runner in RUNTIME_CONFIG.job_triggers.items()
+    }
     registered_secrets = {
         secret.name: secret
         for secret in (
@@ -216,32 +220,47 @@ def main() -> None:
         )
     }
 
-    # Every scheduled execution migrates before running app code. The deploy executes the
-    # same runner in migration-only mode, so a scheduler tick against the new image is also
-    # safe while the service revision waits for its schema.
+    # Gate both web traffic and scheduled workers before replacing either old image.
     def runners_before_deploy(image_ref: pulumi.Output[str]) -> tuple[pulumi.Resource, ...]:
-        resources: dict[str, gcp.cloudrunv2.Job] = {}
-        for runner in runners:
-            resources[runner.name] = scheduled_runner(
+        deploy_job_name = f"{SERVICE}-registry-migrate"
+        migration_job = gcp.cloudrunv2.Job(
+            "registry-migration-runner",
+            name=deploy_job_name,
+            project=PROJECT,
+            location=REGION,
+            deletion_protection=False,
+            template=gcp.cloudrunv2.JobTemplateArgs(
+                template=job_template(
+                    image_ref,
+                    ["marina", "migrate", "--require-apps"],
+                    DATABASE_ENV,
+                    (),
+                    cpu="1",
+                    memory="1Gi",
+                    timeout=deploy_runner.timeout,
+                )
+            ),
+            opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(depends_on=[database_user, grants])),
+        )
+        run = command.local.Command(
+            "run-migrate",
+            create=(f"gcloud run jobs execute {deploy_job_name} --project {PROJECT} --region {REGION} --wait "),
+            triggers=[image_ref],
+            opts=pulumi.ResourceOptions(depends_on=[migration_job]),
+        )
+        resources = tuple(
+            scheduled_runner(
                 runner,
                 image_ref,
                 registered_secrets,
                 child,
                 database_user,
                 grants,
+                run,
             )
-
-        deploy_job_name = f"{SERVICE}-{deploy_runner.name}"
-        run = command.local.Command(
-            "run-migrate",
-            create=(
-                f"gcloud run jobs execute {deploy_job_name} --project {PROJECT} --region {REGION} --wait "
-                f"--args=marina,run,{deploy_runner.name},--reader,{READER_GROUP},--migrate-only"
-            ),
-            triggers=[image_ref],
-            opts=pulumi.ResourceOptions(depends_on=[resources[deploy_runner.name]]),
+            for runner in runners
         )
-        return (*resources.values(), run)
+        return (migration_job, run, *resources)
 
     service = CloudRunService(
         "service",
@@ -259,6 +278,7 @@ def main() -> None:
                 "MARINA_APPLET_ORIGIN": f"https://{APPLET_HOST}",
                 "MARINA_PUBLIC_APPLET_ORIGIN": f"https://{PUBLIC_APPLET_HOST}",
                 "MARINA_APPLET_OPERATORS": ",".join(applet_operators),
+                "MARINA_APPLET_DOMAINS": ",".join(applet_domains),
                 "MARINA_AGENT_ORIGIN": "https://loom.oa.dev",
                 **DATABASE_ENV,
                 **runner_env,
@@ -365,6 +385,7 @@ def main() -> None:
             APPLET_HOST: (SERVICE, service),
             PUBLIC_APPLET_HOST: (PUBLIC_APPLET_SERVICE, public_applet_service),
             **{host: (SERVICE, service) for host in HOST_APPS},
+            **{host: (SERVICE, service) for host in applet_domains},
         }
         for host, (route_name, route_service) in hosts.items():
             slug = host.split(".")[0]
@@ -403,9 +424,10 @@ def scheduled_runner(
     child: pulumi.ResourceOptions,
     database_user: pulumi.Resource,
     grants: pulumi.Resource,
+    registry_ready: pulumi.Resource,
 ) -> gcp.cloudrunv2.Job:
-    """Create one app-declared Cloud Run runner and its scheduler trigger."""
-    secret_names = sorted({secret for bound in runner.jobs for secret in bound.job.secrets})
+    """Create infrastructure capacity for released jobs and its scheduler trigger."""
+    secret_names = runner.secrets
     unknown = set(secret_names) - registered_secrets.keys()
     if unknown:
         raise ValueError(f"runner {runner.name!r} declares unknown secrets {sorted(unknown)}")
@@ -431,7 +453,12 @@ def scheduled_runner(
         opts=pulumi.ResourceOptions.merge(
             child,
             pulumi.ResourceOptions(
-                depends_on=[database_user, grants, *(resource for secret in secrets for resource in secret.wait_for)]
+                depends_on=[
+                    database_user,
+                    grants,
+                    registry_ready,
+                    *(resource for secret in secrets for resource in secret.wait_for),
+                ]
             ),
         ),
     )

@@ -1,24 +1,7 @@
-# Build context is the repository root; Dockerfile.dockerignore allowlists what is copied.
-FROM node:22-slim AS web
-WORKDIR /build
-COPY infra/marina/web web
-COPY infra/marina/apps apps
-# Every app with a web/ directory is built in place so its dist/ lands beside app.toml.
-# This stage has no Python, so it runs the conventional build rather than calling
-# `marina build`; an app whose app.toml asks for anything else fails here instead of
-# shipping a dist/ that does not match what `marina build` produces.
-RUN set -e; \
-    for dir in apps/*/web; do \
-      app="$(dirname "$dir")"; \
-      grep -qxF 'build_command = "cd web && npm ci && npm run build"' "$app/app.toml" \
-        || { echo "$app/app.toml declares a build_command this image cannot run" >&2; exit 1; }; \
-      (cd "$dir" && npm ci && npm run build); \
-    done \
-    && rm -rf apps/*/web/node_modules
-
+# Build context is the repository root; application packages are released separately.
 FROM python:3.12-slim AS runtime
 ENV PYTHONUNBUFFERED=1
-COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /bin/uv
 # The workspace lives at /app: rigging resolves the repo-root config/ directory by walking up
 # from the working directory to the workspace pyproject, so the process runs from here.
 WORKDIR /app
@@ -61,16 +44,7 @@ COPY lib/zephyr/src lib/zephyr/src
 COPY infra/marina/src infra/marina/src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --package marin-marina
-COPY --from=web /build/apps /app/apps
-ENV MARINA_APPS_DIR=/app/apps
-# App packages that declare jobs are importable by name for their commands.
-# A backend/ package is loaded by the kernel under a private name when its URL
-# name conflicts with an installed package.
-ENV PYTHONPATH=/app/apps
-# Echo's two ONNX models are baked in rather than fetched on demand: Cloud Run keeps no
-# disk between instances, so every cold start would otherwise download them before it
-# could answer the first search. FASTEMBED_CACHE_PATH keeps them out of /tmp, which is
-# memory on Cloud Run.
+COPY infra/marina/runtime.toml infra/marina/runtime.toml
 ENV FASTEMBED_CACHE_PATH=/app/models
-RUN python -c "from echo import models; loaded = models.SearchModels(); loaded.embedding(); loaded.reranker()"
+RUN python -m marina.model_cache
 CMD ["marina", "serve"]

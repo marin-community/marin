@@ -46,6 +46,13 @@ def _run_cli(args: list[str], *, config: IrisClusterConfig | None = None):
     )
 
 
+def test_job_run_rejects_deprecated_gvisor_choice():
+    result = _run_cli(["--container-profile", "CONTAINER_PROFILE_GVISOR"])
+    assert result.exit_code == 2
+    assert "Invalid value for '--container-profile'" in result.output
+    assert "container_profile_sandbox" in result.output
+
+
 def test_validate_region_zone_valid_region(recorded_job_submissions):
     config = _make_config_with_zones(["us-central2-b", "europe-west4-a"])
     result = _run_cli(["--region", "us-central2"], config=config)

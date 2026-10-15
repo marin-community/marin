@@ -36,6 +36,7 @@ from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from urllib.parse import unquote
 
+from rigging.auth import RefreshingTokenProvider, TokenProvider
 from rigging.server_auth import (
     ANONYMOUS_ADMIN,
     IAP_ISSUER,
@@ -57,6 +58,7 @@ from rigging.token_authority import (
 )
 
 from iris.cluster.config import AuthConfig, PeerConfig
+from iris.cluster.types import JobName
 from iris.rpc.auth import FEDERATION_PEER_ROLE, SESSION_COOKIE, authorize_resource_owner
 
 logger = logging.getLogger(__name__)
@@ -73,21 +75,24 @@ DEFAULT_USER_ROLE = "user"
 WORKER_ROLE = "worker"
 # Role granted to a config-listed admin.
 ADMIN_ROLE = "admin"
+# Role of the token a task's own client presents. Its subject is the job's owner,
+# so owner-gated RPCs (child jobs, exec, endpoints) behave as for that user; it
+# never carries admin authority.
+TASK_ROLE = "task"
 
 # TTL for the control-plane admin token LocalCluster mints in-process for its
 # auto-login (aud="iris"). Short-lived and non-refreshable. Deployed clusters
 # authenticate users via IAP and mint no user tokens, so this is dev-only.
 SESSION_TOKEN_TTL_SECONDS = 3600  # 1 hour
-# Worker machine identity (aud="iris", role="worker"). This is a SHARED,
-# cluster-lived credential: one token is minted per controller start and injected
-# into every worker, with no refresh path, so it must outlive any single job. It
-# is not revocable. KNOWN RISK (accepted for now, hardening tracked as follow-up):
-# a leaked worker token lets an attacker register a rogue worker — and thus be
-# dispatched tasks — fleet-wide until it expires; the only kill switch is rotating
-# the cluster signing key, which re-auths every worker. Proper fixes (per-worker
-# short-lived tokens, or a worker-credential rotation lever) are in the auth design
-# doc's follow-ups.
+# Worker machine identity (aud="iris", role="worker"). Workers renew while
+# their credential remains valid; the controller also renews its bootstrap
+# credential before provisioning. Tokens are not individually revocable: a
+# stolen worker credential can renew until the cluster signing key is rotated.
 WORKER_TOKEN_TTL_SECONDS = 86400 * 30  # 30 days
+# Task token lifetime. Not revocable; a fresh token is minted for each dispatch,
+# so a retried or rescheduled attempt starts a new lifetime. It must outlive one
+# attempt of a long training task.
+TASK_TOKEN_TTL_SECONDS = 86400 * 30  # 30 days
 
 # Provider name when trusted_cidrs alone enables auth: in-network callers get
 # identity by location, everything else needs a token.
@@ -198,13 +203,16 @@ class NativeProxyIdentityAuthenticator:
         user_id = payload.get("user_id")
         role = payload.get("role")
         audience = payload.get("audience")
+        job_id = payload.get("job_id")
         if not isinstance(user_id, str) or not user_id or not isinstance(role, str) or not role:
             return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
         if audience is not None and not isinstance(audience, str):
             return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
+        if job_id is not None and not isinstance(job_id, str):
+            return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
         return AuthOutcome(
             AuthDecision.AUTHENTICATED,
-            identity=VerifiedIdentity(user_id=user_id, role=role, audience=audience),
+            identity=VerifiedIdentity(user_id=user_id, role=role, audience=audience, job_id=job_id),
         )
 
 
@@ -276,6 +284,23 @@ class JwtTokenManager:
             {"sub": user_id, "role": role, "jti": key_id},
             audience=CONTROL_PLANE_AUDIENCE,
             ttl_seconds=ttl_seconds,
+        )
+
+    def create_task_token(self, job_id: JobName) -> str:
+        """Mint the control-plane token a task of ``job_id`` presents as its owner.
+
+        The ``job_id`` claim binds the token to ``job_id``, so the controller lets
+        it pass the parent's elevated band or profile only to ``job_id``'s children.
+        """
+        return self._signer.mint(
+            {
+                "sub": job_id.user,
+                "role": TASK_ROLE,
+                "jti": f"iris_task_{secrets.token_urlsafe(8)}",
+                "job_id": job_id.to_wire(),
+            },
+            audience=CONTROL_PLANE_AUDIENCE,
+            ttl_seconds=TASK_TOKEN_TTL_SECONDS,
         )
 
     def create_endpoint_token(
@@ -353,6 +378,7 @@ class JwtTokenManager:
             user_id=claims.sub,
             role=claims.claims.get("role", "user"),
             audience=endpoint,
+            job_id=None if is_proxy_scope else claims.claims.get("job_id"),
         )
 
 
@@ -479,7 +505,7 @@ class ControllerAuth:
 
     verifier: TokenVerifier | None = None
     provider: str | None = None
-    worker_token: str | None = None
+    worker_token_provider: TokenProvider | None = None
     jwt_manager: JwtTokenManager | None = None
     optional: bool = False
     # Verifies IAP's signed-header assertion to authenticate tokenless callers
@@ -498,6 +524,10 @@ class ControllerAuth:
     allowed_submitters: tuple[str, ...] = ()
     iap_audience: str | None = None
     federation_keys: dict[str, str] = dataclasses.field(default_factory=dict)
+
+    @property
+    def worker_token(self) -> str | None:
+        return self.worker_token_provider.get_token() if self.worker_token_provider is not None else None
 
 
 def authorize_owner_if_configured(auth: ControllerAuth, owner: str) -> None:
@@ -629,7 +659,9 @@ def create_controller_auth(
         signing_key_pem=signing_key_pem,
         previous_public_keys=previous_public_keys,
     )
-    worker_token = _create_worker_jwt(jwt_mgr)
+    worker_token_provider = RefreshingTokenProvider(
+        mint_worker_token(jwt_mgr), lambda _token: mint_worker_token(jwt_mgr)
+    )
 
     # Inbound federation trust: a dedicated verifier over the configured peer keys.
     # When present, the request verifier accepts both control-plane tokens and (via
@@ -647,7 +679,7 @@ def create_controller_auth(
         logger.info("Authentication disabled — null-auth mode (workers use JWT)")
         return ControllerAuth(
             verifier=request_verifier,
-            worker_token=worker_token,
+            worker_token_provider=worker_token_provider,
             jwt_manager=jwt_mgr,
             role_policy=_build_role_policy(auth_config, None),
             allowed_submitters=allowed_submitters,
@@ -684,7 +716,7 @@ def create_controller_auth(
     return ControllerAuth(
         verifier=request_verifier,
         provider=provider,
-        worker_token=worker_token,
+        worker_token_provider=worker_token_provider,
         jwt_manager=jwt_mgr,
         optional=optional,
         iap_assertion_verifier=iap_assertion_verifier,
@@ -696,14 +728,13 @@ def create_controller_auth(
     )
 
 
-def _create_worker_jwt(jwt_mgr: JwtTokenManager) -> str:
-    """Mint the worker-identity JWT on each controller start.
+def mint_worker_token(jwt_mgr: JwtTokenManager) -> str:
+    """Mint a worker-identity JWT for bootstrap or authenticated renewal.
 
-    A fresh ``jti`` is minted per start for log correlation only; it is never
+    A fresh ``jti`` is minted for log correlation only; it is never
     persisted or revocable. The worker role is known from the :class:`RolePolicy`
     (``WORKER_USER`` -> ``worker``), so no DB row is created. Old worker tokens
-    simply age out at their TTL, so in-flight workers finish gracefully with their
-    existing credentials.
+    expire at their TTL; workers must renew while their credential is valid.
     """
     key_id = f"iris_k_worker_{secrets.token_hex(8)}"
     jwt_token = jwt_mgr.create_token(WORKER_USER, WORKER_ROLE, key_id, ttl_seconds=WORKER_TOKEN_TTL_SECONDS)

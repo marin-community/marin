@@ -18,6 +18,13 @@ from rigging.credentials import iap_edge_provider
 
 DEFAULT_MARINA_URL = "https://marina.oa.dev"
 DEFAULT_TIMEOUT = 60
+LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost"})
+
+
+class MarinaRequestError(RuntimeError):
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(f"Marina request failed ({status_code}): {detail}")
+        self.status_code = status_code
 
 
 def _cached_login_provider() -> TokenProvider | None:
@@ -58,7 +65,7 @@ def marina_request(
     if payload is not None:
         headers["Content-Type"] = "application/gzip"
     host = urlparse(service_url).hostname
-    if host not in {"127.0.0.1", "localhost"}:
+    if host not in LOCAL_HOSTS:
         headers["Authorization"] = f"Bearer {bearer_token()}"
     response = requests.request(
         method,
@@ -75,7 +82,7 @@ def marina_request(
             if "json" in response.headers.get("content-type", "")
             else response.text
         )
-        raise RuntimeError(f"Marina request failed ({response.status_code}): {detail}")
+        raise MarinaRequestError(response.status_code, str(detail))
     if response.status_code == 204:
         return None
     return response.json()

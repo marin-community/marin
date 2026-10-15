@@ -143,13 +143,11 @@ result to the next request as structured `tool_calls` and `role: "tool"`
 messages. The same template then renders the result in its trained format.
 The server derives schemas from the function syntax without executing the
 source. Pydantic validates arguments before each call and the return value
-afterward. Each call runs in a fresh ShellSim environment that cannot access
-the host filesystem, processes, network, environment variables, or clock. The
-simulation is limited to 10 million CPU ticks, 64 MiB of memory, 4 MiB of disk,
-and 1 MiB of output. An outer worker also enforces a 10-second wall timeout,
-and source is limited to 64 KiB. ShellSim implements a source-compatible subset
-of Python rather than full CPython, so unsupported modules and language features
-fail the tool call.
+afterward. Calls run in isolated ShellSim environments with CPython and NumPy,
+prepared from the server-configured ports catalog before startup. Python tools
+have 10 billion fuel units, 1 GiB memory, 512 MiB disk, 1 MiB output and a
+10-second worker timeout; source is limited to 64 KiB. Guest code has no ambient
+host filesystem, process, network, environment or clock access.
 
 Within one user turn, each model response that contains one or more calls counts
 as one tool round. **Max tool rounds** in **More settings** controls the number
@@ -205,8 +203,8 @@ limited to 32 commits and approximately 4 MiB of text changes; older commits
 are dropped first when necessary. Binary files and common generated directories
 such as `node_modules`, `.venv`, `target`, and `__pycache__` are skipped. A
 conversation may replay at most 32 commands totaling 128 KiB; each command is
-limited to 16 KiB. Each simulation is limited to 50 million CPU ticks, 64 MiB
-of memory, 16 MiB of disk, and 2 MiB of output, with the same 10-second outer
+limited to 16 KiB. Each simulation has 4 billion fuel units, 1 GiB memory,
+512 MiB disk and 2 MiB output, with the same 10-second outer
 worker timeout used for custom Python tools.
 
 After the endpoint becomes ready, `marin-serve iris` prints a capability URL.

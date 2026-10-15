@@ -123,6 +123,7 @@ class PendingDispatchRow:
     # Requested container security profile (job_config). UNSPECIFIED(0) resolves
     # to DEFAULT when the backend applies it.
     container_profile: int  # job_pb2.ContainerProfile
+    egress_policy: int  # job_pb2.EgressPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -650,6 +651,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             job_config_table.c.priority_band,
             job_config_table.c.task_image,
             job_config_table.c.container_profile,
+            job_config_table.c.egress_policy,
             job_config_table.c.submit_argv_json,
             job_config_table.c.fail_if_exists,
         )
@@ -1702,6 +1704,7 @@ PENDING_DISPATCH_COLS = (
     # Current stamped task band; see PendingDispatchRow.priority_band.
     local_tasks.c.priority_band,
     job_config_table.c.container_profile,
+    job_config_table.c.egress_policy,
 )
 
 
@@ -1730,6 +1733,7 @@ def pending_dispatch_row(r) -> PendingDispatchRow:
         coscheduling_group_by=str(r.coscheduling_group_by),
         priority_band=int(r.priority_band),
         container_profile=int(r.container_profile),
+        egress_policy=int(r.egress_policy),
     )
 
 

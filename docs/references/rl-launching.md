@@ -43,20 +43,31 @@ Outside Iris, `--run` submits a 4-CPU coordinator with 16 GB RAM and 64 GB disk.
 `IrisSkyRLExecution` sets the coordinator deadline for its workload. CoreWeave coordinators route
 through the Marin hub to their target cluster. The coordinator runs the same module and arguments
 inside Iris, where `--run` executes the artifact graph. This preserves one construction and
-validation path. The submitter forwards `DAYTONA_API_KEY`, `HF_TOKEN`, and `WANDB_API_KEY` when they
-are present in its environment.
+validation path. The submitter forwards `DAYTONA_API_KEY`, `DAYTONA_RL_API_KEY`,
+`DAYTONA_EVAL_API_KEY`, `HF_TOKEN`, and `WANDB_API_KEY` when they
+are present in its environment. The RL and eval keys let rollout and evaluation
+workloads use separate Daytona credentials.
 
 ## One Hydra launch document
 
 Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no parallel request
 envelope and no internal command-line rendering layer.
 
+The runtime executes tasks through `TaskSession` and sends token requests to model engines.
+Harbor tasks use the Shellbox session. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
+See [task rollouts](task-rollouts.md) for task execution and backend limits.
+
+The launcher uses the frozen project in `config/external/MarinSkyRL` in an isolated environment.
+This project supplies the pinned SkyRL revision, published Rigging package, and platform wheel sources.
+The launch document records that revision in `runtime.launcher_commit`.
+Outside a Marin checkout, the launcher raises `RuntimeError` before submission.
+
 ```text
 Marin experiment
   SkyRLSpec + IrisSkyRLExecution + resolved artifacts
                          |
                          v
-  source launch.yaml: run, runtime, iris, ingress, ray,
+  source launch.yaml: run, runtime, iris, ray,
                       artifacts, inputs, skyrl recipe
                          |
                          v

@@ -1,232 +1,154 @@
 ---
 name: marina-applet
-description: Build, validate, publish, update, inspect, query, roll back, or archive a dynamic Marina applet. Use for Artifact+-style web apps that should run behind Marina authentication, carry small bundled assets or data, use an applet-owned Postgres schema, or add a trusted Python ASGI backend without a Marina image deployment.
+description: Build, validate, release, inspect, query, roll back, or archive a Marina application. Maintained source apps and uploaded applets use Postgres packages and marina release, independently of Marina runtime deployment.
 ---
 
-# Work with Marina applets
+# Work with Marina applications
 
-Read the `Publishing an applet` section of `infra/marina/README.md` before
-changing an applet or publishing one. Use
-`infra/marina/examples/problem-set-applet/` as the minimal working package and
-backend reference. Treat those files and `marina --help` as authoritative when
-this skill disagrees with the checkout.
+Read [Building Marina apps](../../../docs/references/marina.md) and the relevant
+sections of [the Marina reference](../../../infra/marina/README.md). Treat source,
+CLI help and those docs as authoritative. Use the existing examples as package
+references.
 
-## Choose the applet shape
+Every application uses `marina release`. Source under `infra/marina/apps/` and
+`infra/marina/applets/` has the same lifecycle. Marina image deployment and startup
+never publish packages, select application revisions, or run application migrations.
+Do not restart Marina to release an application.
 
-Ensure the built package contains:
+## Source and package
 
-```text
-my-applet/
-  applet.toml
-  dist/index.html
-```
+Use `applet.toml`, `dist/index.html`, optional browser assets, and optional Python
+modules. A declared `build_command` can generate `dist/`. Maintained sources declare
+the stable `applet_id` and optional shared build inputs in `source_paths` within
+the same `applet.toml`, as the named apps do for `infra/marina/web`. Keep existing UUIDs,
+names, database schemas and data locations when updating an application.
 
-Add browser assets below `dist/`. Use only relative asset, API, and query URLs
-so both `/a/<uuid>/` and `/a/<uuid>/v/<revision>/` work.
+Prefer plain HTML/JavaScript for small reports and Vue/Vite for substantial client
+state. UUID applets need relative asset/API URLs, Vite `base: "./"`, and hash routing.
+Named applications may retain their existing route bases. Bundle dependencies;
+executable inline scripts and third-party script CDNs are blocked.
 
-The source directory may omit `dist/index.html` only when `applet.toml` has a
-`build_command` that creates it before packaging.
+An optional `python_entrypoint = "server.app:create_api"` names a factory returning
+an ASGI app. Root modules and `backend/` modules also work. Return
+`registered_api(api)` to expose annotated FastAPI operations through MCP. Use relative
+intra-application imports and installed shared libraries. Dependencies must already
+exist in Marina's base environment.
 
-Use plain HTML and JavaScript for a small single-view applet. Use Vue with Vite
-when the applet needs multiple views, reusable components, or substantial
-client state. For Vue applets:
+Use `services.engine()` for role-scoped database access. An optional
+`migrate(connection)` runs inside the release transaction; it must not commit,
+install extensions, perform remote scans or start workers. Keep schema changes
+compatible with retained revisions and in-flight requests/jobs.
 
-- Set Vite's `base` to `"./"` so built asset URLs remain relative.
-- Use `createWebHashHistory()` when the app has client-side routes. This avoids
-  hard-coding an applet UUID or revision into the router base.
-- Use relative backend calls such as `fetch("api/results")` and
-  `fetch("query", ...)`; do not start applet-owned URLs with `/`.
-- Bundle dependencies into `dist/`. Marina's content security policy does not
-  allow scripts loaded from a third-party CDN.
+Python packages are trusted plugins sharing Marina's process and service identity.
+They have no security sandbox, reliable lifespan hooks or persistent local disk.
+Separate dependencies, credentials or failure isolation require a separate service.
 
-Keep the source `index.html`, `package.json`, the Vite configuration, and `src/`
-beside `applet.toml`. They are local build inputs and are not uploaded. A
-typical manifest uses `build_command = "npm ci && npm run build"`. Marina runs
-that command before every publish by default. Use `--no-build` only when the
-existing `dist/` has already been built and validated.
+## Capabilities
 
-Use the applet's implicit Postgres schema for mutable or queryable data. Do not
-create or attach a separate database. Load simple scalar tables with the CLI,
-or add `server/` when the applet needs parameterized business logic, custom
-responses, or server-side integration.
+A named app declares `name` in its manifest and uses `/<name>/`. First named
+registration requires an operator. Data URLs, scheduled jobs and Loom agent metadata
+are available to named apps; the server checks data prefixes, runner capacity and
+per-application secret permissions against infrastructure-owned `runtime.toml`.
+Never expand those permissions merely to make a test or release pass.
 
-An optional backend has this shape:
+Job modules export `main()` and execute it under the usual `__main__` guard. Use
+`marina.jobs.job_engine()` for the selected package's role/schema. Runners snapshot
+and materialize packages before starting children, so a release does not replace
+running job code. New runner capacity or secret access is an infrastructure change.
 
-```text
-my-applet/
-  server/__init__.py
-  server/app.py
-```
-
-Declare it in `applet.toml`:
-
-```toml
-title = "Problem sets"
-description = "Browse generated math problem sets."
-python_entrypoint = "server.app:create_api"
-```
-
-Export `create_api(services) -> ASGIApp`. Use `services.engine()` for an engine
-configured with the applet role and schema. Optionally export
-`migrate(connection) -> None`; it runs inside the publish transaction before
-the new revision becomes current. Keep schema changes compatible with retained
-revisions.
-
-Use `get_verified_identity()` from `rigging.server_auth` when a backend needs
-the authenticated caller. Import only packages already declared in
-`infra/marina/pyproject.toml`. Shared Marin helpers must come from installed
-packages under `lib/*`; do not import checked-in apps under `infra/marina/apps`.
-
-Treat Python applets as trusted plugins. They run inside Marina with its
-filesystem, network, credentials, and process identity. Do not publish code
-from an untrusted source or depend on lifespan events, background workers, or
-local filesystem persistence.
-
-## Build and validate
-
-Inspect existing Marina and repository helpers before introducing a framework
-or dependency. Build frontend output locally; Marina does not install applet
-dependencies. `marina publish` runs a declared `build_command` before packaging
-by default, and the command may create `dist/index.html`. Pass `--no-build` to
-reuse an existing validated `dist/`.
-
-Validate the package and import a declared backend from the current Marina
-environment without changing server state:
+## Validate and preview
 
 ```bash
-uv run marina validate my-applet
+uv run marina validate my-app
+uv run marina release my-app --dry-run --json
+uv run marina release my-app --local --json
 ```
 
-The report names its completed checks and omissions. It does not execute the
-backend factory, run its migration, connect to Postgres, or start a browser.
-Use package-only validation when only the upload archive matters:
+Release builds from empty frontend output and restores previous local output after
+packaging, including on failure. Validation imports backend and job modules but
+never invokes factories/migrations, connects to Postgres or drives the browser.
+Exercise those paths in the local stack. Stop it with Ctrl-C and verify cleanup.
+
+`release --local` starts disposable Postgres, explicitly releases the package and
+prints a revision URL. Omitting `--url` from data commands still targets production.
+Use the printed UUID/origin for local data loading and queries.
+
+For source-app or kernel changes, run focused tests and the affected safe suite.
+Browser journeys use an explicitly installed Postgres-backed preview:
 
 ```bash
-uv run marina publish my-applet --dry-run
+uv run marina build
+uv run marina dev
+uv run marina journey evaldash
+uv run pytest infra/marina
 ```
 
-Dry-run reports backend imports as unchecked. Both commands reject executable
-inline scripts under Marina's `script-src 'self'` policy. Load JavaScript from
-relative packaged files.
+## Release
 
-Respect the current package limits: 25 MiB total, 8 MiB per file, and 2,000
-regular files. Keep large data out of the package until Marina gains an object
-store path.
+Treat a request to build or update an application as authorization to release it
+and perform the requested schema/data writes. Honor requests for PR-only work,
+local previews, drafts or review before release. Rollback, archive and unrelated
+data mutations still require authorization within the request.
 
-Run the complete local stack with:
+For maintained source, use a clean checkout at current remote main by default:
 
 ```bash
-uv run marina publish my-applet --local
+uv run marina release-status my-app --json
+uv run marina applets versions UUID --json
+uv run marina release my-app --base-version CURRENT_VERSION --json
 ```
 
-This starts disposable Postgres in Docker, installs Marina's privileged applet
-provisioning, migrates the registry, starts Marina on a free loopback port,
-publishes the applet with its migration, and prints its immutable revision URL.
-It requires a running Docker daemon, binds only to loopback, and does not enable
-IAP authentication. It stays in the foreground. After validation, send Ctrl-C
-and verify that both Marina and the container stop. If `uv` cannot write its
-cache in a restricted checkout, use the current checkout's `.venv/bin/marina`
-executable instead of installing or synchronizing dependencies.
+Use `--allow-dirty` to explicitly release branch or uncommitted source without
+verified Git provenance; `release-status` then reports `unrecorded` from a clean checkout. Use `--local`
+for a disposable preview.
 
-To preserve the disposable Postgres stack across edits, leave the first
-`publish --local --json` process running. From a second terminal, publish the
-edit with this command, using each returned revision as the next base version:
+Use zero for a new declared UUID. Version conflicts mean the live selection changed;
+inspect the new revision before retrying. Do not blindly reread the version and
+retry stale source. Release preserves the access mode unless explicitly changed.
+The default origin is `https://marina.oa.dev`, authenticated through cached Marin
+login or ambient IAP credentials.
+
+An ad hoc applet without a declared `applet_id` or Git repository uses the same command:
 
 ```bash
-uv run marina publish my-applet --url <printed-origin> \
-  --update <printed-id> --base-version <current-version>
+uv run marina release my-report --base-version 0 --json
+uv run marina release my-report --id RETURNED_UUID --base-version CURRENT_VERSION
 ```
 
-Open the printed immutable revision URL. Exercise the frontend, every backend
-route, caller identity when used, and at least one schema read/write path. For
-Marina code changes, run the focused tests and then:
+Record the first result's UUID and immutable revision URL. Maintained sources should
+declare `applet_id` in `applet.toml`. A merge or runtime restart does not release source or load
+application datasets. `release-status` compares recorded app/shared-input trees;
+runtime dependencies also matter.
+
+Atlas's code release and catalog load are separate. Follow
+[its loader guide](../../../docs/references/rl-data-atlas.md). Never replace a serving
+catalog with partial data, and never load remote data in a factory or migration.
+
+## Data and lifecycle
+
+Use Postgres for mutable state and reusable serving catalogs; keep large payloads
+in object storage. Key caches by source version/query and record freshness. Load
+remote data separately and select complete snapshots atomically.
 
 ```bash
-cd infra/marina && uv run pytest
+uv run marina applets table load UUID observations rows.parquet --url ORIGIN
+uv run marina applets sql UUID 'SELECT * FROM observations LIMIT 20' --url ORIGIN
+uv run marina applets versions UUID --json
+uv run marina applets rollback UUID RETAINED_REVISION
+uv run marina applets archive UUID
 ```
 
-## Use applet data
+Repeated table loads append. `--replace` drops before separate insert requests;
+use staged loading for live catalogs. SQL/query response limits and role-control
+restrictions are documented in the reference. Rollback selects a retained package
+and does not reverse schema migrations. The registry retains the current revision
+and four other recent revisions.
 
-The applet role owns `applet_<uuid-without-hyphens>` and inherits read access to
-checked-in and other applet schemas. It can write only its own schema. Prefer
-the CLI for small datasets:
+Unnamed applets default to private. Public mode is only for trusted GET/HEAD
+handlers and data intended for unrestricted disclosure; Marina cannot prove GET
+handlers have no side effects. Named apps stay private.
 
-```bash
-uv run marina applets table load <uuid> observations rows.parquet --replace
-uv run marina applets sql <uuid> 'SELECT * FROM observations'
-```
-
-Table loading accepts JSON arrays, JSONL, CSV, and Parquet with scalar columns.
-Browser code may post one SQLAlchemy text statement to relative URL `query`.
-Query results are limited in Postgres to 10,000 rows and 5 MiB with a 10-second
-timeout. Transaction and role-control commands, data-modifying `WITH`, and
-mutation statements with `RETURNING` are rejected.
-
-Prefer a Python backend over browser-submitted SQL when inputs need validation,
-authorization, stable response types, or multiple database operations.
-
-## Publish and operate
-
-Treat a request to build or update a Marina applet as authorization to publish
-it and perform the server writes needed for the requested behavior, including
-schema migrations and requested data loading. Validate the package, then publish
-without asking for separate confirmation. Honor requests for local-only work,
-drafts, or review before publishing. Rollback, archive, and unrelated data
-mutations still need authorization within the user's request. The default target is
-`https://marina.oa.dev`, and the CLI uses cached `iris login` credentials or
-ambient Google credentials through IAP.
-
-First publish:
-
-```bash
-uv run marina publish my-applet --json
-```
-
-Record the returned UUID, revision, and immutable revision URL. A successful
-publish runs its migration and atomically selects the new revision as current.
-Fetch the stable current URL with:
-
-```bash
-uv run marina applets versions <uuid> --json
-```
-
-Update the same applet with optimistic concurrency:
-
-```bash
-uv run marina publish my-applet --update <uuid> --base-version <current>
-```
-
-Applets are private by default. Use `--mode public` on a publish or update when
-the frontend and its GET backend routes may be disclosed without
-authentication. An update without `--mode` preserves the current mode. Change
-only the mode with `marina applets mode <uuid> public|private`.
-
-Public mode is limited to GET and HEAD requests, but Marina cannot prove that a
-GET backend is side-effect-free. Use it only for trusted applet code and data
-that may be disclosed to the unrestricted internet. Do not use public mode for
-untrusted publishers, sensitive data, SQL `query` access, or mutation routes.
-
-Inspect before mutating lifecycle state:
-
-```bash
-uv run marina applets list
-uv run marina applets versions <uuid>
-```
-
-Roll back only to a retained revision:
-
-```bash
-uv run marina applets rollback <uuid> <revision>
-```
-
-Archive an applet with:
-
-```bash
-uv run marina applets archive <uuid>
-```
-
-Archival hides the applet but preserves its schema and retained revisions.
-Marina retains the current revision plus four other recent revisions.
-
-Report the applet UUID, stable URL, immutable revision URL, validation or test
-results, and any trusted-code or schema-compatibility caveat that affects use.
+The first source-app cutover has an explicit bootstrap and readiness gate; follow
+the reference rather than introducing filesystem fallback or automatic publication
+in a runtime deployment. Report the UUID, stable/revision URLs, validation evidence
+and any schema/runtime compatibility limits relevant to the released change.

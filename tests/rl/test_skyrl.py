@@ -15,7 +15,6 @@ from typing import IO
 import pytest
 import yaml
 from marin.execution.artifact import Artifact
-from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.external_dependencies import MARIN_SKYRL
 from marin.rl.skyrl import (
@@ -37,8 +36,6 @@ from marin.rl.skyrl import (
 )
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
-
-from experiments.post_training.tasktrove.rl_smoke import smoke_step
 
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
@@ -85,6 +82,8 @@ def _role_plan() -> SkyRLRolePlan:
         colocate_all=True,
         policy_num_nodes=1,
         policy_num_gpus_per_node=4,
+        colocate_policy_ref=True,
+        reference_num_nodes=1,
         num_inference_engines=4,
         inference_engine_tensor_parallel_size=1,
         inference_engine_pipeline_parallel_size=1,
@@ -151,6 +150,39 @@ def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
     )
 
 
+def test_megatron_microbatch_mismatch_fails_before_launch() -> None:
+    # Reject incompatible microbatch sizes before allocating the GPU workers.
+    base = _spec()
+    plan = dataclasses.replace(base.topology.role_plan, micro_train_batch_size_per_gpu=2)
+    recipe = yaml.safe_load(_config_yaml(strategy="megatron"))
+    recipe["trainer"]["micro_forward_batch_size_per_gpu"] = 1
+    with pytest.raises(ValueError, match="equal micro_forward_batch_size_per_gpu"):
+        dataclasses.replace(
+            base,
+            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+            topology=dataclasses.replace(base.topology, role_plan=plan),
+            config_yaml=yaml.safe_dump(recipe),
+        )
+    # Matching sizes still validate: the gate rejects the mismatch, not Megatron itself.
+    recipe["trainer"]["micro_forward_batch_size_per_gpu"] = 2
+    dataclasses.replace(
+        base,
+        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        topology=dataclasses.replace(base.topology, role_plan=plan),
+        config_yaml=yaml.safe_dump(recipe),
+    )
+
+
+@pytest.mark.parametrize("key", ["use_conversation_multi_turn", "require_exact_chat_transport"])
+@pytest.mark.parametrize("value", [False, True])
+def test_skyrl_spec_rejects_retired_transport_options_before_submission(key: str, value: bool) -> None:
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["generator"][key] = value
+
+    with pytest.raises(ValueError, match=f"generator.{key}"):
+        dataclasses.replace(_spec(), config_yaml=yaml.safe_dump(recipe))
+
+
 def test_skyrl_retention_allows_explicit_rollback_depth_up_to_five() -> None:
     policy = SkyRLRetentionPolicy(resume_checkpoint_count=5)
 
@@ -165,6 +197,7 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
         colocate_all=False,
         policy_num_nodes=4,
         policy_num_gpus_per_node=8,
+        reference_num_nodes=4,
         num_inference_engines=1,
         inference_engine_data_parallel_size=8,
         inference_engine_expert_parallel_size=8,
@@ -206,6 +239,7 @@ def test_skyrl_topology_accepts_node_local_dp8_engines() -> None:
         colocate_all=False,
         policy_num_nodes=4,
         policy_num_gpus_per_node=8,
+        reference_num_nodes=4,
         num_inference_engines=4,
         inference_engine_data_parallel_size=8,
         inference_engine_expert_parallel_size=8,
@@ -244,6 +278,40 @@ def test_skyrl_spec_rejects_config_that_disagrees_with_role_plan() -> None:
             _spec(),
             config_yaml=_config_yaml().replace("  max_steps: 8", "  max_steps: 8\n  train_batch_size: 32"),
         )
+
+
+def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles() -> None:
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        colocate_policy_ref=False,
+        policy_num_nodes=4,
+        policy_num_gpus_per_node=8,
+        reference_num_nodes=2,
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=8,
+        inference_engine_expert_parallel_size=8,
+    )
+    with pytest.raises(ValueError, match="core role plan exceeds the allocated topology"):
+        SkyRLTopology(num_nodes=5, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+    spec = dataclasses.replace(
+        _spec(),
+        config_yaml=_config_yaml(strategy="megatron").replace("use_kl_loss: false", "use_kl_loss: true"),
+        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        topology=SkyRLTopology(num_nodes=7, gpus_per_node=8, gpu_variant="H100", role_plan=plan),
+    )
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = yaml.safe_load(config.launch_config_yaml)
+    assert launch["iris"]["allocation"]["num_nodes"] * launch["iris"]["allocation"]["gpus_per_node"] == 56
+    assert launch["skyrl"]["trainer"]["placement"] == {
+        "colocate_all": False,
+        "colocate_policy_ref": False,
+        "policy_num_nodes": 4,
+        "policy_num_gpus_per_node": 8,
+        "ref_num_nodes": 2,
+        "ref_num_gpus_per_node": 8,
+    }
 
 
 def test_skyrl_spec_rejects_distinct_batch_sizes_for_fully_async() -> None:
@@ -462,28 +530,6 @@ def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert run.iris_job_id == "01KNOEXPORT"
 
 
-def test_tasktrove_smoke_renders_serializable_launch_document(tmp_path: Path) -> None:
-    release = ArtifactStep.adopt("tasktrove/clean", "2026.09.10", str(tmp_path))
-    (tmp_path / "manifest.json").write_text(json.dumps({"verify_tool_ref": "verifyit@abc123"}))
-    with build_context(BuildContext(versions=VersionCodex(default="2026.09.10"))):
-        step = smoke_step(release)
-    config = step.build_config(
-        StepContext.for_run(
-            output_path=str(tmp_path / "output"),
-            prefix=str(tmp_path),
-            runtime_args=step.runtime_args,
-            deps=step.deps,
-        )
-    )
-    launch = yaml.safe_load(config.launch_config_yaml)
-    source = json.loads(json.dumps(launch))["inputs"]["train_data"][0]
-
-    assert source["kind"] == "tasktrove_parquet"
-    assert source["uri"] == str(tmp_path / "tasks/part-00000.parquet")
-    assert source["verifier_ref"] == "verifyit@abc123"
-    assert source["selection"]["tag_match"] == "all"
-
-
 def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) -> None:
     release = ArtifactStep.adopt("tasktrove/clean", "2026.09.10", str(tmp_path))
     (tmp_path / "manifest.json").write_text(json.dumps({"verify_tool_ref": "verifyit@abc123"}))
@@ -497,6 +543,7 @@ def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) 
             limit=160,
             seed=17,
         ),
+        relative_path="tasks.parquet",
     )
     context = StepContext.for_run(
         output_path=str(tmp_path / "output"),
@@ -507,8 +554,8 @@ def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) 
 
     resolved = source.resolve(context)
 
-    assert resolved.uri == str(tmp_path / "tasks/part-00000.parquet")
-    assert resolved.relative_path == "part-00000.parquet"
+    assert resolved.uri == str(tmp_path / "tasks.parquet")
+    assert resolved.relative_path == "tasks.parquet"
     assert resolved.verifier_ref == "verifyit@abc123"
     assert resolved.selection.sources == ("source-a", "source-b")
     assert resolved.selection.tags == ("bash", "terminal")
