@@ -2,7 +2,7 @@
 # log behind every cell. Records are read from object storage into this app's own
 # Postgres schema; the page fetches everything from /evaldash/api/.
 title = "EvalDash"
-description = "Every Marin eval run: the benchmark panel, the runs behind it, and the graded samples behind those."
+description = "Compare models across benchmarks and inspect evaluation runs. Follow a score through to graded samples, artifacts, and run logs."
 connect_src = []
 build_command = "cd web && npm ci && npm run build"
 

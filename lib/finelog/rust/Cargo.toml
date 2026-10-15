@@ -126,7 +126,7 @@ datafusion = "53"
 datafusion-datasource = "53"
 datafusion-datasource-parquet = "53"
 object_store = { version = "0.13", features = ["gcp", "aws"] }
-async-trait = "0.1"
+async-trait = "0.1.92"
 url = "2"
 # Rust-owned catalog sidecar; `bundled` keeps the build hermetic (no system
 # sqlite). Distinct file from Python's DuckDB registry — never aliased.

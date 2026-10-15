@@ -32,6 +32,44 @@ ctx.execute(pipeline)
 
 Pass `include_file_paths=True` to add `__file_path` to each row (or set `file_path_column` to use another name). Selecting only that column returns the source path for each matching row. Parquet path-only reads skip source data columns unless a filter needs them.
 
+For CPU-heavy local row transforms, enable intra-shard execution on the context:
+
+```python
+from zephyr.context import IntraShardExecution, ZephyrContext
+from zephyr.runners import SubprocessRunner
+
+ctx = ZephyrContext(
+    max_workers=4,
+    stage_runner_factory=SubprocessRunner,
+    intra_shard_execution=IntraShardExecution.AUTO,
+)
+```
+
+The planner inserts `Split → Map → Concat` around independent row operations.
+Use this option when row callbacks do not depend on per-shard mutable state.
+When there are fewer source shards than workers, the planner reads Parquet
+footers and divides row ranges into up to four tasks per worker, capped at one
+task per row. It gives larger row ranges more tasks. Existing shards stay
+intact when they already fill the worker pool, avoiding extra `Split` and
+`Concat` stages. A later reshard to fewer shards can still split existing
+intermediate chunks. Row maps after `group_by` stay with the reduce stage and
+run on each whole output shard.
+`Concat` restores each original shard's row order and ID before writes, joins,
+windows, `take_per_shard`, and `map_shard`. Output filenames and shard counts
+therefore stay the same. The default is `OFF`.
+
+This adds intermediate writes and reads, without a key shuffle. When an
+independent map chain ends in `write_parquet` with an explicit schema, fragments
+are written as Parquet and the final writer consumes Arrow batches. Other
+boundaries use the existing pickle chunks. Parquet workers
+still read overlapping row groups in full, so splitting a large row group
+increases read work and memory use. Batch-mode Parquet sources retain their
+original batch boundaries. Opaque loaders and `map_shard` callbacks are not
+subdivided internally; a source yielding a single item or chunk may still have
+only one runnable task.
+As with explicit resharding, materialized map stages run before a final writer
+can skip an existing output file.
+
 **Transformations:**
 - `.map(fn)` - transform each item
 - `.flat_map(fn)` - expand items (e.g., `load_jsonl`)
@@ -49,62 +87,7 @@ Pass `include_file_paths=True` to add `__file_path` to each row (or set `file_pa
 - `ZephyrContext(max_workers=N)` — auto-detects the backend (Iris inside an Iris job, local otherwise) via `fray.current_client()`
 - `ZephyrContext(client=LocalClient())` — explicit local backend (testing)
 - `ctx.execute(pipeline)` — runs the pipeline; returns a `ZephyrExecutionResult(results, counters)`
-
-### Read-only memory stores
-
-`ZephyrContext.load_memory_store()` loads an existing partitioned dataset into
-the workers of an entered context. Every worker starts an empty multi-table
-service; pipelines that do not load a table perform no source reads. The table
-handle is picklable, so later pipelines and child jobs can use `get()` or
-order-preserving `get_many()` lookups without copying the table into every task.
-
-```python
-from fray.types import ResourceConfig
-
-
-def document_partition(key: tuple[int, str]) -> int:
-    file_index, _ = key
-    return file_index
-
-
-documents = Dataset.from_files("s3://bucket/documents/*.parquet").load_parquet().map(
-    lambda row: ((row["file_index"], row["id"]), row["text"])
-)
-
-with ZephyrContext(
-    max_workers=16,
-    resources=ResourceConfig(cpu=2, ram="8g"),
-) as ctx:
-    document_store = ctx.load_memory_store(
-        documents,
-        name="documents",
-        hash_key=document_partition,
-        recovery_timeout=900,
-    )
-    result = ctx.execute(Dataset.from_list(document_keys).map(document_store.get))
-    document_store.destroy()
-```
-
-For `P` source shards, every key must already satisfy
-`hash_key(key) % P == source_shard_index`. Construction checks every row and
-does not insert a shuffle. Readers and shard-local maps can load directly.
-Persist and reload the output of a shuffle, join, reshard, reduce, or write
-before constructing a store.
-
-Keys must be hashable and unique. Keys, values, and the hash function must be
-picklable for remote calls; Python's salted `hash()` is not stable enough to
-serve as the partition function for string or byte keys. Actors retain the
-loaded Python objects directly, and `store.stats()` reports item counts and
-load time. Invalid input fails the load call without consuming actor restart
-retries. Multiple tables can share the worker process. Zephyr does not reserve,
-limit, or evict table memory; size the context's worker RAM for the combined
-tables and pipeline workload.
-
-Iris reconstructs a preempted worker at the same endpoint. The first table
-lookup on that replacement reloads its immutable source shards, and all worker
-responses and reconstruction share one `recovery_timeout` deadline. Destroying
-one table leaves other tables active. Exiting the creating context stops the
-worker pool and invalidates its table handles.
+- `ctx.execute(pipeline, name="rlvr-ifeval-review")` — prefixes the execution ID shown in logs and the dashboard. Names become lowercase ASCII alphanumerics and dashes, capped at 64 characters. Omitted or empty normalized names keep the timestamp/hash format.
 
 ## Real Usage
 
@@ -192,5 +175,9 @@ Zephyr consolidates ad-hoc distributed and Hugging Face dataset processing patte
 - Automatic chunking to prevent large object overhead
 - fsspec integration (GCS, S3, local)
 - Type-safe operation chaining
+
+Shuffle ingestion bounds its input buffer by serialized payload bytes and item
+count before passing frames to the memory-aware writer. This also applies when
+each item is itself a batch. A single item must still fit in task memory.
 
 See `AGENTS.md` for execution internals and source layout.

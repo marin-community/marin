@@ -168,6 +168,30 @@ def test_panel_can_be_pinned_to_one_cohort():
     assert row["cells"]["mmlu"]["value"] == pytest.approx(0.50)
 
 
+@pytest.mark.parametrize("cohort", ["v1", "v2"])
+def test_panel_rows_and_gap_explanations_stay_within_the_selected_cohort(cohort):
+    records = [
+        _record("a", "mmlu", "v1", "2026-01-01T00:00:00+00:00", 0.5),
+        _record("b", "mmlu", "v2", "2026-02-01T00:00:00+00:00", 0.7),
+        _record("failed", "drop", cohort, "2026-03-01T00:00:00+00:00", None),
+        _record("zero", "mmlu", cohort, "2026-03-01T00:00:00+00:00", 0.0),
+        _record("a", "drop", "v2", "2026-02-01T00:00:00+00:00", None),
+        _record("b", "math500", "v2", "2026-02-01T00:00:00+00:00", 0.8),
+    ]
+
+    panel = build_panel(records, panel_request(cohort_version=cohort))
+    rows = {row["model"]: row for row in panel["rows"]}
+
+    assert set(rows) == ({"a", "failed", "zero"} if cohort == "v1" else {"a", "b", "failed", "zero"})
+    assert rows["failed"]["missing"]["drop"]["reason"] == "status infra_failed"
+    assert rows["zero"]["cells"]["mmlu"]["value"] == 0.0
+    if cohort == "v1":
+        assert rows["a"]["missing"] == {}
+        assert "math500" not in panel["benchmarks"]
+        assert "math500" not in panel["protocols"]
+    assert all(cell["version"] == cohort for row in rows.values() for cell in row["cells"].values())
+
+
 def test_a_failed_run_leaves_an_explained_gap_rather_than_a_blank_cell():
     records = [
         _record("m", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.5),

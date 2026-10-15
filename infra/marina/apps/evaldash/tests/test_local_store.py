@@ -223,8 +223,21 @@ def test_unverified_policy_run_has_no_headline_in_detail_or_group(store, client)
     assert group["evals"][0]["headline"] is None
 
 
-def test_api_compare_reports_shared_benchmarks_and_their_difference_intervals(client):
-    comparison = client.get("/compare", params={"models": "snowball,qwen3-8b", "cohort": "all"}).json()
+@pytest.fixture
+def comparison_client(client, store):
+    records = [
+        EvalRunRecord.model_validate(store.get_record(f"{model}-{version}-{benchmark}")).model_copy(
+            update={"version": "2026.07.20"}
+        )
+        for model, version in (("snowball", "2026.07.20"), ("qwen3-8b", "2026.07.21"))
+        for benchmark in ("mmlu", "arc-challenge")
+    ]
+    store.refresh(records)
+    return client
+
+
+def test_api_compare_reports_shared_benchmarks_and_their_difference_intervals(comparison_client):
+    comparison = comparison_client.get("/compare", params={"models": "snowball,qwen3-8b", "cohort": "2026.07.20"}).json()
 
     assert set(comparison["shared"]) >= {"mmlu", "arc-challenge"}
     mmlu = next(row for row in comparison["rows"] if row["benchmark"] == "mmlu")
@@ -235,13 +248,21 @@ def test_api_compare_reports_shared_benchmarks_and_their_difference_intervals(cl
     assert gap["low"] <= gap["high"]
 
 
-def test_api_compare_applies_the_selection_it_is_given(client):
-    comparison = client.get(
-        "/compare", params={"models": "snowball,qwen3-8b", "benchmarks": "mmlu", "cohort": "all"}
+def test_api_compare_applies_the_selection_it_is_given(comparison_client):
+    comparison = comparison_client.get(
+        "/compare", params={"models": "snowball,qwen3-8b", "benchmarks": "mmlu", "cohort": "2026.07.20"}
     ).json()
 
     assert comparison["benchmarks"] == ["mmlu"]
     assert comparison["shared"] == ["mmlu"]
+
+
+def test_api_compare_rejects_mixed_cohorts_but_panel_can_browse_them(client):
+    response = client.get("/compare", params={"models": "snowball,qwen3-8b", "cohort": "all"})
+
+    assert response.status_code == 400
+    panel = client.get("/panel", params={"cohort": "all"}).json()
+    assert {cell["version"] for row in panel["rows"] for cell in row["cells"].values()} >= {"2026.07.20", "2026.07.21"}
 
 
 def test_api_compare_rejects_a_request_it_cannot_answer(client):

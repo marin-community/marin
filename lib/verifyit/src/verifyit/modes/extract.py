@@ -18,6 +18,10 @@ _WHITESPACE = re.compile(r"\s+")
 # Longest-first: ``$$`` must be tried before ``$``.
 _MATH_DELIMITERS = ((r"\[", r"\]"), (r"\(", r"\)"), ("$$", "$$"), ("$", "$"))
 
+ANSWER_HEADING = re.compile(r"(?im)^#{1,6}\s*answer\s*$")
+NEXT_SECTION = re.compile(r"(?m)^(?:#{1,6}\s|---\s*$|```)")
+EMPHASIS = ("**", "__", "*", "_", "`")
+
 
 def unwrap_fence(text: str) -> str:
     """The body of the first fenced code block, or the whole text when there is no fence."""
@@ -83,3 +87,21 @@ def strip_math_delimiters(text: str) -> str:
             changed = True
             break
     return value
+
+
+def extract_markdown_answer(text: str) -> str | None:
+    """Return the last explicit Markdown answer section."""
+    headings = list(ANSWER_HEADING.finditer(text))
+    if not headings:
+        return None
+    section = text[headings[-1].end() :].strip()
+    boundary = NEXT_SECTION.search(section)
+    section = section[: boundary.start()].strip() if boundary else section
+    if not section:
+        return None
+    plain = section
+    for marker in EMPHASIS:
+        if plain.startswith(marker) and plain.endswith(marker) and len(plain) > 2 * len(marker):
+            plain = plain[len(marker) : -len(marker)].strip()
+            break
+    return plain

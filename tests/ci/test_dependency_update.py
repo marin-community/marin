@@ -304,6 +304,19 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
         f"#!{sys.executable}\n"
         "import sys, tomllib\n"
         "from pathlib import Path\n"
+        "if sys.argv[1] == 'sync':\n"
+        "    directory = Path(sys.argv[sys.argv.index('--project') + 1])\n"
+        "    metadata = tomllib.loads((directory / 'pyproject.toml').read_text())\n"
+        "    overrides = metadata['tool']['uv']['override-dependencies']\n"
+        "    assert any('marin-rigging[secrets,prometheus]' in dependency for dependency in overrides)\n"
+        "    (directory / '.venv').mkdir()\n"
+        "    (directory / '.venv' / 'validated-project').write_text(str(directory))\n"
+        "    raise SystemExit(0)\n"
+        "if sys.argv[1:3] == ['pip', 'check']:\n"
+        "    environment = Path(sys.argv[sys.argv.index('--python') + 1]).parents[1]\n"
+        "    assert (environment / 'validated-project').is_file()\n"
+        f"    Path({str(tmp_path / 'validated-environment')!r}).write_text('valid')\n"
+        "    raise SystemExit(0)\n"
         "directory = Path(sys.argv[sys.argv.index('--project') + 1])\n"
         "distribution = sys.argv[sys.argv.index('--upgrade-package') + 1]\n"
         "path = directory / 'uv.lock'\n"
@@ -397,6 +410,8 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
             text=True,
             timeout=30,
         )
+        if project is ExternalRuntime.MARIN_SKYRL:
+            assert (tmp_path / "validated-environment").read_text() == "valid"
         assert set(changed.stdout.splitlines()) == {
             f"config/external/{project.value}/uv.lock",
             str(pins.relative_to(repository)),

@@ -18,7 +18,7 @@ RUN set -e; \
 
 FROM python:3.12-slim AS runtime
 ENV PYTHONUNBUFFERED=1
-COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /bin/uv
 # The workspace lives at /app: rigging resolves the repo-root config/ directory by walking up
 # from the working directory to the workspace pyproject, so the process runs from here.
 WORKDIR /app

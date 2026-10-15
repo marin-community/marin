@@ -24,7 +24,7 @@ import re
 import statistics
 import string
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -34,6 +34,7 @@ from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
 from verifyit.file_ops.read import read_text
 from verifyit.grade import (
     Aggregation,
+    GradingInfraError,
     InvalidTask,
     Reward,
     aggregate_rewards,
@@ -121,6 +122,19 @@ class _ValidatedJudgeSpec:
     checks: list[tuple[Constraint, Check]]
 
 
+@dataclass(frozen=True)
+class _CompletionAttempt:
+    finish_reason: str | None
+    completion_tokens: int | None
+
+
+@dataclass(frozen=True)
+class _ScoreResult:
+    score: float
+    reply: str
+    attempts: tuple[_CompletionAttempt, ...]
+
+
 def grade(
     spec: Spec,
     tests_dir: Path,
@@ -145,6 +159,8 @@ def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
         raise InvalidTask("label_case must be sensitive or upper")
     if spec.rubric not in RUBRICS:
         raise InvalidTask(f"unknown judge rubric {spec.rubric!r}; known rubrics: {sorted(RUBRICS)}")
+    if not isinstance(spec.strip_candidate_reasoning_blocks, bool):
+        raise InvalidTask("strip_candidate_reasoning_blocks must be boolean")
     if spec.rubric == RUBRIC_LABELS and (
         not isinstance(spec.system_prompt, str)
         or not isinstance(spec.prompt_template, str)
@@ -160,6 +176,20 @@ def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
         raise InvalidTask("judge rubric 'checklist' needs non-empty criteria")
     if spec.rubric == RUBRIC_LABELS:
         _validate_label_spec(spec, references)
+    for budget in (spec.max_completion_tokens, spec.incomplete_retry_tokens):
+        if type(budget) is not int or budget < 0:
+            raise InvalidTask("judge token budgets must be nonnegative integers")
+    if spec.max_completion_tokens == 0:
+        raise InvalidTask("judge token budget must be positive")
+    if spec.incomplete_retry_tokens and spec.incomplete_retry_tokens <= spec.max_completion_tokens:
+        raise InvalidTask("retry token budget must exceed the initial budget")
+    if (
+        isinstance(spec.request_timeout, bool)
+        or not isinstance(spec.request_timeout, (int, float))
+        or spec.request_timeout <= 0
+        or not math.isfinite(spec.request_timeout)
+    ):
+        raise InvalidTask("judge request timeout must be finite and positive")
     if (
         not isinstance(spec.exact_gate_answers, tuple)
         or any(not isinstance(answer, str) or not answer for answer in spec.exact_gate_answers)
@@ -199,6 +229,7 @@ def grade_judge_candidate(
     policy = empty_output_policy(spec)
     if not isinstance(candidate, str):
         raise InvalidTask("judge candidate must be text")
+    candidate = _answer_text(candidate, spec.strip_candidate_reasoning_blocks, strip_outer=False)
     if policy is EmptyOutputPolicy.ZERO and not candidate.strip():
         return scored(0.0, reason="no_output")
     context = context[:CONTEXT_LIMIT]
@@ -258,20 +289,6 @@ def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
     normalized_labels = [label.upper() if spec.label_case == "upper" else label for label in spec.label_scores]
     if len(set(normalized_labels)) != len(normalized_labels):
         raise InvalidTask("verdict labels collide after case normalization")
-    for budget in (spec.max_completion_tokens, spec.incomplete_retry_tokens):
-        if type(budget) is not int or budget < 0:
-            raise InvalidTask("judge token budgets must be nonnegative integers")
-    if spec.max_completion_tokens == 0:
-        raise InvalidTask("judge token budget must be positive")
-    if spec.incomplete_retry_tokens and spec.incomplete_retry_tokens <= spec.max_completion_tokens:
-        raise InvalidTask("retry token budget must exceed the initial budget")
-    if (
-        isinstance(spec.request_timeout, bool)
-        or not isinstance(spec.request_timeout, (int, float))
-        or spec.request_timeout <= 0
-        or not math.isfinite(spec.request_timeout)
-    ):
-        raise InvalidTask("judge request timeout must be finite and positive")
     used = set()
     for template in (spec.system_prompt, spec.prompt_template):
         try:
@@ -287,17 +304,25 @@ def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
         raise InvalidTask("judge template must include reference and candidate")
 
 
-def _label_answer(reply: str, strip_reasoning: bool) -> str:
+def _answer_text(
+    text: str,
+    strip_reasoning: bool,
+    *,
+    strip_outer: bool = True,
+    unfinished_error: str | None = None,
+) -> str:
     if not strip_reasoning:
-        return reply.strip()
+        return text.strip() if strip_outer else text
     pairs = (("<think>", "</think>"), ("<thinking>", "</thinking>"), ("<|start_think|>", "<|end_think|>"))
     for opening, closing in pairs:
-        reply = re.sub(re.escape(opening) + ".*?" + re.escape(closing), "", reply, flags=re.DOTALL)
-    closing = max((reply.rfind(end) + len(end) for _, end in pairs if end in reply), default=0)
-    reply = reply[closing:]
-    if any(start in reply for start, _ in pairs):
-        raise RuntimeError("judge has unfinished reasoning")
-    return reply.strip().removesuffix("<|eot_id|>").strip()
+        text = re.sub(re.escape(opening) + ".*?" + re.escape(closing), "", text, flags=re.DOTALL)
+    closing = max((text.rfind(end) + len(end) for _, end in pairs if end in text), default=0)
+    text = text[closing:]
+    if any(opening in text for opening, _ in pairs):
+        if unfinished_error is not None:
+            raise RuntimeError(unfinished_error)
+        return ""
+    return text.strip().removesuffix("<|eot_id|>").strip()
 
 
 def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: openai.OpenAI, model: str) -> Reward:
@@ -306,9 +331,7 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
     if spec.system_prompt:
         messages.append({"role": "system", "content": spec.system_prompt.format(**fields)})
     messages.append({"role": "user", "content": spec.prompt_template.format(**fields)})
-    budgets = [spec.max_completion_tokens]
-    if spec.incomplete_retry_tokens:
-        budgets.append(spec.incomplete_retry_tokens)
+    budgets = _completion_budgets(spec)
     labels = {
         label.upper() if spec.label_case == "upper" else label: score for label, score in spec.label_scores.items()
     }
@@ -318,7 +341,7 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
             if index + 1 < len(budgets):
                 continue
             raise RuntimeError("judge completion is incomplete")
-        answer = _label_answer(content, spec.strip_reasoning_blocks)
+        answer = _answer_text(content, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning")
         if spec.label_case == "upper":
             answer = answer.upper()
         if spec.label_scan == "whole":
@@ -432,9 +455,9 @@ def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai
     base_url = connection.base_url.strip() if connection else os.environ.get(BASE_URL_ENV, "").strip()
     model = spec.model.strip() or os.environ.get(MODEL_ENV, "").strip()
     if not base_url:
-        raise RuntimeError(f"no judge endpoint: set {BASE_URL_ENV}")
+        raise InvalidTask(f"no judge endpoint: set {BASE_URL_ENV}")
     if not model:
-        raise RuntimeError(f"no judge model: set {MODEL_ENV} or the spec's model field")
+        raise InvalidTask(f"no judge model: set {MODEL_ENV} or the spec's model field")
     # Local OpenAI-compatible servers ignore the key, but the client insists on a non-empty one.
     options: dict[str, Any] = {"max_retries": 0} if spec.rubric == RUBRIC_LABELS else {}
     return (
@@ -459,8 +482,8 @@ def _judge_reference(
         references="\n".join(f"- {reference}" for reference in references),
         candidate=candidate.strip(),
     )
-    score, reply = _ask(client, model, prompt, spec.request_timeout, allowed_scores=(0.0, 0.5, 1.0))
-    return scored(score, model=model, reasoning=_reasoning(reply))
+    result = _ask(spec, client, model, prompt, allowed_scores=(0.0, 0.5, 1.0))
+    return scored(result.score, model=model, reasoning=_reasoning(result.reply), **_attempt_detail(result.attempts))
 
 
 def _judge_checklist(
@@ -472,31 +495,79 @@ def _judge_checklist(
         prompt = CHECKLIST_PROMPT.format(
             context=context_block, question=_question(spec), candidate=candidate.strip(), criterion=criterion.strip()
         )
-        score, reply = _ask(client, model, prompt, spec.request_timeout, allowed_scores=(0.0, 1.0))
-        results.append({"criterion": criterion, "passed": score >= 1.0, "reasoning": _reasoning(reply)})
+        try:
+            result = _ask(spec, client, model, prompt, allowed_scores=(0.0, 1.0))
+        except GradingInfraError as error:
+            raise GradingInfraError(
+                str(error), model=model, criteria=[*results, {"criterion": criterion, **error.detail}]
+            ) from error
+        results.append(
+            {
+                "criterion": criterion,
+                "passed": result.score >= 1.0,
+                "reasoning": _reasoning(result.reply),
+                **_attempt_detail(result.attempts),
+            }
+        )
     passed = sum(1 for result in results if result["passed"])
     return scored(passed / len(results), model=model, passed=passed, total=len(results), criteria=results)
 
 
 def _ask(
-    client: openai.OpenAI, model: str, prompt: str, timeout: float, *, allowed_scores: tuple[float, ...]
-) -> tuple[float, str]:
-    """Parse a final allowed SCORE label; retry once, then raise if no valid score appears."""
-    reply = ""
+    spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, *, allowed_scores: tuple[float, ...]
+) -> _ScoreResult:
+    """Parse a final SCORE, retrying truncated replies with the larger budget."""
+    attempts: list[_CompletionAttempt] = []
+    budgets = _completion_budgets(spec)
     for attempt in range(1, ATTEMPTS + 1):
-        reply = _complete(client, model, prompt, timeout)
-        score = _score(reply, allowed_scores)
-        if score is not None:
-            return score, reply
-        logger.warning("judge %s returned no SCORE line on attempt %d", model, attempt)
-    raise RuntimeError(f"judge {model!r} returned no valid SCORE after {ATTEMPTS} attempts")
-
-
-def _complete(client: openai.OpenAI, model: str, prompt: str, timeout: float) -> str:
-    response = _chat_completion(
-        client, model=model, messages=[{"role": "user", "content": prompt}], temperature=0.0, timeout=timeout
+        for index, budget in enumerate(budgets):
+            response = _complete(spec, client, model, prompt, budget)
+            choice = _completion_choice(response)
+            attempts.append(
+                _CompletionAttempt(
+                    finish_reason=choice.finish_reason,
+                    completion_tokens=response.usage.completion_tokens if response.usage else None,
+                )
+            )
+            if choice.finish_reason == "length":
+                if index + 1 < len(budgets):
+                    continue
+                raise GradingInfraError("judge completion is incomplete", **_attempt_detail(attempts))
+            try:
+                reply = _completed_text(choice)
+            except RuntimeError as error:
+                raise GradingInfraError(str(error), **_attempt_detail(attempts)) from error
+            score = _score(reply, allowed_scores)
+            if score is not None:
+                return _ScoreResult(score, reply, tuple(attempts))
+            logger.warning("judge %s returned no SCORE line on attempt %d", model, attempt)
+            break
+    raise GradingInfraError(
+        f"judge {model!r} returned no valid SCORE after {ATTEMPTS} attempts", **_attempt_detail(attempts)
     )
-    return _completed_text(_completion_choice(response))
+
+
+def _attempt_detail(attempts: tuple[_CompletionAttempt, ...] | list[_CompletionAttempt]) -> dict[str, object]:
+    return {"attempt_count": len(attempts), "attempts": [asdict(attempt) for attempt in attempts]}
+
+
+def _completion_budgets(spec: JudgeSpec) -> tuple[int, ...]:
+    if spec.incomplete_retry_tokens:
+        return spec.max_completion_tokens, spec.incomplete_retry_tokens
+    return (spec.max_completion_tokens,)
+
+
+def _complete(spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, budget: int) -> ChatCompletion:
+    options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
+    return _chat_completion(
+        client,
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.0,
+        timeout=spec.request_timeout,
+        max_completion_tokens=budget,
+        **options,
+    )
 
 
 def _chat_completion(client: openai.OpenAI, **options: Any) -> ChatCompletion:
