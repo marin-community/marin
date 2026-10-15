@@ -92,6 +92,19 @@ def merge_counter_entries(entries: Iterable[tuple[str, CounterEntry]]) -> tuple[
     return merged, conflicted
 
 
+@dataclass(frozen=True)
+class ShardProgress:
+    """Live progress for one runner's current shard and input."""
+
+    stage_name: str
+    stage_generation: int
+    attempt: int
+    elapsed_seconds: float
+    records_in: int
+    input_rows_completed: int | None
+    input_rows_total: int | None
+
+
 @dataclass
 class CounterSnapshot:
     """Bundled counter values and monotonically increasing generation tag.
@@ -105,6 +118,7 @@ class CounterSnapshot:
 
     counters: dict[str, CounterEntry]
     generation: int
+    shards: dict[int, ShardProgress] = field(default_factory=dict)
 
     @staticmethod
     def empty(generation: int = 0) -> "CounterSnapshot":

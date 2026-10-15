@@ -54,6 +54,12 @@ RECORDS_IN = "zephyr/records_in"
 """Records read by the loaders (jsonl/parquet/vortex/zip)."""
 RECORDS_OUT = "zephyr/records_out"
 """Records written by the output writers (jsonl/parquet/vortex/binary)."""
+INPUT_ROWS_TOTAL = "zephyr/input_rows_total"
+INPUT_ROWS_COMPLETED = "zephyr/input_rows_completed"
+"""Current input's selected rows before filtering; total is -1 when unknown.
+
+Completed rows advance after downstream consumption of each read group/batch.
+"""
 PARTITIONS_SKIPPED = "zephyr/partitions_skipped"
 """Output partitions skipped because the target already existed (``skip_existing``)."""
 SHUFFLE_INPUT_ROWS = "zephyr/shuffle/input_rows"

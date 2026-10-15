@@ -74,6 +74,18 @@ def iter_parquet_row_groups(
     start = 0 if row_start is None else row_start
     end = pf.metadata.num_rows if row_end is None else row_end
 
+    # Count only the selected row ranges/groups, using the already-loaded footer.
+    # Advance after yield so a fused mapper consuming the group is included.
+    selected_rows = 0
+    group_start = 0
+    for i in range(pf.metadata.num_row_groups):
+        group_end = group_start + pf.metadata.row_group(i).num_rows
+        if row_groups is None or i in row_groups:
+            selected_rows += max(0, min(group_end, end) - max(group_start, start))
+        group_start = group_end
+    counters.pipeline.set_counter(counters.INPUT_ROWS_COMPLETED, 0)
+    counters.pipeline.set_counter(counters.INPUT_ROWS_TOTAL, selected_rows)
+
     cumulative_rows = 0
 
     for i in range(pf.metadata.num_row_groups):
@@ -103,6 +115,7 @@ def iter_parquet_row_groups(
 
         if len(table) > 0:
             yield table
+            counters.pipeline.update_counter(counters.INPUT_ROWS_COMPLETED, len(table))
 
 
 # 16 MB read blocks with background prefetch for S3/remote reads.
@@ -298,6 +311,8 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
     filter_fn = spec.filter_expr.evaluate if spec.filter_expr is not None else None
     columns = spec.columns
 
+    counters.pipeline.set_counter(counters.INPUT_ROWS_COMPLETED, 0)
+    counters.pipeline.set_counter(counters.INPUT_ROWS_TOTAL, -1)
     with open_file(spec.path, "rt") as f:
         for line in f:
             line = line.strip()
@@ -429,9 +444,15 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
     logger.info("Loading: %s", spec.path)
     vf = vortex.open(spec.path)
     dataset = vf.to_dataset()
+    num_rows = dataset.count_rows()
+    start = 0 if spec.row_start is None else spec.row_start
+    end = num_rows if spec.row_end is None else min(spec.row_end, num_rows)
+    counters.pipeline.set_counter(counters.INPUT_ROWS_COMPLETED, 0)
+    # Filtered output batches do not expose how many source rows were scanned.
+    counters.pipeline.set_counter(counters.INPUT_ROWS_TOTAL, max(0, end - start) if pa_filter is None else -1)
 
     # Schema-less empty files cannot be projected by Vortex.
-    if not dataset.schema.names and dataset.count_rows() == 0:
+    if not dataset.schema.names and num_rows == 0:
         return
 
     # Vortex rejects empty projections. Read one column to retain row counts,
@@ -441,9 +462,6 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
         columns = [dataset.schema.names[0]]
 
     if spec.row_start is not None or spec.row_end is not None:
-        num_rows = dataset.count_rows()
-        start = 0 if spec.row_start is None else spec.row_start
-        end = num_rows if spec.row_end is None else min(spec.row_end, num_rows)
         batches = (
             dataset.take(
                 pa.array(np.arange(batch_start, min(batch_start + _VORTEX_READ_BATCH_ROWS, end), dtype=np.uint64)),
@@ -460,6 +478,7 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
             batch = batch.select([])
         counters.pipeline.update_counter(counters.RECORDS_IN, len(batch))
         yield from batch.to_pylist()
+        counters.pipeline.update_counter(counters.INPUT_ROWS_COMPLETED, len(batch))
 
 
 SUPPORTED_EXTENSIONS = tuple(

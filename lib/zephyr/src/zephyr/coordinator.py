@@ -1038,7 +1038,14 @@ class ZephyrCoordinator:
         counter_key = (worker_id, execution_id)
         existing = self._worker_counters.get(counter_key)
         watermark = max(generation, existing.generation) if existing is not None else generation
-        self._worker_counters[counter_key] = CounterSnapshot.empty(watermark)
+        # Finishing one concurrent runner must not blank its siblings' progress.
+        run = self._executions[execution_id]
+        remaining_shards = {
+            index: progress
+            for index, progress in (existing.shards.items() if existing is not None else ())
+            if index in run.in_flight and run.in_flight[index].worker_id == worker_id
+        }
+        self._worker_counters[counter_key] = CounterSnapshot(counters={}, generation=watermark, shards=remaining_shards)
 
     def report_error(
         self,

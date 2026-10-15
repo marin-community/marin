@@ -11,7 +11,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 from fray.actor import ActorFuture, ActorHandle, current_actor
@@ -30,7 +30,7 @@ from zephyr.stats import (
     ZephyrWorkerStatStatus,
     _push_iris_task_status,
 )
-from zephyr.worker_context import CounterEntry, CounterSnapshot, merge_counter_entries
+from zephyr.worker_context import CounterEntry, CounterSnapshot, ShardProgress, merge_counter_entries
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,7 @@ class _ActiveShard:
     execution_id: str
     start_time: float
     attempt: int
+    stage_generation: int
     attempt_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     last_counters: dict[str, CounterEntry] = field(default_factory=dict)
 
@@ -262,6 +263,7 @@ class ZephyrWorker:
                 execution_id=work.execution_id,
                 start_time=time.monotonic(),
                 attempt=work.attempt,
+                stage_generation=work.stage_generation,
             )
             with self._resources_lock:
                 self._available = self._available - work.task.cost
@@ -414,9 +416,10 @@ class ZephyrWorker:
     def _heartbeat_counter_snapshots(self) -> dict[str, CounterSnapshot] | None:
         """Return changed live counters, grouped by pipeline execution."""
         entries_by_execution: dict[str, list[tuple[str, CounterEntry]]] = defaultdict(list)
+        shards_by_execution: dict[str, dict[int, ShardProgress]] = defaultdict(dict)
         with self._resources_lock:
             for active_shard in self._active_shards:
-                counters = active_shard.runner.live_counters()
+                counters = {name: replace(entry) for name, entry in active_shard.runner.live_counters().items()}
                 active_shard.last_counters = dict(counters)
                 if ZEPHYR_WORKER_MEM_CURRENT_KEY in counters:
                     self._stats_writer.emit_worker_stat(
@@ -429,11 +432,24 @@ class ZephyrWorker:
                         active_shard.attempt_id,
                     )
                 entries_by_execution[active_shard.execution_id].extend(counters.items())
+                completed = counters.get(stage_counters.INPUT_ROWS_COMPLETED)
+                total = counters.get(stage_counters.INPUT_ROWS_TOTAL)
+                shards_by_execution[active_shard.execution_id][active_shard.task.shard_idx] = ShardProgress(
+                    stage_name=active_shard.task.stage_name,
+                    stage_generation=active_shard.stage_generation,
+                    attempt=active_shard.attempt,
+                    elapsed_seconds=max(0, time.monotonic() - active_shard.start_time),
+                    records_in=int(counters.get(stage_counters.RECORDS_IN, CounterEntry(0)).value),
+                    input_rows_completed=int(completed.value) if completed is not None else None,
+                    input_rows_total=int(total.value) if total is not None and total.value >= 0 else None,
+                )
             snapshots: dict[str, CounterSnapshot] = {}
             execution_ids = entries_by_execution.keys() | self._last_reported_counters.keys()
             for execution_id in execution_ids:
                 current, _ = merge_counter_entries(entries_by_execution.get(execution_id, []))
-                if current == self._last_reported_counters.get(execution_id, {}):
+                if not shards_by_execution[execution_id] and current == self._last_reported_counters.get(
+                    execution_id, {}
+                ):
                     continue
                 if current:
                     self._last_reported_counters[execution_id] = current
@@ -442,6 +458,7 @@ class ZephyrWorker:
                 snapshots[execution_id] = CounterSnapshot(
                     counters=current,
                     generation=self._next_counter_generation_locked(),
+                    shards=shards_by_execution[execution_id],
                 )
         return snapshots or None
 

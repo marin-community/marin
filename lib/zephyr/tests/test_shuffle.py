@@ -20,7 +20,7 @@ import pytest
 from fsspec.implementations.local import LocalFileSystem
 from iris.env_resources import TaskResources
 from rigging.filesystem.storage_path import StoragePath
-from zephyr import memory_budget
+from zephyr import counters, memory_budget
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
 from zephyr.shuffle import (
@@ -97,6 +97,22 @@ def test_scatter_roundtrip(tmp_path):
         recovered.extend(_read_shard(shard))
 
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
+
+
+def test_shuffle_input_progress_uses_target_rows_and_waits_for_consumption(tmp_path):
+    items = [{"k": i % 4, "v": i} for i in range(40)]
+    paths = _build_shard(tmp_path, items, num_output_shards=4)
+    target = deterministic_hash(0) % 4
+    reader = ScatterReader.from_sidecars(paths, target)
+    merged = reader.merge_sorted_chunks(str(tmp_path / "sort"))
+    first = next(merged)
+    values = counters.pipeline.get_counters()
+    expected = [row for row in items if deterministic_hash(row["k"]) % 4 == target]
+    assert values[counters.INPUT_ROWS_TOTAL] == len(expected)
+    assert values[counters.INPUT_ROWS_COMPLETED] == 0
+    recovered = [first, *merged]
+    assert sorted(recovered, key=lambda row: row["v"]) == expected
+    assert counters.pipeline.get_counters()[counters.INPUT_ROWS_COMPLETED] == len(expected)
 
 
 def test_scatter_streams_wide_items_before_consuming_input(tmp_path):

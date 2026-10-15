@@ -6,8 +6,9 @@
 import time
 from _thread import LockType
 from collections import Counter, defaultdict, deque
-from collections.abc import Callable, Mapping, Sized
+from collections.abc import Callable, Iterable, Mapping, Sized
 from dataclasses import dataclass
+from itertools import islice
 from typing import Protocol
 
 from zephyr.dashboard.app import (
@@ -63,6 +64,10 @@ class DashboardExecution(Protocol):
     fatal_error: str | None
     terminal_error: Exception | None
     done: bool
+    stage_generation: int
+
+    @property
+    def task_attempts(self) -> Mapping[int, int]: ...
 
     @property
     def node_states(self) -> Mapping[str, PlanNodeState]: ...
@@ -266,22 +271,59 @@ class CoordinatorDashboard:
             pipelines.sort(key=lambda item: (item.status.started_at_ms, item.status.execution_id))
             return DashboardOverview(pipelines=tuple(pipelines))
 
-    def shards(self, execution_id: str, offset: int, limit: int) -> ShardPage:
+    def shards(self, execution_id: str, offset: int, limit: int, state: str = "") -> ShardPage:
+        now = time.monotonic()
         with self._coordinator._lock:
             run = self._run_locked(execution_id)
             if run is None:
                 return ShardPage(shards=(), total=0, stage_name="")
             stopped = self._phase_locked(run) == PipelinePhase.FAILED
+            indices: Iterable[int]
+            if state == ShardState.RUNNING:
+                indices = sorted(run.in_flight)
+                matching = len(indices)
+            elif state == ShardState.SUCCEEDED:
+                indices = sorted(run.results)
+                matching = len(indices)
+            elif state:
+                available = (state == ShardState.STOPPED) == stopped
+                matching = run.total_shards - len(run.results) - len(run.in_flight) if available else 0
+                indices = (
+                    index
+                    for index in range(run.total_shards)
+                    if available and index not in run.results and index not in run.in_flight
+                )
+            else:
+                indices = range(run.total_shards)
+                matching = run.total_shards
             shards = []
-            for index in range(offset, min(run.total_shards, offset + limit)):
+            for index in islice(indices, offset, offset + limit):
                 if index in run.results:
                     state = ShardState.SUCCEEDED
                 elif index in run.in_flight:
                     state = ShardState.RUNNING
                 else:
                     state = ShardState.STOPPED if stopped else ShardState.PENDING
-                shards.append(ShardStatus(index=index, state=state))
-            return ShardPage(shards=tuple(shards), total=run.total_shards, stage_name=run.stage_name)
+                entry = run.in_flight.get(index)
+                worker_id = entry.worker_id if entry is not None else ""
+                snapshot = self._coordinator._worker_counters.get((worker_id, run.execution_id))
+                progress = snapshot.shards.get(index) if snapshot is not None and entry is not None else None
+                if progress is not None and (
+                    progress.stage_generation != run.stage_generation or progress.attempt != run.task_attempts[index]
+                ):
+                    progress = None
+                last_seen = self._coordinator._last_seen.get(worker_id)
+                shards.append(
+                    ShardStatus(
+                        index=index,
+                        state=state,
+                        worker_id=worker_id,
+                        task_id=self._coordinator._worker_task_ids.get(worker_id, ""),
+                        heartbeat_age_seconds=max(0, now - last_seen) if last_seen is not None else None,
+                        progress=progress,
+                    )
+                )
+            return ShardPage(shards=tuple(shards), total=run.total_shards, stage_name=run.stage_name, matching=matching)
 
     def metrics(self, execution_id: str, max_points: int) -> PipelineMetrics:
         with self._coordinator._lock:

@@ -91,6 +91,9 @@ can skip an existing output file.
 
 ## Real Usage
 
+See the [dashboard reference](../../docs/references/zephyr-dashboard.md) for
+per-shard input progress, worker details, and measurement limits.
+
 **Wikipedia Processing:**
 ```python
 from zephyr.context import ZephyrContext
