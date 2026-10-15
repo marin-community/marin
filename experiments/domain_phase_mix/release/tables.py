@@ -34,7 +34,3 @@ def add_aggregates(df: pd.DataFrame, task_weights: dict[str, dict[str, float]]) 
         cols = {f"bpb__{t}": w for t, w in weights.items()}
         out[f"bpb__{name}"] = sum(out[c] * w for c, w in cols.items())
     return out
-
-
-def weight_columns(df: pd.DataFrame, prefix: str = "w__") -> list[str]:
-    return [c for c in df if c.startswith(prefix)]
