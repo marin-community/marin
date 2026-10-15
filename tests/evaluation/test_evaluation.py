@@ -349,6 +349,7 @@ def _evaluate_with_session(
 
 
 def test_evaluation_steps_share_candidate_and_judge(tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "stepspec-test-secret-do-not-persist")
     opened_models: list[str] = []
     observed_candidates: list[RemoteInferenceSession] = []
     observed_judges: list[RemoteInferenceSession | None] = []
@@ -398,6 +399,11 @@ def test_evaluation_steps_share_candidate_and_judge(tmp_path, monkeypatch):
     assert record.judge is not None
     assert record.judge.model.name == "judge"
     assert record.judge.hardware.accelerator == "H100x1"
+    for evaluation in batch.evaluations:
+        metadata = json.loads((tmp_path / "records" / evaluation.identity.run_id / ".executor_info").read_text())
+        assert "https://candidate.example/v1" not in metadata["fn_name"]
+        assert "https://judge.example/v1" not in metadata["fn_name"]
+        assert "stepspec-test-secret-do-not-persist" not in metadata["fn_name"]
 
 
 def test_model_and_judge_weights_are_ready_before_gpu_startup(tmp_path, monkeypatch):
