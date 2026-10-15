@@ -30,6 +30,7 @@ from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, Constra
 from iris.resources.state import JobState, TaskState
 from iris.rpc import job_pb2
 from marin.evaluation.eval_policy import HARBOR_COMMIT, SEPTEMBER_16_VERSION, source_config_digest
+from marin.evaluation.evalchemy.config import EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig, _coverage_with_aggregate_counts
 from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
@@ -255,7 +256,7 @@ def _failed_evaluation(
     )
 
 
-def _evaluation(root: Path, name: str, executor, endpoint_route: EndpointRoute = EndpointRoute.CAPABILITY) -> Evaluation:
+def _evaluation(root: Path, name: str, executor, endpoint_route: EndpointRoute = EndpointRoute.PROVIDED) -> Evaluation:
     return Evaluation(
         identity=EvaluationIdentity(
             run_id=f"run-{name}",
@@ -716,9 +717,12 @@ def test_evaluation_step_gates_transport_failure_coverage(tmp_path, monkeypatch,
 
 @pytest.mark.parametrize("recovered_before_result", [False, True])
 @pytest.mark.parametrize("failure_mode", ["none", "reported", "cached", "existing"])
-@pytest.mark.parametrize("entrypoint", ["batch", "served"])
+@pytest.mark.parametrize(
+    ("entrypoint", "endpoint_route"),
+    [("batch", EndpointRoute.DIRECT), ("batch", EndpointRoute.PROVIDED), ("served", EndpointRoute.DIRECT)],
+)
 def test_evaluation_resumes_one_archive_and_rejects_saved_transport_failures(
-    tmp_path, monkeypatch, recovered_before_result, failure_mode, entrypoint
+    tmp_path, monkeypatch, recovered_before_result, failure_mode, entrypoint, endpoint_route
 ):
     controller = SimpleNamespace(ready=False, preemptions=0)
 
@@ -736,7 +740,7 @@ def test_evaluation_resumes_one_archive_and_rejects_saved_transport_failures(
         resolve_endpoint=lambda _name: f"http://10.0.0.{controller.preemptions + 1}:8000",
     )
     monkeypatch.setattr("marin.inference.iris.iris_ctx", lambda: SimpleNamespace(client=client))
-    monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
+    monkeypatch.setattr("marin.evaluation.runner.iris_ctx", lambda: SimpleNamespace(client=client))
     monkeypatch.setattr("marin.inference.iris.time.sleep", lambda _seconds: setattr(controller, "ready", True))
     monkeypatch.setattr("marin.inference.iris.requests.get", lambda *_args, **_kwargs: SimpleNamespace(status_code=200))
     session = replace(
@@ -748,7 +752,14 @@ def test_evaluation_resumes_one_archive_and_rejects_saved_transport_failures(
 
     def run_child(_model, _config, output_dir, _env_vars, **_kwargs):
         assert controller.ready
-        assert _model.endpoint.base_url == f"http://10.0.0.{controller.preemptions + 1}:8000/v1"
+        if entrypoint == "served":
+            assert _env_vars["JUDGE_API_KEY"] == "test-judge-key"
+        expected_url = (
+            f"http://10.0.0.{controller.preemptions + 1}:8000/v1"
+            if endpoint_route is EndpointRoute.DIRECT
+            else session.model.endpoint.base_url
+        )
+        assert _model.endpoint.base_url == expected_url
         if failure_mode == "existing" or (failure_mode == "cached" and controller.preemptions):
             # Native resume restores the saved failure without making another model request.
             return "/eval/child"
@@ -770,8 +781,18 @@ def test_evaluation_resumes_one_archive_and_rejects_saved_transport_failures(
         return "/eval/child"
 
     monkeypatch.setattr("marin.evaluation.evalchemy.runner._run_evalchemy_child", run_child)
-    executor = EvalchemyExecutor(EvalchemyRunConfig(name="task", tasks=(EvalTaskConfig(name="task", num_fewshot=0),)))
-    evaluation = _evaluation(tmp_path, "interrupted", executor)
+    monkeypatch.setenv("TEST_EVALUATION_JUDGE_KEY", "test-judge-key")
+    judge_config = (
+        EvalchemyJudgeConfig(
+            base_url="https://judge.example/v1", model="judge", api_key=("env:TEST_EVALUATION_JUDGE_KEY",)
+        )
+        if entrypoint == "served"
+        else None
+    )
+    executor = EvalchemyExecutor(
+        EvalchemyRunConfig(name="task", tasks=(EvalTaskConfig(name="task", num_fewshot=0),), judge=judge_config)
+    )
+    evaluation = _evaluation(tmp_path, "interrupted", executor, endpoint_route)
     evaluation = replace(
         evaluation, identity=replace(evaluation.identity, output_dir=f"file://{tmp_path / 'interrupted'}")
     )
@@ -1554,7 +1575,7 @@ def test_launch_group_resolves_declared_secrets_outside_the_pickled_batch(tmp_pa
             eval_runtime="test-runtime",
         ),
         executor=_successful_evaluation,
-        endpoint_route=EndpointRoute.CAPABILITY,
+        endpoint_route=EndpointRoute.PROVIDED,
     )
     batch = EvaluationBatch(
         group_id="group",
@@ -1765,7 +1786,7 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
         )
     }
     assert {evaluation.identity.eval_runtime for evaluation in batch.evaluations} == {HARBOR_RUNTIME}
-    assert all(evaluation.endpoint_route is EndpointRoute.CAPABILITY for evaluation in batch.evaluations)
+    assert all(evaluation.endpoint_route is EndpointRoute.PROVIDED for evaluation in batch.evaluations)
     assert all(evaluation.identity.eval_ref.harbor.config_digest for evaluation in batch.evaluations)
     assert all(evaluation.identity.eval_ref.harbor.task_limit == 1 for evaluation in batch.evaluations)
 

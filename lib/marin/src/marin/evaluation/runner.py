@@ -168,7 +168,12 @@ class EvaluationError(RuntimeError):
 
 
 class EvalExecutor(Protocol):
-    """Execute one resumable attempt at output_dir; raise EvaluationError on failure."""
+    """Execute one resumable attempt using the supplied endpoint and output_dir.
+
+    Monitor inference dependencies while child work runs. Stop all child work
+    before raising InferenceUnavailable so the runner can safely reuse output_dir.
+    Raise EvaluationError for evaluation failures that should not be retried.
+    """
 
     def __call__(
         self,
@@ -181,8 +186,10 @@ class EvalExecutor(Protocol):
 
 
 class EndpointRoute(StrEnum):
+    """Resolve a current Iris worker address, or keep the supplied endpoint."""
+
     DIRECT = "direct"
-    CAPABILITY = "capability"
+    PROVIDED = "provided"
 
 
 @dataclass(frozen=True)
@@ -419,8 +426,8 @@ def run_evaluation(
     output_dir: str,
     env_vars: Mapping[str, str],
     *,
+    endpoint_route: EndpointRoute,
     judge: RemoteInferenceSession | None = None,
-    endpoint_route: EndpointRoute = EndpointRoute.CAPABILITY,
 ) -> EvaluationOutcome:
     """Supervise one evaluator and resume the same archive after inference outages."""
     sessions = (session,) if judge is None else (session, judge)

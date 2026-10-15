@@ -45,9 +45,8 @@ from marin.evaluation.runner import (
     check_inference_backend,
     inference_attempt_state,
 )
-from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.iris import RemoteInferenceSession
-from marin.inference.types import OpenAIEndpoint, RunningModel
+from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
@@ -380,23 +379,6 @@ def _run_evalchemy_once(
     )
 
 
-def _evalchemy_model(session: RemoteInferenceSession) -> RunningModel:
-    if not session.jobs:
-        return session.model
-    try:
-        address = iris_ctx().client.resolve_endpoint(session.endpoint_name).rstrip("/")
-    except ConnectionError as exc:
-        raise InferenceUnavailable("inference endpoint registration is unavailable") from exc
-    return RunningModel(
-        endpoint=OpenAIEndpoint(
-            base_url=f"{address}{OPENAI_API_SUFFIX}",
-            model=session.model.endpoint.model,
-            api_key=session.model.endpoint.api_key,
-        ),
-        tokenizer=session.model.tokenizer,
-    )
-
-
 @dataclass(frozen=True)
 class EvalchemyExecutor:
     """Run one resolved Evalchemy configuration."""
@@ -413,7 +395,7 @@ class EvalchemyExecutor:
     ) -> EvaluationOutcome:
         try:
             outcome = _run_evalchemy_once(
-                _evalchemy_model(session),
+                session.model,
                 self.config,
                 output_dir,
                 env_vars=env_vars,

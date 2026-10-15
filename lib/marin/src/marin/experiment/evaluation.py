@@ -14,6 +14,7 @@ from fray.cluster import ResourceConfig
 from iris.rpc import job_pb2
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.secrets import resolve_secret_spec
 
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.evalchemy.result import (
@@ -30,7 +31,7 @@ from marin.evaluation.evalchemy.runner import (
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.lm_eval import LM_EVAL_UV_PACKAGES, LmEvalResults, LmEvalRun, run_lm_eval
 from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
-from marin.evaluation.runner import run_evaluation
+from marin.evaluation.runner import EndpointRoute, run_evaluation
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import result_type_name, write_artifact
@@ -91,6 +92,11 @@ def run_served_evalchemy(config: EvalchemyEvalConfig) -> FineStoreEvalchemyResul
     if config.model.tokenizer is None and "://" in config.model.location:
         raise ValueError(f"model {config.model.location!r} is an object-store path; set tokenizer to an HF tokenizer id")
     runtime_env = env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS)
+    evaluation_env = (
+        {**runtime_env, "JUDGE_API_KEY": resolve_secret_spec(config.run.judge.api_key).value}
+        if config.run.judge is not None
+        else runtime_env
+    )
     inference = inference_config_for_model(
         config.model,
         config.accelerator,
@@ -102,7 +108,8 @@ def run_served_evalchemy(config: EvalchemyEvalConfig) -> FineStoreEvalchemyResul
             EvalchemyExecutor(config.run),
             session,
             output_dir,
-            runtime_env,
+            evaluation_env,
+            endpoint_route=EndpointRoute.DIRECT,
         )
         jobs = {f"serve-{index}" if index else "serve": str(job.job_id) for index, job in enumerate(session.jobs)}
         jobs |= outcome.jobs

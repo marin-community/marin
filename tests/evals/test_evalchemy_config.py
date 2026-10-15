@@ -23,7 +23,7 @@ from marin.evaluation.evalchemy.runner import (
     _run_evalchemy_child,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.runner import InferenceBackendFinished, InferenceUnavailable, run_evaluation
+from marin.evaluation.runner import EndpointRoute, InferenceBackendFinished, InferenceUnavailable, run_evaluation
 from marin.evaluation.serving_config import _auto_serve_overrides_from_config, auto_serve_overrides
 from marin.inference.iris import InferenceBackendState
 from marin.inference.types import OpenAIEndpoint, RunningModel
@@ -112,7 +112,7 @@ def test_failed_child_cancellation_does_not_start_a_same_archive_retry(tmp_path,
         pytest.fail("the child should not finish successfully")
 
     with pytest.raises(ConnectionError, match="cancellation failed"):
-        run_evaluation(executor, session, str(tmp_path / "cancel-failed"), {})
+        run_evaluation(executor, session, str(tmp_path / "cancel-failed"), {}, endpoint_route=EndpointRoute.PROVIDED)
 
 
 def _payload(config: EvalchemyRunConfig | None = None) -> dict:
