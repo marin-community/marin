@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import threading
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -48,6 +50,7 @@ from taskforge.sandbox.factories import (
     container_backend,
     machine_factories,
     task_refusals,
+    warm_local_python,
 )
 from taskforge.spec import draft
 
@@ -249,6 +252,58 @@ def test_factories_cover_the_hosts_backends(monkeypatch, host):
         assert container.controller_url == "http://controller.example:10000"
     else:
         assert isinstance(container, DockerMachineFactory)
+
+
+@dataclass(frozen=True)
+class FakeLocalFactory(FakeFactory):
+    """The local factory's shape: a package cache and a Python version the warm-up resolves."""
+
+    package_cache: Path = Path("/cache/python")
+    python_version: str = "3.12.12"
+
+
+def test_warming_resolves_the_bare_cpython_environment_once_off_the_caller_thread(monkeypatch, caplog):
+    calls: list[tuple[Path, tuple[str, ...], str, str]] = []
+    monkeypatch.setattr(
+        factories,
+        "resolve_python_environment",
+        lambda cache, requirements, version: calls.append(
+            (cache, requirements, version, threading.current_thread().name)
+        ),
+    )
+    built = {**IRIS, Backend.LOCAL.value: FakeLocalFactory(Backend.LOCAL)}
+
+    with caplog.at_level(logging.INFO, logger=factories.__name__):
+        thread = warm_local_python(built)
+        assert thread is not None
+        thread.join(timeout=10)
+
+    assert not thread.is_alive()
+    assert calls == [(Path("/cache/python"), (), "3.12.12", factories.WARM_THREAD)]
+    assert "Warmed the local Python 3.12.12 environment" in caplog.text
+
+
+def test_a_failed_warm_up_is_logged_and_leaves_the_first_machine_to_resolve(monkeypatch, caplog):
+    def refuse(cache, requirements, version):
+        raise RuntimeError("uv is not installed")
+
+    monkeypatch.setattr(factories, "resolve_python_environment", refuse)
+    built = {**IRIS, Backend.LOCAL.value: FakeLocalFactory(Backend.LOCAL)}
+
+    with caplog.at_level(logging.WARNING, logger=factories.__name__):
+        thread = warm_local_python(built)
+        assert thread is not None
+        thread.join(timeout=10)
+
+    assert "Warming the local Python 3.12.12 environment in /cache/python failed" in caplog.text
+    assert "uv is not installed" in caplog.text
+
+
+def test_without_a_local_factory_there_is_nothing_to_warm(monkeypatch):
+    monkeypatch.setattr(factories, "resolve_python_environment", lambda *args: pytest.fail("resolved without a factory"))
+
+    assert warm_local_python({Backend.SHELLSIM.value: SHELLSIM}) is None
+    assert warm_local_python(IRIS) is None
 
 
 def test_factory_arguments_must_match_the_host():

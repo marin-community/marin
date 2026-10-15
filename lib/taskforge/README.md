@@ -124,7 +124,10 @@ record, so a move of either is a single-site change.
   ShellSim plus gVisor on Iris, plus the local backend for lock-only graders when bubblewrap works
   in the Iris task. Before a trial starts, `task_refusals(lowered, factories)` passes each machine of
   a lowered task to its factory's `check_environment` and lists a typed refusal, with the factory's
-  message, for each machine without a factory or rejected by one.
+  message, for each machine without a factory or rejected by one. `warm_local_python(factories)`
+  builds the local backend's bare CPython environment in a background thread, so a coordinator that
+  calls it once at start spares its first wave of local machines the five-second build; the build
+  children share the cache.
 
 Task-specific grading is the task's own code, private in `resources.verifier`, run by a
 `ScriptGrader` in a separate verifier machine after the attempt. The verifier machine starts from
