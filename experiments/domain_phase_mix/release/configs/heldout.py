@@ -1,0 +1,142 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""The cumulative held-out registry: frozen (September 2) and expanded (September 13) cohorts of all three swarms."""
+
+import numpy as np
+import pandas as pd
+
+from experiments.domain_phase_mix.release import keys, naming, paths, tables
+from experiments.domain_phase_mix.release.context import ExportContext
+
+EXPANDED = paths.RO / "single_phase_heldout_benchmark_expanded_20260913"
+FROZEN = paths.RO / "single_phase_heldout_benchmark_20260902"
+SWARM = {"delphi_3e18_39bucket": "qwen3_360m_1p6b", "60m_39bucket": "llama_160m_1p2b", "300m_39bucket": "llama_200m_6b"}
+META = {
+    "proposal_model": "proposal_method",
+    "proposal_target": "proposal_objective",
+    "epoch_cap": "epoch_cap",
+    "data_seed": "data_seed",
+    "trainer_seed": "trainer_seed",
+    "subset_seed": "subset_seed",
+    "phase_tv": "phase_tv",
+    "uncheatable_bpb": "bpb__uncheatable_source",
+    "table9_macro_bpb": "bpb__obe_easy_source",
+}
+# Weights behind each panel's recorded Uncheatable aggregate; the frozen registry's builder checked them to 3e-6.
+AGGREGATE_VERSION = {"delphi_3e18_39bucket": "fixed_20260927", "60m_39bucket": "legacy", "300m_39bucket": "legacy"}
+# These launches ran after the evaluator moved to BPB schema 2 (about 12 September 2026). Their recorded Uncheatable
+# aggregate is its pooled one, 0.008 to 0.011 BPB above the fixed weighting of the same runs' components
+# (two_phase_many/uncheatable_objective.py); the expanded registry copied it unchecked.
+POOLED_SOURCES = ("validation::path_midpoints", "validation::regmix_reference")
+POOLED_VERSION = "pooled_schema2"
+# Result folders of the validation launches in the expanded cohort, from the launch registry of
+# collect_delphi_3e18_validation_results_20260906.py, which the expanded registry's builder read.
+VALIDATION_LAUNCHES = {
+    "link": "delphi_link_validation_3e18_20260906",
+    "hub": "delphi_link_hub_validation_3e18_20260906",
+    "coupling": "delphi_coupling_validation_3e18_20260906",
+    "kappa_floor": "delphi_kappa_floor_validation_3e18_20260907",
+    "kappa_floor_kl05": "delphi_kappa_floor_validation_kl05_3e18_20260907",
+    "kappa_floor_flat": "delphi_kappa_floor_flat15_validation_3e18_20260907",
+    "frozen_procedure": "delphi_frozen_procedure_validation_3e18_20260908",
+    "kl_ablation": "delphi_kl_ablation_3e18_20260908",
+    "fairness_repeats": "delphi_fairness_repeats_3e18_20260908",
+    "olmix_kl005_repeats": "delphi_olmix_kl005_repeats_3e18_20260908",
+    "matched_olmix": "delphi_matched_olmix_3e18_20260908",
+    "comparator_proposals": "delphi_comparator_proposals_3e18_20260909",
+    "path_midpoints": "delphi_path_midpoints_3e18_20260912",
+    "regmix_reference": "delphi_regmix_reference_3e18_20260913",
+    "three_component_optimum": "delphi_three_component_optimum_3e18_20260908",
+    "factorial": "delphi_frontier_factorial_design_20260906",
+}
+
+
+def _frozen_components() -> pd.DataFrame:
+    """Run-level components of the frozen cohort, which its builder checked against each run's recorded aggregates."""
+    long = pd.read_csv(paths.require(FROZEN / "heldout_components.csv"))
+    return pd.DataFrame({"row_id": long.row_id, "task": long.component.map(naming.task_public), "bpb": long.bpb})
+
+
+def _validation_components(ctx: ExportContext) -> pd.DataFrame:
+    """Run-level components of the validation launches, keyed as the expanded registry's builder keyed them.
+
+    A launch that repeats candidates over trainer seeds names each run `<candidate>@t<seed>`, otherwise `<candidate>`.
+    Uncheatable components are `uncheatable_<corpus>_bpb` result columns; the OlmoBaseEval Easy file is long and names
+    each component by its public task id.
+    """
+    uncheatable_columns = {f"uncheatable_{t.removeprefix('uncheatable/')}_bpb": t for t in ctx.tasks[:7]}
+    frames = []
+    for launch, folder in VALIDATION_LAUNCHES.items():
+        results = pd.read_csv(paths.require(paths.RO / folder / "measured_results.csv"))
+        results = results[results.status == "measured"]
+        run = list(results.candidate_id)
+        if "trainer_seed" in results:
+            run = [f"{c}@t{int(s)}" for c, s in zip(run, results.trainer_seed, strict=True)]
+        uncheatable = results[list(uncheatable_columns)].rename(columns=uncheatable_columns).set_axis(run)
+        obe = pd.read_csv(paths.require(paths.RO / folder / "measured_table9_components.csv"))
+        assert set(obe.component) == set(ctx.tasks[7:]), f"{launch}: unexpected OlmoBaseEval Easy components"
+        both = pd.concat([uncheatable.stack(), obe.set_index(["candidate_id", "component"]).bpb])
+        both = both.rename_axis(["run", "task"]).reset_index(name="bpb")
+        frames.append(
+            pd.DataFrame({"row_id": f"delphi_validation::{launch}::" + both.run, "task": both.task, "bpb": both.bpb})
+        )
+    return pd.concat(frames, ignore_index=True)
+
+
+def _components(ctx: ExportContext, runs: pd.DataFrame) -> pd.DataFrame:
+    """Per-run components, wide, after checking that they average to the expanded registry's coordinate components.
+
+    The expanded registry publishes components per coordinate only; those means differ from the run values wherever
+    seeds repeat a mixture, so the run values come from the frozen registry and from the validation launches.
+    """
+    long = pd.concat([_frozen_components(), _validation_components(ctx)], ignore_index=True)
+    coordinate = long.row_id.map(runs.set_index("row_id").coordinate_id).rename("coordinate_id")
+    means = long.groupby([coordinate, long.task]).bpb.mean()
+    published = pd.read_csv(paths.require(EXPANDED / "heldout_coordinate_components.csv"))
+    published = published.set_index([published.coordinate_id, published.component.map(naming.task_public)]).bpb_mean
+    assert set(means.index) == set(published.index), "run-level components cover other coordinates than the registry"
+    assert np.allclose(means, published.reindex(means.index), rtol=0, atol=1e-12), "components differ from the registry"
+    wide = long.pivot(index="row_id", columns="task", values="bpb")
+    wide.columns = [f"bpb__{t}" for t in wide.columns]
+    return wide
+
+
+def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
+    runs = pd.read_csv(paths.require(EXPANDED / "heldout_runs.csv"))
+    assert runs.eligible.all() and runs.exclusion_reason.isna().all()
+    assert set(runs.panel) == set(SWARM), f"panels {sorted(set(runs.panel))}"
+    frozen_ids = set(pd.read_csv(paths.require(FROZEN / "heldout_runs.csv")).row_id)
+
+    out = pd.DataFrame({"observation_id": runs.row_id.map(ctx.registry.id_for)})
+    out["swarm"] = runs.panel.map(SWARM)
+    out["cohort"] = ["frozen" if r in frozen_ids else "expanded" for r in runs.row_id]
+    for src, dst in META.items():
+        out[dst] = runs[src]
+    # The 160M panel and some archived Qwen3 runs record no proposal model; their registry source names the experiment.
+    out["proposal_method"] = out.proposal_method.fillna(runs.source)
+    wcols = [c for c in runs.columns if c.startswith("weight::")]
+    pcols = [c for c in runs.columns if c.startswith("pool_fraction::")]
+    for c in wcols:
+        out[f"w__{naming.bucket_public(c.removeprefix('weight::'))}"] = runs[c]
+    for c in pcols:
+        out[f"pf__{naming.bucket_public(c.removeprefix('pool_fraction::'))}"] = runs[c]
+    bucket_order = ctx.buckets
+    out["mixture_id"] = [
+        keys.mixture_id(dict(zip(bucket_order, row, strict=True)))
+        for row in out[[f"w__{b}" for b in bucket_order]].to_numpy()
+    ]
+    out["exposure_id"] = [
+        keys.exposure_id(
+            dict(zip(bucket_order, w, strict=True)), dict(zip(bucket_order, p, strict=True)), paths.PARTITION_REVISION
+        )
+        for w, p in zip(
+            out[[f"w__{b}" for b in bucket_order]].to_numpy(),
+            out[[f"pf__{b}" for b in bucket_order]].to_numpy(),
+            strict=True,
+        )
+    ]
+    out["aggregate_version"] = runs.panel.map(AGGREGATE_VERSION).mask(runs.source.isin(POOLED_SOURCES), POOLED_VERSION)
+    out = out.join(_components(ctx, runs).reindex(runs.row_id).reset_index(drop=True))
+    out = tables.add_aggregates(out, ctx.weights)  # NaN where components are missing; the manifest records coverage
+    return {"heldout": tables.order_columns(out, ctx.buckets, ctx.tasks)}
