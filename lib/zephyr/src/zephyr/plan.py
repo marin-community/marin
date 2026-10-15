@@ -188,7 +188,7 @@ def _filter_gen(stream: Iterator, predicate: Callable) -> Iterator:
             yield item
 
 
-def _read_input[T](reader: Reader[T]) -> Iterator[T]:
+def _read_input[T](reader: Reader[T], counter: str | None) -> Iterator[T]:
     """Count declared input records and publish best-effort task progress."""
     progress = InputProgress(completed=0, total=reader.total_rows)
     ctx = _worker_ctx_var.get()
@@ -198,7 +198,8 @@ def _read_input[T](reader: Reader[T]) -> Iterator[T]:
         for item in reader:
             progress.total = reader.total_rows
             rows = reader.rows_per_item(item)
-            counters.pipeline.update_counter(counters.RECORDS_IN, rows)
+            if counter is not None:
+                counters.pipeline.update_counter(counter, rows)
             yield item
             progress.completed += rows
         progress.total = reader.total_rows
@@ -207,7 +208,7 @@ def _read_input[T](reader: Reader[T]) -> Iterator[T]:
 def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
     for item in stream:
         result = fn(item)
-        yield from _read_input(result) if isinstance(result, Reader) else result
+        yield from _read_input(result, counters.RECORDS_IN) if isinstance(result, Reader) else result
 
 
 def _reduce_gen(
@@ -216,7 +217,7 @@ def _reduce_gen(
     reducer_fn: Callable,
     external_sort_dir: str,
 ) -> Iterator:
-    merged = _read_input(shard.merge_sorted_chunks(external_sort_dir))
+    merged = _read_input(shard.merge_sorted_chunks(external_sort_dir), counter=None)
     for key, grouped in groupby(merged, key=key_fn):
         result = reducer_fn(key, grouped)
         if isinstance(result, Iterator):
@@ -234,7 +235,8 @@ def _load_file_gen(stream: Iterator, loader: Callable, *, include_file_paths: bo
     for spec in stream:
         try:
             yield from _read_input(
-                loader(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
+                loader(spec, include_file_paths=include_file_paths, file_path_column=file_path_column),
+                counters.RECORDS_IN,
             )
         except Exception as e:
             e.add_note(f"While loading from {spec}")

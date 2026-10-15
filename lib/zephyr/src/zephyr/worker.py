@@ -64,7 +64,11 @@ def _shard_progress(active: _ActiveShard, snapshot: RunnerSnapshot, now: float) 
         stage_generation=active.stage_generation,
         attempt=active.attempt,
         elapsed_seconds=max(0, now - active.start_time),
-        records_in=int(snapshot.counters.get(stage_counters.RECORDS_IN, CounterEntry(0)).value),
+        records_in=int(
+            snapshot.counters.get(
+                stage_counters.RECORDS_IN, CounterEntry(progress.completed if progress is not None else 0)
+            ).value
+        ),
         input_rows_completed=progress.completed if progress is not None else None,
         input_rows_total=progress.total if progress is not None else None,
     )

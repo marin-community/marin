@@ -25,7 +25,8 @@ outer input's progress on the tile.
 File and shuffle readers expose a row total when it is cheap to obtain. The
 input operation updates both task progress and cumulative `records_in` counters
 as it consumes a reader. Direct reader calls inside a mapper do not contribute
-to either measurement.
+to either measurement. Shuffle inputs update task progress and their existing
+shuffle counters; they do not add to file-record totals.
 
 Select a shard for its input count, elapsed time, average reader-record rate
 over the whole shard, worker-task link, and heartbeat age. Heartbeats older than

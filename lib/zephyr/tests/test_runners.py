@@ -117,7 +117,7 @@ def test_user_counters_propagate(local_client, tmp_path, runner_factory):
     assert outcome.counters.get("doubled_sum") == 30
 
 
-def test_record_totals_across_parquet_and_jsonl_inputs(local_client, tmp_path, runner_factory):
+def test_file_record_totals_exclude_shuffle_reads(local_client, tmp_path, runner_factory):
     records = [{"id": index} for index in range(3)]
     parquet_path = tmp_path / "input.parquet"
     jsonl_path = tmp_path / "input.jsonl"
@@ -125,11 +125,17 @@ def test_record_totals_across_parquet_and_jsonl_inputs(local_client, tmp_path, r
     jsonl_path.write_text("\n".join(json.dumps(record) for record in records))
     ctx = _ctx(local_client, tmp_path, stage_runner_factory=runner_factory)
     try:
-        outcome = ctx.execute(Dataset.from_list([str(parquet_path), str(jsonl_path)]).load_file())
+        dataset = (
+            Dataset.from_list([str(parquet_path), str(jsonl_path)])
+            .load_file()
+            .group_by(key=lambda row: row["id"], reducer=lambda key, rows: rows, num_output_shards=2)
+        )
+        outcome = ctx.execute(dataset)
     finally:
         ctx.shutdown()
     assert sorted(row["id"] for row in outcome.results) == [0, 0, 1, 1, 2, 2]
     assert outcome.counters[counters.RECORDS_IN] == 6
+    assert outcome.counters[counters.SHUFFLE_INPUT_ROWS] == 6
 
 
 def test_runner_snapshots_keep_input_progress_separate_and_reset_between_tasks(tmp_path, runner_factory):
