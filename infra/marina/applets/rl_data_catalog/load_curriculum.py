@@ -13,6 +13,7 @@ from typing import Any
 import click
 import pyarrow.parquet as pq
 from marina.client import DEFAULT_MARINA_URL
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage, CurriculumStatistic
 
@@ -236,6 +237,7 @@ def load_curriculum(release_uri: str, coverage_uri: str, query: Query) -> dict[s
 @click.option("--applet-id", required=True)
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 def main(release_uri: str, coverage_uri: str, applet_id: str, service_url: str) -> None:
+    configure_coreweave_s3()
     click.echo(json.dumps(load_curriculum(release_uri, coverage_uri, applet_query(service_url, applet_id))))
 
 
