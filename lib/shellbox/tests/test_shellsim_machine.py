@@ -14,7 +14,7 @@ import pytest
 pytest.importorskip("shellsim")
 
 import shellsim
-from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.backends.shellsim.machine import INTERRUPT_GRACE, ShellSimMachineFactory
 from shellbox.machine import Command, ExitReason, MachineSpec, PackageSpec, ShellStatus
 from shellbox.transfer import download_files
 
@@ -32,6 +32,7 @@ class _ControlledAction:
         self.release = threading.Event()
         self._cancelled = threading.Event()
         self.result = shellsim.run(":")
+        self.error: Exception | None = None
 
     def cancel(self):
         self._cancelled.set()
@@ -44,6 +45,8 @@ class _ControlledAction:
     def run(self, _source, _stdin=b"", *, cancellation):
         self.loop.call_soon_threadsafe(self.started.set)
         self.release.wait()
+        if self.error is not None:
+            raise self.error
         interrupted = cancellation.cancelled
         return replace(self.result, returncode=130 if interrupted else 0, interrupted=interrupted)
 
@@ -60,8 +63,8 @@ def _controlled_action(monkeypatch, runner):
             action.release.set()
 
 
-@pytest.mark.parametrize("interruption", ["timeout", "cancel"])
-def test_interrupted_command_waits_for_native_cleanup_and_preserves_machine(monkeypatch, tmp_path, interruption):
+@pytest.mark.parametrize("interruption", ["timeout", "cancel", "timeout-error"])
+def test_interrupted_command_waits_for_native_cleanup_and_preserves_machine(monkeypatch, tmp_path, caplog, interruption):
     async def check():
         machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
         loop = asyncio.get_running_loop()
@@ -71,9 +74,11 @@ def test_interrupted_command_waits_for_native_cleanup_and_preserves_machine(monk
         source.write_text("reused")
         try:
             with _controlled_action(monkeypatch, machine.simulation) as action:
+                if interruption == "timeout-error":
+                    action.error = shellsim.SimulationError("native cleanup failed")
                 running = asyncio.create_task(machine.run(Command(("fixture",), timeout=10)))
                 await action.started.wait()
-                if interruption == "timeout":
+                if interruption != "cancel":
                     clock[0] += 10
                 else:
                     running.cancel()
@@ -88,16 +93,99 @@ def test_interrupted_command_waits_for_native_cleanup_and_preserves_machine(monk
                     await asyncio.sleep(0)
                     assert not queued_upload.done()
                 action.release.set()
-                if interruption == "timeout":
+                if interruption != "cancel":
                     result = await running
                     assert result.reason is ExitReason.TIMED_OUT
                 else:
                     with pytest.raises(asyncio.CancelledError):
                         await running
                 await queued_upload
+                if interruption == "timeout-error":
+                    assert any(
+                        record.exc_info and record.exc_info[0] is shellsim.SimulationError for record in caplog.records
+                    )
             result = await machine.run(Command(("cat", "/workspace/after")))
             assert (result.exit_code, result.stdout) == (0, b"reused")
         finally:
+            await machine.close()
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("interruption", ["timeout", "cancel", "interrupt", "close"])
+def test_uncooperative_native_work_closes_the_machine_after_a_bounded_grace(monkeypatch, interruption):
+    async def check():
+        machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
+        shell = await machine.open_shell()
+        loop = asyncio.get_running_loop()
+        clock = [loop.time()]
+        monkeypatch.setattr(loop, "time", lambda: clock[0])
+        shell_action = interruption in ("interrupt", "close")
+        try:
+            with _controlled_action(monkeypatch, shell.shell if shell_action else machine.simulation) as action:
+                running = asyncio.create_task(
+                    shell.execute("fixture") if shell_action else machine.run(Command(("fixture",), timeout=10))
+                )
+                await action.started.wait()
+                if interruption == "timeout":
+                    clock[0] += 10
+                elif interruption == "cancel":
+                    running.cancel()
+                else:
+                    stopping = asyncio.create_task(shell.interrupt() if interruption == "interrupt" else machine.close())
+                await action.requested.wait()
+                clock[0] += INTERRUPT_GRACE
+                if interruption == "cancel":
+                    running.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await running
+                elif interruption == "timeout":
+                    result = await running
+                    assert result.reason is ExitReason.TIMED_OUT
+                elif interruption == "interrupt":
+                    with pytest.raises(RuntimeError):
+                        await stopping
+                else:
+                    await stopping
+                # Reject admission without waiting for the still-running native worker's lock.
+                with pytest.raises(RuntimeError):
+                    await machine.run(Command(("true",)))
+                action.release.set()
+                if shell_action:
+                    result = await running
+                    assert result.exit_code == 130
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
+
+
+def test_close_bounds_native_file_transfer_cleanup(monkeypatch, tmp_path):
+    async def check():
+        machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
+        loop = asyncio.get_running_loop()
+        clock = [loop.time()]
+        monkeypatch.setattr(loop, "time", lambda: clock[0])
+        started = asyncio.Event()
+        release = threading.Event()
+
+        def mount(_source, _target):
+            loop.call_soon_threadsafe(started.set)
+            release.wait()
+
+        monkeypatch.setattr(machine.simulation, "mount", mount)
+        upload = asyncio.create_task(machine.upload(tmp_path, "/workspace/input"))
+        try:
+            await started.wait()
+            closing = asyncio.create_task(machine.close())
+            await asyncio.sleep(0)
+            clock[0] += INTERRUPT_GRACE
+            await closing
+            with pytest.raises(RuntimeError):
+                await machine.run(Command(("true",)))
+        finally:
+            release.set()
+            await upload
             await machine.close()
 
     asyncio.run(check())
