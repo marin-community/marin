@@ -241,29 +241,50 @@ class MuonMomentumState(NamedTuple):
     slow: optax.Updates | None
 
 
-def scale_by_muon_momentum(momentum: float, nesterov: bool, switch_step: int) -> optax.GradientTransformation:
-    """MuonH momentum outside Newton-Schulz with Bi-Maxwell (modded-nanogpt #339) from ``switch_step`` on.
+def scale_by_muon_momentum(
+    momentum: float,
+    nesterov: bool,
+    switch_step: int | None,
+    warmup_start: float | None,
+    warmup_steps: int,
+) -> optax.GradientTransformation:
+    """MuonH momentum outside Newton-Schulz, with optional Bi-Maxwell (modded-nanogpt #339) from ``switch_step`` on.
 
-    Before ``switch_step`` it is (Nesterov) momentum: ``buf = m buf + g``, out ``m buf + g`` (``buf`` without
-    ``nesterov``). From ``switch_step`` on, a fast and a slow EMA of the gradient (rates ``BIMAXWELL_FAST_RATE``
-    and ``BIMAXWELL_SLOW_RATE``), both started from ``(1 - m) buf``, mix as ``M = (1 - w) fast + w slow``
+    Before ``switch_step`` (always, when it is None) it is (Nesterov) momentum: ``buf = m buf + g``, out
+    ``m buf + g`` (``buf`` without ``nesterov``). With ``warmup_start``, ``m`` rises linearly from ``warmup_start``
+    to ``momentum`` over the first ``warmup_steps`` steps (modded-nanogpt's momentum warmup), then stays at
+    ``momentum``. From ``switch_step`` on, a fast and a slow EMA of the gradient (rates ``BIMAXWELL_FAST_RATE`` and
+    ``BIMAXWELL_SLOW_RATE``), both started from ``(1 - m) buf``, mix as ``M = (1 - w) fast + w slow``
     (``w = BIMAXWELL_SLOW_WEIGHT``, mean age about 30 steps) and the output is ``g + m (M - g)``. Newton-Schulz is
-    scale-invariant per matrix, so the two regimes' different scales don't matter."""
+    scale-invariant per matrix, so the regimes' different scales don't matter."""
+
+    def momentum_at(count):
+        if warmup_start is None:
+            return momentum
+        frac = jnp.minimum((count - 1).astype(jnp.float32) / max(1, warmup_steps), 1.0)
+        return warmup_start + (momentum - warmup_start) * frac
 
     def init(params):
         zeros = lambda: jax.tree.map(jnp.zeros_like, params)  # noqa: E731
+        if switch_step is None:
+            return MuonMomentumState(jnp.zeros([], jnp.int32), zeros(), None, None)
         return MuonMomentumState(jnp.zeros([], jnp.int32), zeros(), zeros(), zeros())
 
     def update(updates, state, params=None):
         count = state.count + 1
+        m = momentum_at(count)
 
         def early(args):
             g_tree, buf_tree, fast_tree, slow_tree = args
-            new_buf = jax.tree.map(lambda g, b: (momentum * b + g).astype(b.dtype), g_tree, buf_tree)
+            new_buf = jax.tree.map(lambda g, b: (m * b + g).astype(b.dtype), g_tree, buf_tree)
             if not nesterov:
                 return new_buf, new_buf, fast_tree, slow_tree
-            out = jax.tree.map(lambda g, b: momentum * b + g, g_tree, new_buf)
+            out = jax.tree.map(lambda g, b: m * b + g, g_tree, new_buf)
             return out, new_buf, fast_tree, slow_tree
+
+        if switch_step is None:
+            out, buf, _, _ = early((updates, state.buf, None, None))
+            return out, MuonMomentumState(count, buf, None, None)
 
         def late(args):
             g_tree, buf_tree, fast_tree, slow_tree = args
@@ -271,13 +292,13 @@ def scale_by_muon_momentum(momentum: float, nesterov: bool, switch_step: int) ->
             first = count == switch_step + 1
 
             def leaf(g, buf, fast, slow):
-                start = (1.0 - momentum) * buf
+                start = (1.0 - m) * buf
                 fast = jnp.where(first, start, fast)
                 slow = jnp.where(first, start, slow)
                 fast = fast + BIMAXWELL_FAST_RATE * (g - fast)
                 slow = slow + BIMAXWELL_SLOW_RATE * (g - slow)
                 mix = (1.0 - BIMAXWELL_SLOW_WEIGHT) * fast + BIMAXWELL_SLOW_WEIGHT * slow
-                return (g + momentum * (mix - g)).astype(g.dtype), fast.astype(buf.dtype), slow.astype(buf.dtype)
+                return (g + m * (mix - g)).astype(g.dtype), fast.astype(buf.dtype), slow.astype(buf.dtype)
 
             res = jax.tree.map(leaf, g_tree, buf_tree, fast_tree, slow_tree)
 
@@ -310,13 +331,15 @@ def scale_with_grug_muonh(
     coefficient_type: CoefficientType,
     pre_norm: str,
     bimaxwell_switch_step: int | None,
+    momentum_warmup_start: float | None,
+    momentum_warmup_steps: int,
 ) -> optax.GradientTransformation:
     """MuonH transform for the stacked model: Newton-Schulz direction + Frobenius hyperball step.
 
-    ``bimaxwell_switch_step`` (Bi-Maxwell from that step) moves the momentum to ``scale_by_muon_momentum`` ahead
-    of Newton-Schulz (Nesterov momentum there equals the in-Muon one).
+    ``bimaxwell_switch_step`` (Bi-Maxwell from that step) or ``momentum_warmup_start`` (momentum warmup) moves the
+    momentum to ``scale_by_muon_momentum`` ahead of Newton-Schulz (Nesterov momentum there equals the in-Muon one).
     """
-    external_momentum = bimaxwell_switch_step is not None
+    external_momentum = bimaxwell_switch_step is not None or momentum_warmup_start is not None
     muon_transform = _grug_scale_with_muon(
         momentum=0.0 if external_momentum else momentum,
         nesterov=nesterov,
@@ -330,7 +353,11 @@ def scale_with_grug_muonh(
         truncate_frac=0.0,
         post_blend=0.0,
     )
-    momentum_stage = scale_by_muon_momentum(momentum, nesterov, bimaxwell_switch_step) if external_momentum else None
+    momentum_stage = (
+        scale_by_muon_momentum(momentum, nesterov, bimaxwell_switch_step, momentum_warmup_start, momentum_warmup_steps)
+        if external_momentum
+        else None
+    )
 
     def init_fn(params):
         if momentum_stage is None:
@@ -406,6 +433,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Decay shape of the MuonH LR after warmup: ``floor + (peak - floor) * (1 - p**power)`` over training
     progress ``p`` (modded-nanogpt MuonH records #345/#351). None keeps the shared schedule (linear = 1)."""
     muon_bimaxwell: bool = False
+    momentum_warmup_start: float | None = None
+    """MuonH Nesterov momentum at step 0, rising linearly to ``momentum`` over ``momentum_warmup`` (a fraction of
+    training, or steps); None keeps ``momentum`` constant."""
+    momentum_warmup: float = 0.1
     adam_ademamix_alpha: float = 0.0
     """AdEMAMix (arXiv 2409.03152) on the plain-Adam groups: weight of a slow gradient EMA added to Adam's
     first moment, warmed up linearly over the run (0: off; the paper uses 5-8)."""
@@ -443,6 +474,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     coefficient_type=self.coefficient_type,
                     pre_norm=self.muon_pre_norm,
                     bimaxwell_switch_step=bimaxwell_switch,
+                    momentum_warmup_start=self.momentum_warmup_start,
+                    momentum_warmup_steps=_convert_frac_or_steps(self.momentum_warmup, num_train_steps),
                 ),
                 _match_named_update_sharding(),
             )
