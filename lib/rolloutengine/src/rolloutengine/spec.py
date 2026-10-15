@@ -3,10 +3,25 @@
 
 """Serializable runtime configuration for one task attempt."""
 
+from enum import StrEnum
+
 from pydantic import BaseModel, ConfigDict, Field
 from shellbox.machine import NetworkPolicy
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.shell import ShellToolConfig
+
+
+class TraceMode(StrEnum):
+    """The evidence a rollout records for each model turn."""
+
+    EXACT_TOKENS = "exact_tokens"
+    """Served token IDs, loss masks, and log probabilities under the exact-token contract."""
+    MESSAGES = "messages"
+    """Unchecked, informational token IDs with an all-zero loss mask; never train on these rollouts."""
+
+
+TRACE_METRIC = "trace"
+"""``RolloutData.metrics`` key that marks every ``TraceMode.MESSAGES`` record with the mode's value."""
 
 
 class MachineRuntimeSpec(BaseModel):
@@ -49,6 +64,7 @@ class TaskSessionSpec(BaseModel):
     attempt_timeout: float | None = Field(gt=0)
     verifier_timeout: float | None = Field(gt=0)
     cleanup_timeout: float = Field(gt=0)
+    trace: TraceMode = TraceMode.EXACT_TOKENS
 
 
 class LoweredTaskSpec(BaseModel):

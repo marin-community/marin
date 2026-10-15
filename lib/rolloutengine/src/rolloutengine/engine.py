@@ -13,7 +13,7 @@ from typing import Any
 
 from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.models import SessionGrader, TaskSpec
+from taskcompendium.models import SessionGrader
 from taskcompendium.runtime.output_capture import captured_output_files
 from taskcompendium.submission import conversation_messages
 
@@ -48,18 +48,19 @@ from rolloutengine.event_delivery import _EventDelivery
 from rolloutengine.grading import _grade_rollout
 from rolloutengine.lowering import SHELLBOX_SESSION, validate_lowered_task
 from rolloutengine.machines import _prepare_machine
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.spec import TRACE_METRIC, LoweredTaskSpec, TraceMode
 from rolloutengine.task_session import _ShellboxTaskSession
+from rolloutengine.trace import _token_trace
 
 
-def _empty_rollout(task: TaskSpec) -> RolloutData:
+def _empty_rollout(lowered: LoweredTaskSpec) -> RolloutData:
     return RolloutData(
-        task.id,
-        tuple(conversation_messages(task.context.events)),
+        lowered.task.id,
+        tuple(conversation_messages(lowered.task.context.events)),
         (),
         (),
         (),
-        (),
+        _token_trace(lowered.session.trace).logprobs,
         GradeResult(Outcome.UNAVAILABLE, None, "Execution has no final grade"),
         "error",
     )
@@ -78,7 +79,7 @@ async def _captured_outputs(lowered: LoweredTaskSpec, machine: Machine | None) -
 
 
 class RolloutEngine:
-    """Generate exact-token rollouts from lowered single-stage tasks.
+    """Generate rollouts from lowered single-stage tasks under their session's trace mode.
 
     An optional observer receives progress events while each attempt runs.
     ``providers`` serve the built-in session's host tools, keyed by ``ProviderRequirement.action_interface``.
@@ -137,7 +138,7 @@ class RolloutEngine:
                 if not deadline.expired():
                     raise
                 operation, cause = RolloutOperation.ATTEMPT, error
-                record = _empty_rollout(lowered.task)
+                record = _empty_rollout(lowered)
             except RolloutInterrupted as error:
                 operation, cause = error.operation, error.__cause__
                 record = error.rollout
@@ -153,6 +154,8 @@ class RolloutEngine:
                 ),
                 metrics={**record.metrics, "cleanup_error_count": float(len(cleanup.errors))},
             )
+        if lowered.session.trace == TraceMode.MESSAGES:
+            record = replace(record, metrics={**record.metrics, TRACE_METRIC: TraceMode.MESSAGES.value})
         return record, operation, cause
 
     async def _run_task(
@@ -175,7 +178,7 @@ class RolloutEngine:
                 resources,
             )
         except Exception as error:
-            raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.START) from error
+            raise RolloutInterrupted(_empty_rollout(lowered), RolloutOperation.START) from error
         if machine is not None:
             events.emit(MachineReady(time.monotonic() - started))
 
@@ -196,7 +199,7 @@ class RolloutEngine:
             )
             session = session_factories[lowered.session.task_session](context)
         except Exception as error:
-            raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.PREPARE) from error
+            raise RolloutInterrupted(_empty_rollout(lowered), RolloutOperation.PREPARE) from error
         resources.push_async_callback(cleanup.run, "session_close", session.close)
         return await self._run_session(lowered, session, machine, attempt, events)
 
@@ -210,7 +213,7 @@ class RolloutEngine:
     ) -> RolloutData:
         task = lowered.task
         limits = lowered.session
-        completed = _empty_rollout(task)
+        completed = _empty_rollout(lowered)
         owner = asyncio.current_task()
         assert owner is not None
         cancellation_count = owner.cancelling()
@@ -224,10 +227,7 @@ class RolloutEngine:
         options = start.options
         replay_prompt_token_ids = start.prompt_token_ids
         completed = replace(completed, messages=tuple(messages))
-        prompt: tuple[int, ...] = ()
-        tokens: tuple[int, ...] = ()
-        masks: tuple[int, ...] = ()
-        logprobs: tuple[float, ...] | None = ()
+        trace = _token_trace(limits.trace)
         steps: list[RolloutStep] = []
         assistant_index = None
         stop_reason = MAX_TURNS_STOP_REASON
@@ -243,7 +243,7 @@ class RolloutEngine:
                                 ModelRequest(
                                     tuple(messages),
                                     options,
-                                    tokens,
+                                    trace.prefix,
                                     assistant_index,
                                     replay_prompt_token_ids,
                                 )
@@ -253,7 +253,7 @@ class RolloutEngine:
                         if not steps:
                             return replace(
                                 completed,
-                                prompt_token_ids=limit.prompt_token_ids,
+                                prompt_token_ids=trace.generation_limit_prompt(limit.prompt_token_ids),
                                 grade=GradeResult(
                                     Outcome.UNAVAILABLE, None, "Generation limit reached before the first response"
                                 ),
@@ -266,17 +266,9 @@ class RolloutEngine:
                     except Exception as error:
                         model_error = error
                         break
-                    if turn.logprobs is not None and len(turn.logprobs) != len(turn.response_token_ids):
-                        raise RolloutContractError("Model logprobs must align with response tokens")
-                    if not turn.response_token_ids:
-                        raise RolloutContractError("Model response contains no token evidence")
                     if replay_prompt_token_ids is not None and turn.prompt_token_ids != replay_prompt_token_ids:
                         raise RolloutContractError("Model transport changed the replay token prefix")
-                    if assistant_index is None:
-                        prompt = turn.prompt_token_ids
-                        tokens = prompt
-                    if turn.prompt_token_ids[: len(tokens)] != tokens:
-                        raise RolloutContractError("Model transport changed the served token prefix")
+                    trace.append(turn)
                     events.emit(
                         ModelTurnCompleted(
                             index,
@@ -287,29 +279,22 @@ class RolloutEngine:
                             time.monotonic() - started,
                         ),
                     )
-                    observation_count = len(turn.prompt_token_ids) - len(tokens)
-                    masks += (0,) * observation_count + (1,) * len(turn.response_token_ids)
-                    if logprobs is not None:
-                        logprobs = (
-                            None if turn.logprobs is None else logprobs + (0.0,) * observation_count + turn.logprobs
-                        )
-                    tokens = turn.prompt_token_ids + turn.response_token_ids
                     assistant_index = len(messages)
                     messages.append(turn.message)
                     pending = RolloutStep(
                         turn,
                         Transition(done=True, metrics={"advance_incomplete": 1.0}),
-                        len(tokens) - len(prompt) - 1,
+                        trace.response_end,
                         tuple(messages),
                     )
                     # Token evidence belongs to the attempt even if a tool operation fails.
                     completed = RolloutData(
                         task.id,
                         tuple(messages),
-                        prompt,
-                        tokens[len(prompt) :],
-                        masks,
-                        logprobs,
+                        trace.prompt,
+                        trace.response,
+                        trace.loss_mask,
+                        trace.logprobs,
                         completed.grade,
                         turn.stop_reason,
                         (*steps, pending),
@@ -323,11 +308,7 @@ class RolloutEngine:
                         raise
                     except Exception as error:
                         raise RolloutInterrupted(completed, RolloutOperation.ADVANCE) from error
-                    for values in (transition.token_rewards, transition.token_credit):
-                        if values is not None and len(values) != len(turn.response_token_ids):
-                            raise RolloutContractError(
-                                "Transition rewards and credit must align with model response tokens"
-                            )
+                    trace.check_transition(turn, transition)
                     events.emit(
                         TransitionCompleted(
                             index, transition.done, len(transition.observations), time.monotonic() - started
@@ -339,16 +320,15 @@ class RolloutEngine:
                     replay_prompt_token_ids = transition.next_prompt_token_ids
                     if transition.reset_conversation is not None and index + 1 < limits.max_turns:
                         messages = list(transition.reset_conversation)
-                        prompt = tokens = masks = ()
-                        logprobs = ()
+                        trace.reset()
                         steps.clear()
                         completed = replace(
                             completed,
                             messages=tuple(messages),
-                            prompt_token_ids=(),
-                            response_token_ids=(),
-                            loss_mask=(),
-                            logprobs=(),
+                            prompt_token_ids=trace.prompt,
+                            response_token_ids=trace.response,
+                            loss_mask=trace.loss_mask,
+                            logprobs=trace.logprobs,
                             steps=(),
                             metrics={},
                         )

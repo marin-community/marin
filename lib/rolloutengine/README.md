@@ -29,8 +29,10 @@ and returns them in `RolloutData.outputs`; final grading uses that capture.
 The default session then grades an in-process `VerifyitGrader` on the host.
 A `ScriptGrader`, or a `VerifyitGrader` with an environment, grades in a separate verifier machine using its digest-pinned image or a local environment built from its package lock.
 A `SessionGrader` requires a registered task session. A `NoGrader` task receives an `unavailable` grade.
+`TaskSessionSpec.trace` selects `TraceMode.EXACT_TOKENS` (the default) or `TraceMode.MESSAGES`.
+`MESSAGES` accepts chat-endpoint turns without checking or requiring token IDs, records an all-zero loss mask, and marks each record with `metrics["trace"] = "messages"`; never train on those rollouts.
 See the [task rollout reference](../../docs/references/task-rollouts.md)
-for the session lifecycle, exact-token contract, failure handling, and backend configuration.
+for the session lifecycle, exact-token contract, trace modes, failure handling, and backend configuration.
 
 From the Marin repository root:
 
