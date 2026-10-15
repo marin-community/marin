@@ -4,6 +4,7 @@
 """Shellbox task operations and public model request preparation."""
 
 import json
+import time
 from typing import Any
 
 from taskcompendium.chat import assistant_message
@@ -28,7 +29,15 @@ from taskcompendium.submission import (
     submission_instruction,
 )
 
-from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, TaskSessionContext, Transition
+from rolloutengine.contracts import (
+    LENGTH_STOP_REASON,
+    ModelTurn,
+    SessionStart,
+    TaskSessionContext,
+    ToolCallCompleted,
+    Transition,
+    emit_event,
+)
 
 WORKSPACE_INSTRUCTION = (
     "Use the {tool_name} tool to inspect and change the workspace. Send a final response when the task is completed."
@@ -77,6 +86,7 @@ class _ShellboxTaskSession:
         self.lowered = context.lowered
         self.machine = context.machine
         self.grader = context.require_task_grader()
+        self.observer = context.observer
         self.shell_tool = resolve_shell_tool(context.lowered.task, context.lowered.session.shell_tool)
 
     async def prepare(self) -> SessionStart:
@@ -95,6 +105,7 @@ class _ShellboxTaskSession:
             answer_call = isinstance(self.lowered.task.answer_format, AnswerCall) and call.name == ANSWER_CALL_NAME
             if call.name in final_tools or answer_call:
                 return Transition(done=True)
+            started = time.monotonic()
             if not isinstance(call.arguments, dict):
                 observation = json.dumps({"error": TOOL_ARGUMENTS_OBJECT_ERROR})
             elif self.shell_tool is None:
@@ -106,6 +117,12 @@ class _ShellboxTaskSession:
                     self.shell_tool,
                     timeout=self.lowered.session.command_timeout,
                 )
+            await emit_event(
+                self.observer,
+                ToolCallCompleted(
+                    self.lowered.task.id, call.name, len(observation.encode()), time.monotonic() - started
+                ),
+            )
             observations.append(
                 {
                     "role": "tool",

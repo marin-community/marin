@@ -214,6 +214,30 @@ These checks run after download and do not limit transfer buffers or downloaded 
 Invalid artifacts and missing required artifacts give `SUBMISSION_FAILURE` with reward zero.
 Archive command failures, archive timeouts, and provider or host I/O failures remain infrastructure errors.
 
+## Rollout events
+
+`RolloutEngine(model, factories, observer=observer)` reports progress while an attempt runs.
+The observer implements `async def on_event(self, event: RolloutEvent) -> None`.
+Each event is a frozen dataclass from `rolloutengine.contracts` with the task's `task_id`.
+Durations are wall-clock seconds.
+
+| Event | Emitted | Fields |
+| --- | --- | --- |
+| `AttemptStarted` | After validation, before machine acquisition | |
+| `MachineReady` | After task-machine setup; not emitted without a task machine | `duration` |
+| `SessionPrepared` | After `prepare()` | `message_count`, `duration` |
+| `ModelTurnCompleted` | After a model turn passes the token checks | `turn_index`, `stop_reason`, prompt and response token counts, `ModelTurn.metadata`, `duration` |
+| `ToolCallCompleted` | By a session, per tool call that returns an observation | `name`, `observation_bytes`, `duration` |
+| `TransitionCompleted` | After `advance(turn)` | `turn_index`, `done`, `observation_count`, `duration` |
+| `Graded` | After the session's `grade()` returns | `status`, `reward` |
+| `AttemptEnded` | After cleanup, when `run()` returns or raises `RolloutInterrupted` | `stop_reason`, or the interrupted `operation` |
+
+Sessions receive the observer as `TaskSessionContext.observer`; the built-in `shellbox` session emits `ToolCallCompleted`.
+The engine awaits each event inline, so observer time counts toward the enclosing deadline.
+An observer exception fails the attempt. When a session emits the event, the exception is the cause of a
+`RolloutInterrupted` for the `advance` operation. No end event is emitted when a token-contract error or
+cancellation propagates.
+
 ## Deadlines and failures
 
 | Field | Boundary |

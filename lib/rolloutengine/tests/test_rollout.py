@@ -6,7 +6,7 @@
 import asyncio
 import json
 import tarfile
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -60,13 +60,22 @@ from verifyit.spec import FunctionCall, PredictedActionSpec, StructuredExactSpec
 from rolloutengine.agent_session import AgentTaskSession
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.contracts import (
+    AttemptEnded,
+    AttemptStarted,
     GenerationLimitReached,
+    Graded,
+    MachineReady,
     ModelTurn,
+    ModelTurnCompleted,
     RolloutContractError,
+    RolloutEvent,
     RolloutInterrupted,
     RolloutOperation,
+    SessionPrepared,
     SessionStart,
+    ToolCallCompleted,
     Transition,
+    TransitionCompleted,
 )
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.lowering import lower_task
@@ -1834,3 +1843,88 @@ async def test_separate_verifyit_grader_uses_typed_submissions_and_task_resource
     for machine in factory.machines:
         with pytest.raises(RuntimeError):
             await machine.run(Command(("true",)))
+
+
+@dataclass
+class RecordingObserver:
+    events: list[RolloutEvent] = field(default_factory=list)
+
+    async def on_event(self, event: RolloutEvent) -> None:
+        self.events.append(event)
+
+    def untimed(self) -> list[RolloutEvent]:
+        return [
+            replace(event, duration=0.0) if "duration" in {item.name for item in fields(event)} else event
+            for event in self.events
+        ]
+
+
+def shell_turn_events(model: ReplayModel) -> list[RolloutEvent]:
+    """Events through the first turn of a rollout whose first response writes the answer file."""
+    observation = model.requests[1].messages[-1]["content"]
+    return [
+        AttemptStarted("arithmetic"),
+        MachineReady("arithmetic", 0.0),
+        SessionPrepared("arithmetic", len(model.requests[0].messages), 0.0),
+        ModelTurnCompleted("arithmetic", 0, "stop", 2, 1, {}, 0.0),
+        ToolCallCompleted("arithmetic", "shell", len(observation.encode()), 0.0),
+        TransitionCompleted("arithmetic", 0, False, 1, 0.0),
+    ]
+
+
+async def test_observer_receives_ordered_events_for_a_multi_turn_shell_rollout():
+    observer = RecordingObserver()
+    model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
+    record = await RolloutEngine(model.complete, {"local": FixtureImageFactory()}, observer=observer).run(
+        lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    assert observer.untimed() == [
+        *shell_turn_events(model),
+        ModelTurnCompleted("arithmetic", 1, "stop", 5, 1, {}, 0.0),
+        TransitionCompleted("arithmetic", 1, True, 0, 0.0),
+        Graded("arithmetic", Outcome.GRADED, 1.0),
+        AttemptEnded("arithmetic", "stop", None),
+    ]
+
+
+async def test_observer_receives_interrupted_operation_after_grading_completed_turns():
+    class FailingModel(ReplayModel):
+        async def complete(self, request):
+            if self.requests:
+                self.requests.append(request)
+                raise ConnectionError("inference server unavailable")
+            return await super().complete(request)
+
+    observer = RecordingObserver()
+    model = FailingModel([shell_call("echo 12 > /workspace/answer")])
+    with pytest.raises(RolloutInterrupted) as interrupted:
+        await RolloutEngine(model.complete, {"local": FixtureImageFactory()}, observer=observer).run(
+            lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
+        )
+    assert interrupted.value.operation == RolloutOperation.MODEL
+    assert observer.untimed() == [
+        *shell_turn_events(model),
+        Graded("arithmetic", Outcome.GRADED, 1.0),
+        AttemptEnded("arithmetic", None, RolloutOperation.MODEL),
+    ]
+
+
+async def test_observer_failure_propagates_and_releases_machines():
+    class ObserverFailure(Exception):
+        pass
+
+    class FailingObserver:
+        async def on_event(self, event: RolloutEvent) -> None:
+            if isinstance(event, ModelTurnCompleted):
+                raise ObserverFailure
+
+    factory = RecordingShellSimFactory()
+    model = ReplayModel([shell_call("echo 12 > /workspace/answer")])
+    with pytest.raises(ObserverFailure):
+        await RolloutEngine(model.complete, {"local": factory}, observer=FailingObserver()).run(
+            lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
+        )
+    assert len(factory.machines) == 1
+    with pytest.raises(RuntimeError):
+        await factory.machines[0].run(Command(("true",)))

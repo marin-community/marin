@@ -4,6 +4,7 @@
 """Rollout iteration, cancellation, and model execution."""
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, replace
@@ -19,18 +20,27 @@ from rolloutengine.contracts import (
     LENGTH_STOP_REASON,
     MAX_TURNS_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
+    AttemptEnded,
+    AttemptStarted,
     GenerationLimitReached,
+    Graded,
+    MachineReady,
     ModelRequest,
     ModelTurn,
+    ModelTurnCompleted,
     RolloutContractError,
     RolloutData,
     RolloutInterrupted,
+    RolloutObserver,
     RolloutOperation,
     RolloutStep,
+    SessionPrepared,
     TaskSession,
     TaskSessionContext,
     TaskSessionFactory,
     Transition,
+    TransitionCompleted,
+    emit_event,
 )
 from rolloutengine.grading import _grade_rollout
 from rolloutengine.lowering import SHELLBOX_SESSION, validate_lowered_task
@@ -53,7 +63,10 @@ def _empty_rollout(task: TaskSpec) -> RolloutData:
 
 
 class RolloutEngine:
-    """Generate exact-token rollouts from lowered single-stage tasks."""
+    """Generate exact-token rollouts from lowered single-stage tasks.
+
+    An optional observer receives progress events while each attempt runs.
+    """
 
     def __init__(
         self,
@@ -61,14 +74,17 @@ class RolloutEngine:
         factories: Mapping[str, MachineFactory],
         *,
         sessions: Mapping[str, TaskSessionFactory] | None = None,
+        observer: RolloutObserver | None = None,
     ):
         self.model = model
         self.factories = factories
         self.sessions = {} if sessions is None else sessions
+        self.observer = observer
 
     async def run(self, lowered: LoweredTaskSpec) -> RolloutData:
         """Run one attempt; release its resources outside the attempt deadline."""
         validate_lowered_task(lowered, factories=self.factories, sessions=self.sessions)
+        await emit_event(self.observer, AttemptStarted(lowered.task.id))
         deadline = asyncio.timeout(lowered.session.attempt_timeout)
         cleanup = _Cleanup(lowered.session.cleanup_timeout)
         operation = None
@@ -97,6 +113,10 @@ class RolloutEngine:
                 ),
                 metrics={**record.metrics, "cleanup_error_count": float(len(cleanup.errors))},
             )
+        await emit_event(
+            self.observer,
+            AttemptEnded(record.task_id, None if operation is not None else record.stop_reason, operation),
+        )
         if operation is not None:
             raise RolloutInterrupted(record, operation) from cause
         return record
@@ -105,6 +125,7 @@ class RolloutEngine:
         self, lowered: LoweredTaskSpec, resources: AsyncExitStack, cleanup: _Cleanup, attempt: asyncio.Timeout
     ) -> RolloutData:
         task = lowered.task
+        started = time.monotonic()
         try:
             machine = await _prepare_machine(
                 task.environment_requirements,
@@ -116,6 +137,8 @@ class RolloutEngine:
             )
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.START) from error
+        if machine is not None:
+            await emit_event(self.observer, MachineReady(task.id, time.monotonic() - started))
 
         async def grade(messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult:
             return await _grade_rollout(
@@ -127,7 +150,9 @@ class RolloutEngine:
             SHELLBOX_SESSION: _ShellboxTaskSession,
         }
         try:
-            context = TaskSessionContext(lowered, machine, None if isinstance(task.grader, SessionGrader) else grade)
+            context = TaskSessionContext(
+                lowered, machine, None if isinstance(task.grader, SessionGrader) else grade, self.observer
+            )
             session = session_factories[lowered.session.task_session](context)
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.PREPARE) from error
@@ -143,10 +168,12 @@ class RolloutEngine:
         owner = asyncio.current_task()
         assert owner is not None
         cancellation_count = owner.cancelling()
+        started = time.monotonic()
         try:
             start = await session.prepare()
         except Exception as error:
             raise RolloutInterrupted(completed, RolloutOperation.PREPARE) from error
+        await emit_event(self.observer, SessionPrepared(task.id, len(start.messages), time.monotonic() - started))
         messages = list(start.messages)
         options = start.options
         replay_prompt_token_ids = start.prompt_token_ids
@@ -163,6 +190,7 @@ class RolloutEngine:
         try:
             async with deadline:
                 for index in range(limits.max_turns):
+                    started = time.monotonic()
                     try:
                         async with asyncio.timeout(limits.model_turn_timeout):
                             turn = await self.model(
@@ -203,6 +231,18 @@ class RolloutEngine:
                         tokens = prompt
                     if turn.prompt_token_ids[: len(tokens)] != tokens:
                         raise RolloutContractError("Model transport changed the served token prefix")
+                    await emit_event(
+                        self.observer,
+                        ModelTurnCompleted(
+                            task.id,
+                            index,
+                            turn.stop_reason,
+                            len(turn.prompt_token_ids),
+                            len(turn.response_token_ids),
+                            turn.metadata,
+                            time.monotonic() - started,
+                        ),
+                    )
                     observation_count = len(turn.prompt_token_ids) - len(tokens)
                     masks += (0,) * observation_count + (1,) * len(turn.response_token_ids)
                     if logprobs is not None:
@@ -231,6 +271,7 @@ class RolloutEngine:
                         (*steps, pending),
                         pending.transition.metrics,
                     )
+                    started = time.monotonic()
                     try:
                         async with asyncio.timeout(limits.tool_turn_timeout):
                             transition = await session.advance(turn)
@@ -243,6 +284,12 @@ class RolloutEngine:
                             raise RolloutContractError(
                                 "Transition rewards and credit must align with model response tokens"
                             )
+                    await emit_event(
+                        self.observer,
+                        TransitionCompleted(
+                            task.id, index, transition.done, len(transition.observations), time.monotonic() - started
+                        ),
+                    )
                     stop_reason = turn.stop_reason
                     if transition.next_options is not None:
                         options = transition.next_options
@@ -310,6 +357,7 @@ class RolloutEngine:
             raise RolloutInterrupted(completed, RolloutOperation.GRADE) from error
         except Exception as error:
             raise RolloutInterrupted(completed, RolloutOperation.GRADE) from error
+        await emit_event(self.observer, Graded(task.id, grade.status, grade.reward))
         completed = replace(completed, grade=grade, stop_reason=stop_reason)
         if model_error is not None:
             raise RolloutInterrupted(completed, RolloutOperation.MODEL) from model_error

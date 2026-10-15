@@ -9,7 +9,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from shellbox.machine import Machine
-from taskcompendium.grading_result import GradeResult
+from taskcompendium.grading_result import GradeResult, Outcome
 
 from rolloutengine.spec import LoweredTaskSpec
 
@@ -146,17 +146,110 @@ class TaskSession(Protocol):
     async def close(self) -> None: ...
 
 
+@dataclass(frozen=True)
+class AttemptStarted:
+    task_id: str
+
+
+@dataclass(frozen=True)
+class MachineReady:
+    """The task machine is created, its resources installed, and its setup commands run."""
+
+    task_id: str
+    duration: float
+
+
+@dataclass(frozen=True)
+class SessionPrepared:
+    task_id: str
+    message_count: int
+    duration: float
+
+
+@dataclass(frozen=True)
+class ModelTurnCompleted:
+    task_id: str
+    turn_index: int
+    stop_reason: str
+    prompt_token_count: int
+    response_token_count: int
+    metadata: dict[str, Any]
+    duration: float
+
+
+@dataclass(frozen=True)
+class ToolCallCompleted:
+    """A session tool call returned an observation to the model."""
+
+    task_id: str
+    name: str
+    observation_bytes: int
+    duration: float
+
+
+@dataclass(frozen=True)
+class TransitionCompleted:
+    task_id: str
+    turn_index: int
+    done: bool
+    observation_count: int
+    duration: float
+
+
+@dataclass(frozen=True)
+class Graded:
+    task_id: str
+    status: Outcome
+    reward: float | None
+
+
+@dataclass(frozen=True)
+class AttemptEnded:
+    """The attempt returned with ``stop_reason``, or was interrupted during ``operation``."""
+
+    task_id: str
+    stop_reason: str | None
+    operation: RolloutOperation | None
+
+
+RolloutEvent = (
+    AttemptStarted
+    | MachineReady
+    | SessionPrepared
+    | ModelTurnCompleted
+    | ToolCallCompleted
+    | TransitionCompleted
+    | Graded
+    | AttemptEnded
+)
+
+
+class RolloutObserver(Protocol):
+    """Receive rollout progress; an exception raised here fails the attempt."""
+
+    async def on_event(self, event: RolloutEvent) -> None: ...
+
+
+async def emit_event(observer: RolloutObserver | None, event: RolloutEvent) -> None:
+    if observer is not None:
+        await observer.on_event(event)
+
+
 class TaskGrader(Protocol):
     async def __call__(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult: ...
 
 
 @dataclass(frozen=True)
 class TaskSessionContext:
-    """Inputs for one task session; session-graded tasks have no task grader."""
+    """Inputs for one task session; session-graded tasks have no task grader.
+
+    A session may report its own events, such as tool calls, to ``observer``.
+    """
 
     lowered: LoweredTaskSpec
     machine: Machine | None
     task_grader: TaskGrader | None
+    observer: RolloutObserver | None = None
 
     def require_task_grader(self) -> TaskGrader:
         """Return the task grader for a session that delegates final grading."""
