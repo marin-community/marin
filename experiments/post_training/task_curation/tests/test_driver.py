@@ -109,7 +109,9 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
     install_fake_build_tools(tmp_path, monkeypatch)
     # The factory probes for a working bubblewrap; CI hosts cannot build sandboxes.
-    monkeypatch.setattr("shellbox.backends.local.machine._working_bwrap", lambda candidates: Path("/usr/bin/bwrap"))
+    monkeypatch.setattr(
+        "shellbox.backends.local.machine._working_bwrap", lambda candidates, system_directories: Path("/usr/bin/bwrap")
+    )
     environment = Environment(
         requirements=REQUIREMENTS,
         files={DATA_PATH: install_fake_archive(monkeypatch)},
