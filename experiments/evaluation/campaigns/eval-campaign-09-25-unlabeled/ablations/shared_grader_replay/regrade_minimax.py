@@ -80,10 +80,17 @@ def main() -> None:
         "evalchemy_commit": evalchemy_pin,
         "harbor_commit": harbor_pin,
         "judge_request_extra_body": regrade_olympiadbench.JUDGE_EXTRA_BODY,
-        "benchmarks": benchmarks,
+        "benchmarks": list(benchmarks),
         "prior_olympiad_prefix": args.prior_olympiad_prefix,
     }
-    regrade_olympiadbench.write_json(prefix_join(prefix, "provenance.json"), provenance)
+    provenance_uri = prefix_join(prefix, "provenance.json")
+    filesystem, key = filesystem_for(provenance_uri)
+    if filesystem.exists(key):
+        current, _ = regrade_olympiadbench.read_json(provenance_uri)
+        if current != provenance:
+            raise ValueError("existing replay provenance differs from this launch")
+    else:
+        regrade_olympiadbench.write_json(provenance_uri, provenance)
 
     accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8)
     inference = inference_config_for_model(
