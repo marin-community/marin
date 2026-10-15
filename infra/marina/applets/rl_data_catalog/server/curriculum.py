@@ -87,6 +87,7 @@ WITH selected_sources AS (
     FROM members m JOIN curriculum_ancestors a ON a.load_id=:load_id
         AND a.subject_id=m.subject_id AND a.node_id=m.capability_id
     WHERE m.capability_similarity >= 1 - CAST(:capability_distance AS DOUBLE PRECISION)
+        AND a.ancestor_id <> 'subject:' || m.subject_id
 ), states AS (
     SELECT t.source_id, t.task_id, t.content_hash, CASE
         WHEN t.description_status='insufficient_context' THEN 'insufficient_context'
@@ -102,12 +103,10 @@ WITH selected_sources AS (
 """
 
 
-def count_expression(alias: str) -> str:
-    return (
-        f"COUNT(DISTINCT CASE WHEN {alias}.task_id IS NULL THEN NULL "
-        f"WHEN :count_mode='content' THEN {alias}.content_hash "
-        f"ELSE jsonb_build_array({alias}.source_id,{alias}.task_id)::text END)"
-    )
+def count_expression(alias: str, count_mode: str) -> str:
+    if count_mode == "content":
+        return f"COUNT(DISTINCT {alias}.content_hash)"
+    return f"COUNT({alias}.task_id)"
 
 
 def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
@@ -150,7 +149,7 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                     text(
                         SCOPED_SQL
                         + f"""
-                SELECT p.subject_id,p.node_id,p.column_id,{count_expression('p')} AS count
+                SELECT p.subject_id,p.node_id,p.column_id,{count_expression('p', filters.count_mode)} AS count
                 FROM placements p WHERE p.node_id IN (SELECT jsonb_array_elements_text(CAST(:node_ids AS JSONB)))
                 GROUP BY p.subject_id,p.node_id,p.column_id
             """
@@ -168,7 +167,7 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                     ELSE s.column_id END AS name,
                     COUNT(DISTINCT s.source_id) AS sources,
                     COUNT(DISTINCT s.source_id) FILTER (WHERE s.alignment IS NOT NULL) AS processed_sources,
-                    {count_expression('t')} AS denominator
+                    {count_expression('t', filters.count_mode)} AS denominator
                 FROM selected_sources s LEFT JOIN selected_tasks t ON t.source_id=s.source_id
                 GROUP BY s.column_id ORDER BY denominator DESC,s.column_id
             """
@@ -181,11 +180,12 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                     text(
                         SCOPED_SQL
                         + f"""
-                SELECT {count_expression('s')} AS denominator,
-                    {count_expression('s')} FILTER (WHERE s.outcome='assigned') AS assigned,
-                    {count_expression('s')} FILTER (WHERE s.outcome='subject_only') AS subject_only,
-                    {count_expression('s')} FILTER (WHERE s.outcome='out_of_scope') AS out_of_scope,
-                    {count_expression('s')} FILTER (WHERE s.outcome='insufficient_context') AS insufficient_context
+                SELECT {count_expression('s', filters.count_mode)} AS denominator,
+                    {count_expression('s', filters.count_mode)} FILTER (WHERE s.outcome='assigned') AS assigned,
+                    {count_expression('s', filters.count_mode)} FILTER (WHERE s.outcome='subject_only') AS subject_only,
+                    {count_expression('s', filters.count_mode)} FILTER (WHERE s.outcome='out_of_scope') AS out_of_scope,
+                    {count_expression('s', filters.count_mode)} FILTER (WHERE s.outcome='insufficient_context')
+                        AS insufficient_context
                 FROM states s
             """
                     ),
@@ -201,8 +201,8 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                         text(
                             SCOPED_SQL
                             + f"""
-                    SELECT {count_expression('m')} AS subject_members,
-                        {count_expression('m')} FILTER (WHERE m.capability_similarity >=
+                    SELECT {count_expression('m', filters.count_mode)} AS subject_members,
+                        {count_expression('m', filters.count_mode)} FILTER (WHERE m.capability_similarity >=
                             1 - CAST(:capability_distance AS DOUBLE PRECISION)) AS capability_matches
                     FROM members m WHERE m.subject_id=:subject_id
                 """
