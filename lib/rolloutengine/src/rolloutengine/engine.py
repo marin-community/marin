@@ -19,6 +19,7 @@ from taskcompendium.submission import conversation_messages
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.contracts import (
+    BUDGET_STOP_REASON,
     LENGTH_STOP_REASON,
     MAX_TURNS_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
@@ -51,6 +52,13 @@ from rolloutengine.machines import _prepare_machine
 from rolloutengine.spec import TRACE_METRIC, LoweredTaskSpec, TraceMode
 from rolloutengine.task_session import _ShellboxTaskSession
 from rolloutengine.trace import _token_trace
+
+
+def _request_tokens(turn: ModelTurn) -> int:
+    """Tokens one request spends; each request charges its full prompt, including a served prefix."""
+    if turn.usage is not None:
+        return turn.usage.prompt_tokens + turn.usage.completion_tokens
+    return len(turn.prompt_token_ids) + len(turn.response_token_ids)
 
 
 def _empty_rollout(lowered: LoweredTaskSpec) -> RolloutData:
@@ -231,6 +239,7 @@ class RolloutEngine:
         steps: list[RolloutStep] = []
         assistant_index = None
         stop_reason = MAX_TURNS_STOP_REASON
+        spent_tokens = 0
         model_error = None
         deadline = asyncio.timeout(limits.total_turn_timeout)
         try:
@@ -266,6 +275,8 @@ class RolloutEngine:
                     except Exception as error:
                         model_error = error
                         break
+                    spent_tokens += _request_tokens(turn)
+                    budget_reached = limits.max_total_tokens is not None and spent_tokens >= limits.max_total_tokens
                     if replay_prompt_token_ids is not None and turn.prompt_token_ids != replay_prompt_token_ids:
                         raise RolloutContractError("Model transport changed the replay token prefix")
                     trace.append(turn)
@@ -318,7 +329,7 @@ class RolloutEngine:
                     if transition.next_options is not None:
                         options = transition.next_options
                     replay_prompt_token_ids = transition.next_prompt_token_ids
-                    if transition.reset_conversation is not None and index + 1 < limits.max_turns:
+                    if transition.reset_conversation is not None and index + 1 < limits.max_turns and not budget_reached:
                         messages = list(transition.reset_conversation)
                         trace.reset()
                         steps.clear()
@@ -339,6 +350,9 @@ class RolloutEngine:
                         completed, steps=tuple(steps), stop_reason=stop_reason, metrics=transition.metrics
                     )
                     if transition.done or stop_reason == LENGTH_STOP_REASON:
+                        break
+                    if budget_reached:
+                        stop_reason = BUDGET_STOP_REASON
                         break
                     if index + 1 == limits.max_turns:
                         stop_reason = MAX_TURNS_STOP_REASON
