@@ -44,5 +44,7 @@
       "preflight_exit_code": 0,
       "preflight_log_sha256": "f189272d66f7fe690ef10f0dd3e614df0a845d7f43b6e302cdffa9acd8453e64"
     }
-  ]
+  ],
+  "admission_status": "Remain unsubmitted. Prefer separately prepared RNO interactive plans to preserve the newly active east five-node Snowball seed1 run.",
+  "replacement_preparation": "results/qwen_nativewindow1200_rno_interactive_pair_preparation.json"
 }

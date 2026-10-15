@@ -1,0 +1,49 @@
+{
+  "placement_reason": "At05:55UTC east Snowball noiseSCseed1 is active on5BATCHnodes; east reserves249GPUs and RNO504. Put the4INTERQwen nodes onRNO to preserve the east Snowball allocation. Counts are observations, not reservations.",
+  "prepared_only": true,
+  "submitted": false,
+  "scope": "Prospective pairedseed0 complete1200 native-window SC/TIS comparison; previous partials are not endpoints.",
+  "gate": "Both current300-update interactive recoveries must finish and pass full native, model/data/metric/checkpoint checks; the campaign-wide count of allocated plus queued interactive nodes across both clusters must allow this pair, never exceeding4. Inspect validated sequential controller snapshots immediately before submission.",
+  "predecessor_rule": "Prefer this pair only if both exact RNOa3 predecessors remain queued. Preserve a predecessor that has begun healthy learning. Confirm concrete published replacements before retiring exact owned queued predecessors. Retain all originala2+a3 allocation intervals and partial raw outputs; update final analysis selectors only after submission confirmation.",
+  "learning_recipe_identical_between_methods_except_centering": true,
+  "configs": [
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_long_interactive_rno_v1/native-window-sc-s0.yaml",
+      "sha256": "fc699c8e43536c6b0fa2020e20f86a6276fd10bd4ec5aa5aae3194a44c6c6fdc",
+      "run_id": "sc-qwen-transfer-native-window-sc-s0-main-interactive-rno-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "source_configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v1/native-window-sc-s0.yaml",
+      "current_predecessor": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a3-01a126ce",
+      "seed": 0,
+      "horizon": 1200,
+      "cluster": "cw-rno2a",
+      "priority": "interactive",
+      "nodes": 2,
+      "gpus_per_node": 8,
+      "checkpoint_steps": 1200,
+      "evaluation_steps": 20,
+      "remaining_learning_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log_sha256": "c00d07fec19d0f44c4ea90a4fe4367635aa1b89a50cec004dc76ba8dfd4f4d9e"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_long_interactive_rno_v1/native-window-tis-s0.yaml",
+      "sha256": "2fa5d2ed77887cb18995ea7ab2a0f97e5fd8b4129eff9d88b71d8b69bcaecc71",
+      "run_id": "sc-qwen-transfer-native-window-tis-s0-main-interactive-rno-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "source_configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v1/native-window-tis-s0.yaml",
+      "current_predecessor": "/romain/sc-qwen-transfer-native-window-tis-s0-main-rno-a3-01a126ce",
+      "seed": 0,
+      "horizon": 1200,
+      "cluster": "cw-rno2a",
+      "priority": "interactive",
+      "nodes": 2,
+      "gpus_per_node": 8,
+      "checkpoint_steps": 1200,
+      "evaluation_steps": 20,
+      "remaining_learning_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log_sha256": "87371e3ddca46fd96a85e724247c69b7f88417d418f7797c3306e30a3b05165b"
+    }
+  ]
+}
