@@ -7,8 +7,9 @@ Triton kernels in the FlashAttention-2 layout, launched through ``jax_triton``:
 
 - Every mask is reduced to one inclusive key lower bound per query, ``lb[b, q]``. A query ``q`` attends to keys
   ``lb[q] <= k <= q``. A sliding window ``W`` gives ``lb[q] >= q - W + 1`` and packed segment IDs give
-  ``lb[q] >= start of q's segment``. Key blocks entirely outside ``[lb, q]`` are never visited, so a window-2048
-  layer at 4096 tokens does about 37.5% of the dense work and a causal layer about 50%.
+  ``lb[q] >= start of q's segment``; a mask carrying ``fa4_bounds`` supplies the bounds directly. Key blocks
+  entirely outside ``[lb, q]`` are never visited, so a window-2048 layer at 4096 tokens does about 37.5% of the
+  dense work and a causal layer about 50%.
 - Blocks entirely inside the allowed band skip the mask computation.
 - Grouped-query attention indexes the shared K/V head per query head instead of materializing repeated K/V. The
   dK/dV program owns one KV head and accumulates over its query-head group.
@@ -90,8 +91,10 @@ def _validate(q: jax.Array, k: jax.Array, v: jax.Array, block_sizes: TritonFlash
     if k.shape != v.shape or k.shape[0] != batch or k.shape[1] != seq_len or k.shape[3] != head_dim:
         raise ValueError(f"gpu_triton_flash needs self-attention shapes, got q={q.shape} k={k.shape} v={v.shape}")
     num_kv_heads = k.shape[2]
-    if num_q_heads % num_kv_heads != 0 or not _is_power_of_two(num_q_heads // num_kv_heads):
-        raise ValueError(f"gpu_triton_flash needs a power-of-two GQA ratio, got Hq={num_q_heads} Hkv={num_kv_heads}")
+    if num_q_heads % num_kv_heads != 0:
+        raise ValueError(f"gpu_triton_flash needs Hq divisible by Hkv, got Hq={num_q_heads} Hkv={num_kv_heads}")
+    if not q.dtype == k.dtype == v.dtype:
+        raise ValueError(f"gpu_triton_flash needs one dtype for q, k and v, got {q.dtype}, {k.dtype}, {v.dtype}")
     if not _is_power_of_two(head_dim) or head_dim < 16:
         raise ValueError(f"gpu_triton_flash needs a power-of-two head_dim >= 16, got {head_dim}")
     for name, size in dataclasses.asdict(block_sizes).items():
@@ -99,28 +102,48 @@ def _validate(q: jax.Array, k: jax.Array, v: jax.Array, block_sizes: TritonFlash
             raise ValueError(f"{name}={size} must be a power of two dividing the sequence length {seq_len}")
 
 
-def _key_lower_bounds(mask: AttentionMask, *, batch: int, seq_len: int) -> Int[Array, "B S"]:
-    """Inclusive lowest key position each query may attend to, for a causal ``AttentionMask``."""
+def _key_lower_bounds(mask: AttentionMask, *, batch: int, seq_len: int, row_spec: P | None) -> Int[Array, "B S"]:
+    """Inclusive lowest key position each query may attend to, for a causal ``AttentionMask``.
+
+    Under a mesh, ``row_spec`` places every ``[B, S]`` input like q's rows, so explicit sharding sees one layout
+    whatever layout the caller gave the segment IDs or bounds.
+    """
     if not mask.is_causal:
         raise NotImplementedError("gpu_triton_flash supports causal self-attention only")
+
+    def rows(x: jax.Array) -> jax.Array:
+        x = jnp.broadcast_to(x, (batch, seq_len))
+        return x if row_spec is None else reshard(x, row_spec)
+
+    positions = rows(jnp.arange(seq_len, dtype=jnp.int32)[None, :])
     if mask.fa4_bounds is not None:
-        raise NotImplementedError("gpu_triton_flash does not read FA4/CuTe precomputed bounds")
-    positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
-    lower = jnp.zeros((batch, seq_len), dtype=jnp.int32)
+        # The precomputed bounds take precedence over segment IDs and the window, as in gpu_fa4_cute. A padding
+        # query (valid=False) attends only to itself, which keeps the bounds nondecreasing.
+        fa4_lower, valid = (rows(x) for x in mask.fa4_bounds)
+        return jnp.where(valid, fa4_lower, positions)
+    lower = jnp.zeros_like(positions)
     if mask.segment_ids is not None:
         q_seg, kv_seg = mask.segment_ids
         same = q_seg is kv_seg
-        q_seg = jnp.broadcast_to(q_seg, (batch, seq_len))
+        q_seg = rows(q_seg)
         if not same:
-            kv_seg = jnp.broadcast_to(kv_seg, (batch, seq_len))
-            q_seg = eqx.error_if(q_seg, jnp.any(q_seg != kv_seg), "gpu_triton_flash needs equal q/kv segment ids")
-        starts = jnp.concatenate([jnp.ones((batch, 1), dtype=jnp.bool_), q_seg[:, 1:] != q_seg[:, :-1]], axis=1)
+            q_seg = eqx.error_if(
+                q_seg, jnp.any(q_seg != rows(kv_seg)), "gpu_triton_flash needs equal q/kv segment ids"
+            )
+        first = jnp.ones_like(q_seg[:, :1], dtype=jnp.bool_)
+        starts = jnp.concatenate([first, q_seg[:, 1:] != q_seg[:, :-1]], axis=1)
         lower = lax.cummax(jnp.where(starts, positions, 0), axis=1)
     if mask.sliding_window is not None:
         if mask.sliding_window <= 0:
             raise ValueError(f"sliding_window must be positive, got {mask.sliding_window}")
         lower = jnp.maximum(lower, positions - (mask.sliding_window - 1))
     return lower
+
+
+def _full_spec(x: jax.Array) -> P:
+    """``x``'s partition spec with one entry per dimension; all ``None`` when it carries no named sharding."""
+    spec = tuple(partition_spec_of(x) or ())
+    return P(*spec, *((None,) * (x.ndim - len(spec))))
 
 
 def _dkv_query_ranges(
@@ -653,12 +676,11 @@ def triton_flash_attention(
         block_sizes = _TUNED_BLOCK_SIZES.get(jax.devices()[0].compute_capability, TritonFlashBlockSizes())
     _validate(q, k, v, block_sizes)
     batch, seq_len = q.shape[:2]
-    lower = _key_lower_bounds(mask, batch=batch, seq_len=seq_len)
     run = functools.partial(_flash, block_sizes=block_sizes)
 
     mesh = get_abstract_mesh()
     if mesh is None or mesh.empty:
-        return run(q, k, v, lower)
+        return run(q, k, v, _key_lower_bounds(mask, batch=batch, seq_len=seq_len, row_spec=None))
     q_dims = partitioned_dims(q, mesh)
     if q_dims[1] or q_dims[3]:
         raise ValueError(f"gpu_triton_flash needs unsharded sequence and head_dim, got {partition_spec_of(q)}")
@@ -668,14 +690,13 @@ def triton_flash_attention(
                 f"gpu_triton_flash needs {name} sharded like q, got q={partition_spec_of(q)} "
                 f"{name}={partition_spec_of(x)}"
             )
-    if not any(q_dims):
-        return run(q, k, v, lower)
-    q_spec = tuple(partition_spec_of(q))
-    q_spec = P(*q_spec, *((None,) * (q.ndim - len(q_spec))))
-    lower = reshard(lower, P(q_spec[0], None))
-
-    @shard_map(mesh=mesh, out_specs=q_spec, check_vma=False)
-    def _local(q_local, k_local, v_local, lower_local):
-        return run(q_local, k_local, v_local, lower_local)
-
-    return _local(q, k, v, lower)
+    # Return q's own spec, including length-1 axes: explicit sharding compares axis names, so an output that drops
+    # them cannot be combined with the caller's activations.
+    q_spec = _full_spec(q)
+    row_spec = P(q_spec[0], None)
+    lower = _key_lower_bounds(mask, batch=batch, seq_len=seq_len, row_spec=row_spec)
+    # shard_map even when no axis of size > 1 partitions q, so the kernels never see operands whose type names a
+    # mesh axis; Grug's meshes keep length-1 axes in every spec. Explicit in_specs also cover Auto mesh axes, where
+    # the types carry no placement and the kernels run replicated.
+    in_specs = (q_spec, _full_spec(k), _full_spec(v), row_spec)
+    return shard_map(run, mesh=mesh, in_specs=in_specs, out_specs=q_spec, check_vma=False)(q, k, v, lower)
