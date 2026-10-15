@@ -2457,11 +2457,13 @@
       "configuration_sha256": "dfbad8cfda991c91781871e0488599231fafdc7a55d23cd5d9279a84059e4cb8",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-tis-s0-main-interactive-a2-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 2,
       "bundle_id": "3dcffd810cc45d520fb1d82a1bf10a0de20049267be08e116abc2390de86bad5",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s0-main-interactive-a2-01a126ce.json.gz",
+      "scientific_completed_updates": 300
     },
     {
       "job_id": "/romain/sc-qwen-transfer-advantages-tis-s1-main-interactive-a1-01a126ce",
@@ -2702,5 +2704,5 @@
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-15T04:01:07.468320+00:00"
+  "observed_at": "2026-10-15T05:49:38.875997+00:00"
 }
