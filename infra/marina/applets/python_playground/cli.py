@@ -8,16 +8,21 @@ import json
 import tomllib
 import zipfile
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import click
 import requests
-from marina.client import DEFAULT_MARINA_URL, DEFAULT_TIMEOUT, LOCAL_HOSTS, bearer_token
+from marina.client import DEFAULT_MARINA_URL, DEFAULT_TIMEOUT, LOCAL_HOSTS, bearer_token, marina_request
+from pydantic import BaseModel
 
 from .server.app import MAX_FILES, MAX_INPUT_BYTES
 
 EXCLUDED_DIRECTORIES = frozenset({"__pycache__", "node_modules", "output", "venv"})
 APPLET_ID = tomllib.loads(Path(__file__).with_name("applet.toml").read_text())["applet_id"]
+
+
+class AppletLocation(BaseModel):
+    authenticated_url: str
 
 
 def directory_archive(directory: Path) -> bytes:
@@ -67,13 +72,15 @@ def upload(directory: Path, title: str | None, entrypoint: str, packages: tuple[
     parsed = urlparse(origin)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.path:
         raise click.ClickException("--url must be a Marina origin without an application path")
+    location = AppletLocation.model_validate(marina_request(origin, "GET", f"/api/marina/applets/{APPLET_ID}"))
+    app_url = urljoin(origin + "/", location.authenticated_url).rstrip("/") + "/"
     headers = {"Content-Type": "application/zip"}
-    if parsed.hostname not in LOCAL_HOSTS:
+    if urlparse(app_url).hostname not in LOCAL_HOSTS:
         headers["Authorization"] = f"Bearer {bearer_token()}"
     params = [("title", title or directory.resolve().name), ("entrypoint", entrypoint)]
     params.extend(("packages", package) for package in packages)
     response = requests.post(
-        f"{origin}/a/{APPLET_ID}/api/projects/import",
+        app_url + "api/projects/import",
         headers=headers,
         params=params,
         data=directory_archive(directory),
@@ -87,7 +94,7 @@ def upload(directory: Path, title: str | None, entrypoint: str, packages: tuple[
             {
                 "id": project["id"],
                 "revision": project["revision"],
-                "url": f"{origin}/a/{APPLET_ID}/#/projects/{project['id']}",
+                "url": f"{app_url}#/projects/{project['id']}",
             }
         )
     )

@@ -5,6 +5,7 @@
 
 import base64
 import io
+import json
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,13 +13,15 @@ from typing import cast
 from uuid import uuid4
 
 import pytest
+import requests
+from click.testing import CliRunner
 from fastapi.testclient import TestClient
 from marina.applets import AppletServices
 from marina.db import UrlDatabase, engine_for
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-from infra.marina.applets.python_playground.cli import directory_archive
+from infra.marina.applets.python_playground.cli import APPLET_ID, cli, directory_archive
 from infra.marina.applets.python_playground.server import app as playground
 
 
@@ -262,3 +265,31 @@ def test_default_rigging_runtime_reads_input_and_inherits_storage_credentials(cl
     result = run_project(client, project)["result"]
     assert result["exit_code"] == 0
     assert base64.b64decode(result["artifacts"][0]["content"]) == b"# Runtime package available"
+
+
+def test_cli_discovers_separate_applet_origin_and_uploads_project(client, tmp_path, monkeypatch):
+    (tmp_path / "main.py").write_text("print('uploaded through the canonical origin')")
+    registry = "http://127.0.0.1:8000"
+    app_url = f"http://127.0.0.1:9000/a/{APPLET_ID}/"
+
+    def remote_request(_session, method, url, **kwargs):
+        method = method.upper()
+        response = requests.Response()
+        response.headers["Content-Type"] = "application/json"
+        if method == "GET" and url == f"{registry}/api/marina/applets/{APPLET_ID}":
+            response.status_code = 200
+            response._content = json.dumps({"authenticated_url": app_url}).encode()
+            return response
+        assert method == "POST" and url == app_url + "api/projects/import"
+        uploaded = client.post("/projects/import", params=kwargs["params"], content=kwargs["data"])
+        response.status_code = uploaded.status_code
+        response._content = uploaded.content
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", remote_request)
+    result = CliRunner().invoke(cli, ["upload", str(tmp_path), "--title", "CLI project", "--url", registry])
+    assert result.exit_code == 0, result.output
+    published = json.loads(result.output)
+    assert published["url"] == app_url + "#/projects/" + published["id"]
+    saved = client.get("/projects/" + published["id"]).json()
+    assert saved["document"]["files"][0]["content"] == "print('uploaded through the canonical origin')"
