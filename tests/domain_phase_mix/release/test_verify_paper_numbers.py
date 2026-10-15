@@ -102,7 +102,7 @@ PAPER_LABELS = {
 }
 SECTIONS = paths.DRIVE / "sections"
 # The numbers of the paper that differ from the build, as .agents/projects/mariner_release/AUDIT.md explains them.
-KNOWN_DIFFERENCES = {("tab:a-unimax-cap", 0, 4, 0), ("tab:a-unimax-cap", 4, 4, 0)}
+KNOWN_DIFFERENCES: set[tuple[str, int, int, int]] = set()  # the two tab:a-unimax-cap cells were corrected on 2026-10-15
 
 
 def registry_frame(rows: list[dict]) -> pd.DataFrame:

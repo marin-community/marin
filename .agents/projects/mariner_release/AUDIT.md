@@ -56,7 +56,7 @@ another value than the paper prints.
 | tab:a-accuracy-components | 459 | 459 | | | | 0 | ladder_accuracy |
 | Total | 1,768 | 1,677 | 54 | 34 | 3 | 2 | |
 
-## Differences
+## Differences (corrected in the paper on 2026-10-15; the audit now reports 0 differences)
 
 Both differences are in `tab:a-unimax-cap`, column Math (7), the mean of a run's seven Minerva MATH components. The
 paper's rows match the results table of the cap sweep's README (`.agents/projects/unimax_cap_sweep_20260922/README.md`),
@@ -159,3 +159,8 @@ to queries and reads the row and column indices from the parsed paper. When the 
 cell no longer prints a number, or prints other decimals, makes the audit raise and name the row, and a new number is
 reported as untraced. After the paper is corrected, remove the fixed cells from `KNOWN_DIFFERENCES` in
 `test_verify_paper_numbers.py`.
+
+
+## Update 2026-10-15
+
+Both tab:a-unimax-cap cells were corrected in sections/appendix.tex (1.099 -> 1.098; 0.936 -> 0.935); the audit now reports `0 differences, 3 untraced cells, 88 registered skips` (exit 0 with --allow-registered-skips).
