@@ -75,11 +75,9 @@ class ShellSimShellSession:
     async def execute(
         self, command: str, *, wait: float = 120, output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
     ) -> ShellUpdate:
+        """Return a complete action; ``wait`` is an interactive polling hint."""
         try:
-            result = await asyncio.wait_for(self.machine._run_source(command, shell=self.shell), timeout=wait)
-        except TimeoutError:
-            output = b"ShellSim command timed out\n"
-            return ShellUpdate(output[:output_limit_bytes], ShellStatus.COMPLETED, 130, len(output) > output_limit_bytes)
+            result = await self.machine._run_source(command, shell=self.shell)
         except shellsim.SimulationError as error:
             output = str(error).encode()
             return ShellUpdate(

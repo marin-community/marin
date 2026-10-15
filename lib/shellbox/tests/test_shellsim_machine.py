@@ -103,14 +103,11 @@ def test_interrupted_command_waits_for_native_cleanup_and_preserves_machine(monk
     asyncio.run(check())
 
 
-@pytest.mark.parametrize("interruption", ["interrupt", "deadline", "close"])
+@pytest.mark.parametrize("interruption", ["interrupt", "close"])
 def test_shell_interruption_and_machine_close_drain_active_work(monkeypatch, interruption):
     async def check():
         machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
         shell = await machine.open_shell()
-        loop = asyncio.get_running_loop()
-        clock = [loop.time()]
-        monkeypatch.setattr(loop, "time", lambda: clock[0])
         try:
             with _controlled_action(monkeypatch, shell.shell) as action:
                 running = asyncio.create_task(shell.execute("fixture", wait=10, output_limit_bytes=4))
@@ -118,20 +115,13 @@ def test_shell_interruption_and_machine_close_drain_active_work(monkeypatch, int
                 if interruption == "close":
                     queued = asyncio.create_task(machine.run(Command(("touch", "/workspace/after-close"))))
                     await asyncio.sleep(0)
-                if interruption == "deadline":
-                    clock[0] += 10
-                    stopping = running
-                else:
-                    stopping = asyncio.create_task(shell.interrupt() if interruption == "interrupt" else machine.close())
+                stopping = asyncio.create_task(shell.interrupt() if interruption == "interrupt" else machine.close())
                 await action.requested.wait()
                 assert not stopping.done()
                 action.release.set()
                 await stopping
                 result = await running
                 assert (result.status, result.exit_code) == (ShellStatus.COMPLETED, 130)
-                if interruption == "deadline":
-                    assert len(result.output) == 4
-                    assert result.truncated
             if interruption == "close":
                 with pytest.raises(RuntimeError):
                     await queued
@@ -174,6 +164,35 @@ def test_queued_timeout_and_shell_interrupt_leave_an_unrelated_command_running(m
     asyncio.run(check())
 
 
+def test_command_timeout_reuses_the_real_shellsim_machine(monkeypatch):
+    async def check():
+        machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
+        loop = asyncio.get_running_loop()
+        clock = [loop.time()]
+        monkeypatch.setattr(loop, "time", lambda: clock[0])
+        started = asyncio.Event()
+        native_run = machine.simulation.run
+
+        def run(source, stdin=b"", *, cancellation):
+            loop.call_soon_threadsafe(started.set)
+            return native_run(source, stdin, cancellation=cancellation)
+
+        monkeypatch.setattr(machine.simulation, "run", run)
+        try:
+            running = asyncio.create_task(machine.run(Command(("sh", "-c", "while :; do :; done"), timeout=10)))
+            await started.wait()
+            # Expire the host deadline after the native worker starts, without a host timer.
+            clock[0] += 10
+            result = await running
+            assert result.reason is ExitReason.TIMED_OUT
+            followup = await machine.run(Command(("printf", "reused")))
+            assert (followup.exit_code, followup.stdout) == (0, b"reused")
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
+
+
 @pytest.mark.parametrize(
     "limits",
     [
@@ -202,7 +221,7 @@ def test_shell_state_and_one_shot_command() -> None:
         try:
             shell = await machine.open_shell()
             first = await shell.execute(
-                'cd /tmp; export ANSWER=hello; answer() { echo "$ANSWER"; }; echo file >/workspace/result'
+                'cd /tmp; export ANSWER=hello; answer() { echo "$ANSWER"; }; echo file >/workspace/result', wait=0
             )
             assert first.status is ShellStatus.COMPLETED
             second = await shell.execute("pwd; answer")
