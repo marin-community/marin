@@ -12,6 +12,7 @@ from levanter.grug.attention import (
     xla_flash_attention,
     AttentionMask,
     attention,
+    fa4_cute_segment_bounds,
     reference_attention,
     token_validity_from_attention_mask,
 )
@@ -45,6 +46,68 @@ def test_reference_attention_matches_manual_segment_mask():
     expected = reference_attention(q, k, v, dense, logits_dtype=jnp.float32)
 
     np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=2e-5)
+
+
+@pytest.mark.parametrize("implementation", ["reference", "xla_flash"])
+def test_attention_scan_uses_dynamic_bounds_for_windows_segments_and_padding(implementation):
+    q, k, v = _make_qkv(batch=2, q_len=32, k_len=32)
+    positions = jnp.arange(32)
+    segment_ids = jnp.stack([jnp.where(positions < 10, 0, 1), jnp.where(positions < 18, 2, 3)]).at[:, -3:].set(-1)
+    long_mask = AttentionMask.causal().with_segment_ids(segment_ids)
+    windows = (1, 5)
+    bounds_and_valid = [
+        fa4_cute_segment_bounds(long_mask, batch_size=2, seq_len=32, sliding_window=window) for window in windows
+    ]
+    bounds = jnp.stack([lower for lower, _ in bounds_and_valid])
+    valid = bounds_and_valid[0][1]
+    cotangent = jax.random.normal(jax.random.key(19), (len(windows), *q.shape))
+
+    def actual_outputs(q, k, v):
+        def layer(_, lower):
+            # The hero scan keeps the static mask full-causal and varies only bounds.
+            mask = long_mask.with_fa4_bounds(lower, valid)
+            if implementation == "xla_flash":
+                output = xla_flash_attention(q, k, v, mask, block_size=16)
+            else:
+                output = attention(q, k, v, mask, implementation="reference")
+            return None, output
+
+        return jax.lax.scan(layer, None, bounds)[1]
+
+    def expected_outputs(q, k, v):
+        query = positions[:, None]
+        key = positions[None, :]
+        same_segment = segment_ids[:, :, None] == segment_ids[:, None, :]
+        outputs = []
+        for window in windows:
+            dense = same_segment & (key <= query) & (key > query - window) & (segment_ids[:, :, None] >= 0)
+            outputs.append(reference_attention(q, k, v, dense, logits_dtype=jnp.float32))
+        return jnp.stack(outputs)
+
+    def loss(outputs, q, k, v):
+        result = outputs(q, k, v)
+        return jnp.sum(result * cotangent), result
+
+    with jax.default_matmul_precision("highest"):
+        (_, actual), actual_grads = jax.jit(
+            jax.value_and_grad(lambda q, k, v: loss(actual_outputs, q, k, v), argnums=(0, 1, 2), has_aux=True)
+        )(q, k, v)
+        (_, expected), expected_grads = jax.jit(
+            jax.value_and_grad(lambda q, k, v: loss(expected_outputs, q, k, v), argnums=(0, 1, 2), has_aux=True)
+        )(q, k, v)
+
+    np.testing.assert_allclose(actual, expected, atol=1e-5, rtol=1e-5)
+    np.testing.assert_array_equal(actual[:, :, -3:], 0)
+    for actual_grad, expected_grad in zip(actual_grads, expected_grads, strict=True):
+        np.testing.assert_allclose(actual_grad, expected_grad, atol=1e-4, rtol=1e-4)
+
+
+def test_splash_rejects_dynamic_bounds_instead_of_ignoring_local_windows():
+    q, k, v = _make_qkv()
+    lower, valid = fa4_cute_segment_bounds(AttentionMask.causal(), batch_size=2, seq_len=6, sliding_window=2)
+    mask = AttentionMask.causal().with_fa4_bounds(lower, valid)
+    with pytest.raises(NotImplementedError):
+        attention(q, k, v, mask, implementation="tpu_splash")
 
 
 def test_reference_attention_supports_model_sharded_head_dimension():
