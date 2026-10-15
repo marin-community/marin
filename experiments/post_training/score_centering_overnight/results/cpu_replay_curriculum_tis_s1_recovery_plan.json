@@ -1,0 +1,110 @@
+{
+  "scope": "Full native300 curriculum TISseed1 replay replacing a controller-confirmed terminal worker failure, not a healthy grader. Old partial progress is retained and is not a completed cohort. Original native inputs/source/graders/lock/packages/runner/deadlines and249984-response membership unchanged; only run-owned output prefix changes.32CPU/64GiB/50GiB BATCH,zeroGPU,retry budgets0,2archiveIO. Older raw retention1077 continues2IO; aggregate4analysisIO once this download starts. No new training.",
+  "cases": [
+    {
+      "run_id": "sc-qwen-transfer-curriculum-tis-s1-main-interactive-a1-01a126ce",
+      "arm": "tis-s1",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "analysis_source": "213f2fed2a2954c50c973c742bfff998f9a2edef",
+      "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e",
+      "requested_cpu": 32,
+      "requested_memory": "64GB",
+      "requested_disk": "50GB",
+      "requested_accelerators": 0,
+      "cpu_workers": 32,
+      "io_workers": 2,
+      "timeout_seconds": 43200,
+      "failure_retries": 0,
+      "preemption_retries": 0,
+      "expected_records": 249984,
+      "selected_archives": 19216,
+      "native_archive_bytes": 713047323,
+      "job_id": "/romain/score-grader-qwen-curriculum-tis-s1-a1-01a126ce",
+      "workspace": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/score-grader-qwen-curriculum-tis-s1-a1-01a126ce-workspace",
+      "spec_sha256": "13b217cd361c8f4c61c0bab5d4cadf167d88cf30213745f685e540da6ee7926d",
+      "output_prefix": "marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a1-01a126ce",
+      "local_input_validation_passed": true,
+      "replaces_failed_cpu_job": "/romain/score-grader-qwen-curriculum-tis-s1-a0-01a126ce",
+      "original_spec_changed_fields": [
+        "output_prefix"
+      ],
+      "bundle": {
+        "bytes": 8580488,
+        "sha256": "0122c5f06f75d8c9c90647e0c290f2ca388b7ecdc682bab9bb436002a6c8962c",
+        "spec_sha256": "13b217cd361c8f4c61c0bab5d4cadf167d88cf30213745f685e540da6ee7926d",
+        "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e",
+        "all_input_files_verified": true
+      },
+      "native_bundle_validation_passed": true,
+      "native_submission_confirmed": true,
+      "retained_input_objects": {
+        "bundle": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a1-01a126ce/inputs/bundle.zip",
+          "bytes": 8580488,
+          "etag": "\"29d3796f361c5ee848d5701bc8f9c056\"",
+          "sha256": "0122c5f06f75d8c9c90647e0c290f2ca388b7ecdc682bab9bb436002a6c8962c"
+        },
+        "spec": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a1-01a126ce/inputs/spec.json",
+          "bytes": 157770,
+          "etag": "\"793e674820c9811777d0ba61d3527dc9\"",
+          "sha256": "13b217cd361c8f4c61c0bab5d4cadf167d88cf30213745f685e540da6ee7926d"
+        }
+      },
+      "controller_row": {
+        "job_id": "/romain/score-grader-qwen-curriculum-tis-s1-a1-01a126ce",
+        "job_state": "3",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "0122c5f06f75d8c9c90647e0c290f2ca388b7ecdc682bab9bb436002a6c8962c",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-curriculum-tis-s1-a1-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "6387987111bee87e",
+        "task_state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792106232168",
+        "finished_at_ms": "",
+        "node_name": "gb95f20",
+        "terminal_reason": ""
+      },
+      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+    }
+  ],
+  "failed_original_controller": {
+    "job_id": "/romain/score-grader-qwen-curriculum-tis-s1-a0-01a126ce",
+    "job_state": "7",
+    "num_tasks": "1",
+    "priority_band": "3",
+    "bundle_id": "6684310827bcea1e1f0e8e402d4a2b6ce11ac7742145aab034d89cbf64a96728",
+    "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+    "res_cpu_millicores": "32000",
+    "res_memory_bytes": "68719476736",
+    "res_disk_bytes": "53687091200",
+    "res_device_json": "{}",
+    "task_id": "/romain/score-grader-qwen-curriculum-tis-s1-a0-01a126ce/0",
+    "attempt_id": "0",
+    "attempt_uid": "95c02e1d5d8dbf9e",
+    "task_state": "7",
+    "exit_code": "",
+    "started_at_ms": "1792094174101",
+    "finished_at_ms": "1792101243344",
+    "node_name": "g8364ba",
+    "terminal_reason": "PodDeleted: pod was deleted while the attempt was active"
+  },
+  "total_requested_cpu": 32,
+  "total_requested_memory_gib": 64,
+  "total_requested_gpu": 0,
+  "maximum_archive_io_workers": 2,
+  "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU,2archiveIO workers. Full249984-response native300 curriculumTISseed1 replay replaces a0 terminal state7/PodDeleted; a0 partial229376reported records and62.8377155556CPUh retained separately. All19216archives/713047323bytes, original frozen0212 source/data/graders/lock/packages/runner/deadlines and all scientific fields unchanged. Only run-owned output prefix differs. Native bundle/spec durably read back/fullSHA verified. Full original grades and all16 evaluation count/quality gates remain pending.",
+  "native_bundle_validation_passed": true,
+  "resource_board_ids": [
+    1079,
+    1080
+  ],
+  "fresh_before_submit_controller": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/cpu-waves-and-snowball-restore5-controller-20261015T231548.csv"
+}

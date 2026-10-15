@@ -300,7 +300,7 @@
         "node_name": "g8364ba",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending.",
+      "status": "Terminal worker failure,state7/PodDeleted,229376partial reported records,no completed replay. Full frozen-input replacement planned as a1.",
       "archive_downloads_complete": true,
       "download_manifest": {
         "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a0-01a126ce/download-manifest.json.gz",
@@ -318,7 +318,32 @@
         "native_failures": 0,
         "result_passed": null,
         "failure_published": false
-      }
+      },
+      "terminal_controller": {
+        "job_id": "/romain/score-grader-qwen-curriculum-tis-s1-a0-01a126ce",
+        "job_state": "7",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "6684310827bcea1e1f0e8e402d4a2b6ce11ac7742145aab034d89cbf64a96728",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-curriculum-tis-s1-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "95c02e1d5d8dbf9e",
+        "task_state": "7",
+        "exit_code": "",
+        "started_at_ms": "1792094174101",
+        "finished_at_ms": "1792101243344",
+        "node_name": "g8364ba",
+        "terminal_reason": "PodDeleted: pod was deleted while the attempt was active"
+      },
+      "allocated_cpu_hours": 62.837715555555555,
+      "full_response_replay_passed": false,
+      "terminal_failure_evidence": "cpu_replay_worker_failure_score-grader-qwen-curriculum-tis-s1-a0-01a126ce.json",
+      "replacement_job": "/romain/score-grader-qwen-curriculum-tis-s1-a1-01a126ce"
     }
   ],
   "total_requested_cpu": 96,
@@ -326,7 +351,7 @@
   "total_requested_gpu": 0,
   "maximum_archive_io_workers": 6,
   "first_complete_cpu_replay_proof": "qwen_curriculum300_first_cpu_complete_response_replay.json",
-  "status": "Curriculum SCseed1 completed full249984 physical records/249983 original grades with1 pre-existing native failure placeholder,zero grade discrepancies and all16 native evals matched. TISseeds0/1 remain controller-running,229376 records each as of21:50UTC; original errors retained separately.",
+  "status": "All three original CPU tasks ended:SCseed1/TISseed0 complete full original-response replays;TISseed1 worker failed after229376reported partial records and does not count as passed. All actual CPU costs and surviving evidence retained. TISseed1 full249984-record replacement prepared separately with unchanged original inputs/runner/graders/deadlines.",
   "native_bundle_validation_passed": true,
   "resource_board_ids": [
     1064,

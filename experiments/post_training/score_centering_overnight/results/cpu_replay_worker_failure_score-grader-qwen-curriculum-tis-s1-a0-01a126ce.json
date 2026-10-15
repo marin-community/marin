@@ -1,0 +1,145 @@
+{
+  "scope": "Terminal worker failure with partial reported progress, not a completed replay. Exact native controller state7/PodDeleted; this is not classified as priority preemption. All three surviving application outputs and four returned native log/event/client-diagnostic files retained, plus full source bundle/spec/controller snapshot. Empty Finelog stdout is not proof of complete workload stdout. Old partial grades are not reused as a full replay.",
+  "job_id": "/romain/score-grader-qwen-curriculum-tis-s1-a0-01a126ce",
+  "run_id": "sc-qwen-transfer-curriculum-tis-s1-main-interactive-a1-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "terminal_controller": {
+    "job_id": "/romain/score-grader-qwen-curriculum-tis-s1-a0-01a126ce",
+    "job_state": "7",
+    "num_tasks": "1",
+    "priority_band": "3",
+    "bundle_id": "6684310827bcea1e1f0e8e402d4a2b6ce11ac7742145aab034d89cbf64a96728",
+    "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+    "res_cpu_millicores": "32000",
+    "res_memory_bytes": "68719476736",
+    "res_disk_bytes": "53687091200",
+    "res_device_json": "{}",
+    "task_id": "/romain/score-grader-qwen-curriculum-tis-s1-a0-01a126ce/0",
+    "attempt_id": "0",
+    "attempt_uid": "95c02e1d5d8dbf9e",
+    "task_state": "7",
+    "exit_code": "",
+    "started_at_ms": "1792094174101",
+    "finished_at_ms": "1792101243344",
+    "node_name": "g8364ba",
+    "terminal_reason": "PodDeleted: pod was deleted while the attempt was active"
+  },
+  "allocated_cpu_hours": 62.837715555555555,
+  "allocated_h100_hours": 0,
+  "partial_reported_records": 229376,
+  "partial_reported_grade_discrepancies": 0,
+  "partial_reported_native_failure_placeholders": 5,
+  "full_response_replay_passed": false,
+  "final_application_result_published": false,
+  "surviving_application_objects": {
+    "started.json": {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a0-01a126ce/started.json",
+      "bytes": 613,
+      "etag": "\"9fd9da8a676ffc54a1d244f0f50c7c1b\"",
+      "sha256": "b8d53adbe46f17696aa8d4a866a469e3fd58054521e391a03f43518bc250136d",
+      "modified": "2026-10-15T19:56:13+00:00"
+    },
+    "download-manifest.json.gz": {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a0-01a126ce/download-manifest.json.gz",
+      "bytes": 1369610,
+      "etag": "\"56f07bbdf8c2f347593ae25f1e7b9b6b\"",
+      "sha256": "7bed3502590aed70d4e070632bba2fb624e3492cd4ff7d8190b1b1bf871cecfc",
+      "modified": "2026-10-15T20:11:49+00:00"
+    },
+    "progress.json": {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a0-01a126ce/progress.json",
+      "bytes": 420,
+      "etag": "\"f4cb5ca59fec0dbf1361059b0138a4d7\"",
+      "sha256": "5f27354f9878bd03a0d1546c91af3c7cd75877ac76d573b764cf644e82289ab3",
+      "modified": "2026-10-15T21:49:52+00:00"
+    }
+  },
+  "retained_terminal_and_input_objects": {
+    "cpu-replay-curriculum-tis-s1-a0-attempt0.events": {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a0-01a126ce/preserved-terminal-evidence/cpu-replay-curriculum-tis-s1-a0-attempt0.events",
+      "bytes": 548,
+      "etag": "\"46f86ddf639e757e12f6ca88699cbad2\"",
+      "sha256": "dce8e160565730486625d4b28c7bc99d8e3e17b43a8b1c7463066aa41a2327c2",
+      "full_bytes_read_back_verified": true
+    },
+    "cpu-replay-curriculum-tis-s1-a0-attempt0.events-client": {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a0-01a126ce/preserved-terminal-evidence/cpu-replay-curriculum-tis-s1-a0-attempt0.events-client",
+      "bytes": 508,
+      "etag": "\"5df81c971377bdac218793503ebd9725\"",
+      "sha256": "cd1b64fa77190cf41dc078d9d38b98b83d0c1d441705d2e34708c17793dd1c83",
+      "full_bytes_read_back_verified": true
+    },
+    "cpu-replay-curriculum-tis-s1-a0-attempt0.logs": {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a0-01a126ce/preserved-terminal-evidence/cpu-replay-curriculum-tis-s1-a0-attempt0.logs",
+      "bytes": 0,
+      "etag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "full_bytes_read_back_verified": true
+    },
+    "cpu-replay-curriculum-tis-s1-a0-attempt0.logs-client": {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a0-01a126ce/preserved-terminal-evidence/cpu-replay-curriculum-tis-s1-a0-attempt0.logs-client",
+      "bytes": 478,
+      "etag": "\"2c58d4f4ceb03ff0df314dfadbc0e382\"",
+      "sha256": "3839d9439f4400fb04cdb09fe7594a40b0c1d378fd85b68c7b64f5778bfc47b2",
+      "full_bytes_read_back_verified": true
+    },
+    "controller_snapshot": {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a0-01a126ce/preserved-terminal-evidence/cpu-waves-and-snowball-restore5-controller-20261015T230854.csv",
+      "bytes": 9958,
+      "etag": "\"165d77bbc1a87af508b5e145483344aa\"",
+      "sha256": "c439f488d1d18ac503e0f7e6d950a5e0ea2d6a4d7c08b2206c7bab57c702acb0",
+      "full_bytes_read_back_verified": true
+    },
+    "input_bundle": {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a0-01a126ce/inputs/bundle.zip",
+      "bytes": 8580488,
+      "etag": "\"e1fe9982dbb5bc0a881e2a57da23e5f1\"",
+      "sha256": "6684310827bcea1e1f0e8e402d4a2b6ce11ac7742145aab034d89cbf64a96728",
+      "full_bytes_read_back_verified": true
+    },
+    "input_spec": {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a0-01a126ce/inputs/spec.json",
+      "bytes": 157770,
+      "etag": "\"7c6f139814b8a0daedbf991fd6bca44c\"",
+      "sha256": "dd99130f614373c1189f24ff8fc0ba970fd78b036416e20992dee48ffed8a371",
+      "full_bytes_read_back_verified": true
+    }
+  },
+  "replacement_job": "/romain/score-grader-qwen-curriculum-tis-s1-a1-01a126ce",
+  "correction": "The22:20 native snapshot already contained terminal state7 and22:14:03.344UTC finish, but saved progress was mistakenly reported as running. Monitoring now requires an explicit native controller snapshot and reports its states/reason next to S3 progress.",
+  "recorded_at": "2026-10-15T23:15:21.462279+00:00",
+  "monitor_correction": {
+    "explicit_native_controller_snapshot_required": true,
+    "native_failed_case_demonstration": {
+      "job_id": "/romain/score-grader-qwen-curriculum-tis-s1-a0-01a126ce",
+      "started": true,
+      "archive_downloads_complete": true,
+      "records": 229376,
+      "discrepancies": 0,
+      "native_failures": 5,
+      "result_passed": null,
+      "failure_published": false,
+      "controller_job_state": "7",
+      "controller_task_state": "7",
+      "controller_finished_at_ms": "1792101243344",
+      "controller_terminal_reason": "PodDeleted: pod was deleted while the attempt was active",
+      "controller_running": false
+    },
+    "retained_helper_and_real_native_result": [
+      {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a0-01a126ce/preserved-terminal-evidence/collect-cpu-wave-status.py",
+        "bytes": 4580,
+        "etag": "\"027a7e202090469fa36c7e9e4b0b2e7d\"",
+        "sha256": "d1ec94f425b4f10adc15cd3af8101b1f6a903c967fc268cd9168da0a03193fff",
+        "full_bytes_read_back_verified": true
+      },
+      {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a0-01a126ce/preserved-terminal-evidence/cpu-wave-status-20261015T2317-native-state-correction-wave2.json",
+        "bytes": 7206,
+        "etag": "\"519f07035c57f429f55afb89c4e0b820\"",
+        "sha256": "3a98c275eac2600aa780a1bc12d06253f41c1f32b1100795370a9b1ed013ba1c",
+        "full_bytes_read_back_verified": true
+      }
+    ]
+  }
+}
