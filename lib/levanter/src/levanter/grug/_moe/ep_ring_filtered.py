@@ -41,6 +41,40 @@ def destination_hit_fraction(*, num_experts: int, local_experts: int, topk: int)
     return 1.0 - math.comb(num_experts - local_experts, topk) / math.comb(num_experts, topk)
 
 
+@jax.custom_vjp
+def _slot_weights(
+    combine_weights: Float[Array, "T K"],
+    safe_source: Int[Array, "S"],
+    on_destination: Bool[Array, "S K"],
+    assignment_slot: Int[Array, "T K"],
+) -> Float[Array, "S K"]:
+    """``where(on_destination, combine_weights[safe_source], 0)`` in float32.
+
+    ``assignment_slot[t, k]`` is the send slot that carries token ``t``'s assignment ``k`` (or an
+    out-of-range sentinel). Each kept assignment has exactly one such slot, so the backward is a
+    gather through that map instead of autodiff's scatter-add over ``safe_source``, which is slow
+    in bfloat16 on AMD GPUs.
+    """
+    return jnp.where(on_destination, combine_weights[safe_source].astype(jnp.float32), 0.0)
+
+
+def _slot_weights_fwd(combine_weights, safe_source, on_destination, assignment_slot):
+    out = _slot_weights(combine_weights, safe_source, on_destination, assignment_slot)
+    # The zero-size array carries the input dtype the cotangent must have.
+    return out, (assignment_slot, jnp.zeros((0,), combine_weights.dtype))
+
+
+def _slot_weights_bwd(residual, cotangent):
+    assignment_slot, dtype_carrier = residual
+    topk = assignment_slot.shape[1]
+    flat = assignment_slot * topk + jnp.arange(topk, dtype=jnp.int32)
+    d_weights = jnp.take(cotangent.reshape(-1), flat, mode="fill", fill_value=0)
+    return d_weights.astype(dtype_carrier.dtype), None, None, None
+
+
+_slot_weights.defvjp(_slot_weights_fwd, _slot_weights_bwd)
+
+
 def _moe_mlp_ep_ring_filtered_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -113,7 +147,9 @@ def _moe_mlp_ep_ring_filtered_local(
         slot_selected = selected[safe_source]
         on_destination = slot_valid[:, None] & (slot_selected // local_experts == slot_destination[:, None])
         slot_local_ids = jnp.where(on_destination, slot_selected - slot_destination[:, None] * local_experts, -1)
-        slot_weights = jnp.where(on_destination, combine_weights_local[safe_source].astype(jnp.float32), 0.0)
+        # assignment_slot[t, k]: the send slot carrying assignment (t, k), or the `send_rows` sentinel.
+        assignment_slot = jnp.take_along_axis(slot, destination, axis=1)
+        slot_weights = _slot_weights(combine_weights_local, safe_source, on_destination, assignment_slot)
         metadata = jnp.concatenate([slot_weights, slot_local_ids.astype(jnp.float32)], axis=1)
         metadata = metadata.reshape(ep_size, pair_capacity, 2 * topk)
         # One trailer row per destination carries this shard's valid demand, which the receiver
