@@ -259,7 +259,10 @@ histogram_scalar_samples AS (
            {source_family} AS source_family,
            {_case_for(_histogram_name_mapping(), "samples.name")} AS family,
            {_case_for(_histogram_component_mapping(), "samples.name")} AS component,
-           json_get(samples.attributes_json, 'le') AS upper_bound,
+           CASE WHEN json_get(samples.attributes_json, 'le') IN ('+Inf', 'Inf') THEN '+Inf'
+                ELSE COALESCE(regexp_replace(CAST(TRY_CAST(json_get(samples.attributes_json, 'le') AS DOUBLE)
+                                                  AS VARCHAR), '\\.0$', ''),
+                              json_get(samples.attributes_json, 'le')) END AS upper_bound,
            samples.timestamp_ms, samples.seq, samples.value,
            CASE WHEN samples.name LIKE '%_sum' THEN NULL
                 WHEN samples.value >= 0 AND samples.value < 9007199254740992
@@ -274,10 +277,10 @@ histogram_scalar_samples AS (
       AND json_get(samples.attributes_json, 'source_temporality') = 'cumulative_snapshot'
       AND (samples.service = 'vllm' OR json_get(samples.attributes_json, 'engine_index') IS NOT NULL)
       AND NOT EXISTS (
-          SELECT 1 FROM histogram_structured_samples AS structured
+          SELECT 1 FROM histogram_structured_candidates AS structured
           WHERE samples.publication_id IS NOT NULL
             AND structured.publication_id = samples.publication_id
-            AND structured.source_family = {source_family}
+            AND structured.name = {source_family}
             AND structured.origin_cluster = samples.origin_cluster
             AND structured.service = samples.service
             AND structured.resource_attributes_json = samples.resource_attributes_json
@@ -295,7 +298,8 @@ histogram_scalar_samples AS (
 ), histogram_structured_components AS (
     SELECT origin_cluster, service, resource_attributes_json, attributes_json,
            source_family, family, 'bucket' AS component,
-           CASE WHEN bucket.i <= array_length(bounds) THEN CAST(bounds[bucket.i] AS VARCHAR)
+           CASE WHEN bucket.i <= array_length(bounds)
+                THEN regexp_replace(CAST(bounds[bucket.i] AS VARCHAR), '\\.0$', '')
                 ELSE '+Inf' END AS upper_bound,
            timestamp_ms, seq, CAST(cumulative_count AS DOUBLE) AS value, cumulative_count AS integer_value,
            producer_epoch, source_sequence, schema_key, 1 AS is_structured, publication_id
@@ -340,7 +344,8 @@ histogram_component_counts AS (
                AS consistent_component
     FROM histogram_components
     WINDOW family_series AS (
-        PARTITION BY origin_cluster, service, resource_attributes_json, attributes_json, source_family, is_structured
+        PARTITION BY origin_cluster, service, resource_attributes_json, attributes_json, source_family
+        ORDER BY timestamp_ms, seq ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
     ), component_publication AS (
         PARTITION BY {publication_key}, component, upper_bound
     )
@@ -630,6 +635,13 @@ WITH base AS MATERIALIZED (
     FROM canonical_gauge_bins AS bins
     JOIN raw_gauge_peaks AS raw USING (name)
     GROUP BY 1, raw.peak
+), histogram_structured_candidates AS MATERIALIZED (
+    SELECT * EXCLUDE (publication_id),
+           json_get(body_json, 'producer_epoch') || ':' || json_get(body_json, 'sequence') AS publication_id
+    FROM base
+    WHERE name IN ({histogram_base_names})
+      AND kind = 'histogram' AND body_json IS NOT NULL
+      AND (service = 'vllm' OR json_get(attributes_json, 'engine_index') IS NOT NULL)
 ), histogram_structured_samples AS MATERIALIZED (
     SELECT origin_cluster, service, resource_attributes_json, attributes_json,
            name AS source_family, {histogram_base_family} AS family,
@@ -641,11 +653,8 @@ WITH base AS MATERIALIZED (
            json_get(body_json, 'producer_epoch') AS producer_epoch,
            CAST(json_extract(body_json, '$.sequence') AS BIGINT) AS source_sequence,
            CAST(json_extract(body_json, '$.explicit_bounds') AS VARCHAR) AS schema_key,
-           json_get(body_json, 'producer_epoch') || ':' || json_get(body_json, 'sequence') AS publication_id
-    FROM base
-    WHERE name IN ({histogram_base_names})
-      AND kind = 'histogram' AND body_json IS NOT NULL
-      AND (service = 'vllm' OR json_get(attributes_json, 'engine_index') IS NOT NULL)
+           publication_id
+    FROM histogram_structured_candidates
     {_histogram_publication_filter(("body_json",))}
 ), {_histogram_component_ctes(_HISTOGRAM_NAMES)}, {_histogram_delta_ctes(start_ms)}, engine_itl AS (
     SELECT producer_identity || ' @ ' || origin_cluster || ':' || service || ':' || resource_attributes_json AS series,
@@ -1373,6 +1382,12 @@ WITH base AS MATERIALIZED (
            point.source_sequence AS source_sequence,
            point.histogram_bins AS histogram_bins
     FROM (SELECT * EXCLUDE (points), unnest(points) AS point FROM series)
+), histogram_structured_candidates AS MATERIALIZED (
+    SELECT * EXCLUDE (publication_id), producer_epoch || ':' || CAST(source_sequence AS VARCHAR) AS publication_id
+    FROM base
+    WHERE name IN ({sql_values(_SUMMARY_HISTOGRAM_BASE_NAMES)})
+      AND kind = 'histogram' AND histogram_count IS NOT NULL
+      AND (service = 'vllm' OR json_get(attributes_json, 'engine_index') IS NOT NULL)
 ), histogram_structured_samples AS MATERIALIZED (
     SELECT origin_cluster, service, name, resource_attributes_json, attributes_json,
            name AS source_family, {_case_for(_HISTOGRAM_FAMILIES, "name")} AS family,
@@ -1381,11 +1396,8 @@ WITH base AS MATERIALIZED (
            CAST(histogram_bins AS BIGINT[]) AS bins,
            histogram_count AS count, histogram_sum AS total,
            producer_epoch, source_sequence, histogram_bounds AS schema_key,
-           producer_epoch || ':' || CAST(source_sequence AS VARCHAR) AS publication_id
-    FROM base
-    WHERE name IN ({sql_values(_SUMMARY_HISTOGRAM_BASE_NAMES)})
-      AND kind = 'histogram' AND histogram_count IS NOT NULL
-      AND (service = 'vllm' OR json_get(attributes_json, 'engine_index') IS NOT NULL)
+           publication_id
+    FROM histogram_structured_candidates
     {_histogram_publication_filter(("count", "total", "schema_key", "histogram_bins"))}
 ), {_histogram_component_ctes(_SUMMARY_HISTOGRAM_NAMES)}, {_histogram_delta_ctes(overview.start_ms)},
 histogram_increments AS (

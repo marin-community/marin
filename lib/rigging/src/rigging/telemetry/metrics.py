@@ -4,9 +4,9 @@
 """Bounded publication of externally collected metric snapshots into telemetry.
 
 External collectors, such as the Prometheus scraper, produce ``MetricSnapshot``
-values with explicit source semantics. ``MetricSnapshotPublisher`` validates and
-enqueues them through the package's shared emit path, capping admission so one
-oversized scrape cannot exhaust the export queue.
+and ``HistogramSnapshot`` values with explicit source semantics. Their publishers
+validate and enqueue them through the package's shared emit path, capping
+admission so one oversized scrape cannot exhaust the export queue.
 """
 
 import math

@@ -102,7 +102,9 @@ def _vllm_projection_database():
         "structured_unidentified_fast",
         "mixed",
         "dual",
+        "dual_conflicting",
         "dual_missing",
+        "dual_missing_middle_bucket",
         "dual_partial",
     ],
 )
@@ -153,7 +155,7 @@ def test_vllm_histogram_dashboard_format_parity(
         }
         scalar = (
             format_name.startswith("scalar")
-            or format_name in ("dual", "dual_missing", "dual_partial")
+            or format_name in ("dual", "dual_conflicting", "dual_missing", "dual_missing_middle_bucket", "dual_partial")
             or (format_name == "mixed" and sequence < 2)
         )
         structured = (
@@ -164,8 +166,9 @@ def test_vllm_histogram_dashboard_format_parity(
                 "structured_unidentified_fast",
                 "structured_middle_bin_reset",
                 "dual",
+                "dual_conflicting",
             )
-            or (format_name in ("dual_missing", "dual_partial") and sequence != 1)
+            or (format_name in ("dual_missing", "dual_missing_middle_bucket", "dual_partial") and sequence != 1)
             or (format_name == "mixed" and sequence > 0)
         )
         if scalar:
@@ -182,13 +185,21 @@ def test_vllm_histogram_dashboard_format_parity(
                 running += bin_count
                 if format_name == "dual_partial" and sequence == 1 and bound != bounds[0]:
                     continue
+                if format_name == "dual_missing_middle_bucket" and sequence == 1 and bound == bounds[1]:
+                    continue
+                if bound == float("inf"):
+                    bound_label = "+Inf"
+                elif bound.is_integer():
+                    bound_label = str(int(bound))
+                else:
+                    bound_label = str(bound)
                 rows.append(
                     (
                         f"{family}_bucket",
                         "gauge",
                         float(running),
                         None,
-                        canonical({**labels, "le": "+Inf" if bound == float("inf") else str(bound)}),
+                        canonical({**labels, "le": bound_label}),
                         17_000 if format_name == "scalar_staggered" and sequence == 1 else timestamp,
                     )
                 )
@@ -227,6 +238,17 @@ def test_vllm_histogram_dashboard_format_parity(
             if format_name.startswith("structured_unidentified"):
                 del body["producer_epoch"], body["sequence"]
             rows.append((family, "histogram", None, json.dumps(body), canonical(common), timestamp))
+            if format_name == "dual_conflicting" and sequence == 1:
+                rows.append(
+                    (
+                        family,
+                        "histogram",
+                        None,
+                        json.dumps({**body, "bucket_counts": [0, count, 0]}),
+                        canonical(common),
+                        timestamp,
+                    )
+                )
     database.executemany(
         """INSERT INTO "telemetry_v1.marinskyrl"
            (cluster, service, job_id, name, kind, value, body_json,
@@ -253,9 +275,10 @@ def test_vllm_histogram_dashboard_format_parity(
     assert statistics["p99"] == pytest.approx((1.0 * scale, expected_count))
     if metric == "output_tokens":
         distribution = {row["series"]: row["value"] for row in result if row["section"] == "output_length_distribution"}
+        expected_bounds = tuple(str(int(bound)) if bound.is_integer() else str(bound) for bound in bounds)
         assert distribution == {
-            str(bounds[0]): 1 if invalid_interval else 3,
-            str(bounds[1]): 2,
+            expected_bounds[0]: 1 if invalid_interval else 3,
+            expected_bounds[1]: 2,
             "+Inf": 0,
         }
     if metric not in ("ttft", "inter_token_latency"):
@@ -267,7 +290,13 @@ def test_vllm_histogram_dashboard_format_parity(
         expected_samples = (
             3
             if format_name == "mixed"
-            else 1 if format_name in ("dual_partial", "scalar_conflicting") or invalid_interval else 2
+            else (
+                1
+                if format_name
+                in ("dual_conflicting", "dual_missing_middle_bucket", "dual_partial", "scalar_conflicting")
+                or invalid_interval
+                else 2
+            )
         )
         assert [(row["value"], row["samples"]) for row in summary if row["metric"] == "ttft_observations"] == [
             (expected_count, expected_samples)
@@ -368,7 +397,7 @@ def test_vllm_target_histograms_weight_producers_without_dual_or_reset_counts() 
         if row["metric"] == "tpot" and row["stat"] == "mean_over_time" and row["t"] == 30_000
     ] == [pytest.approx((0.1, 2))]
     distribution = {row["series"]: row["value"] for row in result if row["section"] == "output_length_distribution"}
-    assert distribution == {"10.0": 2, "100.0": 10, "+Inf": 0}
+    assert distribution == {"10": 2, "100": 10, "+Inf": 0}
 
 
 @pytest.mark.parametrize("conflicting", [False, True])
