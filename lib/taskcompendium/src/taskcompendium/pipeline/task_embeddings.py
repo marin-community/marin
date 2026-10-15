@@ -18,6 +18,7 @@ from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
+from zephyr.shard_keys import deterministic_hash
 
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.semantics import DescriptionStatus
@@ -26,6 +27,16 @@ EMBEDDING_INSTRUCTION = (
     "Represent the core knowledge and decisive operation required by this work, ignoring story details "
     "and routine setup, capture, formatting or submission unless they are the main problem."
 )
+# Keep cache routing independent of the execution pool size.
+EMBEDDING_CACHE_SHARDS = 1024
+
+
+def embedding_cache_partition(key: str) -> int:
+    return deterministic_hash(key) % EMBEDDING_CACHE_SHARDS
+
+
+def embedding_cache_path(root: str, partition: int) -> str:
+    return str(StoragePath(root) / f"part-{partition:04d}")
 
 
 class TextEmbedder(Protocol):
@@ -64,12 +75,13 @@ def normalized_vectors(values: np.ndarray, rows: int, dimensions: int) -> np.nda
 
 def _embed_batches(
     batches: Iterator[list[dict]],
-    _shard: ShardInfo,
+    shard: ShardInfo,
     *,
     spec: EmbeddingSpec,
     embedder: TextEmbedder,
     cache_root: str,
 ) -> Iterator[dict]:
+    cache_root = embedding_cache_path(cache_root, shard.shard_idx)
     view = ReadView(cache_root)
     with DataStore.open(cache_root) as store:
         for batch in batches:
@@ -114,7 +126,7 @@ def embed_texts(
     """Return vector Parquet paths for unique text keys, reusing cached vectors."""
     schema = pa.schema([("embedding_key", pa.string()), ("embedding", pa.list_(pa.float32(), spec.dimensions))])
     result = context.execute(
-        texts.deduplicate(key=lambda row: row["embedding_key"], num_output_shards=context.max_workers)
+        texts.deduplicate(key=lambda row: row["embedding_key"], num_output_shards=EMBEDDING_CACHE_SHARDS)
         .window(batch_size)
         .map_shard(partial(_embed_batches, spec=spec, embedder=embedder, cache_root=cache_root))
         .write_parquet(str(StoragePath(output_root) / "vectors/part-{shard:05d}.parquet"), schema=schema),

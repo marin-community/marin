@@ -27,7 +27,7 @@ from taskcompendium.pipeline.curriculum_alignment import (
     rank_task_batch,
 )
 from taskcompendium.pipeline.semantics import DescriptionStatus
-from taskcompendium.pipeline.task_embeddings import text_record
+from taskcompendium.pipeline.task_embeddings import embedding_cache_partition, embedding_cache_path, text_record
 
 PREVIEW_CHARACTERS = 8192
 
@@ -83,11 +83,18 @@ def _align_batches(
     spec: EmbeddingSpec,
 ) -> Iterator[dict]:
     curriculum: CurriculumVectors = zephyr_worker_ctx().get_shared(shared_key)
-    view = ReadView(cache_root)
+    views: dict[int, ReadView] = {}
     for batch in batches:
         ready = [row for row in batch if row["status"] == DescriptionStatus.READY]
         requests = [text_record(row["description"], spec)["embedding_key"] for row in ready]
-        cached = view.read_blobs(requests)
+        partitions: dict[int, list[str]] = {}
+        for key in requests:
+            partitions.setdefault(embedding_cache_partition(key), []).append(key)
+        cached = {}
+        for partition, keys in partitions.items():
+            if partition not in views:
+                views[partition] = ReadView(embedding_cache_path(cache_root, partition))
+            cached.update(views[partition].read_blobs(keys))
         missing = set(requests) - set(cached)
         if missing:
             raise ValueError(f"Alignment is missing {len(missing)} cached task vectors")

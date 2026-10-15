@@ -18,6 +18,7 @@ from marin.execution.lazy import ArtifactStep, run
 from marin.processing.embeddings.harrier import HarrierEmbedder
 from taskcompendium.convert.answers import numeric_answer_task
 from taskcompendium.models import Source, TaskSpec
+from taskcompendium.pipeline import task_embeddings
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.semantics import DescriptionModel
 from taskcompendium.pipeline.task_embeddings import text_record
@@ -30,6 +31,11 @@ from experiments.post_training.task_curation.embedding import DescriptionEndpoin
 from experiments.post_training.task_curation.local import local_artifact_prefix
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
+
+
+@pytest.fixture(autouse=True)
+def cache_partitions(monkeypatch):
+    monkeypatch.setattr(task_embeddings, "EMBEDDING_CACHE_SHARDS", 2)
 
 
 class DescriptionServer(ThreadingHTTPServer):

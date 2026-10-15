@@ -18,6 +18,7 @@ from zephyr.stage_io import ZephyrWorkerError
 
 from taskcompendium.convert.answers import numeric_answer_task
 from taskcompendium.models import Source, TaskSpec
+from taskcompendium.pipeline import task_embeddings
 from taskcompendium.pipeline.alignment_publication import publish_alignments
 from taskcompendium.pipeline.curriculum_alignment import (
     AnchorKind,
@@ -37,7 +38,18 @@ from taskcompendium.pipeline.semantics import (
     task_semantic_input,
 )
 from taskcompendium.pipeline.task_alignment import align_tasks
-from taskcompendium.pipeline.task_embeddings import embed_texts, task_text_records, text_record
+from taskcompendium.pipeline.task_embeddings import (
+    embed_texts,
+    embedding_cache_partition,
+    embedding_cache_path,
+    task_text_records,
+    text_record,
+)
+
+
+@pytest.fixture(autouse=True)
+def cache_partitions(monkeypatch):
+    monkeypatch.setattr(task_embeddings, "EMBEDDING_CACHE_SHARDS", 2)
 
 
 @pytest.fixture
@@ -152,7 +164,13 @@ def rows(paths):
 
 
 def test_embedding_retry_reuses_completed_cache_batches(tmp_path, spec):
-    records = [text_record(f"Count case {i}.", spec) for i in range(520)]
+    records = []
+    index = 0
+    while len(records) < 520:
+        row = text_record(f"Count case {index}.", spec)
+        if embedding_cache_partition(row["embedding_key"]) == 0:
+            records.append(row)
+        index += 1
     cache = str(tmp_path / "vectors-cache")
     provider = EmbeddingProvider(str(tmp_path / "failed-calls.jsonl"), fail_after=256)
     arguments = dict(texts=Dataset.from_list(records), spec=spec, cache_root=cache)
@@ -161,7 +179,8 @@ def test_embedding_retry_reuses_completed_cache_batches(tmp_path, spec):
             embed_texts(context, **arguments, embedder=provider, output_root=str(tmp_path / "failed"))
         successful = [json.loads(line) for line in Path(provider.calls).read_text().splitlines()]
         assert len(successful) == 256
-        recovered = EmbeddingProvider(str(tmp_path / "recovered-calls.jsonl"))
+    recovered = EmbeddingProvider(str(tmp_path / "recovered-calls.jsonl"))
+    with ZephyrContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "recovery-chunks")) as context:
         result = embed_texts(context, **arguments, embedder=recovered, output_root=str(tmp_path / "recovered"))
     assert len(rows(result)) == 520
     retried = [json.loads(line) for line in Path(recovered.calls).read_text().splitlines()]
@@ -457,4 +476,5 @@ def test_invalid_provider_vectors_never_enter_persistent_cache(context, tmp_path
             cache_root=cache,
             output_root=str(tmp_path / "failed"),
         )
-    assert ReadView(cache).read_blobs([row["embedding_key"]]) == {}
+    partition = embedding_cache_path(cache, embedding_cache_partition(row["embedding_key"]))
+    assert ReadView(partition).read_blobs([row["embedding_key"]]) == {}

@@ -274,8 +274,10 @@ failure reason; no vector or match is guessed.
 
 Tasks and curriculum anchors share the pinned Harrier checkpoint, embedding
 instruction, tokenizer, bfloat16 CPU inference, last-token pooling and L2
-normalization. FineStore stores vectors by rendered-text/specification hash, with
-batched reads and writes. A curriculum edit reuses task descriptions and vectors.
+normalization. FineStore stores vectors by rendered-text/specification hash in
+1,024 fixed partitions, independent of worker count. Zephyr routes each embedding
+partition to one writer, avoiding shared-manifest contention. Reads and writes
+are batched. A curriculum edit reuses task descriptions and vectors.
 Assignment workers read the persistent vector cache in bounded batches. Parquet
 outputs preserve each embedding stage's vectors and provenance.
 
