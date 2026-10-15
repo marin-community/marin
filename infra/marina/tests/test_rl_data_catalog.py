@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from fastapi.testclient import TestClient
 from finestore.rl.curation import (
@@ -29,12 +31,14 @@ from finestore.rl.curation import (
     SourceDeclaration,
     register_catalog,
 )
+from finestore.rl.curriculum import AlignmentRelease
 from finestore.store import DataStore
 from marina.applets import AppletServices
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 
 from infra.marina.applets.rl_data_catalog.load import load_catalog
+from infra.marina.applets.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.applets.rl_data_catalog.server.app import create_api, migrate
 
 
@@ -165,6 +169,202 @@ class CatalogServices:
 
     def engine(self) -> Engine:
         return self.database_engine
+
+
+def curriculum_release(tmp_path: Path) -> Path:
+    declarations = [
+        SourceDeclaration(
+            id=identifier,
+            name=identifier,
+            display_name=identifier.upper(),
+            origin="fixture",
+            family="Numbers",
+            tags=[],
+            task_count=None,
+            notes="",
+            dataset_id=None,
+            dataset_revision=None,
+            url=None,
+            type="RLVR",
+            turns="Single-turn",
+            is_benchmark=False,
+            kind="Dataset",
+            status="Available",
+            pipeline=None,
+        )
+        for identifier in ("a", "b", "inventory")
+    ]
+    records = []
+    for source_id, task_id, content, capability_score in (
+        ("a", "one", "h1", 0.9),
+        ("a", "two", "h2", 0.65),
+        ("a", "three", "h3", None),
+        ("b", "one", "h1", 0.9),
+    ):
+        records.append(
+            {
+                "source_id": source_id,
+                "source_key": source_id + "-key",
+                "task_id": task_id,
+                "task_hash": source_id + task_id,
+                "content_hash": content,
+                "intended_use": "train",
+                "population": "converted",
+                "description_status": "ready" if capability_score is not None else "insufficient_context",
+                "description": content if capability_score is not None else "",
+                "reason": "",
+                "task_preview": "Count public objects.",
+                "preview_truncated": False,
+                "instruction_characters": 21,
+                "matches": (
+                    {
+                        "subjects": [
+                            {
+                                "subject_id": "D01",
+                                "facet": "subject_domain",
+                                "membership_similarity": 0.9,
+                                "capability_id": "add",
+                                "candidates": [
+                                    {
+                                        "subject_id": "D01",
+                                        "capability_id": "add",
+                                        "similarity": capability_score,
+                                        "anchor_id": "addition",
+                                    }
+                                ],
+                            }
+                        ],
+                        "capabilities": [],
+                    }
+                    if capability_score is not None
+                    else None
+                ),
+            }
+        )
+    data = tmp_path / "tasks.parquet"
+    pq.write_table(pa.Table.from_pylist(records), data)
+    release = AlignmentRelease(
+        release_id="first",
+        created_at="2026-10-14T00:00:00Z",
+        curriculum_key="curriculum-1",
+        population="converted",
+        sample_size=None,
+        task_count=4,
+        ready_count=3,
+        insufficient_context_count=1,
+        unique_content_count=3,
+        unique_embedding_count=2,
+        sources=[
+            {
+                "source_id": identifier,
+                "source_key": identifier + "-key",
+                "population": "converted",
+                "intended_use": "train",
+                "task_count": count,
+                "ready_count": ready,
+                "insufficient_context_count": count - ready,
+                "unique_content_count": count,
+            }
+            for identifier, count, ready in (("a", 3, 2), ("b", 1, 1))
+        ],
+        inventory=declarations,
+        nodes=[
+            {
+                "node_id": "subject:D01",
+                "subject_id": "D01",
+                "parent_id": None,
+                "kind": "subject",
+                "name": "Mathematics",
+                "description": "Numbers",
+            },
+            {
+                "node_id": "arithmetic",
+                "subject_id": "D01",
+                "parent_id": "subject:D01",
+                "kind": "group",
+                "name": "Arithmetic",
+                "description": "Calculate",
+            },
+            {
+                "node_id": "add",
+                "subject_id": "D01",
+                "parent_id": "arithmetic",
+                "kind": "capability",
+                "name": "Addition",
+                "description": "Add numbers",
+            },
+        ],
+        paths=[str(data)],
+        lineage={"alignment_root": "fixture"},
+        embedding_spec={"model": "fixture"},
+    )
+    path = tmp_path / "release.json"
+    path.write_text(release.model_dump_json())
+    return path
+
+
+def test_curriculum_runtime_cutoffs_dedup_pagination_and_atomic_load(catalog_database, tmp_path):
+    engine = catalog_database
+
+    def query(sql, parameters):
+        with engine.begin() as connection:
+            result = connection.execute(text(sql), parameters)
+            return {
+                "rows": [dict(row) for row in result.mappings()] if result.returns_rows else [],
+                "row_count": result.rowcount,
+            }
+
+    path = curriculum_release(tmp_path)
+    assert load_curriculum(str(path), query)["counts"]["tasks"] == 4
+    assert load_curriculum(str(path), query)["changed"] is False
+    with TestClient(create_api(cast(AppletServices, CatalogServices(engine)))) as client:
+        first = client.get("/curriculum").json()
+        assert first["totals"] == {
+            "denominator": 4,
+            "assigned": 2,
+            "subject_only": 1,
+            "out_of_scope": 0,
+            "insufficient_context": 1,
+        }
+        assert first["cells"][0]["count"] == 3
+        assert first["columns"][0]["denominator"] == 4
+        assert first["columns"][0]["processed_sources"] == 2
+        sources = client.get("/curriculum", params={"group_by": "source"}).json()["columns"]
+        assert next(row for row in sources if row["column_id"] == "inventory")["denominator"] == 0
+        unique = client.get("/curriculum", params={"count_mode": "content"}).json()
+        assert unique["totals"]["denominator"] == 3
+        assert unique["cells"][0]["count"] == 2
+        default = client.get("/curriculum", params={"parent_id": "subject:D01", "subject_id": "D01"}).json()
+        assert default["cells"][0]["count"] == 2
+        assert default["scope_summary"] == {"subject_members": 3, "capability_matches": 2}
+        relaxed = client.get(
+            "/curriculum", params={"parent_id": "subject:D01", "subject_id": "D01", "capability_distance": 0.4}
+        ).json()
+        assert relaxed["cells"][0]["count"] == 3
+        assert relaxed["scope_summary"] == {"subject_members": 3, "capability_matches": 3}
+        assert relaxed["totals"]["denominator"] == 4
+        strict = client.get("/curriculum", params={"subject_distance": 0.05}).json()
+        assert strict["totals"]["out_of_scope"] == 3
+        assert strict["release_id"] == relaxed["release_id"] == "first"
+        params = {"node_id": "add", "subject_id": "D01", "limit": 1}
+        page = client.get("/curriculum/tasks", params=params).json()
+        next_page = client.get("/curriculum/tasks", params={**params, "cursor": page["next_cursor"]}).json()
+        assert [(row["source_id"], row["task_id"]) for row in page["tasks"] + next_page["tasks"]] == [
+            ("a", "one"),
+            ("b", "one"),
+        ]
+        assert not next_page["next_cursor"]
+        assert client.get("/curriculum/task", params={"source_id": "a", "task_id": "one"}).json()["task"]["task_preview"]
+        manifest = json.loads(path.read_text())
+        path.write_text(json.dumps({**manifest, "release_id": "bad", "task_count": 5}))
+        with pytest.raises(ValueError, match="corpus counts"):
+            load_curriculum(str(path), query)
+        assert client.get("/curriculum").json()["release_id"] == "first"
+        path.write_text(json.dumps({**manifest, "release_id": "next", "curriculum_key": "curriculum-2"}))
+        assert load_curriculum(str(path), query)["changed"]
+        shutil.rmtree(tmp_path)
+        assert client.get("/curriculum").json()["release_id"] == "next"
+        assert client.get("/curriculum", params={"release": "first"}).json()["release_id"] == "first"
 
 
 def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(catalog_database, tmp_path: Path) -> None:

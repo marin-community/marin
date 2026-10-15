@@ -5,6 +5,10 @@ reads a Postgres copy of the published [curation catalog](task-curation.md#run-c
 Curation owns source declarations, admission decisions, executed controls and
 sampled GLM judgments. Atlas displays those records and their task packets.
 
+The checked-in app also reads immutable curriculum-matching releases. The
+curriculum pane shows task coverage by subject, group, capability and source.
+Its loader and selected release are independent of the sampled grading catalog.
+
 The 95% control pass threshold permits curation to skip validation of unsampled
 tasks. Below that threshold, curation validates each task and retains individual
 passes. The 80% Good threshold below grades a sample of the retained output.
@@ -18,6 +22,13 @@ flowchart LR
   K --> L[Explicit loader: stage and check]
   L --> D[Select Postgres load]
   D --> A[Atlas: SQL reads]
+  T[Public TaskSpec instructions and contracts] --> E[Zephyr: cached descriptions and CPU Harrier embeddings]
+  H[Curriculum anchor embeddings] --> M[Zephyr: exact matches and scores]
+  E --> M
+  M --> R[Zephyr: validate task coverage and publish release]
+  R --> CL[Streaming curriculum loader]
+  CL --> CA[Postgres: runtime cutoffs and coverage]
+  CA --> A
 ```
 
 ## Reading grades
@@ -95,6 +106,62 @@ uv run python infra/marina/applets/rl_data_catalog/load.py \
 
 Inspect the inventory, an assessment and its task evidence. Stop the local stack
 with Ctrl-C when finished; its database is disposable.
+
+## Curriculum coverage
+
+Open **Curriculum coverage** from the source inventory. The heatmap starts with
+subjects and source families. Open a subject or group to descend through the
+hierarchy, or search names and descriptions across the curriculum. Search returns
+at most 100 areas. Select a cell for its task instances and a task for its public
+instruction preview, core-work description, cosine scores and alternatives.
+Long instruction previews record the original character count and truncation.
+
+Displayed cosine scores are similarities; distance is `1 - similarity`.
+The subject and capability distance defaults are 0.45 and 0.25. Smaller values
+are stricter. **Apply cutoffs** runs new SQL queries over saved scores. It does
+not run inference or matching. A task can have a capability match, a subject-only
+match, no match within the cutoff, or insufficient context for a description.
+The nearest capabilities across all subjects remain available as diagnostics.
+
+Count task instances or unique public inputs. Public-input hashes cover
+instructions and public tool/answer contracts. For each column, the denominator
+includes every task selected for the release, including insufficient context
+and matches outside the cutoff. Sampled releases use the selected sample as
+the denominator. Unique mode deduplicates hashes within
+the selected sources for both numerator and denominator. Parent cells count a
+task once across descendants. Columns can overlap and must not be summed to
+recover the global unique count. Task drilldown always lists source instances.
+
+Converted populations contain successfully converted TaskSpecs before admission.
+They retain training/evaluation intent. Input rows, conversion rejections, task
+instances and unique embedding texts are separate quantities. Selecting a source
+shows its full conversion ledger when available. A sampled release states its
+sample size. Sources outside the release remain in the inventory; enable
+**Show sources without processed tasks** to show their striped columns.
+
+The embedding command's default `publication` stage produces `release.json`.
+It validates task IDs and lineage against the selected population and requires
+full converted releases to match conversion-manifest counts. Run the loader
+process in the release's storage region:
+
+```bash
+uv run python -m infra.marina.applets.rl_data_catalog.load_curriculum \
+  --release IMMUTABLE_RELEASE_ROOT/release.json \
+  --applet-id APPLET_ID --url MARINA_ORIGIN
+```
+
+The loader streams Parquet in bounded batches, checks source keys, populations,
+curriculum references and per-source/global counts, then switches the selected
+release atomically. Failed loads preserve the selected release. The previous
+successful release remains available for requests already viewing it; abandoned
+and older staging loads are removed on the next update. An identical selected
+release skips loading. Run one curriculum loader per applet at a time.
+Curriculum-only updates do not require a grading-catalog reload. APIs read
+Postgres without cloud scans.
+
+Start the local stack as shown in [Updating Atlas](#updating-atlas), then use the
+same curriculum-loader command with its printed ID and origin. Stop the stack
+with Ctrl-C when finished.
 
 ## Historical reviews
 
