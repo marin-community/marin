@@ -44,6 +44,8 @@ PLANTS = [
     ("someone@example.com", "email"),
     ("http://example.org", "url"),
     ("gcs://bucket/x", "url"),
+    ("source_https://example.org/private", "url"),
+    ("x_s3://private-bucket/x", "url"),
 ]
 DIGEST = hashlib.sha256(b"table").hexdigest()  # 64 hex digits, like a file's SHA-256
 REVISION = hashlib.sha1(b"commit").hexdigest()  # 40 hex digits, like a git commit
@@ -156,6 +158,15 @@ def test_scan_reads_parquet_index_and_metadata(tmp_path):
         ("metadata.parquet", 0, f"schema metadata {LEAK}"),
         ("metadata.parquet", 0, "a metadata note"),
     }
+
+
+def test_parquet_under_a_key_value_directory_gains_no_column(tmp_path):
+    # pyarrow's default reader would take `run=abc` above the build for a partition column (a dictionary column, which
+    # the scan refuses); the scan reads each Parquet file alone.
+    root = tmp_path / "run=abc/build"
+    root.mkdir(parents=True)
+    pd.DataFrame({"a": ["ok", LEAK]}).to_parquet(root / "t.parquet", index=False)
+    assert {(h.line_or_row, h.field) for h in scan_upload.scan(root)} == {(2, "a")}
 
 
 def test_every_pattern_fires_and_clean_text_passes(tmp_path):

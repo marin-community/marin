@@ -43,7 +43,7 @@ PATTERNS = {
     "long_hash": re.compile(r"[0-9a-f]{40,}"),  # git commits, SHA-256 digests, policy hashes
     "personal": re.compile(r"pinlin_calvin_xu|calvinxu", re.I),
     "email": re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"),
-    "url": re.compile(r"\b[a-z][a-z0-9+.-]*://", re.I),  # any scheme: http, s3, gcs, ...
+    "url": re.compile(r"[a-z][a-z0-9+.-]*://", re.I),  # any scheme (http, s3, gcs, ...), whatever precedes it
 }
 # Arrow types that cannot hold text; a string column is scanned, and a column of any other type raises.
 TEXTLESS = (
@@ -120,7 +120,8 @@ def _strings(path: Path) -> Iterator[tuple[Sequence[int], str, str]]:
         for column in frame:
             yield from _column_strings(frame[column], frame[column].iat[0], first_row=0)
     elif path.suffix == ".parquet":
-        yield from _parquet_strings(pq.read_table(path))
+        # The file alone: by default pyarrow turns a `key=value` directory above it into a partition column.
+        yield from _parquet_strings(pq.read_table(path, partitioning=None))
     elif path.suffix == ".json":
         yield from _json_strings(json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_json_object), "$")
     else:
