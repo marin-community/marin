@@ -7,6 +7,7 @@ import json
 import os
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import cast
 
@@ -536,14 +537,11 @@ def main(
             else str(StoragePath(marin_prefix()) / ".zephyr/rl-data-campaign")
         ),
     )
-    inventory = [source.declaration for source in {**all_sources(), **selected}.values()]
-    if corpus is not None:
-        restored = _corpus_sources(corpus)
-        assert review_cache is not None and embed is not None
-        _embedding_pass(
-            restored.roots,
-            inventory=restored.inventory,
-            population=restored.population,
+    embedding = None
+    if embed is not None:
+        assert review_cache is not None
+        embedding = partial(
+            _embedding_pass,
             catalog_root=catalog_root,
             runtime=runtime,
             model=description_model,
@@ -554,8 +552,12 @@ def main(
             seed=seed,
             pool=pool,
             stage=embed,
-            do_run=do_run,
         )
+    inventory = [source.declaration for source in {**all_sources(), **selected}.values()]
+    if corpus is not None:
+        restored = _corpus_sources(corpus)
+        assert embedding is not None
+        embedding(restored.roots, inventory=restored.inventory, population=restored.population, do_run=do_run)
         return
     if input_root is not None and local_files:
         raise click.UsageError("Choose either --input-root or --input-file")
@@ -592,24 +594,8 @@ def main(
         report_path = str(StoragePath(output_root) / "campaign.json")
         if not local_quick or embed is not None:
             _write_corpus(roots, inventory, report_path, "converted")
-        if embed is not None:
-            assert review_cache is not None
-            _embedding_pass(
-                roots,
-                inventory=inventory,
-                population="converted",
-                catalog_root=catalog_root,
-                runtime=runtime,
-                model=description_model,
-                endpoint=DescriptionEndpoint(base_url, relay_job, review_concurrency),
-                cache_root=review_cache,
-                cache_dir=cache_dir,
-                sample_size=embedding_sample_size,
-                seed=seed,
-                pool=pool,
-                stage=embed,
-                do_run=True,
-            )
+        if embedding is not None:
+            embedding(roots, inventory=inventory, population="converted", do_run=True)
         return
     if output_root is not None:
         raise click.UsageError("--output-root requires --mode quick; use --report-path for SAMPLE/FULL")
@@ -719,26 +705,10 @@ def main(
             raise
         else:
             _publish_campaign(report_path, selected)
-        if embed is not None:
-            assert review_cache is not None
+        if embedding is not None:
             roots = {source.info.id: step.path() for source, step in zip(selected.values(), curation_steps, strict=True)}
             _write_corpus(roots, inventory, report_path, "admitted")
-            _embedding_pass(
-                roots,
-                inventory=inventory,
-                population="admitted",
-                catalog_root=catalog_root,
-                runtime=runtime,
-                model=description_model,
-                endpoint=DescriptionEndpoint(base_url, relay_job, review_concurrency),
-                cache_root=review_cache,
-                cache_dir=cache_dir,
-                sample_size=embedding_sample_size,
-                seed=seed,
-                pool=pool,
-                stage=embed,
-                do_run=True,
-            )
+            embedding(roots, inventory=inventory, population="admitted", do_run=True)
 
 
 if __name__ == "__main__":

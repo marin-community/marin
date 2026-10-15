@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from functools import partial
 
 import numpy as np
-from finestore.rl.curation import SourceDeclaration
+from finestore.rl.curation import CatalogRecord, SourceDeclaration
 from finestore.rl.curriculum import AlignmentRelease, AlignmentSource, CurriculumCoverage, EmbeddingSpec
 from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact
@@ -64,6 +64,16 @@ COVERAGE_VERSION = "2026.10.15.1"
 
 
 class SemanticArtifact(Artifact):
+    paths: list[str]
+
+
+class AlignmentManifest(CatalogRecord):
+    inputs_root: str
+    descriptions_root: str
+    task_vectors_root: str
+    curriculum_vectors_root: str
+    curriculum_key: str
+    spec: EmbeddingSpec
     paths: list[str]
 
 
@@ -240,20 +250,16 @@ def _align(
         spec=spec,
         output_root=output_root,
     )
-    (StoragePath(output_root) / "alignment.json").write_text(
-        json.dumps(
-            {
-                "inputs_root": inputs_root,
-                "descriptions_root": descriptions_root,
-                "task_vectors_root": task_vectors_root,
-                "curriculum_vectors_root": curriculum_vectors_root,
-                "curriculum_key": curriculum_key,
-                "spec": spec.model_dump(mode="json"),
-                "paths": paths,
-            },
-            ensure_ascii=False,
-        )
+    manifest = AlignmentManifest(
+        inputs_root=inputs_root,
+        descriptions_root=descriptions_root,
+        task_vectors_root=task_vectors_root,
+        curriculum_vectors_root=curriculum_vectors_root,
+        curriculum_key=curriculum_key,
+        spec=spec,
+        paths=paths,
     )
+    (StoragePath(output_root) / "alignment.json").write_text(manifest.model_dump_json())
     return SemanticArtifact(path=output_root, paths=paths)
 
 
@@ -271,10 +277,10 @@ def _publish(
     sample_size: int | None,
     output_root: str,
 ) -> SemanticArtifact:
-    alignment = json.loads((StoragePath(alignment_root) / "alignment.json").read_text())
+    alignment = AlignmentManifest.model_validate_json((StoragePath(alignment_root) / "alignment.json").read_text())
     data = publish_alignments(
         runtime.context,
-        input_paths=SemanticArtifact.raw_load(alignment["inputs_root"]).paths,
+        input_paths=SemanticArtifact.raw_load(alignment.inputs_root).paths,
         alignment_paths=SemanticArtifact.raw_load(alignment_root).paths,
         output_root=output_root,
     )
@@ -311,9 +317,9 @@ def _publish(
                 }
             )
         )
-    curriculum_root = alignment["curriculum_vectors_root"]
+    curriculum_root = alignment.curriculum_vectors_root
     lineage = {
-        key: alignment[key]
+        key: alignment.model_dump()[key]
         for key in ("inputs_root", "descriptions_root", "task_vectors_root", "curriculum_vectors_root")
     }
     lineage["alignment_root"] = alignment_root
@@ -326,7 +332,7 @@ def _publish(
             }
         ),
         created_at=datetime.now(UTC).isoformat(),
-        curriculum_key=alignment["curriculum_key"],
+        curriculum_key=alignment.curriculum_key,
         population=population,
         sample_size=sample_size,
         task_count=sum(row.task_count for row in sources),
@@ -339,7 +345,7 @@ def _publish(
         nodes=json.loads((StoragePath(curriculum_root) / "nodes.json").read_text()),
         paths=data.paths,
         lineage=lineage,
-        embedding_spec=alignment["spec"],
+        embedding_spec=alignment.spec,
     )
     (StoragePath(output_root) / "release.json").write_text(release.model_dump_json(indent=2))
     return SemanticArtifact(path=output_root, paths=data.paths)

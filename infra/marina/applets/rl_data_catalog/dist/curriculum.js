@@ -122,7 +122,7 @@ function renderCoverage() {
   }
   $('matrix-body').replaceChildren(...rows);
   $('empty').hidden = rows.length > 0;
-  $('level-help').textContent = $('search').value ? 'Showing up to 100 matching areas. Open a group or select a cell.' : 'Open a row to explore. Select a count to inspect source task instances.';
+  $('level-help').textContent = $('search').value ? 'Showing up to 100 matching areas. Open a group or select a cell.' : 'Subject cells count subject matches; group and capability cells count capability matches. Select a count to inspect samples.';
   const scroller = $('matrix-body').parentElement.parentElement;
   const scrolls = scroller.scrollHeight > scroller.clientHeight || scroller.scrollWidth > scroller.clientWidth;
   $('matrix-summary').textContent = `Curriculum areas: ${data.nodes.length} · Source ${$('group-by').value === 'source' ? 'columns' : 'families'}: ${columns.length}${scrolls ? ' · Scroll within the table for more rows or columns' : ''}`;
@@ -153,7 +153,7 @@ async function loadTasks() {
       const item = button('', 'task-row', () => openDetail(task));
       const source = state.data.sources.find(source => source.source_id === task.source_id);
       const identity = node('span', source?.name || task.source_id, 'task-source'); identity.append(node('span', task.task_id, 'task-id'));
-      item.append(identity, node('span', task.description || (task.outcome === 'skipped' ? 'Embedding skipped; open details for the failure.' : 'Instructions do not establish the requested operation.'), 'task-description'), node('span', outcomes[task.outcome], 'task-outcome'));
+      item.append(identity, node('span', task.task_preview || (task.outcome === 'skipped' ? 'Embedding skipped; open details for the failure.' : 'Instructions do not establish the requested operation.'), 'task-description'), node('span', outcomes[task.outcome], 'task-outcome'));
       $('task-list').append(item);
     }
     state.next = data.next_cursor; $('more-tasks').hidden = !state.next;
@@ -176,12 +176,12 @@ async function openDetail(task) {
     for (const match of detail.matches?.subjects || []) {
       const subjectInside = match.membership_similarity >= 1 - state.data.thresholds.subject_distance;
       $('detail-matches').append(node('h3', `Primary subject · ${labelFor(`subject:${match.subject_id}`, match.subject_id)}`));
-      scoreTable([{name: 'Subject membership', similarity: match.membership_similarity, status: subjectInside ? 'Within subject cutoff' : 'Outside subject cutoff'}, ...match.candidates.map((candidate, index) => ({name: labelFor(candidate.capability_id, candidate.subject_id), similarity: candidate.similarity,
+      scoreTable([{name: 'Subject membership', similarity: match.membership_similarity, within: subjectInside, status: subjectInside ? 'Within subject cutoff' : 'Outside subject cutoff'}, ...match.candidates.map((candidate, index) => ({name: labelFor(candidate.capability_id, candidate.subject_id), similarity: candidate.similarity, within: subjectInside && candidate.similarity >= 1 - state.data.thresholds.capability_distance,
         status: !subjectInside ? 'Outside subject cutoff' : candidate.similarity < 1 - state.data.thresholds.capability_distance ? 'Outside capability cutoff' : index === 0 ? 'Primary capability match' : 'Alternative within cutoff'}))]);
     }
     if (detail.matches?.capabilities?.length) {
       const alternatives = node('details'); alternatives.append(node('summary', 'Nearest capabilities across all subjects'));
-      scoreTable(detail.matches.capabilities.map(candidate => ({name: `${labelFor(`subject:${candidate.subject_id}`, candidate.subject_id)} / ${labelFor(candidate.capability_id, candidate.subject_id)}`, similarity: candidate.similarity,
+      scoreTable(detail.matches.capabilities.map(candidate => ({name: `${labelFor(`subject:${candidate.subject_id}`, candidate.subject_id)} / ${labelFor(candidate.capability_id, candidate.subject_id)}`, similarity: candidate.similarity, within: candidate.similarity >= 1 - state.data.thresholds.capability_distance,
         status: candidate.similarity >= 1 - state.data.thresholds.capability_distance ? 'Alternative within capability cutoff' : 'Outside capability cutoff'})), alternatives);
       $('detail-matches').append(alternatives);
     }
@@ -190,7 +190,7 @@ async function openDetail(task) {
 }
 function scoreTable(scores, target = $('detail-matches')) {
   const table = node('table'), head = node('tr'); for (const text of ['Area', 'Cosine', 'Distance', 'At release cutoffs']) head.append(node('th', text)); const thead = node('thead'); thead.append(head); table.append(thead);
-  const body = node('tbody'); for (const score of scores) { const row = node('tr'); row.append(node('td', score.name), node('td', score.similarity.toFixed(3), 'score'), node('td', (1-score.similarity).toFixed(3), 'score'), node('td', score.status, 'score-status')); body.append(row); } table.append(body); target.append(table);
+  const body = node('tbody'); for (const score of scores) { const row = node('tr'); row.append(node('td', score.name), node('td', score.similarity.toFixed(3), 'score'), node('td', (1-score.similarity).toFixed(3), 'score'), node('td', score.status, `score-status${score.within ? '' : ' outside'}`)); body.append(row); } table.append(body); target.append(table);
 }
 
 $('controls').addEventListener('submit', event => { event.preventDefault(); loadCoverage(); });

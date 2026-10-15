@@ -277,7 +277,8 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                     text(
                         SAMPLE_SQL
                         + """
-                SELECT t.source_id,t.task_id,t.content_hash,d.description,t.description_status,s.outcome
+                SELECT t.source_id,t.task_id,t.content_hash,d.detail->>'task_preview' AS task_preview,
+                    t.description_status,s.outcome
                 FROM selected_tasks t JOIN states s USING (source_id,task_id,content_hash)
                 JOIN curriculum_tasks d USING (load_id,source_id,task_id)
                 WHERE (:node_id='' OR EXISTS (SELECT 1 FROM placements p
