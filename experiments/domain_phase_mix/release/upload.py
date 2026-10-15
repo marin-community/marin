@@ -6,13 +6,14 @@
 `uv run python -m experiments.domain_phase_mix.release.upload [--build release_build] [--repo Calvin-Xu/mariner-data]
 [--card DRAFT] [--sections DIR] [--registry CSV] [--dry-run | --confirm]`
 
-Every run writes the dataset card into the build as README.md: a YAML header generated from MANIFEST.json (license,
-size category, one config per CSV table), then the prose of the card draft in the paper folder, whose own YAML header,
-if any, it drops. An upload sends exactly the manifest's tables, MANIFEST.json, figures_tables.csv and README.md. The run
-stops when the build root holds any other entry except fits/ (the inputs and outputs of the archived-swarm refits, which
-it skips), when the files under data/ differ from the manifest's tables in name, size or SHA-256, when the manifest
-records consistency problems, or when the privacy scan of the files it would send finds anything. It then prints the
-file list, the build commit, the paper audit's summary line and the size.
+Every run writes the dataset card into the build as README.md: a YAML header (the fields of the Olmix dataset card's
+header, the language and one config per CSV table, with the size category from MANIFEST.json's row count), then the
+prose of the card draft in the paper folder, whose own YAML header, if any, it drops. An upload sends exactly the
+manifest's tables, MANIFEST.json, figures_tables.csv and README.md. The run stops when the build root holds any other
+entry except fits/ (the inputs and outputs of the archived-swarm refits, which it skips), when the files under data/
+differ from the manifest's tables in name, size or SHA-256, when the manifest records consistency problems, or when the
+privacy scan of the files it would send finds anything. It then prints the file list, the build commit, the paper
+audit's summary line and the size.
 
 A dry run, the default, stops there without any network call. `--confirm` creates the repository as private, or finds
 it, refuses one that is not private, and sends the files in one commit, which also deletes the repository's data/
@@ -88,11 +89,15 @@ def size_category(rows: int) -> str:
 
 def build_card(manifest: dict, draft: str) -> str:
     """The dataset card: a YAML header generated from the manifest, then the draft's prose without its own header."""
+    # The fields of the Olmix dataset card's header (huggingface.co/datasets/allenai/olmix) in its order, and the
+    # language.
     header = {
         "license": "apache-2.0",
-        "pretty_name": "MARINER data",
+        "task_categories": ["other"],
         "language": ["en"],
+        "pretty_name": "MARINER Data",
         "size_categories": [size_category(sum(t["rows"] for t in manifest["tables"]))],
+        "tags": ["data-mixing", "language-models", "pretraining", "mixture-optimization"],
     }
     yaml_block = yaml.safe_dump(header, sort_keys=False) + card_configs(manifest)
     return f"---\n{yaml_block}---\n\n{_prose(draft).strip()}\n"
