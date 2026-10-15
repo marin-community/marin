@@ -178,11 +178,14 @@ _ATTN_RES_STREAM_GATES = ("attn", "mlp")
 # Initial scale of the MSAR stream-mixer logits (the paper's alpha).
 _STREAM_MIX_ALPHA_INIT = 0.01
 # Leaves the train step keeps in the param dtype (float32) under a bf16 compute policy: the MSAR mixers' per-layer
-# alpha [2] and b [2, m], and the [N, K] channel-shared MSAR conv taps (``attn_res_stream_scalar_taps``). As bf16
+# alpha [2] and b [2, m], the [N, K] channel-shared MSAR conv taps (``attn_res_stream_scalar_taps``) and the
+# per-gate embedding scales [2] (``attn_res_embed_scale``). As bf16
 # their gradients join XLA GPU's combined float32 gradient all-reduce on 8 H100s and come back through
 # ``bf16[2] bitcast(f32[2])`` instead of a convert, i.e. as raw float32 bit halves (0, 1e18, inf, NaN), and Adam's
 # moments overflow within ~10-70 steps.
-PARAM_DTYPE_LEAVES = frozenset({"attn_res_stream_mix_alpha", "attn_res_stream_mix_b", "attn_res_stream_conv_scalar"})
+PARAM_DTYPE_LEAVES = frozenset(
+    {"attn_res_stream_mix_alpha", "attn_res_stream_mix_b", "attn_res_stream_conv_scalar", "attn_res_embed_scale"}
+)
 # Per-layer extras key carrying ``LayerSkip.keep`` into a skipped layer.
 _SKIP_KEEP = "layer_skip_keep"
 # Per-layer extras key carrying the extra-MLP token mask (``extra_mlp_layers``), and the entropy head's prediction.
@@ -903,6 +906,14 @@ class GrugModelConfig:
     """The sources MSAR streams ``r >= 1`` read; conv taps exist only for those slots."""
     attn_res_stream_scalar_taps: bool = False
     """MSAR stream convs share one tap set across channels (``[N, K_r]`` per stream instead of ``[N, K_r, D]``)."""
+    attn_res_embed_out: bool = False
+    """Every per-layer AttnRes gate mixes the history without the token-embedding source and adds the embedding
+    directly: ``h = softmax-mix(other sources) + e`` (``e`` alone when a gate has no other source). The final gate
+    keeps the embedding in its softmax."""
+    attn_res_embed_scale: bool = False
+    """A learned scalar per layer gate (init 1) on the gate's direct embedding term: the MSAR embed stream
+    (``attn_res_streams=2``, ``attn_res_stream_sources=embed``, no mixer: ``h = z_0 + s conv(e)``) or the
+    ``attn_res_embed_out`` embedding (``h = mix + s e``)."""
     embed_sconv: bool = False
     """The token-embedding AttnRes source becomes ``emb + conv(emb)``: a zero-init causal depthwise ``ShortConv``
     (``sconv_kernel`` taps, within documents), so the model starts as without it."""
@@ -1116,6 +1127,28 @@ class GrugModelConfig:
             self.attn_res_stream_sources != AttnResStreamSources.ALL or self.attn_res_stream_scalar_taps
         ):
             raise ValueError("attn_res_stream_sources and attn_res_stream_scalar_taps need attn_res_streams > 1")
+        if self.attn_res_embed_out and (
+            not self.attn_res
+            or self.scan_layers
+            or self.attn_res_streams > 1
+            or self.attn_res_plain_sum
+            or self.attn_res_shared_query
+            or self.attn_res_kv_layers
+        ):
+            raise ValueError(
+                "attn_res_embed_out needs attn_res and the unrolled loop, without attn_res_streams, attn_res_plain_sum, "
+                "attn_res_shared_query or attn_res_kv_layers"
+            )
+        embed_stream = (
+            self.attn_res_streams == 2
+            and self.attn_res_stream_sources == AttnResStreamSources.EMBED
+            and not self.attn_res_stream_mixer
+        )
+        if self.attn_res_embed_scale and not (embed_stream or self.attn_res_embed_out):
+            raise ValueError(
+                "attn_res_embed_scale needs attn_res_embed_out, or attn_res_streams=2 with "
+                "attn_res_stream_sources=embed and attn_res_stream_mixer=false"
+            )
         if self.embed_sconv and not self.attn_res:
             raise ValueError("embed_sconv convolves the AttnRes embedding source: it needs attn_res")
         if self.attn_res_streams > 1:
@@ -3388,6 +3421,7 @@ class Block(eqx.Module):
     attn_res_stream_mix_w: Float[Array, "2 MD M"] | None  # cfg.attn_res_stream_mixer
     attn_res_stream_mix_alpha: Float[Array, " 2"] | None
     attn_res_stream_mix_b: Float[Array, "2 M"] | None
+    attn_res_embed_scale: Float[Array, " 2"] | None  # cfg.attn_res_embed_scale: (attn, mlp) gates, init 1
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, layer_index: jax.Array, use_kda: bool = False) -> "Block":
@@ -3476,6 +3510,7 @@ class Block(eqx.Module):
                 reshard(jnp.full((2,), _STREAM_MIX_ALPHA_INIT, jnp.float32), P(None)) if mixer else None
             ),
             attn_res_stream_mix_b=reshard(jnp.zeros((2, streams), jnp.float32), P(None, None)) if mixer else None,
+            attn_res_embed_scale=(reshard(jnp.ones((2,), jnp.float32), P(None)) if cfg.attn_res_embed_scale else None),
         )
 
     def _attn_input(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
@@ -4389,10 +4424,15 @@ def _attn_res_stream_slots(cfg: GrugModelConfig) -> int:
     return schedule.num_sources(cfg.num_layers - 1) + 1
 
 
+def _embed_slot(cfg: GrugModelConfig) -> int:
+    """History index of the token-embedding source: after the extra sources (``second_embed``)."""
+    return int(cfg.second_embed)
+
+
 def _attn_res_stream_read_slots(cfg: GrugModelConfig) -> tuple[int, ...]:
     """The source slots MSAR streams ``r >= 1`` read (``attn_res_stream_sources``), in slot order; row ``i`` of every
-    stream's conv taps belongs to slot ``read_slots[i]``. The embedding is slot ``int(second_embed)``."""
-    embed = int(cfg.second_embed)
+    stream's conv taps belongs to slot ``read_slots[i]``."""
+    embed = _embed_slot(cfg)
     slots = range(_attn_res_stream_slots(cfg))
     if cfg.attn_res_stream_sources == AttnResStreamSources.EMBED:
         return (embed,)
@@ -4447,7 +4487,12 @@ def _attn_res_stream_gate(
         _, mixed = _softmax_mix(logits, sources)
         mixes.append(reshard(mixed.astype(mix0.dtype), _batch_spec()))
     if layer.attn_res_stream_mix_w is None:
-        return _stream_sum(tuple(mixes)), jnp.ones((len(mixes),), jnp.float32)
+        if layer.attn_res_embed_scale is None:
+            return _stream_sum(tuple(mixes)), jnp.ones((len(mixes),), jnp.float32)
+        # attn_res_embed_scale: the single embed stream, scaled per gate.
+        scale = layer.attn_res_embed_scale[gate].astype(jnp.float32)
+        total = mixes[0].astype(jnp.float32) + scale * mixes[1].astype(jnp.float32)
+        return reshard(total.astype(mix0.dtype), _batch_spec()), jnp.stack([jnp.ones((), jnp.float32), scale])
     assert layer.attn_res_stream_mix_alpha is not None and layer.attn_res_stream_mix_b is not None
     w = rearrange(layer.attn_res_stream_mix_w[gate], "(m d) k -> m d k", m=len(mixes))
     # rms_norm of the concatenated mixes: one per-token scalar over all m * D channels, applied after the projection.
@@ -4466,6 +4511,35 @@ def _attn_res_stream_gate(
         fused = fused + weights[..., r : r + 1] * mixes[r].astype(jnp.float32)
     mean_weights = jax.lax.stop_gradient(jnp.mean(weights, axis=(0, 1)))
     return reshard(fused.astype(mix0.dtype), _batch_spec()), mean_weights
+
+
+def _embed_out_mix(
+    layer: "Block",
+    blocks: tuple[jax.Array, ...],
+    block_logits: tuple[jax.Array, ...],
+    partial: Float[Array, "B S D"] | None,
+    queries: Float[Array, "G D"],
+    gate_index: int,
+    gate: int,
+    eps: float,
+    extras: dict[str, jax.Array | None] | None,
+) -> tuple[Float[Array, "B S D"], jax.Array, jax.Array]:
+    """``attn_res_embed_out`` gate (``gate`` 0: attention, 1: MLP): the AttnRes mix of every source but the token
+    embedding, plus the embedding (scaled by ``attn_res_embed_scale``). A gate with no other source returns the
+    (scaled) embedding with a zero z term. The token-mean weights keep the embedding's column, at 0."""
+    k = _embed_slot(layer.attn.cfg)
+    emb = blocks[k]
+    rest, rest_logits = (*blocks[:k], *blocks[k + 1 :]), (*block_logits[:k], *block_logits[k + 1 :])
+    if rest or partial is not None:
+        mixed, z, weights = _attn_res_mix(rest, rest_logits, partial, queries, gate_index, eps, extras)
+        weights = jnp.concatenate([weights[:k], jnp.zeros((1,), weights.dtype), weights[k:]])
+        mixed = mixed.astype(jnp.float32)
+    else:
+        mixed, z, weights = jnp.zeros(emb.shape, jnp.float32), jnp.zeros((), jnp.float32), jnp.zeros((1,), jnp.float32)
+    direct = emb.astype(jnp.float32)
+    if layer.attn_res_embed_scale is not None:
+        direct = layer.attn_res_embed_scale[gate].astype(jnp.float32) * direct
+    return reshard((mixed + direct).astype(emb.dtype), _batch_spec()), z, weights
 
 
 GateMix = Callable[..., tuple[jax.Array, jax.Array, jax.Array]]
@@ -4503,6 +4577,10 @@ def _attn_res_layer(
     def mix(p: jax.Array | None, gate_index: int, attn_gate: bool, leading_sources_only: bool = False):
         del attn_gate
         cfg = layer.attn.cfg
+        if cfg.attn_res_embed_out:
+            return _embed_out_mix(
+                layer, blocks, block_logits, p, queries, gate_index, gate_index - 2 * layer_index, eps, logit_bias
+            )
         if not leading_sources_only:
             h, z, weights = _attn_res_mix(
                 blocks, block_logits, p, queries, gate_index, eps, logit_bias, plain_sum=cfg.attn_res_plain_sum
@@ -5977,10 +6055,12 @@ class Transformer(eqx.Module):
                 if schedule.is_boundary(eff):
                     assert partial is not None
                     blocks = (*blocks, partial)
-                    # Score the new block only against the gates that can read it (this layer's onwards).
+                    # Score the new block only against the gates that can read it (this layer's onwards; with
+                    # attn_res_embed_out the embedding only against the final gate).
+                    readers = queries[-1:] if cfg.attn_res_embed_out and eff == 0 else queries[2 * eff :]
                     block_logits = (
                         *block_logits,
-                        _logit_rows(_attn_res_source_logits(partial, queries[2 * eff :], eps, (False))),
+                        _logit_rows(_attn_res_source_logits(partial, readers, eps, (False))),
                     )
                     if block_streams is not None:
                         block_streams = (*block_streams, slot_streams(partial, len(blocks) - 1))
