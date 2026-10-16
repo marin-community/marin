@@ -71,7 +71,7 @@ config:
         groups:
           - messaging
           - watch
-    default:
+    default: &interactiveProfile
       agent: codex
       description: Interactive Marin work with repository-owned workflow instructions
       model: &codexModel gpt-6-sol
@@ -99,6 +99,10 @@ config:
           - permissions
           - session
           - watch
+    codex-6-1:
+      <<: *interactiveProfile
+      description: Interactive Marin work with GPT-6.1 Sol
+      model: gpt-6.1-sol
     marina:
       agent: codex
       description: Interactive questions over read-only Marina application APIs

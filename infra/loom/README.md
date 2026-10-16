@@ -215,6 +215,13 @@ activation. Stock profiles omitted from the declaration remain unmanaged and
 are not pruned; production intentionally manages `default` so interactive
 instruction and runtime policy are reviewed in this repository.
 
+The `codex-6-1` interactive profile selects GPT-6.1 Sol with the same instructions,
+repository access, and MCP policy as `default`. Loom reads its model catalogue
+from the installed Codex CLI. The Compose `CODEX_CLI_VERSION` pin selects both
+that CLI and the `@openai/codex` package used by ACP. The adapter has its own
+`CODEX_ACP_VERSION` pin, so model additions may require a CLI upgrade without
+an adapter upgrade.
+
 At runtime, the Grafana bridge gets a Google-signed ID token from the Cloud Run
 metadata server, exchanges it at `/api/auth/federate`, and uses the resulting
 short-lived, profile-scoped token to create the alert session. No long-lived
