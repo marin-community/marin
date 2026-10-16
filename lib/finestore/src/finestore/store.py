@@ -20,7 +20,7 @@ from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.timing import ExponentialBackoff
 
 from finestore.commit import ClearSeal, CommitCoordinator, CommitDelta, TableAddition, initialize_archive, write_schema
-from finestore.compaction import CompactionResult, compact_table, compact_writer_tables
+from finestore.compaction import COMPACTION_TARGET_BYTES, CompactionResult, compact_table, compact_writer_tables
 from finestore.layout import (
     CHUNKED_BLOBS_FEATURE,
     RESERVED_COLUMNS,
@@ -161,6 +161,7 @@ class DataStore:
         flush_interval: float = DEFAULT_FLUSH_INTERVAL,
         max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
         compaction_levels: Sequence[int] = DEFAULT_COMPACTION_LEVELS,
+        compaction_target_bytes: int = COMPACTION_TARGET_BYTES,
     ) -> None:
         self.root = root
         self._layout = FineStoreLayout(self.root)
@@ -170,6 +171,7 @@ class DataStore:
         self._flush_interval = flush_interval
         self._max_buffer_bytes = max_buffer_bytes
         self._compaction_levels = tuple(compaction_levels)
+        self._compaction_target_bytes = compaction_target_bytes
         if not self._compaction_levels or any(limit < 1 for limit in self._compaction_levels):
             raise ValueError("compaction_levels must contain positive shard limits")
         self._tables: dict[str, DataTable] = {}
@@ -353,7 +355,13 @@ class DataStore:
     def compact(self, table: str, *, generation: int | None = None) -> CompactionResult:
         """Logically compact one table against the current manifest."""
         with self._commit_lock:
-            return compact_table(self.root, table, generation=generation, coordinator=self._commits)
+            return compact_table(
+                self.root,
+                table,
+                generation=generation,
+                coordinator=self._commits,
+                target_bytes=self._compaction_target_bytes,
+            )
 
     def maintain(self) -> CommitToken | None:
         """Flush pending rows and compact each overfull level once."""
@@ -394,6 +402,7 @@ class DataStore:
                 writer_id=self.writer_id,
                 max_input_bytes=_CLOSE_COMPACTION_MAX_INPUT_BYTES,
                 max_input_rows=_CLOSE_COMPACTION_MAX_INPUT_ROWS,
+                target_bytes=self._compaction_target_bytes,
                 coordinator=self._commits,
             )
 
