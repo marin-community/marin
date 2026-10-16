@@ -16,6 +16,7 @@ from levanter.data.sharded_datasource import (
     AudioTextUrlDataSource,
     ParquetDataSource,
     TextUrlDataSource,
+    UrlDataSource,
     _mk_shard_name_mapping,
     _sniff_format_for_dataset,
 )
@@ -40,6 +41,18 @@ def test_sniff_format_for_json():
         f.write(b'{\n"ids": [1, 2, 3]\n}\n')
         f.flush()
         assert _sniff_format_for_dataset(f.name) == ".json"
+
+
+def test_url_datasource_reads_json_object_array_and_jsonl(tmp_path):
+    documents = {
+        "object": ('{ "text":\n  "hello"\n}\n', [{"text": "hello"}]),
+        "array": ('[{"text": "hello"}, {"text": "world"}]', [{"text": "hello"}, {"text": "world"}]),
+        "jsonl": ('{"text": "hello"}\n{"text": "world"}\n', [{"text": "hello"}, {"text": "world"}]),
+    }
+    for name, (contents, expected) in documents.items():
+        path = tmp_path / f"{name}.json"
+        path.write_text(contents)
+        assert list(UrlDataSource([str(path)])) == expected
 
 
 def test_sniff_format_for_parquet():

@@ -258,6 +258,8 @@ class UrlDataSource(UrlBackedShardedDataSource[dict]):
             case ".json":
                 with open_url(url, "r", compression=compression) as f:
                     data = json.load(f)
+                    if isinstance(data, dict):
+                        data = [data]
                     for doc in data[row:]:
                         if self.columns:
                             yield {col: doc[col] for col in self.columns}
@@ -344,36 +346,14 @@ def _sniff_format_for_dataset(url):
         raise ValueError(f"Unknown format for {url}")
 
     if format_from_url == ".json":
-        # unfortunately, HF (and others) will use "json" for jsonl files,
-        # so we have to do some extra work to distinguish them.
-        # Choices are
-        # 1. look at the first 2 chars, if the first is "[", then it's probably json.
-        #    If it's "{\n", also json. If it's { something else", then it's probably jsonl
-        # 2. look at the first line. If it's valid json, then it's probably jsonl, unless there's only one line.
-        #
-        # (You can't actually distinguish between jsonl and json in a file with one line,
-        #  which we'll just declare to be json and not jsonl, since that seems more likely)
-        # (1) is cheating a bit, but it's fast and works in most cases we care about. (2) is more robust, but slower.
+        # Some datasets use .json for JSONL. A JSONL object occupies one
+        # complete line; a multiline JSON document does not.
         with open_url(url, "r", compression="infer") as f:
-            first_two = f.read(2)
-
-            if first_two[0] == "[" or first_two == "{\n" or first_two == "{\r":
+            first_line = f.readline()
+            if first_line.lstrip().startswith("["):
                 return ".json"
-            elif first_two[0] == "{":
+            if first_line.rstrip().endswith("}"):
                 return ".jsonl"
-
-            # this is (much) heavier. This is particularly slow if we're dealing with packed/non-prettified json
-            # since we're parsing the whole file.
-            first_line = first_two + f.readline()
-            try:
-                json.loads(first_line)
-                format_from_url = ".jsonl"
-            except json.JSONDecodeError:
-                return format_from_url
-
-            if not f.readline():
-                # only one line
-                format_from_url = ".json"
 
     return format_from_url
 

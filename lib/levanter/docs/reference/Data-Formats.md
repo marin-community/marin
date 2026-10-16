@@ -15,7 +15,7 @@ Levanter supports three canonical formats:
 
 !!! tip
 
-     Extra fields in the JSON are ignored. All input must be valid JSONL (i.e., one JSON object per line).
+     URL sources accept JSONL, Parquet, and `.json` files containing one object or an array of objects. Each record must have the required fields below; extra JSON fields are ignored.
 
 ---
 
