@@ -22,13 +22,9 @@ from importlib import import_module
 from importlib.util import find_spec
 from pathlib import Path
 
-from finestore.reader import ReadView
-
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
-# Historical result-tree readers still use these names for pre-FineStore artifacts.
 EVALCHEMY_RESULTS_PREFIX = "results_"
 EVALCHEMY_RESULTS_SUFFIX = ".json"
-_EVALCHEMY_RESULTS_TABLE = "evalchemy_results"
 _REQUEST_TIMEOUT = 1800
 _TRANSPORT_RETRY_BUDGET = 1800
 _TRANSPORT_ATTEMPT_TIMEOUT = _REQUEST_TIMEOUT
@@ -205,8 +201,6 @@ def build_command(config: dict, task: dict, python: str, max_length: int | None)
         task["name"],
         *(["--gen_kwargs", ",".join(gen_kwargs)] if gen_kwargs else []),
         *budget_args,
-        # FineStore owns the aggregate result and normalized sample rows. Evalchemy treats
-        # --output_path as an alias for this option; passing both leaves no local output to inspect.
         "--finestore_output_path",
         config["out_path"],
         "--finestore_output_prefix",
@@ -234,15 +228,6 @@ def build_command(config: dict, task: dict, python: str, max_length: int | None)
     return cmd
 
 
-def completed_result(root: str, source_prefix: str) -> bool:
-    """Whether Evalchemy committed a successful aggregate result to FineStore."""
-    table = ReadView(root).scan(_EVALCHEMY_RESULTS_TABLE)
-    if table is None:
-        return False
-    return any(
-        row.get("source_prefix") == source_prefix and row.get("scored") is True
-        for row in table.to_pylist(maps_as_pydicts="strict")
-    )
 def main() -> None:
     # Evalchemy is installed only in the isolated evaluator environment.
     completed_finestore_output = import_module("eval.contracts.finestore_output").completed_finestore_output
@@ -261,7 +246,6 @@ def main() -> None:
     print(f"served max_model_len: {served} (lm-eval max_length={max_length})", flush=True)
     failures: list[str] = []
     for task in tasks:
-        # Evalchemy is installed beside the uvx environment's interpreter.
         cmd = build_command(config, task, sys.executable, max_length)
         print(f"running evalchemy: {' '.join(cmd)}", flush=True)
         result = subprocess.run(cmd)

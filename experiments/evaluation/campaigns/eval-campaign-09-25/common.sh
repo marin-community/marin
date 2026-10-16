@@ -267,7 +267,7 @@ from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.external_dependencies import EVALCHEMY
 from marin.evaluation.model_config import load_model_config
 # Dataset revisions remain frozen independently of evaluator runtime updates.
-REGISTRY_COMMIT = "82b45e4506584675012ebf9611302889b62aeb24"
+REGISTRY_COMMIT = "016dd78b301b621ee4089f2da5776ebe80236820"
 
 models = Path(os.environ["MODEL_CONFIG_DIR"])
 chat_templates = Path(os.environ["CHAT_TEMPLATE_DIR"])

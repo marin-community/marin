@@ -46,7 +46,7 @@ def _panel(store, **kwargs):
 
 
 def test_api_defaults_to_the_current_verified_cohort(client):
-    expected = "eval-policy-2026-10-16-verified"
+    expected = "eval-policy-2026-10-17-verified"
     assert client.get("/meta").json()["default_cohort"] == expected
     assert client.get("/panel").json()["request"]["cohort_version"] == expected
     assert client.get("/panel", params={"cohort": ""}).json()["request"]["cohort_version"] == expected
@@ -187,7 +187,7 @@ def test_api_surface_over_fixtures(client):
     assert meta["verified_cohorts"] == [
         "eval-policy-2026-09-16-verified",
         "eval-policy-2026-09-24-verified",
-        "eval-policy-2026-10-16-verified",
+        "eval-policy-2026-10-17-verified",
     ]
 
     panel = client.get("/panel", params={"cohort": "all"}).json()

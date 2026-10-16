@@ -24,15 +24,12 @@ from finestore.eval import (
     sample_to_archive_row,
     write_sample_parquet,
 )
-from finestore.layout import OnConflict
 from finestore.reader import ReadView
 from finestore.store import DataStore
 from fsspec.core import url_to_fs
-from marin.evaluation.evalchemy.client import completed_result
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.lm_eval_samples import (
-    evalchemy_result_committed,
     export_lm_eval_samples,
     preserved_sample_sources,
     rebuild_lm_eval_samples,
@@ -168,71 +165,6 @@ def test_native_summary_reads_evalchemy_normalized_rows(tmp_path, result_table):
     assert summary.canonical_metrics == {"gsm8k_5shot": {"accuracy": 1.0}}
     assert summary.tasks[0].benchmark is not None
     assert summary.tasks[0].benchmark.primary_metric == "accuracy"
-
-
-def test_native_summary_reads_direct_evalchemy_result_table(tmp_path):
-    root = str(tmp_path / "run" / "results")
-    store = EvaluationStore.open(root, writer_id="evalchemy-samples")
-    try:
-        store.add_sample(
-            EvalSample(
-                task="gsm8k_0shot",
-                doc_id="0",
-                kind=SampleKind.GENERATION,
-                output="4",
-                extracted="4",
-                grading=Grading(method="lm-eval:exact_match", metric="exact_match", score=1.0, passed=True),
-                metrics={"exact_match": 1.0},
-                correct=True,
-            )
-        )
-        store.seal()
-    finally:
-        store.close()
-
-    document = json.dumps(
-        {
-            "results": {"gsm8k": {"exact_match,flexible-extract": 1.0}},
-            **_result_contract("gsm8k", "exact_match", "accuracy", 1.0, n_benchmark=1, n_attempted=1),
-        }
-    )
-    results = DataStore.open(root, writer_id="evalchemy-results")
-    try:
-        results.table(
-            "evalchemy_results",
-            primary_key=("source_prefix",),
-            schema=pa.schema(
-                [
-                    pa.field("source_prefix", pa.string()),
-                    pa.field("document", pa.large_string()),
-                    pa.field("scored", pa.bool_()),
-                ]
-            ),
-            on_conflict=OnConflict.SUPERSEDE,
-        )
-        with results.unbounded_transaction() as transaction:
-            transaction.table("evalchemy_results").add(
-                {"source_prefix": "gsm8k_0shot", "document": document, "scored": True}
-            )
-        results.seal()
-    finally:
-        results.close()
-
-    summary = summarize_native_eval_samples(root, tasks=(EvalTaskConfig("gsm8k", 0),))
-
-    assert completed_result(root, "gsm8k_0shot")
-    assert evalchemy_result_committed(root, "gsm8k_0shot")
-    assert summary.samples == 1
-    assert summary.coverage == {
-        "gsm8k_0shot": TaskCoverage(
-            n_benchmark=1,
-            n_attempted=1,
-            n_scored=1,
-            n_correct=1,
-            n_unanswered=0,
-        )
-    }
-    assert summary.canonical_metrics == {"gsm8k_0shot": {"accuracy": 1.0}}
 
 
 def test_native_summary_partitions_repeated_task_configurations(tmp_path):

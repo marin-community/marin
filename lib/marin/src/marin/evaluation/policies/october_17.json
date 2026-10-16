@@ -1,9 +1,8 @@
 {
   "schema_version": 1,
   "runtimes": {
-    "harbor": "79ea96fb37928223137bf52a82d7feee247a2af9",
-    "evalchemy": "c2548fe6d556bdec26be0be0e7e09cf423c325a1",
-    "evalchemy:humanevalplus": "a595ac68bbad95b72f4c09503d2acf7261042f19"
+    "harbor": "a9600f43d9637e4b4f03c1594746a0f4431390df",
+    "evalchemy": "f39273127716866b595a41452fbbc603e2a43fab"
   },
   "native32k_locations": [
     "inclusionAI/Ling-lite-1.5",
@@ -626,8 +625,8 @@
   "harbor": {
     "bfclparity-pi": {
       "sources": {
-        "standard": "sha256:56d88c4dd269546a24038a3b6263cf366e6f90d4b8587bb992333c9460c36e72",
-        "native32k": "sha256:56d88c4dd269546a24038a3b6263cf366e6f90d4b8587bb992333c9460c36e72"
+        "standard": "sha256:392cad8fb238218b8cb505e35ff2151c09f42d868a60c44228af47a761d8073a",
+        "native32k": "sha256:392cad8fb238218b8cb505e35ff2151c09f42d868a60c44228af47a761d8073a"
       },
       "model_info": {
         "standard": {
@@ -646,8 +645,8 @@
     },
     "bixbench-pi": {
       "sources": {
-        "standard": "sha256:656bfe8bff597514ab3ecc7ca1c27666f32c819fb7330a2bfc5a580daf7715b0",
-        "native32k": "sha256:4597d6c115855f14639da35d93c17037d6d11e4fe79ec937872a4b80c6d17f81"
+        "standard": "sha256:8deb90827a04d84aae10b9938d100d3b55b56ac9cc587cb3ec35db0d5d66a7f8",
+        "native32k": "sha256:ae12da30524ee58a686edda7f40250d56fadc23bcf76eb5457a78cd6a141c81b"
       },
       "model_info": {
         "standard": {
@@ -668,8 +667,8 @@
     },
     "ds-1000-local": {
       "sources": {
-        "standard": "sha256:0008fec50b0ac3cc0e351a43240c1b6320920e6d3455e6ad915423fbceb6e798",
-        "native32k": "sha256:0008fec50b0ac3cc0e351a43240c1b6320920e6d3455e6ad915423fbceb6e798"
+        "standard": "sha256:4fd83a62744800115c8541c6462e898586da75c74d2dc64fdae805c8891a5567",
+        "native32k": "sha256:4fd83a62744800115c8541c6462e898586da75c74d2dc64fdae805c8891a5567"
       },
       "model_info": {
         "standard": {
@@ -708,8 +707,8 @@
     },
     "sotopia-hard": {
       "sources": {
-        "standard": "sha256:6ecc5574ec138502834b25046693df7b83a8c96b5c63e20fb871c08c9a5ce997",
-        "native32k": "sha256:6ecc5574ec138502834b25046693df7b83a8c96b5c63e20fb871c08c9a5ce997"
+        "standard": "sha256:59024351293a54f5e0387f201608d9c8607e10bff24935c2ffe54cdbdae33efc",
+        "native32k": "sha256:59024351293a54f5e0387f201608d9c8607e10bff24935c2ffe54cdbdae33efc"
       },
       "model_info": {
         "standard": {
@@ -728,8 +727,8 @@
     },
     "swebench-verified": {
       "sources": {
-        "standard": "sha256:700ad57f25ce610bfa41962fd90f10690c3f60b7d9ec297c1c8a5197063cec02",
-        "native32k": "sha256:700ad57f25ce610bfa41962fd90f10690c3f60b7d9ec297c1c8a5197063cec02"
+        "standard": "sha256:37f79a0e209404a1bcc46fff4c016fe9858e9a6f16a2a4fd5f0c84df084c664e",
+        "native32k": "sha256:37f79a0e209404a1bcc46fff4c016fe9858e9a6f16a2a4fd5f0c84df084c664e"
       },
       "model_info": {
         "standard": {
@@ -748,8 +747,8 @@
     },
     "tau3-pi": {
       "sources": {
-        "standard": "sha256:06d3faa6f787d0eb0459988554c2063e1d61bfa4aa007fe81e20e936964abd8e",
-        "native32k": "sha256:7dec03a66622fb551f45d9fa28a6ebb1828f86c967668f9f078ac1cbfde13d7b"
+        "standard": "sha256:4df19c186b48edf8bd21a2fcc6e3076f8b21ac5242600e3101cdd92a123d67c7",
+        "native32k": "sha256:062259335b5f051618147d6b60f701ff712eb0f62d308f369c1a15db61db2352"
       },
       "model_info": {
         "standard": {

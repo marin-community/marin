@@ -5,7 +5,7 @@
 
 import contextlib
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
@@ -18,6 +18,7 @@ from iris.client.client import Job, iris_ctx
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import SecretSpec
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE
@@ -214,7 +215,6 @@ class LaunchProvenance:
 class Evaluation:
     identity: EvaluationIdentity
     executor: EvalExecutor
-    endpoint_route: EndpointRoute
     secret_env_keys: tuple[str, ...] = ()
 
 
@@ -450,10 +450,6 @@ def _run_one_evaluation(
         session.check_alive()
         if judge is not None:
             judge.check_alive()
-        if evaluation.endpoint_route is EndpointRoute.DIRECT:
-            execution_session = _local_endpoint_session(session)
-        else:
-            execution_session = session
         if session.metrics_url is not None and batch.max_concurrent == 1:
             try:
                 metric_window = InferenceMetricWindow.start(
@@ -571,16 +567,51 @@ def _record_startup_failure(
     *,
     batch: EvaluationBatch,
     orchestrator_job_id: str,
-    exc: RemoteInferenceStartupError,
+    exc: Exception,
     role: str,
     existing_jobs: Mapping[str, str] | None = None,
 ) -> NoReturn:
-    failed_jobs, tails = _job_diagnostics(exc.jobs, role)
+    handles = exc.jobs if isinstance(exc, RemoteInferenceStartupError) else ()
+    failed_jobs, tails = _job_diagnostics(handles, role)
     jobs = {_ORCHESTRATOR_ROLE: orchestrator_job_id, **(existing_jobs or {}), **failed_jobs}
     error = f"{type(exc).__name__}: {exc}"
     _record(batch, evaluation.identity, RunStatus.INFRA_FAILED, error, {}, jobs, tails)
     subject = "judge inference" if role == _JUDGE_ROLE else "inference"
     raise RuntimeError(f"{evaluation.identity.eval_ref.name} {subject} failed: {exc}") from exc
+
+
+def _is_submitted_inference_startup_failure(exc: Exception) -> bool:
+    """Return whether Iris accepted an endpoint job before startup failed."""
+    if not isinstance(exc, RemoteInferenceStartupError):
+        return False
+    # Job handles are stable at terminal transition; federated log contents may still be propagating.
+    return bool(exc.jobs)
+
+
+@contextlib.contextmanager
+def _remote_inference_with_startup_retry(
+    config: RemoteInferenceConfig,
+) -> Iterator[RemoteInferenceSession]:
+    """Start hosted-judge inference with bounded replacement of failed endpoints."""
+
+    def start() -> tuple[contextlib.ExitStack, RemoteInferenceSession]:
+        stack = contextlib.ExitStack()
+        try:
+            session = stack.enter_context(remote_inference(config))
+        except Exception:
+            stack.close()
+            raise
+        return stack, session
+
+    stack, session = retry_with_backoff(
+        start,
+        retryable=_is_submitted_inference_startup_failure,
+        max_attempts=_HOSTED_JUDGE_STARTUP_ATTEMPTS,
+        backoff=_HOSTED_JUDGE_STARTUP_BACKOFF,
+        operation="hosted_judge_startup",
+    )
+    with stack:
+        yield session
 
 
 def run_evaluation_step(
@@ -631,6 +662,33 @@ def run_evaluation_steps(
         api_model=batch.api_model,
         priority=batch.priority_band,
     )
+    judge_inference = (
+        inference_config_for_model(
+            batch.judge.model,
+            batch.judge.accelerator,
+            env_vars=runtime_env,
+            capability_origin=batch.capability_origin,
+            api_model=batch.judge.api_model,
+            priority=batch.priority_band,
+        )
+        if batch.judge is not None
+        else None
+    )
+    try:
+        precache_inference_model(inference)
+        if judge_inference is not None:
+            precache_inference_model(judge_inference)
+    except Exception as exc:
+        run(
+            partial(
+                _record_startup_failure,
+                batch=batch,
+                orchestrator_job_id=orchestrator_job_id,
+                exc=exc,
+                role=_INFERENCE_ROLE,
+            )
+        )
+        return
     with ExitStack() as stack:
         try:
             session = stack.enter_context(remote_inference(inference))
@@ -646,17 +704,9 @@ def run_evaluation_steps(
             )
             return
         judge = None
-        if batch.judge is not None:
-            judge_inference = inference_config_for_model(
-                batch.judge.model,
-                batch.judge.accelerator,
-                env_vars=runtime_env,
-                capability_origin=batch.capability_origin,
-                api_model=batch.judge.api_model,
-                priority=batch.priority_band,
-            )
+        if judge_inference is not None:
             try:
-                judge = stack.enter_context(remote_inference(judge_inference))
+                judge = stack.enter_context(_remote_inference_with_startup_retry(judge_inference))
             except RemoteInferenceStartupError as exc:
                 run(
                     partial(

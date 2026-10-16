@@ -266,7 +266,6 @@ def _evaluation(root: Path, name: str, executor) -> Evaluation:
             eval_runtime="test-runtime",
         ),
         executor=executor,
-        endpoint_route=endpoint_route,
     )
 
 
@@ -349,6 +348,7 @@ def _evaluate_with_session(
     )
     with (
         patch("marin.evaluation.runner.configure_coreweave_s3", lambda: None),
+        patch("marin.evaluation.runner.precache_inference_model", lambda _config: None),
         patch("marin.evaluation.runner.iris_ctx", lambda: context),
         patch("marin.evaluation.runner.remote_inference", lambda _config: nullcontext(session)),
         patch(
@@ -432,7 +432,7 @@ def test_model_and_judge_weights_are_ready_before_gpu_startup(tmp_path, monkeypa
     evaluation = _evaluation(tmp_path, "one", _successful_evaluation)
     batch = _hosted_judge_batch(tmp_path, (evaluation,))
 
-    run_evaluation_batch(batch)
+    _run_test_batch(batch)
 
     record = read_record(str(tmp_path / "records" / "run-one" / "record.json"))
     assert record.status is RunStatus.SUCCEEDED
@@ -453,98 +453,14 @@ def test_model_cache_failure_records_unstarted_evals_as_infrastructure(tmp_path,
     )
     batch = _hosted_judge_batch(tmp_path, evaluations)
 
-    with pytest.raises(OSError, match="mirror upload interrupted"):
-        run_evaluation_batch(batch)
+    with pytest.raises(RuntimeError, match="1 step"):
+        _run_test_batch(batch)
 
     for evaluation in evaluations:
         record = read_record(str(tmp_path / "records" / evaluation.identity.run_id / "record.json"))
         assert record.status is RunStatus.INFRA_FAILED
         assert record.metrics == {}
         assert record.jobs == {"orchestrator": "/orchestrator"}
-
-
-def test_evaluation_restart_skips_completed_step_without_serving(tmp_path, monkeypatch):
-    evaluation = _evaluation(tmp_path, "finished", _successful_evaluation)
-    batch = replace(_hosted_judge_batch(tmp_path, (evaluation,)), judge=None)
-    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
-    path = _evaluate_with_session(batch, _remote_session(), orchestrator_job_id="/first")[0]
-    original = Path(path).read_bytes()
-
-    _patch_inference_runtime(monkeypatch, lambda _config: pytest.fail("completed eval started serving again"))
-
-    assert _run_test_batch(batch) == [path]
-    assert Path(path).read_bytes() == original
-    assert _step_status(batch, 0) == STATUS_SUCCESS
-
-
-def test_step_cache_skips_completed_eval(tmp_path, monkeypatch):
-    executions = 0
-
-    def executor(_session, _output_dir, _env_vars, *, judge=None):
-        nonlocal executions
-        executions += 1
-        return EvaluationOutcome(metrics={"task": {"accuracy": 0.5}})
-
-    evaluation = _evaluation(tmp_path, "finished", executor)
-    batch = replace(_hosted_judge_batch(tmp_path, (evaluation,)), judge=None)
-    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
-
-    first = _evaluate_with_session(batch, _remote_session(), orchestrator_job_id="/first")
-    second = _evaluate_with_session(batch, _remote_session(), orchestrator_job_id="/retry")
-
-    assert first == second
-    assert executions == 1
-    assert read_record(first[0]).jobs["orchestrator"] == "/first"
-    assert _step_status(batch, 0) == STATUS_SUCCESS
-
-
-def test_evaluation_restart_only_runs_unfinished_evals(tmp_path, monkeypatch):
-    executed: list[str] = []
-
-    def executor(_session, output_dir, _env_vars, *, judge=None):
-        executed.append(output_dir)
-        return EvaluationOutcome(metrics={"task": {"accuracy": 0.5}})
-
-    finished = _evaluation(tmp_path, "finished", executor)
-    pending = _evaluation(tmp_path, "pending", executor)
-    batch = replace(_hosted_judge_batch(tmp_path, (finished, pending)), judge=None)
-    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
-    _evaluate_with_session(replace(batch, evaluations=(finished,)), _remote_session(), orchestrator_job_id="/first")
-    executed.clear()
-    _patch_inference_runtime(monkeypatch, lambda _config: nullcontext(_remote_session()))
-
-    paths = _run_test_batch(batch)
-
-    assert executed == [pending.identity.output_dir]
-    assert paths == [
-        str(tmp_path / "records" / "run-finished" / "record.json"),
-        str(tmp_path / "records" / "run-pending" / "record.json"),
-    ]
-    assert read_record(paths[0]).jobs["orchestrator"] == "/first"
-    assert read_record(paths[1]).jobs["orchestrator"] == "/orchestrator"
-    assert _step_status(batch, 0) == STATUS_SUCCESS
-    assert _step_status(batch, 1) == STATUS_SUCCESS
-
-
-def test_run_evaluation_batch_startup_failure_preserves_success_from_other_attempt(tmp_path, monkeypatch):
-    evaluation = _evaluation(tmp_path, "finished", _successful_evaluation)
-    batch = replace(_hosted_judge_batch(tmp_path, (evaluation,)), judge=None)
-    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
-
-    def remote(_config):
-        path = evaluate_batch(batch, _remote_session(), orchestrator_job_id="/first", env_vars={})[0]
-        original.append(Path(path).read_bytes())
-        raise RemoteInferenceStartupError("duplicate inference did not become ready", jobs=())
-
-    original: list[bytes] = []
-    _patch_inference_runtime(monkeypatch, remote)
-
-    with pytest.raises(RuntimeError, match="inference failed"):
-        run_evaluation_batch(batch)
-
-    path = tmp_path / "records" / "run-finished" / "record.json"
-    assert path.read_bytes() == original[0]
-    assert read_record(str(path)).status is RunStatus.SUCCEEDED
 
 
 def test_run_evaluation_batch_does_not_bind_execution_to_direct_endpoint(tmp_path, monkeypatch):
@@ -592,6 +508,7 @@ def test_run_evaluation_batch_does_not_bind_execution_to_direct_endpoint(tmp_pat
 
 def test_run_evaluation_batch_records_every_eval_when_hosted_judge_fails_to_start(tmp_path, monkeypatch):
     opened_models: list[str] = []
+
     class InferenceContext:
         def __init__(self, model_name: str):
             self.model_name = model_name
@@ -616,7 +533,7 @@ def test_run_evaluation_batch_records_every_eval_when_hosted_judge_fails_to_star
         _run_test_batch(batch)
 
     assert opened_models == ["candidate", "judge"]
-    for evaluation in evaluations:
+    for index, evaluation in enumerate(evaluations):
         record = read_record(str(tmp_path / "records" / evaluation.identity.run_id / "record.json"))
         assert record.status is RunStatus.INFRA_FAILED
         assert _step_status(batch, index) == STATUS_FAILED
@@ -673,7 +590,7 @@ def test_run_evaluation_batch_retries_hosted_judge_startup_failure(tmp_path, mon
     _patch_inference_runtime(monkeypatch, lambda config: InferenceContext(config.model.model_id))
     evaluation = _evaluation(tmp_path, "one", executor)
 
-    run_evaluation_batch(_hosted_judge_batch(tmp_path, (evaluation,)))
+    _run_test_batch(_hosted_judge_batch(tmp_path, (evaluation,)))
 
     assert opened_models == ["candidate", "judge", "judge", "judge"]
     assert len(observed_judges) == 1
@@ -1552,7 +1469,6 @@ def test_launch_group_resolves_declared_secrets_outside_the_pickled_batch(tmp_pa
             eval_runtime="test-runtime",
         ),
         executor=_successful_evaluation,
-        endpoint_route=EndpointRoute.CAPABILITY,
     )
     batch = EvaluationBatch(
         group_id="group",
@@ -2637,7 +2553,7 @@ def test_launch_reuses_compatible_harbor_results_path(tmp_path, monkeypatch):
     def launch(batch, _client):
         evaluation = replace(batch.evaluations[0], executor=_successful_evaluation)
         execution = replace(batch, records_prefix=str(tmp_path / "records"), evaluations=(evaluation,))
-        evaluate_batch(execution, _remote_session(), orchestrator_job_id="/test", env_vars={})
+        _evaluate_with_session(execution, _remote_session(), orchestrator_job_id="/test")
         submitted.append(evaluation.identity)
         return SimpleNamespace(group_id=batch.group_id, model_name=batch.model.name, evaluations=())
 
@@ -2743,7 +2659,6 @@ def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
     final_evaluation = Evaluation(
         identity=original.identity,
         executor=executor,
-        endpoint_route=original.endpoint_route,
         secret_env_keys=original.secret_env_keys,
     )
     batch = replace(

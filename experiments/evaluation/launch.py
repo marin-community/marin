@@ -77,7 +77,7 @@ EVALUATION_CONTROLLER_CLUSTER = "marin"
 DEFAULT_EVAL_CONCURRENCY = 1
 _ORCHESTRATOR_CPU = 4.0
 _ORCHESTRATOR_MEMORY = "16g"
-_ORCHESTRATOR_DISK = "16g"
+_ORCHESTRATOR_DISK = "80g"
 
 logger = logging.getLogger(__name__)
 
@@ -343,12 +343,11 @@ def build_evaluation_batch(
                 identity=EvaluationIdentity(
                     run_id=run_id,
                     created_at=created_at,
-                    output_dir=prefix_join(records_prefix, f"{run_id}/results"),
+                    output_dir=spec.resume_results_path or prefix_join(records_prefix, f"{run_id}/results"),
                     eval_ref=definition.record_ref,
                     eval_runtime=definition.runtime_descriptor,
                 ),
                 executor=definition.executor,
-                endpoint_route=definition.endpoint_route,
                 secret_env_keys=tuple(definition.secret_env),
             )
         )
@@ -445,7 +444,7 @@ def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluat
         resources=ResourceSpec(cpu=_ORCHESTRATOR_CPU, memory=_ORCHESTRATOR_MEMORY, disk=_ORCHESTRATOR_DISK),
         environment=EnvironmentSpec(env_vars=launch_env),
         constraints=constraints,
-        max_retries_failure=0,
+        max_retries_failure=3,
         priority_band=batch.priority_band,
     )
     logger.info("submitted eval batch %s (%d evals) as job %s", batch.group_id, len(batch.evaluations), job)
