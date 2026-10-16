@@ -11,8 +11,8 @@ import logging
 import threading
 import time
 import uuid
-from collections.abc import Iterable, Mapping, Sequence
-from contextlib import nullcontext
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Protocol
@@ -40,13 +40,13 @@ from finestore.layout import (
     BlobTables,
     CommitToken,
     FineStoreLayout,
+    KeyRange,
     OnConflict,
     SealMarker,
     Shard,
     SystemColumns,
     TableMetadata,
     build_uri,
-    key_bounds,
 )
 from finestore.migrations import migrate_for_write
 from finestore.reader import ReadView
@@ -419,6 +419,18 @@ class DataStore:
         _LEASE_ACQUIRED.add()
         return True
 
+    @contextmanager
+    def _maintenance(self) -> Iterator[bool]:
+        """Try to hold the maintenance lease for the block, refreshing it on a heartbeat while held.
+
+        Yields whether the lease is held. The lease stays held after the block so a maintainer
+        keeps its role across passes; ``_release_maintenance`` gives it up.
+        """
+        with self._maintenance_lock:
+            held = self._acquire_maintenance()
+            with lease_refresh(self._lease) if held else nullcontext():
+                yield held
+
     def _release_maintenance(self) -> None:
         with self._maintenance_lock:
             if self._lease_epoch is None:
@@ -433,19 +445,18 @@ class DataStore:
         lease timeout is not taken over mid-way.
         """
         token = self.flush()
-        with self._maintenance_lock:
-            if not self._acquire_maintenance():
+        with self._maintenance() as held:
+            if not held:
                 return token
-            with lease_refresh(self._lease):
-                view = ReadView(self.root, self._commits.snapshot())
-                for name in view.table_names():
-                    for generation, shard_limit in enumerate(self._compaction_levels):
-                        level_shards = [shard for shard in view.list_shards(name) if shard.generation == generation]
-                        if len(level_shards) <= shard_limit:
-                            continue
-                        self.compact(name, generation=generation)
-                        view = ReadView(self.root, self._commits.last_snapshot())
-                        token = view.token
+            view = ReadView(self.root, self._commits.snapshot())
+            for name in view.table_names():
+                for generation, shard_limit in enumerate(self._compaction_levels):
+                    level_shards = [shard for shard in view.list_shards(name) if shard.generation == generation]
+                    if len(level_shards) <= shard_limit:
+                        continue
+                    self.compact(name, generation=generation)
+                    view = ReadView(self.root, self._commits.last_snapshot())
+                    token = view.token
         return token
 
     def seal(self) -> CommitToken:
@@ -455,19 +466,15 @@ class DataStore:
         check still rejects its compactions if that holder is replaced meanwhile.
         """
         self.flush()
-        with self._maintenance_lock:
-            held = self._acquire_maintenance()
+        superseded = {}
+        with self._maintenance() as held:
             if not held:
                 logger.info("FineStore sealing %s while another writer holds the maintenance lease", self.root)
-            superseded = {}
-            with lease_refresh(self._lease) if held else nullcontext():
-                for name in self.read_view().table_names():
-                    result = self.compact(name)
-                    if result.superseded:
-                        superseded[name] = result.superseded
-            return self._commits.commit(
-                CommitDelta(seal_update=SealMarker(writer=self.writer_id, superseded=superseded))
-            )
+            for name in self.read_view().table_names():
+                result = self.compact(name)
+                if result.superseded:
+                    superseded[name] = result.superseded
+        return self._commits.commit(CommitDelta(seal_update=SealMarker(writer=self.writer_id, superseded=superseded)))
 
     def close(self) -> None:
         """Flush pending writes and, as the maintainer, merge bounded groups of level-zero shards.
@@ -482,16 +489,16 @@ class DataStore:
         self.request_stop()
         self._thread.join()
         self.flush()
-        with self._maintenance_lock:
-            try:
-                if not self._has_level_zero_groups():
-                    return
-                if not self._acquire_maintenance():
+        try:
+            if not self._has_level_zero_groups():
+                return
+            with self._maintenance() as held:
+                if not held:
                     logger.info(
                         "FineStore writer %s left level-zero shards in %s to the maintainer", self.writer_id, self.root
                     )
                     return
-                with lease_refresh(self._lease), self._commit_lock:
+                with self._commit_lock:
                     compact_level_zero_tables(
                         self.root,
                         list(self._tables),
@@ -500,8 +507,8 @@ class DataStore:
                         target_bytes=self._compaction_target_bytes,
                         coordinator=self._commits,
                     )
-            finally:
-                self._release_maintenance()
+        finally:
+            self._release_maintenance()
 
     def _has_level_zero_groups(self) -> bool:
         """Whether some registered table holds at least two level-zero shards, from any writer."""
@@ -782,7 +789,7 @@ class DataTable:
             for group in table_row_groups(self.name, arrow_rows):
                 writer.write_table(group)
         written = writer.result
-        bounds = key_bounds(row.key for row in rows) if primary_key_sorted else None
+        bounds = KeyRange.of(row.key for row in rows) if primary_key_sorted else None
         return Shard(
             path=path,
             writer=self._writer_id,
@@ -793,8 +800,8 @@ class DataTable:
             size_bytes=written.size_bytes,
             content_sha256=written.content_sha256,
             primary_key_sorted=primary_key_sorted,
-            min_key=None if bounds is None else bounds[0],
-            max_key=None if bounds is None else bounds[1],
+            min_key=None if bounds is None else bounds.lowest,
+            max_key=None if bounds is None else bounds.highest,
         )
 
     def flush(self) -> CommitToken | None:

@@ -31,10 +31,11 @@ from finestore.layout import (
     FineStoreLayout,
     FormatVersionError,
     HeadMetadata,
+    KeyRange,
     OnConflict,
 )
 from finestore.migrations import LegacyReadView, migrate
-from finestore.reader import BlobCorruptionError, ReadView, shard_may_contain
+from finestore.reader import BlobCorruptionError, FilterClause, ReadView, shard_may_contain
 from finestore.store import (
     INLINE_BLOB_BYTES,
     OBJECT_PART_BYTES,
@@ -1517,8 +1518,7 @@ def test_manifest_migration_requires_a_sealed_archive(tmp_path, open_archive):
 
 @dataclass(frozen=True)
 class _BoundedShard:
-    min_key: tuple | None
-    max_key: tuple | None
+    key_range: KeyRange | None
     path: str = "shard"
     generation: int = 0
     commit_sequence: int = 1
@@ -1540,8 +1540,8 @@ class _BoundedShard:
     ],
 )
 def test_shard_bounds_prune_only_lookups_outside_a_typed_key_prefix(bounds, where, expected):
-    shard = _BoundedShard(min_key=bounds[0], max_key=bounds[1])
-    assert shard_may_contain(shard, ("name", "part"), where) is expected
+    shard = _BoundedShard(key_range=None if bounds[0] is None else KeyRange(bounds[0], bounds[1]))
+    assert shard_may_contain(shard, ("name", "part"), [FilterClause.parse(clause) for clause in where]) is expected
 
 
 def test_flushed_and_compacted_shards_record_primary_key_bounds(archive_root):

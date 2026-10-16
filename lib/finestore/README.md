@@ -42,12 +42,12 @@ only that table. If writing or publication fails, claimed store buffers are rest
 for retry. Immutable files written before a failed publication are harmless orphans
 and can be collected later.
 
-On object storage a flush costs one request per shard, one for the manifest, and one
-compare-and-swap. Shards are uploaded directly to their final path. A commit starts
-from the manifest this writer last published, so an uncontended flush reads nothing
-first; a lost compare-and-swap re-reads `HEAD` and the manifest, rebases the delta, and
-retries after a backoff that starts at half a second and stays below five seconds, for
-up to ten minutes before the flush fails with `CommitConflict`.
+A flush uploads each new shard, writes a manifest, and publishes it with one
+compare-and-swap of `HEAD`. A writer that loses the compare-and-swap rebases its change
+onto the new `HEAD` and retries with backoff. Every writer to a root shares its `HEAD`,
+so commits to one root are serialized; writers that need more aggregate commit
+throughput should write to separate roots. A flush raises `CommitConflict` only after
+losing the compare-and-swap for an hour.
 
 ## Reads
 
@@ -77,13 +77,9 @@ user commit for each primary key before applying filters on non-key columns. Com
 preserves each row's original commit sequence, so reorganizing files never makes an
 older value outrank a concurrent write.
 
-Each shard records the smallest and largest primary key it holds when every key is
-made of strings and integers. A lookup with `==` on a prefix of the primary key, or
-`in` on its first column, skips shards whose bounds exclude the value. Shard schemas
-are cached per process by path because shards are immutable, and manifest shards are
-opened without a preceding existence check. A view therefore costs two requests, and
-a point lookup costs the table metadata plus one footer and one data read per shard
-that can hold the key.
+Each shard records the range of primary keys it holds when the key columns are
+strings and integers. A lookup with `==` on a prefix of the primary key, or `in` on its
+first column, skips shards whose range excludes the value.
 
 ## Named objects and caches
 
@@ -160,30 +156,24 @@ pass performs at most three compactions per table. `store.maintain()` exposes th
 operation for deterministic callers. `compact_table(root, table)` compacts all active shards
 for explicit materialization and sealing.
 
-One writer per archive compacts at a time. Before compacting, the maintenance pass
-takes the lease at `_maintenance` under the root, which a holder refreshes every 30
-seconds and other writers consider stale after 90 seconds. Taking the lease publishes a
-manifest with the next `maintainer_epoch`; a compaction commit carries the epoch it was
-prepared under and is rejected, instead of rebased, once a later maintainer has
-announced itself. A writer that cannot take the lease flushes and leaves compaction to
-the holder, which refreshes the lease on a heartbeat while its compactions run. `seal()`
-compacts even while another writer holds the lease; the epoch check still protects it.
-A writer from a FineStore build without the lease compacts as before, without taking
-it; its commits rebase normally and carry the epoch forward unchanged. Lease acquisitions and losses, commits, conflicts, and started and
-abandoned compactions are exported as `finestore_*` telemetry counters.
+One writer per archive compacts at a time. Maintenance holds a lease, the
+`_maintenance` object under the root, while it compacts; a writer that cannot take the
+lease flushes and leaves compaction to the holder. A holder that stops without releasing
+the lease loses it once the lease goes stale. Each new holder publishes a higher
+`maintainer_epoch` in the manifest, and a compaction prepared under an older epoch is
+rejected rather than rebased, so a stalled maintainer cannot overwrite its successor's
+work. `seal()` compacts even while another writer holds the lease; the epoch check still
+protects it. Lease, commit, conflict, and compaction events are exported as
+`finestore_*` telemetry counters.
 
-`close()` also runs a best-effort level-zero merge. After its final flush, a closing
-writer that holds the maintenance lease, or can take a free or stale one, merges each
-registered table's level-zero shards from every writer when there are at least two. It
-visits blob descriptors first, then other tables in name order, within an aggregate
-budget of 64 MiB stored input and 16,384 input rows, skipping groups that exceed the
-remaining budget. A closing writer that finds another writer maintaining the archive
-leaves its shards to that writer, so a wave of closing writers elects one merger instead
-of racing replacement commits. Concurrent writers must use distinct writer IDs (the
-default IDs are unique). The pass retries classified transient storage failures with
-exponential backoff for up to three attempts per snapshot or merge before propagating
-them. Retries can repeat reads and writes of the selected inputs. The pass adds close
-latency after flushing; its input budget is not a wall-time or decoded-memory bound.
+`close()` also runs a best-effort level-zero merge after its final flush. A closing
+writer that holds the maintenance lease, or can take it, merges the level-zero shards of
+each registered table from every writer within a bounded input budget; otherwise it
+leaves them to the current maintainer. A wave of closing writers therefore elects one
+merger instead of racing replacement commits. Concurrent writers must use distinct
+writer IDs (the default IDs are unique). Transient storage failures are retried a
+bounded number of times before propagating. The merge adds close latency; its budget
+bounds stored input, not wall time or decoded memory.
 
 `PersistentKvCache.close()` performs this pass during explicit shutdown. Its process-exit
 handler only requests maintenance shutdown after the bounded cache-write drain, so
@@ -230,8 +220,9 @@ archive retention or reader leases; it is outside the current API.
 Only `HEAD` is mutable. The `HEAD` document names a manifest, commit id, and logical
 sequence. A manifest names every active shard, its writer and compaction generation,
 row, sequence, and primary-key bounds, byte size, SHA-256 digest, each table's metadata
-object, the current maintainer epoch, and optional seal state. Writers compute shard integrity metadata while streaming Parquet,
-so it does not require another object-store read.
+object, the current maintainer epoch, and optional seal state. Writers compute shard
+integrity metadata while streaming Parquet, so it does not require another object-store
+read.
 
 Manifest models preserve unknown optional JSON fields when an older writer rebases a
 commit. A manifest can also name `required_features`; readers reject features they do
@@ -259,7 +250,8 @@ an equivalent compare-and-swap primitive.
   rebases only while all of its exact inputs remain active and the maintainer epoch it
   was prepared under is still current.
 - A maintainer that stops without releasing its lease blocks compaction by other
-  writers, including close-time merges, for at most 90 seconds. Flushes never wait on it.
+  writers, including close-time merges, until the lease goes stale. Flushes never wait
+  on it.
 - Opening a sealed archive for writing publishes a commit that clears its seal.
   `store.seal()` flushes, compacts, and records seal metadata in a final manifest.
 

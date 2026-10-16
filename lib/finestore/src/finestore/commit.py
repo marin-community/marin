@@ -36,7 +36,7 @@ from finestore.layout import (
 # The retry budget is wall time, so many writers can share one HEAD without a flush failing.
 _COMMIT_BACKOFF_INITIAL = 0.5
 _COMMIT_BACKOFF_MAXIMUM = 5.0
-_COMMIT_RETRY_BUDGET = 10 * 60.0
+_COMMIT_RETRY_BUDGET = 60 * 60.0
 _MAX_COMMIT_ATTEMPTS = 100_000
 _ROOT_COMMIT_ID = "root"
 

@@ -113,32 +113,59 @@ KeyBound = tuple[str | int, ...]
 BOUNDED_KEY_TYPES = (str, int)
 
 
-def key_bounds(keys: Iterable[tuple]) -> tuple[KeyBound, KeyBound] | None:
-    """Return the smallest and largest primary key among ``keys``, or ``None`` when unbounded.
+def _comparable(value: object, bound: object) -> bool:
+    return type(value) is type(bound) and type(value) in BOUNDED_KEY_TYPES
 
-    Bounds are recorded only for keys made of strings and integers, so readers can compare
-    a lookup key against them without ambiguity. A row count of zero or any other key type
-    leaves the shard unbounded.
+
+@dataclass(frozen=True)
+class KeyRange:
+    """Inclusive bounds on the primary keys a shard holds.
+
+    Bounds exist only for keys made of strings and integers, so a lookup value compares
+    against them without ambiguity. A lookup value of another type than the bound at its
+    position is treated as unbounded at that position.
     """
-    smallest: tuple | None = None
-    largest: tuple | None = None
-    for key in keys:
-        if not all(type(value) in BOUNDED_KEY_TYPES for value in key):
+
+    lowest: KeyBound
+    highest: KeyBound
+
+    @classmethod
+    def of(cls, keys: Iterable[tuple]) -> KeyRange | None:
+        """Return the range spanning ``keys``, or ``None`` for no keys or an unbounded key type."""
+        lowest: tuple | None = None
+        highest: tuple | None = None
+        for key in keys:
+            if not all(type(value) in BOUNDED_KEY_TYPES for value in key):
+                return None
+            if lowest is None or key < lowest:
+                lowest = key
+            if highest is None or key > highest:
+                highest = key
+        if lowest is None or highest is None:
             return None
-        if smallest is None or key < smallest:
-            smallest = key
-        if largest is None or key > largest:
-            largest = key
-    if smallest is None or largest is None:
-        return None
-    return smallest, largest
+        return cls(lowest, highest)
+
+    def may_contain_prefix(self, prefix: tuple) -> bool:
+        """Whether a key starting with ``prefix`` can lie within the range."""
+        width = 0
+        for value, low, high in zip(prefix, self.lowest, self.highest, strict=False):
+            if not _comparable(value, low) or not _comparable(value, high):
+                break
+            width += 1
+        if width == 0:
+            return True
+        return self.lowest[:width] <= prefix[:width] <= self.highest[:width]
+
+    def may_contain_first(self, values: Iterable[object]) -> bool:
+        """Whether any of ``values`` can be the first key column of a key within the range."""
+        return any(self.may_contain_prefix((value,)) for value in values)
 
 
 class Shard(_FormatModel):
     """One immutable Parquet segment referenced by a manifest.
 
     ``min_key`` and ``max_key`` bound the primary keys stored in the shard when they are
-    strings and integers; a reader skips the shard for lookups outside that range.
+    strings and integers; a reader skips the shard for lookups outside ``key_range``.
     """
 
     path: str
@@ -153,6 +180,12 @@ class Shard(_FormatModel):
     primary_key_sorted: bool = False
     min_key: KeyBound | None = None
     max_key: KeyBound | None = None
+
+    @property
+    def key_range(self) -> KeyRange | None:
+        if self.min_key is None or self.max_key is None:
+            return None
+        return KeyRange(self.min_key, self.max_key)
 
 
 class ManifestTable(_FormatModel):
