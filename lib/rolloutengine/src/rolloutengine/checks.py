@@ -19,12 +19,12 @@ from taskcompendium.models import (
 from taskcompendium.runtime.environment import validate_machine_spec
 
 from rolloutengine.machines import _machine_spec
-from rolloutengine.spec import RolloutSpec
+from rolloutengine.spec import TaskRolloutSpec
 
 WORKSPACE_ANSWERS = frozenset({AnswerType.FILE, AnswerType.STATE, AnswerType.WORKSPACE_STATE})
 
 
-def check_spec(spec: RolloutSpec, machine_factories: Mapping[str, MachineFactory]) -> None:
+def check_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, MachineFactory]) -> None:
     """Check the machine selections against the task's environments, resources, and grader.
 
     A workspace answer needs a task machine only when the engine grades it: a harness that grades a

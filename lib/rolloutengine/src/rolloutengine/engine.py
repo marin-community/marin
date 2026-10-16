@@ -29,14 +29,15 @@ from rolloutengine.contracts import (
     Continuation,
     GenerationLimitReached,
     Graded,
+    GradedRollout,
     HarnessPrepared,
     MachineReady,
     ModelRequest,
     ModelTurn,
     ModelTurnCompleted,
     Prompt,
+    Rollout,
     RolloutContractError,
-    RolloutData,
     RolloutFailure,
     RolloutInterrupted,
     RolloutObserver,
@@ -49,7 +50,7 @@ from rolloutengine.event_delivery import _EventDelivery
 from rolloutengine.grading import _grade_rollout
 from rolloutengine.harness import Episode, Harness, HarnessContext
 from rolloutengine.machines import _prepare_machine
-from rolloutengine.spec import TRACE_METRIC, RolloutSpec, TraceMode
+from rolloutengine.spec import TRACE_METRIC, TaskRolloutSpec, TraceMode
 from rolloutengine.trace import _token_trace
 
 Model = Callable[[ModelRequest], Awaitable[ModelTurn]]
@@ -75,8 +76,9 @@ class _Record:
     next request only.
     """
 
-    def __init__(self, spec: RolloutSpec):
+    def __init__(self, spec: TaskRolloutSpec, run_id: str):
         self.spec = spec
+        self.run_id = run_id
         self.messages: list[dict[str, Any]] = conversation_messages(spec.task.context.events)
         self.trace = _token_trace(spec.trace)
         self.steps: list[RolloutStep] = []
@@ -139,16 +141,15 @@ class _Record:
         self.grade = GradeResult(Outcome.UNAVAILABLE, None, reason)
         self.unserved_prompt = prompt_token_ids
 
-    def snapshot(self) -> RolloutData:
+    def snapshot(self) -> Rollout:
         steps = (*self.steps, self.pending) if self.pending is not None else tuple(self.steps)
-        return RolloutData(
-            self.spec.task.id,
+        return Rollout(
+            self.run_id,
             tuple(self.messages),
             self.trace.prompt if self.unserved_prompt is None else self.unserved_prompt,
             self.trace.response,
             self.trace.loss_mask,
             self.trace.logprobs,
-            self.grade,
             self.stop_reason,
             steps,
             dict(steps[-1].transition.metrics) if steps else {},
@@ -156,7 +157,7 @@ class _Record:
         )
 
 
-async def _captured_outputs(spec: RolloutSpec, machine: Machine | None) -> dict[str, bytes]:
+async def _captured_outputs(spec: TaskRolloutSpec, machine: Machine | None) -> dict[str, bytes]:
     task = spec.task
     if machine is None or not task.output_paths:
         return {}
@@ -172,10 +173,10 @@ async def _captured_outputs(spec: RolloutSpec, machine: Machine | None) -> dict[
 class _Attempt:
     """One attempt's inputs, and the record and cleanup that outlive its deadline."""
 
-    spec: RolloutSpec
+    spec: TaskRolloutSpec
     harness: Harness[Any]
     model: Model
-    run_key: str
+    run_id: str
     record: _Record
     cleanup: _Cleanup
     events: _EventDelivery
@@ -185,7 +186,7 @@ class RolloutEngine:
     """Run task attempts with registered machine factories and harnesses.
 
     ``machine_factories`` is keyed by ``MachineRuntimeSpec.backend`` and ``harnesses`` by
-    ``RolloutSpec.harness``; each run supplies the model under rollout. The engine grades each attempt
+    ``TaskRolloutSpec.harness``; each run supplies the model under rollout. The engine grades each attempt
     with the task's grader, except that a ``SessionGrader`` task is graded by its harness. An optional
     observer receives progress events while each attempt runs.
     """
@@ -201,7 +202,7 @@ class RolloutEngine:
         self.harnesses = harnesses
         self.observer = observer
 
-    def check(self, spec: RolloutSpec) -> None:
+    def check(self, spec: TaskRolloutSpec) -> None:
         """Reject a spec before any machine starts: unknown factories or harness, or unsupported requirements."""
         check_spec(spec, self.machine_factories)
         if spec.harness not in self.harnesses:
@@ -211,26 +212,25 @@ class RolloutEngine:
             raise ValueError(f"Harness {spec.harness!r} does not grade, so it cannot run a session-graded task")
         harness.check(spec)
 
-    async def run(self, spec: RolloutSpec, model: Model, *, run_key: str | None = None) -> RolloutData:
-        """Run one attempt of ``spec`` with ``model``; release its resources outside the attempt deadline.
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+        """Run and grade one attempt of ``spec`` with ``model``. Release its resources outside the attempt deadline.
 
-        Every event of the attempt carries ``run_key``, a new random key unless the caller passes one.
-        A spec is reused for many attempts, so the key is an argument of the attempt, not of the spec;
-        pass one to match the attempt's events with the caller's own records.
-        Queued events are delivered within the cleanup deadline after the attempt's resources are
-        released; events the observer did not receive are counted in ``RolloutData.metrics``.
-        An attempt that fails raises ``RolloutInterrupted`` with the record so far.
+        The events of the attempt and ``Rollout.run_id`` carry ``run_id``, a new random ID unless the caller gives
+        one. A spec runs many attempts, so the ID is an argument of the attempt, not a field of the spec. Queued
+        events go to the observer within the cleanup deadline after the attempt releases its resources, and
+        ``Rollout.metrics`` counts the events that the observer did not receive. An attempt that fails raises
+        ``RolloutInterrupted`` with the rollout so far and its grade.
         """
         self.check(spec)
-        run_key = uuid.uuid4().hex if run_key is None else run_key
+        run_id = uuid.uuid4().hex if run_id is None else run_id
         attempt = _Attempt(
             spec,
             self.harnesses[spec.harness],
             model,
-            run_key,
-            _Record(spec),
+            run_id,
+            _Record(spec, run_id),
             _Cleanup(spec.limits.cleanup_timeout),
-            _EventDelivery(self.observer, run_key, spec.task.id),
+            _EventDelivery(self.observer, run_id, spec.task.id),
         )
         started = time.monotonic()
         try:
@@ -244,21 +244,21 @@ class RolloutEngine:
             delivery = await attempt.events.close(spec.limits.cleanup_timeout)
         finally:
             attempt.events.cancel()
-        result = attempt.record.snapshot()
-        metrics = {**result.metrics, **delivery}
-        grade = result.grade
+        rollout = attempt.record.snapshot()
+        metrics = {**rollout.metrics, **delivery}
+        grade = attempt.record.grade
         if attempt.cleanup.errors:
             cleanup_errors = [asdict(error) for error in attempt.cleanup.errors]
             grade = replace(grade, diagnostics={**grade.diagnostics, "cleanup_errors": cleanup_errors})
             metrics["cleanup_error_count"] = float(len(cleanup_errors))
         if spec.trace == TraceMode.MESSAGES:
             metrics[TRACE_METRIC] = TraceMode.MESSAGES.value
-        result = replace(result, grade=grade, metrics=metrics)
+        rollout = replace(rollout, metrics=metrics)
         if failure is None:
-            return result
+            return GradedRollout(rollout, grade)
         operation, cause = failure
-        result = replace(result, failure=RolloutFailure(type(cause).__name__, {"operation": operation.value}))
-        raise RolloutInterrupted(result, operation) from cause
+        rollout = replace(rollout, failure=RolloutFailure(type(cause).__name__, {"operation": operation.value}))
+        raise RolloutInterrupted(rollout, operation, grade) from cause
 
     async def _attempt(self, attempt: _Attempt) -> tuple[RolloutOperation, BaseException] | None:
         """Run the attempt under its deadline and release its resources; return the failure, if any."""
@@ -295,7 +295,7 @@ class RolloutEngine:
             events.emit(MachineReady(time.monotonic() - started))
         started = time.monotonic()
         try:
-            episode = attempt.harness.open(HarnessContext(spec, machine, events, attempt.run_key))
+            episode = attempt.harness.open(HarnessContext(spec, machine, events, attempt.run_id))
             resources.push_async_callback(attempt.cleanup.run, "episode_close", episode.close)
             prompt = await episode.prepare()
         except Exception as error:

@@ -1,26 +1,27 @@
 # Rollout engine
 
-`marin-rolloutengine` runs one attempt of a TaskCompendium task and returns `RolloutData`: the
-conversation, exact tokens, loss mask, optional log probabilities, grade, per-turn steps, and run outputs.
+`marin-rolloutengine` runs and grades one attempt of a TaskCompendium task. It returns a `GradedRollout`: the
+`Rollout`, with the conversation, exact tokens, loss mask, optional log probabilities, per-turn steps, and run
+outputs, and its grade.
 
 ```python
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.shell import shell_harness
 
 engine = RolloutEngine(machine_factories, {"shellbox": shell_harness(command_timeout=30)})
-record = await engine.run(spec, model)
+result = await engine.run_task(spec, model)
 ```
 
-- `RolloutSpec` holds an unchanged `TaskSpec` and the choices that run it: the harness name, the task and
+- `TaskRolloutSpec` holds an unchanged `TaskSpec` and the choices that run it: the harness name, the task and
   verifier machines, the limits, and the trace mode.
 - The model is the policy under rollout, an async function from `ModelRequest` to `ModelTurn`. Pass it to each
-  `engine.run` call.
+  `engine.run_task` call.
 - A harness runs the model side of a task. Register each `Harness(open, check, grade)` in the `harnesses`
-  mapping; `RolloutSpec.harness` selects one by its key. `check` rejects a spec before any machine starts,
+  mapping; `TaskRolloutSpec.harness` selects one by its key. `check` rejects a spec before any machine starts,
   `open` starts an episode for one attempt, and `grade` grades a task whose grader is `SessionGrader`, which
   leaves grading to the harness. The engine grades every other task with the task's grader.
 - An episode returns the first prompt (`prepare`), handles each model turn (`advance`), and releases its
-  resources (`close`). Each `Transition` that `advance` returns becomes one of `RolloutData.steps`, and it
+  resources (`close`). Each `Transition` that `advance` returns becomes one of `Rollout.steps`, and it
   can carry the harness's own step data, such as rewards for training.
 - Built-in harnesses: `shell_harness` serves a shell tool on the task machine and host tools from
   registered providers; `agent_harness` runs an agent that owns its prompts and tool loop, for example an

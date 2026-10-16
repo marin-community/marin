@@ -38,7 +38,7 @@ from taskcompendium.submission import (
 
 from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, Prompt, ToolCallCompleted, Transition
 from rolloutengine.harness import Episode, Harness, HarnessContext
-from rolloutengine.spec import RolloutSpec
+from rolloutengine.spec import TaskRolloutSpec
 
 UNKNOWN_TOOL_ERROR = "Unknown tool"
 DEFAULT_SHELL_TOOL = ShellToolConfig()
@@ -174,7 +174,7 @@ class _ShellOptions:
         if self.command_timeout is not None and not (math.isfinite(self.command_timeout) and self.command_timeout > 0):
             raise ValueError(f"The command timeout must be a positive, finite number: {self.command_timeout!r}")
 
-    def check(self, spec: RolloutSpec) -> None:
+    def check(self, spec: TaskRolloutSpec) -> None:
         task = spec.task
         if task.answer_type == AnswerType.STATE:
             raise NotImplementedError("The shell harness does not capture state answers")

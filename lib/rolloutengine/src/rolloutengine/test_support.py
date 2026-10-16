@@ -19,10 +19,10 @@ from taskcompendium.models import (
 )
 from verifyit.spec import NumericSpec
 
-from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutData
+from rolloutengine.contracts import GradedRollout, ModelRequest, ModelTurn
 from rolloutengine.engine import Model, RolloutEngine
 from rolloutengine.shell import shell_harness
-from rolloutengine.spec import MachineRuntimeSpec, RolloutLimits, RolloutSpec
+from rolloutengine.spec import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
 
 TWELVE = NumericSpec("12", tolerance_abs=0, tolerance_rel=0)
 SHELL = "shell"
@@ -74,8 +74,8 @@ def machine_runtime(**overrides) -> MachineRuntimeSpec:
 
 def rollout_spec(
     task: TaskSpec, *, harness=SHELL, machine=None, verifier_machine=None, trace=None, **limits
-) -> RolloutSpec:
-    return RolloutSpec.model_validate(
+) -> TaskRolloutSpec:
+    return TaskRolloutSpec.model_validate(
         {
             "task": task,
             "harness": harness,
@@ -106,11 +106,11 @@ class ModelEngine:
     engine: RolloutEngine
     model: Model
 
-    def check(self, spec: RolloutSpec) -> None:
+    def check(self, spec: TaskRolloutSpec) -> None:
         self.engine.check(spec)
 
-    async def run(self, spec: RolloutSpec, run_key: str | None = None) -> RolloutData:
-        return await self.engine.run(spec, self.model, run_key=run_key)
+    async def run_task(self, spec: TaskRolloutSpec, run_id: str | None = None) -> GradedRollout:
+        return await self.engine.run_task(spec, self.model, run_id=run_id)
 
 
 def engine(model, machine_factories=None, *, harnesses=None, observer=None) -> ModelEngine:
