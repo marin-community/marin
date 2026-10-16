@@ -75,6 +75,15 @@ def _f32_dots_use_tf32() -> bool:
 TOLERANCE = {jnp.float32: 1e-4, jnp.bfloat16: 1e-2}
 
 
+def _assert_gradients_match(actual, expected, *, tol):
+    for name, want, got in zip("qkv", expected, actual, strict=True):
+        want = np.asarray(want, np.float32)
+        got = np.asarray(got, np.float32)
+        # Gradients of K/V sum over a GQA group and many queries, so compare relative to their scale.
+        scale = max(1.0, float(np.max(np.abs(want))))
+        np.testing.assert_allclose(got / scale, want / scale, atol=tol, rtol=tol, err_msg=f"d{name}")
+
+
 @pytest.mark.parametrize("mask_name", list(MASKS))
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
 def test_flash_attention_forward_matches_reference(mask_name, dtype):
@@ -105,13 +114,7 @@ def test_flash_attention_gradients_match_reference(mask_name, dtype):
 
     expected = jax.grad(lambda *a: loss(_reference, *a), argnums=(0, 1, 2))(q, k, v)
     actual = jax.grad(lambda *a: loss(_flash, *a), argnums=(0, 1, 2))(q, k, v)
-    tol = TOLERANCE[dtype]
-    for name, want, got in zip("qkv", expected, actual, strict=True):
-        want = np.asarray(want, np.float32)
-        got = np.asarray(got, np.float32)
-        # Gradients of K/V sum over a GQA group and many queries, so compare relative to their scale.
-        scale = max(1.0, float(np.max(np.abs(want))))
-        np.testing.assert_allclose(got / scale, want / scale, atol=tol, rtol=tol, err_msg=f"d{name}")
+    _assert_gradients_match(actual, expected, tol=TOLERANCE[dtype])
 
 
 def test_flash_attention_batch_sharded_mesh_keeps_output_and_gradient_sharding():
@@ -161,11 +164,7 @@ def test_flash_attention_on_single_device_grug_mesh_matches_reference():
     assert actual.sharding.spec == sharding.spec
     tol = TOLERANCE[jnp.bfloat16]
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected), atol=tol, rtol=tol)
-    for name, want, got in zip("qkv", expected_grads, actual_grads, strict=True):
-        want = np.asarray(want, np.float32)
-        got = np.asarray(got, np.float32)
-        scale = max(1.0, float(np.max(np.abs(want))))
-        np.testing.assert_allclose(got / scale, want / scale, atol=tol, rtol=tol, err_msg=f"d{name}")
+    _assert_gradients_match(actual_grads, expected_grads, tol=tol)
 
 
 _SHARDED_SCRIPT = """
