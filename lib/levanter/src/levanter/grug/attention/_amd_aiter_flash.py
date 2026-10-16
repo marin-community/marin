@@ -55,7 +55,9 @@ def aiter_flash_attention(
     window = _window_size(mask)
 
     def run(q, k, v):
-        return flash_attn_func(q, k, v, causal=True, window_size=window, deterministic=DETERMINISTIC_BACKWARD)
+        # flash_attn_func returns a tuple even when no LSE or probabilities are requested.
+        (out,) = flash_attn_func(q, k, v, causal=True, window_size=window, deterministic=DETERMINISTIC_BACKWARD)
+        return out
 
     mesh = get_abstract_mesh()
     if mesh is None or mesh.empty:
