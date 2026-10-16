@@ -241,8 +241,9 @@ two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, th
 
 Harbor Hub sources acquire the complete pinned release through the existing cached
 source-download step. The isolated `config/external/harbor` runtime verifies
-release membership and task content, then writes `tasks/<digest>.jsonl` and a
-release manifest. The membership checksum is pinned separately because the Hub
+release membership and task content, then writes `tasks/<task-reference-hash>.jsonl` and a
+release manifest. Each filename hashes the full immutable task reference,
+so differently named tasks with identical contents remain separate. The membership checksum is pinned separately because the Hub
 release identifier need not equal the SDK manifest hash. Dataset-level scoring
 files are not supported. Packages with links or more than 8 MiB of exported
 files produce explicit unsupported rows.

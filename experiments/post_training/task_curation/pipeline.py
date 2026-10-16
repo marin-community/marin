@@ -172,7 +172,7 @@ class UrlSource:
 
 @dataclass(frozen=True)
 class HarborHubSource:
-    """A pinned Harbor Hub release exported to digest-named task JSONL files."""
+    """A pinned Harbor Hub release exported to task-reference-keyed JSONL files."""
 
     name: str
     revision: str

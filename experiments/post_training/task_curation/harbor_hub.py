@@ -6,6 +6,7 @@
 import argparse
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import re
@@ -82,8 +83,8 @@ async def export_release(release: str, membership_sha256: str, output: StoragePa
             row = export_task(root, ref)
             row["release"] = release
             # The shared pipeline uses filename and row index as the task identity.
-            task_digest = ref.rsplit("@sha256:", 1)[1]
-            (task_output / f"{task_digest}.jsonl").write_text(json.dumps(row) + "\n", auto_mkdir=True)
+            task_identity = hashlib.sha256(ref.encode()).hexdigest()
+            (task_output / f"{task_identity}.jsonl").write_text(json.dumps(row) + "\n", auto_mkdir=True)
             LOGGER.info("Exported %s", ref)
 
     (output / "release.json").write_text(
