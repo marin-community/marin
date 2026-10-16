@@ -415,7 +415,8 @@ export interface SampleGrading {
 // `prompt_text` and `prompt_messages` are mutually exclusive; `choices`/`model_choice`/
 // `target_choice` are set for `multiple_choice` samples, `output`/`extracted` for `generation`
 // samples, and `trajectory_uri` for `agentic` samples. The one unbounded payload, the agentic
-// trajectory, is referenced by URI and lazy-loaded on demand.
+// artifact, is referenced by URI and lazy-loaded on demand. SOTOPIA-hard runs can use a
+// `sotopia-summary://` reference to a retained episode when Harbor archived no ATIF trajectory.
 export interface SampleRow {
   task: string
   doc_id: string

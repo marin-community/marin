@@ -18,6 +18,7 @@ run browses correctly whether or not it has been migrated.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from typing import Generic, TypeVar
@@ -31,6 +32,7 @@ from finestore.eval import (
     SAMPLES_SUFFIX,
     EvalSample,
     Grading,
+    SampleKind,
     sample_from_archive_row,
 )
 from finestore.layout import FormatVersionError
@@ -52,6 +54,8 @@ MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 
 # The finestore reference scheme a migrated sample uses for its trajectory.
 _ARCHIVE_URI_PREFIX = "finestore://"
+_SOTOPIA_SUMMARY_URI_PREFIX = "sotopia-summary://"
+_SOTOPIA_TASK = "sotopia-hard-harbor"
 
 
 class SampleTask(BaseModel):
@@ -413,6 +417,14 @@ def fetch_samples(
     page = []
     for row in page_rows:
         sample = sample_from_archive_row(row)
+        trial_id = row.get("trial_id") or ""
+        if (
+            task.rsplit("/", 1)[-1] == _SOTOPIA_TASK
+            and sample.kind is SampleKind.AGENTIC
+            and sample.trajectory_uri is None
+            and re.fullmatch(r"[A-Za-z0-9._-]+", trial_id)
+        ):
+            sample = sample.model_copy(update={"trajectory_uri": f"{_SOTOPIA_SUMMARY_URI_PREFIX}{trial_id}"})
         if sample.correct is None and primary is not None and primary in sample.metrics:
             score = sample.metrics[primary]
             sample = sample.model_copy(
@@ -499,18 +511,28 @@ def _resolve_archive_artifact(results_path: str, uri: str, max_bytes: int) -> Ar
     )
 
 
+def _sotopia_summary_path(results_path: str, trial_id: str) -> StoragePath | None:
+    """Find the latest retained summary for a trial in one Harbor job tree."""
+    jobs = (StoragePath(results_path) / "harbor_jobs" / "harbor_*").glob()
+    matches_by_job = [(job / trial_id / "attempts/*/agent/sotopia-summary.json").glob() for job in jobs]
+    matches_by_job = [matches for matches in matches_by_job if matches]
+    if len(matches_by_job) != 1:
+        return None
+    return sorted(matches_by_job[0], key=str)[-1]
+
+
 def fetch_artifact(results_path: str | None, uri: str, *, max_bytes: int = MAX_ARTIFACT_BYTES) -> ArtifactResponse:
     """Resolve one sample-referenced artifact URI to decoded text, size-capped.
 
-    A ``finestore://`` reference resolves from the run's archive; a legacy ``gs://``/``s3://`` URI is
-    resolved in place, path-restricted to under ``results_path``. Anything missing, out of tree, or
-    oversized returns ``available=False`` with a reason instead of raising.
+    A ``finestore://`` reference resolves from the run's archive. A ``sotopia-summary://`` reference
+    resolves by trial ID under the run's Harbor job tree. Legacy ``gs://``/``s3://`` URIs are resolved
+    in place, path-restricted to under ``results_path``. Anything missing, out of tree, or oversized
+    returns ``available=False`` with a reason instead of raising.
     """
     if not results_path:
         return _unavailable_artifact(uri, "run has no results_path")
 
-    # A finestore:// URI is archive-relative, so two runs can share one (e.g. blobs/trial-1/...);
-    # key the cache by the run as well so one run's artifact never answers for another's.
+    # Relative references can repeat across runs; key the cache by the run as well.
     cache_key = f"{results_path}|{uri}"
     cached = _artifact_cache.get(cache_key)
     if cached is not None:
@@ -518,6 +540,22 @@ def fetch_artifact(results_path: str | None, uri: str, *, max_bytes: int = MAX_A
 
     if uri.startswith(_ARCHIVE_URI_PREFIX):
         response = _resolve_archive_artifact(results_path, uri, max_bytes)
+        if response.available:
+            _artifact_cache.put(cache_key, response)
+        return response
+
+    if uri.startswith(_SOTOPIA_SUMMARY_URI_PREFIX):
+        trial_id = uri.removeprefix(_SOTOPIA_SUMMARY_URI_PREFIX)
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", trial_id):
+            return _unavailable_artifact(uri, "invalid SOTOPIA trial ID")
+        try:
+            path = _sotopia_summary_path(results_path, trial_id)
+        except Exception as exc:
+            logger.info("SOTOPIA summary lookup failed for %s: %s", uri, exc)
+            return _unavailable_artifact(uri, f"{type(exc).__name__}: {exc}"[:400])
+        if path is None:
+            return _unavailable_artifact(uri, "SOTOPIA summary is not present in one Harbor job")
+        response = fetch_artifact(results_path, str(path), max_bytes=max_bytes).model_copy(update={"uri": uri})
         if response.available:
             _artifact_cache.put(cache_key, response)
         return response
