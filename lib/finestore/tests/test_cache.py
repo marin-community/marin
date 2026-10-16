@@ -5,6 +5,7 @@ import random
 import subprocess
 import sys
 import textwrap
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
 import finestore.cache as cache_module
@@ -110,11 +111,12 @@ _CACHE_EXIT_COMPACTION_PROCESS = textwrap.dedent(
 
 class _RangeFile(AbstractBufferedFile):
     def _fetch_range(self, start, end):
-        self.fs.fetched_bytes += end - start
         self.fs.largest_fetch = max(self.fs.largest_fetch, end - start)
         with open(self.path, "rb") as source:
             source.seek(start)
-            return source.read(end - start)
+            data = source.read(end - start)
+        self.fs.fetched_bytes += len(data)
+        return data
 
 
 class _RangeFileSystem(LocalFileSystem):
@@ -151,6 +153,65 @@ class _BlobUriFileSystem(_RangeFileSystem):
         if path.endswith(".parquet"):
             self.read_cache_types.append(cache_type)
         return super()._open(path, mode=mode, cache_type=cache_type, **kwargs)
+
+
+def test_read_view_reuses_small_shards_across_queries_and_keeps_its_snapshot(tmp_path, monkeypatch):
+    root = str(tmp_path / "archive")
+    with DataStore.open(root, flush_interval=600) as store:
+        samples = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
+        samples.extend([{"id": "b", "status": "pending"}, {"id": "a", "status": "pending"}])
+        store.flush()
+        samples.append({"id": "a", "status": "done"})
+        store.flush()
+        view = ReadView(root)
+        stored_bytes = sum(shard.size_bytes for shard in view.list_shards("samples"))
+        samples.append({"id": "b", "status": "done"})
+        store.flush()
+        latest = ReadView(root)
+
+    filesystem = _RangeFileSystem(skip_instance_cache=True)
+    monkeypatch.setattr(factory, "url_to_fs", lambda path: (filesystem, path))
+    # Concurrent cold lookups must share the download, including schema/footer reads.
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(lambda key: view.point("samples", id=key), ["a", "b", "a", "b"]))
+    assert [row["status"] for row in results] == ["done", "pending", "done", "pending"]
+    assert filesystem.fetched_bytes == stored_bytes
+    assert view.scan("samples", columns=["id"], where=[("status", "==", "pending")]).to_pylist() == [{"id": "b"}]
+    assert list(view.iter_rows("samples", columns=["id", "status"])) == [
+        {"id": "a", "status": "done"},
+        {"id": "b", "status": "pending"},
+    ]
+    assert view.keys("samples") == {("a",), ("b",)}
+    assert view.point("samples", id="missing") is None
+    assert filesystem.fetched_bytes == stored_bytes
+    assert latest.point("samples", id="b")["status"] == "done"
+    assert filesystem.fetched_bytes > stored_bytes
+
+
+def test_read_view_cache_budget_is_shared_by_tables_and_can_be_disabled(tmp_path, monkeypatch):
+    root = str(tmp_path / "archive")
+    with DataStore.open(root, flush_interval=600) as store:
+        for name in ("first", "second"):
+            store.table(name, primary_key=("id",)).append({"id": "a", "value": name})
+    snapshot = read_snapshot(FineStoreLayout(root))
+    first_bytes = sum(shard.size_bytes for shard in snapshot.manifest.tables["first"].shards)
+    filesystem = _RangeFileSystem(skip_instance_cache=True)
+    monkeypatch.setattr(factory, "url_to_fs", lambda path: (filesystem, path))
+    view = ReadView(root, snapshot=snapshot, cache_bytes=first_bytes)
+    assert view.point("first", id="a")["value"] == "first"
+    warm_bytes = filesystem.fetched_bytes
+    assert view.point("first", id="a")["value"] == "first"
+    assert filesystem.fetched_bytes == warm_bytes
+    for _ in range(2):
+        before = filesystem.fetched_bytes
+        assert view.point("second", id="a")["value"] == "second"
+        assert filesystem.fetched_bytes > before
+
+    uncached = ReadView(root, snapshot=snapshot, cache_bytes=0)
+    for _ in range(2):
+        before = filesystem.fetched_bytes
+        assert uncached.point("first", id="a")["value"] == "first"
+        assert filesystem.fetched_bytes > before
 
 
 def test_blob_uri_keeps_file_cache_options_out_of_storage_constructor(tmp_path):
