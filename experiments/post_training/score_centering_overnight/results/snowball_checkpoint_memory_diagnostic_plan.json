@@ -21,7 +21,7 @@
     7
   ],
   "expected_responses": 5820,
-  "status": "All five 8-H100 BATCH tasks are controller-running. Actual allocation began 2026-10-16T01:23:28.057000+00:00. The observation-only source26cc99 is starting; restored checkpoint controls, new updates6/7, evaluation7 and all qualification gates remain pending. No memory repair or successful restore is yet established.",
+  "status": "All five8-H100 BATCH tasks controller-running at02:06UTC. Actual224 native CUDA observations from all32 learner ranks: checkpoint-training-state load exited successfully and checkpoint-weight load entered. No weight-load exit, optimizer backload, new update, evaluation, repaired source or complete restore qualification yet. Original scientific settings and all qualification gates unchanged.",
   "preparation_failures": [
     {
       "attempt": 0,
@@ -160,7 +160,7 @@
       "terminal_reason": ""
     }
   ],
-  "controller_observation_file": "cpu-and-memory-diagnostic-controller-20261016T012744.csv",
+  "controller_observation_file": "cpu-and-memory-diagnostic-controller-20261016T020601.csv",
   "native_bundle_sha256": "475c0520c5412658a35f4acd4e77fcc26ad7080f4c526100ac7af23b439b837b",
   "source_observation_validation": {
     "source": "26cc99a426737309a60a490ce219138f8cae4818",
@@ -250,5 +250,6 @@
       "terminal_reason": ""
     }
   ],
-  "initial_queued_controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T005325"
+  "initial_queued_controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T005325",
+  "native_memory_observation_proof": "results/snowball_checkpoint_memory_diagnostic_initial_observations.json"
 }

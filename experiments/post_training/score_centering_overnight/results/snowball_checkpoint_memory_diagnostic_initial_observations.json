@@ -1,0 +1,69 @@
+{
+  "scope": "Observation-only source26cc99 on the actual five-node restore5 diagnostic. All32 learner ranks completed the checkpoint-training-state load observation and entered checkpoint-weight load by the captured native timestamps. No checkpoint-weight-load exit, optimizer backload, new update, evaluation, memory repair or complete resume qualification is established by this capture. Native worker bytes, sourceETags, bounded ranges and complete returned-byte SHA identities retained and independently read back. No source or scientific settings changed.",
+  "run_id": "sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce",
+  "source": "26cc99a426737309a60a490ce219138f8cae4818",
+  "observed_at": "2026-10-16T02:06:22.563906+00:00",
+  "observations": 224,
+  "learner_ranks": 32,
+  "observer_warnings": 0,
+  "native_worker_objects": 70,
+  "retained_native_worker_bytes": 662907,
+  "phase_boundary_counts": [
+    {
+      "phase": "checkpoint_training_state_load",
+      "boundary": "enter",
+      "outcome": "started",
+      "count": 32
+    },
+    {
+      "phase": "checkpoint_training_state_load",
+      "boundary": "exit",
+      "outcome": "success",
+      "count": 32
+    },
+    {
+      "phase": "checkpoint_weights_load",
+      "boundary": "enter",
+      "outcome": "started",
+      "count": 32
+    },
+    {
+      "phase": "offload_to_cpu",
+      "boundary": "enter",
+      "outcome": "started",
+      "count": 64
+    },
+    {
+      "phase": "offload_to_cpu",
+      "boundary": "exit",
+      "outcome": "success",
+      "count": 64
+    }
+  ],
+  "retained_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/native-memory-observations/20261016T020622/observation-manifest.json.gz",
+    "bytes": 20493,
+    "sha256": "61b4820c03bb5304629699705da71a8dd19e41e44cfab4b1521315155ed39128",
+    "etag": "\"3c7b1b7c610e55ae33e1f373ad492aed\"",
+    "full_readback_verified": true
+  },
+  "controller_snapshot": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/native-memory-observations/20261016T020622/cpu-and-memory-diagnostic-controller-20261016T020601.csv",
+    "bytes": 12601,
+    "sha256": "037eb60a52681760f6e4a95b522b4a2dbb9335feece6e607eea81c8267f631f0",
+    "etag": "\"c9f3ee24e631d6ba125135691edfbb57\"",
+    "full_readback_verified": true
+  },
+  "native_progress": {
+    "run_id": "sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce",
+    "source": "26cc99a426737309a60a490ce219138f8cae4818",
+    "observed_at": "2026-10-16T02:06:51.071894+00:00",
+    "metrics": [],
+    "resolved_config": {
+      "bytes": 24248,
+      "etag": "\"dfc24e544598ca23b8728c04f5cf535e\"",
+      "modified": "2026-10-16T01:24:46+00:00"
+    },
+    "scope": "Observed native outputs during the live five-node restore. No metric yet means no applied-update or resume/evaluation-skip claim."
+  }
+}
