@@ -23,7 +23,7 @@ import pyarrow.dataset as pds
 import pyarrow.parquet as pq
 import rigging.filesystem.factory as factory
 from fsspec.spec import AbstractFileSystem
-from pyarrow.fs import FSSpecHandler, PyFileSystem
+from pyarrow.fs import FileInfo, FileType, FSSpecHandler, PyFileSystem
 from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
 
@@ -44,6 +44,8 @@ from finestore.layout import (
 
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
 MAX_DESCRIPTOR_READS = 4
+_SMALL_TABLE_BYTES = 8 * 1024 * 1024
+_READ_CACHE_BYTES = 64 * 1024 * 1024
 
 
 @dataclass
@@ -107,6 +109,36 @@ class _BoundedReadAheadHandler(FSSpecHandler):
         return pa.PythonFile(
             self.fs.open(path, mode="rb", cache_type="readahead", block_size=self._block_size), mode="r"
         )
+
+
+class _CachedReadHandler(FSSpecHandler):
+    """Serve immutable small-table shards from a view's reserved byte budget."""
+
+    def __init__(self, filesystem: AbstractFileSystem, shards: Sequence[Shard]) -> None:
+        super().__init__(filesystem)
+        self._sizes = {shard.path: shard.size_bytes for shard in shards}
+        self._buffers: dict[str, pa.Buffer] = {}
+        self._lock = threading.Lock()
+
+    def get_file_info(self, paths: list[str]) -> list[FileInfo]:
+        # The pinned manifest already identifies these immutable files and their sizes.
+        return [FileInfo(path, FileType.File, size=self._sizes[path]) for path in paths]
+
+    def open_input_file(self, path: str) -> pa.BufferReader:
+        with self._lock:
+            buffer = self._buffers.get(path)
+            if buffer is None:
+                size = self._sizes[path]
+                with self.fs.open(path, mode="rb", cache_type="none") as source:
+                    data = source.read(size + 1)
+                if len(data) != size:
+                    raise ValueError(f"shard {path!r} has {len(data)} bytes; manifest declares {size}")
+                buffer = pa.py_buffer(data)
+                self._buffers[path] = buffer
+        return pa.BufferReader(buffer)
+
+    def open_input_stream(self, path: str) -> pa.BufferReader:
+        return self.open_input_file(path)
 
 
 @dataclass(frozen=True)
@@ -613,6 +645,11 @@ class _ReadOperations:
     def list_shards(self, table: str) -> Sequence[_ReadableShard]:
         raise NotImplementedError
 
+    def _filesystem(self, table: str) -> PyFileSystem:
+        fs, _ = factory.url_to_fs(self.root)
+        handler = _NoReadAheadHandler(fs) if table in (BlobTables.DESCRIPTORS, BlobTables.PARTS) else _ShardHandler(fs)
+        return PyFileSystem(handler)
+
     def _read_plan(
         self,
         table: str,
@@ -622,9 +659,7 @@ class _ReadOperations:
         shards = tuple(self.list_shards(table))
         if not shards:
             return None
-        fs, _ = factory.url_to_fs(self.root)
-        handler = _NoReadAheadHandler(fs) if table in (BlobTables.DESCRIPTORS, BlobTables.PARTS) else _ShardHandler(fs)
-        return _read_plan(PyFileSystem(handler), shards, self.primary_key(table), columns, where)
+        return _read_plan(self._filesystem(table), shards, self.primary_key(table), columns, where)
 
     def scan(
         self,
@@ -822,12 +857,37 @@ class _ReadOperations:
 class ReadView(_ReadOperations):
     """A read-only archive view pinned to one commit token."""
 
-    def __init__(self, root: str, snapshot: ArchiveSnapshot | None = None) -> None:
+    def __init__(
+        self, root: str, snapshot: ArchiveSnapshot | None = None, *, cache_bytes: int = _READ_CACHE_BYTES
+    ) -> None:
         super().__init__()
+        if cache_bytes < 0:
+            raise ValueError("cache_bytes must be nonnegative")
         self.root = root
         self._layout = FineStoreLayout(self.root)
         self._snapshot = snapshot or read_snapshot(self._layout)
         self._meta_cache: dict[str, TableMetadata] = {}
+        self._filesystems: dict[str, PyFileSystem] = {}
+        self._cache_remaining = cache_bytes
+        self._cache_lock = threading.Lock()
+
+    def _filesystem(self, table: str) -> PyFileSystem:
+        with self._cache_lock:
+            filesystem = self._filesystems.get(table)
+            if filesystem is not None:
+                return filesystem
+            shards = self.list_shards(table)
+            size = sum(shard.size_bytes for shard in shards)
+            if table not in (BlobTables.DESCRIPTORS, BlobTables.PARTS) and 0 < size <= min(
+                _SMALL_TABLE_BYTES, self._cache_remaining
+            ):
+                fs, _ = factory.url_to_fs(self.root)
+                filesystem = PyFileSystem(_CachedReadHandler(fs, shards))
+                self._cache_remaining -= size
+            else:
+                filesystem = super()._filesystem(table)
+            self._filesystems[table] = filesystem
+            return filesystem
 
     @property
     def token(self) -> CommitToken | None:
