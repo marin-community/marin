@@ -97,7 +97,6 @@ uv run marina applets versions fb11c931-5861-4878-8bb5-a964d652b45f --json
 uv run marina release infra/marina/applets/rl_data_catalog --base-version CURRENT_VERSION
 
 uv run python infra/marina/applets/rl_data_catalog/load.py \
-  --catalog-root CATALOG_ROOT \
   --applet-id fb11c931-5861-4878-8bb5-a964d652b45f
 ```
 
@@ -109,13 +108,20 @@ default release records its source commit and subtree hash in the immutable pack
 Use `--allow-dirty` to explicitly release branch or uncommitted source without
 verified Git provenance; `release-status` then reports `unrecorded` from a clean checkout.
 
+The loader defaults to the published catalog in CoreWeave's `us-east-02a` bucket at
+`s3://marin-us-east-02a/marin/rl-data/catalog/legacy-2026-10-12`.
+Use `--catalog-root` to explicitly select another catalog, such as a local preview.
+The default keeps production updates independent of an operator's local curation cache.
+
 Coordinate the code release and data load: the new API returns 503 until a
-catalog has been selected. Run the loader in the
-catalog's storage region. It reads through `CurationCatalog`, sends byte-bounded
+catalog has been selected. The loader reads through `CurationCatalog`, sends byte-bounded
 SQL batches, checks sample and packet coverage, then selects the load with one
 UPDATE. An unchanged snapshot skips loading. One operator runs updates; concurrent
 loaders are unsupported. Abandoned and obsolete staging rows are removed on the
-next update. Schema changes may require downtime.
+next update. Schema changes may require downtime. FineStore's snapshot reader caches
+requested Parquet byte ranges under a shared memory budget. The loader needs no
+separate metadata cache and keeps evidence packet reads batched. A bounded import
+can run from a workstation; prefer the catalog's storage region for large transfers.
 
 Packets are stored separately as JSON text, preserving escaped null characters.
 Inventory queries scan structured metadata and verdict rows. Atlas performs no

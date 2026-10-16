@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Load a published curation catalog into Atlas; run beside its object storage."""
+"""Load the published S3 curation catalog into Atlas."""
 
 import json
 import time
@@ -17,6 +17,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
+DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/legacy-2026-10-12"
 TABLE_COLUMNS = {
     "sources": (
         "id TEXT, declaration JSONB, assessment_key TEXT, latest_attempt_key TEXT, "
@@ -190,7 +191,9 @@ def applet_query(service_url: str, applet_id: str) -> Query:
 
 
 @click.command(help=__doc__)
-@click.option("--catalog-root", required=True, help="Published FineStore catalog; run in its storage region.")
+@click.option(
+    "--catalog-root", default=DEFAULT_CATALOG_ROOT, show_default=True, help="Published FineStore catalog to import."
+)
 @click.option("--applet-id", required=True)
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 def main(catalog_root: str, applet_id: str, service_url: str) -> None:
