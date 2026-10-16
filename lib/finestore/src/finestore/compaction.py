@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 
 _COMPACTOR = "compactor"
 _CLOSE_COMPACTION_MAX_ATTEMPTS = 3
-_COMPACTION_BATCH_ROWS = 4096
 _COMPACTION_FILE_READ_AHEAD_BYTES = 1024 * 1024
 _COMPACTION_BUFFER_ROW_GROUPS = 4
 
@@ -205,19 +204,7 @@ def _compact_shards(
             key=lambda shard: (shard.commit_sequence, shard.generation),
             reverse=True,
         )
-        streams = [
-            stack.enter_context(
-                closing(
-                    iter_shard_row_group_batches(
-                        shard,
-                        unified,
-                        pa_fs,
-                        batch_rows=_COMPACTION_BATCH_ROWS,
-                    )
-                )
-            )
-            for shard in inputs
-        ]
+        streams = [stack.enter_context(closing(iter_shard_row_group_batches(shard, unified, pa_fs))) for shard in inputs]
         # Interleave shard scans so versions of nearby keys can meet in one buffer.
         batches = (batch for group in zip_longest(*streams) for batch in group if batch is not None)
         for batch, dropped in _compaction_groups(batches, unified, primary_key):

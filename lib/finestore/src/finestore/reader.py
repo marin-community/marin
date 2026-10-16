@@ -330,8 +330,6 @@ def iter_shard_row_group_batches(
     shard: _ReadableShard,
     unified: pa.Schema,
     pa_fs: PyFileSystem,
-    *,
-    batch_rows: int,
 ) -> Generator[pa.RecordBatch, None, None]:
     """Scan one Parquet row group at a time."""
     dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
@@ -344,7 +342,6 @@ def iter_shard_row_group_batches(
         with row_group.scanner(
             schema=unified,
             use_threads=False,
-            batch_size=batch_rows,
             batch_readahead=1,
             fragment_readahead=1,
             fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=False),
