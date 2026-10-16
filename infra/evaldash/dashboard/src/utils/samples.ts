@@ -53,9 +53,23 @@ function truncate(text: string, n = 48): string {
   return clean.length > n ? `${clean.slice(0, n)}…` : clean
 }
 
+/** The GSM8K answer selected by Evalchemy from a worked reference, when the marker is present. */
+export function gsm8kGradedReference(row: SampleRow): string | null {
+  if (!/^gsm8k(?:$|[-_])/.test(row.task) || !row.target_text) return null
+  const marker = row.target_text.lastIndexOf('#### ')
+  if (marker < 0) return null
+
+  const reference = row.target_text.slice(marker + '#### '.length)
+  const answer = reference.slice(reference.lastIndexOf('=') + 1).trim()
+  if (!answer) return null
+  // Evalchemy's numeric normalization removes spaces and dollar signs, then commas in unsigned integers.
+  const normalized = answer.replace(/[$ ]/g, '')
+  return /^\d[\d,]*$/.test(normalized) ? normalized.replace(/,/g, '') : normalized
+}
+
 /**
  * A one-line reason for the outcome, extracted from the normalized fields: the picked-vs-gold choice
- * for MCQ, extracted-vs-target for generation, the reward or recorded error for an agentic trial.
+ * for MCQ, extracted-vs-reference for generation, the reward or recorded error for an agentic trial.
  */
 export function sampleHint(row: SampleRow): string {
   const error = graderError(row)
@@ -75,7 +89,7 @@ export function sampleHint(row: SampleRow): string {
 
   // generation
   const extracted = row.extracted ?? row.output ?? ''
-  const target = row.target_text ?? ''
+  const target = gsm8kGradedReference(row) ?? row.target_text ?? ''
   if (sampleOutcome(row) === 'ungraded') return `“${truncate(extracted)}” (ungraded)`
   return row.correct ? `“${truncate(extracted)}” ✓` : `“${truncate(extracted)}” vs “${truncate(target)}”`
 }

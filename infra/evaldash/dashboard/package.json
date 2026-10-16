@@ -5,7 +5,8 @@
   "scripts": {
     "build": "rsbuild build",
     "build:check": "vue-tsc --noEmit && rsbuild build",
-    "dev": "rsbuild dev"
+    "dev": "rsbuild dev",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs"
   },
   "dependencies": {
     "@fontsource-variable/noto-sans": "^5.2.10",
