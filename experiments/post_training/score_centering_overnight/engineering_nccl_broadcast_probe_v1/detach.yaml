@@ -1,0 +1,50 @@
+schema_version: 1
+kind: iris-native-sdk-communication-probe
+run:
+  id: sc-core-runtime-nccl-broadcast-probe-a0-01a126ce
+  submission: detach
+  seed: 0
+runtime:
+  launcher_commit: 57b0c60bb0a92f7fc22f258b05fff125ac1a9ff0
+  profile: megatron
+iris:
+  cluster: cw-rno2a
+  priority: batch
+  timeout: 3600
+  max_retries: 0
+  allocation:
+    num_nodes: 1
+    gpus_per_node: 8
+    gpu_variant: H100
+    cpu: 32
+    memory: 256GB
+    disk: 200GB
+artifacts:
+  attempts_root: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce/attempts
+native_sdk:
+  payload_sha256: d973f313ce6cd399f416ca563703c5687b0f34fdb2ec0fb36825eed7492f775f
+  setup_sha256: 84a179144d9eb7c10401767cb17c8593955ff2350e27c516000645bf8926f700
+  immutable_preparation_uri: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce/plan/nccl-checkpoint-broadcast-probe-submission-plan.json
+  resource_board_ids:
+  - 1136
+  - 1137
+  failure_retries: 0
+  preemption_retries: 0
+  max_task_failures: 0
+probe:
+  model: null
+  optimizer: null
+  nccl_ranks: 2
+  dtype: bfloat16
+  shape:
+  - 2560
+  - 1280
+  broadcasts: 256
+  modes:
+  - dropped
+  - waited
+  boundaries:
+  - before_transfers
+  - after_world_barrier
+  - after_exchange_group_barrier
+  scientific_qualification: false

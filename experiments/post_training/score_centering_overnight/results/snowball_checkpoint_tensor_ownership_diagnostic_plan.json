@@ -86,7 +86,7 @@
   "before_submit_controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T081439",
   "native_submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-tensor-ownership-diagnostic-native-submit.log",
   "native_submission_log_sha256": "0559f3f69abc2c32e39ca655c0e229ec2ed832828158f48e4a19d269cf01eeaf",
-  "status": "Controller confirms all5BATCH H100node-tasks queued, physical0, no assigned node/start or completed GPU diagnostic. Native bundle/source57b0 and frozen configuration recorded. Root cause/repair/source-resume qualification remain unestablished.",
+  "status": "Physical0 terminal CUDA OOM during first resumed optimizer backload. All32 training-state loads/64 weights loads/32 forwards succeed;28 backloads succeed and4 fail.512 allocator/320 owner records,52 full worker files including original error retained with SHA/full S3 byte readback. No new published update;31.0823088889 H100h. Root cause remains a candidate pending targeted communication probe; no repaired source or completed resume qualification.",
   "controller_confirmation": [
     {
       "job_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce",
@@ -196,5 +196,65 @@
   ],
   "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/cpu-owners-memory-and-stale-controller-20261016T081718.csv",
   "controller_snapshot_sha256": "58a723fb018d94739f5f10e14bbbf6d8e036cff1943462db68a8b815e244a3ab",
-  "native_bundle": "eae73e04efea3c3c63fff9712ac04bf0834274986d1302da095658df757c7f9f"
+  "native_bundle": "eae73e04efea3c3c63fff9712ac04bf0834274986d1302da095658df757c7f9f",
+  "initial_native_observation": "snowball_checkpoint_tensor_ownership_initial_observations.json",
+  "initial_observation_scope": "Dated partial physical0 after training-state checkpoint load, before captured weight-load exit or optimizer backload. 160 tensor census reports across all32 ranks; no repair or completed recovery qualification.",
+  "latest_controller_rows": [
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "2ad8112c4c15b96b",
+      "state": "5",
+      "exit_code": "1",
+      "started_at_ms": "1792146668905",
+      "finished_at_ms": "1792149451636",
+      "node_name": "g538126",
+      "terminal_reason": "y 60.50 GiB is allocated by PyTorch, and 1.83 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)\n2026-10-16 11:16:40.031 | ERROR    | skyrl_train.entrypoints.main_base:run_ray_driver:747 - Preserved original training-driver exce"
+    },
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "2a5b2fa78ded1b6a",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792146658663",
+      "finished_at_ms": "1792149451636",
+      "node_name": "g543ab2",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/2",
+      "attempt_id": "0",
+      "attempt_uid": "286a1a3175f6c8d2",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792146658663",
+      "finished_at_ms": "1792149451636",
+      "node_name": "g5b3bc4",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/3",
+      "attempt_id": "0",
+      "attempt_uid": "215f1369fd741806",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792146626247",
+      "finished_at_ms": "1792149451636",
+      "node_name": "g5b3dfe",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/4",
+      "attempt_id": "0",
+      "attempt_uid": "0b1fa516806aec10",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792146658663",
+      "finished_at_ms": "1792149451636",
+      "node_name": "g5ba762",
+      "terminal_reason": ""
+    }
+  ],
+  "current_native_memory_observation_proof": "snowball_checkpoint_tensor_ownership_terminal_optimizer_backload_oom.json"
 }

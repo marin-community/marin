@@ -1,0 +1,1033 @@
+{
+  "source": "57b0c60bb0a92f7fc22f258b05fff125ac1a9ff0",
+  "run_id": "sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce",
+  "physical_attempt": 0,
+  "observed_at": "2026-10-16T11:23:40.207404+00:00",
+  "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T111810/resume-rno-current-attempts.csv",
+  "controller_snapshot_sha256": "1e4256467cf4ed8699f4a9fec8c7997f46817d0662e5e63f53723972d8b9ca65",
+  "terminal_controller_rows": [
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "2ad8112c4c15b96b",
+      "state": "5",
+      "exit_code": "1",
+      "started_at_ms": "1792146668905",
+      "finished_at_ms": "1792149451636",
+      "node_name": "g538126",
+      "terminal_reason": "y 60.50 GiB is allocated by PyTorch, and 1.83 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)\n2026-10-16 11:16:40.031 | ERROR    | skyrl_train.entrypoints.main_base:run_ray_driver:747 - Preserved original training-driver exce"
+    },
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "2a5b2fa78ded1b6a",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792146658663",
+      "finished_at_ms": "1792149451636",
+      "node_name": "g543ab2",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/2",
+      "attempt_id": "0",
+      "attempt_uid": "286a1a3175f6c8d2",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792146658663",
+      "finished_at_ms": "1792149451636",
+      "node_name": "g5b3bc4",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/3",
+      "attempt_id": "0",
+      "attempt_uid": "215f1369fd741806",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792146626247",
+      "finished_at_ms": "1792149451636",
+      "node_name": "g5b3dfe",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/4",
+      "attempt_id": "0",
+      "attempt_uid": "0b1fa516806aec10",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792146658663",
+      "finished_at_ms": "1792149451636",
+      "node_name": "g5ba762",
+      "terminal_reason": ""
+    }
+  ],
+  "allocated_h100_hours": 31.08230888888889,
+  "cuda_memory_records": 512,
+  "tensor_ownership_records": 320,
+  "learner_ranks": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+  ],
+  "allocator_phase_boundary_counts": {
+    "offload_to_cpu/enter/started": 96,
+    "offload_to_cpu/exit/success": 96,
+    "checkpoint_training_state_load/enter/started": 32,
+    "checkpoint_training_state_load/exit/success": 32,
+    "checkpoint_weights_load/enter/started": 64,
+    "checkpoint_weights_load/exit/success": 64,
+    "forward/enter/started": 32,
+    "forward/exit/success": 32,
+    "backload_to_gpu/enter/started": 32,
+    "backload_to_gpu/exit/success": 28,
+    "backload_to_gpu/exit/failure": 4
+  },
+  "ownership_phase_counts": {
+    "offload_to_cpu_exit": 96,
+    "checkpoint_training_state_load_enter": 32,
+    "checkpoint_training_state_load_exit": 32,
+    "checkpoint_weights_load_enter": 64,
+    "checkpoint_weights_load_exit": 64,
+    "backload_to_gpu_enter": 32
+  },
+  "optimizer_backload_failure_ranks": [
+    10,
+    11,
+    16,
+    29
+  ],
+  "new_published_training_updates": 0,
+  "native_training_metric_inventory": [],
+  "native_oom": {
+    "exception": "torch.OutOfMemoryError",
+    "operation": "load_megatron_optimizer: state[name].to(current_cuda_device, non_blocking=True)",
+    "requested_mib": 14,
+    "free_mib": 9.12,
+    "pytorch_allocated_gib": 60.5,
+    "pytorch_reserved_unallocated_gib": 1.83,
+    "full_original_error_file": {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/snowball57-owner-final-20261016T112340/8-worker-a491fcc0f70d500e08047257628719880006b2c9451343f69a528ec5-06000000-13998.err",
+      "bytes": 71627,
+      "sha256": "7b4c6e130775271e1289fa6995e738e04268c9e0319f9b83746c711130c2a355",
+      "full_byte_readback_verified": true
+    }
+  },
+  "retained_complete_worker_files": 52,
+  "retained_worker_bytes": 1622837,
+  "retained_files_with_observation_manifest": 53,
+  "all_retained_files_full_byte_readback_verified": true,
+  "retention_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/snowball57-owner-final-20261016T112340/retention-manifest.json",
+    "bytes": 20857,
+    "sha256": "90779fdbe36b316b6a01f8f0b2d9df3cc941a7582deca087cee454aeebf7d6ff",
+    "full_byte_readback_verified": true
+  },
+  "before_optimizer_backload_unattributed_python_cuda_storage_bytes": {
+    "minimum": 4698323000,
+    "median": 8009892476.0,
+    "maximum": 10910068088
+  },
+  "before_optimizer_backload_rank_summaries": [
+    {
+      "rank": 0,
+      "allocated_before_bytes": 16456919552,
+      "allocated_after_bytes": 16456919552,
+      "unique_python_storage_bytes": 16415777656,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 6589131128
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1121
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 1,
+      "allocated_before_bytes": 17675722240,
+      "allocated_after_bytes": 17675722240,
+      "unique_python_storage_bytes": 17638365112,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 7811718584
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1315
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 2,
+      "allocated_before_bytes": 16462804480,
+      "allocated_after_bytes": 16462804480,
+      "unique_python_storage_bytes": 16428200372,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 6601553844
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1109
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 3,
+      "allocated_before_bytes": 16170767360,
+      "allocated_after_bytes": 16170767360,
+      "unique_python_storage_bytes": 16135634080,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 6308987552
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1081
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 4,
+      "allocated_before_bytes": 17074020864,
+      "allocated_after_bytes": 17074020864,
+      "unique_python_storage_bytes": 17037034392,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 7210387864
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1209
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 5,
+      "allocated_before_bytes": 17943226368,
+      "allocated_after_bytes": 17943226368,
+      "unique_python_storage_bytes": 17905342276,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 8078695748
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1344
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 6,
+      "allocated_before_bytes": 14664836608,
+      "allocated_after_bytes": 14664836608,
+      "unique_python_storage_bytes": 14629780880,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 4803134352
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 847
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 7,
+      "allocated_before_bytes": 19876356608,
+      "allocated_after_bytes": 19876356608,
+      "unique_python_storage_bytes": 19833303388,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 10006656860
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1645
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 8,
+      "allocated_before_bytes": 17993684480,
+      "allocated_after_bytes": 17993684480,
+      "unique_python_storage_bytes": 17953448008,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 8126801480
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1352
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 9,
+      "allocated_before_bytes": 18861680128,
+      "allocated_after_bytes": 18861680128,
+      "unique_python_storage_bytes": 18794237072,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 8967590544
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1461
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 10,
+      "allocated_before_bytes": 19643972608,
+      "allocated_after_bytes": 19643972608,
+      "unique_python_storage_bytes": 19605349980,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 9778703452
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1576
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 11,
+      "allocated_before_bytes": 20460639744,
+      "allocated_after_bytes": 20460639744,
+      "unique_python_storage_bytes": 20424901592,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 10598255064
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1723
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 12,
+      "allocated_before_bytes": 18703411200,
+      "allocated_after_bytes": 18703411200,
+      "unique_python_storage_bytes": 18668739536,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 8842093008
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1469
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 13,
+      "allocated_before_bytes": 18190952960,
+      "allocated_after_bytes": 18190952960,
+      "unique_python_storage_bytes": 18134823688,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 8308177160
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1358
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 14,
+      "allocated_before_bytes": 17480881664,
+      "allocated_after_bytes": 17480881664,
+      "unique_python_storage_bytes": 17442911776,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 7616265248
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1240
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 15,
+      "allocated_before_bytes": 14591319040,
+      "allocated_after_bytes": 14591319040,
+      "unique_python_storage_bytes": 14524969528,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 4698323000
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 826
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 16,
+      "allocated_before_bytes": 20775995904,
+      "allocated_after_bytes": 20775995904,
+      "unique_python_storage_bytes": 20736714616,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 10910068088
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1780
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 17,
+      "allocated_before_bytes": 18047698432,
+      "allocated_after_bytes": 18047698432,
+      "unique_python_storage_bytes": 18012857272,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 8186210744
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1373
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 18,
+      "allocated_before_bytes": 17802128384,
+      "allocated_after_bytes": 17802128384,
+      "unique_python_storage_bytes": 17767735732,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 7941089204
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1312
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 19,
+      "allocated_before_bytes": 16493176832,
+      "allocated_after_bytes": 16493176832,
+      "unique_python_storage_bytes": 16457646240,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 6630999712
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1131
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 20,
+      "allocated_before_bytes": 16578991616,
+      "allocated_after_bytes": 16578991616,
+      "unique_python_storage_bytes": 16542570392,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 6715923864
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1134
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 21,
+      "allocated_before_bytes": 18884630528,
+      "allocated_after_bytes": 18884630528,
+      "unique_python_storage_bytes": 18845855556,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 9019209028
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1488
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 22,
+      "allocated_before_bytes": 15468832256,
+      "allocated_after_bytes": 15468832256,
+      "unique_python_storage_bytes": 15378104720,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 5551458192
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 962
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 23,
+      "allocated_before_bytes": 18912715264,
+      "allocated_after_bytes": 18912715264,
+      "unique_python_storage_bytes": 18877911388,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 9051264860
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1500
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 24,
+      "allocated_before_bytes": 15954850816,
+      "allocated_after_bytes": 15954850816,
+      "unique_python_storage_bytes": 15918120008,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 6091473480
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1041
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 25,
+      "allocated_before_bytes": 17385873920,
+      "allocated_after_bytes": 17385873920,
+      "unique_python_storage_bytes": 17348917392,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 7522270864
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1238
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 26,
+      "allocated_before_bytes": 15700266496,
+      "allocated_after_bytes": 15700266496,
+      "unique_python_storage_bytes": 15662048860,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 5835402332
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 972
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 27,
+      "allocated_before_bytes": 19721408000,
+      "allocated_after_bytes": 19721408000,
+      "unique_python_storage_bytes": 19685568472,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 9858921944
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1611
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 28,
+      "allocated_before_bytes": 18436809728,
+      "allocated_after_bytes": 18436809728,
+      "unique_python_storage_bytes": 18401839056,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 8575192528
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1429
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 29,
+      "allocated_before_bytes": 20164974592,
+      "allocated_after_bytes": 20164974592,
+      "unique_python_storage_bytes": 20122494728,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 10295848200
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1659
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 30,
+      "allocated_before_bytes": 17385307648,
+      "allocated_after_bytes": 17385307648,
+      "unique_python_storage_bytes": 17346671136,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 7520024608
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1223
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    },
+    {
+      "rank": 31,
+      "allocated_before_bytes": 20518806528,
+      "allocated_after_bytes": 20518806528,
+      "unique_python_storage_bytes": 20473994808,
+      "owner_storage_bytes": {
+        "ddp_param_data+model_parameter": 9826626560,
+        "model_buffer": 19968,
+        "unattributed_python_tensor": 10647348280
+      },
+      "owner_storage_counts": {
+        "ddp_param_data+model_parameter": 2,
+        "model_buffer": 26,
+        "unattributed_python_tensor": 1734
+      },
+      "known_cpu_tensor_bytes": {
+        "optimizer_parameter": 8384859520,
+        "optimizer_state_exp_avg": 8384859520,
+        "optimizer_state_exp_avg_sq": 8384859520
+      }
+    }
+  ],
+  "rank0_largest_unattributed_storages": [
+    {
+      "python_tensor_views": 1,
+      "referrers": [
+        {
+          "keys_referring_to_tensor": [
+            "tuple"
+          ],
+          "object_owners": [
+            "functools._lru_cache_wrapper"
+          ],
+          "type": "builtins.dict"
+        }
+      ],
+      "storage_bytes": 33555456,
+      "tensor_examples": [
+        "torch.uint8:(33555456,)"
+      ]
+    },
+    {
+      "python_tensor_views": 1,
+      "referrers": [
+        {
+          "type": "builtins.list"
+        }
+      ],
+      "storage_bytes": 33555456,
+      "tensor_examples": [
+        "torch.uint8:(33555456,)"
+      ]
+    },
+    {
+      "python_tensor_views": 1,
+      "referrers": [
+        {
+          "type": "builtins.list"
+        }
+      ],
+      "storage_bytes": 33555456,
+      "tensor_examples": [
+        "torch.uint8:(33555456,)"
+      ]
+    },
+    {
+      "python_tensor_views": 1,
+      "referrers": [
+        {
+          "type": "builtins.list"
+        }
+      ],
+      "storage_bytes": 33555456,
+      "tensor_examples": [
+        "torch.uint8:(33555456,)"
+      ]
+    },
+    {
+      "python_tensor_views": 1,
+      "referrers": [
+        {
+          "type": "builtins.list"
+        }
+      ],
+      "storage_bytes": 33555456,
+      "tensor_examples": [
+        "torch.uint8:(33555456,)"
+      ]
+    },
+    {
+      "python_tensor_views": 1,
+      "referrers": [],
+      "storage_bytes": 6553600,
+      "tensor_examples": [
+        "torch.bfloat16:(2560, 1280)"
+      ]
+    },
+    {
+      "python_tensor_views": 1,
+      "referrers": [],
+      "storage_bytes": 6553600,
+      "tensor_examples": [
+        "torch.bfloat16:(2560, 1280)"
+      ]
+    },
+    {
+      "python_tensor_views": 1,
+      "referrers": [],
+      "storage_bytes": 6553600,
+      "tensor_examples": [
+        "torch.bfloat16:(2560, 1280)"
+      ]
+    }
+  ],
+  "rank16_largest_unattributed_storages": [
+    {
+      "python_tensor_views": 1,
+      "referrers": [
+        {
+          "keys_referring_to_tensor": [
+            "tuple"
+          ],
+          "object_owners": [
+            "functools._lru_cache_wrapper"
+          ],
+          "type": "builtins.dict"
+        }
+      ],
+      "storage_bytes": 33555456,
+      "tensor_examples": [
+        "torch.uint8:(33555456,)"
+      ]
+    },
+    {
+      "python_tensor_views": 1,
+      "referrers": [
+        {
+          "type": "builtins.list"
+        }
+      ],
+      "storage_bytes": 33555456,
+      "tensor_examples": [
+        "torch.uint8:(33555456,)"
+      ]
+    },
+    {
+      "python_tensor_views": 1,
+      "referrers": [
+        {
+          "type": "builtins.list"
+        }
+      ],
+      "storage_bytes": 33555456,
+      "tensor_examples": [
+        "torch.uint8:(33555456,)"
+      ]
+    },
+    {
+      "python_tensor_views": 1,
+      "referrers": [
+        {
+          "type": "builtins.list"
+        }
+      ],
+      "storage_bytes": 33555456,
+      "tensor_examples": [
+        "torch.uint8:(33555456,)"
+      ]
+    },
+    {
+      "python_tensor_views": 1,
+      "referrers": [
+        {
+          "type": "builtins.list"
+        }
+      ],
+      "storage_bytes": 33555456,
+      "tensor_examples": [
+        "torch.uint8:(33555456,)"
+      ]
+    },
+    {
+      "python_tensor_views": 1,
+      "referrers": [
+        {
+          "keys_referring_to_tensor": [
+            "input_tensor"
+          ],
+          "object_owners": [
+            "megatron.core.transformer.transformer_block.TransformerBlock"
+          ],
+          "type": "builtins.dict"
+        }
+      ],
+      "storage_bytes": 8668160,
+      "tensor_examples": [
+        "torch.bfloat16:(1693, 1, 2560)"
+      ]
+    },
+    {
+      "python_tensor_views": 1,
+      "referrers": [],
+      "storage_bytes": 6553600,
+      "tensor_examples": [
+        "torch.bfloat16:(2560, 1280)"
+      ]
+    },
+    {
+      "python_tensor_views": 1,
+      "referrers": [],
+      "storage_bytes": 6553600,
+      "tensor_examples": [
+        "torch.bfloat16:(2560, 1280)"
+      ]
+    }
+  ],
+  "coverage": "Python Tensor/Parameter storage on selected device; allocator allocations without a Python tensor are not attributed. CPU bytes count tensor views and may alias. No tensor values copied and no explicit garbage collection.",
+  "observer_warnings": [],
+  "memory_root_cause_established": false,
+  "repaired_source_qualified": false,
+  "scope": "Complete selected worker stderr capture after terminal five-node source57 physical0 failure; all 512 allocator and 320 ownership records have native timestamps and exact assigned node attribution within physical0. All 32 training-state loads, 64 weights-only loads and 32 forwards succeed; optimizer backload has 28 successful and 4 failed exits, with no new published update. All 52 worker files, including the original trainer error, and the observation manifest have full SHA256 and independent S3 byte readback. One pre-backload census per all 32 learner ranks measures CUDA storage visible through Python outside the named roots. No root cause, repair or completed resume qualification is established."
+}

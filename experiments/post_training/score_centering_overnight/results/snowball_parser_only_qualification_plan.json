@@ -354,5 +354,80 @@
     "full_byte_readback_verified": true
   },
   "retained_native_controller_proof_files": 16,
-  "retained_native_controller_proof_bytes": 265696
+  "retained_native_controller_proof_bytes": 265696,
+  "native_priority_preemptions": [
+    {
+      "controller_attempt": 0,
+      "allocated_h100_hours": 4.6382111111111115,
+      "completed_updates": 0,
+      "native_archives": 0,
+      "native_preemption_source": "WorkloadEvictedDueToPreempted",
+      "preserved_controller_and_exports": "new_terminal_allocations_20261016T104501.json.gz",
+      "preserved_raw_runtime": "new_terminal_runtime_20261016T104501.json.gz",
+      "native_replacement_attempt": 1,
+      "replacement_state_at_20261016T110022": "All five queued; no allocation timestamp."
+    }
+  ],
+  "latest_native_controller_observation": {
+    "as_of": "2026-10-16T11:18:10Z",
+    "physical_attempt": 1,
+    "rows": [
+      {
+        "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/0",
+        "attempt_id": "1",
+        "attempt_uid": "9ce0a6e91fa558c2",
+        "state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792149468199",
+        "finished_at_ms": "",
+        "node_name": "g538126",
+        "terminal_reason": ""
+      },
+      {
+        "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/1",
+        "attempt_id": "1",
+        "attempt_uid": "9d40a554c1f46833",
+        "state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792149494952",
+        "finished_at_ms": "",
+        "node_name": "g543ab2",
+        "terminal_reason": ""
+      },
+      {
+        "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/2",
+        "attempt_id": "1",
+        "attempt_uid": "cafd948bfdfc1b3b",
+        "state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792149494952",
+        "finished_at_ms": "",
+        "node_name": "g5b3bc4",
+        "terminal_reason": ""
+      },
+      {
+        "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/3",
+        "attempt_id": "1",
+        "attempt_uid": "cc34dcaf530b20ce",
+        "state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792149494952",
+        "finished_at_ms": "",
+        "node_name": "g5b3dfe",
+        "terminal_reason": ""
+      },
+      {
+        "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/4",
+        "attempt_id": "1",
+        "attempt_uid": "2830c7f101761282",
+        "state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792149494952",
+        "finished_at_ms": "",
+        "node_name": "g5ba762",
+        "terminal_reason": ""
+      }
+    ],
+    "state": "All five BATCH nodes allocated; qualification outcome pending."
+  }
 }
