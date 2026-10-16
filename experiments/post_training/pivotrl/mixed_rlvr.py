@@ -1,0 +1,157 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Datasets for the mixed-domain RLVR pivot arms (#10214): RLVR1 alone, with selected pivots, and with random turns.
+
+Each arm's rows carry a top-level ``teacher_route`` column naming their pool: ``rlvr``, ``swe`` or
+``terminal``. MarinSkyRL's domain-weighted sampling (``data.sampling.kind=domain-weighted``) fills
+every ``train_batch_size`` window from the pools in the proportions ``data.sampling.domain_weights``
+gives, so one dataset serves every pivot share and :func:`domain_weights` sets the share at launch.
+RLVR rows come first and the sampler shuffles the ``rlvr`` pool before the others, so arms that
+list ``rlvr`` first and share a sampling seed draw RLVR prompts in the same order; arm A uses
+domain-weighted sampling too, with ``rlvr`` alone.
+
+Upstream pass-rate and selection artifacts were built at version ``2026.10.09``; build at the same
+version so they are reused: ``uv run python -m experiments.post_training.pivotrl.mixed_rlvr --version 2026.10.09``.
+"""
+
+import json
+from dataclasses import dataclass
+
+import click
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
+from fray.types import ResourceConfig
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import OUT, ArtifactStep, apply
+from marin.execution.remote import remote
+from marin.experiment.cli import build_options
+from marin.experiment.data import hf_download
+from marin.experiment.namespacing import user_owned_name
+from marin.rl.nemotron_pivot import VALIDATION_FILENAME
+from marin.rl.pass_rates import PASS_RATES_FILENAME
+from rigging.filesystem.storage_path import StoragePath
+from zephyr.writers import write_parquet_file
+
+from experiments.post_training.pivotrl.pipeline import candidate_step, pivot_steps
+from experiments.post_training.pivotrl.runs import GRUG_K16_LAMBDA_065_RUNS, SWE_CANDIDATES
+from experiments.post_training.pivotrl.selection import TRAIN_FILENAME, count_columns
+
+ROUTE_COLUMN = "teacher_route"
+"""The column MarinSkyRL's domain-weighted sampling reads each row's pool from."""
+
+RLVR1 = hf_download(
+    "raw/open-athena-nemotron-rl-ultra-rlvr1-cleaned-v3-2026-09-30",
+    hf_id="open-athena/Nemotron-RL-Ultra-RLVR1-Cleaned-v3-2026-09-30",
+    revision="600262dd37891b86075a80517e61dbfb105d7cbe",
+    version="2026.10.16",
+    urls_glob=("data/train.parquet", "data/validation.parquet"),
+)
+
+
+def _pool_rows(pool: dict[str, str]) -> pa.Table:
+    with (StoragePath(pool["path"]) / pool["filename"]).open("rb") as source:
+        table = pq.read_table(source)
+    if pool["filename"] == PASS_RATES_FILENAME:
+        # Random turns are the candidates the frozen policy was scored on, without their counts.
+        table = table.filter(pc.field("exclusion").is_null()).drop_columns(count_columns(table))
+    return table
+
+
+def _routed(pools: dict[str, dict[str, str]]) -> tuple[pa.Table, dict[str, int]]:
+    tables = {route: _pool_rows(pool) for route, pool in pools.items()}
+    rows = pa.concat_tables(tables.values(), promote_options="permissive")
+    routes = pa.array([route for route, table in tables.items() for _ in range(table.num_rows)], pa.string())
+    return rows.append_column(ROUTE_COLUMN, routes), {route: table.num_rows for route, table in tables.items()}
+
+
+def mix_routes(*, train: dict[str, dict[str, str]], validation: dict[str, dict[str, str]], output_path: str) -> None:
+    """Write ``train.parquet`` and ``validation.parquet``, each its pools' rows tagged by route, plus counts.
+
+    Pools are plain dicts so the executor resolves the artifact steps inside them.
+
+    Args:
+        train: Pools by route, each ``{"path": artifact, "filename": file}``, in row order. A
+            ``pass_rates.parquet`` pool keeps the rows its policy was scored on.
+        validation: Validation pools in the same form.
+        output_path: Where the two files and ``manifest.json`` go.
+    """
+    output = StoragePath(output_path)
+    manifest = {}
+    for split, pools, filename in (("train", train, TRAIN_FILENAME), ("validation", validation, VALIDATION_FILENAME)):
+        rows, counts = _routed(pools)
+        write_parquet_file(rows.to_batches(), str(output / filename), schema=rows.schema)
+        manifest[split] = counts
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+
+def domain_weights(pivot_share: float, *, batch_size: int = 512) -> dict[str, int]:
+    """Prompts per route in every batch: ``pivot_share`` of it split evenly between SWE and Terminal.
+
+    The two benchmarks weigh equally in #10214's decision rules, so the split ignores pool sizes.
+    """
+    if not 0 <= pivot_share < 1:
+        raise ValueError("pivot_share must be in [0, 1)")
+    pivots = round(pivot_share * batch_size)
+    weights = {"rlvr": batch_size - pivots, "swe": (pivots + 1) // 2, "terminal": pivots // 2}
+    return {route: count for route, count in weights.items() if count}
+
+
+def arm_datasets() -> dict[str, ArtifactStep[Artifact]]:
+    """One dataset per kind of arm: ``rlvr1``, ``selected`` pivots and ``random`` candidate turns."""
+    runs = {"swe" if run.candidates == SWE_CANDIDATES else "terminal": run for run in GRUG_K16_LAMBDA_065_RUNS}
+    steps = {route: pivot_steps(run) for route, run in runs.items()}
+    rlvr = {"rlvr": {"path": RLVR1, "filename": "data/train.parquet"}}
+    validation = {
+        "rlvr": {"path": RLVR1, "filename": "data/validation.parquet"},
+        **{
+            route: {"path": candidate_step(run.candidates), "filename": VALIDATION_FILENAME}
+            for route, run in runs.items()
+        },
+    }
+    pivots = {
+        "selected": {route: {"path": step["pivots"], "filename": TRAIN_FILENAME} for route, step in steps.items()},
+        "random": {
+            route: {"path": step["pass-rates"], "filename": PASS_RATES_FILENAME} for route, step in steps.items()
+        },
+    }
+    return {
+        name: apply(
+            user_owned_name(f"pivotrl/mixed-rlvr/{name}"),
+            remote(mix_routes, resources=ResourceConfig.with_cpu(cpu=4, ram="64g")),
+            train={**rlvr, **pools},
+            validation=validation,
+            output_path=OUT,
+        )
+        for name, pools in {"rlvr1": {}, "selected": pivots["selected"], "random": pivots["random"]}.items()
+    }
+
+
+@dataclass(frozen=True)
+class Arm:
+    dataset: str
+    """Key in :func:`arm_datasets`."""
+    pivot_share: float
+
+
+ARMS = {
+    "A": Arm("rlvr1", 0.0),
+    "B": Arm("selected", 0.2),
+    "C": Arm("random", 0.2),
+    "B-10": Arm("selected", 0.1),
+    "B-30": Arm("selected", 0.3),
+}
+"""B-10 and B-30 are the optional arms that move the pivot share."""
+
+
+@click.command(help=__doc__)
+@build_options
+def main() -> dict[str, ArtifactStep[Artifact]]:
+    for name, arm in ARMS.items():
+        click.echo(f"{name}: {arm.dataset}, domain_weights={domain_weights(arm.pivot_share)}")
+    return arm_datasets()
+
+
+if __name__ == "__main__":
+    main()
