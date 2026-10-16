@@ -244,5 +244,4 @@ def test_flash_attention_reads_precomputed_fa4_bounds(window):
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), atol=1e-6, rtol=1e-6)
     expected_grads = jax.grad(lambda *a: loss(segment_mask, *a), argnums=(0, 1, 2))(q, k, v)
     actual_grads = jax.grad(lambda *a: loss(bounds_mask, *a), argnums=(0, 1, 2))(q, k, v)
-    for name, want, got in zip("qkv", expected_grads, actual_grads, strict=True):
-        np.testing.assert_allclose(np.asarray(got), np.asarray(want), atol=1e-6, rtol=1e-6, err_msg=f"d{name}")
+    _assert_gradients_match(actual_grads, expected_grads, tol=1e-6)
