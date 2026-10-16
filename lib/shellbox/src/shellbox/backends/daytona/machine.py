@@ -6,8 +6,8 @@
 import asyncio
 import hashlib
 import json
+import logging
 import math
-import random
 import re
 import shlex
 import stat
@@ -52,7 +52,7 @@ from shellbox.machine import (
 )
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
-CREATE_MAX_ATTEMPTS = 8
+logger = logging.getLogger(__name__)
 CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 RUN_COMMAND = (
     'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; trap \': > "$completed"; rm -f "$pidfile"\' EXIT; "$@"'
@@ -124,12 +124,14 @@ def _rejected_create_request(error: DaytonaRateLimitError) -> bool:
 
 async def _create_sandbox(client: AsyncDaytona, params: CreateSandboxFromSnapshotParams, timeout: float) -> AsyncSandbox:
     """Retry rejected creation requests inside the caller's startup deadline."""
-    backoff = ExponentialBackoff(initial=1, maximum=30)
-    for attempt in range(CREATE_MAX_ATTEMPTS):
+    backoff = ExponentialBackoff(initial=1, maximum=30, factor=2, jitter=0.5)
+    attempt = 0
+    while True:
+        attempt += 1
         try:
             return await client.create(params, timeout=timeout)
         except DaytonaRateLimitError as error:
-            if attempt == CREATE_MAX_ATTEMPTS - 1 or not _rejected_create_request(error):
+            if not _rejected_create_request(error):
                 raise
             retry_after = 0
             for name, value in (error.headers or {}).items():
@@ -142,8 +144,8 @@ async def _create_sandbox(client: AsyncDaytona, params: CreateSandboxFromSnapsho
                 ):
                     retry_after = int(value)
             delay = max(retry_after, backoff.next_interval())
-            await sleep(delay + random.uniform(0, 1))
-    raise AssertionError("Creation retry loop exhausted without a result")
+            logger.warning("Retrying rejected Daytona creation: attempt=%d delay=%.3f", attempt, delay)
+            await sleep(delay)
 
 
 class DaytonaNetworkMode(StrEnum):

@@ -41,7 +41,9 @@ from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec, UnsupportedMachineSpec
 
 
-@pytest.mark.parametrize("failure", ["rejected_post", "late_get", "exhausted", "deadline", "cancelled"])
+@pytest.mark.parametrize(
+    "failure", ["rejected_post", "late_get", "unknown_request", "prolonged_throttle", "deadline", "cancelled"]
+)
 def test_daytona_creation_retries_only_rejected_http_requests(monkeypatch, failure):
     async def scenario():
         requests = []
@@ -65,7 +67,9 @@ def test_daytona_creation_retries_only_rejected_http_requests(monkeypatch, failu
                 return websocket
             requests.append(request.method)
             if request.method == "POST" and (
-                failure == "late_get" or (failure == "rejected_post" and requests.count("POST") == 2)
+                failure == "late_get"
+                or (failure == "rejected_post" and requests.count("POST") == 2)
+                or (failure == "prolonged_throttle" and requests.count("POST") == 10)
             ):
                 return web.json_response(
                     {
@@ -97,11 +101,23 @@ def test_daytona_creation_retries_only_rejected_http_requests(monkeypatch, failu
                 DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/"))
             ) as client:
                 params = CreateSandboxFromSnapshotParams(snapshot="fixture")
-                if failure == "rejected_post":
+                if failure == "unknown_request":
+
+                    class SnapshotClient:
+                        async def create(self, params, *, timeout):
+                            return await client.snapshot.get(params.snapshot)
+
+                    with pytest.raises(DaytonaRateLimitError):
+                        await _create_sandbox(SnapshotClient(), params, 60)
+                    assert requests == ["GET"]
+                    assert delays == []
+                    return
+                if failure in {"rejected_post", "prolonged_throttle"}:
                     sandbox = await _create_sandbox(client, params, 60)
                     assert sandbox.id == "created-once"
-                    assert requests == ["POST", "POST"]
-                    assert len(delays) == 1 and 17 <= delays[0] <= 18
+                    attempts = 2 if failure == "rejected_post" else 10
+                    assert requests == ["POST"] * attempts
+                    assert len(delays) == attempts - 1 and all(delay >= 17 for delay in delays)
                 elif failure == "deadline":
                     with pytest.raises(TimeoutError):
                         async with asyncio.timeout(None) as deadline:
@@ -126,12 +142,8 @@ def test_daytona_creation_retries_only_rejected_http_requests(monkeypatch, failu
                 else:
                     with pytest.raises(DaytonaRateLimitError):
                         await _create_sandbox(client, params, 60)
-                    if failure == "late_get":
-                        assert requests == ["POST", "GET"]
-                        assert delays == []
-                    else:
-                        assert requests == ["POST"] * 8
-                        assert len(delays) == 7
+                    assert requests == ["POST", "GET"]
+                    assert delays == []
 
     asyncio.run(scenario())
 
