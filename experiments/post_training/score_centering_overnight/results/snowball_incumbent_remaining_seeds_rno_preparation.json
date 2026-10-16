@@ -1,0 +1,79 @@
+{
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "seeds": [
+    1,
+    2
+  ],
+  "cases": [
+    {
+      "seed": 1,
+      "job_id": "/romain/sc-snowball-incumbent-main-s1-rno-a3-01a126ce",
+      "source_configuration": "experiments/post_training/score_centering_overnight/snowball_incumbent_main_v2/s1.yaml",
+      "source_configuration_sha256": "42292aca383f5b50b3ee8b225872887d0c0f192dcefefbcb6a40d71934976b7a",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/ordinary-s1.yaml",
+      "configuration_sha256": "8997cee98a3eb289966821a4f83f4689d61663e6ba121eed79cbfefaf335eefd",
+      "prepare_configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/ordinary-s1-prepare.yaml",
+      "prepare_configuration_sha256": "a04ace429bb70436a45cd6db0f99ede53ec2bbeb1e7e61d4d41b20f93ef8dc87",
+      "actual_decoded_changed_fields": [
+        "run.id",
+        "iris.cluster",
+        "iris.cluster_config",
+        "iris.job_name",
+        "ray.rendezvous_dir",
+        "ray.log_dir",
+        "artifacts.checkpoint_root",
+        "artifacts.export_root",
+        "artifacts.attempts_root",
+        "artifacts.resolved_config_uri",
+        "artifacts.terminal_manifest_uri",
+        "skyrl.trainer.rollout_buffer.object_store_root",
+        "skyrl.trainer.policy.megatron_config.torch_profiler_config.save_path"
+      ],
+      "actual_nonpath_changed_fields": [
+        "iris.cluster",
+        "iris.cluster_config"
+      ],
+      "native_preparation_passed": true,
+      "native_submission_confirmed": false,
+      "native_preparation_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-snowball-incumbent-main-s1-rno-a3-01a126ce-native-prepare.log",
+      "native_preparation_log_sha256": "4ed65439287bef3497e9dabed0bb00ab648677779459c4b55169c211547d98ca"
+    },
+    {
+      "seed": 2,
+      "job_id": "/romain/sc-snowball-incumbent-main-s2-rno-a3-01a126ce",
+      "source_configuration": "experiments/post_training/score_centering_overnight/snowball_incumbent_main_v2/s2.yaml",
+      "source_configuration_sha256": "3a5b5baf038564ce9a05593bb53fcaaa01a7655200c48b9df958e9cacd1d512a",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/ordinary-s2.yaml",
+      "configuration_sha256": "0d2f6d63cf66e355764b611f70df55d6410ac0c31a46f9dbcd80f6952217c983",
+      "prepare_configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/ordinary-s2-prepare.yaml",
+      "prepare_configuration_sha256": "2d6731bb6c49689b45596f57f16cc405ba9d3128796bce3e9dac0a0e019d31da",
+      "actual_decoded_changed_fields": [
+        "run.id",
+        "iris.cluster",
+        "iris.cluster_config",
+        "iris.job_name",
+        "ray.rendezvous_dir",
+        "ray.log_dir",
+        "artifacts.checkpoint_root",
+        "artifacts.export_root",
+        "artifacts.attempts_root",
+        "artifacts.resolved_config_uri",
+        "artifacts.terminal_manifest_uri",
+        "skyrl.trainer.rollout_buffer.object_store_root",
+        "skyrl.trainer.policy.megatron_config.torch_profiler_config.save_path"
+      ],
+      "actual_nonpath_changed_fields": [
+        "iris.cluster",
+        "iris.cluster_config"
+      ],
+      "native_preparation_passed": true,
+      "native_submission_confirmed": false,
+      "native_preparation_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-snowball-incumbent-main-s2-rno-a3-01a126ce-native-prepare.log",
+      "native_preparation_log_sha256": "11bd2ce421cb40bdbb768116234e72e0df7f6dc407262694139176646f2904f8"
+    }
+  ],
+  "submitted": false,
+  "admission_gate": "Both actual source0212 RNO ordinary seed0 main updates1/2 must pass the retained native finite/applied/512physical/no-head/no-TIS/no-SC/sampler-age0..2 audit before either remaining seed is submitted.",
+  "admission_gate_proof": null,
+  "scope": "Prepare the two remaining declared ordinary asynchronous1200-update seeds on RNO. Their original East configurations were never submitted; there are no predecessors to cancel. Preserve source, data, seeds, recipe and full horizons. No GPU is submitted by this script."
+}

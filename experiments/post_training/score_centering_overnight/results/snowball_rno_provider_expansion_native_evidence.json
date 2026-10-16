@@ -1,0 +1,75 @@
+{
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "controller_snapshot_tag": "20261016T114709",
+  "new_provider_replacements": [
+    {
+      "job_id": "/romain/sc-snowball-main-noise005-sc-s0-rno-a3-01a126ce",
+      "predecessor_job": "/romain/sc-snowball-main-noise005-sc-s0-a2-01a126ce",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/noise005-sc-s0.yaml",
+      "configuration_sha256": "d4d680bc10fc578c749a6acb345770b1fa15684e98d7a618a32ecf9aacaedb19"
+    },
+    {
+      "job_id": "/romain/sc-snowball-main-noise005-sc-s2-rno-a3-01a126ce",
+      "predecessor_job": "/romain/sc-snowball-main-noise005-sc-s2-a2-01a126ce",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/noise005-sc-s2.yaml",
+      "configuration_sha256": "88842b9b3a37bf913bda409a6ba23012cdff84a22c81f6d9702162e36fbbc07d"
+    },
+    {
+      "job_id": "/romain/sc-snowball-main-noise005-tis-s0-rno-a3-01a126ce",
+      "predecessor_job": "/romain/sc-snowball-main-noise005-tis-s0-a2-01a126ce",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/noise005-tis-s0.yaml",
+      "configuration_sha256": "f0c0a1e28ec412737a7e4870a5060b21b1ebb8971b16b49c8f85cc34f30e5377"
+    },
+    {
+      "job_id": "/romain/sc-snowball-main-noise005-tis-s2-rno-a3-01a126ce",
+      "predecessor_job": "/romain/sc-snowball-main-noise005-tis-s2-a2-01a126ce",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/noise005-tis-s2.yaml",
+      "configuration_sha256": "66be4cbe34432b366b3081966493400b91a4ed683bdf3592e381703a04b665cb"
+    },
+    {
+      "job_id": "/romain/sc-snowball-main-fresh-noise000-sc-s0-rno-a3-01a126ce",
+      "predecessor_job": "/romain/sc-snowball-main-fresh-noise000-sc-s0-a2-01a126ce",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/fresh-sc-s0.yaml",
+      "configuration_sha256": "4fb4c4d1966d886d455499453d34646758cfbc38604bcd5081b23648ff5cc6da"
+    },
+    {
+      "job_id": "/romain/sc-snowball-main-fresh-noise000-sc-s1-rno-a3-01a126ce",
+      "predecessor_job": "/romain/sc-snowball-main-fresh-noise000-sc-s1-a2-01a126ce",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/fresh-sc-s1.yaml",
+      "configuration_sha256": "9d41e4ce51b54a9cb2aa977e95201ae8399d94ae9bff652f38e46f402fd4e80e"
+    },
+    {
+      "job_id": "/romain/sc-snowball-main-fresh-noise000-sc-s2-rno-a3-01a126ce",
+      "predecessor_job": "/romain/sc-snowball-main-fresh-noise000-sc-s2-a2-01a126ce",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/fresh-sc-s2.yaml",
+      "configuration_sha256": "aef6ca6f62456b71422b9704d849bf50e360200c7f500a64ea3319cc4d261413"
+    },
+    {
+      "job_id": "/romain/sc-snowball-main-fresh-noise000-tis-s2-rno-a3-01a126ce",
+      "predecessor_job": "/romain/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/fresh-tis-s2.yaml",
+      "configuration_sha256": "a7526c0b725626a4870dc35763506283fae35064a6fef4a058183842232d7a14"
+    }
+  ],
+  "additional_replacements": 8,
+  "total_with_earlier_ordinary": 9,
+  "latest_unallocated_predecessor_task_attempts_cancelled": 40,
+  "cancelled_latest_attempts_allocated_h100_hours": 0,
+  "skipped_running_predecessor": "/romain/sc-snowball-main-fresh-noise000-tis-s1-a2-01a126ce",
+  "remaining_ordinary_seeds_native_prepared_unsubmitted": [
+    1,
+    2
+  ],
+  "ordinary_first_two_actual_main_update_gate_passed": false,
+  "native_evidence_files": 71,
+  "native_evidence_bytes": 737564,
+  "all_files_sha256_and_full_byte_readback_verified": true,
+  "retained_manifest": {
+    "file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/rno-provider-expansion-native-retention-manifest.json",
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/rno-provider-expansion-20261016T1148/rno-provider-expansion-native-retention-manifest.json",
+    "bytes": 36045,
+    "sha256": "b1ab0272f7254bf885b440d0d1a729215c9c2ee40a2b7dfc06d64ec9010ebc93",
+    "full_byte_readback_verified": true
+  },
+  "scope": "Eight additional provider-only source0212/full1200/five-BATCH-node replacements. Exact native resources are confirmed before an immediate never-allocated predecessor guard and retirement. The40 cancelled latest East task attempts allocate zero GPU; historical failed/preempted costs and raw outputs remain preserved. FreshTISseed1 is already running in East and is skipped without submitting its RNO alternative. No duplicate scientific replication, parser repair or checkpoint source promotion. Two remaining ordinary seeds are CPU-prepared only and remain gated on actual ordinary seed0 updates1/2."
+}
