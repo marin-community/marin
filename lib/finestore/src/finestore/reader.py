@@ -10,7 +10,7 @@ import io
 import itertools
 import threading
 import time
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, closing
@@ -22,7 +22,7 @@ import pyarrow.compute as pc
 import pyarrow.dataset as pds
 import pyarrow.parquet as pq
 import rigging.filesystem.factory as factory
-from fsspec.spec import AbstractFileSystem
+from fsspec.spec import AbstractBufferedFile, AbstractFileSystem
 from pyarrow.fs import FileInfo, FileType, FSSpecHandler, PyFileSystem
 from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
@@ -42,7 +42,6 @@ from finestore.layout import (
 
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
 MAX_DESCRIPTOR_READS = 4
-_SMALL_TABLE_BYTES = 8 * 1024 * 1024
 _READ_CACHE_BYTES = 64 * 1024 * 1024
 
 
@@ -98,33 +97,69 @@ class _BoundedReadAheadHandler(FSSpecHandler):
         )
 
 
-class _CachedReadHandler(FSSpecHandler):
-    """Serve immutable small-table shards from a view's reserved byte budget."""
+class _ReadRangeCache:
+    """A byte-bounded LRU shared by all shard handles in one snapshot."""
 
-    def __init__(self, filesystem: AbstractFileSystem, shards: Sequence[Shard]) -> None:
+    def __init__(self, filesystem: AbstractFileSystem, shards: Sequence[Shard], capacity: int) -> None:
+        self._filesystem = filesystem
+        self._sizes = {shard.path: shard.size_bytes for shard in shards}
+        self._capacity = capacity
+        self._bytes = 0
+        self._ranges: dict[str, dict[tuple[int, int], bytes]] = {path: {} for path in self._sizes}
+        self._entries: OrderedDict[tuple[str, int, int], bytes] = OrderedDict()
+        self._file_locks = {path: threading.Lock() for path in self._sizes}
+        self._lock = threading.Lock()
+
+    def read(self, path: str, start: int, end: int) -> bytes:
+        # Serialize misses for the same file while allowing different shards to load concurrently.
+        with self._file_locks[path]:
+            with self._lock:
+                for (cached_start, cached_end), data in self._ranges[path].items():
+                    if cached_start <= start and end <= cached_end:
+                        self._entries.move_to_end((path, cached_start, cached_end))
+                        return data[start - cached_start : end - cached_start]
+            with cast(
+                BinaryIO, self._filesystem.open(path, mode="rb", cache_type="none", size=self._sizes[path])
+            ) as source:
+                source.seek(start)
+                data = source.read(end - start)
+            # Oversized caller reads remain transient and do not evict the working set.
+            if len(data) > self._capacity:
+                return data
+            with self._lock:
+                while self._bytes + len(data) > self._capacity:
+                    (old_path, old_start, old_end), old = self._entries.popitem(last=False)
+                    del self._ranges[old_path][old_start, old_end]
+                    self._bytes -= len(old)
+                self._entries[path, start, end] = data
+                self._ranges[path][start, end] = data
+                self._bytes += len(data)
+            return data
+
+
+class _CachedReadFile(AbstractBufferedFile):
+    def __init__(self, filesystem: AbstractFileSystem, path: str, size: int, cache: _ReadRangeCache) -> None:
+        super().__init__(filesystem, path, mode="rb", size=size, cache_type="none")
+        self._range_cache = cache
+
+    def _fetch_range(self, start: int, end: int) -> bytes:
+        return self._range_cache.read(self.path, start, min(end, self.size))
+
+
+class _CachedReadHandler(FSSpecHandler):
+    def __init__(self, filesystem: AbstractFileSystem, shards: Sequence[Shard], capacity: int) -> None:
         super().__init__(filesystem)
         self._sizes = {shard.path: shard.size_bytes for shard in shards}
-        self._buffers: dict[str, pa.Buffer] = {}
-        self._lock = threading.Lock()
+        self._cache = _ReadRangeCache(filesystem, shards, capacity)
 
     def get_file_info(self, paths: list[str]) -> list[FileInfo]:
         # The pinned manifest already identifies these immutable files and their sizes.
         return [FileInfo(path, FileType.File, size=self._sizes[path]) for path in paths]
 
-    def open_input_file(self, path: str) -> pa.BufferReader:
-        with self._lock:
-            buffer = self._buffers.get(path)
-            if buffer is None:
-                size = self._sizes[path]
-                with self.fs.open(path, mode="rb", cache_type="none") as source:
-                    data = source.read(size + 1)
-                if len(data) != size:
-                    raise ValueError(f"shard {path!r} has {len(data)} bytes; manifest declares {size}")
-                buffer = pa.py_buffer(data)
-                self._buffers[path] = buffer
-        return pa.BufferReader(buffer)
+    def open_input_file(self, path: str) -> pa.PythonFile:
+        return pa.PythonFile(_CachedReadFile(self.fs, path, self._sizes[path], self._cache), mode="r")
 
-    def open_input_stream(self, path: str) -> pa.BufferReader:
+    def open_input_stream(self, path: str) -> pa.PythonFile:
         return self.open_input_file(path)
 
 
@@ -713,8 +748,7 @@ class _ReadOperations:
                 return None
             if diagnostics is not None:
                 diagnostics.selected_shards += len(shards)
-            fs, _ = factory.url_to_fs(self.root)
-            filesystem = PyFileSystem(_NoReadAheadHandler(fs))
+            filesystem = self._filesystem(BlobTables.DESCRIPTORS)
             primary_key = self.primary_key(BlobTables.DESCRIPTORS)
             # Read footers and matching rows together, with bounded concurrent decoding.
             # Version resolution still spans every shard in the committed snapshot.
@@ -781,27 +815,19 @@ class ReadView(_ReadOperations):
         validate_archive(self._layout)
         self._snapshot = snapshot or read_snapshot(self._layout)
         self._meta_cache: dict[str, TableMetadata] = {}
-        self._filesystems: dict[str, PyFileSystem] = {}
-        self._cache_remaining = cache_bytes
-        self._cache_lock = threading.Lock()
+        self._read_filesystem: PyFileSystem | None = None
+        self._cache_bytes = cache_bytes
+        self._filesystem_lock = threading.Lock()
 
     def _filesystem(self, table: str) -> PyFileSystem:
-        with self._cache_lock:
-            filesystem = self._filesystems.get(table)
-            if filesystem is not None:
-                return filesystem
-            shards = self.list_shards(table)
-            size = sum(shard.size_bytes for shard in shards)
-            if table not in (BlobTables.DESCRIPTORS, BlobTables.PARTS) and 0 < size <= min(
-                _SMALL_TABLE_BYTES, self._cache_remaining
-            ):
+        if not self._cache_bytes:
+            return super()._filesystem(table)
+        with self._filesystem_lock:
+            if self._read_filesystem is None:
                 fs, _ = factory.url_to_fs(self.root)
-                filesystem = PyFileSystem(_CachedReadHandler(fs, shards))
-                self._cache_remaining -= size
-            else:
-                filesystem = super()._filesystem(table)
-            self._filesystems[table] = filesystem
-            return filesystem
+                shards = [shard for state in self._snapshot.manifest.tables.values() for shard in state.shards]
+                self._read_filesystem = PyFileSystem(_CachedReadHandler(fs, shards, self._cache_bytes))
+            return self._read_filesystem
 
     @property
     def token(self) -> CommitToken | None:
