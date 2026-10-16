@@ -463,9 +463,11 @@ def test_sotopia_summary_from_harbor_trial_is_available_to_sample_viewer(tmp_pat
 
     page = fetch_samples(str(results), task, offset=0, limit=10, correct="all", primary_metric_name="reward")
 
-    assert page.rows[0].trajectory_uri == f"sotopia-summary://{trial_id}"
+    assert page.rows[0].trajectory_uri is None
+    assert page.rows[0].summary_uri == f"sotopia-summary://{trial_id}"
+    assert page.model_dump(mode="json")["rows"][0]["summary_uri"] == page.rows[0].summary_uri
     assert page.rows[0].metrics == {"reward": 0.309}
-    artifact = fetch_artifact(str(results), page.rows[0].trajectory_uri)
+    artifact = fetch_artifact(str(results), page.rows[0].summary_uri)
     assert artifact.available
     assert artifact.media_type == "application/json"
     assert json.loads(artifact.text) == summary

@@ -414,9 +414,9 @@ export interface SampleGrading {
 // One evaluated question: the prompt, the model's answer, the gold answer, and its scores.
 // `prompt_text` and `prompt_messages` are mutually exclusive; `choices`/`model_choice`/
 // `target_choice` are set for `multiple_choice` samples, `output`/`extracted` for `generation`
-// samples, and `trajectory_uri` for `agentic` samples. The one unbounded payload, the agentic
-// artifact, is referenced by URI and lazy-loaded on demand. SOTOPIA-hard runs can use a
-// `sotopia-summary://` reference to a retained episode when Harbor archived no ATIF trajectory.
+// samples, and `trajectory_uri` for `agentic` samples. The unbounded agentic artifact is referenced
+// by URI and lazy-loaded on demand. SOTOPIA-hard runs can have a separate `summary_uri` when Harbor
+// archived no ATIF trajectory.
 export interface SampleRow {
   task: string
   doc_id: string
@@ -430,13 +430,14 @@ export interface SampleRow {
   extracted: string | null
   target_text: string | null
   trajectory_uri: string | null
+  summary_uri: string | null
   grading: SampleGrading | null
   metrics: Record<string, number>
   correct: boolean | null
   doc: string
 }
 
-// One sample-referenced artifact (a trajectory) resolved to text by the server's
+// One sample-referenced artifact resolved to text by the server's
 // artifact endpoint. `available` is false with a `reason` when the object is out of tree,
 // missing, unreadable, or over the size cap — mirroring the logs endpoint's degradation.
 export interface ArtifactResponse {

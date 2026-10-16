@@ -56,6 +56,7 @@ MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 _ARCHIVE_URI_PREFIX = "finestore://"
 _SOTOPIA_SUMMARY_URI_PREFIX = "sotopia-summary://"
 _SOTOPIA_TASK = "sotopia-hard-harbor"
+_SOTOPIA_TRIAL_ID = re.compile(r"[A-Za-z0-9._-]+")
 
 
 class SampleTask(BaseModel):
@@ -91,6 +92,12 @@ class SampleCounts(BaseModel):
     ungraded: int
 
 
+class SampleRow(EvalSample):
+    """A sample page row with an optional reference to a retained SOTOPIA episode."""
+
+    summary_uri: str | None = None
+
+
 class SamplesResponse(BaseModel):
     """One page of validated samples plus task-level paging metadata."""
 
@@ -110,17 +117,16 @@ class SamplesResponse(BaseModel):
     offset: int
     limit: int
     counts: SampleCounts
-    rows: tuple[EvalSample, ...]
+    rows: tuple[SampleRow, ...]
 
 
 class ArtifactResponse(BaseModel):
-    """One sample-referenced artifact (the trajectory) resolved to text for the browser.
+    """One sample-referenced artifact resolved to text for the browser.
 
     ``available`` is False -- with a human-readable ``reason`` -- for every non-happy path (the run
     has no results directory, the reference is missing/unreadable, or it exceeds the size cap),
-    mirroring the logs endpoint's reachability degradation rather than raising. ``text`` is the decoded
-    object body when available, and ``media_type`` reflects the URI extension so the client knows
-    whether to parse JSON.
+    mirroring the logs endpoint's reachability degradation rather than raising. ``text`` is the
+    decoded object body when available, and ``media_type`` describes the resolved object.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -416,15 +422,15 @@ def fetch_samples(
     page_rows = table.take(pa.array(page_indices, type=pa.int64())).to_pylist(maps_as_pydicts="strict")
     page = []
     for row in page_rows:
-        sample = sample_from_archive_row(row)
+        sample = SampleRow.model_validate(sample_from_archive_row(row).model_dump())
         trial_id = row.get("trial_id") or ""
         if (
             task.rsplit("/", 1)[-1] == _SOTOPIA_TASK
             and sample.kind is SampleKind.AGENTIC
             and sample.trajectory_uri is None
-            and re.fullmatch(r"[A-Za-z0-9._-]+", trial_id)
+            and _SOTOPIA_TRIAL_ID.fullmatch(trial_id)
         ):
-            sample = sample.model_copy(update={"trajectory_uri": f"{_SOTOPIA_SUMMARY_URI_PREFIX}{trial_id}"})
+            sample = sample.model_copy(update={"summary_uri": f"{_SOTOPIA_SUMMARY_URI_PREFIX}{trial_id}"})
         if sample.correct is None and primary is not None and primary in sample.metrics:
             score = sample.metrics[primary]
             sample = sample.model_copy(
@@ -512,7 +518,7 @@ def _resolve_archive_artifact(results_path: str, uri: str, max_bytes: int) -> Ar
 
 
 def _sotopia_summary_path(results_path: str, trial_id: str) -> StoragePath | None:
-    """Find the latest retained summary for a trial in one Harbor job tree."""
+    """Find the latest retained summary, or None if absent or found in multiple jobs."""
     jobs = (StoragePath(results_path) / "harbor_jobs" / "harbor_*").glob()
     matches_by_job = [(job / trial_id / "attempts/*/agent/sotopia-summary.json").glob() for job in jobs]
     matches_by_job = [matches for matches in matches_by_job if matches]
@@ -546,7 +552,7 @@ def fetch_artifact(results_path: str | None, uri: str, *, max_bytes: int = MAX_A
 
     if uri.startswith(_SOTOPIA_SUMMARY_URI_PREFIX):
         trial_id = uri.removeprefix(_SOTOPIA_SUMMARY_URI_PREFIX)
-        if not re.fullmatch(r"[A-Za-z0-9._-]+", trial_id):
+        if not _SOTOPIA_TRIAL_ID.fullmatch(trial_id):
             return _unavailable_artifact(uri, "invalid SOTOPIA trial ID")
         try:
             path = _sotopia_summary_path(results_path, trial_id)
