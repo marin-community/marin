@@ -1,0 +1,96 @@
+{
+  "job_id": "/romain/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce",
+  "source": "57b0c60bb0a92f7fc22f258b05fff125ac1a9ff0",
+  "payload_sha256": "d973f313ce6cd399f416ca563703c5687b0f34fdb2ec0fb36825eed7492f775f",
+  "plan_sha256": "cd0bb2b05367a3f1e0665119703382cc75d2a5a3fc449a89be2f710d1f0c1a47",
+  "resources": {
+    "cpu": 32,
+    "memory": "256GB",
+    "disk": "200GB",
+    "gpu": {
+      "variant": "H100",
+      "count": 8
+    },
+    "tasks": 1,
+    "priority": "batch"
+  },
+  "native_submission_confirmed": true,
+  "controller_resource_confirmation_pending": false,
+  "retained_preparation": [
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce/plan/nccl-checkpoint-broadcast-probe-submission-plan.json",
+      "bytes": 13896,
+      "sha256": "cd0bb2b05367a3f1e0665119703382cc75d2a5a3fc449a89be2f710d1f0c1a47",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce/plan/nccl-checkpoint-broadcast-memory-probe.py",
+      "bytes": 5443,
+      "sha256": "d973f313ce6cd399f416ca563703c5687b0f34fdb2ec0fb36825eed7492f775f",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce/plan/submit-nccl-checkpoint-broadcast-probe.py",
+      "bytes": 4863,
+      "sha256": "337b33c703a5723b2f9b0f159bcaa7143d31e7ec7ed77ca3dc563b3b45adb8e7",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce/plan/prepare-nccl-checkpoint-broadcast-probe.py",
+      "bytes": 5897,
+      "sha256": "e47b9ad6b0579bcf5f949cfee474290b8e9fcc48ba419eb8bdca022b7b6934b4",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce/plan/client-recovery/resume-nccl-checkpoint-broadcast-probe-after-client-config.py",
+      "bytes": 5208,
+      "sha256": "d74b1c9161839aa6ae552ce51324f265a7882d0c666905df95230b94b9d77682",
+      "full_byte_readback_verified": true
+    }
+  ],
+  "scientific_qualification_established": false,
+  "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T113317",
+  "controller_job": {
+    "job_id": "/romain/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce",
+    "state": "3",
+    "num_tasks": "1",
+    "priority_band": "3",
+    "bundle_id": "edb7afd04966bf3edf3ef30562dd35125b147eddf113de6b3f7f08ea71fdb095",
+    "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+    "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+  },
+  "controller_task_attempts": [
+    {
+      "task_id": "/romain/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "8417262e2803b3ea",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    }
+  ],
+  "expected_priority": "batch",
+  "physically_requested_h100s": 8,
+  "nccl_ranks": 2,
+  "published_plan_commit": "a40065532a66cfda9b3cecc5b3192f71b7ff3007",
+  "initial_local_submission_setup_failures": [
+    {
+      "kind": "Pinned SkyRL Iris client rejects canonical node_health config",
+      "reached_submit_rpc": false,
+      "allocated_h100_hours": 0
+    },
+    {
+      "kind": "Current Iris source imported with pinned incompatible rigging dependency",
+      "reached_submit_rpc": false,
+      "allocated_h100_hours": 0
+    }
+  ],
+  "actual_client_source_files": {
+    "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/lib/iris/src/iris/cli/connect.py": "e0555e731d227d1398a37a472338cb652423b73a2a61d3bbd6bc77c8251b2a79",
+    "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/lib/rigging/src/rigging/auth.py": "b8d52ab98f135f78ee2025426511d2d0d25aef088b8c75a41be99ba6ef7d875d"
+  },
+  "scope": "Native SDK accepts one BATCH task with all8H100 physically requested. Two NCCL ranks exercise the frozen source57/PyTorchcf30153 communication-only payload; no policy model or optimizer. The two driver setup errors did not reach job submission and create no native allocation. Controller confirms exact resources/image/bundle. All allocated GPUs will be included in campaign engineering cost; no scientific or checkpoint recovery qualification is established."
+}

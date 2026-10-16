@@ -3107,7 +3107,24 @@
       "priority_band": 3,
       "bundle_id": "cef00c3c8bac58f14732d6fcd7b0b1cf9f633af161d2a3d629d72a531990bdf5",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "h100_nodes": 1,
+      "h100_per_node": 8,
+      "source": "57b0c60bb0a92f7fc22f258b05fff125ac1a9ff0",
+      "configuration": "experiments/post_training/score_centering_overnight/engineering_nccl_broadcast_probe_v1/detach.yaml",
+      "configuration_sha256": "95d0cb33581859938c7832161bba0d9508ef3a149310fa74a5f6f2626884be89",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "edb7afd04966bf3edf3ef30562dd35125b147eddf113de6b3f7f08ea71fdb095",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-16T11:18:32.598701+00:00"
+  "observed_at": "2026-10-16T11:33:38.581459+00:00"
 }
