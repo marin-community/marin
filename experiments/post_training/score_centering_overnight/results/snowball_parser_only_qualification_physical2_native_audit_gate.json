@@ -1,0 +1,135 @@
+{
+  "run_id": "sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce",
+  "source": "d6d6628f4cbf7a8bbf38b6803cc5a5b59dba12d9",
+  "physical_attempt": 2,
+  "configuration": "experiments/post_training/score_centering_overnight/snowball_parser_only_qualification_v1/detach.yaml",
+  "configuration_sha256": "47761ecbca40c605afe0269b5355c789f214bede34b25e32375d255e7ee3664f",
+  "native_checks_passed": true,
+  "native_controller_rows": [
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/0",
+      "attempt_id": "2",
+      "attempt_uid": "ee1cbe3d2529bfd9",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1792165629268",
+      "finished_at_ms": "1792171414782",
+      "node_name": "g530bbc",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/1",
+      "attempt_id": "2",
+      "attempt_uid": "d1d8df095f880499",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1792165629268",
+      "finished_at_ms": "1792171419454",
+      "node_name": "g538126",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/2",
+      "attempt_id": "2",
+      "attempt_uid": "4edaa689fdc05643",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1792165624767",
+      "finished_at_ms": "1792171435368",
+      "node_name": "g543ab2",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/3",
+      "attempt_id": "2",
+      "attempt_uid": "f6ea3be31d54d3ee",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1792165629268",
+      "finished_at_ms": "1792171435368",
+      "node_name": "g5b3bc4",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/4",
+      "attempt_id": "2",
+      "attempt_uid": "4d1f0b0fa6d8bf08",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1792165629268",
+      "finished_at_ms": "1792171435368",
+      "node_name": "g5b3dfe",
+      "terminal_reason": ""
+    }
+  ],
+  "allocated_h100_hours_this_physical_attempt": 64.44111333333333,
+  "archive_after_ms": 1792165624767,
+  "completed_updates": 5,
+  "physical_records": {
+    "eval": 9592,
+    "train": 2560
+  },
+  "native_failure_placeholders": {
+    "train": 0,
+    "eval": 0
+  },
+  "available_original_verdicts": 12152,
+  "native_failure_contract_passed": true,
+  "native_failure_evidence_sha256": "5c6338639e78a161747351b91c9c0a6cc2354fbc996569d3df6c740c4f81127b",
+  "native_audit_report": "sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce.json.gz",
+  "native_audit_sha256": "a8c124804729c4f6992611a0b4869c2c0a236f75c1f23576daf229599a24b186",
+  "model_data_entire_resolved_recipe_matches": true,
+  "flash_attention_both_pipeline_stages": true,
+  "all256_global_expert_fixed_noise_identities": true,
+  "all32_checkpoint_rank_controls_passed": true,
+  "evaluation_metric_crosschecks": [
+    {
+      "completed_updates": 0,
+      "physical_responses": 4796,
+      "native_available_verdicts": 4796,
+      "native_verifier_coverage": 1.0,
+      "fixed_denominator_mean_verifier_score": 0.2978576713922402,
+      "metric_and_record_mean_match": true
+    },
+    {
+      "completed_updates": 5,
+      "physical_responses": 4796,
+      "native_available_verdicts": 4796,
+      "native_verifier_coverage": 1.0,
+      "fixed_denominator_mean_verifier_score": 0.36430511307588226,
+      "metric_and_record_mean_match": true
+    }
+  ],
+  "original_grader_replay_passed": true,
+  "whole_parser_only_qualification_passed": true,
+  "checkpoint_recovery_qualified": false,
+  "scope": "Complete native5/checkpoint32/GPU/recipe and every available original-response grade gate passes for fresh-start sourceD6 parser qualification physical2. This permits a labeled fresh scientific retry of failed noisyTISseed1; checkpoint recovery remains unqualified and no1200 science endpoint is established.",
+  "complete_native_proof": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/complete-native-physical2-proof/manifest.json",
+    "sha256": "bb8325f6f4d3e68340f507ee6e6f87d66f3d0261811bdbf6f4bb81bbbd3b4ad2",
+    "bytes": 7731,
+    "files": 16,
+    "file_bytes": 902297,
+    "full_byte_readback_verified": true
+  },
+  "original_replay_report": "sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce-regrading.json.gz",
+  "original_replay_report_sha256": "e8a27ed1580acf6c67a05c98ddf99c790d37a8fda0b1365768cff483be088ebd",
+  "original_replay_cpu_proof": "cpu_replay_complete_score-grader-snowball-parser-qual-s1-a0-01a126ce.json",
+  "actual_original_grade_calls": 12152,
+  "original_grade_discrepancies": 0,
+  "complete_original_grader_evidence_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-snowball-parser-qual-s1-a0-01a126ce/completed-original-grader-proof/manifest.json",
+    "sha256": "0ab4cf40a99e5148fabab19506c73997f54d8300b7336c99a5d1537dd435ce75",
+    "bytes": 12711,
+    "files": 21,
+    "file_bytes": 162375,
+    "full_byte_readback_verified": true
+  },
+  "assertion_scope_clarification": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-snowball-parser-qual-s1-a0-01a126ce/available-count-assertion-clarification/manifest.json",
+    "bytes": 4107,
+    "sha256": "11f13b4cae6f8e035777b6125959cd30aa32196f7ec2cb301fbb3a588e7df186",
+    "files": 7,
+    "full_byte_readback_verified": true
+  }
+}

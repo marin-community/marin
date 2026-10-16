@@ -154,7 +154,7 @@
   "native_preparation_passed": true,
   "native_submission_confirmed": true,
   "scientific_main_retry_submitted": false,
-  "full_gpu_qualification_passed": false,
+  "full_gpu_qualification_passed": true,
   "checkpoint_recovery_qualified": false,
   "native_preparation_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-parser-only-qualification-native-prepare.log",
   "native_preparation_log_sha256": "77c91bd4fb238cede46aa0d93fa57e70a164a5034c67da82f02ff5b3350bcb6c",
@@ -369,65 +369,28 @@
     }
   ],
   "latest_native_controller_observation": {
-    "as_of": "2026-10-16T11:18:10Z",
-    "physical_attempt": 1,
-    "rows": [
-      {
-        "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/0",
-        "attempt_id": "1",
-        "attempt_uid": "9ce0a6e91fa558c2",
-        "state": "3",
-        "exit_code": "",
-        "started_at_ms": "1792149468199",
-        "finished_at_ms": "",
-        "node_name": "g538126",
-        "terminal_reason": ""
-      },
-      {
-        "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/1",
-        "attempt_id": "1",
-        "attempt_uid": "9d40a554c1f46833",
-        "state": "3",
-        "exit_code": "",
-        "started_at_ms": "1792149494952",
-        "finished_at_ms": "",
-        "node_name": "g543ab2",
-        "terminal_reason": ""
-      },
-      {
-        "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/2",
-        "attempt_id": "1",
-        "attempt_uid": "cafd948bfdfc1b3b",
-        "state": "3",
-        "exit_code": "",
-        "started_at_ms": "1792149494952",
-        "finished_at_ms": "",
-        "node_name": "g5b3bc4",
-        "terminal_reason": ""
-      },
-      {
-        "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/3",
-        "attempt_id": "1",
-        "attempt_uid": "cc34dcaf530b20ce",
-        "state": "3",
-        "exit_code": "",
-        "started_at_ms": "1792149494952",
-        "finished_at_ms": "",
-        "node_name": "g5b3dfe",
-        "terminal_reason": ""
-      },
-      {
-        "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/4",
-        "attempt_id": "1",
-        "attempt_uid": "2830c7f101761282",
-        "state": "3",
-        "exit_code": "",
-        "started_at_ms": "1792149494952",
-        "finished_at_ms": "",
-        "node_name": "g5ba762",
-        "terminal_reason": ""
-      }
-    ],
-    "state": "All five BATCH nodes allocated; qualification outcome pending."
+    "snapshot": "controller-snapshots/20261016T173829",
+    "physical_attempt": 2,
+    "all5_native_tasks_exited_zero": true,
+    "complete_native_gate": "snowball_parser_only_qualification_physical2_native_audit_gate.json",
+    "original_grader_replay_passed": true,
+    "checkpoint_recovery_qualified": false
+  },
+  "native_five_update_gate_passed": true,
+  "complete_native_gate": "snowball_parser_only_qualification_physical2_native_audit_gate.json",
+  "original_grader_replay_plan": "cpu_replay_snowball_parser_qualification_plan.json",
+  "original_grader_replay_passed": true,
+  "qualified_physical_attempt": 2,
+  "qualified_source": "d6d6628f4cbf7a8bbf38b6803cc5a5b59dba12d9",
+  "complete_qualification_proof": "snowball_parser_only_qualification_physical2_native_audit_gate.json",
+  "complete_original_replay_proof": "cpu_replay_complete_score-grader-snowball-parser-qual-s1-a0-01a126ce.json",
+  "qualification_scope": "Fresh5-update five-node noisyTISseed1 at sourceD6 only; does not qualify checkpoint recovery or completed1200 science.",
+  "complete_original_grader_evidence_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-snowball-parser-qual-s1-a0-01a126ce/completed-original-grader-proof/manifest.json",
+    "sha256": "0ab4cf40a99e5148fabab19506c73997f54d8300b7336c99a5d1537dd435ce75",
+    "bytes": 12711,
+    "files": 21,
+    "file_bytes": 162375,
+    "full_byte_readback_verified": true
   }
 }

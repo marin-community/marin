@@ -3087,11 +3087,13 @@
       "configuration_sha256": "47761ecbca40c605afe0269b5355c789f214bede34b25e32375d255e7ee3664f",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "bccad083242efad36bf56988be4a6a61f653e8195cfdb7c700575b44cd50c2b1",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce.json.gz",
+      "scientific_completed_updates": 5
     },
     {
       "job_id": "/romain/sc-snowball-incumbent-main-s0-rno-a3-01a126ce",
@@ -3366,5 +3368,5 @@
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-16T16:50:27.845403+00:00"
+  "observed_at": "2026-10-16T18:05:57.530376+00:00"
 }
