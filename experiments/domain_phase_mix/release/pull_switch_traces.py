@@ -44,7 +44,7 @@ import pyarrow.parquet as pq
 import wandb
 
 from experiments.domain_phase_mix.release import paths, tables
-from experiments.domain_phase_mix.release.configs.starcoder import GRADIENT_CONFLICT_MANIFEST, GRADIENT_CONFLICT_RUN_ID
+from experiments.domain_phase_mix.release.configs.starcoder import GRADIENT_CONFLICT_MANIFEST, GRADIENT_CONFLICT_PREFIX
 
 TRANSITION = paths.RO / "starcoder_wsd80_transition_transient_20261006"
 ENTITY_PROJECT = "marin-community/marin"
@@ -102,7 +102,7 @@ def series() -> pd.DataFrame:
             pd.DataFrame(
                 {
                     "run_name": runs.trajectory_id,
-                    "wandb_id": [GRADIENT_CONFLICT_RUN_ID.format(t) for t in runs.trajectory_id],
+                    "wandb_id": [GRADIENT_CONFLICT_PREFIX + t for t in runs.trajectory_id],
                     "run_label": label,
                     "seed": runs.training_seed,
                     "switch_step": runs.boundary_step,

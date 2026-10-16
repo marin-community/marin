@@ -156,6 +156,15 @@ def test_trajectories_reproduce_the_training_loss_jumps(out):
         assert (np.median(duration), duration.max()) == (expected.dur_median, expected.dur_max)
 
 
+def test_required_sources_are_the_files_the_export_reads(monkeypatch):
+    # The skip guard above and the manifest's provenance rely on this list.
+    read = set()
+    require = paths.require
+    monkeypatch.setattr(paths, "require", lambda path: read.add(path) or require(path))
+    starcoder.export()
+    assert read == set(starcoder.required_sources())
+
+
 def test_trajectories_key_on_the_w_and_b_runs_they_were_pulled_from(out):
     # pull_switch_traces.py read each series from its W&B run: a confirmation run under its run name, a
     # gradient-conflict trajectory as gcfv9_<trajectory id>.

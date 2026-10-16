@@ -62,8 +62,10 @@ family (COUPLED_RELEASE) puts before its runs' W&B run ids. These runs appear in
   each run. The launch recorded no trainer seed.
 
 The transition tables and the trajectories key on W&B run ids too: a run's name, or for a gradient-conflict v9 trajectory
-`gcfv9_` and its trajectory id (GRADIENT_CONFLICT_RUN_ID). A run has one id across them: the 4x confirmation winners
-are both the `conf_m400_untied` trajectories and the offline evaluations' `august_abrupt` runs.
+`gcfv9_` and its trajectory id (GRADIENT_CONFLICT_PREFIX). A run has one id across them: the 4x confirmation winners
+are both the `conf_m400_untied` trajectories and the offline evaluations' `august_abrupt` runs. The export checks how
+many runs take each prefix (COUPLED_ATLAS_RUNS, GRADIENT_CONFLICT_RUNS), so a renamed family or a changed manifest stops
+it.
 """
 
 import gzip
@@ -90,10 +92,15 @@ COUPLED_RELEASE = (
     / "experiments/domain_phase_mix/manifests/starcoder_wsd80_coupled_onset_dense_surfaces_central2_v4_v1_20260830"
     / "release.json"
 )
-# The gradient-conflict v9 launch logged each trajectory of its manifest to W&B as `gcfv9_<trajectory id>`
-# (launch_starcoder_wsd80_gradient_conflict_full.py, WANDB_RUN_ID_PREFIX); pull_switch_traces.py reads the same runs.
+# The gradient-conflict v9 launch logged each trajectory of its manifest to W&B as `gcfv9_<trajectory id>`. The prefix
+# copies WANDB_RUN_ID_PREFIX of launch_starcoder_wsd80_gradient_conflict_full.py, which no launch record holds;
+# pull_switch_traces.py read the trajectories from the same runs.
 GRADIENT_CONFLICT_MANIFEST = paths.RO / "starcoder_wsd80_gradient_conflict_design_20260811_v9/trajectory_manifest.csv"
-GRADIENT_CONFLICT_RUN_ID = "gcfv9_{}"
+GRADIENT_CONFLICT_PREFIX = "gcfv9_"
+# The runs that take a launch's W&B prefix: the atlas's coupled learning-rate-onset runs and the gradient-conflict v9
+# trajectories of the switch study's tables.
+COUPLED_ATLAS_RUNS = 78
+GRADIENT_CONFLICT_RUNS = 96
 DIAGONAL = paths.RO / "starcoder_wsd80_fixed_total_tpp5_diagonal_20260905"
 CURRICULA = (
     paths.RO
@@ -249,6 +256,9 @@ def _atlas_run_ids(pred: pd.DataFrame, coupled: dict) -> pd.Series:
     if launched != (COUPLED_DESIGN.relative_to(paths.REPO).as_posix(), coupled["design_sha256"]):
         raise ValueError(f"{COUPLED_RELEASE.name} records the launch of another design than {COUPLED_DESIGN.name}")
     is_coupled = pred.family == COUPLED_FAMILY
+    coupled_runs = pred.run[is_coupled].nunique()
+    if coupled_runs != COUPLED_ATLAS_RUNS:
+        raise ValueError(f"expected {COUPLED_ATLAS_RUNS} coupled-family atlas runs, found {coupled_runs}")
     if not pred.run[is_coupled].isin([run["run_name"] for run in coupled["runs"]]).all():
         raise ValueError("a coupled-family atlas run is not a run of the coupled design")
     return pred.run.mask(is_coupled, release["deployment"]["run_id_prefix"] + pred.run)
@@ -318,7 +328,7 @@ def _gradient_conflict_trajectories() -> set[str]:
 def _wandb_run_ids(names: pd.Series, gradient_conflict: set[str]) -> pd.Series:
     """The W&B run id of each run name: `gcfv9_<trajectory id>` for a trajectory of `gradient_conflict` (the
     gradient-conflict v9 trajectory ids), the name itself for any other run."""
-    ids = {n: GRADIENT_CONFLICT_RUN_ID.format(n) if n in gradient_conflict else n for n in names.unique()}
+    ids = {n: GRADIENT_CONFLICT_PREFIX + n if n in gradient_conflict else n for n in names.unique()}
     return names.map(ids)
 
 
@@ -436,6 +446,11 @@ def export() -> dict[str, pd.DataFrame]:
     designs = _curve_designs(curves, dense, coupled)
     obs, membership = _atlas_runs(curves, designs, pd.DataFrame(dense["deterministic_aliases"]), coupled)
     gradient_conflict = _gradient_conflict_trajectories()
+    transition, trajectories = _transition(gradient_conflict), _trajectories(gradient_conflict)
+    switch_runs = set(transition.observation_id.dropna()) | set(trajectories.observation_id.unique())
+    prefixed = {run for run in switch_runs if run.startswith(GRADIENT_CONFLICT_PREFIX)}
+    if len(prefixed) != GRADIENT_CONFLICT_RUNS:
+        raise ValueError(f"expected {GRADIENT_CONFLICT_RUNS} gradient-conflict v9 trajectories, found {len(prefixed)}")
     curves = curves.merge(designs[DESIGN], left_on="curve_id", right_index=True, how="left", validate="one_to_one")
     curves["fitter"], curves["grid_points"] = FITTER, GRID_POINTS
     params = tables.read_csv(paths.require(ATLAS / "full_fit_parameters.csv"))
@@ -452,9 +467,9 @@ def export() -> dict[str, pd.DataFrame]:
         "starcoder_curricula": tables.read_csv(paths.require(CURRICULA)),
         "starcoder_curricula_matched_nd": tables.read_csv(paths.require(MATCHED_OPTIMA)),
         "starcoder_curricula_matched_nd_confirmation": _matched_confirmation(),
-        "starcoder_transition": _transition(gradient_conflict),
+        "starcoder_transition": transition,
         "starcoder_ramp_designs": _ramp_designs(),
-        "starcoder_trajectories": _trajectories(gradient_conflict),
+        "starcoder_trajectories": trajectories,
         "starcoder_repeat_noise": _repeat_noise(),
     }
     for name, t in out.items():

@@ -8,14 +8,13 @@ from experiments.domain_phase_mix.release.configs import (
     heldout,
     ladder,
     partition_tasks,
-    starcoder,
     swarm_llama,
     swarm_qwen3,
     validation,
 )
 
-# Each exporter with the exporters it runs itself, whose files are theirs to list. `fits` and `domain_sweeps` test
-# their own lists. The StarCoder export needs no context.
+# Each exporter with the exporters it runs itself, whose files are theirs to list. `fits`, `domain_sweeps` and
+# `starcoder` test their own lists.
 EXPORTERS = {
     partition_tasks: (),
     swarm_qwen3: (),
@@ -23,7 +22,6 @@ EXPORTERS = {
     heldout: (),
     validation: (),
     ladder: (partition_tasks,),
-    starcoder: (),
 }
 
 
@@ -47,10 +45,7 @@ def test_required_sources_are_the_files_the_export_reads(ctx, monkeypatch, modul
         upstream.export(ctx)
     upstream_reads = set(read)
     read.clear()
-    if module is starcoder:
-        module.export()
-    else:
-        module.export(ctx)
+    module.export(ctx)
     required = set(module.required_sources())
     assert required <= read and read - upstream_reads <= required
 
