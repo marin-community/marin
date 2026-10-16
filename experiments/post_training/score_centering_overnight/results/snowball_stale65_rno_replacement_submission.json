@@ -303,9 +303,9 @@
     "gpus_per_node": 8,
     "priority": "batch",
     "diagnostic_only": false,
-    "submission_authorized_after_preflight": false,
+    "submission_authorized_after_preflight": true,
     "native_preparation_passed": true,
-    "native_submission_confirmed": false,
+    "native_submission_confirmed": true,
     "changes": "Only run-owned identities/output paths and provider/client configuration;all model/data/loss/optimizer/noise/capture/deadline/evaluation/checkpoint/full130 fields unchanged.",
     "actual_decoded_changed_fields": [
       "run.id",
@@ -337,10 +337,134 @@
         "uri": "s3://marin-us-east-02a/tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce",
         "observed_empty": true
       }
-    ]
+    ],
+    "resource_board_ids": [
+      1127,
+      1128
+    ],
+    "before_submit_controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T085532",
+    "first_two_stale_update_admission_proof": "snowball_stale130_rno_first_two_update_admission.json",
+    "first_two_stale_update_admission_sha256": "f1ced8d9bf8303426adef7938d147ea3add5d3650936d8e831c06d4e4c909a28",
+    "latest_empty_output_roots": [
+      "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce",
+      "s3://marin-us-east-02a/tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce"
+    ],
+    "native_submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/matched-fresh130-after-stale-admission-native-submit.log",
+    "native_submission_log_sha256": "5630b6b47b7eba7394d73dd88b0be698ecae7cbcfbeaa47d0fd1e6893a73d78f",
+    "status": "Controller confirms5BATCH H100node-tasks physical0. Actual native rows and allocation state retained; full130 control and stale calibration remain incomplete, no stale1200 configuration freeze/source promotion.",
+    "controller_confirmation": [
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "bbf7f6225d48d39a45984386e269bbe26f9e2d584c246822a9d49eefa577a89a",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "1932735283200",
+        "res_disk_bytes": "536870912000",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+        "task_id": "/romain/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "248b2c4223adbae6",
+        "task_state": "2",
+        "exit_code": "",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "bbf7f6225d48d39a45984386e269bbe26f9e2d584c246822a9d49eefa577a89a",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "1932735283200",
+        "res_disk_bytes": "536870912000",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+        "task_id": "/romain/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce/1",
+        "attempt_id": "0",
+        "attempt_uid": "f6282b200189e9dd",
+        "task_state": "2",
+        "exit_code": "",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "bbf7f6225d48d39a45984386e269bbe26f9e2d584c246822a9d49eefa577a89a",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "1932735283200",
+        "res_disk_bytes": "536870912000",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+        "task_id": "/romain/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce/2",
+        "attempt_id": "0",
+        "attempt_uid": "9b440a71fe3191e1",
+        "task_state": "2",
+        "exit_code": "",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "bbf7f6225d48d39a45984386e269bbe26f9e2d584c246822a9d49eefa577a89a",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "1932735283200",
+        "res_disk_bytes": "536870912000",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+        "task_id": "/romain/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce/3",
+        "attempt_id": "0",
+        "attempt_uid": "b34f8c2cbc914e7a",
+        "task_state": "2",
+        "exit_code": "",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "bbf7f6225d48d39a45984386e269bbe26f9e2d584c246822a9d49eefa577a89a",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "1932735283200",
+        "res_disk_bytes": "536870912000",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+        "task_id": "/romain/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce/4",
+        "attempt_id": "0",
+        "attempt_uid": "12ce69e0dc2a9971",
+        "task_state": "2",
+        "exit_code": "",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      }
+    ],
+    "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/cpu-owners-memory-and-stale-controller-20261016T090128.csv",
+    "controller_snapshot_sha256": "d18bb0bc3c4a9e3fedc879377aec79b268a57e2425c02d2b3a915e5af7d20090",
+    "native_bundle": "bbf7f6225d48d39a45984386e269bbe26f9e2d584c246822a9d49eefa577a89a"
   },
-  "matched_fresh_submitted": false,
-  "matched_fresh_submission_gate": "At least2actualfinite staleupdates with aligned natural128/chosen-q/TIS2,actualgeneratingversion0atsteps1/2,unchangedmodel/data/grader/geometry and append-onlynativearchives;full130calibrationsbeforefreezingstale1200main.",
+  "matched_fresh_submitted": true,
+  "matched_fresh_submission_gate": "At least2actualfinite staleupdates with aligned natural128/chosen-q/TIS2,actualgeneratingversion0atsteps1/2,unchangedmodel/data/grader/geometry and append-onlynativearchives;full130calibrationsbeforefreezingstale1200main. Actual first2 gate nowPASS: one native advance OverflowError is retained with unavailable verdict/empty trainable spans/zero native reward/matching failure-mask-baseline counts. The auditor-only zero-error assertion was absent from the recorded gate and has been corrected; no scientific recipe or evaluator changed. Full130 remains incomplete.",
   "current_native_allocation": {
     "controller_attempt": 0,
     "all_five_tasks_running": true,
@@ -455,5 +579,32 @@
       }
     ],
     "scope": "Actual native allocation/start only; first2capture-version-finite-archive gate and full130 calibration still required. Matchedfresh130 unsubmitted."
+  },
+  "first_two_update_admission": {
+    "proof": "snowball_stale130_rno_first_two_update_admission.json",
+    "passed": true,
+    "finite_applied_updates": [
+      1,
+      2
+    ],
+    "actual_optimizer_ages": [
+      0,
+      1
+    ],
+    "generating_policy_versions": [
+      0,
+      0
+    ],
+    "physical_records": 5820,
+    "native_masked_failures": 1,
+    "available_native_verdicts": 5819,
+    "probability_capture_scope": "Two retained learner rows per update,8and10loss tokens; full native response membership checked separately.",
+    "audit_correction": "Removed an auditor-only zero-native-error assertion absent from the recorded admission criteria. No model/data/loss/optimizer/source/cadence/verifier/deadline or scientific endpoint changed. Native environment/verifier errors must satisfy the existing mask contract; serving errors are not admitted by this correction.",
+    "retained_manifest": {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/admission/first-two-20261016T084236/admission-manifest.json",
+      "bytes": 504295,
+      "sha256": "38795a8c0a1eb6296be0185efe96044e5734aca0d758f913630c9e9807f8bf54",
+      "full_byte_readback_verified": true
+    }
   }
 }

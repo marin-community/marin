@@ -1,0 +1,1640 @@
+{
+  "run_id": "sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "scope": "Actual first two stale-calibration updates only; neither full130 calibration nor1200 main endpoint. Full response membership is checked in native archives; probability/TIS alignment is checked on the two retained learner rows per update, not all512 learner rows.",
+  "planned_updates": 130,
+  "controller_attempt": 0,
+  "archive_after_ms": 1792136623531,
+  "sampler_refresh_period": 65,
+  "sampler_generating_versions_checked": [
+    0,
+    0
+  ],
+  "learner_evidence": [
+    {
+      "step": 1,
+      "gradient_norm": 0.20478664338588715,
+      "age": 0,
+      "sampler_completed_updates": 0,
+      "logical_rows": 512,
+      "retained_rows": 2,
+      "retained_source_row_indices": [
+        0,
+        1
+      ],
+      "excluded_from_baseline_count": 0,
+      "loss_tokens_checked": 8,
+      "metric_sha256": "6774ea33b54a0c1404e254bfaf2f7c7b4d03e34c58c4965d34b46626785e6292",
+      "capture_sha256": "9499ed3eb8f8a69c3dc3d67fae441bd368b433b0d8984256402f91f957cd5a5f"
+    },
+    {
+      "step": 2,
+      "gradient_norm": 0.19189420342445374,
+      "age": 1,
+      "sampler_completed_updates": 0,
+      "logical_rows": 512,
+      "retained_rows": 2,
+      "retained_source_row_indices": [
+        0,
+        1
+      ],
+      "excluded_from_baseline_count": 1,
+      "loss_tokens_checked": 10,
+      "metric_sha256": "e7527e032baa4e9a1fe6a07d52e14ccf1cdee9a43496a0df9b14aa9f1ab8effd",
+      "capture_sha256": "f7119b7f06d3506192dbc0f498c612865d4c103f55df24daa0b92ed5af30b730"
+    }
+  ],
+  "native_training_responses": 1024,
+  "native_initial_evaluation_responses": 4796,
+  "native_errors": [
+    {
+      "phase": "train",
+      "step": 2,
+      "instance_id": "202",
+      "repetition_id": 2,
+      "record_id": "6abd6aec3a6dfc88003f66c18734eb8df43b2ea549041387ca0bb29b711f3ea9",
+      "exception_type": "OverflowError",
+      "operation": "advance",
+      "error_treatment": "mask",
+      "native_verdict_available": false,
+      "native_trainable_spans": [],
+      "native_outcome_reward": 0,
+      "native_shaped_reward": 0,
+      "archive": "attempts/trajectories/schema_v5/archives/phase=train/step=00000002/4cbeef94cd0aef1e5a766136f3230d2eada1e72f049c36035c927e8daf51e910.zip",
+      "archive_member": "records/6abd6aec3a6dfc88003f66c18734eb8df43b2ea549041387ca0bb29b711f3ea9.json.gz"
+    }
+  ],
+  "native_failed_physical_responses": 1,
+  "native_available_verdicts": 5819,
+  "native_failed_response_treatment": "Count each physical record; retain unavailable verdicts and empty trainable spans; verify zero native outcome/shaped reward, failure/mask metrics and baseline-exclusion counts. Do not regrade a placeholder or assign an available original verdict.",
+  "admission_audit_correction": "Removed an auditor-only zero-native-error assertion absent from the recorded admission criteria. No model/data/loss/optimizer/source/cadence/verifier/deadline or scientific endpoint changed. Native environment/verifier errors must satisfy the existing mask contract; serving errors are not admitted by this correction.",
+  "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/cpu-owners-memory-and-stale-controller-20261016T084236.csv",
+  "controller_snapshot_sha256": "58a723fb018d94739f5f10e14bbbf6d8e036cff1943462db68a8b815e244a3ab",
+  "source_inventory_sha256": "55c378cf36d94523a58f09aa947310232474876e3e11bca3b28bd39e61a36cda",
+  "offline_existing_capture_snapshot": true,
+  "archive_inventory": [
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/f50a87572580b9df4e7b936f809d048263ef42d9315bb260e79012a6f20146f4.zip",
+      "Size": 10073,
+      "ETag": "\"aeaf338c3a577dbf9c94c04e869b2ef6\"",
+      "last_modified_ms": 1792139677702
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/7302ab7d7a63a69474d885305c8540fb20dc8c9ae356e5971cff296ddef088c7.zip",
+      "Size": 23344,
+      "ETag": "\"7a6e6cb7b04437fcc490e86c6670b88c\"",
+      "last_modified_ms": 1792139654906
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/36f3ea44e1794a35c81bc5629f8c5fd1eb1795f91bcda55c84daff78844a758e.zip",
+      "Size": 17808,
+      "ETag": "\"4b68c164e52a5929f56eb717ac5c00d2\"",
+      "last_modified_ms": 1792139684939
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/ba42dbad12815f9a9b4214cba6551dff76f1dc7c90db57831c9891b958ba8697.zip",
+      "Size": 23271,
+      "ETag": "\"d6afcc82aff04ddeca4da25dd8105eb9\"",
+      "last_modified_ms": 1792139587623
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/93a4a9da7a54448f9937140064d0d3238d2751230f62fbfd937752db74f49897.zip",
+      "Size": 25917,
+      "ETag": "\"94eea6a21d30ad8d5f12141db37bbd0d\"",
+      "last_modified_ms": 1792139701187
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/ece1531c4a74518d77d01492eac18c878c0156c1e20f42ab4ef6656904b8e364.zip",
+      "Size": 14829,
+      "ETag": "\"092146868525e95ac41efe5979f6e342\"",
+      "last_modified_ms": 1792139671661
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/dd0499ed198d3616302c461a3c67461d5c39577fd4cea9a7cb1d1d1d16030609.zip",
+      "Size": 23084,
+      "ETag": "\"7e1f6d4eebed8f016c791cc7e886194b\"",
+      "last_modified_ms": 1792139604856
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/01a3fac1d556939fb4f2a0f5da7f79b8b735b727e640d0a255fd1df9450abfd5.zip",
+      "Size": 12513,
+      "ETag": "\"35ba1a722c16cd4e9c60a8a04ef9436a\"",
+      "last_modified_ms": 1792139577015
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/2ab913411b9de2584320fd6dffb6eb03ddf96b53b11785063306441a42f52bd8.zip",
+      "Size": 11766,
+      "ETag": "\"58242182704c5ca643e1fddcc9685f77\"",
+      "last_modified_ms": 1792139552899
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/dbbfee2c5399c038c3c3c35d1a540853820759d375230faae2d3dafd139b551b.zip",
+      "Size": 9901,
+      "ETag": "\"a606d5957301b402f4b14ce5a73b6387\"",
+      "last_modified_ms": 1792139567020
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/a940ad2d85f87afd2bc36ca82019798b1b2f437eb985fe74d6e06ff5f2a7ed24.zip",
+      "Size": 16429,
+      "ETag": "\"0b7b4f6f040c6342c15f18ac3e7657e9\"",
+      "last_modified_ms": 1792139679974
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/fed72d40f045616516c377bfcd6e1773912aea909686ccc071b52afb3f7f065c.zip",
+      "Size": 18527,
+      "ETag": "\"628ef1f3ba9e8d4131171fd170bc1f20\"",
+      "last_modified_ms": 1792139717906
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/3f5ee59b990cbfe9ecaa49d16646aa05d0c169958173067209bfff4eeeda31e7.zip",
+      "Size": 16017,
+      "ETag": "\"a33986358c2394c9b886712636bf5513\"",
+      "last_modified_ms": 1792139589201
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/6df577b3c2ad77dcdc3ea561cb7bc36c48d749909c1d00019de1fbc460229cc9.zip",
+      "Size": 15685,
+      "ETag": "\"aa308165bf673c20f5181eceae85fe38\"",
+      "last_modified_ms": 1792139584679
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/711101e4e15449f9f682d2a9487c1e974d52a635c542b8ea89fdf141f2a9a262.zip",
+      "Size": 28823,
+      "ETag": "\"46ded6fb80610c56b521f93aef563408\"",
+      "last_modified_ms": 1792139625565
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/7c383a855fa5fe5d3c408bdf68fa1fca647dff1edda712b0a990635723a04bc7.zip",
+      "Size": 28045,
+      "ETag": "\"cd1480331a57373ba94dc6777131166f\"",
+      "last_modified_ms": 1792139673157
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/521ec9f28c622dda610f37be98556236a5ac23d2431896da21d49a93dde09789.zip",
+      "Size": 21486,
+      "ETag": "\"6b62b64b92eb65eb5544125f59fd537d\"",
+      "last_modified_ms": 1792139641603
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/a4674cc9706f945221595f9a61b4c1c1a9682f9742e3e3627611524df3b8be74.zip",
+      "Size": 32665,
+      "ETag": "\"71178c89fe0980f2836dabb2e6631801\"",
+      "last_modified_ms": 1792139616351
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/bea61749b746741fac6bbc6b71f0ff1500f7cd07278806fff5d57e36b3f12872.zip",
+      "Size": 13917,
+      "ETag": "\"4d13aaaa4bdc05410df3ae799e6e38db\"",
+      "last_modified_ms": 1792139559216
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/df2af30f61cd80f2ae3f9d1f4b0695abd35f1a51aacdf7105993e8413cda3b66.zip",
+      "Size": 13468,
+      "ETag": "\"9450d4916789bccc8b7863565fbca889\"",
+      "last_modified_ms": 1792139582769
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/92801cb892e376062fba3a38e1ea72bcce57695d3594dda20c9ab8d3c2331ba8.zip",
+      "Size": 35479,
+      "ETag": "\"6b42f5826a366e4dd7f4f82c8cd8918f\"",
+      "last_modified_ms": 1792139660950
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/77bb4cdcd84c92537520fd251ce3df763b360cde3022466ea8a228f2c99d2732.zip",
+      "Size": 12598,
+      "ETag": "\"e9b76e8111740fe2a2cb9f25766bf0d2\"",
+      "last_modified_ms": 1792139547220
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/8709a395b8a7f7f0d1428abf42dbd91c17a58df2540eb563f4391735994e2508.zip",
+      "Size": 44081,
+      "ETag": "\"9647aef76fb738349f12db3cbacc7c10\"",
+      "last_modified_ms": 1792139666796
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/d246a5175d633c6f138a3cb5151b7fa1e0647fa3b81de7f8e9789125e50379ac.zip",
+      "Size": 20032,
+      "ETag": "\"641eb8aabba7f5c250ce3f43825a965c\"",
+      "last_modified_ms": 1792139570720
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/06735e15581977cf9d648f30619e9fc82d6dfe705ce4f782528ae06f8a4c9906.zip",
+      "Size": 13064,
+      "ETag": "\"4c38d7e16d9ef225caeb2e568c382ed5\"",
+      "last_modified_ms": 1792139548787
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/22afed2d8cdc5eb16c3a8e07dbf19104576bd87eb8115b66ae0ef25c9ec8ad8c.zip",
+      "Size": 12974,
+      "ETag": "\"e75209eaaeecf267fcce6a4d0fafbb96\"",
+      "last_modified_ms": 1792139585122
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/bccff1b27942fd624062e01bbf8a1e14e63668bfa44c8f21e830a3ef12a38b41.zip",
+      "Size": 11690,
+      "ETag": "\"f1ac2065d754b75640987ae5344030db\"",
+      "last_modified_ms": 1792139553893
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/2277c6e2136ca4ebe822a11fa11fb78c542ed41838da06844b826fedf6884983.zip",
+      "Size": 11606,
+      "ETag": "\"a56d16cadf6fac17d1e9c9cb98f963f1\"",
+      "last_modified_ms": 1792139666307
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/7e4c4d880860a70b12877fa67b33b5e33b20baea549832825a6125431b881bc2.zip",
+      "Size": 11129,
+      "ETag": "\"a1c60e2c3e2fa9d4a632484bf44c84fa\"",
+      "last_modified_ms": 1792139671143
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/8193e598782c871afa50453ff51f947616f5f90d83f55c086f8f90f6652f8d78.zip",
+      "Size": 31422,
+      "ETag": "\"f54a43ae50632391d54850471d67339c\"",
+      "last_modified_ms": 1792139655355
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/10993f8ac5c881c8ab767ed0d5c46bd3ffd541abbe1566972a81664a18e8cce1.zip",
+      "Size": 11350,
+      "ETag": "\"98d6c4cdea551d0c23bab772f2adf716\"",
+      "last_modified_ms": 1792139655800
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/e1c4888cdea1c40f882e67e431ab6080bee6c0eb2765eebf9945acac7667a893.zip",
+      "Size": 18273,
+      "ETag": "\"137137ba332a5bff8df8950b09179044\"",
+      "last_modified_ms": 1792139642048
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/e6eaeb288c81fd18fad4688b74255278fcb77d85b0ed3f9f021599a1509bc0b3.zip",
+      "Size": 32991,
+      "ETag": "\"9302179e8f8396072ea65fb2f228aece\"",
+      "last_modified_ms": 1792139605656
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/2c9dbdbf19e37db69f0b0df35fedf5299136a6d1e43ed90f9981430d1078c146.zip",
+      "Size": 23454,
+      "ETag": "\"c29d6857a218aa990a0d35a8170fce92\"",
+      "last_modified_ms": 1792139720549
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/da90c1e86c7cf21b7d9b05cc7d711eab5ca7b9f71babcae3ec40e87c46421395.zip",
+      "Size": 36778,
+      "ETag": "\"f15f840465438abf6a830a06b761fedf\"",
+      "last_modified_ms": 1792139631008
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/cd1a508190348571984f6884e7f9ad6a62e94e99d12aadbedba2fcaa210cf090.zip",
+      "Size": 21378,
+      "ETag": "\"485b917338073b39e8287fae67ac5dea\"",
+      "last_modified_ms": 1792139615418
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/a5884c7ca1c35f6807dfc83fe229e1cab52e10ab8597f0bc31a4726323bb99a1.zip",
+      "Size": 19190,
+      "ETag": "\"d614925c6ae5ca3fb991f12eb4a8885b\"",
+      "last_modified_ms": 1792139581112
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/65bfd411049cede31da3d70e6f0d1e99d51a6079a02c98a440172617495a3686.zip",
+      "Size": 12266,
+      "ETag": "\"8ac25b603572fa99b180415e4463cc30\"",
+      "last_modified_ms": 1792139588077
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/3d75aae69cc1d7dbccb710d2333ce6e8d060212da0e56ff3352f58f3e6a2d16f.zip",
+      "Size": 39225,
+      "ETag": "\"665fb8209be5ed54a51fed84606f01d4\"",
+      "last_modified_ms": 1792139653553
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/89864fba1bcc3c99aebf494c59a1e1a0c49cbc25716b950426ecda4e2421f6f8.zip",
+      "Size": 27325,
+      "ETag": "\"c3714b6c3c3e2c1813c40d69ccf2d4ed\"",
+      "last_modified_ms": 1792139624754
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/86e9ce5a8a3c3eabcc8af05526afa80f4692c094db48c27b234cc20c6b41b20e.zip",
+      "Size": 22413,
+      "ETag": "\"26c85ff2c60f0133895b8bfd92883362\"",
+      "last_modified_ms": 1792139621594
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/5616d3a19294eb8b9c2196b3ae3c061c62a35f5028efba55f3756c09b302e14c.zip",
+      "Size": 29976,
+      "ETag": "\"9e3dc1b84b47c245cd4eb22c2f282b1e\"",
+      "last_modified_ms": 1792139652153
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/f4f69cfb293e85881a50174e5c73d7dd4d6697bd60e2763ff7b7f19a74ca174b.zip",
+      "Size": 9718,
+      "ETag": "\"e270abbe269a56518769661643a2026c\"",
+      "last_modified_ms": 1792139677241
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/ab6a05385b99b87004746749a73ea18e49ad997e6722f85b273656eab11da97f.zip",
+      "Size": 48994,
+      "ETag": "\"4dad8cc8059d52a1831e5102f2f23c11\"",
+      "last_modified_ms": 1792139669176
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/e18d0dd65ea8cd98962df4fca92dad03757cfd5d018e5e4477579c1d53d15c64.zip",
+      "Size": 16492,
+      "ETag": "\"e7a9a5db1ffd4dcaa2cf60d56a518ec3\"",
+      "last_modified_ms": 1792139617243
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/18061447bbeab92a9f7df12e1308d6fe8c0dc778b12f2c81f886314470c13771.zip",
+      "Size": 12229,
+      "ETag": "\"a98a673a47064a1aeeaf8c16dfa6c1fb\"",
+      "last_modified_ms": 1792139597671
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/8a3c1c83bdd1ec1d89c4570c290f768bf0e1fec3433d1f22f5086126f0b7a71a.zip",
+      "Size": 33682,
+      "ETag": "\"869f3b6c74f61955019db33806b0a96f\"",
+      "last_modified_ms": 1792139718741
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/272d06784045b33c0b816e15ae35f9c655dc4824ffb41094454903b6adcf6724.zip",
+      "Size": 19555,
+      "ETag": "\"b9be07af5a08d7d0535be111bfee5224\"",
+      "last_modified_ms": 1792139614029
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/a0657ebcdb7269c5754ad0141017c802e305aee16a3ddffffbb29359da09ca6d.zip",
+      "Size": 17873,
+      "ETag": "\"ee7ba7e9294648b43d88091651512ef3\"",
+      "last_modified_ms": 1792139574461
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/28bd5fa9151c3e162612aa23ba13f920812ee0d192f456f0589eb156a6998ad5.zip",
+      "Size": 36761,
+      "ETag": "\"b088969e7d612d852aeee9eaae5ed433\"",
+      "last_modified_ms": 1792139701640
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/75e0b692e38dc4b7036f12c8b7a088535c6fce07ecdd6588c38db72dcda7ba7a.zip",
+      "Size": 14685,
+      "ETag": "\"3f73dc07daf9258925983ae2ae111a6e\"",
+      "last_modified_ms": 1792139678609
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/669c61dc717cf09ac707c8e24fa322d603789f7e08b5aef4712779d06109b162.zip",
+      "Size": 11172,
+      "ETag": "\"5f97e35408409f991251a4b4f42565a9\"",
+      "last_modified_ms": 1792139659964
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/687eab71650eee7b3cb7b5b86bb736494345ea413d657edb7cb3547bc8d0e823.zip",
+      "Size": 18617,
+      "ETag": "\"f112e0f2b996e1d597934970b1f94e0f\"",
+      "last_modified_ms": 1792139679080
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/1d42adc6e3799f1fd6b7870e0717222808e19eacb3a6497182fec258fad28d1d.zip",
+      "Size": 13606,
+      "ETag": "\"a080030c601a3676e53cd5d78038d4b8\"",
+      "last_modified_ms": 1792139552367
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/d9c4ad0237258b084ce44ef5e5e2b71a2a2f261485f88c6617d5e196e875567e.zip",
+      "Size": 10607,
+      "ETag": "\"e96576e1dd27aba3f2b36d2b791777a2\"",
+      "last_modified_ms": 1792139680707
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/e3ebf97863538cc405cd746b8a609545cb1cc763cb892bad46f680b5d9be0d9a.zip",
+      "Size": 12636,
+      "ETag": "\"013cc0c7bc475b6ac2329ff6ab81cfcb\"",
+      "last_modified_ms": 1792139551022
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/4141ba621cd339a8ac8dc98ea9cfc75a75ce65aa7ecbf14ab29530e26b8b96b8.zip",
+      "Size": 13313,
+      "ETag": "\"af23a864aa10c8dcdc31c84c18f8f4c0\"",
+      "last_modified_ms": 1792139652614
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/a71c81165ac02a16e97b9f727733b7beb95d17b91b6449c3b18a10dbb8f68321.zip",
+      "Size": 28457,
+      "ETag": "\"078d40c561375d7e648909af632f88af\"",
+      "last_modified_ms": 1792139629843
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/d6c3335dbfc553e6fae4b37781f0112b74c91cbed7327573890ca9dc2c027ab5.zip",
+      "Size": 34413,
+      "ETag": "\"73cfe9da9a59271147b44d5fc10daf5c\"",
+      "last_modified_ms": 1792139602113
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/0cb4d49d3a73577f48038e8b65296a35f73c779ed21533ae41fd58d47f6976eb.zip",
+      "Size": 12009,
+      "ETag": "\"b2e19535be036b170c505729e9b58d71\"",
+      "last_modified_ms": 1792139679536
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/36a95513103872c22e7a87c9c694979b20e1196bd124c57ea25ce541d09f651a.zip",
+      "Size": 12947,
+      "ETag": "\"f281aa5a9f048b1e04b836cff8fd87a3\"",
+      "last_modified_ms": 1792139579798
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/0403b8d7c63859aba5f6002bf365081beae99f01565f37c9c174b8562ec7f268.zip",
+      "Size": 17935,
+      "ETag": "\"fa6965291da06d56c71cf3ec86c9ddf5\"",
+      "last_modified_ms": 1792139675588
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/b55556526b1b1462abe464d5aff46cc0332ff4083cc1400723cbefd78b36fbef.zip",
+      "Size": 11298,
+      "ETag": "\"b46461f5549d3e186ee13792a255433a\"",
+      "last_modified_ms": 1792139614560
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/f094fc904bf38d19952cf63ce88d1d47da933ac7aa8ea346de64a61a288150f7.zip",
+      "Size": 52239,
+      "ETag": "\"8f0ea3c1f612f12eb30f0f87650145bd\"",
+      "last_modified_ms": 1792139653088
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/ad39a1fc10232ec961fb7cfa1dc4dc579f63c080a8ef905e693eb4a2794b91c7.zip",
+      "Size": 33920,
+      "ETag": "\"908293499b3e25f678b545a5d1aa0009\"",
+      "last_modified_ms": 1792139614999
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/28de7da55b2571f691d53062a9fad497cb04f8038db76e54bc9d4520933d460a.zip",
+      "Size": 12903,
+      "ETag": "\"27687a7d31071effbada37d99bb41576\"",
+      "last_modified_ms": 1792139659544
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/3850433f517b7ffe3298b9366abdb35c0c45447c3700a790dd142ed5389f5739.zip",
+      "Size": 12513,
+      "ETag": "\"eb11ac7ad7a4384c426d34aa9ca2a118\"",
+      "last_modified_ms": 1792139577904
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/4cbeef94cd0aef1e5a766136f3230d2eada1e72f049c36035c927e8daf51e910.zip",
+      "Size": 27572,
+      "ETag": "\"c8f7b7cf9ffc8adf53e61bc3a93bd51d\"",
+      "last_modified_ms": 1792139642918
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/d7453c6665d9c9191ebfa30a0c5a99076b6fadaad9066af8debd9c1dc3e7a77a.zip",
+      "Size": 13612,
+      "ETag": "\"8869cc09739a268a6c163519bf4a5fdb\"",
+      "last_modified_ms": 1792139662564
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/abb105eb9eaa574709d92f517da1d512333992f019b6164a062c9947b53e6789.zip",
+      "Size": 13111,
+      "ETag": "\"e3a19264a00c325c409f21da1fcc632c\"",
+      "last_modified_ms": 1792139610420
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/872ec0af77b876ef7a5520b4cc160702e1ba983686fb63ffb30575f27c10c76a.zip",
+      "Size": 12943,
+      "ETag": "\"0d79b872a95a0fcacc82145cc9488858\"",
+      "last_modified_ms": 1792139577456
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/24391bb3c29f6cf1e16f0cf39073bffa6e9c036b0cfcef43de04a0636620c114.zip",
+      "Size": 23547,
+      "ETag": "\"e6c2590c8f0819b07a0439053d84dd65\"",
+      "last_modified_ms": 1792139702154
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/74eea4b992568e526ea9d31b9a7ac22330b8d104fa65e04762b185a6fd34b4dc.zip",
+      "Size": 14998,
+      "ETag": "\"04ba04cae38629f6b8231f47e4bee25d\"",
+      "last_modified_ms": 1792139587153
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/af9de1b02fe64ac40c0861748a6124a6d26af64ad86dde6fa40e21352636d75c.zip",
+      "Size": 11939,
+      "ETag": "\"1b5034289a5c04e310022592b94f32df\"",
+      "last_modified_ms": 1792139546777
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/c637e8509f6148ef43ced2ccca6d0cae34407f23016c588f8950ad9ac216e6e4.zip",
+      "Size": 10019,
+      "ETag": "\"c88d4948e23edb31e852f23997dd52b6\"",
+      "last_modified_ms": 1792139543814
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/1c7d334d9bf01ff343a45249e61d1590d76505954ba228104d53379e614ef2d5.zip",
+      "Size": 23436,
+      "ETag": "\"5e947ade48c8aadfab9cac99036bee63\"",
+      "last_modified_ms": 1792139597034
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/8cf157203231aabc526f9d2907cc2e79ce40351f5dc6c56efc85c1cdeb7b67bb.zip",
+      "Size": 16023,
+      "ETag": "\"c1eacc156289f3b4f076c8a84c83b64d\"",
+      "last_modified_ms": 1792139560060
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/28b7907d9c9343440aad89dbed84f74c0035e0ec5e6edd163052ebf2fd435104.zip",
+      "Size": 18912,
+      "ETag": "\"89ff9c146b848f99dd45e10b717f7ab6\"",
+      "last_modified_ms": 1792139566566
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/18f92cca5f7e7a3ffed50cdb39ef851f2930135075d9f3700889699cfb29290b.zip",
+      "Size": 22345,
+      "ETag": "\"fd4c3b660696e82c99fdccc2b42744c8\"",
+      "last_modified_ms": 1792139603586
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/e09eed83f2b5e5ba6b911193bf2a86b68e915e952db97ae302eff16bd8f270bc.zip",
+      "Size": 20864,
+      "ETag": "\"f33f9398cf64a96fa8901bce52d61ca9\"",
+      "last_modified_ms": 1792139687563
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/b2051c59485d90af4c080a04841f5dc840efc37f1085ab2ba34c24b25e3a3ee2.zip",
+      "Size": 14244,
+      "ETag": "\"176cb19d0be8dc9cfc9d2cdc3bc7c725\"",
+      "last_modified_ms": 1792139601255
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/1feb5331a607d363bc9c7210b4db8559c9b17ce90ee72fb9ae5c25748d627e5e.zip",
+      "Size": 11058,
+      "ETag": "\"38f1e5d93ee190db96bd22a09303cc38\"",
+      "last_modified_ms": 1792139658230
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/0be12572482af4ecedfc2443dc54ec9e5d305cecd7f345e66cdca0a58485a66a.zip",
+      "Size": 31362,
+      "ETag": "\"247950e83b36ce152283fff10ae9710d\"",
+      "last_modified_ms": 1792139704882
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/536a4abe3ce3938f4277a6826b86ea6dc2077afe14072fbd8c99c56eb94e517f.zip",
+      "Size": 11131,
+      "ETag": "\"279e843f19e76f23d69a4784bdc6b5e0\"",
+      "last_modified_ms": 1792139676761
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/d21a8690c3971d6ebaa4349a7adc376c06fe0e6befe9848ad9e863ab0def670a.zip",
+      "Size": 47922,
+      "ETag": "\"445675abf8057f3896bae8ee7d349507\"",
+      "last_modified_ms": 1792139651655
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/4c2b82af84c87963f683f42ac5757241e74c277a017812f54d3f2add00ac1a5f.zip",
+      "Size": 9276,
+      "ETag": "\"8bf9abc297af085215f05ea462eea618\"",
+      "last_modified_ms": 1792139542242
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/bce9e8f99565a96eb35287c36105c9665fa2450c8e1106ed7be13ac7c25bc495.zip",
+      "Size": 15387,
+      "ETag": "\"994debf4ee472697e10d03309bfdb5f1\"",
+      "last_modified_ms": 1792139675165
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/c3bdbd8125e105c492e0a0bacb7878a6f4bb6c89ae9665ead4c4a8a0d1a07890.zip",
+      "Size": 11268,
+      "ETag": "\"b2acbde3032f2911d3402775ff707a75\"",
+      "last_modified_ms": 1792139545941
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/4916b3bb10db2ba4969167612c680de47afb9ae6686329b60c5151012d682f61.zip",
+      "Size": 12699,
+      "ETag": "\"461e7bc854c134a8e6ec63b030489006\"",
+      "last_modified_ms": 1792139549861
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/ddd8445d243c16e82a52f435f80eb03f4b192dea62d26c26d82e75486ee790b3.zip",
+      "Size": 24719,
+      "ETag": "\"244649f4b508a8ff393d187929ba188f\"",
+      "last_modified_ms": 1792139654013
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/6be0f9664b1a5861e505197aa8de9e2c9f45f2567811d997ef58bf5f5bb12c3f.zip",
+      "Size": 24544,
+      "ETag": "\"6b1773488c5ca352dfbcdb91b7ef45fe\"",
+      "last_modified_ms": 1792139719646
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/680615287c00bf0f2056f807efb0bb17dbf6e817325dd15407040ff230205a09.zip",
+      "Size": 14273,
+      "ETag": "\"f0cc17773c54303dafc8148b921b3096\"",
+      "last_modified_ms": 1792139580249
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/474405517a4b42392d0ac62145b4cb3ed35fef0d1802bd63a209c81f0518fb32.zip",
+      "Size": 19890,
+      "ETag": "\"6ed5d92deb77d6e997d8a130167b64d3\"",
+      "last_modified_ms": 1792139569646
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/71b4120bc00b003f22c658eefa8d9e2457a1afae5d5d49646ad6eab6d6c73633.zip",
+      "Size": 30947,
+      "ETag": "\"5b0ec51d7783ce6f7fc614e9064dd63a\"",
+      "last_modified_ms": 1792139656536
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/2db0d724b53b6fa96e98c7ea60e5f9d96b83c7831a4e3520bd23790a66f39376.zip",
+      "Size": 32990,
+      "ETag": "\"37f511099cfd90d4e982e4d70273c7f6\"",
+      "last_modified_ms": 1792139705913
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/596b78bb61683ae720176a25684f69746b44d2af5fa5ba2234b9a6bea41408e3.zip",
+      "Size": 10723,
+      "ETag": "\"9d8b3f791d9dcecda5ff2dc7c56a0a03\"",
+      "last_modified_ms": 1792139545488
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/0a2d7439f3dc753df661795279bfee77e1a34f120c39ff92288314a254cd4948.zip",
+      "Size": 12755,
+      "ETag": "\"edcc716bdce0e8d4f0d5663054b4de51\"",
+      "last_modified_ms": 1792139551489
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/734c413f3f897eb472da302cd888055bd938bdcb12e38e2bb95883ea3106b2dd.zip",
+      "Size": 16040,
+      "ETag": "\"9390a6f2bd43fccf1432d0e8e4e83d83\"",
+      "last_modified_ms": 1792139687085
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/7ff1d3ce22849d7d76dcf69d2b16796f525a0478e0391dd9d607fdb5de0ad2c2.zip",
+      "Size": 10767,
+      "ETag": "\"60fcaf5569f1a28492c4aa6dff5f5b68\"",
+      "last_modified_ms": 1792139659080
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/4db9ce1fd93101b52b868a50a4b4552861e4ef9ab4c2f3553a381269a718ba08.zip",
+      "Size": 25221,
+      "ETag": "\"58961c81baa8bed397bd5e9e4c382c36\"",
+      "last_modified_ms": 1792139598120
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/7c04a0ccf7fc0ffcda32decde02b0adcbf49d4335fa6588d415d886de3ba3df9.zip",
+      "Size": 12699,
+      "ETag": "\"82e0e03abee5a69b80b9473d5d0f942e\"",
+      "last_modified_ms": 1792139550296
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/2022a033aced87b87d290ddddd02326034af23d975dc80d75e22252680a66c59.zip",
+      "Size": 10941,
+      "ETag": "\"15aac55c30361e9626b379a43a7db492\"",
+      "last_modified_ms": 1792139657405
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/5cbf41fa01d5a62603063167a7a0b30e86c6fa89887f270a13c2188b5dc880fe.zip",
+      "Size": 15092,
+      "ETag": "\"98369493a112d0f2e35bf0b345bcbedb\"",
+      "last_modified_ms": 1792139551923
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/7ce8970a3da0315151eb3b962af5669bf3073eaa8068da00717c52f773a45440.zip",
+      "Size": 14731,
+      "ETag": "\"c4da484848c4921599cf8d3b3ea5de3b\"",
+      "last_modified_ms": 1792139558762
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/e69a70a69c5d1a0f9ca4a0c9643e98f6ec9b73d374b67c6861447e1ff56672d4.zip",
+      "Size": 32968,
+      "ETag": "\"6a6970fcad35674105c962bd72c7ca25\"",
+      "last_modified_ms": 1792139615906
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/5de4fa2583c6bc9e2d2363828ac2ac429c6a6cdd3df9d7a1576863b68231b7c1.zip",
+      "Size": 38174,
+      "ETag": "\"811d965945f228bf186261b5c7e44a9a\"",
+      "last_modified_ms": 1792139703106
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/bd13f6be5472a9d372efaeee76799940b813354dc8b3e0246852dbd676cfb04b.zip",
+      "Size": 13843,
+      "ETag": "\"274709f8e023f5125863fdd8e1b4fb61\"",
+      "last_modified_ms": 1792139555918
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/71b621545e97ad16cb29109ae6856844703410abfb621d85d8b0db4859d3abff.zip",
+      "Size": 15412,
+      "ETag": "\"67a01eed520a3f3a1197b3bdfd3ef0b3\"",
+      "last_modified_ms": 1792139678171
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/07d4985d6fa5c1e6a1e3a40e158b67cdf1d0db5c4017eb4c34ed9285278eea94.zip",
+      "Size": 32805,
+      "ETag": "\"4c4b29875f73364a2ecd481151b8916f\"",
+      "last_modified_ms": 1792139630534
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/7297bc9722d19a56749a8dc95091aa8c6c0fc14f007f2be192c22ce72e9e548b.zip",
+      "Size": 11959,
+      "ETag": "\"1428743d935cb2833d2ef39c3bcf8bd7\"",
+      "last_modified_ms": 1792139575721
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/e0bb9039aefb5139945daea528396bfd5011448beb8a6614b7a69f879da411f2.zip",
+      "Size": 9554,
+      "ETag": "\"faca56575ebf4aa9c552f0f4ed4e0c41\"",
+      "last_modified_ms": 1792139656985
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/8f8b862ea38c06509da5e1f918703289a1633b21d64a0d932ff09d0d7cfe414d.zip",
+      "Size": 9073,
+      "ETag": "\"5d7e88c392a60cd1eb8325c14ca03cb0\"",
+      "last_modified_ms": 1792139657823
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/3e7e66819ce7ba46fb801f94e58dc9a04ac2edaf3fa2d69a11926af5a23df33e.zip",
+      "Size": 25082,
+      "ETag": "\"5c409793b26e37aadd6181da66f4358b\"",
+      "last_modified_ms": 1792139654470
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/dedbaad5dd5fa9a17f209c4d2a7754ca8498ff36c65451656a55ad1cf0a9101f.zip",
+      "Size": 15342,
+      "ETag": "\"f4fd3e282c50b98f8c57ae1571876700\"",
+      "last_modified_ms": 1792139610003
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/94a84e725d18d1d1d10aa9109c000f29662386a30e84a041f82763f495674b87.zip",
+      "Size": 16075,
+      "ETag": "\"3b9cffd10a45d239d2e1737f3a505155\"",
+      "last_modified_ms": 1792139568159
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/4ccb4661c7104acc79dd16921e2c8bc9a63d5a251f23ef816ac05855ecf45c86.zip",
+      "Size": 10072,
+      "ETag": "\"3e81242fe0b28dd49e9ce5e9b92b1cc4\"",
+      "last_modified_ms": 1792139672521
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/d6a517b8e1775eb4a702af19c7b8e72ee4af7b80b294daf82c903ce3c3403c67.zip",
+      "Size": 25744,
+      "ETag": "\"ab19c449f50fde7b9ff21c0ec6ee060c\"",
+      "last_modified_ms": 1792139719176
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/9201e8da59bda4e8b3d57e6efcb30b6214b93360c884fe549efc0531f1f1eb87.zip",
+      "Size": 13866,
+      "ETag": "\"02df8f49a07de75fc2a4446cc28150b9\"",
+      "last_modified_ms": 1792139586526
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/1b1f2e1dbbd7dc315de6a5cd27a7317fb57ef5bee3c215ee6731cb63c05ea60b.zip",
+      "Size": 36797,
+      "ETag": "\"38303254b03063710d4805291d29e16e\"",
+      "last_modified_ms": 1792139685629
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/d94967e53c2a016fd6f1bc945752f8370555ae1eb1507a846735f337392d6ec6.zip",
+      "Size": 10933,
+      "ETag": "\"df87320ca0ccce966c2e0d9a51d43b95\"",
+      "last_modified_ms": 1792139570259
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/f9aaacf0649d9e88d79913c01f68efd449476e7fb607762bad05ef07fbf260f3.zip",
+      "Size": 22871,
+      "ETag": "\"2ef62ce1fa2c26fa6b29735d6af6ef25\"",
+      "last_modified_ms": 1792139616782
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/076844d86ba6d65630f35d36c7cdf99fccac92e3c24b6758fde7059f09b7f3f1.zip",
+      "Size": 17228,
+      "ETag": "\"8e87accbd4d54a95ea7e1786b90b01b2\"",
+      "last_modified_ms": 1792139617706
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/7fbdf0a9e2589ac4018e3fd02697f6521ee6c12243a0afe9fdb045ba91da26ad.zip",
+      "Size": 11797,
+      "ETag": "\"557eff469250fe3022ed014bfb239989\"",
+      "last_modified_ms": 1792139571156
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/f90b436264dc9d5ce9f78af6dd16afb054a31d7413516dcc29131cda87ea8461.zip",
+      "Size": 24980,
+      "ETag": "\"ee93f10e2198a1082ac7a4015f32553e\"",
+      "last_modified_ms": 1792139707117
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/36e5333fc6aa3a0f78de6c337b8f77dc7e1f3d043d35bf63fa0ddcf5a80457fc.zip",
+      "Size": 35929,
+      "ETag": "\"e6f9eed32a43e19be7e6b04af2f2bfc0\"",
+      "last_modified_ms": 1792139704383
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/27abf521074cfa692ad382d66ba0a162a6858f43e8583bfaa4cffd8389f4875c.zip",
+      "Size": 19886,
+      "ETag": "\"c390a4a9efeb40799844ba6485520bea\"",
+      "last_modified_ms": 1792139581561
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/6767963fbb7a9d83b15d97aa56a50f558eda97546988f53b1a00e4ac2ac78479.zip",
+      "Size": 23961,
+      "ETag": "\"1b1afe1470c621646d7b4458460ec18f\"",
+      "last_modified_ms": 1792139689154
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/2b4d060e5c867375e748a061006dc39969207286d726b23abcdb2f5f5e75d9e1.zip",
+      "Size": 27956,
+      "ETag": "\"d8d4662c4345ea8f2579def1cc3018e9\"",
+      "last_modified_ms": 1792139720097
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/cc62d47ea022076a02aa087b70c6f23ee51e73f052ab0b87a84714d5d4cda04c.zip",
+      "Size": 11307,
+      "ETag": "\"e7f2f567f53a6748dc8147ebebceffa6\"",
+      "last_modified_ms": 1792139306974
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/cd8f4cf5537b9ea629ee3cbd25a5653cd5c1a7f4ae3f79abbf9f27499a6a8763.zip",
+      "Size": 19852,
+      "ETag": "\"1c0192b0d29f4b3835f5aabbf54a4544\"",
+      "last_modified_ms": 1792139424466
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/7a837e02b9583da85d35fe5cab6464a004a5b16ec140234b4932033aa52ef1b6.zip",
+      "Size": 12069,
+      "ETag": "\"7b5b3ac1b3f92042e61d24a2c2fcca87\"",
+      "last_modified_ms": 1792139325859
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/3e47307e8ad87abfeb0ee69e6b412f799eee910d290a6133753df5192bc47466.zip",
+      "Size": 36044,
+      "ETag": "\"9d0253d963653cd031e6b9aa169083d0\"",
+      "last_modified_ms": 1792139369873
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/0e9dc0756017c109f30b454c0124b9e334236e768a1c097b969f7b4b82e60696.zip",
+      "Size": 27577,
+      "ETag": "\"be6532b6922dc566024e0c85b6ac32b7\"",
+      "last_modified_ms": 1792139345554
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/a3c72e999acfd964853cc4758669c694fa701822356eeabf8f5c26cde86d38ff.zip",
+      "Size": 11019,
+      "ETag": "\"ba4eb768be3703871cc59d9785d3cd1d\"",
+      "last_modified_ms": 1792139373444
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ded6a337808e9b15f28e5821565f4d7a3b2974bd1b12d2128f4fd2f548531fc7.zip",
+      "Size": 42426,
+      "ETag": "\"aab8010ad647045a7d1777fcdbf36c47\"",
+      "last_modified_ms": 1792139353399
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/c4d8f4c1592f40d74dcdd9273185a89cf0224e0276624c31b4ded7a05a23da8f.zip",
+      "Size": 12081,
+      "ETag": "\"372844bf350a54d67bde5723746c21ad\"",
+      "last_modified_ms": 1792139385673
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/b6623a88bb65bf5c2447657f2209fabc38a0a57dac960b4f6c6411ff49022cb4.zip",
+      "Size": 36947,
+      "ETag": "\"dcaf0b000f1f66b378ab03b9b7827b44\"",
+      "last_modified_ms": 1792139441373
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/4ae0b24515b172288fdb1d2cb03b62d2f745c1ea85f0551727f008f8782a6e19.zip",
+      "Size": 11212,
+      "ETag": "\"a2586a8f96865b9b85be873ea58b9ab0\"",
+      "last_modified_ms": 1792139378931
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/421692a18c16e07e1daf9f0761178dfa0933bd3cb4e9c72ca94fd8a59838c171.zip",
+      "Size": 29571,
+      "ETag": "\"0de6392bf79134fa3be308fa878c9a23\"",
+      "last_modified_ms": 1792139372021
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/673d2a4fb5149653a862bf181a0b7d2e2cd1ac1d42ffd43b930effd8b3abc74a.zip",
+      "Size": 12971,
+      "ETag": "\"031b8e911c2fc8eef671e81291f60373\"",
+      "last_modified_ms": 1792139311912
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/2f527da0d17c3b04591af914fcf906527d8a4ce10eeea59b5448960c0c38eb45.zip",
+      "Size": 15877,
+      "ETag": "\"4b68b61e54ff4e66a7c209d258cb35bf\"",
+      "last_modified_ms": 1792139385238
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/6d5b21703c73f48688657aebb7051d9902f55975b9b7460fc5ed83207a66746a.zip",
+      "Size": 22449,
+      "ETag": "\"516ec55d10b40f267616328907f0c2c3\"",
+      "last_modified_ms": 1792139370738
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/f06695408a245bac8a54c365490a5c0af8641f0b224c6bf837a32f33d0724487.zip",
+      "Size": 10775,
+      "ETag": "\"93f3c77621868abdd459f71416f5d401\"",
+      "last_modified_ms": 1792139434647
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/54f9c2f5bd447ac2a8231dd523e7b55dbf91abd9897547902d529e34b9c7143a.zip",
+      "Size": 31140,
+      "ETag": "\"fefcc40d39c5a1029eef41a747e04f1d\"",
+      "last_modified_ms": 1792139346513
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/af0f7f8a9dfd5091ead7ccc3516b710195b13c940e798718e303d3e39836fae3.zip",
+      "Size": 29815,
+      "ETag": "\"d331aeb8aeacb0e71a26419776ca46a6\"",
+      "last_modified_ms": 1792139421702
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/68105b7b673d65157fb4195efab8b190cc0a520677e747044b2bb83b7334c10b.zip",
+      "Size": 11427,
+      "ETag": "\"6ff3a6b6aa4eee4bf58a2bc0802250a2\"",
+      "last_modified_ms": 1792139368483
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/cbbb7991d06c130013b4f048fb0eb7cd61e0c147d1ff182be265f383a1520e83.zip",
+      "Size": 23416,
+      "ETag": "\"56347b9a723b50b7a51473df66c10817\"",
+      "last_modified_ms": 1792139324512
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/652fed93d7a8f8f875a53cb06367a4b924139458de1e9748a8d69f17f028aae8.zip",
+      "Size": 9655,
+      "ETag": "\"4d9519bd716fb569fec555bc7f22dac4\"",
+      "last_modified_ms": 1792139280794
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/e47be065e6633f7f6f8ee10062e478bf5d06479ded154d16b18e5706e05c81b1.zip",
+      "Size": 11514,
+      "ETag": "\"c21cbd0890e88c555969d9690982a769\"",
+      "last_modified_ms": 1792139282165
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/31a77c18fd6faf7e319c885647ea75ea5d5fe281a39e9ae6b0a4032b473b9d7f.zip",
+      "Size": 19748,
+      "ETag": "\"8be9a52d0033149a18b9b59669264a7c\"",
+      "last_modified_ms": 1792139425851
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/f10c544a83643991833a3ea951b299155094e02dc8209284655efc0ede4afae1.zip",
+      "Size": 39239,
+      "ETag": "\"eab848cb864bfa9d38b3657ca3ae743f\"",
+      "last_modified_ms": 1792139449695
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/851311e2a18b19bb0b203c9f7125ad6d88ceee1e8be262de3a0d5a542d67aed2.zip",
+      "Size": 36010,
+      "ETag": "\"8d52989b9c1ecc1e542584c35e4fa8f4\"",
+      "last_modified_ms": 1792139440003
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/75d35c53810b0ee584c608c1bc06dc2af4714ede4a9faf646c6cc7ced3e21806.zip",
+      "Size": 12899,
+      "ETag": "\"b252b4b3ab3a801decbe99dfc06fafa9\"",
+      "last_modified_ms": 1792139380004
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/617e14a1934d3be0b76b09f22b462874e310a4bd1ec2d2c639970d9b6c33083a.zip",
+      "Size": 15564,
+      "ETag": "\"bd95b08e1de631e11a0498d95dd86f64\"",
+      "last_modified_ms": 1792139293137
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/886c10d83d0494d4c7d96285fa992dd9db4f68c6511ef34649072df3e504cab4.zip",
+      "Size": 15106,
+      "ETag": "\"57e797820f62d66cc22b55c6a9d7bae9\"",
+      "last_modified_ms": 1792139286297
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/497930c5e8cf856191eecfc25b153dab35ae03251816eff53589f0712c727eea.zip",
+      "Size": 10704,
+      "ETag": "\"84afab8a36fac9a4db8f7e9981591bf2\"",
+      "last_modified_ms": 1792139281706
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/3113c962c704e799ad0cb0e521715538043798e8d3244b8b93cbe98c60e090e0.zip",
+      "Size": 30800,
+      "ETag": "\"16e486d272cbcfbf9ea99f348f6a92fc\"",
+      "last_modified_ms": 1792139386141
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/32569945d35d8efe50dbe39f1af8065830c2e6fa515fbd25079b28ef9af60763.zip",
+      "Size": 11419,
+      "ETag": "\"a3a68ae632abf4c8b427f59590424735\"",
+      "last_modified_ms": 1792139372503
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/6a240150674b1cc2dbf5d790d0550553833d8373409123aa7ecd8687b8623c75.zip",
+      "Size": 30603,
+      "ETag": "\"50791d27748179e77e536dd5d6b39a6a\"",
+      "last_modified_ms": 1792139375837
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/1a780c2b824739c56b95a0d5773ff1803ff59a100260a27f0d4c9b962c965c8c.zip",
+      "Size": 12225,
+      "ETag": "\"553712d2548bac17579b79b39a7d34ca\"",
+      "last_modified_ms": 1792139368927
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/2bccb11b0d853bb344e7df51951f52c8ec019d000c03891bcc18edc4114f964d.zip",
+      "Size": 24908,
+      "ETag": "\"a11121b3bc68f13bc73c372fe1c2dd11\"",
+      "last_modified_ms": 1792139330521
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ee4c0521bc8b433c668c2aad6d42544d6914add720f541408713ee664f1e4a31.zip",
+      "Size": 13185,
+      "ETag": "\"a1c69c37641e397c5df7b6a56d7f44b7\"",
+      "last_modified_ms": 1792139401001
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/946298e750fc0d115213f4eaf3d32133364c1b690e3061dec6b1197812428343.zip",
+      "Size": 16780,
+      "ETag": "\"91a92095fc4aee4ac23b7a90805c60c2\"",
+      "last_modified_ms": 1792139390515
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/97a36f5aaa398e6f0b5b01ce2c7066c75571fd910671ef15e12f860952489172.zip",
+      "Size": 20328,
+      "ETag": "\"98444ee61375ce49e4d56697e2f15892\"",
+      "last_modified_ms": 1792139316385
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/7dbca6cd9475704f721de22a9b15d495ffad3dd840bd974f54291aceac018cbe.zip",
+      "Size": 15713,
+      "ETag": "\"1ce356e5fcbd7cb9aad29fa4fb2a0ca5\"",
+      "last_modified_ms": 1792139299580
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/07bd1d72b6277e765efe0f4cba56ba875e08de01c8b68a03f001127d6dc61cdc.zip",
+      "Size": 47401,
+      "ETag": "\"4c4ebdddfdb279e36deb1169a1458818\"",
+      "last_modified_ms": 1792139455842
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ca0328e9c73820c5343776ab7d7b566c46fa252055679b0f87a61877bf5b3945.zip",
+      "Size": 9805,
+      "ETag": "\"04d028ca814d219b322aefac357b41c1\"",
+      "last_modified_ms": 1792139375357
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/42199da52a06e9c3d2a7859ac2cac54edb67b3cdfc01961942ac8e21b52b2634.zip",
+      "Size": 19782,
+      "ETag": "\"5adc3221648438a3785c54a3a7ada261\"",
+      "last_modified_ms": 1792139371163
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/e04f348ba28493ed6fd50f5108386457f9ac664e72813d923a9e12198486cbaf.zip",
+      "Size": 14746,
+      "ETag": "\"027827a7fc58f2e71d16550eed5d4af6\"",
+      "last_modified_ms": 1792139393883
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/a783de8861242e31c5bdf2dd83c380e86b8591488dabf382d9788e5345cdf951.zip",
+      "Size": 10887,
+      "ETag": "\"dff5fa356d60258c41cacdcc4da8b8c6\"",
+      "last_modified_ms": 1792139409095
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/0037e1eb234396c70568e49a769db05fabc2537355e82d782f0136ffeec5d02b.zip",
+      "Size": 29891,
+      "ETag": "\"c0bbf4925d4851c227de388e470463c8\"",
+      "last_modified_ms": 1792139363512
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/33aeccbd74dbc87326639e3916bc01e397a10f7c40400978afbfd20b0ca1b105.zip",
+      "Size": 14158,
+      "ETag": "\"66fe947176e438c88f47122248632a41\"",
+      "last_modified_ms": 1792139370284
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/b63a2f67a7bfa03e2b5ba32d357cc23f2a6ae940f46cae62ee663f5af71fc798.zip",
+      "Size": 32735,
+      "ETag": "\"1d8fad6e0019afa97da88191eb4c50af\"",
+      "last_modified_ms": 1792139434052
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/62040c55e794e2140b2e8036da5b0161e460288ba005a6c4b1bca6eb63f3ade7.zip",
+      "Size": 32556,
+      "ETag": "\"62f16455cc4c0790a2e34dd6faad4af4\"",
+      "last_modified_ms": 1792139357038
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/5a58f97f5fc747281f79dcbad36ead8ed493e9c553aef78bb6d439639688a123.zip",
+      "Size": 39821,
+      "ETag": "\"fbfdeea06859c0d5f100960bc11da26c\"",
+      "last_modified_ms": 1792139374891
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/1c06a420900b6c181dd6c840ed1b191b966533234a0cd27ae74a9eba86210151.zip",
+      "Size": 27059,
+      "ETag": "\"19cb354d566cfdbac8672782fc0faa50\"",
+      "last_modified_ms": 1792139352679
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/d208f9e198957dc9a09d06d516a2fc0c7f8cd1cf822c50546eb08ea468806591.zip",
+      "Size": 18285,
+      "ETag": "\"c8c14a40cc0dc43a62d3ed96e3386945\"",
+      "last_modified_ms": 1792139389996
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/882be7561e26a6f4ab78e6ee36aacb4717a37f37bc9762b7fa230bc08964ba9e.zip",
+      "Size": 16766,
+      "ETag": "\"c113af576e04caba095b68fa917e5f7d\"",
+      "last_modified_ms": 1792139393436
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/5e86662f54e9bab647f099b2ff434337dbe2f361365f4197d136410ab455c23d.zip",
+      "Size": 15366,
+      "ETag": "\"4b4be82183b96ba4d5a9b9db402720a0\"",
+      "last_modified_ms": 1792139320014
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/8808ec485cc2f41eea9acfb3d68513d2b1776ab4ea5d78091db5312fe5c04cd0.zip",
+      "Size": 23225,
+      "ETag": "\"9e11a6e30a80153d4ed69f210cb96b94\"",
+      "last_modified_ms": 1792139346019
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/646af6a5df90d267da4c4e646318f91c0d91b8ab77b4f0f1afacb96e8009d536.zip",
+      "Size": 11095,
+      "ETag": "\"39fa29cbe6c1bd258c42f8e4e380ab8b\"",
+      "last_modified_ms": 1792139377154
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/16ea85d1bf1ae972758628c22b072484ff10cbd09d2fa83e11708257afee8732.zip",
+      "Size": 16491,
+      "ETag": "\"9bce3d98f36b2a190e5499ae6ae1fe25\"",
+      "last_modified_ms": 1792139294297
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/0752d8ccdad82a807770c7f0bc36110666704adcd493ff13ee7e2dea9bcf1f74.zip",
+      "Size": 10506,
+      "ETag": "\"6be73f2f0f29b5275d393515b4ddeb58\"",
+      "last_modified_ms": 1792139288006
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/4c9e943d9ab5d082a86d3a046c8d6968b9eed77ee01804fcaeaccf8e2bef20f6.zip",
+      "Size": 26928,
+      "ETag": "\"58f1ca7e1e07172d3bca2d7cae698d63\"",
+      "last_modified_ms": 1792139422614
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/4cf7b6cfbb099550b676b64471e4cff75a4d3cd43044c5d08a9433e394f0b27e.zip",
+      "Size": 30565,
+      "ETag": "\"90237707ac5a8ccf62944cc8abbdcb46\"",
+      "last_modified_ms": 1792139437494
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/cd574f4540337b9600fd4d9811a5956c7a20b29d71f04098fed354e504553d9c.zip",
+      "Size": 14063,
+      "ETag": "\"032ca79742c62388878305c56bdd6f5b\"",
+      "last_modified_ms": 1792139290570
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/f11ed5be83f5f69e8ec91d3b4a2f61c02545de70f9bb0d42957c7d9e2095ae0e.zip",
+      "Size": 12999,
+      "ETag": "\"4d57fdf5d1a0162bd68256f6c92b9931\"",
+      "last_modified_ms": 1792139295172
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/66016e9415a5d3c34f90df2aad836f647c1d87b84acb9061e42c6b0468a85f04.zip",
+      "Size": 12173,
+      "ETag": "\"f0b6d428dfb51ac68215ff9fb4ca5e7b\"",
+      "last_modified_ms": 1792139309791
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/b79e8b32631a2c66326ea30d5c21eb668d1a802afeeb9ce6b3ac2f56df6ca145.zip",
+      "Size": 33522,
+      "ETag": "\"be455f7a7b83c0e92aea7762109617d2\"",
+      "last_modified_ms": 1792139369425
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/42a47381eba8b44ae0541a4737fbb2740b93da945b96cb68913c9fe6e760aaba.zip",
+      "Size": 10836,
+      "ETag": "\"3307bb0174fbc71fc7e05497f2559af8\"",
+      "last_modified_ms": 1792139295614
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/013bb2954d3a6250c3e04493bf27d8fbb59ce7fd9eacae711f6e4d6e90b6ce3d.zip",
+      "Size": 23239,
+      "ETag": "\"018a76691d826c7c08bf8ec174eb6900\"",
+      "last_modified_ms": 1792139356113
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/6ae6a2b2909a23ec013a84098237807b403213df05e2bcaee37a935fca7897bc.zip",
+      "Size": 13082,
+      "ETag": "\"5c2e81bde8fa6e753521d3f2699abc84\"",
+      "last_modified_ms": 1792139303181
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ac71139199ce2c92d2a94784f61dd9d52b3e4374d20df6ad7d3b2870e911c8ab.zip",
+      "Size": 10618,
+      "ETag": "\"da22246b3a711973b4c5b3ecd98cbe22\"",
+      "last_modified_ms": 1792139281249
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/81a1b9fc95c9a7d269f8d578d56bb5e3ba035417cf917bc6a882a2413e333518.zip",
+      "Size": 11909,
+      "ETag": "\"d4e7295c98c93b091c6ebae06976618a\"",
+      "last_modified_ms": 1792139305508
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/e9da8750885a4aea5af58b671ce51af6707e04de337bb379f68f40077a09cd5c.zip",
+      "Size": 18278,
+      "ETag": "\"7700ed9e05dec9c8ada34036754067c3\"",
+      "last_modified_ms": 1792139348958
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/d8d37a71f93a856f5724286edfa986aa57d9faf6b94a525f27bc101c7287dbf9.zip",
+      "Size": 41358,
+      "ETag": "\"d5f82593975f225100c8b07065f79e74\"",
+      "last_modified_ms": 1792139425153
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/bbf7ff3f18ccedc0093dc473c3d792588e7d04e4ba13270aa2a26148447ceba0.zip",
+      "Size": 11198,
+      "ETag": "\"77ff01b6edf58838dda9eba99099ec73\"",
+      "last_modified_ms": 1792139285200
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/1741754d4c6c16a9d6897e24d8136d61c875ef3f68474b5c8f5cd1da8eb7ecb9.zip",
+      "Size": 26997,
+      "ETag": "\"ab0f676bf21c727b68eb3d9452148205\"",
+      "last_modified_ms": 1792139439482
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/468bdbcc0de2fe0b5cf2ad2891ae9dcf9cd9c87b3f84604a832deda18329a823.zip",
+      "Size": 14195,
+      "ETag": "\"f6af383f18129ba3ff026a0ed327cabe\"",
+      "last_modified_ms": 1792139314480
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ddaac4a3fb4d20c379cf6917b4052da00668e37a50317904018c23d39957be17.zip",
+      "Size": 17283,
+      "ETag": "\"babda6a648e74ecfda8a8690eb3e6291\"",
+      "last_modified_ms": 1792139411828
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/d25187e820269f8541e6bb3132a6e29104f7118ce6b538c7ab828e1f5b5cc6d8.zip",
+      "Size": 34321,
+      "ETag": "\"2661345fc85d9436f759434d64449e8f\"",
+      "last_modified_ms": 1792139440470
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/a19d3bee3c6bbe770c8e992134bdad8a92c410b30f745e029f279f93b4daa8ed.zip",
+      "Size": 11669,
+      "ETag": "\"7e356ce60792c4461130c44d638e3c85\"",
+      "last_modified_ms": 1792139296065
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/86a10937a0db23e10d231099d2f32347df8747641cbb138a48f719d7fc7002a5.zip",
+      "Size": 15876,
+      "ETag": "\"5ddee3d51b84c569e9c66c7e0a873a11\"",
+      "last_modified_ms": 1792139322113
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/0b1a34f56a400fee161cc55165c0332dbcc15978bd0b93483c1892b902f355cc.zip",
+      "Size": 11225,
+      "ETag": "\"850134557370cc168c0c27b011836d16\"",
+      "last_modified_ms": 1792139284713
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/027e4e9599e9511f062181bebe4836f1804eecf968d861d9498ba42c3f63cd30.zip",
+      "Size": 28976,
+      "ETag": "\"6a55c6505aea26500fe26f5bb216b250\"",
+      "last_modified_ms": 1792139437986
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/0445c26a294337a12c8de791030e962686fc3981b0c99177f34d4ea784e87899.zip",
+      "Size": 10772,
+      "ETag": "\"2542601585d319af795623d8b162f886\"",
+      "last_modified_ms": 1792139388077
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/28147f1b70a19bae2a509d30e10ed0726ee3be746be039054b6819eead528dbe.zip",
+      "Size": 23352,
+      "ETag": "\"bec2d0f49fdbc37e435bde28d69416dd\"",
+      "last_modified_ms": 1792139432545
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/1d6b12cad85769617a7b0ce19620a76ac6208c2e275e4f22509005bff5cc3b38.zip",
+      "Size": 26698,
+      "ETag": "\"63fdb1e22c73640808c7fedf0a657fd6\"",
+      "last_modified_ms": 1792139366991
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/8f7336a4706058ab1f3f9cfe61fafdca20c535d712843c51458616b914a8b1a6.zip",
+      "Size": 45028,
+      "ETag": "\"bd907dbaa5128a8dddeaa859be722ad8\"",
+      "last_modified_ms": 1792139347270
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/0badf099a11bac5bc84cb35308ad50b2d2716f008f7de33a93bb0a1decf72b70.zip",
+      "Size": 10890,
+      "ETag": "\"5054095ad50e2983f3daac9dfb187bd9\"",
+      "last_modified_ms": 1792139283840
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/8658b50f2ade6a4370ab3d36e4e10698e31152e3b8e747e2e6f2abc9a0de5898.zip",
+      "Size": 13351,
+      "ETag": "\"36ed2808f87ffcf592856db3b7bc8c23\"",
+      "last_modified_ms": 1792139306018
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/8c242b76c5b8f78ad3cd3316e8c7865a90d976a020f4388620e96792f6133ec2.zip",
+      "Size": 33750,
+      "ETag": "\"69e8985880395d1b4a29bb0391e14f71\"",
+      "last_modified_ms": 1792139340761
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ef5ef9fbc600a4caeeec620b2b67301c79f7a2f29390db6a6731362200404475.zip",
+      "Size": 18633,
+      "ETag": "\"7ff900e8a7a670dc2e2c2b9f2658a825\"",
+      "last_modified_ms": 1792139397816
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/28fb9581cdede81fa298fbf88f517850e21ab95ebe11194da2c2877160498ef5.zip",
+      "Size": 22243,
+      "ETag": "\"82bc2785b684109a892745e8a1c56dbc\"",
+      "last_modified_ms": 1792139429656
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ef78e7b47b4d9723edfe3c93071e5ebff51a2d80104485c1e20059f08fed8b32.zip",
+      "Size": 32268,
+      "ETag": "\"4eeb78a5ccf573d089216e354e82af1e\"",
+      "last_modified_ms": 1792139353844
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/364a8d6eb516f29c586f3830e964ecbe6853aad7a622600d62c2c194b4029d29.zip",
+      "Size": 27488,
+      "ETag": "\"26ae361ac2f78c6e0609b1c89b9d2fb8\"",
+      "last_modified_ms": 1792139438997
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/45b5576f44316f286e7a0b4fe88bde99e802bf0a73eefc65c317a5f3eeb1c400.zip",
+      "Size": 11348,
+      "ETag": "\"58cae2a6d79f57a1f7b7b9504646afe7\"",
+      "last_modified_ms": 1792139349467
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/76d0ef55ed8859e25ae84553a2e654afcd90a9e5dec489de105e6efd93034c89.zip",
+      "Size": 11976,
+      "ETag": "\"973ebbf68293261bf8268635e91f1c5e\"",
+      "last_modified_ms": 1792139283418
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/a02f127a4de084b8dfbc054279198eaa7cce3b44f68aa802e4f9c15e3fe748aa.zip",
+      "Size": 41446,
+      "ETag": "\"969497f8ea4d6d793d25639ab3b3545b\"",
+      "last_modified_ms": 1792139376741
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/70c2c1a59aec9d824fe6ec0bbcc05ddb096e03b6b3a0eb8b367491ef2d7c369c.zip",
+      "Size": 25460,
+      "ETag": "\"02ef45792ceb8882236074b5a3b00a8d\"",
+      "last_modified_ms": 1792139359328
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/c9faea411ad1caad7a160b43024c9d7f66e492d8cc10458fc1584126cdac0d11.zip",
+      "Size": 13996,
+      "ETag": "\"c65c1b3646fa39f7d88a3625fe63d8ae\"",
+      "last_modified_ms": 1792139378038
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/57066b09b14527df5565ecef8b7bab26912c1d4225d427ce4657abb4ff99c521.zip",
+      "Size": 11561,
+      "ETag": "\"bf71c7c68eb522390652c4bb346fdbcf\"",
+      "last_modified_ms": 1792139379582
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/12a820ddf6ebc021bcf557542c41c0895914730da086ddb2dcedebf02322e368.zip",
+      "Size": 25862,
+      "ETag": "\"aa5a8e23ac302901aabf226341b180ad\"",
+      "last_modified_ms": 1792139440931
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/4f5ea2de4ea18f9ce4d36882c499ee88e6ad53177169bc47df3329b36ae00612.zip",
+      "Size": 26384,
+      "ETag": "\"c4905ed5757fd8dfa52b08efde579e23\"",
+      "last_modified_ms": 1792139372991
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/2c7fa10ec8c532814c66bc65ff7e1855bc39b48e1d925e7d8fda0b73db46d426.zip",
+      "Size": 12569,
+      "ETag": "\"d879af3754bbf420233b8dec3625f919\"",
+      "last_modified_ms": 1792139294726
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/d54f241fed463523d93dba9c71d967674d3473740be114733c58f56a7aa2c671.zip",
+      "Size": 36967,
+      "ETag": "\"ef1f293d040898eefdaaf8c0788cc6f4\"",
+      "last_modified_ms": 1792139418930
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/0a022cab24c06e405e9bb66e3953acb7f24b3a07669615e71bebbf7c9097b0b6.zip",
+      "Size": 11560,
+      "ETag": "\"47492f6e87d01a678921782bdeb4a061\"",
+      "last_modified_ms": 1792139373951
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/d319e5636a92405288287308396c0f433dff86c65885b28579cc9d9cc7ca0d61.zip",
+      "Size": 44163,
+      "ETag": "\"3fd22c98aec46bf2be502aa8e14e356b\"",
+      "last_modified_ms": 1792139354637
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/805da1542c39755490304244f35f1b43fa27a86956482f11a1ca25f8901bc1ff.zip",
+      "Size": 11103,
+      "ETag": "\"191e220a2216e62abad5d5cf6f0aca7b\"",
+      "last_modified_ms": 1792139377615
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/5f1a148152fc691b8ca8e46647874798dc926fc96d7891db76b54e2e3277afee.zip",
+      "Size": 11092,
+      "ETag": "\"43e7f5351c29336f63826a822c02d51d\"",
+      "last_modified_ms": 1792139311444
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/df6c5991fdc8513d7a75d7eba0f5e0d6cb2cdfcfc8059e441f825b8fe4a4d743.zip",
+      "Size": 29578,
+      "ETag": "\"32f2c37d92e519afe1fbf56d73e80ce7\"",
+      "last_modified_ms": 1792139438472
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/51a589c8c5b0b2a8c7920b3dcaeb4dcfb3e42a674fd819afa1282934d46bc41f.zip",
+      "Size": 23349,
+      "ETag": "\"c5a6f38737c9fc4cfccb8b26f6f19696\"",
+      "last_modified_ms": 1792139374398
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/457869579ec1991c79fa8403207b754bec53967c9e059802d76d6a0822c97cfa.zip",
+      "Size": 10992,
+      "ETag": "\"d70ca54f5ccf7feac073e7b081566223\"",
+      "last_modified_ms": 1792139368070
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/6a1a53164ce8d4ae764f341430f6e782233da95a57e3d6973a090d0369ecea79.zip",
+      "Size": 11589,
+      "ETag": "\"0d019b6520db1c01d60c2994c219f036\"",
+      "last_modified_ms": 1792139376290
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/c39943a454bb24d994cb8e8e4a3f239ee6af80246ab810f5ded54caae6be398e.zip",
+      "Size": 27192,
+      "ETag": "\"04f18bacac17abefe438a5f68bf742cd\"",
+      "last_modified_ms": 1792139422153
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/d2af048ada7d386e33ab771831a44e106c026330a632b304410608a7070c9158.zip",
+      "Size": 14061,
+      "ETag": "\"7e3a7c21681122fc1a76d3b3d2a39bfa\"",
+      "last_modified_ms": 1792139285643
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/8ecc34209a7e6ccbcdcbc556c9573ecdd3c5860eb2ea31dd6e07361e03098905.zip",
+      "Size": 12692,
+      "ETag": "\"d17c1a029901b8a959087e91af1cda42\"",
+      "last_modified_ms": 1792139288922
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/48dfae39f3f5e3b112e5e30ad7babd61c322432e2535027e9ed856bf2680a82b.zip",
+      "Size": 43852,
+      "ETag": "\"9277bc02f24e235237cbd289bf115d32\"",
+      "last_modified_ms": 1792139435129
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/bd828a54e92469afe1a4dd2cda549ebaae76db4352866d88c5676cfb5b370d6c.zip",
+      "Size": 28508,
+      "ETag": "\"2ac38a9a854b841a9334f3f986b47168\"",
+      "last_modified_ms": 1792139447686
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/9b67b4278161234e1921ea72edfbc305133dddfec27470104feaa4b63e085857.zip",
+      "Size": 31984,
+      "ETag": "\"3a6dfa358b8d35eb3172411471352210\"",
+      "last_modified_ms": 1792139356558
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/3ba7142cdf18eba4d0a984bde563410d3230aab72a96231cc58ad54a9e1f2d32.zip",
+      "Size": 15091,
+      "ETag": "\"ec59b2604374df8241ea0098681ad7ca\"",
+      "last_modified_ms": 1792139393016
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/1d3be51e52db8942203645e540a2f1c1630da1a434b5e54cf0cfb416518ac52a.zip",
+      "Size": 13273,
+      "ETag": "\"82daff0efd4c4ab5f55ef2bbe198004e\"",
+      "last_modified_ms": 1792139402113
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/9c61696f2d56d14b4fb66e1b6d121f59d55460ef36d33df00c30e08461088999.zip",
+      "Size": 9678,
+      "ETag": "\"10aef2b105d664c76fe424d191a3203b\"",
+      "last_modified_ms": 1792139397120
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/21518913c5453e88824f790c4c7138d8c296a67ba41f3c0d695b8f0a6f4ddd0d.zip",
+      "Size": 13737,
+      "ETag": "\"0152a82a1f9bbf58ba9a6808764ee142\"",
+      "last_modified_ms": 1792139410018
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/560c10c1bc50c8c5af350871df88611d03ce01a7dcc38324fd7c8de62e8d1de0.zip",
+      "Size": 11427,
+      "ETag": "\"ae38d1401125560e5e994bfc7672c555\"",
+      "last_modified_ms": 1792139278739
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/dbe619ee3cac041b11b1320eac92aef16cd816851d95d61bee775b2a1b98a487.zip",
+      "Size": 12107,
+      "ETag": "\"9e14f6486e8cde5a44f93e804f9d9e64\"",
+      "last_modified_ms": 1792139371572
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/0f3cb293721853a57e5f4deaf63e0508198040b18086ef45e20a18a7075b18cc.zip",
+      "Size": 19203,
+      "ETag": "\"902a158f40d02addc0fad036ba780157\"",
+      "last_modified_ms": 1792139291090
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/e86abf8fe4d3da42107b6b6d37167c9bbf5ade0df9e0d522f084d8a726e0b0a2.zip",
+      "Size": 29180,
+      "ETag": "\"016f9b1ad52a5cbbce717b3c9a0a75a0\"",
+      "last_modified_ms": 1792139357812
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/590c25b011c14ac5a533f11dbfa154f9ba4ae93a01a6423e4e4989b64e520cc0.zip",
+      "Size": 27241,
+      "ETag": "\"8515f0d7b4af2cbeb8c8d11252585ccd\"",
+      "last_modified_ms": 1792139420023
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/edd5e78d8fb11a28eff703b7ced181524c9e49d0cb004c9132a9c2bdf7bacd0c.zip",
+      "Size": 9379,
+      "ETag": "\"f794034bdc1191099c7a8180f26a2c83\"",
+      "last_modified_ms": 1792139279247
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/583bb3cf57830016a58279fc18391712c1c575cef8068599ed1d49de050ec479.zip",
+      "Size": 10895,
+      "ETag": "\"06f52d24e161ff92745302c452be1f1b\"",
+      "last_modified_ms": 1792139398494
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ea2ce14b77af0f180bf8ac4f1166eddda986292e97229ff58bc618566d45d2f1.zip",
+      "Size": 15833,
+      "ETag": "\"14b5616fa3bde15c71e128f7888cb845\"",
+      "last_modified_ms": 1792139300709
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/7c40e57aff10378f586509cc4306d77b65fa4a5999bf0838aea72654f95eada9.zip",
+      "Size": 17885,
+      "ETag": "\"22d6d1e72ad6b16abf4f1c2c652a334c\"",
+      "last_modified_ms": 1792139317945
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/d399e2da8cab01c73751d35d1b9b1afbbd9e7235a6fd3f53af4ca6442df87adf.zip",
+      "Size": 14171,
+      "ETag": "\"dd9a3dbbcb2417957c2761f836145b3a\"",
+      "last_modified_ms": 1792139400234
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/6a327707948ab7edb82a0e85d7b2115140e46d42a59f926534a0c696a5c28327.zip",
+      "Size": 45041,
+      "ETag": "\"124c2b4f19ab446bf354533c3032de82\"",
+      "last_modified_ms": 1792139449207
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/187b1827e1993a95cb0c9b1f3b3c7cf79148ab30057684277934bc38d708bac5.zip",
+      "Size": 17329,
+      "ETag": "\"2bcaae6b2956a4769cd810f8270dd2ef\"",
+      "last_modified_ms": 1792139300276
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=eval/step=00000000/d56f4949ccc2694a3a5f0cb8c7a8722e53246ac0d296a0a6ac9de08bda7f3ebd.zip",
+      "Size": 21512534,
+      "ETag": "\"a4b219a884b5a2e80ff2911d92803bd3\"",
+      "last_modified_ms": 1792139099617
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories/schema_v5/archives/phase=eval/step=00000000/0a58591beb6c5fc27d05a3041edc4a2b3692e266a88f88cf8f637bdb027a6a6c.zip",
+      "Size": 2805759,
+      "ETag": "\"2864939ba6ed978b1f00797b76350692\"",
+      "last_modified_ms": 1792139261488
+    }
+  ],
+  "first_two_update_gate_passed": true,
+  "retained_evidence_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/admission/first-two-20261016T084236/admission-manifest.json",
+    "bytes": 504295,
+    "sha256": "38795a8c0a1eb6296be0185efe96044e5734aca0d758f913630c9e9807f8bf54",
+    "full_byte_readback_verified": true
+  },
+  "retained_evidence_files": 273,
+  "retained_evidence_bytes": 64313624,
+  "configuration_sha256": "58143f3b1dfa3ad352150bdb8e627a9b0002c814a813b006bd73e6d8c6c12d29",
+  "original_grader_utility_sha256": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+  "original_verifier_timeout_seconds": 10,
+  "full130_calibration_complete": false,
+  "stale1200_main_configuration_frozen": false,
+  "full_original_grade_replay_established": false
+}

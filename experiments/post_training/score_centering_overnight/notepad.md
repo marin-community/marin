@@ -1,5 +1,25 @@
 # Campaign notepad
 
+## Current snapshot, 16 October 2026
+
+Tokenwise truncated importance sampling (TIS) plus score centering (SC) is compared with TIS alone. Both arms keep the same probability capture. Scientific jobs remain on source revision 0212d03. The current synthesis and immutable evidence links are in [Echo 731](https://echo.oa.dev/wiki/731); dated entries below preserve earlier decisions and results.
+
+| Comparison | State | Evidence or remaining work |
+| --- | --- | --- |
+| Martin Marek Countdown reference and faithful SkyRL reproduction | Complete | Three noisy paired seeds and a matched control without noise in each implementation; primary evaluation after 299 updates, run completion after 300 |
+| First three Qwen transfer stages: curriculum/SGD, AdamW/binary rewards, native rewards/GRPO | Complete | All 18 runs at 300 updates pass native and original-grader gates; [paired endpoint analyses and figures](results/qwen_first_three300_complete_analysis_artifacts.json). Each paired 95% interval for TIS+SC minus TIS held-out native verifier score at update 300 includes zero; no equivalence margin is set |
+| Last two Qwen transfer stages: batching, native context/response limits | Partial | [Five 1200-update runs](results/qwen_completed1200_response_replays.json) have full native and original-grader evidence; seven runs continue |
+| Snowball noise comparison and matched controls | Incomplete | Relative-initial noise 0.05 was selected by probability drift and rollout usability; the fixed Gaussian delta follows the [protocol](protocol.md). No final 1200-update Snowball result exists. The noisy TIS seed-1 [fatal parser failure](results/snowball_tis1_native_parser_failure_20261015T1200.json) remains gated on repair qualification |
+| Snowball staleness | Calibrating | Actual cadence is 65 updates. The [first-two-update admission](results/snowball_stale130_rno_first_two_update_admission.json) passes; the [matched 130-update control](results/snowball_fresh130_after_stale_admission_submission.json), which refreshes every update, is queued. Full 130-update validation remains pending for both runs before locking six stale 1200-update mains. Three ordinary native asynchronous 1200-update controls without head capture, TIS or SC also remain |
+
+The stale admission includes 5,820 physical records and one masked native OverflowError with no available verifier verdict. Its trainable spans are empty; native outcome and shaped reward are zero. Update 2's failure, masking and baseline-exclusion counts equal one. Correcting the audit's extra zero-error assertion changes no source, grader, deadline or scientific recipe. Probability checks use two retained learner rows per update: 8 loss tokens in update 1 and 10 in update 2. Archive membership covers all physical records. The failed placeholder is counted and remains unavailable for original-grader replay.
+
+Snowball checkpoint recovery remains engineering work. Revision 173f626e passes the five-update initial run and all 12,152 available original response grades. Its first resumed update fails while moving optimizer state from CPU back to GPU. The [memory baseline from initial weights](results/snowball_checkpoint_memory_fresh2_complete_observations.json) completes two updates on all 32 learner ranks. At entry to that state transfer, the failed restore's upcoming update 6 holds an extra 4.03–10.16 GiB of live allocation reported by PyTorch compared with baseline update 2. The median across all 32 rank pairs is 7.52 GiB. Tensor owners and root cause remain unresolved; the separate revision-57b0c60 diagnostic is queued. Full five-node resume qualification remains incomplete.
+
+At 09:04 UTC, the [GPU ledger](costs.json.gz) counts 847 terminal node-task attempts and 12,096.65528 H100-hours across cw-rno2a and cw-us-east-02a; active allocation intervals remain separate. It includes failed, preempted and setup work. The [CPU ledger](auxiliary_cpu_allocations.json) remains separate. The campaign limit remains four interactive H100 nodes including queued tasks across both clusters; Snowball uses five nodes at batch priority. Draft PRs [968](https://github.com/marin-community/MarinSkyRL/pull/968) and [996](https://github.com/marin-community/MarinSkyRL/pull/996) retain their stated validation scopes; merging remains a later user decision.
+
+## Earlier entries
+
 2026-10-10 03:00 UTC: Read the full overnight brief. Both allowed H100 clusters returned healthy current controllers. MarinSkyRL main is c96f6d25 and Marin main is c4687932. Earlier Snowball evidence at 40 updates and consumed ages 0–2 does not qualify the new port or settle severe staleness.
 
 The released reference has no dependency lock. Freeze a resolved Python 3.13/CUDA12 JAX environment and record it separately from code. Reference evaluation holds out the first 64 rows after the training-seed shuffle, rather than using the environment's separate eval split. Its terminal step-299 evaluation is before update 300; this timing is now explicit in the protocol.
