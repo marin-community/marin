@@ -178,10 +178,11 @@ tables in name order, within an
 aggregate budget of 64 MiB stored input and 16,384 input rows, skipping groups that
 exceed the remaining budget. This consolidates small completed writes below the
 maintenance threshold without repeatedly rewriting earlier compacted data or merging
-other writers' inputs. The merge does not take the maintenance lease: closing writers
-touch disjoint inputs, and a maintainer that consumed them first makes the merge a
-benign no-op. Concurrent writers must use distinct writer IDs (the default
-IDs are unique). The pass retries classified transient storage failures with exponential
+other writers' inputs. The merge does not take the maintenance lease. Two closers
+select disjoint inputs because each takes only its own writer's shards; the maintainer's
+level-zero pass can take the same shards, and whichever replacement commits second finds
+an input missing and is abandoned. Concurrent writers must use distinct writer IDs (the
+default IDs are unique). The pass retries classified transient storage failures with exponential
 backoff for up to three attempts per snapshot or merge before propagating them. Retries
 can repeat reads and writes of the selected inputs. The pass adds close latency after
 flushing; its input budget is not a wall-time or decoded-memory bound.
