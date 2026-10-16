@@ -26,6 +26,7 @@ from rolloutengine.contracts import (
     TOTAL_TURN_TIMEOUT_STOP_REASON,
     AttemptEnded,
     AttemptStarted,
+    Continuation,
     GenerationLimitReached,
     Graded,
     HarnessPrepared,
@@ -105,9 +106,13 @@ class _Record:
         self.assistant_index = None
 
     def request(self) -> ModelRequest:
-        return ModelRequest(
-            (*self.messages, *self.observations), self.options, self.trace.prefix, self.assistant_index, self.token_ids
-        )
+        messages = (*self.messages, *self.observations)
+        if self.token_ids is not None:
+            return ModelRequest(messages, self.options, prompt_token_ids=self.token_ids)
+        # A chat endpoint re-tokenizes every request, so a messages trace never continues served tokens.
+        if self.assistant_index is None or self.spec.trace == TraceMode.MESSAGES:
+            return ModelRequest(messages, self.options)
+        return ModelRequest(messages, self.options, Continuation(self.trace.prefix, self.assistant_index))
 
     def add_turn(self, turn: ModelTurn) -> None:
         if self.token_ids is not None and turn.prompt_token_ids != self.token_ids:

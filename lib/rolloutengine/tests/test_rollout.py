@@ -518,7 +518,8 @@ async def test_agent_session_replays_exact_tokens_on_later_turns(compact):
         if len(requests) == 1:
             assert request.prompt_token_ids is None
             return ModelTurn({"role": "assistant", "content": "Working."}, (10, 11), (20,), (-0.5,), "stop")
-        assert request.prompt_token_ids == replay
+        # A pinned prompt replaces the continuation: the transport serves it unchanged.
+        assert (request.prompt_token_ids, request.continuation) == (replay, None)
         return ModelTurn({"role": "assistant", "content": "12"}, replay, (21,), (-0.5,), "stop")
 
     rollout_engine = RolloutEngine({}, {"agent": agent_harness(lambda _context, complete: agent(complete), grade=grade)})
@@ -1393,7 +1394,8 @@ async def test_context_limit_keeps_served_evidence_and_grades_only_completed_ope
     class LimitedModel(ReplayModel):
         async def complete(self, request):
             if len(self.requests) == completed_turns:
-                raise GenerationLimitReached((*request.prefix_token_ids, 90, 91))
+                served = () if request.continuation is None else request.continuation.served_token_ids
+                raise GenerationLimitReached((*served, 90, 91))
             return await super().complete(request)
 
     record = await engine(
@@ -1503,7 +1505,7 @@ async def test_token_budget_under_messages_trace_needs_usage_or_token_ids(usage)
 @pytest.mark.parametrize("violation", ["prefix", "logprobs", "empty"])
 async def test_model_transport_must_preserve_exact_token_evidence(violation):
     async def complete(request):
-        if request.prefix_token_ids:
+        if request.continuation is not None:
             return ModelTurn({"role": "assistant", "content": "Done."}, (99,), (30,), (-0.5,), "stop")
         return ModelTurn(
             shell_call("echo 12 > /workspace/answer"),
@@ -1545,7 +1547,7 @@ async def test_message_trace_runs_chat_models():
     assert record.stop_reason == "stop"
     assert record.messages[-1] == replies[-1]
     assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
-    assert [request.prefix_token_ids for request in model.requests] == [(), ()]
+    assert [request.continuation for request in model.requests] == [None, None]
     assert len(record.steps) == 2
     assert (record.prompt_token_ids, record.response_token_ids, record.loss_mask, record.logprobs) == ((), (), (), None)
     assert record.metrics["trace"] == "messages"

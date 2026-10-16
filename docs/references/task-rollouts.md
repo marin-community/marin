@@ -466,9 +466,12 @@ Patch collection compares the final index with that revision, including agent co
 ## Exact-token contract
 
 The model callable accepts `ModelRequest` and returns `ModelTurn` with a parsed assistant message and exact served token IDs.
-`ModelRequest.messages` contains public messages. `prefix_token_ids` contains the earlier served tokens that the next request must preserve.
+`ModelRequest.messages` contains public messages. After the first turn, `ModelRequest.continuation` holds the
+earlier served tokens, which the next prompt must keep unchanged, and the index of the assistant message where
+they end. The transport tokenizes only the messages after that index and appends their tokens.
 If `Prompt.token_ids` or `Transition.token_ids` is set, `ModelRequest.prompt_token_ids` carries that exact
-prompt to the model transport. The returned turn must report the same prompt tokens.
+prompt to the model transport, and the request has no continuation. The returned turn must report the same
+prompt tokens.
 `ModelTurn.prompt_token_ids` contains the exact prompt sent to inference. `response_token_ids` contains the sampled response.
 Optional log probabilities align with response tokens.
 A continuation prompt preserves the full served prefix, including earlier response tokens.
@@ -498,7 +501,7 @@ It does not add an oversized observation to retained response evidence.
 `TraceMode.MESSAGES` lets a model behind a chat endpoint drive a rollout for evaluation, task validation, or data collection.
 Chat endpoints re-tokenize the conversation for every request, so the exact-token contract cannot hold there:
 on GLM-5.3 behind the Orion router, 2 of 7 recorded 7-turn ShellSim rollouts failed it on a single non-canonical sampled token.
-The engine sends empty `prefix_token_ids` and skips the prefix, token-evidence, and log-probability checks.
+The engine sends no `continuation` and skips the prefix, token-evidence, and log-probability checks.
 It still checks token replay: a chat endpoint cannot serve `Prompt.token_ids` or `Transition.token_ids`,
 so a `MESSAGES` rollout whose harness pins prompt tokens raises `RolloutContractError`
 unless the model reports serving exactly those tokens.
