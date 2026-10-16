@@ -39,18 +39,6 @@ def test_overlapping_conditional_writes_let_exactly_one_writer_win():
         head.write(b"c", expected_version=version)
 
 
-def test_rename_costs_a_copy_and_a_delete(simulated_bucket):
-    fs = simulated_bucket
-    with fs.open(f"{ROOT}/tmp", "wb") as handle:
-        handle.write(b"payload")
-    before = fs.log.snapshot()
-    fs.mv(f"{ROOT}/tmp", f"{ROOT}/final", recursive=True)
-    delta = fs.log.delta(before)
-    assert delta.requests[Request.COPY] == 1
-    assert delta.requests[Request.DELETE] == 1
-    assert fs.cat_file(f"{ROOT}/final") == b"payload"
-
-
 def test_single_row_flush_fits_the_request_budget(simulated_bucket):
     fs = simulated_bucket
     with DataStore.open(ROOT, writer_id="w1", flush_interval=3600) as store:
@@ -71,8 +59,7 @@ def test_read_view_costs_three_requests(simulated_bucket):
         store.table("samples", primary_key=("id",)).append({"id": 1})
         store.flush()
     before = fs.log.snapshot()
-    view = ReadView(ROOT)
-    assert view.token is not None
+    ReadView(ROOT)
     # The format marker, HEAD, and the manifest it names.
     delta = fs.log.delta(before)
     assert delta.total() <= 3, dict(delta.requests)

@@ -6,8 +6,7 @@
 Every request pays one round trip of simulated latency, ranged reads fetch one block
 per uncached request, renames cost a copy plus a delete, and the commit pointer uses
 compare-and-swap with the 409 conflict S3 returns when conditional writes overlap.
-Request counts are recorded per operation so a test or benchmark can assert how many
-round trips an operation costs, not only whether it succeeded.
+Request counts are recorded per operation for cost assertions in tests and benchmarks.
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ from rigging.filesystem.conditional_object import ConditionalWriteError, Version
 import finestore.commit
 
 DEFAULT_LATENCY = 0.1
-# Captured before ``simulated_s3`` patches ``time.sleep`` to scale FineStore's retry backoff.
+# Keep the original sleep before the context manager patches the stdlib function.
 _REAL_SLEEP = time.sleep
 DEFAULT_BLOCK_SIZE = 5 * 1024 * 1024
 MULTIPART_THRESHOLD = 5 * 1024 * 1024
