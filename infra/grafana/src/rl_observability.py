@@ -14,6 +14,8 @@ from dashboard_dataset import (
 from vllm_observability import VLLM_DETAIL_MAX_WINDOW_MS, sql_string, sql_values
 
 RL_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+RL_GPU_MAX_WINDOW_MS = VLLM_DETAIL_MAX_WINDOW_MS
+RL_STRAGGLER_BUCKET_MS = 30 * 60 * 1000
 RL_MAX_POINTS = 360
 RL_MIN_BUCKET_MS = 30_000
 RL_MAX_CLUSTERS = 16
@@ -94,7 +96,7 @@ def rl_overview_dataset(
         max_points=RL_MAX_POINTS,
     )
     bucket = f"{start_ms} + (timestamp_ms - {start_ms}) - (timestamp_ms - {start_ms}) % {bucket_ms}"
-    straggler_bucket = f"{start_ms} + (t - {start_ms}) - (t - {start_ms}) % {30 * 60 * 1000}"
+    straggler_bucket = f"{start_ms} + (t - {start_ms}) - (t - {start_ms}) % {RL_STRAGGLER_BUCKET_MS}"
     clusters_sql = sql_values(clusters)
     run_sql = sql_string(run)
     core_sql = f"""
@@ -300,6 +302,32 @@ def rl_gpu_dataset(
         min_bucket_ms=RL_MIN_BUCKET_MS,
         max_points=RL_MAX_POINTS,
     )
+    if end_ms - start_ms > RL_GPU_MAX_WINDOW_MS:
+        message = sql_string(RL_GPU_ZOOM_MESSAGE)
+        status = f"'range_limit' AS status, {message} AS message"
+        series = f"SELECT {start_ms} AS t, {message} AS series, CAST(NULL AS DOUBLE) AS value, {status}"
+        views = {
+            "gpu_utilization": series,
+            "sm_activity": series,
+            "gpu_memory": (
+                f"SELECT {start_ms} AS t, CAST(NULL AS DOUBLE) AS mean_used_bytes, "
+                f"CAST(NULL AS DOUBLE) AS peak_used_bytes, {status}"
+            ),
+            "fabric_receive": series,
+            "pcie_faults": (
+                f"SELECT {message} AS node, CAST(NULL AS VARCHAR) AS gpu, "
+                "CAST(NULL AS DOUBLE) AS peak_power_watts, CAST(NULL AS DOUBLE) AS pcie_replay_increase, "
+                f"{status}"
+            ),
+        }
+        return DashboardDataset(
+            name="RL GPU",
+            cache_key=(clusters, run, start_ms, end_ms, bucket_ms),
+            sources=(),
+            setup_sql=(),
+            views=views,
+            max_result_rows=RL_MAX_RESULT_ROWS,
+        )
     bucket = f"{start_ms} + (timestamp_ms - {start_ms}) - (timestamp_ms - {start_ms}) % {bucket_ms}"
     clusters_sql = sql_values(clusters)
     run_sql = sql_string(run)
@@ -388,30 +416,10 @@ ORDER BY 4 DESC, node, gpu
             "WHERE statistic = 'series' AND name = 'gpu_utilization_percent' ORDER BY t"
         ),
     }
-    sources = (SourceQuery("gpu", gpu_sql, RL_MAX_GPU_ROWS),)
-    if end_ms - start_ms > VLLM_DETAIL_MAX_WINDOW_MS:
-        message = sql_string(RL_GPU_ZOOM_MESSAGE)
-        status = f"'range_limit' AS status, {message} AS message"
-        series = f"SELECT {start_ms} AS t, {message} AS series, CAST(NULL AS DOUBLE) AS value, {status}"
-        views = {
-            "gpu_utilization": series,
-            "sm_activity": series,
-            "gpu_memory": (
-                f"SELECT {start_ms} AS t, CAST(NULL AS DOUBLE) AS mean_used_bytes, "
-                f"CAST(NULL AS DOUBLE) AS peak_used_bytes, {status}"
-            ),
-            "fabric_receive": series,
-            "pcie_faults": (
-                f"SELECT {message} AS node, CAST(NULL AS VARCHAR) AS gpu, "
-                "CAST(NULL AS DOUBLE) AS peak_power_watts, CAST(NULL AS DOUBLE) AS pcie_replay_increase, "
-                f"{status}"
-            ),
-        }
-        sources = ()
     return DashboardDataset(
         name="RL GPU",
         cache_key=(clusters, run, start_ms, end_ms, bucket_ms),
-        sources=sources,
+        sources=(SourceQuery("gpu", gpu_sql, RL_MAX_GPU_ROWS),),
         setup_sql=(),
         views=views,
         max_result_rows=RL_MAX_RESULT_ROWS,
