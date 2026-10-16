@@ -61,8 +61,8 @@ and selected row-group columns, across all shard handles. The cache shares a
 64 MiB budget across tables and evicts the least recently used ranges when full.
 It reads only the requested ranges, regardless of table or shard size. Reads larger
 than the budget bypass the cache. `ReadView(root, cache_bytes=...)` sets the budget;
-zero disables it. Cached bytes remain compressed, and blob decoding keeps its
-bounded scans. A new view has a separate cache pinned to its own manifest.
+zero disables it. Cached bytes remain compressed, and blob readers retain their
+row-batch limits. A new view loads the current manifest and starts a separate cache.
 
 `scan` supports column projection and `==`, `!=`, and `in` filters. FineStore unifies
 compatible Parquet schemas across active shards and keeps the row from the latest
