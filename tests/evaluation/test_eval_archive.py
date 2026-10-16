@@ -36,7 +36,7 @@ from marin.evaluation.lm_eval_samples import (
     samples_from_lm_eval,
     summarize_native_eval_samples,
 )
-from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, TaskCoverage
+from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, MetricKind, TaskCoverage
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.migrations.cli import (
@@ -839,6 +839,33 @@ def test_export_uses_evaluator_metadata_for_chat_native_task(tmp_path):
     assert coverage.n_scored == 1
 
 
+def test_truthfulqa_mc2_export_corrects_primary_metric_kind(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "truthfulqa_mc2_0shot" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"truthfulqa_mc2": {"acc": 0.4865235595}},
+                **_result_contract("truthfulqa_mc2", "acc", "accuracy", 0.4865235595, n_benchmark=817, n_attempted=817),
+            }
+        )
+    )
+
+    exported = export_lm_eval_samples(
+        str(results), tasks=(EvalTaskConfig("truthfulqa_mc2", 0, task_alias="truthfulqa_mc2_0shot"),)
+    )
+
+    assert exported.canonical_metrics == {"truthfulqa_mc2_0shot": {"accuracy": 0.4865235595}}
+    benchmark = exported.tasks[0].benchmark
+    assert benchmark is not None
+    assert benchmark.metric_kind is MetricKind.CONTINUOUS
+    assert (
+        next(metric for metric in benchmark.metrics if metric.name == benchmark.primary_metric).kind
+        is MetricKind.CONTINUOUS
+    )
+
+
 def test_export_records_aggregate_only_benchmark_metadata(tmp_path):
     results = tmp_path / "run" / "results"
     directory = results / "aime24" / "model"
@@ -916,7 +943,9 @@ def test_rebuild_keeps_the_recorded_primary_metric(tmp_path):
     [stored] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
     sample = sample_from_archive_row(stored)
     assert sample.grading.metric == "f1"
-    assert sample.correct
+    assert sample.grading.score == 1.0
+    assert sample.grading.passed is None
+    assert sample.correct is None
 
 
 def test_rebuild_preserves_native_evalchemy_repeat_keys(tmp_path):

@@ -109,7 +109,7 @@ DEFAULT_REVIEW_SAMPLES = 20
 MAX_REVIEW_SAMPLES = 40
 # Most models one request may compare head-to-head; mirrors the SPA's picker cap.
 MAX_COMPARE_MODELS = 4
-REVIEW_FILTERS = ("all", "correct", "incorrect", "ungraded")
+REVIEW_FILTERS = ("all", "correct", "incorrect", "scored", "ungraded")
 
 DEFAULT_INGEST_INTERVAL = 600.0
 DEFAULT_REVALIDATE_AFTER = 86400.0
@@ -1191,6 +1191,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
         if not task:
             return JSONResponse({"error": "task is required"}, status_code=400)
         typed_record = EvalRunRecord.model_validate(record)
+        primary_metric_name, primary_metric_kind = samples.declared_primary_metric(typed_record, task)
         payload = await asyncio.to_thread(
             samples.fetch_samples,
             record.get("results_path"),
@@ -1199,7 +1200,8 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             limit=_parse_int(limit, default=DEFAULT_SAMPLE_LIMIT, low=1, high=MAX_SAMPLE_LIMIT),
             correct=correct or "all",
             extraction_filter=extraction_filter or None,
-            primary_metric_name=samples.declared_primary_metric(typed_record, task),
+            primary_metric_name=primary_metric_name,
+            primary_metric_kind=primary_metric_kind,
         )
         return payload
 
@@ -1227,6 +1229,8 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
         sample_filter = body.get("filter", "all")
         if sample_filter not in REVIEW_FILTERS:
             return JSONResponse({"error": f"filter must be one of {REVIEW_FILTERS}"}, status_code=400)
+        typed_record = EvalRunRecord.model_validate(record)
+        primary_metric_name, primary_metric_kind = samples.declared_primary_metric(typed_record, task)
         payload = await asyncio.to_thread(
             review.review_run_samples,
             record.get("results_path"),
@@ -1235,6 +1239,8 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             sample_filter,
             _parse_review_n(body.get("n")),
             config.review_model,
+            primary_metric_name=primary_metric_name,
+            primary_metric_kind=primary_metric_kind,
         )
         return JSONResponse(payload.model_dump(mode="json"))
 

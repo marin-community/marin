@@ -17,7 +17,7 @@ import type { SampleFilter } from '@/utils/samples'
 
 export type { SampleFilter }
 
-type SampleCounts = { all: number; correct: number; incorrect: number; ungraded: number }
+type SampleCounts = { all: number; correct: number; incorrect: number; scored: number; ungraded: number }
 
 const PAGE_SIZE = 25
 const PREFETCH_MARGIN = 5
@@ -26,6 +26,7 @@ export interface SamplePager {
   total: Ref<number>
   counts: Ref<SampleCounts | null>
   primaryMetric: Ref<string | null>
+  metricKind: Ref<'binary' | 'continuous' | null>
   extractionFilters: Ref<string[]>
   resolvedExtractionFilter: Ref<string | null>
   loading: Ref<boolean>
@@ -43,6 +44,7 @@ export function useSamplePager(
   const total = ref(0)
   const counts = ref<SampleCounts | null>(null)
   const primaryMetric = ref<string | null>(null)
+  const metricKind = ref<'binary' | 'continuous' | null>(null)
   const extractionFilters = ref<string[]>([])
   const resolvedExtractionFilter = ref<string | null>(null)
   const loading = ref(false)
@@ -65,6 +67,7 @@ export function useSamplePager(
     pending = new Set()
     total.value = 0
     counts.value = null
+    metricKind.value = null
     revision.value++
   }
 
@@ -93,6 +96,7 @@ export function useSamplePager(
       revision.value++
       total.value = resp.total
       primaryMetric.value = resp.primary_metric
+      metricKind.value = resp.metric_kind
       extractionFilters.value = resp.extraction_filters ?? []
       resolvedExtractionFilter.value = resp.extraction_filter
       if (resp.counts) counts.value = resp.counts
@@ -124,5 +128,5 @@ export function useSamplePager(
     return rows[i - page * PAGE_SIZE] ?? null
   }
 
-  return { total, counts, primaryMetric, extractionFilters, resolvedExtractionFilter, loading, error, sample, ensure }
+  return { total, counts, primaryMetric, metricKind, extractionFilters, resolvedExtractionFilter, loading, error, sample, ensure }
 }

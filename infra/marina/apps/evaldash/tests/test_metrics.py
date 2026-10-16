@@ -8,6 +8,7 @@ from dataclasses import asdict
 
 import pytest
 from evaldash.metrics import build_comparison, build_meta, build_model_detail, build_panel, eval_suites, panel_request
+from marin.evaluation.eval_measurements import measurement_from_record
 from marin.evaluation.eval_policy import EVALCHEMY_COMMIT
 from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS
 from marin.evaluation.eval_stats import Completeness, MissingPolicy
@@ -31,6 +32,27 @@ from marin.evaluation.records import (
 )
 
 ITEMS = 1000
+
+
+def test_truthfulqa_mc2_archive_uses_continuous_interval_without_changing_score():
+    record = _record(
+        "m",
+        "truthfulqa_mc2",
+        None,
+        "2026-10-11T12:01:26+00:00",
+        0.4865235595,
+        coverage={"truthfulqa_mc2": TaskCoverage(n_benchmark=817, n_attempted=817, n_scored=817)},
+        primary_metric="accuracy",
+        metric_kind=MetricKind.BINARY,
+    )
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert measurement.value == 0.4865235595
+    assert measurement.kind is MetricKind.CONTINUOUS
+    assert measurement.protocol_kind is MetricKind.CONTINUOUS
+    assert measurement.n_correct is None
 
 
 def _record(

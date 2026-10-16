@@ -497,6 +497,7 @@ export interface SampleCounts {
   all: number
   correct: number
   incorrect: number
+  scored: number
   ungraded: number
 }
 
@@ -505,6 +506,7 @@ export interface SamplesResponse {
   error: string | null
   task: string
   primary_metric: string | null
+  metric_kind: 'binary' | 'continuous' | null
   metric_columns: string[]
   /** Extraction filters this task was scored under; empty only when its rows carry no filter. */
   extraction_filters: string[]

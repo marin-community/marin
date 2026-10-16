@@ -37,8 +37,14 @@ from finestore.layout import FormatVersionError
 from finestore.migrations import LEGACY_READ_FORMAT_VERSION, LegacyReadView
 from finestore.reader import ReadView
 from fsspec.core import url_to_fs
-from marin.evaluation.metric_selection import base_metric, declared_sample_metric, primary_filter
-from marin.evaluation.records import EvalRunRecord
+from marin.evaluation.metric_selection import (
+    base_metric,
+    declared_sample_metric,
+    is_truthfulqa_mc2_task,
+    primary_filter,
+    sample_metric_kind,
+)
+from marin.evaluation.records import BenchmarkMetadataRef, EvalRunRecord, MetricKind
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 
@@ -76,14 +82,14 @@ class SampleTasksResponse(BaseModel):
 
 
 class SampleCounts(BaseModel):
-    """Unpaginated per-task outcome counts. ``ungraded`` (no primary metric, ``correct is None``) is
-    tracked apart from ``incorrect`` so a sample that was never scored is not reported as a wrong answer."""
+    """Unpaginated per-task outcome counts, with scored and ungraded rows kept separate."""
 
     model_config = ConfigDict(frozen=True)
 
     all: int
     correct: int
     incorrect: int
+    scored: int
     ungraded: int
 
 
@@ -96,6 +102,7 @@ class SamplesResponse(BaseModel):
     error: str | None
     task: str
     primary_metric: str | None
+    metric_kind: MetricKind | None
     metric_columns: tuple[str, ...]
     # Every extraction filter this task stored samples under, and the one this page was drawn from.
     # A task scored under one named filter reports that one name and selects it; only a task whose
@@ -274,13 +281,14 @@ def _empty_samples(*, available: bool, error: str, task: str, offset: int, limit
         error=error,
         task=task,
         primary_metric=None,
+        metric_kind=None,
         metric_columns=(),
         extraction_filters=(),
         extraction_filter=None,
         total=0,
         offset=offset,
         limit=limit,
-        counts=SampleCounts(all=0, correct=0, incorrect=0, ungraded=0),
+        counts=SampleCounts(all=0, correct=0, incorrect=0, scored=0, ungraded=0),
         rows=(),
     )
 
@@ -326,19 +334,25 @@ def _task_table(results_path: str, task: str) -> pa.Table | None:
     return _legacy_load_table(_fs, paths) if paths else None
 
 
-def declared_primary_metric(record: EvalRunRecord, sample_task: str) -> str | None:
-    """Return the metric declaration that applies to a sample task."""
+def _sample_benchmark(record: EvalRunRecord, sample_task: str) -> BenchmarkMetadataRef | None:
+    """Return the benchmark declaration that applies to a sample task."""
     tasks = record.evaluation.tasks
     if len(tasks) == 1:
-        benchmark = tasks[0].benchmark
-        if benchmark is None:
-            return None
-        return next(metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric)
+        return tasks[0].benchmark
     for task in tasks:
         benchmark = task.benchmark
         if benchmark is not None and (sample_task == benchmark.task or sample_task.startswith(f"{benchmark.task}_")):
-            return next(metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric)
+            return benchmark
     return None
+
+
+def declared_primary_metric(record: EvalRunRecord, sample_task: str) -> tuple[str | None, MetricKind | None]:
+    """Return the primary source metric and its effective sample-scoring kind."""
+    benchmark = _sample_benchmark(record, sample_task)
+    if benchmark is not None:
+        source = next(metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric)
+        return source, sample_metric_kind(benchmark.task, benchmark.metric_kind)
+    return None, sample_metric_kind(sample_task, None)
 
 
 def _sample_primary_metric(metric_columns: tuple[str, ...], declared: str | None) -> str | None:
@@ -356,6 +370,7 @@ def fetch_samples(
     correct: str,
     extraction_filter: str | None = None,
     primary_metric_name: str | None = None,
+    primary_metric_kind: MetricKind | None = None,
 ) -> SamplesResponse:
     """Return one typed, correctness-filtered page of samples for a task under one extraction filter."""
     if not results_path:
@@ -388,16 +403,29 @@ def fetch_samples(
     )
     metric_columns = tuple(sorted({name for row in metric_maps if row for name in row}))
     primary = _sample_primary_metric(metric_columns, primary_metric_name)
-    correct_values = [
-        value if value is not None or primary is None or not row or row.get(primary) is None else row[primary] >= 1.0
-        for value, row in zip(stored_correct, metric_maps, strict=True)
-    ]
+    metric_kind = sample_metric_kind(task, primary_metric_kind)
+    if metric_kind is MetricKind.CONTINUOUS:
+        correct_values = [None] * table.num_rows
+    else:
+        correct_values = [
+            value if value is not None or primary is None or not row or row.get(primary) is None else row[primary] >= 1.0
+            for value, row in zip(stored_correct, metric_maps, strict=True)
+        ]
     n_correct = sum(1 for value in correct_values if value is True)
-    n_ungraded = sum(1 for value in correct_values if value is None)
+    scored_indices = [
+        i for i, row in enumerate(metric_maps) if primary is not None and row and row.get(primary) is not None
+    ]
+    scored_set = set(scored_indices)
+    n_ungraded = (
+        table.num_rows - len(scored_indices)
+        if metric_kind is MetricKind.CONTINUOUS
+        else sum(1 for value in correct_values if value is None)
+    )
     counts = SampleCounts(
         all=table.num_rows,
         correct=n_correct,
-        incorrect=table.num_rows - n_correct - n_ungraded,
+        incorrect=0 if metric_kind is MetricKind.CONTINUOUS else table.num_rows - n_correct - n_ungraded,
+        scored=table.num_rows - n_ungraded,
         ungraded=n_ungraded,
     )
     if correct == "correct":
@@ -405,7 +433,17 @@ def fetch_samples(
     elif correct == "incorrect":
         indices = [i for i, value in enumerate(correct_values) if value is False]
     elif correct == "ungraded":
-        indices = [i for i, value in enumerate(correct_values) if value is None]
+        indices = (
+            [i for i in range(table.num_rows) if i not in scored_set]
+            if metric_kind is MetricKind.CONTINUOUS
+            else [i for i, value in enumerate(correct_values) if value is None]
+        )
+    elif correct == "scored":
+        indices = (
+            scored_indices
+            if metric_kind is MetricKind.CONTINUOUS
+            else [i for i, value in enumerate(correct_values) if value is not None]
+        )
     else:
         indices = list(range(table.num_rows))
     page_indices = indices[offset : offset + limit]
@@ -413,7 +451,31 @@ def fetch_samples(
     page = []
     for row in page_rows:
         sample = sample_from_archive_row(row)
-        if sample.correct is None and primary is not None and primary in sample.metrics:
+        if metric_kind is MetricKind.CONTINUOUS:
+            score = sample.metrics.get(primary) if primary is not None else None
+            grading = sample.grading
+            if score is not None:
+                grading = (
+                    grading.model_copy(update={"score": score, "passed": None})
+                    if grading is not None and grading.metric == primary
+                    else Grading(
+                        method=f"lm-eval:{base_metric(primary)}",
+                        metric=primary,
+                        filter=filtered.selected,
+                        score=score,
+                        passed=None,
+                    )
+                )
+            elif grading is not None:
+                grading = grading.model_copy(update={"passed": None})
+            sample = sample.model_copy(
+                update={
+                    "correct": None,
+                    "grading": grading,
+                    "target_choice": None if is_truthfulqa_mc2_task(task) else sample.target_choice,
+                }
+            )
+        elif sample.correct is None and primary is not None and primary in sample.metrics:
             score = sample.metrics[primary]
             sample = sample.model_copy(
                 update={
@@ -436,6 +498,7 @@ def fetch_samples(
         error=None,
         task=task,
         primary_metric=primary,
+        metric_kind=metric_kind,
         metric_columns=metric_columns,
         extraction_filters=filtered.available,
         extraction_filter=filtered.selected,
