@@ -117,24 +117,35 @@ class RolloutFailure:
 
 @dataclass(frozen=True)
 class RolloutData:
-    """One attempt's conversation, token evidence, grade, and captured run outputs.
+    """The record of one attempt: the conversation, the token evidence, the grade, and the run outputs.
 
-    ``outputs`` maps each regular file under ``TaskSpec.output_paths`` on the task machine
-    to its bytes. The engine captures them once after the turn loop, before final grading.
+    A ``Transition.reset`` starts a new training record. Thus the record holds only the part after the last reset.
     """
 
     task_id: str
+    """The ID of the task that the attempt ran."""
     messages: tuple[dict[str, Any], ...]
+    """The chat of this training record, through the last model response. The grader reads it."""
     prompt_token_ids: tuple[int, ...]
+    """The tokens of the first prompt of this training record."""
     response_token_ids: tuple[int, ...]
+    """All tokens after the first prompt: each sampled response and the observation tokens between them."""
     loss_mask: tuple[int, ...]
+    """One value per response token: 1 for a sampled token, 0 for an observation. All 0 in a messages trace."""
     logprobs: tuple[float, ...] | None
+    """The sampling log probability of each response token, 0.0 for observation tokens. None if a turn had none."""
     grade: GradeResult
+    """The verdict of the task's grader, or of the harness for a ``SessionGrader`` task. Unavailable if no response."""
     stop_reason: str
+    """Why the turn loop ended, for example ``"stop"``, ``"length"``, ``"max_turns"``, or ``"budget_reached"``."""
     steps: tuple["RolloutStep", ...] = ()
+    """One step per model turn of this training record: the turn, the transition, and where its tokens end."""
     metrics: dict[str, Any] = field(default_factory=dict)
+    """The last step's metrics, and engine values such as the count of undelivered events."""
     outputs: dict[str, bytes] = field(default_factory=dict)
+    """The files under ``TaskSpec.output_paths``, by path. The engine reads them after the turn loop."""
     failure: RolloutFailure | None = None
+    """For an interrupted attempt: the exception type and the operation that failed."""
 
 
 class RolloutOperation(StrEnum):
@@ -161,20 +172,20 @@ class RolloutContractError(ValueError):
 
 @dataclass(frozen=True)
 class Transition:
-    """A harness's response to one model turn.
-
-    ``observations`` extend the conversation for the next request, and ``token_ids`` can pin the exact
-    prompt tokens of that request. ``reset`` replaces the conversation with a new prompt instead, and the
-    engine starts a new training record. ``data`` is the harness's own record of the step, for example
-    the rewards that a trainer reads; the engine keeps it unchanged in ``RolloutStep.transition``.
-    """
+    """A harness's answer to one model turn: observations for the next request, a reset, or the end."""
 
     done: bool
+    """True ends the turn loop after this turn."""
     observations: tuple[dict[str, Any], ...] = ()
+    """New messages for the next request, for example tool results. They follow the model's message."""
     token_ids: tuple[int, ...] | None = None
+    """Pins the exact tokens of the next prompt. They must start with the tokens served so far."""
     reset: Prompt | None = None
+    """A new prompt that replaces the chat in a new training record. Skipped on the last turn or at the token budget."""
     metrics: dict[str, Any] = field(default_factory=dict)
+    """The step's metrics. ``RolloutData.metrics`` starts from the metrics of the last step."""
     data: object = None
+    """The harness's own data for the step, for example rewards for a trainer. The engine does not read it."""
 
 
 @dataclass(frozen=True)
