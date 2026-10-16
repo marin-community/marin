@@ -268,6 +268,7 @@ def test_build_command_completion_route_with_fewshot_and_limit():
     assert "--apply_chat_template" not in cmd
     assert cmd[cmd.index("--tasks") + 1] == "gsm8k"
     assert cmd[cmd.index("--output_path") + 1] == "/tmp/out"
+    assert "--log_samples" not in cmd
     assert cmd[cmd.index("--finestore_output_path") + 1] == config["out_path"]
     assert cmd[cmd.index("--finestore_output_prefix") + 1] == "gsm8k_cot"
     assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048"

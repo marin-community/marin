@@ -203,7 +203,6 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         output_path,
         # FineStore owns the durable native artifacts and normalized sample rows. Evalchemy keeps
         # its aggregate JSON in this temporary directory only for the completion check below.
-        "--log_samples",
         "--finestore_output_path",
         config["out_path"],
         "--finestore_output_prefix",
