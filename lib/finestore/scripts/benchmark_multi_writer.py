@@ -253,6 +253,8 @@ def main() -> None:
     logging.basicConfig(level=logging.ERROR)
     logging.getLogger(COMPACTION_LOGGER).setLevel(logging.INFO)
     logging.getLogger(COMPACTION_LOGGER).propagate = False
+    logging.getLogger(RETRY_LOGGER).setLevel(logging.WARNING)
+    logging.getLogger(RETRY_LOGGER).propagate = False
 
     header = (
         f"{'writers':>7} {'layout':>16} {'elapsed_s':>9} {'requests':>9} {'cas':>5} {'conflicts':>9} "
