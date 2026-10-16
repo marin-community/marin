@@ -98,13 +98,23 @@ def ckpt1_model_config(size: str) -> GrugModelConfig:
 # with attn_res_layer_backward=save), so a hook can read the traced layer index and hand back traced captures.
 
 
+class PartInput:
+    """What one MLP part (routed or shared) computes from, as the traced int ``PoolPlan`` carries."""
+
+    UNPOOLED = 0
+    POOLED = 1
+    ABLATED = 2
+
+
 @dataclasses.dataclass
 class PoolPlan:
     """Replace a layer's MLP (routed + shared, before the branch-output SConv) by the MLP of a pooled input.
 
     Position ``t`` reads ``z_t = (v[i1[t]] + v[i2[t]]) / 2``; ``v`` is the MLP input ``x`` (``pool_resid`` 0) or the
     pre-norm AttnRes mix ``h`` re-normed through rms_mlp/GatedNorm (``pool_resid`` 1). ``routed_on``/``shared_on``
-    pick which part reads ``z`` (the other reads ``x``). All four are traced so one compile serves every variant."""
+    are each part's ``PartInput``: read ``x``, read ``z``, or ablate the part (zero output). All four are traced so
+    one compile serves every variant.
+    """
 
     layer: int
     i1: jax.Array
@@ -149,8 +159,8 @@ def _pooled_mlp_branch(self: Block, h: jax.Array, mask, plan: PoolPlan) -> tuple
     hbar = 0.5 * (_gather_rows(h, i1).astype(jnp.float32) + _gather_rows(h, i2).astype(jnp.float32))
     zh = self._mlp_input(hbar.astype(h.dtype))
     z = jnp.where(plan.pool_resid > 0, zh, zx)
-    routed_in = jnp.where(plan.routed_on > 0, z, x)
-    shared_in = jnp.where(plan.shared_on > 0, z, x)
+    routed_in = jnp.where(plan.routed_on == PartInput.POOLED, z, x)
+    shared_in = jnp.where(plan.shared_on == PartInput.POOLED, z, x)
     routed, stats = self.mlp(routed_in, segment_ids=segment_ids)
     shared = self.shared[0]
     pre = jnp.einsum("bsd,di->bsi", shared_in, shared.w_up.astype(x.dtype), out_sharding=spec)
@@ -158,6 +168,8 @@ def _pooled_mlp_branch(self: Block, h: jax.Array, mask, plan: PoolPlan) -> tuple
         "bsi,id->bsd", jnp.square(jax.nn.relu(pre)), shared.w_down.astype(x.dtype), out_sharding=spec
     )
     stats = {**stats, model_mod._SHARED_PRE: rearrange(pre, "b s i -> (b s) i")}
+    routed = jnp.where(plan.routed_on == PartInput.ABLATED, jnp.zeros_like(routed), routed)
+    shared_out = jnp.where(plan.shared_on == PartInput.ABLATED, jnp.zeros_like(shared_out), shared_out)
     out = routed + shared_out
     if self.sconv_mlp is not None:
         out = self.sconv_mlp(out, segment_ids)
@@ -277,7 +289,12 @@ def pool_indices(doc_start: np.ndarray, variant: str) -> tuple[np.ndarray, np.nd
     return i1, i2
 
 
-# (name, layer-independent index variant, routed_on, shared_on, pool_resid)
+# (name, index variant, routed PartInput, shared PartInput, pool_resid)
+ABLATIONS = (
+    ("zero_mlp", "identity", 2, 2, 0),
+    ("zero_routed", "identity", 2, 0, 0),
+    ("zero_shared", "identity", 0, 2, 0),
+)
 LAYER3_VARIANTS = (
     ("ref_identity", "identity", 1, 1, 0),
     ("a_causal_pool", "causal_pool", 1, 1, 0),
@@ -288,6 +305,7 @@ LAYER3_VARIANTS = (
     ("c_pool_self", "pool_self", 1, 1, 0),
     ("c_pool_self_resid", "pool_self", 1, 1, 1),
     ("d_oracle_noncausal", "oracle", 1, 1, 0),
+    *ABLATIONS,
 )
 CONTRAST_VARIANTS = (
     ("ref_identity", "identity", 1, 1, 0),
@@ -295,6 +313,7 @@ CONTRAST_VARIANTS = (
     ("b_lag1", "lag1", 1, 1, 0),
     ("c_pool_self", "pool_self", 1, 1, 0),
     ("d_oracle_noncausal", "oracle", 1, 1, 0),
+    *ABLATIONS,
 )
 LEAK_VARIANTS = ("ref_identity", "a_causal_pool", "b_lag1", "c_pool_self", "d_oracle_noncausal")
 
