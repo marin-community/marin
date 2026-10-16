@@ -22,8 +22,10 @@ class Continuation:
     The transport keeps them unchanged, so that it never tokenizes sampled text again.
     """
 
-    served_token_ids: tuple[int, ...]  # The prompt and sampled response tokens of the earlier turns, as served.
-    assistant_message_index: int  # Where the served tokens end in `messages`: the last assistant message.
+    served_token_ids: tuple[int, ...]
+    """The prompt and sampled response tokens of the earlier turns, as served."""
+    assistant_message_index: int
+    """Where the served tokens end in ``messages``: the last assistant message."""
 
 
 @dataclass(frozen=True)
@@ -36,10 +38,14 @@ class ModelRequest:
     are sampling settings. A request never has both.
     """
 
-    messages: tuple[dict[str, Any], ...]  # The chat so far, one dict per message. New observations come last.
-    options: dict[str, Any]  # Other request fields, such as tools and sampling settings. The engine does not read them.
-    continuation: Continuation | None = None  # Tokens to keep unchanged. Tokenize only the messages after them.
-    prompt_token_ids: tuple[int, ...] | None = None  # A full prompt that the harness pinned. Serve it unchanged.
+    messages: tuple[dict[str, Any], ...]
+    """The chat so far, one dict per message. New observations come last."""
+    options: dict[str, Any]
+    """Other request fields, such as tools and sampling settings. The engine does not read them."""
+    continuation: Continuation | None = None
+    """Tokens to keep unchanged. Tokenize only the messages after them."""
+    prompt_token_ids: tuple[int, ...] | None = None
+    """A full prompt that the harness pinned. Serve it unchanged."""
 
 
 @dataclass(frozen=True)
