@@ -106,6 +106,8 @@ model_config_overrides:
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21.yaml
   open-athena-Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92:
     tau3-pi: model-configs/tau3/open-athena-Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92.yaml
+  open-athena-Snowball-Smartie-RL-2026.10.15.32-step14:
+    tau3-pi: model-configs/tau3/open-athena-Snowball-Smartie-RL-2026.10.15.32-step14.yaml
   openai-gpt-oss-20b:
     tau3-pi: model-configs/tau3/openai-gpt-oss-20b.yaml
   zai-org-GLM-4.7-Flash:
