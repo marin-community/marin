@@ -16,8 +16,8 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.swe import SWEInstance, swe_task
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Source, TaskSpec, TextMessage
 
-from rolloutengine.task_session import WORKSPACE_INSTRUCTION
-from rolloutengine.test_support import ReplayModel, engine, lowered, machine_runtime
+from rolloutengine.shell import WORKSPACE_INSTRUCTION
+from rolloutengine.test_support import ReplayModel, engine, machine_runtime, rollout_spec
 
 
 class LocalGitMachine:
@@ -131,7 +131,7 @@ async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(
         ]
     )
     result = await engine(model, {"local": Factory()}).run(
-        lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+        rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
     )
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward)
     assert model.requests[0].messages[0] == {"role": "user", "content": "Repair value.txt."}

@@ -125,11 +125,13 @@ def file_write_command(files):
 @pytest.mark.parametrize("case", ["math500", "tasktrove-codeforces", "tasktrove-stack_pytest"])
 async def test_quick_parquet_rollout_grades_correct_and_wrong_answers(case, tmp_path, monkeypatch, machines):
     # RolloutEngine is optional in Marin CI; import it only when this manual test is selected.
+    from rolloutengine.shell import shell_harness  # noqa: PLC0415
     from rolloutengine.test_support import (  # noqa: PLC0415
+        SHELL,
         ReplayModel,
         engine,
-        lowered,
         machine_runtime,
+        rollout_spec,
         shell_call,
     )
 
@@ -193,13 +195,13 @@ async def test_quick_parquet_rollout_grades_correct_and_wrong_answers(case, tmp_
             function["arguments"] = json.dumps({"script" if tool_name else "cmd": candidate})
             messages = [call, {"role": "assistant", "content": "Done."}]
         model = ReplayModel(messages)
-        result = await engine(model, {"local": machines}).run(
-            lowered(
+        shell = shell_harness(command_timeout=None, shell_tool=ShellToolConfig(name="terminal", command_parameter="cmd"))
+        result = await engine(model, {"local": machines}, harnesses={SHELL: shell}).run(
+            rollout_spec(
                 task,
                 machine=None if case == "math500" else machine_runtime(),
                 verifier_machine=None if case == "math500" else machine_runtime(),
                 verifier_timeout=60,
-                shell_tool=ShellToolConfig(name="terminal", command_parameter="cmd"),
             )
         )
         assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, expected), result.grade.error

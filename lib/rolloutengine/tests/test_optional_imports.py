@@ -19,7 +19,7 @@ class WithoutBubblewrap:
 
 sys.meta_path.insert(0, WithoutBubblewrap())
 import rolloutengine.engine
-import rolloutengine.lowering
+import rolloutengine.checks
 import rolloutengine.machines
 import taskcompendium.runtime.local
 """
