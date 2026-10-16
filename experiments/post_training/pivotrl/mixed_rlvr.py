@@ -115,11 +115,30 @@ def _replace_field(struct: pa.StructArray, name: str, values: pa.Array) -> pa.St
     return pa.StructArray.from_arrays(children, names=names, mask=struct.is_null())
 
 
-def _routed(pools: dict[str, dict[str, Any]]) -> tuple[pa.Table, dict[str, int]]:
+def _has_empty_message(prompt: list[dict[str, Any]]) -> bool:
+    """Whether a text message is blank; MarinSkyRL's task conversations reject them."""
+    return any(
+        not (message["content"] or "").strip()
+        for message in prompt
+        if message["role"] != "tool" and not (message["role"] == "assistant" and message.get("tool_calls"))
+    )
+
+
+def _without_empty_messages(rows: pa.Table) -> pa.Table:
+    keep = [not _has_empty_message(prompt) for prompt in rows.column("prompt").to_pylist()]
+    return rows.filter(pa.array(keep))
+
+
+def _routed(pools: dict[str, dict[str, Any]]) -> tuple[pa.Table, dict[str, dict[str, int]]]:
     tables = {route: _pool_rows(pool) for route, pool in pools.items()}
+    counts = {route: {"rows": table.num_rows} for route, table in tables.items()}
+    tables = {route: _without_empty_messages(table) for route, table in tables.items()}
+    for route, table in tables.items():
+        counts[route]["dropped_empty_message"] = counts[route]["rows"] - table.num_rows
+        counts[route]["rows"] = table.num_rows
     rows = _with_task_session_route(pa.concat_tables(tables.values(), promote_options="permissive"))
     routes = pa.array([route for route, table in tables.items() for _ in range(table.num_rows)], pa.string())
-    return rows.append_column(ROUTE_COLUMN, routes), {route: table.num_rows for route, table in tables.items()}
+    return rows.append_column(ROUTE_COLUMN, routes), counts
 
 
 def mix_routes(*, train: dict[str, dict[str, Any]], validation: dict[str, dict[str, Any]], output_path: str) -> None:
@@ -188,7 +207,7 @@ def arm_datasets() -> dict[str, ArtifactStep[Artifact]]:
         name: apply(
             user_owned_name(f"pivotrl/mixed-rlvr/{name}"),
             remote(mix_routes, resources=ResourceConfig.with_cpu(cpu=4, ram="64g")),
-            version="2026.10.16.1",
+            version="2026.10.16.2",
             train={**rlvr, **pools},
             validation=validation,
             output_path=OUT,

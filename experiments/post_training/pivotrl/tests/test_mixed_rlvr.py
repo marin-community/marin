@@ -38,10 +38,10 @@ def _pivots(ids: list[str], **counts: list) -> pa.Table:
     return pa.table({**columns, "extra_info": _extra_info(len(ids)), **counts})
 
 
-def test_arms_tag_rows_by_route_rlvr_first_and_random_turns_drop_unscored_rows(tmp_path):
+def test_arms_tag_rows_by_route_rlvr_first_and_drop_unscored_turns_and_blank_messages(tmp_path):
     # Every row also moves to the task-session route MarinSkyRL grades Nemotron Ultra rows on, and a
     # capped pool's rows carry their reply cap in their request.
-    rlvr = _write(tmp_path / "rlvr", "data/train.parquet", _rlvr(["r0", "r1"]))
+    rlvr = _write(tmp_path / "rlvr", "data/train.parquet", _rlvr(["r0", "r1", " "]))
     swe = {**_write(tmp_path / "swe", TRAIN_FILENAME, _pivots(["s0"])), "max_output_tokens": 4096}
     scored = _pivots(
         ["t0", "t1", "t2"],
@@ -74,8 +74,12 @@ def test_arms_tag_rows_by_route_rlvr_first_and_random_turns_drop_unscored_rows(t
     assert messages[0][0]["reasoning_content"] is None and messages[2][0]["reasoning_content"] == "think"
     assert pq.read_table(out / VALIDATION_FILENAME).column(ROUTE_COLUMN).to_pylist() == ["rlvr", "swe"]
     assert json.loads((out / "manifest.json").read_text()) == {
-        "train": {"rlvr": 2, "swe": 1, "terminal": 2},
-        "validation": {"rlvr": 1, "swe": 1},
+        "train": {
+            "rlvr": {"rows": 2, "dropped_empty_message": 1},
+            "swe": {"rows": 1, "dropped_empty_message": 0},
+            "terminal": {"rows": 2, "dropped_empty_message": 0},
+        },
+        "validation": {"rlvr": {"rows": 1, "dropped_empty_message": 0}, "swe": {"rows": 1, "dropped_empty_message": 0}},
     }
 
 
