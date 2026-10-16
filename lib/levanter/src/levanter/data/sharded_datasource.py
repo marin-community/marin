@@ -346,14 +346,17 @@ def _sniff_format_for_dataset(url):
         raise ValueError(f"Unknown format for {url}")
 
     if format_from_url == ".json":
-        # Some datasets use .json for JSONL. A JSONL object occupies one
-        # complete line; a multiline JSON document does not.
+        # Some datasets use .json for JSONL. Its first line must decode as a
+        # complete record; a nested object can end a line in multiline JSON.
         with open_url(url, "r", compression="infer") as f:
             first_line = f.readline()
             if first_line.lstrip().startswith("["):
                 return ".json"
-            if first_line.rstrip().endswith("}"):
-                return ".jsonl"
+            try:
+                json.loads(first_line)
+            except json.JSONDecodeError:
+                return ".json"
+            return ".jsonl"
 
     return format_from_url
 

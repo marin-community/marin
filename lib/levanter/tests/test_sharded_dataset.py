@@ -46,6 +46,7 @@ def test_sniff_format_for_json():
 def test_url_datasource_reads_json_object_array_and_jsonl(tmp_path):
     documents = {
         "object": ('{ "text":\n  "hello"\n}\n', [{"text": "hello"}]),
+        "nested_object": ('{ "metadata": {}\n, "text": "hello"\n}\n', [{"metadata": {}, "text": "hello"}]),
         "array": ('[{"text": "hello"}, {"text": "world"}]', [{"text": "hello"}, {"text": "world"}]),
         "jsonl": ('{"text": "hello"}\n{"text": "world"}\n', [{"text": "hello"}, {"text": "world"}]),
     }
