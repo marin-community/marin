@@ -10,6 +10,7 @@ harness lives on the marin side (``tests/test_snowball_grug_parity.py``) to resp
 levanter -> experiments dependency direction.
 """
 
+import dataclasses
 import json
 import subprocess
 import sys
@@ -32,11 +33,13 @@ from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmConfig
 from levanter.layers.attention import AttentionMask as LmAttentionMask
+from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
     GRUG_MOE_MODEL_TYPE,
     GrugMoeHfConfig,
     SnowballConfig,
+    SnowballDecodeRouteCaptureBatch,
     SnowballLMHeadModel,
     SnowballMoEMLP,
     SnowballRouteCaptureBatch,
@@ -332,6 +335,9 @@ def test_snowball_moe_capture_replay_preserves_padding_and_gradients():
         x = jax.random.normal(jax.random.key(18), (2, 4, cfg.hidden_dim))
         token_valid = jnp.asarray([True, True, False, True, True, False, True, True])
         capture = layer.capture_routes(x, token_valid=token_valid)
+        reference_logits = np.einsum("td,de->te", np.asarray(x).reshape(-1, cfg.hidden_dim), np.asarray(layer.router))
+        reference_logits += np.asarray(layer.router_bias)
+        reference_order = np.argsort(-reference_logits, axis=-1, kind="stable")[:, : cfg.num_experts_per_token + 1]
         perturbed = eqx.tree_at(lambda m: m.router, layer, layer.router.at[:, 0].add(10.0))
         replayed = perturbed(x, token_valid=token_valid, route_capture=capture)
         fresh = perturbed(x, token_valid=token_valid)
@@ -345,6 +351,42 @@ def test_snowball_moe_capture_replay_preserves_padding_and_gradients():
     assert float(jnp.max(jnp.abs(replay_grad.router))) > 0.0
     assert float(jnp.max(jnp.abs(replay_grad.expert_mlp.w_gate))) > 0.0
     assert isinstance(capture, PreparedMoERouteCapture)
+    assert capture.selected_experts.shape == (8, cfg.num_experts_per_token)
+    assert capture.qb_alpha.shape == (8, 1)
+    assert np.asarray(capture.qb_alpha).dtype == np.float32
+    assert np.all(np.isfinite(np.asarray(capture.qb_alpha)))
+    np.testing.assert_array_equal(
+        np.asarray(capture.selected_experts), reference_order[:, : cfg.num_experts_per_token]
+    )
+    np.testing.assert_array_equal(np.asarray(capture.token_valid), np.asarray(token_valid))
+
+
+def test_snowball_moe_capture_routes_reports_exact_qb_threshold_for_representable_logits():
+    cfg = _tiny_config(num_layers=1, num_experts=4, num_experts_per_token=2, moe_implementation="scatter")
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        layer = SnowballMoEMLP.init(cfg, key=jax.random.key(19))
+        x = (
+            jnp.zeros((1, 4, cfg.hidden_dim), dtype=jnp.float32)
+            .at[:, :, 0]
+            .set(jnp.asarray([1, 2, 4, 8], dtype=jnp.float32))
+        )
+        router = jnp.zeros_like(layer.router).at[0, :4].set(jnp.asarray([1, 2, 3, 4], dtype=jnp.float32))
+        router_bias = jnp.asarray([0.5, -0.5, 0.25, -0.25], dtype=jnp.float32)
+        layer = eqx.tree_at(lambda m: m.router, layer, router)
+        layer = eqx.tree_at(lambda m: m.router_bias, layer, router_bias)
+        token_valid = jnp.asarray([True, True, False, True])
+        capture = layer.capture_routes(x, token_valid=token_valid)
+
+    reference_logits = np.einsum("td,de->te", np.asarray(x).reshape(-1, cfg.hidden_dim), np.asarray(router))
+    reference_logits += np.asarray(router_bias)
+    reference_order = np.argsort(-reference_logits, axis=-1, kind="stable")[:, : cfg.num_experts_per_token + 1]
+    np.testing.assert_array_equal(
+        np.asarray(capture.selected_experts), reference_order[:, : cfg.num_experts_per_token]
+    )
+    np.testing.assert_allclose(
+        np.asarray(capture.qb_alpha[:, 0]), reference_logits[np.arange(4), reference_order[:, -1]], rtol=1e-7, atol=0
+    )
+    np.testing.assert_array_equal(np.asarray(capture.token_valid), np.asarray(token_valid))
 
 
 def test_snowball_transformer_replay_jit_and_grad_use_actual_packed_validity():
@@ -766,6 +808,192 @@ def test_snowball_paged_decode_matches_full_forward(sliding_window):
         )
         model = eqx.tree_at(lambda m: m.transformer.blocks, model, blocks)
         assert_mixed_paged_decode_matches_forward(model)
+
+
+def test_snowball_cached_decode_routes_reassemble_for_teacher_forced_replay():
+    """Capture routes in the actual decode MLP and bind them to the same forward layout."""
+    cfg = _tiny_config(num_layers=2, moe_implementation="scatter", max_seq_len=16)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(41))
+        cache = model.initial_cache(PageTableSpec(num_pages=8, page_size=2, max_seqs=1), dtype=jnp.float32)
+        prefill_ids = hax.named(jnp.asarray([2, 7, 0, 9], dtype=jnp.int32), "position")
+        prefill_positions = hax.named(jnp.arange(4, dtype=jnp.int32), "position")
+        prefill_info = PageBatchInfo(
+            slot_ids=hax.named(jnp.asarray([0], dtype=jnp.int32), "seq"),
+            page_indices=hax.named(jnp.asarray([[0, 1]], dtype=jnp.int32), ("seq", "page")),
+            seq_lens=hax.named(jnp.asarray([4], dtype=jnp.int32), "seq"),
+            cu_q_lens=hax.named(jnp.asarray([0, 4], dtype=jnp.int32), "seq"),
+            num_seqs=jnp.asarray(1, dtype=jnp.int32),
+            new_token_dests=hax.named(jnp.asarray([0, 1, 2, 3], dtype=jnp.int32), "position"),
+            page_size=2,
+        )
+        legacy_cache = model.initial_cache(PageTableSpec(num_pages=8, page_size=2, max_seqs=1), dtype=jnp.float32)
+        legacy_logits, legacy_cache = model.decode(prefill_ids, legacy_cache, prefill_info, prefill_positions)
+        prefill_logits, cache, prefill_capture = model.decode_with_route_captures(
+            prefill_ids, cache, prefill_info, prefill_positions
+        )
+        legacy_prefill_pages = tuple(page.kv_pages.array for page in legacy_cache)
+        capture_prefill_pages = tuple(page.kv_pages.array for page in cache)
+        assert isinstance(prefill_capture, SnowballDecodeRouteCaptureBatch)
+        assert len(prefill_capture.route_captures) == cfg.num_layers
+        assert all(c.selected_experts.shape == (4, cfg.num_experts_per_token) for c in prefill_capture.route_captures)
+        teacher_ids = hax.named(prefill_ids.array[None, :], ("batch", "position"))
+        teacher_positions = jnp.arange(4, dtype=jnp.int32)[None, :]
+        teacher_valid = jnp.ones((4,), dtype=jnp.bool_)
+        replay_capture = prefill_capture.as_teacher_forced(
+            teacher_ids,
+            teacher_positions,
+            teacher_valid,
+            batch_info=prefill_info,
+        )
+        replayed = model(teacher_ids, route_captures=replay_capture)
+        changed_block = eqx.tree_at(
+            lambda block: block.mlp.router,
+            model.transformer.blocks[0],
+            model.transformer.blocks[0].mlp.router.at[:, 0].add(0.01),
+        )
+        changed = eqx.tree_at(lambda current: current.transformer.blocks[0], model, changed_block)
+        changed_replay = changed(teacher_ids, route_captures=replay_capture)
+        changed_grad = eqx.filter_grad(
+            lambda current: jnp.sum(current(teacher_ids, route_captures=replay_capture).array)
+        )(changed)
+
+        continuation_ids = hax.named(jnp.asarray([11], dtype=jnp.int32), "position")
+        continuation_positions = hax.named(jnp.asarray([4], dtype=jnp.int32), "position")
+        continuation_info = PageBatchInfo(
+            slot_ids=hax.named(jnp.asarray([0], dtype=jnp.int32), "seq"),
+            page_indices=hax.named(jnp.asarray([[0, 1, 2]], dtype=jnp.int32), ("seq", "page")),
+            seq_lens=hax.named(jnp.asarray([5], dtype=jnp.int32), "seq"),
+            cu_q_lens=hax.named(jnp.asarray([0, 1], dtype=jnp.int32), "seq"),
+            num_seqs=jnp.asarray(1, dtype=jnp.int32),
+            new_token_dests=hax.named(jnp.asarray([4], dtype=jnp.int32), "position"),
+            page_size=2,
+        )
+        legacy_continuation_logits, legacy_cache = model.decode(
+            continuation_ids, legacy_cache, continuation_info, continuation_positions
+        )
+        continuation_logits, cache, continuation_capture = model.decode_with_route_captures(
+            continuation_ids, cache, continuation_info, continuation_positions
+        )
+        legacy_continuation_pages = tuple(page.kv_pages.array for page in legacy_cache)
+        capture_continuation_pages = tuple(page.kv_pages.array for page in cache)
+        padded_ids = hax.named(jnp.asarray([12, 0], dtype=jnp.int32), "position")
+        padded_positions = hax.named(jnp.asarray([5, -1], dtype=jnp.int32), "position")
+        padded_info = PageBatchInfo(
+            slot_ids=hax.named(jnp.asarray([0], dtype=jnp.int32), "seq"),
+            page_indices=hax.named(jnp.asarray([[0, 1, 2]], dtype=jnp.int32), ("seq", "page")),
+            seq_lens=hax.named(jnp.asarray([6], dtype=jnp.int32), "seq"),
+            cu_q_lens=hax.named(jnp.asarray([0, 1], dtype=jnp.int32), "seq"),
+            num_seqs=jnp.asarray(1, dtype=jnp.int32),
+            new_token_dests=hax.named(jnp.asarray([5, -1], dtype=jnp.int32), "position"),
+            page_size=2,
+        )
+        legacy_padded_logits, legacy_cache = model.decode(padded_ids, legacy_cache, padded_info, padded_positions)
+        padded_logits, cache, padded_capture = model.decode_with_route_captures(
+            padded_ids, cache, padded_info, padded_positions
+        )
+        legacy_padded_pages = tuple(page.kv_pages.array for page in legacy_cache)
+        capture_padded_pages = tuple(page.kv_pages.array for page in cache)
+        full_capture = SnowballDecodeRouteCaptureBatch.concatenate(
+            prefill_capture, continuation_capture, padded_capture
+        )
+        full_teacher_ids = hax.named(
+            jnp.concatenate((prefill_ids.array, continuation_ids.array, padded_ids.array[:1]))[None, :],
+            ("batch", "position"),
+        )
+        full_teacher_positions = jnp.arange(6, dtype=jnp.int32)[None, :]
+        full_replay_capture = full_capture.as_teacher_forced(
+            full_teacher_ids,
+            full_teacher_positions,
+            jnp.ones((6,), dtype=jnp.bool_),
+            batch_info=padded_info,
+        )
+        full_replayed = model(full_teacher_ids, route_captures=full_replay_capture)
+        full_ordinary = model(full_teacher_ids)
+
+    np.testing.assert_array_equal(np.asarray(prefill_logits.array), np.asarray(legacy_logits.array))
+    for expected, actual in zip(legacy_prefill_pages, capture_prefill_pages, strict=True):
+        np.testing.assert_array_equal(np.asarray(expected), np.asarray(actual))
+    np.testing.assert_array_equal(np.asarray(legacy_continuation_logits.array), np.asarray(continuation_logits.array))
+    for expected, actual in zip(legacy_continuation_pages, capture_continuation_pages, strict=True):
+        np.testing.assert_array_equal(np.asarray(expected), np.asarray(actual))
+    np.testing.assert_array_equal(np.asarray(legacy_padded_logits.array), np.asarray(padded_logits.array))
+    for expected, actual in zip(legacy_padded_pages, capture_padded_pages, strict=True):
+        np.testing.assert_array_equal(np.asarray(expected), np.asarray(actual))
+    np.testing.assert_allclose(np.asarray(prefill_logits.array), np.asarray(replayed.array[0]), rtol=1e-4, atol=1e-4)
+    assert not np.array_equal(np.asarray(changed_replay.array), np.asarray(replayed.array))
+    assert float(jnp.max(jnp.abs(changed_grad.transformer.blocks[0].mlp.router))) > 0.0
+    assert bool(jnp.all(prefill_capture.token_valid))
+    assert bool(jnp.all(continuation_capture.token_valid))
+    assert bool(jnp.array_equal(padded_capture.token_valid, jnp.asarray([True, False])))
+    np.testing.assert_allclose(
+        np.asarray(full_replayed.array[0]),
+        np.asarray(full_ordinary.array[0]),
+        rtol=1e-4,
+        atol=1e-4,
+    )
+    with pytest.raises(ValueError, match="position IDs"):
+        prefill_capture.as_teacher_forced(
+            teacher_ids,
+            teacher_positions.at[0, 3].set(8),
+            teacher_valid,
+            batch_info=prefill_info,
+        )
+    with pytest.raises(ValueError, match="token IDs"):
+        prefill_capture.as_teacher_forced(
+            hax.named(teacher_ids.array.at[0, 1].set(13), teacher_ids.axes),
+            teacher_positions,
+            teacher_valid,
+            batch_info=prefill_info,
+        )
+    with pytest.raises(ValueError, match="contiguous"):
+        continuation_capture.as_teacher_forced(
+            continuation_ids,
+            continuation_positions.array,
+            jnp.ones((1,), dtype=jnp.bool_),
+            batch_info=continuation_info,
+        )
+    with pytest.raises(ValueError, match="serving segment"):
+        prefill_capture.as_teacher_forced(
+            teacher_ids,
+            teacher_positions,
+            teacher_valid,
+            segment_ids=(teacher_ids.array, teacher_ids.array),
+            batch_info=prefill_info,
+        )
+    bad_metadata = [
+        (dataclasses.replace(continuation_info, cu_q_lens=hax.named(jnp.asarray([0, 0]), "seq")), "cu_q_lens"),
+        (
+            dataclasses.replace(
+                continuation_info, new_token_dests=hax.named(jnp.asarray([3], dtype=jnp.int32), "position")
+            ),
+            "destinations",
+        ),
+        (
+            dataclasses.replace(
+                continuation_info, page_indices=hax.named(jnp.asarray([[0, 1, 3]], dtype=jnp.int32), ("seq", "page"))
+            ),
+            "destinations",
+        ),
+        (
+            dataclasses.replace(continuation_info, seq_lens=hax.named(jnp.asarray([6]), "seq")),
+            "positions",
+        ),
+        (dataclasses.replace(continuation_info, num_seqs=jnp.asarray(2, dtype=jnp.int32)), "exactly one"),
+    ]
+    for altered_info, message in bad_metadata:
+        altered_capture = continuation_capture._replace(batch_info=altered_info)
+        with pytest.raises(ValueError, match=message):
+            SnowballDecodeRouteCaptureBatch.concatenate(prefill_capture, altered_capture)
+    altered_positions = continuation_capture._replace(position_ids=jnp.asarray([5], dtype=jnp.int32))
+    with pytest.raises(ValueError, match="positions"):
+        SnowballDecodeRouteCaptureBatch.concatenate(prefill_capture, altered_positions)
+    altered_validity = continuation_capture._replace(token_valid=jnp.asarray([False]))
+    with pytest.raises(ValueError, match="cu_q_lens"):
+        SnowballDecodeRouteCaptureBatch.concatenate(prefill_capture, altered_validity)
+    altered_info = dataclasses.replace(prefill_info, page_size=4)
+    with pytest.raises(ValueError, match="page size"):
+        prefill_capture.as_teacher_forced(teacher_ids, teacher_positions, teacher_valid, batch_info=altered_info)
 
 
 @pytest.mark.timeout(180)

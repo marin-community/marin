@@ -21,7 +21,7 @@ guards against drift.
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, Literal, NamedTuple, Optional, Type
+from typing import Any, Literal, NamedTuple, Optional, Type, cast
 
 import equinox as eqx
 import jax
@@ -96,6 +96,163 @@ class SnowballRouteCaptureBatch(NamedTuple):
     route_captures: tuple[PreparedMoERouteCapture, ...]
     token_ids: jax.Array
     segment_ids: tuple[jax.Array, jax.Array] | None
+
+
+class SnowballDecodeRouteCaptureBatch(NamedTuple):
+    """Routes captured from one cached decode batch, with its serving layout."""
+
+    route_captures: tuple[PreparedMoERouteCapture, ...]
+    token_ids: jax.Array
+    position_ids: jax.Array
+    token_valid: jax.Array
+    batch_info: PageBatchInfo
+
+    def as_teacher_forced(
+        self,
+        input_ids: hax.NamedArray,
+        position_ids: jax.Array,
+        token_valid: jax.Array,
+        *,
+        segment_ids: tuple[jax.Array, jax.Array] | None = None,
+        batch_info: PageBatchInfo,
+    ) -> SnowballRouteCaptureBatch:
+        """Bind these routes to an identical contiguous teacher-forced layout."""
+        if segment_ids is not None:
+            raise ValueError("decode route captures do not contain a serving segment binding")
+        _validate_page_batch_identity(self.batch_info, batch_info)
+        actual_tokens = np.asarray(input_ids.array).reshape(-1)
+        actual_positions = np.asarray(position_ids).reshape(-1)
+        actual_valid = np.asarray(token_valid).reshape(-1)
+        if not np.array_equal(np.asarray(self.token_ids).reshape(-1), actual_tokens):
+            raise ValueError("decode route captures are bound to different token IDs or packed order")
+        if not np.array_equal(np.asarray(self.position_ids).reshape(-1), actual_positions):
+            raise ValueError("decode route captures are bound to different position IDs")
+        if not np.array_equal(np.asarray(self.token_valid).reshape(-1), actual_valid):
+            raise ValueError("decode route captures are bound to different token validity")
+        if not np.array_equal(actual_positions, np.arange(actual_positions.size, dtype=actual_positions.dtype)):
+            raise ValueError("decode route captures require contiguous teacher-forced positions")
+        return SnowballRouteCaptureBatch(self.route_captures, input_ids.array, None)
+
+    @staticmethod
+    def concatenate(*captures: "SnowballDecodeRouteCaptureBatch") -> "SnowballDecodeRouteCaptureBatch":
+        """Join one sequence's valid prefill and continuation captures in serving order."""
+        if len(captures) < 2:
+            raise ValueError("concatenate requires a prefill and at least one continuation capture")
+        first = captures[0]
+        if int(np.asarray(first.batch_info.num_seqs)) != 1:
+            raise ValueError("route capture concatenation supports exactly one serving sequence")
+        rows = []
+        previous_info = None
+        previous_seq_len = 0
+        for capture in captures:
+            valid_rows, valid_count = _validate_decode_capture_metadata(capture, previous_info)
+            if (
+                previous_info is not None
+                and int(np.asarray(capture.batch_info.seq_lens.array)[0]) != previous_seq_len + valid_count
+            ):
+                raise ValueError("decode route captures must advance sequence length by valid token count")
+            rows.append(valid_rows)
+            previous_info = capture.batch_info
+            previous_seq_len = int(np.asarray(capture.batch_info.seq_lens.array)[0])
+
+        token_ids = jnp.concatenate([capture.token_ids.reshape(-1)[row] for capture, row in zip(captures, rows)])
+        position_ids = jnp.concatenate([capture.position_ids.reshape(-1)[row] for capture, row in zip(captures, rows)])
+        token_valid = jnp.ones((token_ids.shape[0],), dtype=jnp.bool_)
+        if not np.array_equal(np.asarray(position_ids), np.arange(token_ids.shape[0], dtype=np.int32)):
+            raise ValueError("route capture calls must have contiguous absolute positions")
+        routes = tuple(
+            PreparedMoERouteCapture(
+                selected_experts=jnp.concatenate(
+                    [
+                        jnp.asarray(np.asarray(capture.route_captures[layer].selected_experts)[row])
+                        for capture, row in zip(captures, rows)
+                    ]
+                ),
+                token_valid=token_valid,
+                qb_alpha=jnp.concatenate(
+                    [
+                        jnp.asarray(np.asarray(capture.route_captures[layer].qb_alpha)[row])
+                        for capture, row in zip(captures, rows)
+                    ]
+                ),
+            )
+            for layer in range(len(first.route_captures))
+        )
+        return SnowballDecodeRouteCaptureBatch(routes, token_ids, position_ids, token_valid, captures[-1].batch_info)
+
+
+def _validate_page_batch_identity(expected: PageBatchInfo, actual: PageBatchInfo) -> None:
+    """Reject a decode capture paired with a different serving layout."""
+    if expected.page_size != actual.page_size:
+        raise ValueError("decode route captures are bound to a different page size")
+    for field, expected_array, actual_array in (
+        ("slot_ids", expected.slot_ids.array, actual.slot_ids.array),
+        ("page_indices", expected.page_indices.array, actual.page_indices.array),
+        ("seq_lens", expected.seq_lens.array, actual.seq_lens.array),
+        ("cu_q_lens", expected.cu_q_lens.array, actual.cu_q_lens.array),
+        ("new_token_dests", expected.new_token_dests.array, actual.new_token_dests.array),
+        ("num_seqs", expected.num_seqs, actual.num_seqs),
+    ):
+        if not np.array_equal(np.asarray(expected_array), np.asarray(actual_array)):
+            raise ValueError(f"decode route captures are bound to different {field}")
+
+
+def _validate_page_batch_prefix_identity(expected: PageBatchInfo, actual: PageBatchInfo) -> None:
+    """Validate the serving slot and already-materialized pages across decode calls."""
+    if expected.page_size != actual.page_size:
+        raise ValueError("decode route captures are bound to a different page size")
+    if not np.array_equal(np.asarray(expected.slot_ids.array), np.asarray(actual.slot_ids.array)):
+        raise ValueError("decode route captures are bound to different serving slots")
+    expected_length = int(np.asarray(expected.seq_lens.array)[0])
+    page_count = (expected_length + expected.page_size - 1) // expected.page_size
+    expected_pages = np.asarray(expected.page_indices.array)[0, :page_count]
+    actual_pages = np.asarray(actual.page_indices.array)[0, :page_count]
+    if not np.array_equal(expected_pages, actual_pages):
+        raise ValueError("decode route captures are bound to different prefix pages")
+    if int(np.asarray(actual.seq_lens.array)[0]) < expected_length:
+        raise ValueError("decode route captures must advance sequence length")
+
+
+def _validate_decode_capture_metadata(
+    capture: SnowballDecodeRouteCaptureBatch, previous: PageBatchInfo | None
+) -> tuple[np.ndarray, int]:
+    """Validate one single-sequence decode call before its rows enter replay order."""
+    info = capture.batch_info
+    if int(np.asarray(info.num_seqs)) != 1:
+        raise ValueError("route capture concatenation supports exactly one serving sequence")
+    token_ids = np.asarray(capture.token_ids).reshape(-1)
+    positions = np.asarray(capture.position_ids).reshape(-1)
+    valid = np.asarray(capture.token_valid).reshape(-1)
+    destinations = np.asarray(info.new_token_dests.array).reshape(-1)
+    if len(token_ids) != len(positions) or len(token_ids) != len(valid) or len(token_ids) != len(destinations):
+        raise ValueError("decode route capture arrays must share the serving token length")
+    rows = np.flatnonzero(valid)
+    valid_count = len(rows)
+    cu_q_lens = np.asarray(info.cu_q_lens.array).reshape(-1)
+    if cu_q_lens.shape != (2,) or int(cu_q_lens[0]) != 0 or int(cu_q_lens[1]) != valid_count:
+        raise ValueError("decode route capture cu_q_lens does not match valid token count")
+    seq_len = int(np.asarray(info.seq_lens.array)[0])
+    start = seq_len - valid_count
+    if start < 0 or not np.array_equal(positions[rows], np.arange(start, seq_len, dtype=positions.dtype)):
+        raise ValueError("decode route capture positions do not match the serving prefix")
+    page_indices = np.asarray(info.page_indices.array)[0]
+    page_count = (seq_len + info.page_size - 1) // info.page_size
+    if page_indices.shape[0] < page_count or np.any(page_indices[:page_count] < 0):
+        raise ValueError("decode route capture page table is missing a required page")
+    expected_destinations = np.full_like(destinations, -1)
+    expected_destinations[rows] = (
+        page_indices[positions[rows] // info.page_size] * info.page_size + positions[rows] % info.page_size
+    )
+    if not np.array_equal(destinations, expected_destinations):
+        raise ValueError("decode route capture destinations do not match the page table")
+    if np.any(valid == 0) and np.any(destinations[valid == 0] >= 0):
+        raise ValueError("padded decode route rows must have invalid destinations")
+    if previous is not None:
+        _validate_page_batch_prefix_identity(previous, info)
+    for route in capture.route_captures:
+        if not np.array_equal(np.asarray(route.token_valid).reshape(-1), valid):
+            raise ValueError("per-layer route validity does not match serving validity")
+    return rows, valid_count
 
 
 # A published config.json carries exactly one spelling per field. ``from_hf_config`` deliberately
@@ -686,7 +843,8 @@ class SnowballMoEMLP(eqx.Module):
         *,
         token_valid: jax.Array | None = None,
         route_capture: PreparedMoERouteCapture | None = None,
-    ) -> Float[Array, "B S D"]:
+        capture_routes: bool = False,
+    ) -> Float[Array, "B S D"] | tuple[Float[Array, "B S D"], PreparedMoERouteCapture]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         if token_valid is None:
@@ -712,14 +870,25 @@ class SnowballMoEMLP(eqx.Module):
         # unsharded. A safetensors load auto-shards [E] over `data` when E % data == 0, which would
         # otherwise make router_logits + router_bias illegally sharded on multi-device meshes.
         biased_logits = router_logits + unshard(self.router_bias)
+        topk_logits = None
         if route_capture is None:
             # Select top-(K+1) on biased logits; the (K+1)-th is only the QB threshold (unused at inference).
-            _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
+            topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
             selected_experts = selected_experts[:, :-1]
         else:
             if route_capture.selected_experts.shape != (b * s, self.cfg.num_experts_per_token):
                 raise ValueError("route_capture must align with Snowball's flattened token order")
-            selected_experts = route_capture.selected_experts
+            # Serving captures are host-prepared, and scan/checkpoint transformations can alter
+            # the inferred token sharding. Match the actual router-logit input before gathering so
+            # replay has the same compiled VJP contract as ordinary top-k routing.
+            if isinstance(router_logits, core.Tracer):
+                router_sharding = jax.typeof(router_logits).sharding
+            else:
+                router_sharding = router_logits.sharding
+            if isinstance(router_sharding, NamedSharding):
+                selected_experts = reshard(route_capture.selected_experts, router_sharding.spec)
+            else:
+                selected_experts = reshard(route_capture.selected_experts, _token_spec())
         # Sigmoid combine weights on UNbiased logits for the selected experts, renormed to sum to 2.5.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         combine_weights_f = jax.nn.sigmoid(unbiased_topk)
@@ -736,7 +905,18 @@ class SnowballMoEMLP(eqx.Module):
             report_capacity_overflow=False,
         )
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        return _activation_reshard(routed)
+        routed = _activation_reshard(routed)
+        if not capture_routes:
+            return routed
+        capture = route_capture
+        if capture is None:
+            assert topk_logits is not None
+            capture = PreparedMoERouteCapture(
+                selected_experts=jax.lax.stop_gradient(selected_experts.astype(jnp.int32)),
+                token_valid=jax.lax.stop_gradient(token_valid.astype(jnp.bool_)),
+                qb_alpha=jax.lax.stop_gradient(topk_logits[:, -1:].astype(jnp.float32)),
+            )
+        return routed, capture
 
 
 class SnowballBlock(eqx.Module):
@@ -772,7 +952,8 @@ class SnowballBlock(eqx.Module):
         use_long: Bool[Array, ""],
         token_valid: Bool[Array, "T"],
         route_capture: PreparedMoERouteCapture | None = None,
-    ) -> Float[Array, "B S D"]:
+        capture_routes: bool = False,
+    ) -> Float[Array, "B S D"] | tuple[Float[Array, "B S D"], PreparedMoERouteCapture]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         # ``lax.cond`` keeps a uniform per-layer body so the transformer can scan the layers:
         # long layers use the full causal mask and disable RoPE (NoPE); short layers use the
@@ -785,8 +966,17 @@ class SnowballBlock(eqx.Module):
         )
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out = self.mlp(mlp_in, token_valid=token_valid, route_capture=route_capture) + self.shared(mlp_in)
-        return x + mlp_out
+        mlp_result = self.mlp(
+            mlp_in,
+            token_valid=token_valid,
+            route_capture=route_capture,
+            capture_routes=capture_routes,
+        )
+        if not capture_routes:
+            mlp_out = cast(Float[Array, "B S D"], mlp_result)
+            return x + (mlp_out + self.shared(mlp_in))
+        mlp_out, capture = cast(tuple[Float[Array, "B S D"], PreparedMoERouteCapture], mlp_result)
+        return x + (mlp_out + self.shared(mlp_in)), capture
 
     def capture_routes(
         self,
@@ -806,7 +996,9 @@ class SnowballBlock(eqx.Module):
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         capture = self.mlp.capture_routes(mlp_in, token_valid=token_valid)
-        mlp_out = self.mlp(mlp_in, token_valid=token_valid, route_capture=capture) + self.shared(mlp_in)
+        mlp_out = cast(
+            Float[Array, "B S D"], self.mlp(mlp_in, token_valid=token_valid, route_capture=capture)
+        ) + self.shared(mlp_in)
         return x + mlp_out, capture
 
 
@@ -1127,7 +1319,6 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             caches.append(KvPageCache(hax.named(pages, cache.kv_pages.axes)))
         return ListCache(tuple(caches))
 
-    @named_call
     def decode(
         self,
         input_ids: NamedArray,
@@ -1137,6 +1328,35 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         *,
         key=None,
     ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+        """Prefill or decode using the existing two-value generation protocol."""
+        logits, caches, _ = self._decode(input_ids, kv_cache, batch_info, pos_ids, key=key, capture_routes=False)
+        return logits, caches
+
+    def decode_with_route_captures(
+        self,
+        input_ids: NamedArray,
+        kv_cache: ListCache[KvPageCache],
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        *,
+        key=None,
+    ) -> tuple[NamedArray, ListCache[KvPageCache], SnowballDecodeRouteCaptureBatch]:
+        """Decode once and return the expert assignments used by that decode."""
+        logits, caches, captures = self._decode(input_ids, kv_cache, batch_info, pos_ids, key=key, capture_routes=True)
+        assert captures is not None
+        return logits, caches, captures
+
+    @named_call
+    def _decode(
+        self,
+        input_ids: NamedArray,
+        kv_cache: ListCache[KvPageCache],
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        *,
+        key=None,
+        capture_routes: bool,
+    ) -> tuple[NamedArray, ListCache[KvPageCache], SnowballDecodeRouteCaptureBatch | None]:
         """Prefill or decode packed sequences using absolute positions and paged KV state.
 
         Tokens occupy a flat position axis, with a valid prefix described by batch_info.
@@ -1158,11 +1378,12 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
                 stacked.mlp.expert_mlp, implementation="ring", capacity_factor=float(expert_size)
             )
             stacked = eqx.tree_at(lambda b: b.mlp.expert_mlp, stacked, experts)
-        cache_pages = jnp.stack([cache.kv_pages.array for cache in kv_cache])
         cache_axes = kv_cache[0].kv_pages.axes
+        cache_pages = jnp.stack([cache.kv_pages.array for cache in kv_cache])
         long_schedule = long_attention_layer_mask(len(kv_cache))
 
-        def layer_step(x, layer_data):
+        def layer_step(carry, layer_data):
+            x = carry
             block, pages, use_long = layer_data
             cache = KvPageCache(hax.named(pages, cache_axes))
             attn_in = block.attn_gated_norm(block.rms_attn(x))
@@ -1174,16 +1395,44 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             )
             x = x + attn_out
             mlp_in = block.mlp_gated_norm(block.rms_mlp(x))
-            x = x + (block.mlp(mlp_in, token_valid=token_valid) + block.shared(mlp_in))
-            return x, cache.kv_pages.array
+            if not capture_routes:
+                x = x + (block.mlp(mlp_in, token_valid=token_valid) + block.shared(mlp_in))
+                return x, (cache.kv_pages.array, None)
+            mlp_out, capture = block.mlp(mlp_in, token_valid=token_valid, capture_routes=True)
+            return x + (mlp_out + block.shared(mlp_in)), (cache.kv_pages.array, capture)
 
-        hidden, cache_pages = jax.lax.scan(layer_step, hidden, (stacked, cache_pages, long_schedule))
+        hidden, (stacked_cache_pages, stacked_captures) = jax.lax.scan(
+            layer_step, hidden, (stacked, cache_pages, long_schedule)
+        )
         hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
         logits = jnp.einsum(
             "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
         )
-        caches = ListCache(tuple(KvPageCache(hax.named(cache_pages[i], cache_axes)) for i in range(len(kv_cache))))
-        return hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches
+        caches = ListCache(
+            tuple(KvPageCache(hax.named(stacked_cache_pages[i], cache_axes)) for i in range(len(kv_cache)))
+        )
+        if not capture_routes:
+            return hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches, None
+        assert stacked_captures is not None
+        captures = tuple(
+            PreparedMoERouteCapture(
+                selected_experts=stacked_captures.selected_experts[layer_index],
+                token_valid=stacked_captures.token_valid[layer_index],
+                qb_alpha=stacked_captures.qb_alpha[layer_index],
+            )
+            for layer_index in range(len(kv_cache))
+        )
+        return (
+            hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)),
+            caches,
+            SnowballDecodeRouteCaptureBatch(
+                captures,
+                input_ids.array,
+                pos_ids.array,
+                token_valid,
+                batch_info,
+            ),
+        )
 
     # --- state dict (bidirectional HF serialization) ---
     def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
@@ -1434,6 +1683,7 @@ __all__ = [
     "GRUG_MOE_MODEL_TYPE",
     "GrugMoeHfConfig",
     "SnowballConfig",
+    "SnowballDecodeRouteCaptureBatch",
     "SnowballLMHeadModel",
     "snowball_from_state_dict",
     "snowball_to_state_dict",
