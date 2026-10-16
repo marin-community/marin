@@ -67,23 +67,29 @@ class TokenUsage:
 
 @dataclass(frozen=True)
 class ModelTurn:
-    """Exact tokens and the parsed message from one inference request.
+    """The transport's answer to one ``ModelRequest``: the parsed message and the exact tokens.
 
-    Under ``TraceMode.MESSAGES`` the token fields may be empty and ``logprobs`` may be ``None``;
-    the engine records reported token IDs without checking them.
-    ``usage`` overrides the token-ID counts when the engine charges this request
-    against ``RolloutLimits.max_total_tokens``. Transports that report usage but
-    not exact token IDs, such as chat endpoints, set it so the budget still counts.
+    Under ``TraceMode.MESSAGES``, the token fields can be empty and ``logprobs`` can be ``None``. The engine then
+    records the token IDs without checking them. A chat endpoint that gives no token IDs sets ``usage``, so that
+    ``RolloutLimits.max_total_tokens`` still counts its tokens.
     """
 
     message: dict[str, Any]
+    """The assistant message that the transport parsed, for example with tool calls. The engine adds it to the chat."""
     prompt_token_ids: tuple[int, ...]
+    """The exact prompt tokens that the model got. They start with the served tokens, or equal a pinned prompt."""
     response_token_ids: tuple[int, ...]
+    """The tokens that the model sampled. Training uses them as the response."""
     logprobs: tuple[float, ...] | None
+    """The log probability of each response token when it was sampled, or ``None`` if the transport gives none."""
     stop_reason: str
+    """Why generation stopped, for example ``"stop"`` or ``"length"``. A ``"length"`` stop ends the turn loop."""
     text: str = ""
+    """The response as plain text. A harness that reads tags in the text, not tool calls, uses it."""
     metadata: dict[str, Any] = field(default_factory=dict)
+    """Extra data from the transport, such as top-k log probabilities. The engine passes it on unread."""
     usage: TokenUsage | None = None
+    """Token counts that the transport reports. The token budget counts them instead of the token IDs."""
 
     @property
     def request_tokens(self) -> int:
