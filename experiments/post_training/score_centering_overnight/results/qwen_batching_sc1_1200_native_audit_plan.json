@@ -1,0 +1,42 @@
+{
+  "scope": "Completed1200 batching SC seed1 native cache and audit; full original grades remain pending.",
+  "run_id": "sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "configuration": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v2/batching-sc-s1.yaml",
+  "configuration_sha256": "ecf26e090201759a3f93fa7fb3a53fffbbfcc11766df01f4a5b8cd649c56f1f7",
+  "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T021058/resume-rno-current-attempts.csv",
+  "controller_snapshot_sha256": "0bd93f93c36dcc0811c726e775bb7753d534604a8c2cbaeba73e3dca9a60feeb",
+  "controller_attempt": 9,
+  "controller_rows": [
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/0",
+      "attempt_id": "9",
+      "attempt_uid": "1d1cfc469148bb04",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1792071213874",
+      "finished_at_ms": "1792112207621",
+      "node_name": "g5303b8",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/1",
+      "attempt_id": "9",
+      "attempt_uid": "8da6fdbbb75edd99",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1792071213874",
+      "finished_at_ms": "1792112207621",
+      "node_name": "g530bbc",
+      "terminal_reason": ""
+    }
+  ],
+  "archive_after_ms": 1792071213874,
+  "cache": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/.campaign-cache/qwen-batching1200-sc1-final/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce",
+  "manifest": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce-complete-native-cache.json",
+  "already_audited_final_controls": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce-final-native-checkpoint-controls.json",
+  "already_audited_final_controls_sha256": "adc28a0e6f721789f7d636c64119b5522fb07603c3522f437e84c08809e5f1ec",
+  "resource_board_id": 1094,
+  "workers": 2,
+  "status": "Bounded native cache download running; native and original replay gates pending."
+}

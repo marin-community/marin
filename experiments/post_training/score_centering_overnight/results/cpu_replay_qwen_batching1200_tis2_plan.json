@@ -1,0 +1,87 @@
+{
+  "scope": "Completed native1200 Qwen batching TISseed2 full original-grader replay.222132 physical records,one actual native timeout placeholder,two exact reused-record proofs. Native and all8rank controls passed. Frozen source/data/graders/lock/packages/runner/deadlines unchanged. Two IO slots released by TIS0/TIS1 downloads reused;SC1 cache2IO and raw1087twoIO keep aggregate6.",
+  "cases": [
+    {
+      "job_id": "/romain/score-grader-qwen-batching-tis-s2-a0-01a126ce",
+      "run_id": "sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce",
+      "arm": "tis-s2",
+      "workspace": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/score-grader-qwen-batching-tis-s2-a0-01a126ce-workspace",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "analysis_source": "213f2fed2a2954c50c973c742bfff998f9a2edef",
+      "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e",
+      "spec_sha256": "9c7d39cc3955e23b7bbb539fc28a3b7d1db0995d72b616c0539c3f3e477a42ed",
+      "requested_cpu": 32,
+      "requested_memory": "64GB",
+      "requested_disk": "50GB",
+      "requested_accelerators": 0,
+      "cpu_workers": 32,
+      "io_workers": 2,
+      "timeout_seconds": 43200,
+      "failure_retries": 0,
+      "preemption_retries": 0,
+      "expected_records": 222132,
+      "selected_archives": 9663,
+      "native_archive_bytes": 630115321,
+      "output_prefix": "marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-batching-tis-s2-a0-01a126ce",
+      "local_input_validation_passed": true,
+      "bundle": {
+        "bytes": 8244042,
+        "sha256": "6819233e0f4d5217155d69368d280bd3dbf19d32445ae4b8cc5fafdd4d08b4c5",
+        "spec_sha256": "9c7d39cc3955e23b7bbb539fc28a3b7d1db0995d72b616c0539c3f3e477a42ed",
+        "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e",
+        "all_input_files_verified": true
+      },
+      "native_bundle_validation_passed": true,
+      "native_submission_confirmed": true,
+      "retained_input_objects": {
+        "bundle": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-batching-tis-s2-a0-01a126ce/inputs/bundle.zip",
+          "bytes": 8244042,
+          "etag": "\"c67599e0c591f8439e20b1c7e9e8d9d0\"",
+          "sha256": "6819233e0f4d5217155d69368d280bd3dbf19d32445ae4b8cc5fafdd4d08b4c5"
+        },
+        "spec": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-batching-tis-s2-a0-01a126ce/inputs/spec.json",
+          "bytes": 157758,
+          "etag": "\"8c6d978343cafe6f57d026b9df5183ba\"",
+          "sha256": "9c7d39cc3955e23b7bbb539fc28a3b7d1db0995d72b616c0539c3f3e477a42ed"
+        }
+      },
+      "controller_row": {
+        "job_id": "/romain/score-grader-qwen-batching-tis-s2-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "6819233e0f4d5217155d69368d280bd3dbf19d32445ae4b8cc5fafdd4d08b4c5",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-batching-tis-s2-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "ffadbcbe142e12a5",
+        "task_state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792116813030",
+        "finished_at_ms": "",
+        "node_name": "g1cb6c2",
+        "terminal_reason": ""
+      },
+      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+    }
+  ],
+  "total_requested_cpu": 32,
+  "total_requested_memory_gib": 64,
+  "total_requested_gpu": 0,
+  "maximum_archive_io_workers": 2,
+  "first_complete_cpu_replay_proof": "qwen_curriculum300_first_cpu_complete_response_replay.json",
+  "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU. Complete native1200 batchingTISseed2 input bundle/spec durably retained and fullSHA read back.222132physical records include one retained native AgentTimeoutError placeholder;222131 available original responses require full replay. Two reused records exactly match current rollout groups. Original source/data/graders/lock/packages/runner/deadlines unchanged. Two IO slots reused from completed prior TIS0/TIS1 downloads; no new GPU work.",
+  "native_bundle_validation_passed": true,
+  "before_submit_controller_absence_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/cpu-and-memory-diagnostic-controller-20261016T021122.csv",
+  "before_submit_empty_output_prefix": true,
+  "resource_board_ids": [
+    1095,
+    1096
+  ]
+}
