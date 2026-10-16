@@ -689,7 +689,8 @@ SELECT (SELECT current_step FROM current_step) AS current_step,
                    AND name = 'work_completed' AND work_kind = 'generated_token')) AS generated_tokens_per_second,
        ({end_ms} - (SELECT last_step_ms FROM current_step)) / 1000.0 AS since_last_step,
        ({end_ms} - (SELECT MAX(last_ms) FROM observations)) / 1000.0 AS since_last_record,
-       CASE WHEN (SELECT MAX(last_ms) FROM core) IS NULL THEN NULL
+       CASE WHEN NOT EXISTS (SELECT 1 FROM core
+                             WHERE statistic = 'percentile' AND name = 'rollout_staleness_steps') THEN NULL
             WHEN (SELECT MAX(is_async) FROM core) = 0 THEN 0
             ELSE (SELECT p95 FROM core WHERE statistic = 'percentile' AND name = 'rollout_staleness_steps'
                   ORDER BY last_ms DESC, execution_uid DESC LIMIT 1) END AS staleness_p95

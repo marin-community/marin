@@ -703,7 +703,7 @@
           "calcs": [
             "distinctCount"
           ],
-          "fields": "",
+          "fields": "/^service$/",
           "values": false
         },
         "colorMode": "value",
@@ -2613,17 +2613,6 @@
           }
         },
         {
-          "id": "convertFieldType",
-          "options": {
-            "conversions": [
-              {
-                "targetField": "step",
-                "destinationType": "string"
-              }
-            ]
-          }
-        },
-        {
           "id": "partitionByValues",
           "options": {
             "fields": [
@@ -2637,6 +2626,28 @@
           "options": {
             "byField": "step",
             "mode": "outerTabular"
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "step",
+                "desc": false
+              }
+            ]
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "targetField": "step",
+                "destinationType": "string"
+              }
+            ]
           }
         }
       ]
@@ -2753,6 +2764,7 @@
                 "execution",
                 "collector",
                 "engine",
+                "model",
                 "counter",
                 "tokens_per_sampled_second"
               ]
@@ -2766,6 +2778,7 @@
               "execution",
               "collector",
               "engine",
+              "model",
               "counter"
             ],
             "keepFields": false

@@ -570,6 +570,24 @@ def test_every_panel_view_returns_declared_fields_for_selected_attempt(store):
             }
         ]
 
+    store.execute(f"DELETE FROM {TABLE} WHERE run_id = 'sync-run' AND name = 'rollout_staleness_steps'")
+    app, _ = _bridge(store)
+    with TestClient(app) as client:
+        response = client.get(f"/finelog/marin{ENDPOINT}", params={**REQUEST, "run": "sync-run", "view": "status"})
+        assert response.status_code == 200, response.text
+        assert response.json() == [
+            {
+                "section": "status",
+                "current_step": 1,
+                "steps_per_hour": None,
+                "raw_reward": 0.5,
+                "generated_tokens_per_second": 5,
+                "since_last_step": 239.998,
+                "since_last_record": 239.873,
+                "staleness_p95": None,
+            }
+        ]
+
 
 def _bridge(database, *, max_rows=1000):
     queries = []

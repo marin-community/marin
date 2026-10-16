@@ -13,7 +13,7 @@ import pytest
 from config import ClusterTarget
 from conftest import bridge_config, dashboard_panels, install_finelog_dialect_macros, queried_namespace
 from dashboard_stitch import stitch_all
-from rl_observability import recent_rl_runs_dataset, rl_gpu_dataset, rl_overview_dataset
+from rl_observability import rl_gpu_dataset, rl_overview_dataset
 from rl_producers import RL_PRODUCER_NAMESPACES, collect_producers, producers_query
 from server import create_app
 from starlette.testclient import TestClient
@@ -762,11 +762,6 @@ def test_every_labelled_series_panel_names_the_series_without_its_column() -> No
         if "series" not in {column["selector"] for target in panel.get("targets", []) for column in target["columns"]}:
             continue
         assert panel["fieldConfig"]["defaults"].get("displayName") == "${__field.labels.series}", panel["title"]
-
-
-def _recent_runs_sql() -> str:
-    dataset = recent_rl_runs_dataset(_WINDOW_START_MS, _NOW_MS)
-    return f"WITH recent AS ({dataset.sources[0].sql})\n{dataset.views['recent']}"
 
 
 def _recent_runs_panel() -> dict:
