@@ -40,6 +40,8 @@ PLANTS = [
     ("gcs://bucket/x", "url"),
     ("source_https://example.org/private", "url"),
     ("x_s3://private-bucket/x", "url"),
+    ("wandb.ai/someone/project/runs/abc", "wandb"),
+    ("wandb.ai/marin-community/../someone/project", "wandb"),
 ]
 DIGEST = hashlib.sha256(b"table").hexdigest()  # 64 hex digits, like a file's SHA-256
 # W&B run ids of the public project marin-community/marin, the observation ids: a training run name and its hash, one
@@ -204,6 +206,20 @@ def test_run_ids_pass_but_the_runs_storage_paths_do_not(tmp_path):
     assert sorted(h.line_or_row for h in hits if h.pattern == "bucket") == [1, 2, 3, 4]
 
 
+def test_wandb_references_must_stay_in_the_public_entity(tmp_path):
+    # Outside the card's links too, a W&B reference may name marin-community only; another entity, or a dot segment,
+    # plain or percent-encoded, that may lead out of it is a hit.
+    notes = [
+        "wandb.ai/marin-community/marin/runs/lwspu_t9_snc_cap08_3e18-6c15f1",
+        "wandb.ai/someone/private/runs/x",
+        "wandb.ai/marin-community/../someone/private",
+        "wandb.ai/marin-community/%2E%2E/someone/private",
+    ]
+    (tmp_path / "MANIFEST.json").write_text(json.dumps({"notes": notes}))
+    hits = scan_upload.scan(tmp_path)
+    assert {(h.field, h.pattern) for h in hits} == {(f"$.notes[{i}]", "wandb") for i in (1, 2, 3)}
+
+
 def test_allowance_exempts_only_its_field_and_pattern(tmp_path):
     # An allowance names a file relative to the root, a field and the hash pattern: the same digest under any other key,
     # column or file (a nested MANIFEST.json included) is a hit, and so is any other pattern inside an allowed field.
@@ -273,8 +289,10 @@ CARD_LINES = [
     ("[x]: https://github.com/x", {"url"}),  # a reference definition, outside an inline link
     ("[x](https://huggingface.co/pinlin_calvin_xu)", {"personal"}),  # other patterns inside an allowed link
     ("[logs](https://wandb.ai/marin-community/marin/runs/lwspu_t9_snc_cap08_3e18-6c15f1)", set()),
-    ("[x](https://wandb.ai/someone/marin/runs/x)", {"url"}),  # another W&B entity than the public project's
-    ("[x](https://wandb.ai/marin-community-x/marin)", {"url"}),  # an entity that only begins with it
+    ("[x](https://wandb.ai/someone/marin/runs/x)", {"url", "wandb"}),  # another W&B entity than the public one
+    ("[x](https://wandb.ai/marin-community-x/marin)", {"url", "wandb"}),  # an entity that only begins with it
+    ("[x](https://wandb.ai/marin-community/../someone/private)", {"url", "wandb"}),  # a dot segment out of it
+    ("[x](https://wandb.ai/marin-community/%2e%2e/someone/private)", {"url", "wandb"}),  # the same, percent-encoded
 ]
 
 

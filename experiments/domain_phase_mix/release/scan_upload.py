@@ -7,8 +7,8 @@
 on any hit. `scan(root, include)` reads only the files `include` names, so an upload scans exactly the files it sends.
 
 The patterns catch storage paths and bucket names, local and checkpoint paths, the author's user names, e-mail
-addresses, Fieldbook ids, long hex hashes and URLs. Training run names and W&B run ids pass: the observation ids are the
-runs' ids in the public W&B project marin-community/marin.
+addresses, Fieldbook ids, long hex hashes, URLs and W&B references outside the public entity marin-community. Training
+run names and W&B run ids pass: the observation ids are the runs' ids in the public W&B project marin-community/marin.
 
 Every file is read by its structure: a CSV cell by cell, header included; a Parquet file's column names, the keys and
 values of its schema and field metadata, and the cells of its string columns, a stored index among them; a JSON file's
@@ -17,8 +17,8 @@ string from the patterns stops the scan: a binary or compressed file, a ragged C
 Parquet column of any type but string, number, boolean or time. A few fields hold hex digests by design: `ALLOWED`
 exempts each of them from the hash pattern alone, so the same digest under any other field, or any other pattern in an
 allowed field, is still a hit. `ALLOWED` also lets the dataset card at the root link to `LINK_HOSTS`: the `url` pattern
-skips the `https://` that begins an inline Markdown link or an autolink to one of them under its path, so any other URL
-of the card, or any other pattern inside such a link, is still a hit.
+skips the `https://` that begins an inline Markdown link or an autolink to one of them under its path, read as a
+browser resolves it, so any other URL of the card, or any other pattern inside such a link, is still a hit.
 """
 
 import argparse
@@ -26,6 +26,7 @@ import collections
 import dataclasses
 import fnmatch
 import json
+import posixpath
 import re
 import urllib.parse
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -48,6 +49,9 @@ PATTERNS = {
     "personal": re.compile(r"pinlin_calvin_xu|calvinxu", re.I),
     "email": re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"),
     "url": re.compile(r"[a-z][a-z0-9+.-]*://", re.I),  # any scheme (http, s3, gcs, ...), whatever precedes it
+    # A W&B reference to another entity than the public marin-community, or one that a dot segment, plain or
+    # percent-encoded, may lead out of it.
+    "wandb": re.compile(r"wandb\.ai/(?!marin-community/)|wandb\.ai/[^\s()<>\[\]]*?(?:\.\.|%2e)", re.I),
 }
 # Arrow types that cannot hold text; a string column is scanned, and a column of any other type raises.
 TEXTLESS = (
@@ -235,13 +239,23 @@ def _json_strings(value: object, field: str) -> Iterator[tuple[Sequence[int], st
         yield (0,), field, str(value)
 
 
+def _under(path: str, prefix: str) -> bool:
+    """Whether a URL path lies under the path `prefix` as a browser resolves it: percent-escapes decoded until none
+    is left, backslashes read as slashes, dot segments removed."""
+    while (decoded := urllib.parse.unquote(path)) != path:
+        path = decoded
+    resolved = posixpath.normpath("/" + path.replace("\\", "/").lstrip("/"))
+    wanted = [segment for segment in prefix.split("/") if segment]
+    return resolved.split("/")[1 : len(wanted) + 1] == wanted
+
+
 def _link_starts(text: str, hosts: Mapping[str, str]) -> set[int]:
     """The offsets in `text` at which the https URL of a Markdown link to one of `hosts`, under its path, begins."""
     starts = set()
     for link in MARKDOWN_LINK.finditer(text):
         group = "inline" if link.group("inline") is not None else "auto"
         parts = urllib.parse.urlsplit(link.group(group))
-        if parts.scheme == "https" and parts.netloc in hosts and parts.path.startswith(hosts[parts.netloc]):
+        if parts.scheme == "https" and parts.netloc in hosts and _under(parts.path, hosts[parts.netloc]):
             starts.add(link.start(group))
     return starts
 
