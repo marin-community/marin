@@ -6413,7 +6413,7 @@ requires-dist = [
     { name = "s3fs", specifier = ">=2024" },
     { name = "scikit-learn", marker = "extra == 'datakit'" },
     { name = "scipy", marker = "extra == 'datakit'" },
-    { name = "shellsim", specifier = ">=0.1.37" },
+    { name = "shellsim", specifier = ">=0.1.38" },
     { name = "tokenizers" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "marin-core", extra = "gpu" } },
     { name = "torch", marker = "sys_platform != 'linux' and extra == 'gpu'", specifier = "==2.11.0" },
@@ -7363,6 +7363,7 @@ dependencies = [
     { name = "marin-finestore" },
     { name = "marin-iris" },
     { name = "marin-rigging" },
+    { name = "marin-taskcompendium" },
     { name = "pg8000" },
     { name = "pgvector" },
     { name = "playwright" },
@@ -7393,6 +7394,7 @@ requires-dist = [
     { name = "marin-finestore", editable = "lib/finestore" },
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
     { name = "pg8000", specifier = ">=1.31" },
     { name = "pgvector", specifier = ">=0.3" },
     { name = "playwright", specifier = ">=1.49" },
@@ -7645,7 +7647,7 @@ requires-dist = [
     { name = "marin-rigging", marker = "extra == 'daytona'", editable = "lib/rigging" },
     { name = "marin-rigging", marker = "extra == 'shellsim'", editable = "lib/rigging" },
     { name = "quicksand-qemu", marker = "extra == 'qemu'", specifier = ">=0.5.12,<0.6" },
-    { name = "shellsim", extras = ["pypi"], marker = "extra == 'shellsim'", specifier = ">=0.1.37" },
+    { name = "shellsim", extras = ["pypi"], marker = "extra == 'shellsim'", specifier = ">=0.1.38" },
 ]
 provides-extras = ["qemu", "shellsim", "gvisor", "daytona", "iris"]
 
@@ -11658,16 +11660,16 @@ wheels = [
 
 [[package]]
 name = "shellsim"
-version = "0.1.37"
+version = "0.1.38"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "packaging" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/08/da/bc685d9df6dcdb3cd4bdf0358ffb82980a2716793524a6491a3bf5f5bfe6/shellsim-0.1.37.tar.gz", hash = "sha256:6bd126de20bfd709817a560586d72eb2f4b7c3c8042e19902c14c9935561e9bb", size = 1761054, upload-time = "2026-10-14T23:23:13.818Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f5/a0/0a6f774e1f3ab8d685a548ca02a2ade499aed3372bd7ca35c62e950fefa7/shellsim-0.1.38.tar.gz", hash = "sha256:e5c1ab11626bccf2c73628dd22c47a07aec8e8955719418c36a9b07958aa9b2a", size = 1769304, upload-time = "2026-10-15T16:22:00.279Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/61/67/92648353bac78881233803d2103bd36b5b77d6b8dc926d7eabbb6fc0360a/shellsim-0.1.37-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:3579f92acd751ee3b3b90e00342873571736e9fe98b4eaa9ff69e1aeeea50164", size = 4387771, upload-time = "2026-10-14T23:23:06.929Z" },
-    { url = "https://files.pythonhosted.org/packages/d2/67/4848250e51c76221cac8a31ffab297c961faef3fba550f341e78e320ee1a/shellsim-0.1.37-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:0d608b0e1a80e7cc0ec593ff3be412ed4df0ddedde7df469722365fe09f79b80", size = 4874859, upload-time = "2026-10-14T23:23:08.839Z" },
-    { url = "https://files.pythonhosted.org/packages/59/f9/984b5e8b7036e2ed1f2905a2be65fe4fa2673623d2cf28a52b39495f47a0/shellsim-0.1.37-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:92206f4c57a33e9343ceead7bccd66fae5c2a0704e4397f22b0181d88a113583", size = 5184886, upload-time = "2026-10-14T23:23:11.835Z" },
+    { url = "https://files.pythonhosted.org/packages/10/a2/518503faa0662dd519e8d1126b5fc59c77e2750e2c08e911a6c2034138ce/shellsim-0.1.38-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:da8a793f13eb5998ea14fb7e12e19952302a310144d50c5990bbf55c83bd4d78", size = 4396151, upload-time = "2026-10-15T16:21:55.088Z" },
+    { url = "https://files.pythonhosted.org/packages/51/95/ed8ff22dc616aed4a444c7bea2ccd5700c56de7a00372d31e733cc35a221/shellsim-0.1.38-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:b603afc9bd7e71a47c82a0cfa162b69564179bebd3f48b6f650231c0d18b4dd4", size = 4881484, upload-time = "2026-10-15T16:21:57.072Z" },
+    { url = "https://files.pythonhosted.org/packages/35/be/b9f2b7ad2bfbd4024b833e10b9695534b580f32b66c7701b5a5091cb760f/shellsim-0.1.38-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:b8bd9e59858b1adb09a8d9533fdadbacbceed9c88a9b74cd119da6711ae7c248", size = 5191203, upload-time = "2026-10-15T16:21:58.703Z" },
 ]
 
 [package.optional-dependencies]

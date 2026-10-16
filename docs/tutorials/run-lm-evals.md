@@ -1,9 +1,8 @@
 # Running Evaluations with Marin
 
 The shared evaluation launcher runs Evalchemy and Harbor evaluations against a registered model or a
-file-backed model configuration. It starts one OpenAI-compatible model server, runs every selected
-evaluation against that endpoint, writes one durable record per evaluation, and tears the server
-down.
+file-backed model configuration. Selected evaluations share one OpenAI-compatible model server
+and each writes a durable record. The server stops when the group finishes.
 
 Use the launcher for routine post-hoc evaluations. Use the composable APIs later in this page when
 an evaluation must be part of a Marin pipeline or consume an `ArtifactStep[LevanterCheckpoint]`.
@@ -260,6 +259,8 @@ documents how to register a Hugging Face model or object-store checkpoint.
   for multiple files.
 - `--harbor-config path.yaml` adds one Harbor policy. Repeat the option for multiple files.
 - `--limit N` overrides the configured instance cap for every selected evaluation.
+- `--max-concurrent N` caps simultaneous evaluators (default 1). All share one candidate and,
+  when configured, one judge. Server-wide inference metrics are omitted when this exceeds 1.
 - `--no-wait` returns after Iris submission. Without it, the command waits for terminal records and
   prints their metrics.
 - `--platform tpu|gpu` overrides the model's default platform when the model resource hint supports
@@ -272,9 +273,10 @@ documents how to register a Hugging Face model or object-store checkpoint.
 - `--version` and `--description` attach run metadata.
 - `--records-prefix` changes the result store.
 
-Each invocation serves the model once and evaluates the selected keys in order. An evaluation
-failure gets its own terminal record and does not skip later evaluations. An inference failure
-records the current and remaining evaluations as infrastructure failures.
+Each selected evaluation runs as its own step against shared inference. An evaluation failure gets
+a record for that eval; other steps continue. A server startup failure marks every pending eval as
+an infrastructure failure. On restart, completed steps are skipped. A fully completed group starts
+no servers.
 
 ### Harbor credentials
 
@@ -301,6 +303,10 @@ normalized launch configuration; Harbor records include the dataset, agent, envi
 and source-policy digest. A Harbor infrastructure exception remains ungraded and counts against the
 completion gate after its artifacts are saved; a verifier-scored zero remains a completed evaluation
 with a zero score.
+
+Evalchemy owns aggregate metrics, including partial-result aggregation. After infrastructure
+failures, its reported `scored_count` must match the valid saved samples; Marin rejects a mismatch.
+Marin does not rebuild scores, uncertainty estimates, or breakdowns by averaging per-sample fields.
 
 [Evaldash](https://evaldash.oa.dev) indexes records from both default stores. The record is the
 source of truth for model, evaluation identity, status, metrics, hardware, provenance, and Iris job

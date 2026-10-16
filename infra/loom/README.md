@@ -91,6 +91,12 @@ pulumi config set --cwd /path/to/marin/infra/loom --stack marin-loom \
 Delete the local payload after upload. The startup script never reads `latest`,
 so uploading another secret version does not change the running service.
 
+The deployment's `browser.allowed_origins` permits credentialed agent-panel
+connections from `https://marina.oa.dev` and `https://applets.marina.oa.dev`,
+Marina's authenticated private applet origin. Public applets on
+`https://public.applets.marina.oa.dev` are excluded. Allowed origins must still
+authenticate with Loom, and profile permissions still apply.
+
 ## Automation identities
 
 Runtime profiles and workload federation mappings live in

@@ -19,6 +19,7 @@ from huggingface_hub import snapshot_download
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import write_artifact
+from marin.processing.embeddings.harrier import HARRIER_DIM, HARRIER_REPO, HARRIER_REVISION
 from pydantic import BaseModel, Field
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
@@ -35,9 +36,6 @@ from experiments.datakit.embeddings.harrier.tei_client import TeiEmbeddingClient
 logger = logging.getLogger(__name__)
 
 EMBEDDING_ATTR_DATA_VERSION = "2026.08.11"
-HARRIER_REPO = "microsoft/harrier-oss-v1-0.6b"
-HARRIER_REVISION = "f9b9dc8d367d443f2479d27aa5d8d2850c0774ee"
-HARRIER_DIM = 1_024
 HARRIER_MAX_TOKENS = 8_192
 HARRIER_MAX_RAW_TEXT_CHARS = 100_000
 HARRIER_MAX_WORKERS = 256

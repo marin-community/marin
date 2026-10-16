@@ -1,4 +1,0 @@
-title = "Zephyr"
-description = "Inspect Zephyr execution plans and live pipeline telemetry. Follow stage progress and investigate reducer workload and skew."
-connect_src = []
-build_command = "cd web && npm ci && npm run build"

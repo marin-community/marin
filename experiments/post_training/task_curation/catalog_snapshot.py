@@ -42,7 +42,6 @@ from zephyr.readers import load_parquet
 from experiments.post_training.task_curation.campaign import CampaignStatus
 from experiments.post_training.task_curation.curation_catalog import RUNS
 from experiments.post_training.task_curation.source import RlDataSource
-from experiments.post_training.task_curation.source_metadata import source_declaration
 
 
 def curation_summary(manifest: dict[str, Any]) -> CurationSummary:
@@ -146,7 +145,7 @@ def publish_assessment(store: DataStore, catalog: CurationCatalog, attempt: Asse
 
 def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> CatalogSnapshot:
     """Archive selected outputs before publishing their typed catalog snapshot."""
-    declarations = [source_declaration(source) for source in sources]
+    declarations = [source.declaration for source in sources]
     by_id = {row.id: row for row in declarations}
     if len(by_id) != len(declarations):
         raise ValueError("Catalog source IDs must be unique")

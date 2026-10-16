@@ -7,6 +7,7 @@ import argparse
 import json
 import logging
 import time
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 
@@ -31,6 +32,34 @@ def blend_serial_row(previous, donor, selected, fraction, name, row, base):
     return (current.float() + fraction * (value.float() - current.float())).to(base.dtype)
 
 
+def materialize_serial_stage(
+    original: CheckpointReader,
+    recipe: dict,
+    stage: dict,
+    stage_number: int,
+    support: tuple[TensorSupport, ...],
+    transform: Callable[[str, int | None, torch.Tensor], torch.Tensor],
+) -> dict:
+    """Materialize and finalize one serial stage against the original Base."""
+    output = stage["output"]
+    audit_fs, audit_path = filesystem_for(stage["audit"])
+    validate_audit_location(stage["audit"], output)
+    if audit_fs.exists(audit_path):
+        raise FileExistsError(stage["audit"])
+    start = time.monotonic()
+    audit = export_constrained(
+        original,
+        output,
+        support,
+        recipe["support_cap"],
+        recipe["change_cap"],
+        transform,
+    )
+    audit.update(recipe=recipe, serial_stage=stage_number, elapsed_seconds=time.monotonic() - start)
+    finalize_constrained_export(audit, stage["audit"])
+    return audit
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recipe", type=Path, required=True)
@@ -48,14 +77,7 @@ def main() -> None:
 
         transform = partial(blend_serial_row, previous, donors[stage["donor"]], selected, stage["fraction"])
         output = stage["output"]
-        audit_fs, audit_path = filesystem_for(stage["audit"])
-        validate_audit_location(stage["audit"], output)
-        if audit_fs.exists(audit_path):
-            raise FileExistsError(stage["audit"])
-        start = time.monotonic()
-        audit = export_constrained(original, output, support, recipe["support_cap"], transform)
-        audit.update(recipe=recipe, serial_stage=index + 1, elapsed_seconds=time.monotonic() - start)
-        finalize_constrained_export(audit, stage["audit"], recipe["change_cap"])
+        materialize_serial_stage(original, recipe, stage, index + 1, support, transform)
         previous = CheckpointReader(CheckpointSource(output, f"{recipe['id']}:stage-{index+1}"))
     if stages[-1]["output"] != recipe["output"] or stages[-1]["audit"] != recipe["audit"]:
         raise ValueError("Serial final output does not match experiment recipe")

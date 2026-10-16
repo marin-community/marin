@@ -22,11 +22,17 @@ review, grader execution, resource admission and deduplication. Outputs are
 `normalize/*.parquet`, `manifest.json` and `campaign.json`, with no admitted
 `final/` view. Failed sources are recorded while the rest continue.
 
-The driver requires `--mode quick`, `sample` or `full`. Omit `--run` to print a
-plan without downloading, converting or starting workers. QUICK requires named
-sources and preserves their request order, ignoring repeated names. SAMPLE/FULL
-select sources in catalog order; omitting `--source` selects the full catalog.
-QUICK needs no review model, controller, worker image or coordinator settings.
+Select `--mode quick`, `sample` or `full`, or resume with `--corpus` as described
+below. Omit `--run` to print a plan without downloading, converting or starting
+workers. QUICK preserves named sources in request order, ignoring repeated names.
+SAMPLE/FULL select sources in catalog order. Omitting `--source` selects every
+runnable source. Local QUICK needs no review model, controller, worker image or
+coordinator settings.
+
+Remote artifacts default to `s3://marin-us-east-02a/marin` on CW, independently
+of the ambient `MARIN_PREFIX`. Use `--artifact-root URL` for an explicit override;
+local `--cache-dir` takes precedence. Keep each retained campaign's
+`--output-root` or `--report-path` in a new versioned directory in that bucket.
 
 Repeat `--source` for a cohort and use a fresh output root each pass. Downloads
 are cached under `~/.cache/marin` (`--cache-dir` overrides this).
@@ -218,6 +224,112 @@ For readable file diffs, repeat with one `--source` and
 `--inspect-path '<original archive path>'` in a new output directory. `task.diff`
 includes file metadata and text changes, capped at 64 KiB per side per file with
 explicit truncation; binary files retain hashes. Full runs discard archive bytes.
+
+## Task and curriculum embeddings
+
+The curation driver embeds public task instructions and curriculum entries with
+Harrier, computes exact cosine matches, and exports an Atlas release through
+Zephyr. Both sides use the same retrieval rubric. Optional model rewrites support
+bounded comparisons. The curriculum has no separate embedding CLI or database.
+
+Start with a local conversion and a seeded sample from a selected source:
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' \
+  --with-editable './lib/marin[cpu]' python \
+  -m experiments.post_training.task_curation.driver \
+  --mode quick --source SOURCE \
+  --output-root /path/to/quick --cache-dir /path/to/persistent/cache \
+  --embed coverage --embedding-sample-size 20
+```
+
+Add `--run` to execute. Omit `--embedding-sample-size` to embed every selected
+task. QUICK embeds converted tasks; SAMPLE/FULL embeds admitted tasks. Neither
+matching nor Atlas changes admission or train/eval use. `--embed coverage` runs
+through the compact export; other `--embed` values stop at intermediate stages.
+`--catalog-root` selects a pinned directory containing `curriculum.json`;
+otherwise the graph uses `TASK_CURRICULUM`.
+
+Direct embedding needs no inference-service credential. It uses bounded public
+instructions and answer/tool requirements, excluding task files, solutions and
+private verifier resources. Task and curriculum text use the same Harrier
+checkpoint, retrieval instruction and normalization. `--worker-cpu` and
+`--worker-memory` size each CPU worker; `--max-workers` bounds the shared pool.
+The model loads inside workers when an embedding batch has cache misses.
+
+`--cache-dir` selects local workers and artifacts. `--review-cache` selects the
+shared inference cache, defaulting locally to `<cache-dir>/review-cache`.
+Keep it across campaigns and worker-count changes. FineStore caches vectors by
+rendered text and embedding specification; Zephyr writes vector Parquet.
+Alignment reads that Parquet and keeps the curriculum matrix in worker memory.
+A curriculum edit reuses task vectors.
+
+Optional `--representation rewrite --model MODEL --model-revision REVISION
+--base-url ENDPOINT` uses an inference service to rewrite public inputs before
+embedding. Supply its credential through `GLM_BULK_TOKEN`. Failed rewrites retain
+`skipped` rows and counters after bounded retries; the pass fails above 5%
+failures across distinct public inputs. `insufficient_context` records an input
+that does not establish the requested operation. Both remain in Atlas counts.
+
+Publication references the assignment Parquet and records source/population
+counts in `release.json`. Complete converted releases reconcile those counts
+against conversion manifests. Coverage exports full-population statistics and
+independent samples of up to 100 tasks per source and 10 per curriculum area.
+The [Atlas loader](../../../docs/references/rl-data-atlas.md#curriculum-coverage)
+imports those statistics, samples and curriculum entries into Postgres.
+Full task and vector outputs stay in object storage.
+
+See the [pipeline diagram and module links](../../../docs/references/task-curation.md#pipeline-overview)
+for the complete graph and implementation details.
+
+### Complete converted corpus
+
+Run the existing QUICK mode on Iris with CW us-east02a outputs:
+
+```bash
+uv run iris --cluster=marin job run --target-cluster YOUR-CW-REGION \
+  --extra cpu --cpu 0.5 --memory 2GB --timeout 43200 \
+  -- python -m experiments.post_training.task_curation.driver \
+  --mode quick --output-root s3://marin-us-east-02a/marin/rl-data/campaigns/YYYY-MM-DD-N \
+  --max-workers 8 --worker-cpu 2 --worker-memory 16g \
+  --coordinator-memory 8g --concurrent-sources 4
+```
+
+Add `--run` to execute. List runnable source names with:
+
+```bash
+uv run python -c 'from experiments.post_training.task_curation.sources import runnable_sources; print("\n".join(runnable_sources()))'
+```
+
+Repeat `--source NAME` to select sources; omit it for every runnable source. QUICK skips grading and admission, preserves
+converter rejections, and writes `corpus.json` after all selected sources finish.
+Conversion artifacts retain their pinned acquisition graph and recipe identities.
+The manifest includes completed source roots, immutable source-manifest hashes,
+conversion counts and the full registry inventory. Inventory entries without
+converters remain visible but have no converted tasks.
+
+Resume from that corpus with the same driver and shared model/cache options.
+On CoreWeave, disable Xet downloads to avoid cold-cache download stalls:
+
+```bash
+uv run iris --cluster=marin job run --target-cluster YOUR-CW-REGION \
+  --extra cpu --cpu 0.5 --memory 2GB --timeout 43200 \
+  -e HF_HUB_DISABLE_XET 1 \
+  -- python -m experiments.post_training.task_curation.driver \
+  --corpus s3://marin-us-east-02a/marin/rl-data/campaigns/YYYY-MM-DD-N/corpus.json \
+  --embed coverage --review-cache s3://marin-us-east-02a/marin/rl-data/semantic-cache \
+  --max-workers 128 --worker-cpu 4 --worker-memory 8g --coordinator-memory 8g
+```
+
+For optional rewrites, pass the credential to the Iris job with
+`-e GLM_BULK_TOKEN VALUE` before `--`.
+The driver prints the final artifact `root` and `paths`; the Atlas manifest is
+`<root>/release.json` after publication. It checks source-manifest hashes before
+processing. The default `--representation direct` skips model rewrites. For rewrite
+comparisons, `--embed descriptions` stops before Harrier inference. Local resumes
+use `--cache-dir` to select a local artifact cache and local Zephyr workers.
+Converter rejections never enter the embedding population. Converted counts and
+embedding coverage do not establish curation admission.
 
 ## Declaring a dataset
 
