@@ -83,7 +83,12 @@ request's size and file patches through the API: the review runs when the
 change has at least 250 changed lines or adds a class, dataclass, or
 `Protocol` under `lib/*/src/` or `experiments/`. The session runs the
 `review-pr-holistic` skill with the `pr-holistic-review` profile (Claude
-Fable) and posts one packet ending in `<!-- marin-holistic-review:<sha> -->`.
+Fable) and maintains one compact overview ending in
+`<!-- marin-holistic-review:<sha> -->`. Re-reviews replace the original
+overview by comment ID, preserving finding numbers and updating their status.
+A separate follow-up may announce only new or materially changed actionable
+findings; it links to the overview and uses
+`<!-- marin-holistic-followup:<sha> -->` so it cannot become the overview.
 Unlike the correctness review, the workflow also launches on `synchronize`;
 runs for an earlier head are cancelled, and the session posts nothing when the
 delta since the last reviewed head is under 100 changed lines, touches only
