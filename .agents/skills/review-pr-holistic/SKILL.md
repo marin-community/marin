@@ -1,7 +1,7 @@
 ---
 name: review-pr-holistic
 description: Review an explicitly identified Marin pull request as a whole change, asking whether it fits repository patterns, whether a better abstraction exists, and what breaks outside the diff; use for large or agent-authored PRs, after or alongside review-pr.
-allowed-tools: Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(gh api:*), Bash(git diff:*), Bash(git log:*), Bash(git merge-base:*), Bash(git rev-parse:*), Bash(git show:*), Bash(rg:*), Bash(uv run pytest:*), Bash(uv run infra/codehealth/log_stats.py:*)
+allowed-tools: Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(gh api:*), Bash(git diff:*), Bash(git grep:*), Bash(git log:*), Bash(git merge-base:*), Bash(git rev-parse:*), Bash(git show:*), Bash(rg:*), Bash(uv run pytest:*), Bash(uv run infra/codehealth/log_stats.py:*)
 ---
 
 # Review a pull request as a whole
@@ -39,7 +39,13 @@ requests; they are the population where structural findings concentrate.
    signature, the module each new helper could have reused, and every test
    marked `docker`, `slow`, `integration`, `cluster`, or `manual` that the
    diff adds or edits.
-6. List open pull requests that touch the same paths. `gh pr list --search`
+6. Learn the system as it is before the change, for the walkthrough. Read
+   the base version of each important changed file
+   (`git show <merge-base>:<path>`), the callers of each changed interface
+   (`git grep -n <symbol> <merge-base>`), and the recent history of the
+   touched paths (`git log --oneline -15 <merge-base> -- <path>`). Read each
+   issue and pull request that the body or the commits link.
+7. List open pull requests that touch the same paths. `gh pr list --search`
    matches titles and bodies only, so list the open PRs with their files and
    filter on paths:
    `gh pr list --state open --limit 100 --json number,title,files`, then keep
@@ -101,13 +107,47 @@ report it here only when the whole-change view changes its conclusion.
 
 ## Review packet
 
-Write the review as one packet in this shape. It is the terminal output
-without `--comment` and the posted comment body with it.
+Write the review as one packet: a walkthrough of the change, then the
+findings. A reader who did not see the work must understand the problem, the
+system before the change, the change, and its limits from the packet alone,
+without the diff. The packet is the terminal output without `--comment` and
+the posted comment body with it.
 
-```markdown
+````markdown
 🤖 Holistic review of <sha>.
 
-<One or two sentences: what the PR does and the overall verdict.>
+> **In short:** <Two or three sentences: what the diff does, the verdict, and
+> the one thing the reviewer must decide or examine.>
+
+### System
+```mermaid
+flowchart TB
+  subgraph <system>["<System name>"]
+    a["<component>"]:::changed --> b["<component>"]
+  end
+  classDef changed fill:#fde7c8,stroke:#e8710a,stroke-width:2px
+  classDef added fill:#d7f0dd,stroke:#1e8e3e,stroke-width:2px
+```
+
+### Why
+<The problem or goal, and its trigger: an issue, an incident, a parent
+project, or a failed run. Quote the evidence.>
+
+### Current state
+<The system before the change, beyond what the diagram shows: entry points,
+data flow, callers, and the prerequisite work the PR builds on. End with what
+is wrong or missing.>
+
+### How
+**<A bold sentence that states one decision.>** <The snippet that shows it and
+the reason for it.>
+
+<Mechanical changes, one line each. The evidence that the change works.>
+
+### Limitations
+- **<Label>:** <one unsupported case, risk, or gap in the evidence>
+
+### Review
 
 **Blockers**
 1. `<file>:<line>` <consequence>. <replacement>.
@@ -125,7 +165,42 @@ without `--comment` and the posted comment body with it.
 - <item number>: resolved | open | changed, <one line>
 
 <!-- marin-holistic-review:<sha> -->
-```
+````
+
+Write the walkthrough sections with these rules:
+
+- **Budget.** "In short" at most 60 words, Why at most 80, Current state at
+  most 150, How at most 250, and Limitations at most five items of 30 words
+  each. Code and the diagram do not count. Give each section space in
+  proportion to what a reviewer must understand, not to the size of the diff.
+- **In short.** Tell what the diff does, not what the title says, and name
+  the difference when they disagree. When item 1 recommends a split, start
+  with it.
+- **System diagram.** Every packet has one component diagram in System. It
+  shows the system after the change: boxes without a class existed before,
+  `changed` marks the components that the PR changes, and `added` marks the
+  new ones. Draw each system as a subgraph, each component that the PR
+  touches as a box with its real code name, and each call or data flow as an
+  edge with a short label. Use at most about 10 boxes and at most three side
+  by side. Use only `flowchart TB`, `subgraph`, node, edge, and `classDef`
+  lines, and quote labels that contain punctuation, so that GitHub renders
+  it. When the PR changes how the components connect, add a diagram of the
+  old connections in Current state.
+- **Snippets.** Each snippet shows a decision, a behavior to check, or the
+  problem. Use 3 to 12 lines, with the path as a comment on the first line.
+  Show each piece of code once: use one `diff` snippet for a before/after
+  change. Do not show imports, configuration lists, or code that the prose
+  already describes.
+- **How.** Put interfaces and decisions first, the implementation second, and
+  tests and docs last. A reader who reads only the bold sentences must get the
+  full design. When a decision changed after a review comment, name the
+  reviewer. Do not repeat a claim from the body as a fact without evidence;
+  write "the PR states".
+- **Limitations.** Report open review concerns that are still valid at the
+  head with the reviewer and `path:line`, also from resolved threads. Do not
+  repeat a numbered finding.
+
+On a re-review, write the full packet again at the new head.
 
 Number items continuously across sections, including tests to drop and
 related PRs, so every item carries one category in the telemetry event. A
@@ -135,8 +210,8 @@ failure encoded as a result, a principle the body states and the code
 violates, a security boundary the code crosses, or an open PR stacked on this
 one that deletes what it adds. A later PR that supersedes this one is a
 related-PR note with a merge order; it is never a blocker. Everything else is
-should-fix. When no question yields a finding,
-the packet body is `No findings.` and the marker.
+should-fix. When no question yields a finding, the Review section is
+`No findings.`; the walkthrough and the marker stay.
 
 Tag each item with its category in the telemetry event below: `fit`,
 `abstraction`, `consequence`, `hidden-test`, `evidence`, `related-pr`,
