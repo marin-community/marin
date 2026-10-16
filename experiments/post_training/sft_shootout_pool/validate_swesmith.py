@@ -39,6 +39,44 @@ true
 """
 
 
+LEAK_COMMANDS = (
+    "git log --all -p",
+    "git show HEAD~1",
+    "git diff HEAD main",
+    "git diff HEAD~1",
+    "git fsck --unreachable --no-reflogs --lost-found",
+    "git stash list -p",
+    "for f in $(git ls-files); do git show main:$f; done",
+)
+
+
+def leak_probe(image: str, clean_lines: list[str]) -> dict:
+    """Run the history commands an agent would try, then search their output and the filesystem for clean lines."""
+    script = "cd /testbed\n" + "\n".join(f"({command}) 2>/dev/null" for command in LEAK_COMMANDS)
+    output = docker("run", "--rm", "--network", "none", image, "bash", "-c", script, check=False)
+    in_commands = [line for line in clean_lines if line in output]
+    needles = "\n".join(clean_lines)
+    found = docker(
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "-i",
+        image,
+        "bash",
+        "-c",
+        "cat > /tmp/needles && grep -rIlF -f /tmp/needles / --exclude-dir=proc --exclude-dir=sys "
+        "--exclude-dir=dev --exclude=needles 2>/dev/null | head -20",
+        stdin=needles.encode(),
+        check=False,
+    )
+    return {
+        "clean_lines": len(clean_lines),
+        "in_command_output": len(in_commands),
+        "files_with_clean_lines": found.split(),
+    }
+
+
 def docker(*args: str, stdin: bytes | None = None, check: bool = True) -> str:
     result = subprocess.run(["docker", *args], input=stdin, capture_output=True, check=False)
     if check and result.returncode:
