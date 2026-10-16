@@ -1,13 +1,56 @@
-# fast_track — dense vs MoE scaling ladder (H100, 16k BPE)
+# fast_track — 16k-vocab H100 ladder for model and data changes
 
 Self-contained grug variant with 16k vocab size for fast iteration. Dense and MoE baselines shown
 below from 9.4e16 to 4.3e19 FLOPs.
+
+## Tracks
+
+Three tracks use the same dense and MoE ladder. Each track changes one input and keeps the others fixed.
+
+| track | changes | data | command |
+|-------|---------|------|---------|
+| Model ladder | model, optimizer, or training recipe | frozen Hero cache | [`fast-track`](#launch-commands) |
+| Hero mix plus a new dataset | fraction `p` of the training tokens from a new dataset | `PreparedHeroSample` and a bounded Hugging Face prefix | [`add_dataset_cli`](#add-a-dataset) |
+| Quality classifier | document scorer that selects the training data | corpus-proportional raw pool from the registered DataKit sources | [`quality_cli`](#improve-a-quality-classifier) |
+
+All training commands train the MoE model by default. Use `--dense` for the dense model.
+When you do not give `--data-seed`, the data order comes from `--seed`.
+`fast-track` must have `--size`. The data-track commands use `d512` by default.
+All tracks use final Paloma macro loss (`eval/paloma/macro_loss`) as the primary metric.
+
+## Run a data-track command
+
+The data-track CLIs are `hero_sample_cli`, `hero_baseline_cli`, `add_dataset_cli`, `corpus_sample_cli`,
+`quality_labels_cli`, and `quality_cli`. Without `--run`, each CLI prints its plan.
+To build the plan, run the CLI with `--run` in an Iris CPU coordinator on `cw-us-east-02a`:
+
+```bash
+uv run iris --cluster=marin job run --no-wait --target-cluster cw-us-east-02a \
+  --cpu 2 --memory 8GB --enable-extra-resources --extra cpu --extra datakit \
+  --job-name <name> -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m experiments.grug.fast_track.<cli> <options> --version <version> --run
+```
+
+Add `-e HF_TOKEN "$HF_TOKEN"` for a gated Hugging Face dataset.
+The coordinator starts Zephyr workers and, for training, one 8xH100 child job.
+The inputs are in `s3://marin-us-east-02a`.
+The coordinator log gives the path of each completed artifact. Give that artifact directory to the next command.
+The examples in this file show only the CLI and its options.
 
 ## Files
 
 | file | contents |
 |------|----------|
 | [`launch.py`](launch.py) | ladder rungs, budget resolution (`--match`), Iris/W&B wiring |
+| [`contracts.py`](contracts.py) | Shared data contracts, tokenization policy, and exposure cap |
+| [`batching.py`](batching.py) | Byte- and row-bounded tokenization batches |
+| [`hero_sample.py`](hero_sample.py), [`hero_sample_cli.py`](hero_sample_cli.py), [`hero_baseline_cli.py`](hero_baseline_cli.py) | Pinned Hero mixture sample and its matched control |
+| [`add_dataset.py`](add_dataset.py), [`add_dataset_cli.py`](add_dataset_cli.py) | Bounded Hugging Face prefix and simulated exposure |
+| [`corpus_sample.py`](corpus_sample.py), [`corpus_sample_cli.py`](corpus_sample_cli.py) | Corpus-proportional raw pool from the registered sources |
+| [`quality_labels.py`](quality_labels.py), [`quality_labels_cli.py`](quality_labels_cli.py), [`label_exclusion.py`](label_exclusion.py) | Frozen GLM labels, ridge head, and label exclusions |
+| [`quality.py`](quality.py), [`quality_features.py`](quality_features.py) | Scorer interface, ridge head, label splits, and cached Harrier features |
+| [`quality_pipeline.py`](quality_pipeline.py), [`ranked_pool.py`](ranked_pool.py) | Scored pool, ranked selection, and selected training cache |
+| [`quality_cli.py`](quality_cli.py) | Quality-track command |
 | [`model.py`](model.py) | the transformer: attention, GatedNorm, SConv, QB-routed MoE |
 | [`train.py`](train.py) | trainer/eval/loss wiring and runtime (XLA) defaults |
 | [`optimizer.py`](optimizer.py) | MuonH optimizer config: LR groups + hyperball step |
@@ -17,6 +60,13 @@ below from 9.4e16 to 4.3e19 FLOPs.
 | [`router_metrics.py`](router_metrics.py) | routing-stats telemetry (logging-only) |
 
 ## Results
+
+These recorded runs use the frozen Hero training cache.
+`fast-track` reads it from `s3://marin-us-east-02a/marin/datakit/hero_tok/v16384_shuf/train`
+(`V16384_CACHE_DIR` in `launch.py`). [`shuffle_cache.py`](shuffle_cache.py) shuffled its documents.
+The [sample build record](https://github.com/marin-community/marin/issues/9188#issuecomment-5691769554)
+describes the source sample. The scripts that built this sample are not in the repository.
+For a reproducible Hero sample, use [`hero_sample_cli`](#hero-sample).
 
 | size | variant | TPP | batch | active | total | steps | tokens | FLOPs | MFU | Paloma loss | Paloma bpb | uncheat bpb | runtime |
 |------|---------|----:|------:|-------:|------:|------:|-------:|------:|----:|------------:|-----------:|------------:|--------:|
@@ -74,10 +124,10 @@ dense recipe (20 TPP) with **~4.2× less compute**.
 
 ## Launch commands
 
-Set `$WANDB_API_KEY` in your shell.
+Set `$WANDB_API_KEY` in your shell, or set `WANDB_MODE=disabled` for a run without W&B.
 
-`fast-track` is the single entry point. Run it locally to print the lowered plan for inspection; add
-`--submit` to launch it as an 8×H100 Iris job:
+`fast-track` runs the model-ladder track. Without `--submit`, it prints the lowered plan.
+With `--submit`, it starts an 8×H100 Iris job:
 
 ```bash
 # inspect the plan locally — nothing is submitted
@@ -88,8 +138,8 @@ uv run fast-track --submit --run-id dense-d768 --size d768 --dense --version 202
 ```
 
 `--submit` wraps the launcher in `iris job run … -- python -m …launch … --run` and forwards
-`$WANDB_API_KEY` to the job. Iris selects an H100 cluster by default.
-Add `--target-cluster cw-us-east-02a` or `--target-cluster cw-rno2a` to select a specific cluster.
+`$WANDB_API_KEY` to the job. The default cluster is `cw-us-east-02a`.
+Use `--target-cluster` to select another cluster.
 
 Pick a size and variant; the budget defaults to **data-matching** that variant's baseline (dense at
 20 TPP, MoE at 60 TPP) at the rung's baseline batch (128 for d512/d768, 256 for d1024/d1280). Steps
@@ -120,14 +170,369 @@ uv run fast-track --submit --run-id probe-d1280 --size d1280 --num-steps 20 --no
 |------|--------|
 | `--run-id` | **required** run identifier for artifact + W&B names |
 | `--size` | **required** `d512` / `d768` / `d1024` / `d1280` |
-| `--dense` | dense 3×hidden SwiGLU, no MoE (expert=1, normal eval) |
+| `--version` | **required** artifact version: `YYYY.MM.DD` for coordinated runs, `dev` for scratch runs |
+| `--dense` | dense 3×hidden SwiGLU, no MoE (expert axis 1) |
 | `--match` | `data` (default) tokens-match or `compute` FLOP-match the variant baseline |
 | `--batch-size` | override the rung's baseline batch (steps rescale to hold the match) |
 | `--num-steps N` | set the step budget explicitly (ignores `--match`) |
+| `--seed` / `--data-seed` | Model initialization and data-order seeds. Without `--data-seed`, the data order comes from `--seed`. |
 | `--no-eval` | skip eval (clean MFU probes) |
 | `--save-checkpoints` | save a permanent final checkpoint to S3 (off by default) |
+| `--run` | Build the plan in the current process. `--submit` adds it to the job command. |
 | `--submit` | Submit as an Iris H100 job. Omit to print the plan locally. |
-| `--target-cluster` | Select a specific Iris cluster for submission. Omit to let Iris select an H100 cluster. |
+| `--target-cluster` | Select the Iris cluster for submission. The default is `cw-us-east-02a`. |
 
-Results land in W&B `marin-community/marin_moe`; eval bpb keys are `eval/paloma/macro_bpb`,
-`eval/uncheatable_eval/macro_bpb` (MoE dropless eval logs under the normal `eval/` prefix).
+Results land in W&B `marin-community/marin_moe`. The eval keys are `eval/paloma/macro_loss` and
+`eval/uncheatable_eval/macro_loss`, with `macro_bpb` versions of the two (MoE dropless eval logs under
+the normal `eval/` prefix).
+
+## Prepare the reference pools
+
+The Hero sampler and the quality-pool sampler use Zephyr. Each sampler writes a versioned artifact.
+Runs at all ladder sizes can use the same artifact.
+
+### Hero sample
+
+The Hero sampler (`hero_sample_cli`) reads `experiments/grug/moe_hero_ep/harrier_mix_2026_08_18.json`
+and store `store_4d2e363d`. It reads each main-phase component in the production block-shuffle order.
+Then it converts the tokens to `hero-bpe-v16384`.
+`PreparedHeroSample` keeps one cache for each component and the fixed weights.
+Training applies only the mixture block permutation.
+Tokenizer conversion changes the sequence boundaries, so the stream is not byte-identical to production.
+
+```bash
+uv run python -m experiments.grug.fast_track.hero_sample_cli \
+  --data-seed 0 --version 2026.10.04
+```
+
+`hero_sample_cli --data-seed` sets the order of each Hero component.
+The default `--token-budget` is the largest data-match rung, 17,478,713,344 tokens (MoE d1280).
+The sample contains sufficient data for the last complete mixture block.
+A training run stops with an error when a Hero component has fewer sequences than the final mixture weights use.
+
+### Quality raw pool
+
+The quality-pool sampler (`corpus_sample_cli`) reads all registered DataKit sources, at this time 292.
+It reads their pinned normalized paths in `experiments/datakit/hero_data_paths.json`.
+It rejects a source that has no pin.
+The `corpus-id-interval-v1` policy selects a seeded cyclic interval in the normalized 128-bit document ID space.
+Each source has its own fixed offset and the same interval width.
+Normalized IDs are uniform content hashes, so the expected token share of a source agrees with its token mass.
+Source estimates set the initial interval width.
+When a pass gives too few tokens, the sampler doubles the width and reads again.
+The output has a stable random order. The input partitions and the worker order do not change it.
+The sampler reads a Parquet row group only when its ID statistics do not exclude the interval.
+It tokenizes only the selected documents.
+
+Build the pool after the label artifact, with `--label-exclusion-manifest`
+(see [Improve a quality classifier](#improve-a-quality-classifier)).
+Scoring rejects a pool that contains a labelled document.
+`--max-training-tokens` sets the largest training budget. The default is 17,478,713,344 tokens.
+The sampler requests ten times this budget: 174,787,133,440 raw tokens by default.
+Whole-document boundaries can add a small number of tokens.
+`--source <registry-name>` (repeatable) selects only the named sources.
+Tokenizer content hashes are part of the artifact identity, so the plan must have access to the tokenizer.
+
+At this time, a pool from all sources stops with an error.
+The `stack-v3` source has documents of 79–213 MB, which is more than the 64 MiB limit of the
+[tokenization policy](#tokenization-policy).
+Until a policy for these documents exists, select the other sources with repeated `--source`.
+
+### Tokenization policy
+
+Corpus sampling and new-dataset preparation use the `fast-track-long-string-v1` tokenization policy
+(`TOKENIZATION_POLICY` in `contracts.py`).
+The policy divides text at the first whitespace at or after 10,000 characters.
+A document larger than 64 MiB of UTF-8 text stops preparation.
+The error gives the corpus source and document ID, or the Hugging Face repository and row number.
+The policy name is part of the artifact identity.
+`corpus.json` (`spec`) and `PreparedAddDatasetCache.tokenization_policy` record it.
+These limits decrease worker memory, but they do not set a fixed limit on worker memory.
+
+## Add a dataset
+
+This track trains on the Hero mixture plus a fraction `p` of tokens from a new Hugging Face dataset.
+The Hero components keep their relative weights in the remaining `1-p` share.
+The control trains on the same Hero sample without the new dataset.
+
+Do these steps, and do steps 3–5 again for each rung.
+Run each command as given in [Run a data-track command](#run-a-data-track-command).
+
+1. Build a `PreparedHeroSample` (see [Hero sample](#hero-sample)).
+   Use one sample for the control and the treatment at all rungs.
+
+   ```bash
+   uv run python -m experiments.grug.fast_track.hero_sample_cli \
+     --data-seed 0 --version 2026.10.04
+   ```
+
+2. Optional: build one bounded prefix of the new dataset for all rungs.
+
+   ```bash
+   uv run python -m experiments.grug.fast_track.add_dataset_cli \
+     --prepare-only --repository org/dataset --revision <immutable-commit-hash> \
+     --split train --text-field text --max-rows 100000 \
+     --prepare-token-cap 1000000000 --version 2026.10.04
+   ```
+
+3. Train the control.
+
+   ```bash
+   uv run python -m experiments.grug.fast_track.hero_baseline_cli \
+     --baseline-artifact <hero-sample-artifact> --run-id hero-control-d512 \
+     --dense --size d512 --seed 0 --data-seed 0 --version 2026.10.04
+   ```
+
+4. Train the treatment with the same `--size`, model variant, `--seed`, and `--data-seed` as the control.
+   With a prefix from step 2, give its artifact directory as `--prepared-cache`:
+
+   ```bash
+   uv run python -m experiments.grug.fast_track.add_dataset_cli \
+     --prepared-cache <prepared-dataset-artifact> --baseline-artifact <hero-sample-artifact> \
+     --run-id new-data-d512 --size d512 --dense --fraction 0.1 \
+     --available-unique-tokens 100000000000 \
+     --seed 0 --data-seed 0 --version 2026.10.04
+   ```
+
+   Without step 2, give the Hugging Face options. The command prepares the prefix and then trains:
+
+   ```bash
+   uv run python -m experiments.grug.fast_track.add_dataset_cli \
+     --run-id new-data-d512 --size d512 --dense --baseline-artifact <hero-sample-artifact> \
+     --repository org/dataset --revision <immutable-commit-hash> \
+     --split train --text-field text --fraction 0.1 \
+     --available-unique-tokens 100000000000 \
+     --max-rows 100000 --seed 0 --data-seed 0 --version 2026.10.04
+   ```
+
+5. Apply the [comparison gate](#compare-data-track-runs).
+
+### Dataset prefix
+
+The source must have an immutable Hugging Face revision, a split, a text field, and `--max-rows`.
+Add `--subset <name>` when the repository has a named dataset configuration.
+Without this flag, the loader uses the repository default.
+A gated repository must also have account access and `HF_TOKEN` in the coordinator.
+Preparation and training use `hero-bpe-v16384`. The CLI has no tokenizer option.
+One Zephyr task streams the prefix in order and tokenizes bounded batches. It does not load the full dataset into memory.
+This track does not deduplicate the dataset.
+
+By default, preparation calculates one cap for the largest ladder budget, so one prefix is sufficient for all rungs.
+`--prepare-token-cap` sets a different limit. This limit must be at least the cap of the selected rung.
+Increase `--max-rows` only when the prefix cannot supply the calculated cap.
+`--prepared-cache` uses a completed `--prepare-only` artifact and does not read from Hugging Face.
+Give the artifact directory, not its inner token-cache directory.
+Do not use `--prepared-cache` together with the Hugging Face source options or `--prepare-token-cap`.
+`--prepare-only` rejects the training options.
+
+Training reads the new dataset in Hugging Face prefix order.
+The Hero mixture uses `shuffle=False`, so training does not shuffle the new dataset.
+Sorted data can make the prefix different from the full dataset. A result applies only to the prefix.
+
+### Exposure cap
+
+The cap simulates the production exposure of the new dataset. The Hero sample keeps its own exposure.
+
+- `p`: `--fraction`, the share of training tokens from the new dataset.
+- `N`: `--available-unique-tokens`, the tokens in one pass of the dataset, counted with the production tokenizer.
+- `T`: `--target-production-tokens`, default 18.75T (the Hero recipe, `marin-community/marin-tokenizer`).
+- `B`: the training budget of the rung in `hero-bpe-v16384` tokens. `B` must not be more than `T`.
+- Cap: `C = min(p*B, (N/T)*B)`, rounded down to whole 4,096-token sequences. The CLI rejects a cap of zero sequences.
+
+When production repeats the dataset, this cap keeps the production epoch count `p*T/N`.
+When production does not repeat the dataset, the cap gives one pass.
+The loader applies the cap one time. The cache records the requested cap and the actual document and token counts.
+`N` must come from a measured count or a recorded estimate.
+The examples use an `N` of 100 billion tokens. Replace it with the value for your dataset.
+
+## Improve a quality classifier
+
+For a training budget `B`, this track reads the first `10*B` tokens of the fixed raw pool.
+It scores this raw prefix and sorts the documents from the highest to the lowest score.
+Then it selects documents until their total gets to `B` tokens.
+Each rung gets its own selection. A smaller rung does not use a prefix of the selection of a larger rung.
+
+Do these steps to compare a ridge head on GLM labels with a random selection.
+Run each command as given in [Run a data-track command](#run-a-data-track-command).
+
+1. Freeze the labels and fit the ridge head.
+   This command builds a `FrozenQualityLabels` artifact and a `FittedRidgeQualityHead` artifact.
+
+   ```bash
+   uv run python -m experiments.grug.fast_track.quality_labels_cli \
+     --regularization 0.001 --split-seed 0 --version 2026.10.04
+   ```
+
+2. Build the raw pool with the label exclusion from step 1.
+   Repeat `--source` for each source other than `stack-v3` (see [Quality raw pool](#quality-raw-pool)).
+
+   ```bash
+   uv run python -m experiments.grug.fast_track.corpus_sample_cli \
+     --label-exclusion-manifest <frozen-labels-artifact>/label_exclusion.json \
+     --source <registry-name> --source <registry-name> \
+     --seed 0 --version 2026.10.04
+   ```
+
+3. Score the raw pool one time at the largest rung.
+
+   ```bash
+   uv run python -m experiments.grug.fast_track.quality_cli \
+     --raw-pool <raw-corpus-artifact> --ridge-head-artifact <fitted-head-artifact> \
+     --stage score --size d1280 --version 2026.10.04
+   ```
+
+4. For each rung, train a candidate selection and a random selection from the `ScoredPool` of step 3.
+   Give each run its own run ID.
+
+   ```bash
+   uv run python -m experiments.grug.fast_track.quality_cli \
+     --scored-pool <scored-pool-artifact> --size d512 \
+     --run-id quality-candidate-d512 --selection-method candidate \
+     --seed 0 --data-seed 0 --version 2026.10.04
+
+   uv run python -m experiments.grug.fast_track.quality_cli \
+     --scored-pool <scored-pool-artifact> --size d512 \
+     --run-id quality-random-d512 --selection-method random \
+     --seed 0 --data-seed 0 --version 2026.10.04
+   ```
+
+5. Apply the [comparison gate](#compare-data-track-runs).
+
+The rungs use the same tokenization, embeddings, and classifier scores. Each rung builds its own selected token cache.
+The scored pool must supply at least ten times the requested training tokens.
+Do not use `--scored-pool` together with `--raw-pool` or the scorer, head, feature, or label-exclusion options.
+
+### Stages and selection
+
+`--stage` sets the last artifact of the plan: `features`, `score`, `select`, or `train` (default).
+`--stage select` scores and prepares the selected cache, but does not train a model.
+In the preparation stages, `--training-tokens` can set a small budget. The training stage rejects this option.
+`--tie-seed` (default 0) sets the order of a random selection and the order of documents with equal scores.
+
+Selection keeps whole documents, so the selected tokens can be more than `B`. The loader reads exactly `B` tokens.
+The selected documents stay in the fixed random order of the raw pool. Classifier scores do not change this order.
+The training source makes sure that the tokenizer content and the rung budget agree with the selection.
+A candidate or incumbent selection stops with an error when all its scores on the rung prefix are equal.
+A random selection does not use the scores.
+A large candidate pool alone does not show that the classifier finds useful data.
+Before a larger run, compare the evaluation results and examine the score and source distributions.
+
+### Ridge head and labels
+
+`quality_labels_cli` reads the default label sources from [PR #8303](https://github.com/marin-community/marin/pull/8303)
+and its [joined-label producer](https://github.com/marin-community/marin/blob/a8bf53bdc953b16cf69b937af47eb7896e5d6e0b/experiments/datakit/scripts/join_glm52_labels_harrier50m.py):
+
+- Original labels: `s3://marin-us-east-02a/marin/user/rav/quality_v2/glm52_labels_88k.parquet`
+- Joined full text and embeddings: `s3://marin-us-east-02a/marin/user/muchanem/quality_v2/glm52_labels_88k-x-harrier-oss-v1-0.6b-50m-text-v1`.
+
+`quality_labels_cli` validates the join and records the hashes of the input files before the head fit.
+It rejects conflicting labels and text-ID mismatches.
+For duplicate embeddings, it keeps the first row in sorted file-and-row order and records the vector differences.
+GLM quality values are from 1 (lowest) to 5 (highest). The head fit uses the target `(quality - 1) / 4`.
+The GLM `valid=false` flag identifies junk content with quality 1 (target 0). The head fit includes these rows.
+A label without a joined embedding stays out of the raw pool, but the head fit does not use it.
+The frozen manifest gives the number of missing labels for each source and content type.
+Original label text can contain excerpts, so the exclusion hashes come only from the joined text.
+
+`fit_quality_head` in `quality.py` accepts `LabelledEmbedding` rows and a `RidgeHeadConfig`.
+It divides the duplicate groups into fixed train, development, and audit splits (80/10/10) with a hash.
+The head gets only the train rows. The fit gives the development error, but not the audit labels.
+The `FittedRidgeQualityHead` artifact supplies the head, the label exclusion, and the feature identity together.
+With `--ridge-head-artifact`, do not give other scorer, label-exclusion, feature, or incumbent options.
+
+### Label exclusion
+
+The raw pool must not contain a labelled duplicate group, including the development and audit groups.
+This keeps label examples out of model training and out of the selection that the evaluation measures.
+The same text in another source is in the same group.
+`FrozenQualityLabels.label_exclusion` contains this union, and the label artifact writes it to `label_exclusion.json`.
+The GLM exclusion includes each original content ID, also the labels without joined embeddings.
+
+For a custom scorer, write a `LabelExclusion` manifest with a fixed `label_revision` and a `duplicate_groups` array.
+Each group is the SHA-256 hash of the UTF-8 bytes of the `text` field in the pinned normalized corpus.
+This stage does not normalize whitespace or case.
+A manifest can also contain `normalized_document_ids` with the `xxh3_128_utf8` scheme.
+A scorer that has no fitted labels must declare an empty group array.
+Corpus preparation removes the declared groups before it fills the token budget.
+Scoring rejects a remaining document that has the same text hash or normalized content ID.
+The artifact identity includes the two exclusion sets.
+
+### Custom scorers
+
+A scorer factory returns a `DocumentQualityScorer` with `scores(batch)`.
+A `QualityScoringBatch` contains document text, document IDs, and optional cached embeddings.
+The scorer returns one finite value for each document. A higher score means higher quality.
+Each Zephyr shard calls the factory one time.
+The classifier identity must include `implementation`, `revision`, and each input that can change the scores,
+for example the model and embedding revisions.
+A scored artifact includes the raw-pool identity and the scored token budget.
+The default scoring workers use CPUs. For a scorer that must have GPUs, set `worker_resources` in the Python builder.
+
+Use the same label-exclusion manifest for the raw pool and for scoring:
+
+```bash
+uv run python -m experiments.grug.fast_track.quality_cli \
+  --raw-pool <raw-corpus-artifact> --scorer-factory <module>:<factory> \
+  --classifier-identity '{"implementation":"candidate-head","revision":"<frozen-model-identity>"}' \
+  --label-exclusion-manifest <labels-excluded.json> \
+  --run-id quality-candidate-d512 --size d512 \
+  --seed 0 --data-seed 0 --version 2026.10.04
+```
+
+Without `--prepared-features`, the scorer gets text and IDs only.
+For a scorer that reads cached Harrier vectors, build the feature artifact first:
+
+```bash
+uv run python -m experiments.grug.fast_track.quality_cli \
+  --raw-pool <raw-corpus-artifact> --stage features --size d512 --version 2026.10.04
+```
+
+Then give it as `--prepared-features`. The feature budget must be the same as the raw-prefix budget of the scorer.
+
+```bash
+uv run python -m experiments.grug.fast_track.quality_cli \
+  --raw-pool <raw-corpus-artifact> --prepared-features <feature-artifact> \
+  --scorer-factory <module>:<embedding-scorer-factory> \
+  --classifier-identity '{"implementation":"embedding-head","revision":"<frozen-model-identity>"}' \
+  --label-exclusion-manifest <labels-excluded.json> \
+  --stage select --size d512 --version 2026.10.04
+```
+
+The feature step joins Harrier vectors by the original normalized shard and row offset.
+Then it does a check of each document ID.
+It reads only the requested raw prefix. It does not shuffle the raw text or the token arrays.
+The stored vectors are signed int8 values. The reader converts them to float32 and applies row-wise L2 normalization.
+`EmbeddingHeadScorer` reads the cached embeddings of the batch. It does not run an embedding model.
+The ridge-head path builds these features automatically.
+
+To score the same raw prefix with a fixed incumbent, add `--incumbent-scorer-factory` and `--incumbent-identity`.
+Then train with `--selection-method incumbent`.
+Keep the raw pool, label exclusions, training budget, model seed, and data seed the same for all compared runs.
+When the selected set does not change, the run gives no new treatment. Use the matched result again.
+
+## Compare data-track runs
+
+Each data-track CLI runs one rung at a time.
+To promote a candidate, start the next rung only after the matched comparison passes its declared gate.
+Code-validation runs can use all rungs without a promotion claim.
+
+The primary metric is final Paloma macro loss (`eval/paloma/macro_loss`).
+The guardrails are Uncheatable macro loss (`eval/uncheatable_eval/macro_loss`) and per-dataset Paloma loss
+(`eval/paloma/<dataset>/loss`). Each macro metric is the mean of the dataset losses in its suite. Lower is better.
+
+Measure the matched-seed noise at d512 before you select a non-inferiority margin.
+Before the candidate runs, record the margin in loss units, the guardrail limits, and the confidence-interval method.
+Use a minimum of three matched model/data seed pairs to calculate the candidate-minus-control differences.
+The gate accepts a rung when the upper one-sided 95% confidence bound is less than the margin
+and all guardrails are in their limits.
+Use a zero margin when the gate must show an improvement.
+After a rung passes, use the same declared gate for d768, d1024, and d1280.
+Record a result that does not pass and does not fail as inconclusive.
+A regression that is not significant does not show non-inferiority.
+
+For the Hero-mix track, `hero_sample_cli --data-seed` fixes the order of each Hero component in the sample.
+The training `--data-seed` changes only the mixture block order.
+
+For quality-head comparisons, build a second raw pool with a different `corpus_sample_cli --seed` for the final confirmation.
+On that pool, build new candidate and control selections, train matched seeds, and apply the same gate.
+Repeated selection on one pool can overfit that pool.
