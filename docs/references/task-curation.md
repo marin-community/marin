@@ -87,14 +87,33 @@ work. Source manifests and `corpus.json` record exact artifact locations and
 manifest hashes. Consumers should follow these references rather than list
 directories and infer the latest version.
 
-Each campaign has its own FineStore catalog beside its report; there is no
-global catalog selecting versions across all campaigns. Source records retain
-each run's result and artifact path. FineStore's conflict check covers one writer
+By default, each campaign has a FineStore catalog beside its report. Production FULL
+campaigns use `--publish-catalog s3://marin-us-east-02a/marin/rl-data/catalog/production`
+to accumulate results across versioned report directories, with assessment enabled.
+`--cache-dir` selects local execution and a local artifact root, so shared
+publication rejects it; local and SAMPLE runs keep separate catalogs. Remote runs
+reuse completed artifacts under `--artifact-root` and model requests under the
+explicit `--review-cache`. Reuse those locations, pinned inputs, recipe versions,
+rubric and model revisions across campaigns. A new report directory or enabling
+assessment does not force recomputation of completed work. Switching artifact
+roots does not copy completed work or model-request caches; verify their reuse
+before executing a campaign from a new root. Moving the publication catalog alone
+does not change the artifact or model-request cache locations.
+Source records retain each run's result and artifact path. FineStore's conflict check covers one writer
 session; another writer can replace the same key. Catalog keys include run IDs
 to separate results, but these conventions do not enforce access control.
 Credentials with object write access can overwrite underlying files. Campaign
 reports and `corpus.json` are mutable, so a shared unversioned `--output-root`
 is unsuitable for publication.
+
+Use `--source` to grade only new or changed sources. Shared publication preserves
+unselected source entries, declarations and assessments without executing their
+pipelines.
+Published non-skipped attempts, including failed attempts, establish each source's
+latest accepted run start time. A superseded source keeps its newer state while the rest of the
+campaign publishes. Registry removal does not implicitly retire a production source.
+After publication, run the [Atlas loader](rl-data-atlas.md#updating-atlas) explicitly;
+Postgres refresh is independent of model execution and Marina rollout.
 
 When building grader environments outside the driver, set `MARIN_PREFIX` to the
 same artifact root:
