@@ -153,7 +153,7 @@ def test_flash_attention_on_single_device_grug_mesh_matches_reference():
         q, k, v, cotangent = (jax.device_put(x, sharding) for x in (q, k, v, cotangent))
         ids = jax.device_put(mask.segment_ids[0], NamedSharding(mesh, P(batch_axes, None)))
         # Separate q and kv arrays, as a batch from the data loader carries them.
-        sharded_mask = AttentionMask.causal(sliding_window=40).with_segment_ids(ids, jnp.copy(ids))
+        sharded_mask = AttentionMask.causal(sliding_window=mask.sliding_window).with_segment_ids(ids, jnp.copy(ids))
 
         def loss(q, k, v):
             return jnp.sum(_flash(q, k, v, sharded_mask).astype(jnp.float32) * cotangent)
