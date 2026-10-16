@@ -1,0 +1,47 @@
+{
+  "run_id": "sc-qwen-transfer-native-window-tis-s0-main-interactive-rno-a4-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_long_interactive_rno_v1/native-window-tis-s0.yaml",
+  "configuration_sha256": "2fa5d2ed77887cb18995ea7ab2a0f97e5fd8b4129eff9d88b71d8b69bcaecc71",
+  "native_job": {
+    "job_id": "/romain/sc-qwen-transfer-native-window-tis-s0-main-interactive-rno-a4-01a126ce",
+    "state": "4",
+    "num_tasks": "2",
+    "priority_band": "2",
+    "bundle_id": "f1b2a459b324fe1ba9a1e3cdbbfdd09ea85cecd34e4ccf9cd3df9b2b60be6e33",
+    "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+    "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+  },
+  "native_controller_rows": [
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-tis-s0-main-interactive-rno-a4-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "443cc951ddcdd7fa",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1792045072376",
+      "finished_at_ms": "1792176331883",
+      "node_name": "gb978d0",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-tis-s0-main-interactive-rno-a4-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "3b5dead3b58968de",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1792045072376",
+      "finished_at_ms": "1792176341652",
+      "node_name": "g53c548",
+      "terminal_reason": ""
+    }
+  ],
+  "controller_snapshot": "controller-snapshots/20261016T185300",
+  "controller_sha256": "7c4df02e70248fb1f93928c16d671f6a4bdf2e71ec24d874099536b1601311d6",
+  "planned_updates": 1200,
+  "all_native_tasks_exit_zero": true,
+  "allocated_h100_hours_this_physical_attempt": 583.3972955555555,
+  "native_full_run_audit_passed": false,
+  "original_grader_replay_passed": false,
+  "scope": "Process/controller completion only. Full1200 finite updates, response/capture/membership, actual final checkpoint controls and every available original grade remain required. This successful physical0 interval excludes earlier retired/recovery allocations, which stay in complete campaign ledger and same-recipe mapping. No endpoint quality or effect inference from exit0."
+}
