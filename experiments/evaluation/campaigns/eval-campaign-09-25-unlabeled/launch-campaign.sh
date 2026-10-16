@@ -14,6 +14,7 @@ Options:
   --suite NAME       all, nonagentic, agentic, or terminal-bench. Default: all.
   --evalchemy NAME   Select one Evalchemy config basename; repeatable. Default: all.
   --harbor NAME      Select one Harbor config basename; repeatable. Default: all.
+  --limit COUNT      Cap selected benchmark items for a smoke reproduction.
   --version LABEL    Attach a submitter-controlled cohort label. Not policy attestation.
   --submit           Submit jobs. Without this flag every launch is a dry run.
   --wait             Wait for each submitted model before launching the next.
@@ -27,6 +28,7 @@ EOF
 submit=0
 suite=all
 version=
+limit=
 models=()
 selected_evalchemy_names=()
 selected_harbor_names=()
@@ -56,6 +58,12 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] || die "--version requires a value"
       [ -n "$2" ] || die "--version requires a non-empty value"
       version=$2
+      shift 2
+      ;;
+    --limit)
+      [ "$#" -ge 2 ] || die "--limit requires a value"
+      [[ "$2" =~ ^[1-9][0-9]*$ ]] || die "--limit must be a positive integer"
+      limit=$2
       shift 2
       ;;
     --submit)
@@ -159,6 +167,9 @@ PY
   )
   if [ -n "$version" ]; then
     base_arguments+=(--version "$version")
+  fi
+  if [ -n "$limit" ]; then
+    base_arguments+=(--limit "$limit")
   fi
   if [ "$suite" = all ] || [ "$suite" = nonagentic ]; then
     arguments=("${base_arguments[@]}")
