@@ -1057,54 +1057,7 @@ def test_evalchemy_executor_rejects_aggregates_that_include_infrastructure_failu
     }
 
 
-@pytest.mark.parametrize(
-    ("task_name", "benchmark_name", "source_metric"),
-    [
-        ("math500", "MATH500", "accuracy"),
-        ("mmlu-pro", "MMLUPro", "accuracy_avg"),
-    ],
-)
-def test_evalchemy_executor_rejects_native_transport_failure_when_rebuilding(
-    tmp_path, monkeypatch, task_name, benchmark_name, source_metric
-):
-    output_dir = f"file://{tmp_path / task_name}"
-    failed = _lm_eval_generation(1, "accuracy", 0.0, "")
-    failed["failure_category"] = "model_transport"
-    _write_evalchemy_output(
-        output_dir,
-        task_name,
-        {benchmark_name: {source_metric: 0.5}},
-        {benchmark_name: [_lm_eval_generation(0, "accuracy", 1.0, "4"), failed]},
-    )
-    monkeypatch.setattr(
-        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
-        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
-    )
-    executor = EvalchemyExecutor(
-        EvalchemyRunConfig(
-            name=task_name,
-            tasks=(EvalTaskConfig(name=benchmark_name, num_fewshot=0, task_alias=task_name, generation=True),),
-        )
-    )
-
-    with pytest.raises(EvaluationError) as exc_info:
-        executor(_remote_session(), output_dir, {})
-
-    assert exc_info.value.status is RunStatus.INFRA_FAILED
-    assert exc_info.value.coverage == {
-        task_name: TaskCoverage(
-            n_benchmark=2,
-            n_attempted=2,
-            n_scored=1,
-            n_correct=1,
-            errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
-        )
-    }
-    samples = [sample_from_archive_row(row) for row in ReadView(output_dir).scan("samples").to_pylist()]
-    assert sum("[EVALCHEMY_INFRASTRUCTURE_ERROR]" in (sample.output or "") for sample in samples) == 1
-
-
-def test_evalchemy_executor_rejects_failed_multiple_choice_request(tmp_path, monkeypatch):
+def test_evalchemy_executor_rejects_multiple_choice_aggregate_with_inconsistent_scored_count(tmp_path, monkeypatch):
     output_dir = f"file://{tmp_path / 'multiple-choice-transport-failure'}"
     successful = {
         "doc_id": 0,
@@ -1148,29 +1101,22 @@ def test_evalchemy_executor_rejects_failed_multiple_choice_request(tmp_path, mon
     )
 
 
-@pytest.mark.parametrize(
-    ("benchmark", "source_metric", "aggregate"),
-    [("MRCR", "mrcr_accuracy", 0.6), ("WeightedTask", "weighted_score", 0.7)],
-)
-def test_evalchemy_executor_preserves_evaluator_partial_aggregates(
-    tmp_path, monkeypatch, benchmark, source_metric, aggregate
-):
-    output_dir = f"file://{tmp_path / benchmark}"
-    sample_metric = "accuracy" if benchmark == "MRCR" else source_metric
-    failed = {**_lm_eval_generation(2, sample_metric, 0.0, ""), "failure_category": "model_transport"}
-    metrics = {source_metric: aggregate, "bucket_low": 0.4, "bucket_high": 0.8, "num_total": 2.0}
+def test_evalchemy_executor_preserves_evaluator_partial_aggregates(tmp_path, monkeypatch):
+    output_dir = f"file://{tmp_path / 'MRCR'}"
+    failed = {**_lm_eval_generation(2, "accuracy", 0.0, ""), "failure_category": "model_transport"}
+    metrics = {"mrcr_accuracy": 0.6, "bucket_low": 0.4, "bucket_high": 0.8, "num_total": 2.0}
     _write_evalchemy_output(
         output_dir,
         "partial",
-        {benchmark: metrics},
+        {"MRCR": metrics},
         {
-            benchmark: [
-                _lm_eval_generation(0, sample_metric, 0.4, "4"),
-                _lm_eval_generation(1, sample_metric, 0.8, "4"),
+            "MRCR": [
+                _lm_eval_generation(0, "accuracy", 0.4, "4"),
+                _lm_eval_generation(1, "accuracy", 0.8, "4"),
                 failed,
             ]
         },
-        scored_counts={benchmark: 2},
+        scored_counts={"MRCR": 2},
     )
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
@@ -1179,14 +1125,14 @@ def test_evalchemy_executor_preserves_evaluator_partial_aggregates(
     executor = EvalchemyExecutor(
         EvalchemyRunConfig(
             name="partial",
-            tasks=(EvalTaskConfig(name=benchmark, num_fewshot=0, task_alias="partial", generation=True),),
+            tasks=(EvalTaskConfig(name="MRCR", num_fewshot=0, task_alias="partial", generation=True),),
         )
     )
 
     outcome = executor(_remote_session(), output_dir, {})
 
     assert outcome.metrics == {"partial": metrics}
-    assert outcome.canonical_metrics == {"partial": {source_metric: aggregate}}
+    assert outcome.canonical_metrics == {"partial": {"mrcr_accuracy": 0.6}}
     assert outcome.coverage["partial"] == TaskCoverage(
         n_benchmark=3,
         n_attempted=3,

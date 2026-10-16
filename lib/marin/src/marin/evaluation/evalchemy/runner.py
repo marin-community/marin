@@ -124,10 +124,10 @@ class EvalchemyRunConfig:
 
 @dataclass(frozen=True)
 class EvalchemyOutcome:
-    """A completed FineStore archive, child job identity, and evaluator measurements."""
+    """Validated evaluator metrics, sample coverage, and child job identity."""
 
     jobs: dict[str, str]
-    result: FineStoreEvalchemyResult
+    metrics: dict[str, dict[str, float]]
     coverage: dict[str, TaskCoverage]
     canonical_metrics: dict[str, dict[str, float]]
     tasks: tuple[EvalTaskRef, ...]
@@ -355,7 +355,7 @@ def run_evalchemy(
     )
     return EvalchemyOutcome(
         jobs={_EVAL_JOB_ROLE: eval_job},
-        result=result,
+        metrics=metrics,
         coverage=coverage,
         canonical_metrics=summary.canonical_metrics,
         tasks=summary.tasks,
@@ -386,13 +386,10 @@ class EvalchemyExecutor:
                 jobs=exc.jobs,
                 log_tails=exc.log_tails,
             ) from exc
-        metrics = outcome.result.task_metrics()
-        coverage = outcome.coverage
-        canonical_metrics = dict(outcome.canonical_metrics)
         return EvaluationOutcome(
-            metrics=metrics,
-            canonical_metrics=canonical_metrics,
+            metrics=outcome.metrics,
+            canonical_metrics=outcome.canonical_metrics,
             tasks=outcome.tasks,
             jobs=outcome.jobs,
-            coverage=coverage,
+            coverage=outcome.coverage,
         )

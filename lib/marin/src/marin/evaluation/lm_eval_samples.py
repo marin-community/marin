@@ -43,7 +43,7 @@ from finestore.migrations.m0001_manifest import LEGACY_SEAL_FILE
 from finestore.reader import ReadView
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from marin.evaluation.eval_stats import UNGRADED_ERROR
+from marin.evaluation.eval_stats import SCORED_COUNT_METRIC, UNGRADED_ERROR
 from marin.evaluation.evaluation_config import eval_task_directory
 from marin.evaluation.metric_selection import (
     REPEAT_MEAN_SUFFIX,
@@ -590,7 +590,7 @@ def _evalchemy_contract_summary(
         directory = PurePosixPath(relative).parent.parent.name
         outcomes = json.loads(payload).get("task_outcomes", {})
         for leaf, outcome in outcomes.items():
-            count = outcome.get("scored_count")
+            count = outcome.get(SCORED_COUNT_METRIC)
             if outcome.get("status") == "succeeded" and isinstance(count, int) and not isinstance(count, bool):
                 if count < 0:
                     raise ValueError(f"{directory}/{leaf}: scored_count must be non-negative")
