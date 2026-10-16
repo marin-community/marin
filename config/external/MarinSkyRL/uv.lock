@@ -1413,7 +1413,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=a1636e85d52a6164fc900032ee48b9deea657f68" }]
+requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=ea93af58f92a8d31d84004b90c95265dd3333c26" }]
 
 [[package]]
 name = "marin-finelog"
@@ -1568,7 +1568,7 @@ secrets = [
 [[package]]
 name = "marin-rolloutengine"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Frolloutengine&rev=c3e1bccd3a574d0329e337950d6004bc491ff125#c3e1bccd3a574d0329e337950d6004bc491ff125" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Frolloutengine&rev=cdb87be31fce26ee6a078e3b207f34362d080831#cdb87be31fce26ee6a078e3b207f34362d080831" }
 dependencies = [
     { name = "marin-shellbox" },
     { name = "marin-taskcompendium" },
@@ -1579,7 +1579,7 @@ dependencies = [
 [[package]]
 name = "marin-shellbox"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fshellbox&rev=c3e1bccd3a574d0329e337950d6004bc491ff125#c3e1bccd3a574d0329e337950d6004bc491ff125" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fshellbox&rev=cdb87be31fce26ee6a078e3b207f34362d080831#cdb87be31fce26ee6a078e3b207f34362d080831" }
 dependencies = [
     { name = "bubblewrap-bin", marker = "sys_platform == 'linux'" },
     { name = "httpx" },
@@ -1598,7 +1598,7 @@ shellsim = [
 [[package]]
 name = "marin-taskcompendium"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=c3e1bccd3a574d0329e337950d6004bc491ff125#c3e1bccd3a574d0329e337950d6004bc491ff125" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=cdb87be31fce26ee6a078e3b207f34362d080831#cdb87be31fce26ee6a078e3b207f34362d080831" }
 dependencies = [
     { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "marin-shellbox" },
@@ -1610,7 +1610,7 @@ dependencies = [
 [[package]]
 name = "marin-verifyit"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fverifyit&rev=c3e1bccd3a574d0329e337950d6004bc491ff125#c3e1bccd3a574d0329e337950d6004bc491ff125" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fverifyit&rev=cdb87be31fce26ee6a078e3b207f34362d080831#cdb87be31fce26ee6a078e3b207f34362d080831" }
 dependencies = [
     { name = "tomli-w" },
 ]
@@ -1634,7 +1634,7 @@ schema = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=a1636e85d52a6164fc900032ee48b9deea657f68#a1636e85d52a6164fc900032ee48b9deea657f68" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=ea93af58f92a8d31d84004b90c95265dd3333c26#ea93af58f92a8d31d84004b90c95265dd3333c26" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
@@ -2832,16 +2832,16 @@ wheels = [
 
 [[package]]
 name = "shellsim"
-version = "0.1.36"
+version = "0.1.38"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "packaging" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8e/1c/f88a11c0acdfa8a0b0e3678fbaa505ee549c5c2e1e496607a93d0125753e/shellsim-0.1.36.tar.gz", hash = "sha256:b845d82bb7ec00f0cfb1fc6e743aa1a0c32421aa1e27653389f10b8bcfd5a060", size = 1759273, upload-time = "2026-10-14T01:02:03.614Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f5/a0/0a6f774e1f3ab8d685a548ca02a2ade499aed3372bd7ca35c62e950fefa7/shellsim-0.1.38.tar.gz", hash = "sha256:e5c1ab11626bccf2c73628dd22c47a07aec8e8955719418c36a9b07958aa9b2a", size = 1769304, upload-time = "2026-10-15T16:22:00.279Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/74/17/1484341b5ebedabb4b5966a90868a1c343446871d7a92435ac9975f29b65/shellsim-0.1.36-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:5a3d17ed4310142096af4a7e83e0a74509020c85aaa31c9b0bf76e311b633df8", size = 4384763, upload-time = "2026-10-14T01:01:57.562Z" },
-    { url = "https://files.pythonhosted.org/packages/79/ea/9147a39907f60f2040818d9f9d9e50e77512d89cf0cd28ff26e90c831945/shellsim-0.1.36-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:ef950014094fdcfee1f4a7acdfae0b33532dfbac0c309d1a8a023a43a0e0ce55", size = 4872378, upload-time = "2026-10-14T01:01:59.79Z" },
-    { url = "https://files.pythonhosted.org/packages/52/8f/c5a6e278714b6eff7cfc0a9c1fb77b0a586b838f65094cd38b7b200c912f/shellsim-0.1.36-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:f7b8ea4cc140313e65cd3f6103669ffe95b22636df8630f3d8164859f2fc7c78", size = 5180661, upload-time = "2026-10-14T01:02:01.969Z" },
+    { url = "https://files.pythonhosted.org/packages/10/a2/518503faa0662dd519e8d1126b5fc59c77e2750e2c08e911a6c2034138ce/shellsim-0.1.38-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:da8a793f13eb5998ea14fb7e12e19952302a310144d50c5990bbf55c83bd4d78", size = 4396151, upload-time = "2026-10-15T16:21:55.088Z" },
+    { url = "https://files.pythonhosted.org/packages/51/95/ed8ff22dc616aed4a444c7bea2ccd5700c56de7a00372d31e733cc35a221/shellsim-0.1.38-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:b603afc9bd7e71a47c82a0cfa162b69564179bebd3f48b6f650231c0d18b4dd4", size = 4881484, upload-time = "2026-10-15T16:21:57.072Z" },
+    { url = "https://files.pythonhosted.org/packages/35/be/b9f2b7ad2bfbd4024b833e10b9695534b580f32b66c7701b5a5091cb760f/shellsim-0.1.38-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:b8bd9e59858b1adb09a8d9533fdadbacbceed9c88a9b74cd119da6711ae7c248", size = 5191203, upload-time = "2026-10-15T16:21:58.703Z" },
 ]
 
 [package.optional-dependencies]
