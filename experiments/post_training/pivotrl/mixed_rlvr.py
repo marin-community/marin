@@ -51,6 +51,10 @@ class Route(StrEnum):
     TERMINAL = "terminal"
 
 
+RETIRED_ROUTE = "skyrl_gym"
+TASK_SESSION_ROUTE = "task_session"
+
+
 RLVR1 = hf_download(
     "raw/open-athena-nemotron-rl-ultra-rlvr1-cleaned-v3-2026-09-30",
     hf_id="open-athena/Nemotron-RL-Ultra-RLVR1-Cleaned-v3-2026-09-30",
@@ -69,9 +73,34 @@ def _pool_rows(pool: dict[str, str]) -> pa.Table:
     return table
 
 
+def _with_task_session_route(rows: pa.Table) -> pa.Table:
+    """Name MarinSkyRL's task-session route on rows written before it replaced ``skyrl_gym``.
+
+    Both RLVR1 and #9933's candidates predate MarinSkyRL #879, which grades every Nemotron Ultra
+    row in a task session and rejects any other route.
+    """
+    extra = rows.column("extra_info").combine_chunks()
+    ultra = pc.struct_field(extra, "nemotron_ultra")
+    route = pc.struct_field(ultra, "route")
+    unknown = set(pc.unique(route).to_pylist()) - {RETIRED_ROUTE, TASK_SESSION_ROUTE}
+    if unknown:
+        raise ValueError(f"unexpected Nemotron Ultra routes: {sorted(unknown)}")
+    route = pc.if_else(pc.equal(route, RETIRED_ROUTE), pa.scalar(TASK_SESSION_ROUTE, route.type), route)
+    ultra = _replace_field(ultra, "route", route)
+    return rows.set_column(
+        rows.column_names.index("extra_info"), "extra_info", _replace_field(extra, "nemotron_ultra", ultra)
+    )
+
+
+def _replace_field(struct: pa.StructArray, name: str, values: pa.Array) -> pa.StructArray:
+    names = [field.name for field in struct.type]
+    children = [values if child == name else pc.struct_field(struct, child) for child in names]
+    return pa.StructArray.from_arrays(children, names=names, mask=struct.is_null())
+
+
 def _routed(pools: dict[str, dict[str, str]]) -> tuple[pa.Table, dict[str, int]]:
     tables = {route: _pool_rows(pool) for route, pool in pools.items()}
-    rows = pa.concat_tables(tables.values(), promote_options="permissive")
+    rows = _with_task_session_route(pa.concat_tables(tables.values(), promote_options="permissive"))
     routes = pa.array([route for route, table in tables.items() for _ in range(table.num_rows)], pa.string())
     return rows.append_column(ROUTE_COLUMN, routes), {route: table.num_rows for route, table in tables.items()}
 
