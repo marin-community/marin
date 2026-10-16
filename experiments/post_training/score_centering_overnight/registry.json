@@ -3328,7 +3328,24 @@
       "priority_band": 3,
       "bundle_id": "24e2d16f75f990327fe55a10ba5b994982a0544f270bef71e634df2990b6c536",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-east-a0-01a126ce",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "h100_nodes": 5,
+      "h100_per_node": 8,
+      "source": "2fcf6f1d2f4daaeaed14e0a5b3e64a53852be9b1",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_direct_checkpoint_recovery_qualification_v1/save5-detach.yaml",
+      "configuration_sha256": "7364f8b5d765c7ea570eecc12c60eaabffe6628832dfcdea77b30824fd12a5e4",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-east-a0-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "f2ef5d94288fc0547ddf2e1cfaca9a9491c6dd444b8b1f5c0e051e0126d702c3",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-16T13:40:22.116957+00:00"
+  "observed_at": "2026-10-16T13:50:46.110266+00:00"
 }

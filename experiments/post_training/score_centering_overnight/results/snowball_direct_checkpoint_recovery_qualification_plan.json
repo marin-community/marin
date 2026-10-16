@@ -1,7 +1,7 @@
 {
-  "scope": "Three sequential five-node engineering phases on source2fcf. No scientific main source or horizon changes.",
+  "scope": "Three sequential five-node engineering phases on source2fcf. Initial save5 is submitted; both restore phases remain separately gated and unsubmitted. No scientific source or horizon changes.",
   "source": "2fcf6f1d2f4daaeaed14e0a5b3e64a53852be9b1",
-  "status": "All three native preparations passed; all GPU phases unsubmitted and gated.",
+  "status": "Initial save5 accepted at13:48UTC and all five tasks queued at13:50UTC. Complete first-phase native and all-available original-grader replay gates are required before restore5-to7 may submit.",
   "resource_board_ids": [
     1147,
     1148
@@ -90,13 +90,27 @@
       ],
       "expected_training_physical_responses": 2560,
       "expected_evaluation_physical_responses": 9592,
-      "submitted": false,
+      "submitted": true,
       "submission_gate": "New-source Qwen preflight must pass all native, state, serving and all-available original-grader replay gates.",
       "native_preparation": {
         "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-direct-restore-save5-native-prepare.log",
         "bytes": 308,
         "sha256": "8e3b8981eea18cf2c84cd81c5745860b02c3089c9d6ab2bd00918cce30d0aec0",
         "passed": true
+      },
+      "native_controller_confirmed": true,
+      "native_submission_evidence": "results/snowball_direct_checkpoint_save5_submission.json",
+      "accepted_at_utc": "2026-10-16T13:48:31.208677+00:00",
+      "latest_state_observation": {
+        "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T135024",
+        "task_states": [
+          "2",
+          "2",
+          "2",
+          "2",
+          "2"
+        ],
+        "allocated": false
       }
     },
     {
@@ -276,5 +290,7 @@
     "full_byte_readback_verified": true,
     "files": 14,
     "file_bytes": 131893
-  }
+  },
+  "published_preparation_commit": "d087c62997eab63ab0677a9e30d33a94d3d740c1",
+  "retained_preparation_scope": "The14file preparation manifest is the immutable pre-submission snapshot. This current plan adds the actual first-phase submission; earlier prepared/unsubmitted bytes remain preserved."
 }

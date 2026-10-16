@@ -1,0 +1,251 @@
+{
+  "scope": "Only source2fcf five-node initial save5 engineering qualification is submitted. Restore5-to7 and restore7-to9 remain separately gated and unsubmitted. No scientific source promotion or completed qualification.",
+  "job_id": "/romain/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-east-a0-01a126ce",
+  "source": "2fcf6f1d2f4daaeaed14e0a5b3e64a53852be9b1",
+  "published_preparation_commit": "d087c62997eab63ab0677a9e30d33a94d3d740c1",
+  "configuration": "experiments/post_training/score_centering_overnight/snowball_direct_checkpoint_recovery_qualification_v1/save5-detach.yaml",
+  "configuration_sha256": "7364f8b5d765c7ea570eecc12c60eaabffe6628832dfcdea77b30824fd12a5e4",
+  "native_submission_confirmed": true,
+  "native_controller_task_confirmation_pending": false,
+  "geometry": {
+    "cluster": "cw-us-east-02a",
+    "priority": "batch",
+    "nodes": 5,
+    "learner_nodes": 4,
+    "inference_nodes": 1,
+    "h100_per_node": 8,
+    "total_h100": 40,
+    "PP": 2,
+    "EP": 8,
+    "TP": 1,
+    "CP": 1,
+    "SP": 1
+  },
+  "expected_new_updates": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "expected_training_physical_responses": 2560,
+  "expected_evaluation_physical_responses": 9592,
+  "final_checkpoint": 5,
+  "final_sampler_completed_updates": 3,
+  "resource_board_ids": [
+    1147,
+    1148
+  ],
+  "preflight": {
+    "checked_at_utc": "2026-10-16T13:48:18.947592+00:00",
+    "source": "2fcf6f1d2f4daaeaed14e0a5b3e64a53852be9b1",
+    "published_preparation_commit": "d087c62997eab63ab0677a9e30d33a94d3d740c1",
+    "job_id": "/romain/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-east-a0-01a126ce",
+    "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T134733",
+    "absent_on_both_clusters": true,
+    "interactive_nodes_including_queued": 4,
+    "empty_output_root": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-east-a0-01a126ce",
+    "new_source_qwen_preflight_all_gates_passed": true,
+    "qwen_evidence_manifest_sha256_rechecked": "d3957bd362309d5971c3225c0217ccef10590c0e30a5baf2a0101ca9e3b2b6c0",
+    "all_14_snowball_preparation_files_full_readback_rechecked": true,
+    "geometry": {
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "nodes": 5,
+      "learner_nodes": 4,
+      "inference_nodes": 1,
+      "h100_per_node": 8,
+      "total_h100": 40,
+      "PP": 2,
+      "EP": 8,
+      "TP": 1,
+      "CP": 1,
+      "SP": 1
+    },
+    "restore_phases_remain_unsubmitted": true
+  },
+  "retained_submission_preflight": [
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/snowball-save5-submission-preflight/submit-snowball-direct-restore-save5.py",
+      "bytes": 10931,
+      "sha256": "e49d7cf870f6d5bfe25e823e11af4b67ed1cf1837ca84c19263a4db555d287a8",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/snowball-save5-submission-preflight/snowball-direct-save5-submission-preflight.json",
+      "bytes": 1227,
+      "sha256": "39dddaffd7914da96e3b100768326332a1483663a199ad2e634e2272f4690079",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/snowball-save5-submission-preflight/snowball_direct_checkpoint_recovery_qualification_plan.json",
+      "bytes": 14406,
+      "sha256": "067cc88a08982904e725a77f105cd73fc3c131ec4687fb06be3511018dcfef90",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/snowball-save5-submission-preflight/direct_checkpoint_restore_candidate_qwen_qualification.json",
+      "bytes": 2213,
+      "sha256": "dab5bd7055128999259dfc9acae3d5f99f25f33a8da3db1934b685d7e55c6a40",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/snowball-save5-submission-preflight/resume-current-attempts.csv",
+      "bytes": 67390,
+      "sha256": "e906f5b8ac3d2bdd0d59e40f40f57c19531a66e79848a7a4cd2fc6c5e737ac22",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/snowball-save5-submission-preflight/resume-job-specs-current.csv",
+      "bytes": 28759,
+      "sha256": "204ef160c40e13510a64c247a36be50d3c73bf87a6b1cd98e7d61abe15649583",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/snowball-save5-submission-preflight/resume-rno-current-attempts.csv",
+      "bytes": 115551,
+      "sha256": "6c55912e1cb2652d29e9b881401163746f0aff04f9ddafe32e2dab9d08440a46",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/snowball-save5-submission-preflight/resume-rno-job-specs-current.csv",
+      "bytes": 19436,
+      "sha256": "e60a638fdca28d1827e6a81414586259ee53bb06b6dfd1380159deef8da66292",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/snowball-save5-submission-preflight/sha256-manifest.json",
+      "bytes": 578,
+      "sha256": "33da025d26f08e53d4aee6add598c7187915e64c47eff8c83c12437cfa217a35",
+      "full_byte_readback_verified": true
+    }
+  ],
+  "native_submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-direct-save5-native-submission.log",
+  "native_submission_log_sha256": "5a29524a01c67fbc52794f272ba357a4598fca9e921aa7a14f3096ee934efaee",
+  "five_node_snowball_recovery_qualified": false,
+  "scientific_source_promoted": false,
+  "native_controller_confirmation": [
+    {
+      "job_id": "/romain/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-east-a0-01a126ce",
+      "job_state": "1",
+      "num_tasks": "5",
+      "priority_band": "3",
+      "bundle_id": "f2ef5d94288fc0547ddf2e1cfaca9a9491c6dd444b8b1f5c0e051e0126d702c3",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_cpu_millicores": "32000",
+      "res_memory_bytes": "1932735283200",
+      "res_disk_bytes": "536870912000",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-east-a0-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "d47c491bb7e3fad6",
+      "task_state": "9",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "job_id": "/romain/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-east-a0-01a126ce",
+      "job_state": "1",
+      "num_tasks": "5",
+      "priority_band": "3",
+      "bundle_id": "f2ef5d94288fc0547ddf2e1cfaca9a9491c6dd444b8b1f5c0e051e0126d702c3",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_cpu_millicores": "32000",
+      "res_memory_bytes": "1932735283200",
+      "res_disk_bytes": "536870912000",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-east-a0-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "f263dec165bfda75",
+      "task_state": "9",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "job_id": "/romain/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-east-a0-01a126ce",
+      "job_state": "1",
+      "num_tasks": "5",
+      "priority_band": "3",
+      "bundle_id": "f2ef5d94288fc0547ddf2e1cfaca9a9491c6dd444b8b1f5c0e051e0126d702c3",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_cpu_millicores": "32000",
+      "res_memory_bytes": "1932735283200",
+      "res_disk_bytes": "536870912000",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-east-a0-01a126ce/2",
+      "attempt_id": "0",
+      "attempt_uid": "d4cf4be8adf95b5c",
+      "task_state": "9",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "job_id": "/romain/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-east-a0-01a126ce",
+      "job_state": "1",
+      "num_tasks": "5",
+      "priority_band": "3",
+      "bundle_id": "f2ef5d94288fc0547ddf2e1cfaca9a9491c6dd444b8b1f5c0e051e0126d702c3",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_cpu_millicores": "32000",
+      "res_memory_bytes": "1932735283200",
+      "res_disk_bytes": "536870912000",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-east-a0-01a126ce/3",
+      "attempt_id": "0",
+      "attempt_uid": "1ce80a45b97c2ad0",
+      "task_state": "9",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "job_id": "/romain/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-east-a0-01a126ce",
+      "job_state": "1",
+      "num_tasks": "5",
+      "priority_band": "3",
+      "bundle_id": "f2ef5d94288fc0547ddf2e1cfaca9a9491c6dd444b8b1f5c0e051e0126d702c3",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_cpu_millicores": "32000",
+      "res_memory_bytes": "1932735283200",
+      "res_disk_bytes": "536870912000",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-east-a0-01a126ce/4",
+      "attempt_id": "0",
+      "attempt_uid": "7f1f79f76b94198e",
+      "task_state": "9",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    }
+  ],
+  "native_controller_confirmation_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-direct-save5-native-controller-confirmation.csv",
+  "native_controller_confirmation_sha256": "d1da2674ec089803a955d35fdc31b9aa3522dd6a87378ae94199fb3fd1dbab41",
+  "confirmed_at_utc": "2026-10-16T13:48:31.208677+00:00",
+  "retained_native_submission_evidence": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/snowball-save5-native-evidence/manifest.json",
+    "bytes": 6323,
+    "sha256": "435d35c2a4788e9b1c91af5314b752ac07722fc3a20e570ba464a6d137ea20e5",
+    "full_byte_readback_verified": true,
+    "files": 16,
+    "file_bytes": 553750
+  },
+  "latest_controller_observation": {
+    "snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T135024",
+    "all_five_tasks_queued": true,
+    "actual_allocated_h100_hours_at_snapshot": 0,
+    "interactive_nodes_including_queued": 4
+  }
+}
