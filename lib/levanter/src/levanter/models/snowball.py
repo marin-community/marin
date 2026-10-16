@@ -21,7 +21,7 @@ guards against drift.
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, NamedTuple, Optional, Type
+from typing import Any, Literal, NamedTuple, Optional, Type
 
 import equinox as eqx
 import jax
@@ -69,6 +69,7 @@ from levanter.grug.sharding import (
     unshard,
 )
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.models.lm_model import LmConfig, LmHeadModel
@@ -86,6 +87,7 @@ GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ATTENTION_MODE = "production"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
+SnowballProjectionImplementation = Literal["native", "fixed_schedule"]
 
 
 class SnowballRouteCaptureBatch(NamedTuple):
@@ -250,11 +252,14 @@ class SnowballConfig(HFCompatConfig):
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
     moe_implementation: Optional[MoeImplementation] = None
+    projection_implementation: SnowballProjectionImplementation = "native"
 
     reference_checkpoint: Optional[str] = None
     tokenizer: Optional[str] = None
 
     def __post_init__(self) -> None:
+        if self.projection_implementation not in ("native", "fixed_schedule"):
+            raise ValueError(f"unknown Snowball projection implementation: {self.projection_implementation!r}")
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
         if self.num_experts_per_token > self.num_experts:
@@ -490,9 +495,16 @@ class SnowballAttention(eqx.Module):
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
         head_dim = self.cfg.inferred_head_dim
 
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+        if self.cfg.projection_implementation == "fixed_schedule":
+            project = lambda weight: fixed_schedule_linear(x.reshape(-1, x.shape[-1]), weight).reshape(
+                *x.shape[:-1], weight.shape[-1]
+            )
+        else:
+            project = lambda weight: jnp.einsum("bsh,hd->bsd", x, weight)
+
+        q = rearrange(project(self.w_q), "... (n d) -> ... n d", d=head_dim)
+        k = rearrange(project(self.w_k), "... (m d) -> ... m d", d=head_dim)
+        v = rearrange(project(self.w_v), "... (m d) -> ... m d", d=head_dim)
 
         q = rms_norm(q)
         k = rms_norm(k)

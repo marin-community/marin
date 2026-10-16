@@ -62,6 +62,26 @@ FP64 arithmetic, and related precision-oracle helpers are removed. Callers
 should use the reference path for CPU validation and the standard TPU path for
 accelerator validation; no compatibility aliases remain.
 
+### Opt-in fixed-schedule projections
+
+Snowball’s `projection_implementation="fixed_schedule"` selects the same
+fixed BM=BK=BN=128 TPU contraction from `SnowballAttention._project_qkv` in
+training and paged decode. It is deliberately opt-in: the native `einsum`
+path remains the default. The first implementation supports only one visible
+TPU v4 device, fully addressable single-device arrays, FP32 or BF16 input and
+weight storage, and projection widths that are multiples of 128. The
+contraction casts activations to the weight storage dtype and restores outputs
+to the activation dtype, which covers the Snowball caller’s FP32-parameter/
+BF16-activation pairing. Unsupported backends, device kinds, layouts, device
+counts, and widths fail explicitly; there is no shape-dependent fallback.
+
+The forward uses DEFAULT products and FP32 accumulation with a K schedule
+determined by the weight width. Its custom VJP uses separate HIGHEST-precision
+FP32 reference GEMMs. The measured prototype established token-row raw-bit
+invariance for the tested TPUv4 shapes, not arbitrary sharding, throughput,
+full-model parity, or distribution-level equality. The opt-in therefore does
+not change attention, RoPE, KV-cache casts, MoE routing, or Splash selection.
+
 ### Service Architecture
 The inference server is built around a `GenerationService` that encapsulates:
 - Model loading and initialization via `HFCheckpointConverter`
