@@ -162,10 +162,13 @@ shard. It takes the next group by its first primary key, then adds that group's 
 to the output buffer. The ordering is approximate for unsorted input shards. A 1 MiB
 fsspec file buffer limits speculative byte reads; Parquet pre-buffering is disabled.
 A required column read or decoded row group can be larger than the file buffer.
-Compaction retains the newest version seen per key in a buffer targeting four 100 MiB
-row groups or 65,536 possible keys, then concatenates and sorts the retained Arrow tables. Each
-buffer becomes a sorted output shard at the next level. A single input batch or row can
-exceed the target. Duplicate keys in different output shards remain valid; readers
+Compaction retains the newest version seen per key in a buffer with a 400 MiB
+default target, configurable as `compaction_target_bytes` on `DataStore` or
+`target_bytes` on `compact_table`. It concatenates and sorts the retained Arrow
+tables when the next row group would exceed that target. Each buffer becomes a
+sorted output shard at the next level. A single input row group or row can exceed
+the target. The shard writer splits output row groups by its own row and byte
+limits. Duplicate keys in different output shards remain valid; readers
 resolve them, and the seal records only duplicates removed during that compaction.
 The manifest replaces the input paths with the output shards through the same `HEAD`
 compare and swap. If another compactor removes an input first, the losing output remains

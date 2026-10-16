@@ -689,7 +689,7 @@ def test_compaction_sorts_unsorted_shard_and_keeps_latest_value(tmp_path):
     ]
 
 
-def test_compaction_preserves_newest_value_across_output_buffers(tmp_path, monkeypatch):
+def test_compaction_preserves_newest_value_across_output_buffers(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="old") as store:
         store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE).extend(
@@ -700,8 +700,7 @@ def test_compaction_preserves_newest_value_across_output_buffers(tmp_path, monke
         store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE).append({"id": "a", "value": "new"})
         store.flush()
 
-    monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", 1)
-    assert compact_table(root, "samples") == CompactionResult(written=3, superseded=0)
+    assert compact_table(root, "samples", target_bytes=1) == CompactionResult(written=3, superseded=0)
     view = ReadView(root)
     assert len(view.list_shards("samples")) > 1
     expected = [{"id": "a", "value": "new"}, {"id": "b", "value": "only"}]
@@ -745,8 +744,7 @@ def test_compaction_orders_row_groups_by_first_key(tmp_path, monkeypatch):
     assert all(
         pq.ParquetFile(shard.path).metadata.num_row_groups == 2 for shard in ReadView(root).list_shards("samples")
     )
-    monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", 1)
-    assert compact_table(root, "samples").written == 8
+    assert compact_table(root, "samples", target_bytes=1).written == 8
     output_shards = ReadView(root).list_shards("samples")
     assert len(output_shards) == 4
     assert [pq.read_table(shard.path, columns=["id"])["id"][0].as_py() for shard in output_shards] == [1, 3, 5, 7]
@@ -758,7 +756,13 @@ def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(
     measurements = []
     for rows_per_shard in (16, 32):
         root = str(tmp_path / f"run-{rows_per_shard}")
-        with DataStore.open(root, flush_interval=3600, max_buffer_bytes=2**40, compaction_levels=(1000,)) as store:
+        with DataStore.open(
+            root,
+            flush_interval=3600,
+            max_buffer_bytes=2**40,
+            compaction_levels=(1000,),
+            compaction_target_bytes=4 * row_bytes,
+        ) as store:
             table = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
             for revision in range(4):
                 for index in range(rows_per_shard):
@@ -771,7 +775,7 @@ def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(
             pool = pa.proxy_memory_pool(default_pool)
             pa.set_memory_pool(pool)
             try:
-                result = compact_table(root, "samples")
+                result = store.compact("samples")
                 measurements.append(pool.max_memory())
             finally:
                 pa.set_memory_pool(default_pool)

@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 _COMPACTOR = "compactor"
 _CLOSE_COMPACTION_MAX_ATTEMPTS = 3
 _COMPACTION_FILE_READ_AHEAD_BYTES = 1024 * 1024
-_COMPACTION_BUFFER_ROW_GROUPS = 4
+COMPACTION_TARGET_BYTES = 400 * 1024 * 1024
 
 
 class CompactionCoordinator(Protocol):
@@ -61,7 +61,9 @@ def _first_key(group: pa.Table, primary_key: tuple[str, ...]) -> tuple:
     return tuple((value is None, value) for value in values)
 
 
-def _compaction_groups(groups: Iterator[pa.Table], primary_key: tuple[str, ...]) -> Iterator[tuple[pa.Table, int]]:
+def _compaction_groups(
+    groups: Iterator[pa.Table], primary_key: tuple[str, ...], target_bytes: int
+) -> Iterator[tuple[pa.Table, int]]:
     """Yield sorted rows and the count of superseded rows for each accumulator flush.
 
     A key may recur in a later output shard; read paths resolve those versions.
@@ -69,10 +71,8 @@ def _compaction_groups(groups: Iterator[pa.Table], primary_key: tuple[str, ...])
     pending: dict[tuple, tuple[tuple[int, int, int], pa.Table]] = {}
     pending_bytes = superseded = 0
     sort_keys = [(key, "ascending") for key in primary_key]
-    buffer_target = _COMPACTION_BUFFER_ROW_GROUPS * shard_writer.ROW_GROUP_TARGET_BYTES
-    row_target = _COMPACTION_BUFFER_ROW_GROUPS * shard_writer.ROW_GROUP_ROWS
     for group in groups:
-        if pending and (pending_bytes + group.nbytes > buffer_target or len(pending) + group.num_rows > row_target):
+        if pending and pending_bytes + group.nbytes > target_bytes:
             yield _sorted_buffer(pending, sort_keys), superseded
             pending = {}
             pending_bytes = superseded = 0
@@ -104,6 +104,7 @@ def compact_table(
     *,
     generation: int | None = None,
     coordinator: CompactionCoordinator | None = None,
+    target_bytes: int = COMPACTION_TARGET_BYTES,
 ) -> CompactionResult:
     """Replace one generation, or all active shards, through one manifest commit.
 
@@ -116,7 +117,7 @@ def compact_table(
     view = ReadView(root, snapshot)
     active_shards = view.list_shards(table)
     shards = active_shards if generation is None else tuple(s for s in active_shards if s.generation == generation)
-    return _compact_shards(root, table, shards, snapshot=snapshot, coordinator=commits)
+    return _compact_shards(root, table, shards, snapshot=snapshot, coordinator=commits, target_bytes=target_bytes)
 
 
 def compact_writer_tables(
@@ -126,6 +127,7 @@ def compact_writer_tables(
     writer_id: str,
     max_input_bytes: int,
     max_input_rows: int,
+    target_bytes: int,
     coordinator: CompactionCoordinator,
 ) -> None:
     """Merge a writer's residual level-zero groups within an aggregate input budget."""
@@ -149,7 +151,15 @@ def compact_writer_tables(
             continue
         # Filter the merge inputs, keeping the full publication base and unrelated shards.
         retry_with_backoff(
-            partial(_compact_shards, root, table, shards, snapshot=snapshot, coordinator=coordinator),
+            partial(
+                _compact_shards,
+                root,
+                table,
+                shards,
+                snapshot=snapshot,
+                coordinator=coordinator,
+                target_bytes=target_bytes,
+            ),
             retryable=is_transient_s3_error,
             max_attempts=_CLOSE_COMPACTION_MAX_ATTEMPTS,
             operation=f"FineStore close compaction at {root} table={table}",
@@ -165,6 +175,7 @@ def _compact_shards(
     *,
     snapshot: ArchiveSnapshot,
     coordinator: CompactionCoordinator,
+    target_bytes: int,
 ) -> CompactionResult:
     if not shards:
         return CompactionResult(written=0)
@@ -209,7 +220,7 @@ def _compact_shards(
         streams = [stack.enter_context(closing(iter_shard_row_groups(shard, unified, pa_fs))) for shard in inputs]
         # First-key order is a best-effort deduplication heuristic for unsorted input shards.
         groups = heapq.merge(*streams, key=lambda group: _first_key(group, primary_key))
-        for batch, dropped in _compaction_groups(groups, primary_key):
+        for batch, dropped in _compaction_groups(groups, primary_key, target_bytes):
             output_path = layout.shard_path(table, _COMPACTOR, next_generation, 0, uuid.uuid4().hex[:8])
             with ShardWriter(output_path, unified) as writer:
                 rows = (batch.slice(index, 1) for index in range(batch.num_rows))
