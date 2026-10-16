@@ -86,8 +86,8 @@ change has at least 250 changed lines or adds a class, dataclass, or
 Fable) and maintains one compact overview ending in
 `<!-- marin-holistic-review:<sha> -->`. Re-reviews replace the original
 overview by comment ID, preserving finding numbers and updating their status.
-A separate follow-up may announce only new or materially changed actionable
-findings; it links to the overview and uses
+A separate new top-level comment may announce only new or materially changed
+actionable findings; it links to the overview and uses
 `<!-- marin-holistic-followup:<sha> -->` so it cannot become the overview.
 Unlike the correctness review, the workflow also launches on `synchronize`;
 runs for an earlier head are cancelled, and the session posts nothing when the

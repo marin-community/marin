@@ -8,8 +8,8 @@ sibling modules, skipped-marker tests, and open pull requests on the same
 paths.
 
 The session is read-only except for creating or replacing the original
-holistic overview comment and, on re-review, optionally adding a short
-follow-up containing only new or materially changed actionable findings.
+holistic overview comment and, on re-review, optionally creating one new
+top-level comment containing only new or materially changed actionable findings.
 Do not edit files, commit, push, change labels, or open pull requests. Run
 `review-pr-holistic --comment`, publish according to its Posting contract,
 then append a concise typed `result` to the session's Loom channel and stop.
