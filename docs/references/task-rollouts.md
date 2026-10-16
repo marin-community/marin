@@ -2,8 +2,7 @@
 
 `RolloutEngine.run(spec, model)` runs one attempt of a single-stage task and returns `RolloutData`.
 The engine holds the machine factories and the harnesses; each run passes the model, the policy under rollout.
-The caller owns concurrency, retries, group grading, and training projections. `ManagedAgent` runs many
-independent attempts for callers that need no more than that.
+The caller owns concurrency, retries, group grading, and training projections.
 TaskCompendium defines `TaskSpec`, its graders, and grading outcomes. VerifyIT supplies grading modes and their implementations.
 Shellbox supplies machine backends. RolloutEngine supplies the turn loop, the harness contract, and the built-in harnesses.
 
@@ -12,7 +11,7 @@ flowchart TD
     Source[Source row or task package] --> Task[TaskSpec: task definition, answer format, and grader]
     Task --> Spec[RolloutSpec: task, harness, machines, limits, trace]
     Config[Deployment configuration] --> Spec
-    Spec --> Caller[Caller: rollout worker or ManagedAgent]
+    Spec --> Caller[Caller: task scheduler or rollout worker]
     Caller --> Engine[RolloutEngine]
     Engine --> Model[Model: public messages and exact tokens]
     Model --> Engine
@@ -320,7 +319,8 @@ Archive command failures, archive timeouts, and provider or host I/O failures re
 `RolloutEngine(machine_factories, harnesses, observer=observer)` reports progress while an attempt runs.
 The observer implements `async def on_event(self, event: RolloutEvent) -> None`.
 A `RolloutEvent` carries the attempt's `run_key`, the task's `task_id`, and a `payload`.
-`run(spec, model, run_key=...)` sets the run key; it defaults to the task id, so a caller that runs a task more than once passes a key per attempt to tell their events apart.
+`run(spec, model, run_key=...)` sets the run key. Without one, each attempt gets a new random key, so the events of
+repeated attempts of a task stay apart. Pass a key to match an attempt's events with your own records.
 Each payload is a frozen dataclass from `rolloutengine.contracts` whose `type` field is a `RolloutEventType`, so a payload serialized with `dataclasses.asdict` keeps its type.
 Durations are wall-clock seconds.
 
@@ -535,32 +535,6 @@ engine = RolloutEngine(
 
 async def run_task(spec: RolloutSpec, model: Model) -> RolloutData:
     return await engine.run(spec, model)
-```
-
-### Managed agents
-
-`ManagedAgent(engine, model, concurrency)` from `rolloutengine.managed` runs independent specs with one model,
-at most `concurrency` at a time ([#10165](https://github.com/marin-community/marin/issues/10165)).
-`run(specs)` yields one `AttemptOutcome` per spec as attempts finish: the spec, its run key
-`<call id>/<task id>/<position in specs>`, the record (the partial record when interrupted), and the error, if any.
-An interrupted attempt, a rejected spec, or a broken transport becomes an outcome and does not stop the other
-attempts. A new attempt starts after the caller takes an outcome, so a long iterable is read as attempts finish
-and a slow caller holds back new attempts.
-Close the iterator with `contextlib.aclosing` to cancel the running attempts and wait for their cleanup.
-
-`agent_task(task_id, instruction, *, source, environment=..., resources=..., output_paths=(), grader=None)`
-builds a `TaskSpec` for free-form agentic work: one user instruction and a plain-text final answer. Without a
-grader the task uses `NoGrader`, and its attempts record `Outcome.UNAVAILABLE` with the reason.
-
-```python
-from contextlib import aclosing
-
-from rolloutengine.managed import ManagedAgent
-
-agent = ManagedAgent(engine, model, concurrency=8)
-async with aclosing(agent.run(specs)) as outcomes:
-    async for outcome in outcomes:
-        print(outcome.run_key, outcome.rollout.grade if outcome.rollout else outcome.error)
 ```
 
 From the Marin repository root, with the test environment installed:

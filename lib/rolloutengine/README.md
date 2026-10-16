@@ -27,8 +27,6 @@ record = await engine.run(spec, model)
   installed agent behind an HTTP proxy, and sends each of its model calls through the engine.
 - The engine owns the machines, the turn loop and its limits, token accumulation, grading, cleanup, and
   progress events for an optional observer, `RolloutEngine(..., observer=...)`.
-- `ManagedAgent(engine, model, concurrency)` from `rolloutengine.managed` runs many independent specs, at
-  most `concurrency` at a time, and yields one `AttemptOutcome` per spec.
 
 `TraceMode.EXACT_TOKENS`, the default, enforces the exact-token contract. `TraceMode.MESSAGES` accepts chat
 endpoints that re-tokenize each request and records an all-zero loss mask. Never train on those rollouts:
