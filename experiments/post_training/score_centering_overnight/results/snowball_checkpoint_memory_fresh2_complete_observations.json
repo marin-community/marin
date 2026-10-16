@@ -185,5 +185,21 @@
   "observer_warnings": [],
   "repair_qualified": false,
   "source_or_resume_qualified": false,
-  "scientific_endpoint_qualified": false
+  "scientific_endpoint_qualified": false,
+  "completed_surviving_runtime_retention": {
+    "proof": "new_terminal_runtime_20261016T075122.json.gz",
+    "objects": 7503,
+    "bytes": 2119614446,
+    "explicit_source_version_exclusions": 0,
+    "manifest_sha256": "dc301fbc9a4685eab4ac36369e4e9af5b44eabd40ff08da16850d86b78c55c46",
+    "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce/preserved-controller-attempt0-through-20261016T075122/retained-runtime/promotion-manifest-01a126ce.json",
+    "full_manifest_byte_readback_verified": true,
+    "selection_inventory": {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce/preserved-controller-attempt0-through-20261016T075122/retained-runtime/selected-source-inventory.json",
+      "bytes": 5227689,
+      "sha256": "37f6eccd16736bbaf0d6fc8e2abe5af1e6053f3a1c738bafb55ab3e00f6c6b63",
+      "full_readback_verified": true
+    },
+    "verification_scope": "Conditional original-source-version copies; destination lengths/source-version metadata checked. Full manifest and selection inventory retained and read back byte for byte. This does not claim full byte readback or independent content hashing of every runtime object. No additional GPU allocation; original37.4894555556H100h counted once."
+  }
 }
