@@ -437,8 +437,8 @@ def _display_sample(
                     passed=None,
                 )
             )
-        elif grading is not None:
-            grading = grading.model_copy(update={"passed": None})
+        else:
+            grading = None
         return sample.model_copy(
             update={
                 "correct": None,

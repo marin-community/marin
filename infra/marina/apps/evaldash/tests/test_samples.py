@@ -230,7 +230,13 @@ def test_truthfulqa_mc2_archive_scores_are_not_failures(tmp_path) -> None:
         correct=False,
         doc=json.dumps({"mc2_targets": {"labels": labels}}),
     )
-    ungraded = stored.model_copy(update={"doc_id": "596", "metrics": {}, "grading": None, "correct": None})
+    ungraded = stored.model_copy(
+        update={
+            "doc_id": "596",
+            "metrics": {},
+            "grading": Grading(method="lm-eval:other", metric="other", score=1.0, passed=True),
+        }
+    )
     with EvaluationStore.open(root, writer_id="evalchemy") as store:
         store.add_sample(stored)
         store.add_sample(ungraded)
@@ -256,6 +262,7 @@ def test_truthfulqa_mc2_archive_scores_are_not_failures(tmp_path) -> None:
     assert scored.grading.passed is None
     assert scored.target_choice is None
     assert json.loads(scored.doc)["mc2_targets"]["labels"] == labels
+    assert missing.correct is None
     assert missing.grading is None
     assert fetch_samples(root, stored.task, offset=0, limit=10, outcome_filter="scored").total == 1
     assert fetch_samples(root, stored.task, offset=0, limit=10, outcome_filter="incorrect").total == 0
