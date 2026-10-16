@@ -3,6 +3,7 @@
 
 """Shared task, model, and runtime helpers for RolloutEngine tests."""
 
+import json
 from dataclasses import dataclass, field
 
 from shellbox.machine import NetworkPolicy
@@ -18,11 +19,13 @@ from taskcompendium.models import (
 )
 from verifyit.spec import NumericSpec
 
-from rolloutengine.contracts import ModelRequest, ModelTurn
-from rolloutengine.engine import RolloutEngine
-from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
+from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutData
+from rolloutengine.engine import Model, RolloutEngine
+from rolloutengine.shell import shell_harness
+from rolloutengine.spec import MachineRuntimeSpec, RolloutLimits, RolloutSpec
 
 TWELVE = NumericSpec("12", tolerance_abs=0, tolerance_rel=0)
+SHELL = "shell"
 
 
 @dataclass
@@ -69,27 +72,68 @@ def machine_runtime(**overrides) -> MachineRuntimeSpec:
     )
 
 
-def lowered(task: TaskSpec, *, machine=None, verifier_machine=None, **limits) -> LoweredTaskSpec:
-    return LoweredTaskSpec(
-        task=task,
-        runtime=TaskRuntimeSpec(task_machine=machine, verifier_machine=verifier_machine),
-        session=TaskSessionSpec.model_validate(
-            {
-                "task_session": "shellbox",
-                "max_turns": 3,
-                "model_turn_timeout": None,
-                "command_timeout": None,
-                "tool_turn_timeout": None,
-                "total_turn_timeout": None,
-                "attempt_timeout": None,
-                "verifier_timeout": 5,
-                "cleanup_timeout": 5,
-                "max_total_tokens": None,
-                **limits,
-            }
-        ),
+def rollout_spec(
+    task: TaskSpec, *, harness=SHELL, machine=None, verifier_machine=None, trace=None, **limits
+) -> RolloutSpec:
+    return RolloutSpec.model_validate(
+        {
+            "task": task,
+            "harness": harness,
+            "task_machine": machine,
+            "verifier_machine": verifier_machine,
+            **({} if trace is None else {"trace": trace}),
+            "limits": RolloutLimits.model_validate(
+                {
+                    "max_turns": 3,
+                    "max_total_tokens": None,
+                    "model_turn_timeout": None,
+                    "tool_turn_timeout": None,
+                    "total_turn_timeout": None,
+                    "attempt_timeout": None,
+                    "verifier_timeout": 5,
+                    "cleanup_timeout": 5,
+                    **limits,
+                }
+            ),
+        }
     )
 
 
-def engine(model, factories=None, *, sessions=None, providers=None) -> RolloutEngine:
-    return RolloutEngine(model.complete, {} if factories is None else factories, sessions=sessions, providers=providers)
+@dataclass(frozen=True)
+class ModelEngine:
+    """A rollout engine and the one model that a test runs through it."""
+
+    engine: RolloutEngine
+    model: Model
+
+    def check(self, spec: RolloutSpec) -> None:
+        self.engine.check(spec)
+
+    async def run(self, spec: RolloutSpec, run_key: str | None = None) -> RolloutData:
+        return await self.engine.run(spec, self.model, run_key=run_key)
+
+
+def engine(model, machine_factories=None, *, harnesses=None, observer=None) -> ModelEngine:
+    """Run ``model.complete`` with a shell harness under ``SHELL``, unless ``harnesses`` replaces it."""
+    rollout_engine = RolloutEngine(
+        {} if machine_factories is None else machine_factories,
+        {SHELL: shell_harness(command_timeout=None), **({} if harnesses is None else harnesses)},
+        observer=observer,
+    )
+    return ModelEngine(rollout_engine, model.complete)
+
+
+def shell_call(command: str, *, call_id: str = "write") -> dict:
+    return {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": "shell",
+                    "arguments": json.dumps({"command": command}),
+                },
+            }
+        ],
+    }
