@@ -59,10 +59,10 @@ def test_single_row_flush_fits_the_request_budget(simulated_bucket):
         before = fs.log.snapshot()
         store.flush()
         delta = fs.log.delta(before)
-    # One shard upload (temp PUT, COPY, DELETE and two HEADs), the HEAD read, the manifest
-    # PUT, and the compare-and-swap.
+    # One shard upload (temp PUT, COPY, HEAD, DELETE), the HEAD read, the manifest PUT, and
+    # the compare-and-swap.
     assert delta.requests[Request.CAS_PUT] == 1
-    assert delta.total() <= 8, dict(delta.requests)
+    assert delta.total() <= 7, dict(delta.requests)
 
 
 def test_read_view_costs_three_requests(simulated_bucket):

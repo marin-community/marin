@@ -244,11 +244,11 @@ class SimulatedS3(MemoryFileSystem):
         raise ValueError(f"unsupported mode {mode!r}")
 
     def cp_file(self, path1, path2, **kwargs):
+        source = self._strip_protocol(path1)
         with self._store_lock:
-            size = self.store[self._strip_protocol(path1)].size
-        self.charge(Request.COPY, nbytes=size)
-        with self._store_lock:
-            super().cp_file(path1, path2, **kwargs)
+            data = self.store[source].getvalue()
+        self.charge(Request.COPY, nbytes=len(data))
+        self.put_object(path2, data)
 
     def mv(self, path1, path2, recursive=False, maxdepth=None, **kwargs):
         self.cp_file(path1, path2)
