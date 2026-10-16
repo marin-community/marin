@@ -4,6 +4,8 @@
 # clusters with Apptainer, such as the Vultr MI355X nodes. Submit from the repository root.
 # One-time setup pulls the image to $JAX_AITER_HOME, then builds the venv and JAX-AITER there:
 #   apptainer pull $JAX_AITER_HOME/jax-dev-therock-7.14.sif docker://ghcr.io/rocm/jax-dev-ubu24.therock-7.14:7.14
+# Unpacking the image needs xattrs, which NFS homes (Vultr) lack: there, set APPTAINER_TMPDIR and APPTAINER_CACHEDIR to
+# node-local disk such as /tmp and pull inside a job. Vultr also needs `-A openathena-ihodes` on sbatch.
 #   sbatch -N1 -p mi3501x -t 90 -o logs/%x-%j.out experiments/amd/hpcfund/run_jax_aiter.sh \
 #       bash experiments/amd/hpcfund/setup_jax_aiter.sh
 # Then run Python entry points like run_gpu.sh does:
