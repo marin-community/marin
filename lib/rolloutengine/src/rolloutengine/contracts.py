@@ -3,17 +3,11 @@
 
 """Public rollout protocols, records, and exceptions."""
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
 
-from pydantic import JsonValue
-from shellbox.machine import Machine
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.models import FunctionDefinition, ProviderRequirement
-
-from rolloutengine.spec import LoweredTaskSpec
 
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"
@@ -37,12 +31,12 @@ class ModelRequest:
 
 
 @dataclass(frozen=True)
-class SessionStart:
-    """Initial conversation, options, and an optional exact token-prefix replay."""
+class Prompt:
+    """Messages and model options for a request; ``token_ids`` pins the exact prompt tokens to serve."""
 
     messages: tuple[dict[str, Any], ...]
     options: dict[str, Any]
-    prompt_token_ids: tuple[int, ...] | None = None
+    token_ids: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -60,7 +54,7 @@ class ModelTurn:
     Under ``TraceMode.MESSAGES`` the token fields may be empty and ``logprobs`` may be ``None``;
     the engine records reported token IDs without checking them.
     ``usage`` overrides the token-ID counts when the engine charges this request
-    against ``TaskSessionSpec.max_total_tokens``. Transports that report usage but
+    against ``RolloutLimits.max_total_tokens``. Transports that report usage but
     not exact token IDs, such as chat endpoints, set it so the budget still counts.
     """
 
@@ -126,7 +120,6 @@ class RolloutOperation(StrEnum):
     MODEL = "model"
     ADVANCE = "advance"
     GRADE = "grade"
-    CLEANUP = "cleanup"
 
 
 class RolloutInterrupted(RuntimeError):
@@ -144,19 +137,20 @@ class RolloutContractError(ValueError):
 
 @dataclass(frozen=True)
 class Transition:
-    """One task transition after a model response."""
+    """A harness's response to one model turn.
+
+    ``observations`` extend the conversation for the next request, and ``token_ids`` can pin the exact
+    prompt tokens of that request. ``reset`` replaces the conversation with a new prompt instead, and the
+    engine starts a new training record. ``data`` is the harness's own record of the step, for example
+    the rewards that a trainer reads; the engine keeps it unchanged in ``RolloutStep.transition``.
+    """
 
     done: bool
     observations: tuple[dict[str, Any], ...] = ()
-    reset_conversation: tuple[dict[str, Any], ...] | None = None
-    reward: float | None = None
-    token_rewards: tuple[float, ...] | None = None
-    token_credit: tuple[float, ...] | None = None
-    reward_components: dict[str, float] = field(default_factory=dict)
-    grade: GradeResult | None = None
+    token_ids: tuple[int, ...] | None = None
+    reset: Prompt | None = None
     metrics: dict[str, Any] = field(default_factory=dict)
-    next_options: dict[str, Any] | None = None
-    next_prompt_token_ids: tuple[int, ...] | None = None
+    data: object = None
 
 
 @dataclass(frozen=True)
@@ -167,28 +161,12 @@ class RolloutStep:
     messages: tuple[dict[str, Any], ...]
 
 
-class TaskSession(Protocol):
-    """Prepare model requests, handle model turns, and grade one task attempt."""
-
-    async def prepare(self) -> SessionStart: ...
-
-    async def advance(self, turn: ModelTurn) -> Transition: ...
-
-    async def grade(
-        self, messages: tuple[dict[str, Any], ...], *, stop_reason: str, outputs: dict[str, bytes]
-    ) -> GradeResult:
-        """Grade the attempt; ``outputs`` holds the run outputs the engine captured after the turn loop."""
-        ...
-
-    async def close(self) -> None: ...
-
-
 class RolloutEventType(StrEnum):
     """Names each event payload, so a serialized event keeps its type."""
 
     ATTEMPT_STARTED = "attempt_started"
     MACHINE_READY = "machine_ready"
-    SESSION_PREPARED = "session_prepared"
+    HARNESS_PREPARED = "harness_prepared"
     MODEL_TURN_COMPLETED = "model_turn_completed"
     TOOL_CALL_COMPLETED = "tool_call_completed"
     TRANSITION_COMPLETED = "transition_completed"
@@ -210,13 +188,13 @@ class MachineReady:
 
 
 @dataclass(frozen=True)
-class SessionPrepared:
-    """The session returned the first request's ``messages`` and ``options``, including its advertised tools."""
+class HarnessPrepared:
+    """The harness returned the first request's ``messages`` and ``options``, including its advertised tools."""
 
     messages: tuple[dict[str, Any], ...]
     options: dict[str, Any]
     duration: float
-    type: RolloutEventType = field(default=RolloutEventType.SESSION_PREPARED, init=False)
+    type: RolloutEventType = field(default=RolloutEventType.HARNESS_PREPARED, init=False)
 
 
 @dataclass(frozen=True)
@@ -236,7 +214,7 @@ class ModelTurnCompleted:
 
 @dataclass(frozen=True)
 class ToolCallCompleted:
-    """A session tool call returned an observation; ``done`` means the call ended the rollout.
+    """A harness tool call returned an observation; ``done`` means the call ended the rollout.
 
     The observation itself arrives in the turn's ``TransitionCompleted``, keyed by ``call_id``.
     """
@@ -251,7 +229,7 @@ class ToolCallCompleted:
 
 @dataclass(frozen=True)
 class TransitionCompleted:
-    """The session handled a turn and returned ``observations``, or a new conversation in ``reset_conversation``.
+    """The harness handled a turn and returned ``observations``, or a new prompt in ``reset``.
 
     The engine skips a reset when the turn or token limit ends the rollout.
     """
@@ -259,7 +237,7 @@ class TransitionCompleted:
     turn_index: int
     done: bool
     observations: tuple[dict[str, Any], ...]
-    reset_conversation: tuple[dict[str, Any], ...] | None
+    reset: Prompt | None
     duration: float
     type: RolloutEventType = field(default=RolloutEventType.TRANSITION_COMPLETED, init=False)
 
@@ -291,7 +269,7 @@ class AttemptEnded:
 RolloutEventPayload = (
     AttemptStarted
     | MachineReady
-    | SessionPrepared
+    | HarnessPrepared
     | ModelTurnCompleted
     | ToolCallCompleted
     | TransitionCompleted
@@ -323,67 +301,3 @@ class EventSink(Protocol):
     """Queue an event payload for delivery as a ``RolloutEvent`` of the current attempt; never blocks."""
 
     def emit(self, payload: RolloutEventPayload) -> None: ...
-
-
-class TaskGrader(Protocol):
-    async def __call__(
-        self, messages: tuple[dict[str, Any], ...], *, stop_reason: str, outputs: dict[str, bytes]
-    ) -> GradeResult: ...
-
-
-@dataclass(frozen=True)
-class TaskSessionContext:
-    """Inputs for one task session; session-graded tasks have no task grader.
-
-    A session may report its own events, such as tool calls, to ``events``.
-    """
-
-    lowered: LoweredTaskSpec
-    machine: Machine | None
-    task_grader: TaskGrader | None
-    events: EventSink
-
-    def require_task_grader(self) -> TaskGrader:
-        """Return the task grader for a session that delegates final grading."""
-        if self.task_grader is None:
-            raise ValueError("This task uses session-owned grading")
-        return self.task_grader
-
-
-TaskSessionFactory = Callable[[TaskSessionContext], TaskSession]
-
-
-@dataclass(frozen=True)
-class ToolContext:
-    """The attempt's task machine and the task requirement a provider session serves."""
-
-    machine: Machine | None
-    requirement: ProviderRequirement
-
-
-@dataclass(frozen=True)
-class ToolCallResult:
-    """A tool observation; ``done`` ends the rollout after this call, and later calls of the turn do not run."""
-
-    content: str
-    done: bool = False
-
-
-class ToolProviderSession(Protocol):
-    """One attempt's provider state for one task requirement."""
-
-    async def call(self, name: str, arguments: dict[str, JsonValue]) -> ToolCallResult: ...
-
-    async def close(self) -> None: ...
-
-
-class ToolProvider(Protocol):
-    """Host tools for one action interface, served beside the built-in shell tool."""
-
-    def tools(self, requirement: ProviderRequirement) -> tuple[FunctionDefinition, ...]:
-        """The functions advertised to the model for one task requirement."""
-        ...
-
-    async def open(self, context: ToolContext) -> ToolProviderSession:
-        """Start the state of one attempt, typically from ``context.requirement.initial_state``."""
-        ...

@@ -203,7 +203,7 @@ The runtime presents the source turns and function definitions and retains the f
 | --- | --- | --- |
 | `verifyit` | `VerifyitGrader` | A stock verifyit `mode` and its `parameters`: the keys of verifyit's `verifier.toml` table other than `mode`. |
 | `script` | `ScriptGrader` | A command run after the episode in a fresh machine built from a pinned image. |
-| `session` | `SessionGrader` | A registered custom RolloutEngine `TaskSession` grades the task. |
+| `session` | `SessionGrader` | The RolloutEngine harness that runs the task grades it (`Harness.grade`). |
 | `none` | `NoGrader` | The task cannot be graded here. `reason` says why; `contract` optionally keeps the source's grading terms. |
 
 A `VerifyitGrader` without an `environment` grades the extracted answer in process. Its mode must be one of `verifyit.candidate.IN_PROCESS_MODES`: `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`, `structured_exact`, or `predicted_action`. A `VerifyitGrader` with an `environment` runs the verifyit command in a fresh machine built from that environment, with verifier resources under `/tests` and the verifyit specification at `/tests/verifier.toml`. Modes that execute code or call a model, such as `pytest`, `stdio`, and `judge`, grade only there. Construction validates `parameters` with verifyit.
@@ -230,7 +230,7 @@ TaskSpec validation ties the grader to the answer:
 - `ScriptGrader.answer_path` must be `None` for `file`, `state`, and `workspace_state` answers. `conversation_path` must not replace a verifier resource.
 - Answer paths, output paths, and output directories must lie outside `/tests` and `/logs/verifier`.
 
-A `SessionGrader` task is graded by the registered custom `TaskSession` that runs it; TaskCompendium cannot grade it. A `NoGrader` task grades as `unavailable`, with no reward and its `reason` as the error. Converters use `NoGrader` when the source evaluator needs a runtime this repository cannot provide; its `contract` records the evaluator, source revision, grading data and runtime requirements. `taskcompendium.grader.grader_config(task)` returns a copy of a `NoGrader`'s contract, or the `config.json` verifier resource of another grader.
+A `SessionGrader` task is graded by the RolloutEngine harness that runs it; TaskCompendium cannot grade it. A `NoGrader` task grades as `unavailable`, with no reward and its `reason` as the error. Converters use `NoGrader` when the source evaluator needs a runtime this repository cannot provide; its `contract` records the evaluator, source revision, grading data and runtime requirements. `taskcompendium.grader.grader_config(task)` returns a copy of a `NoGrader`'s contract, or the `config.json` verifier resource of another grader.
 
 `taskcompendium.grader.GraderPackage` pairs a grader with its verifier resources, whose paths are relative to `/tests`. `verifyit_package(spec, resources=(), environment=None)` builds a `VerifyitGrader` from a verifyit `Spec`. Build other packages directly with `GraderPackage(grader, resources)`.
 
@@ -314,7 +314,7 @@ Three functions grade an attempt:
 - `taskcompendium.runtime.grading.grade_in_sandbox(task, attempt, factory, machine_spec, *, task_machine=None, timeout=None)` is asynchronous. It grades with a `VerifyitGrader` that has an environment, or with a `ScriptGrader`, in a fresh machine from `factory`. `task_machine` is the agent's machine, required for `collect` and `artifacts`. Machine exceptions propagate.
 - `taskcompendium.runtime.task_grading.grade_task(task, attempt, *, machine_factory=None, machine_spec=None)` grades any task synchronously. A `NoGrader` task is `unavailable`. An in-process grader uses `grade_answer`; a sandbox grader uses shared environment preparation and `grade_in_sandbox`. Unsupported requirements raise before machine creation. A missing factory or machine specification, and machine `RuntimeError` or `OSError`, become `infra_error`. A `SessionGrader` raises `TypeError`.
 
-RolloutEngine's Shellbox session calls `grade_answer` or `grade_in_sandbox` after the turn loop; see [task rollouts](../../docs/references/task-rollouts.md).
+RolloutEngine calls `grade_answer` or `grade_in_sandbox` after the turn loop; see [task rollouts](../../docs/references/task-rollouts.md).
 
 The execution runtime completes file and environment-state acquisition before grading. `GradingAttempt` carries the conversation, captured file bytes keyed by absolute path, and an optional `StateSubmission`. A missing state is `None`; captured JSON null is `StateSubmission(None)`. `taskcompendium.runtime.models.grading_attempt(conversation, evidence)` builds an attempt from captured `RuntimeEvidence`. A grading machine also receives a conversational answer extracted from the conversation. Expected values remain in `task.grader` and verifier resources and must not be included in the model request.
 

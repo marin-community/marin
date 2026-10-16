@@ -1,14 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Rollout iteration, cancellation, and model execution."""
+"""Run one task attempt: machines, the model turn loop under its limits, grading, and cleanup."""
 
 import asyncio
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
-from dataclasses import asdict, replace
-from functools import partial
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory
@@ -17,6 +16,7 @@ from taskcompendium.models import SessionGrader
 from taskcompendium.runtime.output_capture import captured_output_files
 from taskcompendium.submission import conversation_messages
 
+from rolloutengine.checks import check_spec
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.contracts import (
     BUDGET_STOP_REASON,
@@ -27,218 +27,284 @@ from rolloutengine.contracts import (
     AttemptStarted,
     GenerationLimitReached,
     Graded,
+    HarnessPrepared,
     MachineReady,
     ModelRequest,
     ModelTurn,
     ModelTurnCompleted,
+    Prompt,
     RolloutContractError,
     RolloutData,
+    RolloutFailure,
     RolloutInterrupted,
     RolloutObserver,
     RolloutOperation,
     RolloutStep,
-    SessionPrepared,
-    TaskSession,
-    TaskSessionContext,
-    TaskSessionFactory,
-    ToolProvider,
     Transition,
     TransitionCompleted,
 )
 from rolloutengine.event_delivery import _EventDelivery
 from rolloutengine.grading import _grade_rollout
-from rolloutengine.lowering import SHELLBOX_SESSION, validate_lowered_task
+from rolloutengine.harness import Episode, Harness, HarnessContext
 from rolloutengine.machines import _prepare_machine
-from rolloutengine.spec import TRACE_METRIC, LoweredTaskSpec, TraceMode
-from rolloutengine.task_session import _ShellboxTaskSession
+from rolloutengine.spec import TRACE_METRIC, RolloutSpec, TraceMode
 from rolloutengine.trace import _token_trace
 
+Model = Callable[[ModelRequest], Awaitable[ModelTurn]]
+"""The policy under rollout: it serves one model request and returns the exact turn."""
 
-def _empty_rollout(lowered: LoweredTaskSpec) -> RolloutData:
-    return RolloutData(
-        lowered.task.id,
-        tuple(conversation_messages(lowered.task.context.events)),
-        (),
-        (),
-        (),
-        _token_trace(lowered.session.trace).logprobs,
-        GradeResult(Outcome.UNAVAILABLE, None, "Execution has no final grade"),
-        "error",
-    )
+ADVANCE_INCOMPLETE = "advance_incomplete"
+"""``Transition.metrics`` key of a turn whose ``advance`` did not return; training must exclude its step."""
 
 
-async def _captured_outputs(lowered: LoweredTaskSpec, machine: Machine | None) -> dict[str, bytes]:
-    task = lowered.task
+class _Interrupted(Exception):
+    """Carry the failed operation to the attempt boundary; the original error is the cause."""
+
+    def __init__(self, operation: RolloutOperation):
+        super().__init__(operation)
+        self.operation = operation
+
+
+class _Record:
+    """The attempt's record as it grows: conversation, token trace, steps, stop reason, and verdict.
+
+    It lives outside the attempt deadline, so an interrupted attempt keeps all that it recorded.
+    ``messages`` is the conversation through the last response; ``observations`` follow it in the
+    next request only.
+    """
+
+    def __init__(self, spec: RolloutSpec):
+        self.spec = spec
+        self.messages: list[dict[str, Any]] = conversation_messages(spec.task.context.events)
+        self.trace = _token_trace(spec.trace)
+        self.steps: list[RolloutStep] = []
+        self.pending: RolloutStep | None = None
+        self.observations: tuple[dict[str, Any], ...] = ()
+        self.options: dict[str, Any] = {}
+        self.token_ids: tuple[int, ...] | None = None
+        self.assistant_index: int | None = None
+        self.unserved_prompt: tuple[int, ...] | None = None
+        self.stop_reason = "error"
+        self.grade = GradeResult(Outcome.UNAVAILABLE, None, "Execution has no final grade")
+        self.outputs: dict[str, bytes] = {}
+
+    @property
+    def has_response(self) -> bool:
+        return bool(self.steps) or self.pending is not None
+
+    def start(self, prompt: Prompt) -> None:
+        """Start the conversation, or replace it after a reset with a new training record."""
+        self.messages = list(prompt.messages)
+        self.options = prompt.options
+        self.token_ids = prompt.token_ids
+        self.trace = _token_trace(self.spec.trace)
+        self.steps.clear()
+        self.pending = None
+        self.observations = ()
+        self.assistant_index = None
+
+    def request(self) -> ModelRequest:
+        return ModelRequest(
+            (*self.messages, *self.observations), self.options, self.trace.prefix, self.assistant_index, self.token_ids
+        )
+
+    def add_turn(self, turn: ModelTurn) -> None:
+        if self.token_ids is not None and turn.prompt_token_ids != self.token_ids:
+            raise RolloutContractError("Model transport changed the replay token prefix")
+        self.trace.append(turn)
+        self.messages.extend(self.observations)
+        self.observations = ()
+        self.assistant_index = len(self.messages)
+        self.messages.append(turn.message)
+        self.token_ids = None
+        self.stop_reason = turn.stop_reason
+        # Token evidence belongs to the attempt even if the harness fails to handle the turn.
+        incomplete = Transition(done=True, metrics={ADVANCE_INCOMPLETE: 1.0})
+        self.pending = RolloutStep(turn, incomplete, self.trace.response_end, tuple(self.messages))
+
+    def add_transition(self, transition: Transition) -> None:
+        assert self.pending is not None
+        self.steps.append(replace(self.pending, transition=transition))
+        self.pending = None
+        self.observations = transition.observations
+        self.token_ids = transition.token_ids
+
+    def no_response(self, reason: str, prompt_token_ids: tuple[int, ...] | None = None) -> None:
+        self.grade = GradeResult(Outcome.UNAVAILABLE, None, reason)
+        self.unserved_prompt = prompt_token_ids
+
+    def snapshot(self) -> RolloutData:
+        steps = (*self.steps, self.pending) if self.pending is not None else tuple(self.steps)
+        return RolloutData(
+            self.spec.task.id,
+            tuple(self.messages),
+            self.trace.prompt if self.unserved_prompt is None else self.unserved_prompt,
+            self.trace.response,
+            self.trace.loss_mask,
+            self.trace.logprobs,
+            self.grade,
+            self.stop_reason,
+            steps,
+            dict(steps[-1].transition.metrics) if steps else {},
+            self.outputs,
+        )
+
+
+async def _captured_outputs(spec: RolloutSpec, machine: Machine | None) -> dict[str, bytes]:
+    task = spec.task
     if machine is None or not task.output_paths:
         return {}
     return await captured_output_files(
         machine,
         task.output_paths,
-        timeout=lowered.session.verifier_timeout,
+        timeout=spec.limits.verifier_timeout,
         limit_bytes=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     )
 
 
-class RolloutEngine:
-    """Generate rollouts from lowered single-stage tasks under their session's trace mode.
+@dataclass(frozen=True)
+class _Attempt:
+    """One attempt's inputs, and the record and cleanup that outlive its deadline."""
 
-    An optional observer receives progress events while each attempt runs.
-    ``providers`` serve the built-in session's host tools, keyed by ``ProviderRequirement.action_interface``.
+    spec: RolloutSpec
+    harness: Harness[Any]
+    model: Model
+    run_key: str
+    record: _Record
+    cleanup: _Cleanup
+    events: _EventDelivery
+
+
+class RolloutEngine:
+    """Run task attempts with registered machine factories and harnesses.
+
+    ``machine_factories`` is keyed by ``MachineRuntimeSpec.backend`` and ``harnesses`` by
+    ``RolloutSpec.harness``; each run supplies the model under rollout. The engine grades each attempt
+    with the task's grader, except that a ``SessionGrader`` task is graded by its harness. An optional
+    observer receives progress events while each attempt runs.
     """
 
     def __init__(
         self,
-        model: Callable[[ModelRequest], Awaitable[ModelTurn]],
-        factories: Mapping[str, MachineFactory],
+        machine_factories: Mapping[str, MachineFactory],
+        harnesses: Mapping[str, Harness[Any]],
         *,
-        sessions: Mapping[str, TaskSessionFactory] | None = None,
         observer: RolloutObserver | None = None,
-        providers: Mapping[str, ToolProvider] | None = None,
     ):
-        self.model = model
-        self.factories = factories
-        self.sessions = {} if sessions is None else sessions
+        self.machine_factories = machine_factories
+        self.harnesses = harnesses
         self.observer = observer
-        self.providers = {} if providers is None else providers
 
-    async def run(self, lowered: LoweredTaskSpec, run_key: str | None = None) -> RolloutData:
-        """Run one attempt; release its resources outside the attempt deadline.
+    def check(self, spec: RolloutSpec) -> None:
+        """Reject a spec before any machine starts: unknown factories or harness, or unsupported requirements."""
+        check_spec(spec, self.machine_factories)
+        if spec.harness not in self.harnesses:
+            raise ValueError(f"Unknown harness: {spec.harness!r}")
+        harness = self.harnesses[spec.harness]
+        if isinstance(spec.task.grader, SessionGrader) and harness.grade is None:
+            raise ValueError(f"Harness {spec.harness!r} does not grade, so it cannot run a session-graded task")
+        harness.check(spec)
+
+    async def run(self, spec: RolloutSpec, model: Model, *, run_key: str | None = None) -> RolloutData:
+        """Run one attempt of ``spec`` with ``model``; release its resources outside the attempt deadline.
 
         Every event of the attempt carries ``run_key``, which defaults to the task id; callers that run
         a task more than once pass a key per attempt to tell the attempts' events apart.
         Queued events are delivered within the cleanup deadline after the attempt's resources are
         released; events the observer did not receive are counted in ``RolloutData.metrics``.
+        An attempt that fails raises ``RolloutInterrupted`` with the record so far.
         """
-        validate_lowered_task(lowered, factories=self.factories, sessions=self.sessions, providers=self.providers)
-        events = _EventDelivery(self.observer, lowered.task.id if run_key is None else run_key, lowered.task.id)
+        self.check(spec)
+        run_key = spec.task.id if run_key is None else run_key
+        attempt = _Attempt(
+            spec,
+            self.harnesses[spec.harness],
+            model,
+            run_key,
+            _Record(spec),
+            _Cleanup(spec.limits.cleanup_timeout),
+            _EventDelivery(self.observer, run_key, spec.task.id),
+        )
         started = time.monotonic()
         try:
-            events.emit(AttemptStarted())
-            record, operation, cause = await self._run_attempt(lowered, events)
+            attempt.events.emit(AttemptStarted())
+            failure = await self._attempt(attempt)
             duration = time.monotonic() - started
-            if operation is None:
-                events.emit(AttemptEnded(record.stop_reason, None, None, duration))
+            if failure is None:
+                attempt.events.emit(AttemptEnded(attempt.record.stop_reason, None, None, duration))
             else:
-                events.emit(AttemptEnded(None, operation, None if cause is None else repr(cause), duration))
-            delivery = await events.close(lowered.session.cleanup_timeout)
+                attempt.events.emit(AttemptEnded(None, failure[0], repr(failure[1]), duration))
+            delivery = await attempt.events.close(spec.limits.cleanup_timeout)
         finally:
-            events.cancel()
-        if delivery:
-            record = replace(record, metrics={**record.metrics, **delivery})
-        if operation is not None:
-            raise RolloutInterrupted(record, operation) from cause
-        return record
+            attempt.events.cancel()
+        result = attempt.record.snapshot()
+        metrics = {**result.metrics, **delivery}
+        grade = result.grade
+        if attempt.cleanup.errors:
+            cleanup_errors = [asdict(error) for error in attempt.cleanup.errors]
+            grade = replace(grade, diagnostics={**grade.diagnostics, "cleanup_errors": cleanup_errors})
+            metrics["cleanup_error_count"] = float(len(cleanup_errors))
+        if spec.trace == TraceMode.MESSAGES:
+            metrics[TRACE_METRIC] = TraceMode.MESSAGES.value
+        result = replace(result, grade=grade, metrics=metrics)
+        if failure is None:
+            return result
+        operation, cause = failure
+        result = replace(result, failure=RolloutFailure(type(cause).__name__, {"operation": operation.value}))
+        raise RolloutInterrupted(result, operation) from cause
 
-    async def _run_attempt(
-        self, lowered: LoweredTaskSpec, events: _EventDelivery
-    ) -> tuple[RolloutData, RolloutOperation | None, BaseException | None]:
-        deadline = asyncio.timeout(lowered.session.attempt_timeout)
-        cleanup = _Cleanup(lowered.session.cleanup_timeout)
-        operation = None
-        cause = None
+    async def _attempt(self, attempt: _Attempt) -> tuple[RolloutOperation, BaseException] | None:
+        """Run the attempt under its deadline and release its resources; return the failure, if any."""
+        deadline = asyncio.timeout(attempt.spec.limits.attempt_timeout)
         async with AsyncExitStack() as resources:
             try:
                 async with deadline:
-                    record = await self._run_task(lowered, resources, cleanup, deadline, events)
+                    await self._run(attempt, resources)
             except TimeoutError as error:
                 if not deadline.expired():
                     raise
-                operation, cause = RolloutOperation.ATTEMPT, error
-                record = _empty_rollout(lowered)
-            except RolloutInterrupted as error:
-                operation, cause = error.operation, error.__cause__
-                record = error.rollout
-        if cleanup.errors:
-            record = replace(
-                record,
-                grade=replace(
-                    record.grade,
-                    diagnostics={
-                        **record.grade.diagnostics,
-                        "cleanup_errors": [asdict(error) for error in cleanup.errors],
-                    },
-                ),
-                metrics={**record.metrics, "cleanup_error_count": float(len(cleanup.errors))},
-            )
-        if lowered.session.trace == TraceMode.MESSAGES:
-            record = replace(record, metrics={**record.metrics, TRACE_METRIC: TraceMode.MESSAGES.value})
-        return record, operation, cause
+                return RolloutOperation.ATTEMPT, error
+            except _Interrupted as interrupted:
+                assert interrupted.__cause__ is not None
+                return interrupted.operation, interrupted.__cause__
+        return None
 
-    async def _run_task(
-        self,
-        lowered: LoweredTaskSpec,
-        resources: AsyncExitStack,
-        cleanup: _Cleanup,
-        attempt: asyncio.Timeout,
-        events: _EventDelivery,
-    ) -> RolloutData:
-        task = lowered.task
+    async def _run(self, attempt: _Attempt, resources: AsyncExitStack) -> None:
+        spec, record, events = attempt.spec, attempt.record, attempt.events
+        task = spec.task
         started = time.monotonic()
         try:
             machine = await _prepare_machine(
                 task.environment_requirements,
-                lowered.runtime.task_machine,
+                spec.task_machine,
                 task.resources.all + task.resources.worker,
-                self.factories,
-                cleanup,
+                self.machine_factories,
+                attempt.cleanup,
                 resources,
             )
         except Exception as error:
-            raise RolloutInterrupted(_empty_rollout(lowered), RolloutOperation.START) from error
+            raise _Interrupted(RolloutOperation.START) from error
         if machine is not None:
             events.emit(MachineReady(time.monotonic() - started))
-
-        async def grade(
-            messages: tuple[dict[str, Any], ...], *, stop_reason: str, outputs: dict[str, bytes]
-        ) -> GradeResult:
-            return await _grade_rollout(
-                lowered, messages, outputs, machine, self.factories, cleanup, resources, stop_reason=stop_reason
-            )
-
-        session_factories: Mapping[str, TaskSessionFactory] = {
-            **self.sessions,
-            SHELLBOX_SESSION: partial(_ShellboxTaskSession, providers=self.providers),
-        }
-        try:
-            context = TaskSessionContext(
-                lowered, machine, None if isinstance(task.grader, SessionGrader) else grade, events
-            )
-            session = session_factories[lowered.session.task_session](context)
-        except Exception as error:
-            raise RolloutInterrupted(_empty_rollout(lowered), RolloutOperation.PREPARE) from error
-        resources.push_async_callback(cleanup.run, "session_close", session.close)
-        return await self._run_session(lowered, session, machine, attempt, events)
-
-    async def _run_session(
-        self,
-        lowered: LoweredTaskSpec,
-        session: TaskSession,
-        machine: Machine | None,
-        attempt: asyncio.Timeout,
-        events: _EventDelivery,
-    ) -> RolloutData:
-        task = lowered.task
-        limits = lowered.session
-        completed = _empty_rollout(lowered)
-        owner = asyncio.current_task()
-        assert owner is not None
-        cancellation_count = owner.cancelling()
         started = time.monotonic()
         try:
-            start = await session.prepare()
+            episode = attempt.harness.open(HarnessContext(spec, machine, events, attempt.run_key))
+            resources.push_async_callback(attempt.cleanup.run, "episode_close", episode.close)
+            prompt = await episode.prepare()
         except Exception as error:
-            raise RolloutInterrupted(completed, RolloutOperation.PREPARE) from error
-        events.emit(SessionPrepared(start.messages, start.options, time.monotonic() - started))
-        messages = list(start.messages)
-        options = start.options
-        replay_prompt_token_ids = start.prompt_token_ids
-        completed = replace(completed, messages=tuple(messages))
-        trace = _token_trace(limits.trace)
-        steps: list[RolloutStep] = []
-        assistant_index = None
-        stop_reason = MAX_TURNS_STOP_REASON
+            raise _Interrupted(RolloutOperation.PREPARE) from error
+        events.emit(HarnessPrepared(prompt.messages, prompt.options, time.monotonic() - started))
+        record.start(prompt)
+        model_error = await self._turns(attempt, episode)
+        if record.has_response:
+            await self._grade(attempt, episode, machine, resources)
+        if model_error is not None:
+            raise _Interrupted(RolloutOperation.MODEL) from model_error
+
+    async def _turns(self, attempt: _Attempt, episode: Episode) -> Exception | None:
+        """Sample turns until the episode is done or a limit ends the loop; return a model failure."""
+        limits, record, events = attempt.spec.limits, attempt.record, attempt.events
         spent_tokens = 0
-        model_error = None
         deadline = asyncio.timeout(limits.total_turn_timeout)
         try:
             async with deadline:
@@ -246,33 +312,18 @@ class RolloutEngine:
                     started = time.monotonic()
                     try:
                         async with asyncio.timeout(limits.model_turn_timeout):
-                            turn = await self.model(
-                                ModelRequest(
-                                    tuple(messages),
-                                    options,
-                                    trace.prefix,
-                                    assistant_index,
-                                    replay_prompt_token_ids,
-                                )
-                            )
+                            turn = await attempt.model(record.request())
                     except GenerationLimitReached as limit:
-                        stop_reason = LENGTH_STOP_REASON
-                        if not steps:
-                            return replace(
-                                completed,
-                                prompt_token_ids=trace.generation_limit_prompt(limit.prompt_token_ids),
-                                grade=GradeResult(
-                                    Outcome.UNAVAILABLE, None, "Generation limit reached before the first response"
-                                ),
-                                stop_reason=stop_reason,
+                        record.stop_reason = LENGTH_STOP_REASON
+                        if not record.has_response:
+                            record.no_response(
+                                "Generation limit reached before the first response", limit.prompt_token_ids
                             )
-                        messages = list(completed.messages)
-                        break
+                        return None
                     except RolloutContractError:
                         raise
                     except Exception as error:
-                        model_error = error
-                        break
+                        return error
                     if limits.max_total_tokens is not None and turn.usage is None and not turn.prompt_token_ids:
                         raise RolloutContractError(
                             "A token budget needs ModelTurn.usage or prompt token IDs from the model"
@@ -284,9 +335,7 @@ class RolloutEngine:
                         limits.max_total_tokens is not None
                         and spent_tokens + turn.request_tokens >= limits.max_total_tokens
                     )
-                    if replay_prompt_token_ids is not None and turn.prompt_token_ids != replay_prompt_token_ids:
-                        raise RolloutContractError("Model transport changed the replay token prefix")
-                    trace.append(turn)
+                    record.add_turn(turn)
                     events.emit(
                         ModelTurnCompleted(
                             index,
@@ -299,119 +348,69 @@ class RolloutEngine:
                             time.monotonic() - started,
                         ),
                     )
-                    assistant_index = len(messages)
-                    messages.append(turn.message)
-                    pending = RolloutStep(
-                        turn,
-                        Transition(done=True, metrics={"advance_incomplete": 1.0}),
-                        trace.response_end,
-                        tuple(messages),
-                    )
-                    # Token evidence belongs to the attempt even if a tool operation fails.
-                    completed = RolloutData(
-                        task.id,
-                        tuple(messages),
-                        trace.prompt,
-                        trace.response,
-                        trace.loss_mask,
-                        trace.logprobs,
-                        completed.grade,
-                        turn.stop_reason,
-                        (*steps, pending),
-                        pending.transition.metrics,
-                    )
                     started = time.monotonic()
                     try:
                         async with asyncio.timeout(limits.tool_turn_timeout):
-                            transition = await session.advance(turn)
+                            transition = await episode.advance(turn)
                     except RolloutContractError:
                         raise
                     except Exception as error:
-                        raise RolloutInterrupted(completed, RolloutOperation.ADVANCE) from error
-                    trace.check_transition(turn, transition)
+                        raise _Interrupted(RolloutOperation.ADVANCE) from error
                     events.emit(
                         TransitionCompleted(
-                            index,
-                            transition.done,
-                            transition.observations,
-                            transition.reset_conversation,
-                            time.monotonic() - started,
+                            index, transition.done, transition.observations, transition.reset, time.monotonic() - started
                         ),
                     )
-                    stop_reason = turn.stop_reason
-                    if transition.next_options is not None:
-                        options = transition.next_options
-                    replay_prompt_token_ids = transition.next_prompt_token_ids
-                    if transition.reset_conversation is not None and index + 1 < limits.max_turns and not budget_reached:
-                        messages = list(transition.reset_conversation)
-                        trace.reset()
-                        steps.clear()
-                        completed = replace(
-                            completed,
-                            messages=tuple(messages),
-                            prompt_token_ids=trace.prompt,
-                            response_token_ids=trace.response,
-                            loss_mask=trace.loss_mask,
-                            logprobs=trace.logprobs,
-                            steps=(),
-                            metrics={},
-                        )
-                        assistant_index = None
+                    last_turn = index + 1 == limits.max_turns
+                    if transition.reset is not None and not last_turn and not budget_reached:
+                        record.start(transition.reset)
                         continue
-                    steps.append(replace(pending, transition=transition))
-                    completed = replace(
-                        completed, steps=tuple(steps), stop_reason=stop_reason, metrics=transition.metrics
-                    )
-                    if transition.done or stop_reason == LENGTH_STOP_REASON:
-                        break
+                    record.add_transition(transition)
+                    if transition.done or turn.stop_reason == LENGTH_STOP_REASON:
+                        return None
                     if budget_reached:
-                        stop_reason = BUDGET_STOP_REASON
-                        break
-                    if index + 1 == limits.max_turns:
-                        stop_reason = MAX_TURNS_STOP_REASON
-                        break
-                    messages.extend(transition.observations)
+                        record.stop_reason = BUDGET_STOP_REASON
+                        return None
+                    if last_turn:
+                        record.stop_reason = MAX_TURNS_STOP_REASON
+                        return None
         except TimeoutError:
             if not deadline.expired():
                 raise
-            stop_reason = TOTAL_TURN_TIMEOUT_STOP_REASON
-            if not completed.steps:
-                return replace(
-                    completed,
-                    grade=GradeResult(Outcome.UNAVAILABLE, None, "Turn deadline expired before the first response"),
-                    stop_reason=stop_reason,
-                )
-            messages = list(completed.messages)
-        except asyncio.CancelledError:
-            if not attempt.expired() or owner.cancelling() > cancellation_count + 1:
-                raise
-            raise RolloutInterrupted(completed, RolloutOperation.ATTEMPT) from TimeoutError("Attempt deadline expired")
-        if model_error is not None:
-            if not completed.steps:
-                raise RolloutInterrupted(completed, RolloutOperation.MODEL) from model_error
-            messages = list(completed.messages)
+            record.stop_reason = TOTAL_TURN_TIMEOUT_STOP_REASON
+            if not record.has_response:
+                record.no_response("Turn deadline expired before the first response")
+        return None
+
+    async def _grade(
+        self, attempt: _Attempt, episode: Episode, machine: Machine | None, resources: AsyncExitStack
+    ) -> None:
+        """Capture the run outputs and grade them with the task's grader, or with the harness."""
+        spec, record = attempt.spec, attempt.record
         started = time.monotonic()
         try:
-            async with asyncio.timeout(limits.verifier_timeout):
-                outputs = await _captured_outputs(lowered, machine)
-                completed = replace(completed, outputs=outputs)
-                grade = await session.grade(tuple(messages), stop_reason=stop_reason, outputs=outputs)
-        except asyncio.CancelledError:
-            if not attempt.expired() or owner.cancelling() > cancellation_count + 1:
-                raise
-            raise RolloutInterrupted(completed, RolloutOperation.ATTEMPT) from TimeoutError("Attempt deadline expired")
+            async with asyncio.timeout(spec.limits.verifier_timeout):
+                record.outputs = await _captured_outputs(spec, machine)
+                if isinstance(spec.task.grader, SessionGrader):
+                    assert attempt.harness.grade is not None
+                    grade = await attempt.harness.grade(episode, record.snapshot())
+                else:
+                    grade = await _grade_rollout(
+                        spec,
+                        tuple(record.messages),
+                        record.outputs,
+                        machine,
+                        self.machine_factories,
+                        attempt.cleanup,
+                        resources,
+                        stop_reason=record.stop_reason,
+                    )
         except TimeoutError as error:
-            completed = replace(
-                completed,
-                grade=GradeResult(
-                    Outcome.INFRA_ERROR, None, "Verifier deadline expired", failure=GradingFailure.TIMEOUT
-                ),
+            record.grade = GradeResult(
+                Outcome.INFRA_ERROR, None, "Verifier deadline expired", failure=GradingFailure.TIMEOUT
             )
-            raise RolloutInterrupted(completed, RolloutOperation.GRADE) from error
+            raise _Interrupted(RolloutOperation.GRADE) from error
         except Exception as error:
-            raise RolloutInterrupted(completed, RolloutOperation.GRADE) from error
-        events.emit(Graded(grade.status, grade.reward, grade.error, grade.failure, time.monotonic() - started))
-        completed = replace(completed, grade=grade, stop_reason=stop_reason)
-        if model_error is not None:
-            raise RolloutInterrupted(completed, RolloutOperation.MODEL) from model_error
-        return completed
+            raise _Interrupted(RolloutOperation.GRADE) from error
+        record.grade = grade
+        attempt.events.emit(Graded(grade.status, grade.reward, grade.error, grade.failure, time.monotonic() - started))

@@ -17,11 +17,11 @@ from taskcompendium.runtime.grading import grade_in_sandbox
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _AttemptMachineFactory, _machine_spec
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.spec import RolloutSpec
 
 
 async def _grade_rollout(
-    lowered: LoweredTaskSpec,
+    spec: RolloutSpec,
     messages: tuple[dict[str, Any], ...],
     outputs: dict[str, bytes],
     machine: Machine | None,
@@ -35,7 +35,7 @@ async def _grade_rollout(
 
     ``outputs`` holds the task's ``output_paths`` that the engine captured after the turn loop.
     """
-    task = lowered.task
+    task = spec.task
     grader = task.grader
     if isinstance(grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
@@ -44,7 +44,7 @@ async def _grade_rollout(
         return await asyncio.to_thread(grade_answer, task, GradingAttempt(conversation, stop_reason=stop_reason))
     attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
     assert isinstance(grader, VerifyitGrader | ScriptGrader) and grader.environment is not None
-    selection = lowered.runtime.verifier_machine
+    selection = spec.verifier_machine
     assert selection is not None
     return await grade_in_sandbox(
         task,
@@ -52,5 +52,5 @@ async def _grade_rollout(
         _AttemptMachineFactory(selection, factories, cleanup, resources),
         _machine_spec(grader.environment, selection),
         task_machine=machine,
-        timeout=lowered.session.verifier_timeout,
+        timeout=spec.limits.verifier_timeout,
     )
