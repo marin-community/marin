@@ -14,7 +14,7 @@ DRIVE = Path(
     "data_mixing_paper_one_phase"
 )
 BUILD = REPO / "release_build"
-PRIVATE = Path.home() / ".config/mariner_release"  # salt and observation map; never inside the upload
+PRIVATE = Path.home() / ".config/mariner_release"  # SOURCES.json, the sources' absolute paths; never in the upload
 D_TGT = 6_325_183_647_689
 PARTITION_REVISION = "dolma3_dolmino_39bucket_2026-06"
 

@@ -1,14 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The main swarm: 280 fit rows from the mixture-selection bundle plus the ten proportional repeats."""
+"""The main swarm: 280 fit rows from the mixture-selection bundle plus the ten proportional repeats.
+
+Observation ids are W&B run ids. A fit row's is the run directory of its checkpoint in the SFT inventory
+(`observation_ids`): `singleavg_fit_002_run_00002-fc9cd7` for the 238 sampled designs, and for the 42 phase-constant
+designs (3 baselines and 39 deletions) the two-phase swarm's run that trained the mixture in both phases, such as
+`fit_000_baseline_proportional-90c474`. A repeat's is the run name with its hash that its sources record.
+"""
 
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from experiments.domain_phase_mix.release import keys, naming, paths, tables
+from experiments.domain_phase_mix.release import keys, naming, paths, run_names, tables
 from experiments.domain_phase_mix.release.context import ExportContext
 
 TABLE = "swarm_qwen3_360m_1p6b"
@@ -16,6 +22,7 @@ SWARM_WEIGHTS = paths.MIXSEL / "data/swarm_weights.csv"
 SWARM_OUTCOMES = paths.MIXSEL / "data/swarm_outcomes.csv"
 PACKET = paths.RO / "two_phase_surrogate_collaborator_packet_20260721/data/canonical/delphi_3e18_one_phase_fit.csv"
 INVENTORY = paths.AG / "sft_midtraining_probe/checkpoint_inventory.csv"
+INVENTORY_PANEL = "p2_one_phase_swarm"  # the inventory's rows of the fit runs
 NOISE = paths.RO / "delphi_3e18_proportional_noise_floor_20260703"
 UNCH_REPEATS = paths.RO / "table9_reliability_20260905/proportional_uncheatable_components.csv"
 REPEAT_SEEDS = (
@@ -51,6 +58,21 @@ def _public_metrics(frame: pd.DataFrame, metric_cols: list[str]) -> pd.DataFrame
     return frame[metric_cols].rename(columns={c: f"bpb__{naming.task_public(c)}" for c in metric_cols})
 
 
+def _inventory() -> pd.DataFrame:
+    """The SFT inventory's fit runs: training run name, design name, seeds and W&B run id (`observation_id`)."""
+    inventory = tables.read_csv(paths.require(INVENTORY))
+    inventory = inventory[inventory.panel == INVENTORY_PANEL].reset_index(drop=True)
+    inventory["observation_id"] = inventory.checkpoint_uri.map(run_names.training_run_name_from_uri)
+    assert inventory.run_name.is_unique and inventory.observation_id.is_unique, "one W&B run per fit row"
+    return inventory[["run_name", "anchor_or_design_id", "data_seed", "trainer_seed", "observation_id"]]
+
+
+def observation_ids() -> pd.Series:
+    """The W&B run id of each fit row, indexed by the training run name that the mixture-selection bundle gives it
+    (`singleavg_fit_002_run_00002`)."""
+    return _inventory().set_index("run_name").observation_id
+
+
 def _design_kind(design: str, candidate_kind: str) -> str:
     if candidate_kind == NEW_TRAINING and design.startswith("run_"):
         return "sampled"
@@ -80,10 +102,7 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     weights = tables.read_csv(paths.require(SWARM_WEIGHTS))
     outcomes = tables.read_csv(paths.require(SWARM_OUTCOMES)).set_index("run")
     packet = tables.read_csv(paths.require(PACKET))[["row_id", "candidate_kind"]]
-    inventory = tables.read_csv(paths.require(INVENTORY))
-    inventory = inventory[inventory.panel == "p2_one_phase_swarm"][
-        ["run_name", "anchor_or_design_id", "data_seed", "trainer_seed"]
-    ]
+    inventory = _inventory()
 
     internal_buckets = [c for c in weights.columns if c not in ("run", "calibration")]
     fit = pd.concat(
@@ -94,14 +113,13 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
         ],
         axis=1,
     )
-    # The bundle's `run`, the packet's `row_id` and the inventory's `run_name` are the training run name
-    # (`singleavg_fit_002_run_00002`); the inventory's `anchor_or_design_id` is the design name (`run_00002`).
+    # The bundle's `run`, the packet's `row_id` and the inventory's `run_name` are the training run name without its
+    # hash (`singleavg_fit_002_run_00002`); the inventory's `anchor_or_design_id` is the design name (`run_00002`).
     fit = fit.merge(packet, left_on="run", right_on="row_id", how="left", validate="one_to_one")
     assert fit.candidate_kind.notna().all(), "every fit row needs a candidate_kind from the July packet"
     fit = fit.merge(inventory, left_on="run", right_on="run_name", how="left", validate="one_to_one")
-    assert fit.run_name.notna().all(), "every fit row needs its design name and seeds from the SFT inventory"
+    assert fit.run_name.notna().all(), "every fit row needs its design name, seeds and W&B run id from the SFT inventory"
     fit["design_kind"] = [_design_kind(d, k) for d, k in zip(fit.anchor_or_design_id, fit.candidate_kind, strict=True)]
-    fit["observation_id"] = fit.run_name.map(ctx.registry.id_for)
     fit["run_label"] = fit.anchor_or_design_id  # design names (run_00002, baseline_proportional, pctrl_del_<bucket>)
     fit["fit_inclusion"] = True
 
@@ -143,7 +161,7 @@ def _repeats(ctx: ExportContext, proportional: pd.DataFrame) -> pd.DataFrame:
     for letter in map(str, t9.index):
         run_name = str(unch.run[letter])
         row = {
-            "observation_id": ctx.registry.id_for(run_name),
+            "observation_id": run_name,
             "run_label": f"proportional_repeat_{letter}",
             "design_kind": "repeat",
             "fit_inclusion": False,

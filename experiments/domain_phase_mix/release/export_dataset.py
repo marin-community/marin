@@ -8,10 +8,10 @@
 `build_tables` runs every exporter once. `write` replaces the build's data folder, writes each table (Parquet for the
 `fits` tables, the StarCoder dense grid and the trajectories; CSV with pandas' shortest round-trip float repr for the
 rest, so every value is bit-identical to the exported one), copies figures_tables.csv and writes the public manifest:
-per table its config, path, format, rows, columns, bytes, SHA-256, the string its observation ids hash (`keying`),
-notes and repository-relative sources, and the cross-table consistency problems. The salt, the run-name map and
-SOURCES.json (every table's absolute source paths) go to the private directory, which must lie outside the build. The
-command exits non-zero, after writing the manifest, when two tables disagree about a run.
+per table its config, path, format, rows, columns, bytes, SHA-256, where its observation ids (W&B run ids) come from
+(`keying`), notes and repository-relative sources, and the cross-table consistency problems. SOURCES.json (every
+table's absolute source paths) goes to the private directory, which must lie outside the build. The command exits
+non-zero, after writing the manifest, when two tables disagree about a run.
 """
 
 import argparse
@@ -61,56 +61,58 @@ EXPORTER = {
     "domain_sweeps": domain_sweeps,
     "fits": fits,
 }
-# The public manifest shows `*` for the run name that begins a per-run file name (it ends in a six-hex-digit hash) and
-# for a folder named by a 64-hex content hash.
-RUN_NAME_IN_FILE = re.compile(r"(?<=/)[^/]+-[0-9a-f]{6}(?=_[^/]+$)")
+# The public manifest shows `*` for a folder named by a 64-hex content hash.
 HASH_FOLDER = re.compile(r"(?<=/)[0-9a-f]{64}(?=/)")
 MIXSEL_PREFIX = "mixture-selection/"
 
 NO_IDS = "The table has no observation ids."
-# The string each table's observation ids hash; one training run has one id wherever it appears.
+# Where each table's observation ids, W&B run ids, come from; one training run has one id wherever it appears.
 KEYING = {
     "partition": NO_IDS,
     "tasks": NO_IDS,
     "swarm_qwen3_360m_1p6b": (
-        "The training run name: without its six-hex-digit hash for the 280 fit rows, as the mixture-selection bundle "
-        "names them, and with it for the ten proportional repeats, as W&B names them."
+        "Each run's W&B run id: its training run name with its six-hex-digit hash. The 42 phase-constant fit rows (3 "
+        "baselines, 39 deletions) take the id of the two-phase swarm's run that trained the mixture in both phases."
     ),
-    "swarm_llama_160m_1p2b": "The training run name with its six-hex-digit hash, which W&B records as the run id.",
-    "swarm_llama_200m_6b": "The training run name with its six-hex-digit hash, which W&B records as the run id.",
+    "swarm_llama_160m_1p2b": "Each run's W&B run id: its training run name with its six-hex-digit hash.",
+    "swarm_llama_200m_6b": "Each run's W&B run id: its training run name with its six-hex-digit hash.",
     "heldout": (
-        "The training run name with its six-hex-digit hash wherever the registry or a validation launch records it, "
-        "and the registry's row id for the 134 Llama 200M runs, which record no run name."
+        "Each run's W&B run id: the training run name with its six-hex-digit hash that the registry or a validation "
+        "launch records, or for the 134 Llama 200M runs, which the registry records without one, the id read from W&B. "
+        "W&B shortened 20 of those ids by dropping leading characters of the run name."
     ),
     "validation_3e18": (
-        "The training run name with its six-hex-digit hash, from each run's evaluation-metrics path or its launch's "
-        "record of run names."
+        "Each run's W&B run id: its training run name with its six-hex-digit hash, from its evaluation-metrics path or "
+        "its launch's record of run names."
     ),
     "ladder": (
-        "The training run name with its six-hex-digit hash; the 3e18 copies keep the ids of their validation_3e18 "
-        "and swarm_qwen3_360m_1p6b rows."
+        "Each run's W&B run id: its training run name with its six-hex-digit hash; the 3e18 copies keep the ids of "
+        "their validation_3e18 and swarm_qwen3_360m_1p6b rows."
     ),
     "ladder_accuracy": "The ladder's ids of the four scored 1e21 runs.",
     "ladder_compute_equivalence": NO_IDS,
     "ladder_unimax_cap_sweep": NO_IDS,
-    "starcoder_observations": "The training run name of each atlas run.",
-    "starcoder_curve_membership": "The training run name of each atlas run.",
+    "starcoder_observations": (
+        "Each atlas run's W&B run id: its training run name, after the prefix c2v4c_ for the 78 coupled "
+        "learning-rate-onset runs, whose launch put it before every W&B run id."
+    ),
+    "starcoder_curve_membership": "The starcoder_observations ids of each curve's runs.",
     "starcoder_curves": NO_IDS,
     "starcoder_fit_parameters": NO_IDS,
     "starcoder_dense_grid": NO_IDS,
-    "starcoder_diagonal": "The training run name.",
+    "starcoder_diagonal": "Each run's W&B run id, its training run name.",
     "starcoder_curricula": NO_IDS,
     "starcoder_curricula_matched_nd": NO_IDS,
-    "starcoder_curricula_matched_nd_confirmation": "The training run names of each pair's two runs (their W&B ids).",
+    "starcoder_curricula_matched_nd_confirmation": "The W&B run ids of each pair's two runs.",
     "starcoder_transition": (
-        "The training run name; for the gradient-conflict runs, the trajectory id without its W&B prefix."
+        "Each run's W&B run id: its training run name, or for a gradient-conflict run gcfv9_ and its trajectory id."
     ),
-    "starcoder_ramp_designs": "The training run names of each ramp run, its abrupt source run and its tied comparator.",
+    "starcoder_ramp_designs": "The W&B run ids of each ramp run, its abrupt source run and its tied comparator.",
     "starcoder_trajectories": (
-        "The training run name; for the gradient-conflict runs, the trajectory id without its W&B prefix."
+        "Each run's W&B run id: its training run name, or for a gradient-conflict run gcfv9_ and its trajectory id."
     ),
-    "starcoder_repeat_noise": "The training run name with its six-hex-digit hash.",
-    "domain_sweeps": "The training run name, to which these launches append no hash.",
+    "starcoder_repeat_noise": "Each run's W&B run id: its training run name with its six-hex-digit hash.",
+    "domain_sweeps": "Each run's W&B run id: its training run name, to which these launches append no hash.",
     "domain_sweeps_olmix_fits": NO_IDS,
     "fits_task_parameters": NO_IDS,
     "fits_swarm_predictions": "The ids of the fit rows of swarm_qwen3_360m_1p6b.",
@@ -152,6 +154,8 @@ NOTES = {
         "One archived Llama 160M run, which the registry scores by its pooled Uncheatable aggregate only, takes its "
         "seven Uncheatable components and its data seed from its W&B run summary and config; it logged no OlmoBaseEval "
         "Easy metrics, so those values are null.",
+        "The 134 Llama 200M runs take their W&B run ids and seeds from W&B, read on 2026-10-15, as the registry records "
+        "neither.",
         "proposal_objective uses the public objective names: none for the UniMax-8 baseline (epoch cap 8, as in "
         "validation_3e18), uncheatable_and_obe_easy for designs built for both objectives, and other where the "
         "registry's run names name no objective; the Llama panels leave it null.",
@@ -191,8 +195,9 @@ NOTES = {
     "fits_learning_curves": ["The out-of-fold predictions behind these metrics are not exported."],
 }
 RELEASE_NOTES = [
-    "observation_id is a salted hash of the string each table's keying names; one training run has one id in every "
-    "table that holds it, and run_sets lists its memberships, so pool tables by observation_id.",
+    "observation_id is a training run's W&B run id in the public project marin-community/marin, whose logs are at "
+    "wandb.ai/marin-community/marin/runs/<observation_id>. One training run has one id in every table that holds it, "
+    "and run_sets lists its memberships, so pool tables by observation_id.",
     "mixture_id hashes a row's weights rounded to 1e-9; exposure_id hashes its weights, pool fractions and the "
     "partition revision.",
     "bpb__uncheatable (the seven Uncheatable corpora weighted by the tasks table's aggregate_weight, the paper's fixed "
@@ -200,7 +205,7 @@ RELEASE_NOTES = [
     "whenever it has all of that objective's components, and otherwise are the aggregate its source recorded under "
     "the same weights, or null where the source recorded none under those weights.",
     "Source paths are relative to the marin repository's root, those under mixture-selection/ to the "
-    "mixture-selection repository's; `*` stands for a run name that begins a file name or a hash that names a folder.",
+    "mixture-selection repository's; `*` stands for a hash that names a folder.",
     "figures_tables.csv lists the paper's 26 figures and 20 tables with their builders (paths in the paper folder, or "
     "in the repository under experiments/ and .agents/) and the configs they read: deferred marks two-phase data "
     "this release omits, and constant marks configuration constants typed into the paper.",
@@ -228,8 +233,8 @@ def build_tables(ctx: context.ExportContext) -> dict[str, pd.DataFrame]:
         ladder_tables["ladder"], tables["validation_3e18"], tables["swarm_qwen3_360m_1p6b"]
     )
     _add(tables, ladder_tables)
-    _add(tables, starcoder.export(ctx))
-    _add(tables, domain_sweeps.export(ctx))
+    _add(tables, starcoder.export())
+    _add(tables, domain_sweeps.export())
     _add(tables, fits.export(ctx, heldout_table=tables["heldout"], validation_table=tables["validation_3e18"]))
     _add(tables, {"run_sets": checks.run_sets(tables)})
     return tables
@@ -243,14 +248,14 @@ def _add(tables: dict[str, pd.DataFrame], exported: dict[str, pd.DataFrame]) -> 
 
 
 def public_source(path: Path) -> str:
-    """A source's path relative to its repository, with run names and hash-named folders replaced by `*`."""
+    """A source's path relative to its repository, with hash-named folders replaced by `*`."""
     if path.is_relative_to(paths.REPO):
         relative = path.relative_to(paths.REPO).as_posix()
     elif path.is_relative_to(paths.MIXSEL):
         relative = MIXSEL_PREFIX + path.relative_to(paths.MIXSEL).as_posix()
     else:
         raise ValueError(f"a source outside the marin and mixture-selection repositories: {path}")
-    return HASH_FOLDER.sub("*", RUN_NAME_IN_FILE.sub("*", relative))
+    return HASH_FOLDER.sub("*", relative)
 
 
 def _sources(table: str) -> list[Path]:
@@ -293,7 +298,7 @@ def _commit() -> str:
 
 
 def _require_private_outside(out: Path, private_dir: Path) -> None:
-    """The salt, the run-name map and SOURCES.json must never land in the build, which is uploaded."""
+    """SOURCES.json, which holds absolute local paths, must never land in the build, which is uploaded."""
     if private_dir.resolve().is_relative_to(out.resolve()):
         raise ValueError(f"the private directory {private_dir} is inside the build {out}")
 
@@ -363,10 +368,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--out", type=Path, default=paths.BUILD)
     parser.add_argument("--private-dir", type=Path, default=paths.PRIVATE)
     args = parser.parse_args(argv)
-    _require_private_outside(args.out, args.private_dir)  # before the context creates a salt there
-    ctx = context.build(private_dir=args.private_dir)
-    manifest = write(build_tables(ctx), args.out, args.private_dir)
-    ctx.registry.save()
+    _require_private_outside(args.out, args.private_dir)  # before the export runs
+    manifest = write(build_tables(context.build()), args.out, args.private_dir)
     problems = manifest["consistency_problems"]
     total = sum(t["bytes"] for t in manifest["tables"])
     print(f"wrote {len(manifest['tables'])} tables ({total / 1e6:.1f} MB) to {args.out}; {len(problems)} problems")

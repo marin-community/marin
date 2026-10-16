@@ -26,13 +26,8 @@ PAPER_ROWS = {
 
 
 @pytest.fixture(scope="module")
-def ctx(tmp_path_factory):
-    return context.build(private_dir=tmp_path_factory.mktemp("private"))
-
-
-@pytest.fixture(scope="module")
-def out(ctx):
-    return swarm_llama.export(ctx)
+def out():
+    return swarm_llama.export(context.build())
 
 
 def _cells(appendix: str, row: str) -> list[str]:
@@ -109,8 +104,8 @@ def test_weights_sum_to_one(out):
         assert np.allclose(t[[f"w__{b}" for b in naming.BUCKETS]].sum(axis=1), 1.0, rtol=0, atol=1e-9)
 
 
-def _recorded_aggregates(ctx) -> pd.DataFrame:
-    """Each run's aggregates as its sources record them, indexed by observation id: the 160M audit's runs, and the 200M
+def _recorded_aggregates() -> pd.DataFrame:
+    """Each run's aggregates as its sources record them, indexed by W&B run id: the 160M audit's runs, and the 200M
     builder's exports of its fit panel and repeats. The fit panel's proportional row records the mean of 11 runs, so it
     is left out."""
     audit = pd.concat(
@@ -136,14 +131,14 @@ def _recorded_aggregates(ctx) -> pd.DataFrame:
     )
     recorded = pd.concat([small, large])
     assert recorded.index.is_unique
-    return recorded.set_axis(recorded.index.map(ctx.registry.id_for))
+    return recorded
 
 
-def test_aggregates_recompute_the_recorded_values(ctx, out):
+def test_aggregates_recompute_the_recorded_values(out):
     # The sources record each run's Uncheatable aggregate under the legacy weights, which differ from the fixed rule by
     # at most 2.5e-4 per corpus, so the components reproduce it within 1e-4; a component row paired with another run
     # would not. No row copies its legacy record. OlmoBaseEval Easy is a plain mean in every source.
-    recorded = _recorded_aggregates(ctx)
+    recorded = _recorded_aggregates()
     for name, t in out.items():
         run = recorded.reindex(t.observation_id).set_axis(t.index)
         compared = run.uncheatable.notna()
@@ -154,7 +149,7 @@ def test_aggregates_recompute_the_recorded_values(ctx, out):
         assert np.allclose(t.bpb__obe_easy[compared], run.obe_easy[compared], rtol=0, atol=1e-6)
 
 
-def test_observation_ids_key_on_hashed_training_run_names(ctx, out):
+def test_observation_ids_are_the_runs_w_and_b_run_ids(out):
     # Both swarms name runs `singleavg_run_00125` without the hash (241 such names appear in both), so only the training
     # run name with its hash, the checkpoint directory that W&B records as the run id, identifies one run.
     small, large = out["swarm_llama_160m_1p2b"], out["swarm_llama_200m_6b"]
@@ -162,20 +157,20 @@ def test_observation_ids_key_on_hashed_training_run_names(ctx, out):
     audit = pd.read_csv(swarm_llama.AUDIT_160 / "fit_single_phase.csv").set_index("paired_run_name")
     hashed = audit.checkpoint_root.str.rsplit("/", n=1).str[-1]  # `singleavg_run_00125-9ca4a6`
     fit = small[small.run_label.isin(hashed.index)]
-    assert len(fit) == 242 and (fit.observation_id == fit.run_label.map(hashed).map(ctx.registry.id_for)).all()
+    assert len(fit) == 242 and (fit.observation_id == fit.run_label.map(hashed)).all()
     # The held-out table keys the deletions on the run ids its registry records, so each deletion has one id.
     registry = pd.read_csv(heldout.EXPANDED / "heldout_runs.csv")
     deletions = registry[registry.row_id.str.startswith("60m::pctrl:p60_del_")].training_wandb_run_id
-    assert set(small.observation_id[small.design_kind == "deletion"]) == set(deletions.map(ctx.registry.id_for))
+    assert set(small.observation_id[small.design_kind == "deletion"]) == set(deletions)
     # Exports the 200M swarm's builder wrote independently of the sources the exporter reads.
     scores = paths.RO / "one_phase_swarm_scores_export_300m_20260630"
     panel = pd.read_csv(scores / "one_phase_augmented_fit_panel_uncheatable_table9_scores_300m.csv")
     hashed = panel.set_index(panel.run_name.str.removeprefix("singleavg_")).training_wandb_id
     fit = large[large.fit_inclusion]
-    assert (fit.observation_id == fit.run_label.map(hashed).map(ctx.registry.id_for)).all()
+    assert (fit.observation_id == fit.run_label.map(hashed)).all()
     references = pd.read_csv(scores / "proportional_reference_uncheatable_table9_scores_300m.csv")
     repeats = references[references.panel == "proportional_noise"].wandb_run_id
-    assert set(large.observation_id[large.design_kind == "repeat"]) == set(repeats.map(ctx.registry.id_for))
+    assert set(large.observation_id[large.design_kind == "repeat"]) == set(repeats)
 
 
 def test_proportional_repeats(out):
@@ -206,6 +201,5 @@ def test_deletions_remove_one_bucket_from_the_proportional_mixture(out):
 def test_no_internal_strings(out):
     for t in out.values():
         text = t.to_csv(index=False)
-        for needle in ["gs://", "wandb", "pinlin_calvin_xu", "/Users/", "singleavg"]:
+        for needle in ["gs://", "pinlin_calvin_xu", "/Users/"]:
             assert needle not in text
-        assert not re.search(r"\w-[0-9a-f]{6}(?![0-9a-z])", text)  # run names end in a six-hex-digit hash

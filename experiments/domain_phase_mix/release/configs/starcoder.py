@@ -31,8 +31,9 @@ weight times the curve's `starcoder_epochs_at_p1`, which is D over the pool for 
 target's repetition (26.46 epochs at full share) times the subset's multiplier. The realized whole-batch subsets of the
 replay family give up to 0.26% more epochs than that coordinate.
 
-Observation ids key on the training run name. The atlas records a run as `run:<name>` or `wandb:<name>` and its
-endpoint observation as `<that>@endpoint`; the export keys on `<name>`. These runs appear in no other config.
+Observation ids are W&B run ids. The atlas records a run as `run:<name>` or `wandb:<name>` and its endpoint observation
+as `<that>@endpoint`; the id is `<name>`, after the prefix that the launch record of the coupled learning-rate-onset
+family (COUPLED_RELEASE) puts before its runs' W&B run ids. These runs appear in no other config.
 
 - `starcoder_diagonal`: the fixed-total-TPP-5 diagonal, 60 runs (4 matched-compute cells x 15 weights) with each
   cell's measured optimum.
@@ -60,9 +61,9 @@ endpoint observation as `<that>@endpoint`; the export keys on `<name>`. These ru
   different data seeds on the 60M-parameter proxy for 1.0B tokens, with the final programming-languages and C4 BPB of
   each run. The launch recorded no trainer seed.
 
-The transition tables and the trajectories key on training run names too (the gradient-conflict trajectory id, without
-its W&B prefix), so a run has one id across them: the 4x confirmation winners are both the `conf_m400_untied`
-trajectories and the offline evaluations' `august_abrupt` runs.
+The transition tables and the trajectories key on W&B run ids too: a run's name, or for a gradient-conflict v9 trajectory
+`gcfv9_` and its trajectory id (GRADIENT_CONFLICT_RUN_ID). A run has one id across them: the 4x confirmation winners
+are both the `conf_m400_untied` trajectories and the offline evaluations' `august_abrupt` runs.
 """
 
 import gzip
@@ -75,7 +76,6 @@ import numpy as np
 import pandas as pd
 
 from experiments.domain_phase_mix.release import paths, run_names, tables
-from experiments.domain_phase_mix.release.context import ExportContext
 
 ATLAS = paths.RO / "starcoder_all_tied_curves_canonical_dsp_20260902"
 INVENTORY = paths.RO / "starcoder_single_phase_curve_inventory_20260902/curve_inventory.csv"
@@ -83,6 +83,17 @@ DENSE_DESIGN = paths.REPO / "experiments/domain_phase_mix/starcoder_wsd80_dense_
 COUPLED_DESIGN = (
     paths.REPO / "experiments/domain_phase_mix/starcoder_wsd80_coupled_onset_dense_surface_design_20260830.json.gz"
 )
+# The launch record of the coupled design: the design it launched and the prefix of its runs' W&B run ids, which
+# launch_starcoder_wsd80_coupled_onset_dense_surfaces.py sets to the prefix and the run name.
+COUPLED_RELEASE = (
+    paths.REPO
+    / "experiments/domain_phase_mix/manifests/starcoder_wsd80_coupled_onset_dense_surfaces_central2_v4_v1_20260830"
+    / "release.json"
+)
+# The gradient-conflict v9 launch logged each trajectory of its manifest to W&B as `gcfv9_<trajectory id>`
+# (launch_starcoder_wsd80_gradient_conflict_full.py, WANDB_RUN_ID_PREFIX); pull_switch_traces.py reads the same runs.
+GRADIENT_CONFLICT_MANIFEST = paths.RO / "starcoder_wsd80_gradient_conflict_design_20260811_v9/trajectory_manifest.csv"
+GRADIENT_CONFLICT_RUN_ID = "gcfv9_{}"
 DIAGONAL = paths.RO / "starcoder_wsd80_fixed_total_tpp5_diagonal_20260905"
 CURRICULA = (
     paths.RO
@@ -169,14 +180,15 @@ def required_sources() -> list[Path]:
     fits = [ATLAS / "full_fit_parameters.csv", ATLAS / "dense_curves.csv"]
     transition = [*(TRANSITION / f"{name}.csv" for name in TRANSITION_TABLES), TRANSITION / "trajectories.parquet"]
     confirmation = [MATCHED_CONFIRMATION / name for name in ("confirmation_pairs.csv", "confirmation_observations.csv")]
-    designs = [INVENTORY, DENSE_DESIGN, COUPLED_DESIGN, *RAMP_DESIGNS]
+    designs = [INVENTORY, DENSE_DESIGN, COUPLED_DESIGN, COUPLED_RELEASE, GRADIENT_CONFLICT_MANIFEST, *RAMP_DESIGNS]
     diagonal = [DIAGONAL / "observations.csv", DIAGONAL / "curve_summary.csv"]
     repeat_noise = [REPEAT_NOISE / "collected_train_only_metrics_live.csv", REPEAT_NOISE / "training_manifest.csv"]
     return [*atlas, *fits, *designs, *diagonal, CURRICULA, MATCHED_OPTIMA, *confirmation, *transition, *repeat_noise]
 
 
-def _curve_designs(curves: pd.DataFrame, dense: dict) -> pd.DataFrame:
-    """N, D, StarCoder subset and seed of each atlas curve, indexed by `curve_id`."""
+def _curve_designs(curves: pd.DataFrame, dense: dict, coupled: dict) -> pd.DataFrame:
+    """N, D, StarCoder subset and seed of each atlas curve, indexed by `curve_id`; `dense` and `coupled` are the
+    dense-support and coupled designs."""
     protocol = json.loads(paths.require(ATLAS / "protocol.json").read_text())
     if hashlib.sha256(paths.require(INVENTORY).read_bytes()).hexdigest() != protocol["input_hashes"][INVENTORY.name]:
         raise ValueError(f"{INVENTORY.name} is not the inventory the atlas fitted")
@@ -187,7 +199,6 @@ def _curve_designs(curves: pd.DataFrame, dense: dict) -> pd.DataFrame:
     pool, target = axis["full_starcoder_source_tokens"], axis["simulated_epoch_target_budget"]
     cells = pd.DataFrame(dense["cells"]).set_index("cell_id")
     supports = pd.DataFrame(dense["supports"]).set_index(["cell_id", "support_id"])
-    coupled = json.loads(gzip.decompress(paths.require(COUPLED_DESIGN).read_bytes()))
 
     subsets = []
     for curve_id, curve in inventory.iterrows():
@@ -230,12 +241,26 @@ def _curve_designs(curves: pd.DataFrame, dense: dict) -> pd.DataFrame:
     return design
 
 
+def _atlas_run_ids(pred: pd.DataFrame, coupled: dict) -> pd.Series:
+    """The W&B run id of each atlas point's run (`pred.run`): its name, after the prefix of COUPLED_RELEASE for the
+    coupled learning-rate-onset family, whose runs must be runs of `coupled`, the design that record launched."""
+    release = json.loads(paths.require(COUPLED_RELEASE).read_text())
+    launched = (release["design_path"], release["design_sha256"])
+    if launched != (COUPLED_DESIGN.relative_to(paths.REPO).as_posix(), coupled["design_sha256"]):
+        raise ValueError(f"{COUPLED_RELEASE.name} records the launch of another design than {COUPLED_DESIGN.name}")
+    is_coupled = pred.family == COUPLED_FAMILY
+    if not pred.run[is_coupled].isin([run["run_name"] for run in coupled["runs"]]).all():
+        raise ValueError("a coupled-family atlas run is not a run of the coupled design")
+    return pred.run.mask(is_coupled, release["deployment"]["run_id_prefix"] + pred.run)
+
+
 def _atlas_runs(
-    ctx: ExportContext, curves: pd.DataFrame, designs: pd.DataFrame, aliases: pd.DataFrame
+    curves: pd.DataFrame, designs: pd.DataFrame, aliases: pd.DataFrame, coupled: dict
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """The atlas's observations, one per training run, and its (curve, run) memberships.
 
-    `designs` is `_curve_designs`'s table and `aliases` the dense-support design's `deterministic_aliases`.
+    `designs` is `_curve_designs`'s table, `aliases` the dense-support design's `deterministic_aliases` and `coupled`
+    the coupled design.
     """
     pred = tables.read_csv(paths.require(ATLAS / "predictions.csv"))
     source, run = pred.training_run_id.str.split(":", n=1, expand=True).T.to_numpy()
@@ -245,7 +270,7 @@ def _atlas_runs(
     ):
         raise ValueError("an atlas run id is not `<run|wandb>:<name>` with observation `<id>@endpoint`")
     pred["run"] = run
-    pred["observation_id"] = pred.run.map(ctx.registry.id_for)
+    pred["observation_id"] = _atlas_run_ids(pred, coupled)
     at_full_share = curves.set_index("curve_id").starcoder_epochs_at_p1
     pred["starcoder_epochs"] = pred.starcoder_weight * pred.curve_id.map(at_full_share)
     points = pred.merge(designs, left_on="curve_id", right_index=True, how="left", validate="many_to_one")
@@ -271,7 +296,7 @@ def _atlas_runs(
     return observations, membership
 
 
-def _diagonal(ctx: ExportContext) -> pd.DataFrame:
+def _diagonal() -> pd.DataFrame:
     """The TPP-5 diagonal's runs with each cell's measured optimum; the cell constants the two files share must agree."""
     runs = tables.read_csv(paths.require(DIAGONAL / "observations.csv"))
     cells = tables.read_csv(paths.require(DIAGONAL / "curve_summary.csv"))
@@ -281,19 +306,32 @@ def _diagonal(ctx: ExportContext) -> pd.DataFrame:
     if not all((table[c] == table[f"{c}_cell"]).all() for c in shared):
         raise ValueError("a diagonal run and its cell summary disagree on a cell constant")
     table = table.drop(columns=[f"{c}_cell" for c in shared])
-    table.insert(0, "observation_id", table.pop("run_name").map(ctx.registry.id_for))
+    table.insert(0, "observation_id", table.pop("run_name"))
     return table
 
 
-def _transition(ctx: ExportContext) -> pd.DataFrame:
-    """The switch study's tables stacked under a `table` column, with run names replaced by observation ids."""
+def _gradient_conflict_trajectories() -> set[str]:
+    """The trajectory ids of the gradient-conflict v9 launch."""
+    return set(tables.read_csv(paths.require(GRADIENT_CONFLICT_MANIFEST)).trajectory_id)
+
+
+def _wandb_run_ids(names: pd.Series, gradient_conflict: set[str]) -> pd.Series:
+    """The W&B run id of each run name: `gcfv9_<trajectory id>` for a trajectory of `gradient_conflict` (the
+    gradient-conflict v9 trajectory ids), the name itself for any other run."""
+    ids = {n: GRADIENT_CONFLICT_RUN_ID.format(n) if n in gradient_conflict else n for n in names.unique()}
+    return names.map(ids)
+
+
+def _transition(gradient_conflict: set[str]) -> pd.DataFrame:
+    """The switch study's tables stacked under a `table` column, with run names replaced by W&B run ids;
+    `gradient_conflict` holds the gradient-conflict v9 trajectory ids."""
     parts = []
     for name in TRANSITION_TABLES:
         part = tables.read_csv(paths.require(TRANSITION / f"{name}.csv"))
         if name == "ramp_eval_history":
             part = part[["run_name", "step", *EVAL_HISTORY_METRICS]].rename(columns=EVAL_HISTORY_METRICS)
         for column in [c for c in RUN_NAME_COLUMNS if c in part]:
-            part.insert(0, "observation_id", part.pop(column).map(ctx.registry.id_for))
+            part.insert(0, "observation_id", _wandb_run_ids(part.pop(column), gradient_conflict))
         part.insert(0, "table", name)
         parts.append(part)
     stacked = pd.concat(parts, ignore_index=True)
@@ -301,8 +339,8 @@ def _transition(ctx: ExportContext) -> pd.DataFrame:
     return stacked.astype(dict.fromkeys(integer, "Int64"))
 
 
-def _matched_confirmation(ctx: ExportContext) -> pd.DataFrame:
-    """The matched-N,D confirmation pairs, each run keyed by its training run name."""
+def _matched_confirmation() -> pd.DataFrame:
+    """The matched-N,D confirmation pairs, each run keyed by its W&B run id."""
     pairs = tables.read_csv(paths.require(MATCHED_CONFIRMATION / "confirmation_pairs.csv"))
     runs = tables.read_csv(paths.require(MATCHED_CONFIRMATION / "confirmation_observations.csv"))
     # The last component of a W&B run URL is the run's id, which for these runs is the training run name.
@@ -312,19 +350,17 @@ def _matched_confirmation(ctx: ExportContext) -> pd.DataFrame:
         names = pairs.pop(f"{role}_wandb_url").str.rsplit("/", n=1).str[-1]
         if not names.isin(runs.run_name).all():
             raise ValueError(f"a confirmation {role} is not among the confirmation runs")
-        pairs.insert(pairs.columns.get_loc(f"{role}_bpb"), f"{role}_observation_id", names.map(ctx.registry.id_for))
+        pairs.insert(pairs.columns.get_loc(f"{role}_bpb"), f"{role}_observation_id", names)
     return pairs
 
 
-def _ramp_designs(ctx: ExportContext) -> pd.DataFrame:
+def _ramp_designs() -> pd.DataFrame:
     """The launched ramp and abrupt schedules, one row per stage of each run."""
     rows = []
     for path in RAMP_DESIGNS:
         design = json.loads(paths.require(path).read_text())
         for run in design["runs"]:
-            ids = {
-                f"{role}observation_id": ctx.registry.id_for(run[f"{role}run_name"]) for role in ("", "source_", "tied_")
-            }
+            ids = {f"{role}observation_id": run[f"{role}run_name"] for role in ("", "source_", "tied_")}
             for stage, (start_step, weight) in enumerate(run["stages"]):
                 rows.append(
                     {
@@ -346,7 +382,7 @@ def _ramp_designs(ctx: ExportContext) -> pd.DataFrame:
     return table
 
 
-def _repeat_noise(ctx: ExportContext) -> pd.DataFrame:
+def _repeat_noise() -> pd.DataFrame:
     """The repeat-noise panel's runs, checked against the launch's record of each run's mixture and step count."""
     runs = tables.read_csv(paths.require(REPEAT_NOISE / "collected_train_only_metrics_live.csv"))
     launch = tables.read_csv(paths.require(REPEAT_NOISE / "training_manifest.csv"))
@@ -363,7 +399,7 @@ def _repeat_noise(ctx: ExportContext) -> pd.DataFrame:
         raise ValueError("a repeat-noise run's checkpoint is not named after the run")
     out = pd.DataFrame(
         {
-            "observation_id": names.map(ctx.registry.id_for),
+            "observation_id": names,
             "mixture_label": table.anchor_id,
             "repeat_index": table.repeat_index,
             "data_seed": table.data_seed,
@@ -379,14 +415,15 @@ def _repeat_noise(ctx: ExportContext) -> pd.DataFrame:
     return out
 
 
-def _trajectories(ctx: ExportContext) -> pd.DataFrame:
+def _trajectories(gradient_conflict: set[str]) -> pd.DataFrame:
+    """The re-pulled training losses, with run names replaced by W&B run ids; `gradient_conflict` holds the
+    gradient-conflict v9 trajectory ids."""
     trajectories = pd.read_parquet(paths.require(TRANSITION / "trajectories.parquet"))
-    ids = {name: ctx.registry.id_for(name) for name in trajectories.run_name.unique()}
-    trajectories.insert(0, "observation_id", trajectories.pop("run_name").map(ids))
+    trajectories.insert(0, "observation_id", _wandb_run_ids(trajectories.pop("run_name"), gradient_conflict))
     return trajectories
 
 
-def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
+def export() -> dict[str, pd.DataFrame]:
     curves = tables.read_csv(paths.require(ATLAS / "curve_reference.csv")).merge(
         tables.read_csv(paths.require(ATLAS / "metrics.csv")),
         on=["curve_id", "curve_number", "curve_ref", "family"],
@@ -395,8 +432,10 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     )
     assert curves.rows.notna().all(), "an atlas curve has no fit metrics"
     dense = json.loads(paths.require(DENSE_DESIGN).read_text())
-    designs = _curve_designs(curves, dense)
-    obs, membership = _atlas_runs(ctx, curves, designs, pd.DataFrame(dense["deterministic_aliases"]))
+    coupled = json.loads(gzip.decompress(paths.require(COUPLED_DESIGN).read_bytes()))
+    designs = _curve_designs(curves, dense, coupled)
+    obs, membership = _atlas_runs(curves, designs, pd.DataFrame(dense["deterministic_aliases"]), coupled)
+    gradient_conflict = _gradient_conflict_trajectories()
     curves = curves.merge(designs[DESIGN], left_on="curve_id", right_index=True, how="left", validate="one_to_one")
     curves["fitter"], curves["grid_points"] = FITTER, GRID_POINTS
     params = tables.read_csv(paths.require(ATLAS / "full_fit_parameters.csv"))
@@ -409,14 +448,14 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
         "starcoder_curves": curves,
         "starcoder_fit_parameters": params,
         "starcoder_dense_grid": grid,
-        "starcoder_diagonal": _diagonal(ctx),
+        "starcoder_diagonal": _diagonal(),
         "starcoder_curricula": tables.read_csv(paths.require(CURRICULA)),
         "starcoder_curricula_matched_nd": tables.read_csv(paths.require(MATCHED_OPTIMA)),
-        "starcoder_curricula_matched_nd_confirmation": _matched_confirmation(ctx),
-        "starcoder_transition": _transition(ctx),
-        "starcoder_ramp_designs": _ramp_designs(ctx),
-        "starcoder_trajectories": _trajectories(ctx),
-        "starcoder_repeat_noise": _repeat_noise(ctx),
+        "starcoder_curricula_matched_nd_confirmation": _matched_confirmation(),
+        "starcoder_transition": _transition(gradient_conflict),
+        "starcoder_ramp_designs": _ramp_designs(),
+        "starcoder_trajectories": _trajectories(gradient_conflict),
+        "starcoder_repeat_noise": _repeat_noise(),
     }
     for name, t in out.items():
         drop = [c for c in t.columns if c in INTERNAL_COLUMNS or c.endswith(("_url", "_uri"))]

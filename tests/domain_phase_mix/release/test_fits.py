@@ -14,8 +14,8 @@ pytestmark = pytest.mark.skipif(not all(path.exists() for path in fits.required_
 
 
 @pytest.fixture(scope="module")
-def ctx(tmp_path_factory):
-    return context.build(private_dir=tmp_path_factory.mktemp("private"))
+def ctx():
+    return context.build()
 
 
 @pytest.fixture(scope="module")
@@ -81,9 +81,8 @@ def test_learning_curves_name_tasks_and_selections_publicly(out, heldout_table):
         assert ((rows.selected_measured_bpb - expected).abs() <= 1e-9).all()
 
 
-def test_swarm_predictions_reference_public_ids(out):
+def test_swarm_predictions_name_tasks_publicly(out):
     p = out["fits_swarm_predictions"]
-    assert p.observation_id.str.startswith("obs_").all()
     assert set(p.task_id) <= set(naming.TASKS)
     assert p.groupby(["objective", "observation_id"]).size().max() <= 58
 
@@ -276,16 +275,14 @@ def test_surrogate_benchmark_holds_every_model_on_every_swarm(out):
     assert np.allclose(weight, exposure, rtol=0, atol=1e-12) and (weight.spearman == exposure.spearman).all()
 
 
-def test_no_run_names_or_internal_strings(out, heldout_table):
-    names = set(pd.read_csv(paths.MIXSEL / "data/swarm_weights.csv").run)
-    runs = pd.read_csv(heldout.EXPANDED / "heldout_runs.csv", usecols=["row_id", "training_wandb_run_id"])
-    names |= set(runs.row_id) | set(runs.training_wandb_run_id.dropna())
+def test_no_internal_strings(out):
+    # The registry's row ids and coordinate ids are internal; observation ids are the runs' W&B run ids.
+    runs = pd.read_csv(heldout.EXPANDED / "heldout_runs.csv", usecols=["row_id"])
     patterns = [
-        re.compile(r"wandb|gs://|http|/Users/|pinlin_calvin_xu"),
+        re.compile(r"gs://|http|/Users/|pinlin_calvin_xu"),
         re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"),  # email addresses
         re.compile(r"[0-9a-f]{64}"),  # registry coordinate ids and policy hashes
         re.compile(r"(?:exp|run|job)_01[a-z0-9]{24}"),  # Fieldbook ids
-        re.compile(r"\w-[0-9a-f]{6}(?![0-9a-z])"),  # run names end in a six-hex-digit hash
     ]
     for name, t in out.items():
         assert name.startswith("fits_")
@@ -293,7 +290,7 @@ def test_no_run_names_or_internal_strings(out, heldout_table):
         for column in t.columns:
             if not pd.api.types.is_numeric_dtype(t[column]) and not pd.api.types.is_bool_dtype(t[column]):
                 strings |= set(t[column].dropna().astype(str))
-        assert not strings & names, (name, sorted(strings & names)[:3])
+        assert not strings & set(runs.row_id), (name, sorted(strings & set(runs.row_id))[:3])
         text = "\n".join(sorted(strings))
         for pattern in patterns:
             assert not pattern.search(text), (name, pattern.pattern, pattern.search(text))

@@ -20,10 +20,11 @@ rows have Uncheatable components only (`components_available` false) and keep th
 every ladder source scored both aggregates with the fixed rule, and `tables.add_aggregates` recomputes them wherever a
 run has the components.
 
-Observation ids key on the hashed training run name: the audited `run_name` (the run directory in its evaluation
-metrics URI) and, for the baselines, the W&B run id, which is the same name. Data seeds are as the sources record them,
-checked against a `_seed<n>` in the run name. A `_t<n>` suffix names a nonzero trainer seed; no ladder run has one,
-and the scaling launches record trainer seed 0. Model sizes and token counts are the launch records' exact counts.
+Observation ids are W&B run ids: the audited `run_name` (the run directory in its evaluation-metrics URI) and, for the
+baselines, the W&B run id of the June ladder's export, which is the same hashed run name. Data seeds are as the sources
+record them, checked against a `_seed<n>` in the run name. A `_t<n>` suffix names a nonzero trainer seed; no ladder run
+has one, and the scaling launches record trainer seed 0. Model sizes and token counts are the launch records' exact
+counts.
 
 `ladder_accuracy` has the BPB and accuracy (percent; MT-MBPP as executable pass@1) on the 51 OlmoBaseEval Easy tasks
 of the four 1e21 runs that the paper scores, keyed by observation id, with the accuracy example counts that the paper's
@@ -273,7 +274,7 @@ def _ladder(ctx: ExportContext, runs: pd.DataFrame) -> pd.DataFrame:
     recorded aggregates)."""
     ids = pd.DataFrame(
         {
-            "observation_id": runs.run_name.map(ctx.registry.id_for),
+            "observation_id": runs.run_name,
             "method": [POLICY[p][0] for p in runs.policy],
             "proposal_objective": [POLICY[p][1] for p in runs.policy],
             "compute_flops": runs.compute_flops,

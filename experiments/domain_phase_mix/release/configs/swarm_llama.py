@@ -4,10 +4,10 @@
 """The two archived single-phase swarms: Llama 160M/1.2B (281 fit runs) and Llama 200M/6B (280 fit runs), each with
 the ten proportional repeats outside the fit set.
 
-Observation ids key on each run's training run name with its six-hex-digit hash (its checkpoint directory, which W&B
-records as the run id), as the held-out table does: the two swarms reuse hash-less names such as `singleavg_run_00125`
-for different runs. `run_label` is the design name (`run_00125`, `baseline_proportional`, `pctrl_del_<bucket>`,
-`proportional_repeat_<trainer seed>`).
+Observation ids are W&B run ids: each run's training run name with its six-hex-digit hash, its checkpoint directory
+(`singleavg_run_00125-9ca4a6`), as in the held-out table. The two swarms reuse hash-less names such as
+`singleavg_run_00125` for different runs. `run_label` is the design name (`run_00125`, `baseline_proportional`,
+`pctrl_del_<bucket>`, `proportional_repeat_<trainer seed>`).
 
 Every row holds its own run's evaluation. The 160M fit swarm is the audit's 242 single-phase runs plus the 39
 single-bucket deletions, which the audit files with its held-out runs and the held-out table also publishes. The 200M
@@ -162,7 +162,6 @@ def _design_kind(design: str) -> str:
 
 
 def _rows(
-    ctx: ExportContext,
     *,
     run_name: pd.Series,
     label: pd.Series,
@@ -174,11 +173,11 @@ def _rows(
     recorded_uncheatable: pd.Series,
     recorded_obe_easy: pd.Series,
 ) -> pd.DataFrame:
-    """Rows keyed on hashed training run names (`run_name`), with each run's recorded aggregates, which `_finish`
-    consumes; every argument is indexed alike."""
+    """Rows keyed on W&B run ids, the hashed training run names (`run_name`), with each run's recorded aggregates,
+    which `_finish` consumes; every argument is indexed alike."""
     meta = pd.DataFrame(
         {
-            "observation_id": run_name.map(ctx.registry.id_for),
+            "observation_id": run_name,
             "run_label": label,
             "design_kind": label.map(_design_kind),
             "fit_inclusion": fit,
@@ -246,7 +245,6 @@ def _fit_160(ctx: ExportContext) -> pd.DataFrame:
     assert (launch.num_train_steps == SETUP[SMALL]["train_steps"]).all()
 
     return _rows(
-        ctx,
         run_name=hashed,
         label=fit.paired_run_name,  # design names: run_00125, baseline_<method>
         fit=True,
@@ -276,7 +274,6 @@ def _deletions_160(ctx: ExportContext, native: pd.DataFrame, proportional: pd.Se
     unch = _join("60m::" + deletions.observation_id, frozen.reset_index(), "row_id", "160M deletion Uncheatable")
 
     return _rows(
-        ctx,
         run_name=hashed,
         label="pctrl_del_" + deletions.target_domain.str.replace("/", "_"),  # the 200M swarm's deletion labels
         fit=True,
@@ -307,7 +304,6 @@ def _repeats_160(ctx: ExportContext, native: pd.DataFrame, proportional: pd.Seri
     assert np.allclose(endpoints[UNCH_POOLED], repeats.uncheatable_bpb, rtol=0, atol=1e-12), "endpoints differ"
 
     return _rows(
-        ctx,
         run_name=hashed,
         label="proportional_repeat_" + endpoints.trainer_seed.astype("Int64").astype(str),
         fit=False,
@@ -371,7 +367,6 @@ def _fit_200(ctx: ExportContext) -> pd.DataFrame:
     seeds = launch[["data_seed"]].assign(trainer_seed=launch.trainer_seed.fillna(DEFAULT_TRAINER_SEED))
 
     return _rows(
-        ctx,
         run_name=hashed,
         label=panel.run_name.str.removeprefix("singleavg_"),
         fit=True,
@@ -396,7 +391,6 @@ def _repeats_200(ctx: ExportContext, proportional: pd.Series) -> pd.DataFrame:
     assert np.allclose(weights, proportional[weights.columns], rtol=0, atol=1e-12), "repeats train the proportional mix"
 
     return _rows(
-        ctx,
         run_name=endpoints.wandb_run_id,  # `propvar_300m_6b_trainer_seed_10000-919fa5`
         label="proportional_repeat_" + endpoints.trainer_seed.astype("Int64").astype(str),
         fit=False,

@@ -15,7 +15,7 @@ from experiments.domain_phase_mix.release.configs import (
 )
 
 # Each exporter with the exporters it runs itself, whose files are theirs to list. `fits` and `domain_sweeps` test
-# their own lists.
+# their own lists. The StarCoder export needs no context.
 EXPORTERS = {
     partition_tasks: (),
     swarm_qwen3: (),
@@ -28,8 +28,8 @@ EXPORTERS = {
 
 
 @pytest.fixture(scope="module")
-def ctx(tmp_path_factory):
-    return context.build(private_dir=tmp_path_factory.mktemp("private"))
+def ctx():
+    return context.build()
 
 
 def _recording(monkeypatch) -> set:
@@ -47,16 +47,19 @@ def test_required_sources_are_the_files_the_export_reads(ctx, monkeypatch, modul
         upstream.export(ctx)
     upstream_reads = set(read)
     read.clear()
-    module.export(ctx)
+    if module is starcoder:
+        module.export()
+    else:
+        module.export(ctx)
     required = set(module.required_sources())
     assert required <= read and read - upstream_reads <= required
 
 
-def test_context_sources_are_the_files_its_names_and_weights_read(tmp_path, monkeypatch):
+def test_context_sources_are_the_files_its_names_and_weights_read(monkeypatch):
     read = _recording(monkeypatch)
     for cached in (naming.bucket_table, naming.task_table, naming.task_weights):
         cached.cache_clear()
     naming.bucket_table()
     naming.task_table()
-    context.build(private_dir=tmp_path)
+    context.build()
     assert read == set(context.required_sources())

@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from experiments.domain_phase_mix.olmix_loglinear_fit import DEFAULT_HUBER_DELTA, OlmixLoglinearFit
-from experiments.domain_phase_mix.release import context, paths
+from experiments.domain_phase_mix.release import paths
 from experiments.domain_phase_mix.release.configs import domain_sweeps
 
 SWEEPS = paths.AG / "starcoder_tpp10"
@@ -72,13 +72,8 @@ EVALUATIONS = {
 
 
 @pytest.fixture(scope="module")
-def ctx(tmp_path_factory):
-    return context.build(private_dir=tmp_path_factory.mktemp("private"))
-
-
-@pytest.fixture(scope="module")
-def out(ctx):
-    return domain_sweeps.export(ctx)
+def out():
+    return domain_sweeps.export()
 
 
 @pytest.fixture(scope="module")
@@ -142,10 +137,10 @@ def _launch_records() -> dict[str, pd.DataFrame]:
     return records
 
 
-def test_runs_match_their_launch_plans(ctx, table):
+def test_runs_match_their_launch_plans(table):
     runs = table.drop_duplicates("observation_id").set_index("observation_id")
     for domain, launched in _launch_records().items():
-        launched.index = launched.run_name.map(ctx.registry.id_for)
+        launched.index = launched.run_name  # the launches' W&B run ids
         assert set(runs.index[runs.domain == domain]) == set(launched.index), domain
         mine = runs.loc[launched.index]
         assert (mine.scale == launched.arm.map({"matched": "proxy", "unmatched": "proxy", "target": "target"})).all()
@@ -225,10 +220,10 @@ def test_olmix_fits_are_fits_to_the_matched_proxies(out):
     assert fit.coefficient_domain["finemath"] < fit.coefficient_web["finemath"]
 
 
-def test_olmix_fits_come_from_the_committed_receipt(ctx, out, monkeypatch, tmp_path):
+def test_olmix_fits_come_from_the_committed_receipt(out, monkeypatch, tmp_path):
     # Without the Drive folder, the export reads the same fits from the committed copy.
     monkeypatch.setattr(paths, "DRIVE", tmp_path / "unmounted")
-    fits = domain_sweeps.export(ctx)["domain_sweeps_olmix_fits"]
+    fits = domain_sweeps.export()["domain_sweeps_olmix_fits"]
     pd.testing.assert_frame_equal(fits, out["domain_sweeps_olmix_fits"])
     # The v03 builder rewrites its Drive receipt on every run; a receipt that drifts from the copy fails the export.
     sources = json.loads(domain_sweeps.SOURCES.read_text())
@@ -240,15 +235,15 @@ def test_olmix_fits_come_from_the_committed_receipt(ctx, out, monkeypatch, tmp_p
     drifted.write_text(json.dumps(receipt))
     monkeypatch.setattr(paths, "DRIVE", tmp_path / "drive")
     with pytest.raises(ValueError, match="Drive receipt"):
-        domain_sweeps.export(ctx)
+        domain_sweeps.export()
 
 
-def test_required_sources_are_the_files_the_export_reads(ctx, monkeypatch):
+def test_required_sources_are_the_files_the_export_reads(monkeypatch):
     # The skip guard above, and any package-level guard, rely on this list.
     read = set()
     require = paths.require
     monkeypatch.setattr(paths, "require", lambda path: read.add(path) or require(path))
-    domain_sweeps.export(ctx)
+    domain_sweeps.export()
     required = set(domain_sweeps.required_sources())
     assert read - {domain_sweeps.SOURCES} == required
     # The sources file lists each of them under the domains it feeds.
@@ -256,14 +251,9 @@ def test_required_sources_are_the_files_the_export_reads(ctx, monkeypatch):
     assert required <= {paths.REPO / entry["original"] for entries in sources.values() for entry in entries}
 
 
-def test_no_run_names_or_internal_strings(out):
-    sources = json.loads(domain_sweeps.SOURCES.read_text())
-    names = set()
-    for entry in [entry for entries in sources.values() for entry in entries if entry["reader"] == "measurements"]:
-        names |= set(pd.read_csv(paths.REPO / entry["original"]).run_name)
-    names |= {row["run_name"] for rows in json.loads(MATH.read_text())["rows"].values() for row in rows}
+def test_no_internal_strings(out):
     patterns = [
-        re.compile(r"wandb|gs://|http|/Users/|pinlin_calvin_xu"),
+        re.compile(r"gs://|http|/Users/|pinlin_calvin_xu"),
         re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"),  # email addresses
         re.compile(r"[0-9a-f]{64}"),
         re.compile(r"(?:exp|run|job)_01[a-z0-9]{24}"),  # Fieldbook ids
@@ -273,7 +263,6 @@ def test_no_run_names_or_internal_strings(out):
         for column in t.columns:
             if not pd.api.types.is_numeric_dtype(t[column]):
                 strings |= set(t[column].dropna().astype(str))
-        assert not strings & names, (name, sorted(strings & names)[:3])
         text = "\n".join(sorted(strings))
         for pattern in patterns:
             assert not pattern.search(text), (name, pattern.pattern)

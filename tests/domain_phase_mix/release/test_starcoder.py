@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 from scipy import stats
 
-from experiments.domain_phase_mix.release import context, paths
+from experiments.domain_phase_mix.release import paths, pull_switch_traces
 from experiments.domain_phase_mix.release.configs import starcoder
 
 ATLAS = paths.RO / "starcoder_all_tied_curves_canonical_dsp_20260902"
@@ -23,19 +23,17 @@ RUN_RECORDS = {
     / "starcoder_wsd80_matched_nd_stage1_20260731/stage3_dense_surface_results_20260802"
     / "combined_discovery_observations.csv",
 }
+# The W&B run id of a family's run is its run name after a prefix: the coupled learning-rate-onset launch put `c2v4c_`
+# before every run name (its deployment in launch_starcoder_wsd80_coupled_onset_dense_surfaces.py).
+WANDB_PREFIX = {"dense_horizon_replay": "", "coupled_lr_onset": "c2v4c_", "matched_nd": ""}
 TRANSITION = paths.RO / "starcoder_wsd80_transition_transient_20261006"
 # The heteroskedasticity analysis's per-mixture summary of the repeat-noise panel, which the paper's table reports.
 NOISE_SUMMARY = paths.RO / "starcoder_heteroskedasticity_mechanisms_20260617/anchor_metric_noise_features.csv"
 
 
 @pytest.fixture(scope="module")
-def ctx(tmp_path_factory):
-    return context.build(private_dir=tmp_path_factory.mktemp("private"))
-
-
-@pytest.fixture(scope="module")
-def out(ctx):
-    return starcoder.export(ctx)
+def out():
+    return starcoder.export()
 
 
 def test_observations_and_membership(out):
@@ -74,16 +72,9 @@ def test_repeat_noise_panel_reproduces_the_analysis(out):
         assert np.allclose(stats[column], summary.loc[stats.index, column], rtol=0, atol=1e-12)
 
 
-def test_no_internal_strings(out):
-    for name, t in out.items():
-        text = t.head(2000).to_csv(index=False)
-        for needle in ["wandb:", "gs://", "/Users/", "pinlin_calvin_xu"]:
-            assert needle not in text, name
-
-
-def test_observations_match_their_runs_launch_records(ctx, out):
+def test_observations_match_their_runs_launch_records(out):
     # Model size, tokens, StarCoder subset and seeds against each run's own launch record, for the 856 runs of the
-    # three families that keep one.
+    # three families that keep one; each run is keyed by its W&B run id.
     obs = out["starcoder_observations"].set_index("observation_id")
     family = out["starcoder_curve_membership"].merge(out["starcoder_curves"][["curve_id", "family"]], on="curve_id")
     family = family.drop_duplicates("observation_id").set_index("observation_id").family
@@ -92,7 +83,7 @@ def test_observations_match_their_runs_launch_records(ctx, out):
         runs = pd.read_csv(source)
         if "is_alias" in runs:
             runs = runs[~runs.is_alias]  # an alias row names the full-pool run it reuses
-        runs.index = runs.run_name.map(ctx.registry.id_for)
+        runs.index = WANDB_PREFIX[name] + runs.run_name
         ids = family.index[family == name]
         mine, theirs = obs.loc[ids], runs.loc[ids]
         assert (mine.total_parameters == theirs.total_parameters).all()
@@ -163,6 +154,16 @@ def test_trajectories_reproduce_the_training_loss_jumps(out):
         assert jump8.mean() == pytest.approx(expected.jump8, rel=0, abs=1e-12)
         assert jump64.mean() == pytest.approx(expected.jump64, rel=0, abs=1e-12)
         assert (np.median(duration), duration.max()) == (expected.dur_median, expected.dur_max)
+
+
+def test_trajectories_key_on_the_w_and_b_runs_they_were_pulled_from(out):
+    # pull_switch_traces.py read each series from its W&B run: a confirmation run under its run name, a
+    # gradient-conflict trajectory as gcfv9_<trajectory id>.
+    pulled = pull_switch_traces.series()
+    pulled = dict(zip(zip(pulled.run_label, pulled.seed.astype(int), strict=True), pulled.wandb_id, strict=True))
+    traj = out["starcoder_trajectories"].drop_duplicates(["run_label", "seed"])
+    keyed = dict(zip(zip(traj.run_label, traj.seed.astype(int), strict=True), traj.observation_id, strict=True))
+    assert len(keyed) == 50 and keyed == pulled
 
 
 def test_transition_runs_share_ids_with_the_trajectories(out):
@@ -245,21 +246,10 @@ def test_figure26_ramp_designs(out):
     assert sorted(shown.arm) == ["abrupt", "ramp0128", "ramp0256", "ramp0512", "ramp2048", "ramp5632"]
 
 
-def test_no_run_names_or_internal_strings_anywhere(out):
+def test_no_internal_strings_anywhere(out):
     # Every string a table holds: its column names and the values of its non-numeric columns.
-    names = set()
-    for source in ("ramp_endpoints.csv", "ramp_eval_history.csv"):
-        names |= set(pd.read_csv(TRANSITION / source).run_name)
-    names |= set(pd.read_csv(TRANSITION / "switch_window_offline_evals.csv").trajectory_id)
-    names |= set(pd.read_parquet(TRANSITION / "trajectories.parquet").run_name)
-    names |= set(pd.read_csv(starcoder.DIAGONAL / "observations.csv").run_name)
-    names |= {run.split(":", 1)[1] for run in pd.read_csv(ATLAS / "predictions.csv").training_run_id}
-    names |= set(pd.read_csv(starcoder.MATCHED_CONFIRMATION / "confirmation_observations.csv").run_name)
-    for path in starcoder.RAMP_DESIGNS:
-        for run in json.loads(path.read_text())["runs"]:
-            names |= {run["run_name"], run["source_run_name"], run["tied_run_name"]}
     patterns = [
-        re.compile(r"wandb|gs://|http|/Users/|pinlin_calvin_xu"),
+        re.compile(r"gs://|http|/Users/|pinlin_calvin_xu"),
         re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"),  # email addresses
         re.compile(r"[0-9a-f]{64}"),
         re.compile(r"(?:exp|run|job)_01[a-z0-9]{24}"),  # Fieldbook ids
@@ -269,7 +259,6 @@ def test_no_run_names_or_internal_strings_anywhere(out):
         for column in t.columns:
             if not pd.api.types.is_numeric_dtype(t[column]):
                 strings |= set(t[column].dropna().astype(str))
-        assert not strings & names, (name, sorted(strings & names)[:3])
         text = "\n".join(sorted(strings))
         for pattern in patterns:
             assert not pattern.search(text), (name, pattern.pattern)

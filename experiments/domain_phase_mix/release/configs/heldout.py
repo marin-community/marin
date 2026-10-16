@@ -3,21 +3,20 @@
 
 """The cumulative held-out registry: frozen (September 2) and expanded (September 13) cohorts of all three swarms.
 
-Observation ids key on each run's training run name with its six-hex-digit hash (as W&B records it) wherever one is
-derivable. The Llama swarm tables key on the same names, so the 39 Llama 160M deletions, rows of both tables, share
-their ids; the Qwen3 swarm's fit rows key on hash-less names and are in no held-out cohort. The 116 validation-launch
-runs take the name from their evaluation-metrics URI, as `validation_3e18` does. 679 frozen runs take the registry's
-W&B training run id; for the 187 `delphi_archive::` rows that is the row_id without its prefix. The 134 Llama 200M runs
-record no run name and key on the registry's `row_id`.
+Observation ids are W&B run ids (`observation_ids`). The 116 validation-launch runs take the run directory of their
+evaluation-metrics URI, as `validation_3e18` does. 679 frozen runs take the registry's W&B training run id, which for
+the 187 `delphi_archive::` rows is the row id without its prefix. The registry records no W&B run id for the 134 Llama
+200M runs; theirs come from W&B, frozen in LLAMA_200M_RUNS. The Llama swarm tables use the same ids, so the 39 Llama
+160M deletions, rows of both tables, have one id each; the Qwen3 swarm's fit rows are in no held-out cohort.
 
 Objectives take their public names (`naming.objective_public`): the registry's one baseline, the UniMax-8 run of the
 June ladder at 3e18, has objective `none` and, as in `validation_3e18`, its construction's epoch cap of 8.
 
 Seeds come from the launch records that `validation_3e18` reads, wherever they hold the run: each validation-launch
 run's from the directory that holds it (`run_names.seeds_from_uri`), and the UniMax-8 run's from the UniMax-8 repeats'
-record. The data seed of each run in WANDB_PULL comes from its W&B config. They must agree with the registry's seeds,
-which it records for 42 of the 116 validation-launch runs. Every other run keeps the registry's seeds, which are null
-for the other Llama runs and for some frozen Qwen3 runs.
+record. The Llama 200M runs' come from their W&B configs (LLAMA_200M_RUNS), and so does the data seed of each run in
+WANDB_PULL. They must agree with the registry's seeds, which it records for 42 of the 116 validation-launch runs. Every
+other run keeps the registry's seeds, which are null for the other Llama 160M runs and for some frozen Qwen3 runs.
 
 Aggregates follow `tables.add_aggregates`: recomputed from a run's components where it has them all, else the
 registry's recorded aggregate where that used the fixed rule. Every run whose recorded Uncheatable aggregate uses other
@@ -68,6 +67,10 @@ POOLED_SOURCES = ("validation::path_midpoints", "validation::regmix_reference")
 # (`wandb_pulls`). The pooled aggregate ties each pull to the run's registry record, which holds the same W&B value at
 # full precision.
 WANDB_PULL = paths.REPO / "experiments/domain_phase_mix/release/configs/heldout_wandb_components_20261015.csv"
+# The W&B run ids and the seeds of the W&B configs of the 134 Llama 200M runs, which the registry records without them
+# (`wandb_pulls.read_runs`). W&B shortened 20 of the ids by dropping leading characters of the run name.
+LLAMA_200M_RUNS = paths.REPO / "experiments/domain_phase_mix/release/configs/heldout_llama200m_wandb_runs_20261015.csv"
+LLAMA_200M_ROW = "300m::"  # the registry's prefix before a Llama 200M run's name
 # Result folders of the validation launches in the expanded cohort, from the launch registry of
 # collect_delphi_3e18_validation_results_20260906.py, which the expanded registry's builder read.
 VALIDATION_LAUNCHES = {
@@ -94,7 +97,7 @@ def required_sources() -> list[Path]:
     launches = [paths.RO / folder / name for folder in VALIDATION_LAUNCHES.values() for name in LAUNCH_FILES]
     frozen = [FROZEN / name for name in FROZEN_FILES]
     expanded = [EXPANDED / name for name in EXPANDED_FILES]
-    return [*frozen, *expanded, *launches, UNIMAX8_WEIGHTS, UNIMAX8_REPEATS, WANDB_PULL]
+    return [*frozen, *expanded, *launches, UNIMAX8_WEIGHTS, UNIMAX8_REPEATS, WANDB_PULL, LLAMA_200M_RUNS]
 
 
 def _unimax8_mixture() -> str:
@@ -155,30 +158,47 @@ def _validation_run_names() -> pd.Series:
     return _validation_uris().map(run_names.training_run_name_from_uri)
 
 
+def _llama_200m_runs() -> pd.DataFrame:
+    """LLAMA_200M_RUNS by registry row id, after checking that each W&B run id names its registry run.
+
+    The id is the run's name and six-hex-digit hash. The registry row id is LLAMA_200M_ROW and the same name, of which
+    the id keeps the end where W&B shortened it. Raises ValueError for an id that ends in another name.
+    """
+    runs = wandb_pulls.read_runs(LLAMA_200M_RUNS)
+    names = runs.index.str.removeprefix(LLAMA_200M_ROW)
+    kept = runs.training_wandb_run_id.str.extract(r"^(?P<name>.+)-[0-9a-f]{6}$")["name"]
+    named = [isinstance(k, str) and name.endswith(k) for name, k in zip(names, kept, strict=True)]
+    if not runs.index.str.startswith(LLAMA_200M_ROW).all() or not all(named):
+        raise ValueError(f"{LLAMA_200M_RUNS.name}: W&B run ids that do not end in their registry run's name")
+    return runs
+
+
 def _launch_seeds() -> pd.DataFrame:
-    """Data and trainer seed of each run in a launch record, indexed by training run name.
+    """Data and trainer seed of each run that a launch record or a W&B pull holds, indexed by W&B run id.
 
     A validation run's seeds come from the directory that holds it, as in `validation_3e18`; the UniMax-8 repeats'
-    record gives its three runs' seeds, and WANDB_PULL the data seed in each pulled run's W&B config.
+    record gives its three runs' seeds, LLAMA_200M_RUNS the seeds in the Llama 200M runs' W&B configs, and WANDB_PULL
+    the data seed in each pulled run's W&B config.
     """
     uris = _validation_uris()
     names = uris.map(run_names.training_run_name_from_uri)
     validation_seeds = pd.DataFrame([run_names.seeds_from_uri(uri) for uri in uris], index=names, columns=SEEDS)
     repeats = tables.read_csv(paths.require(UNIMAX8_REPEATS)).set_index("run")[SEEDS]
+    llama = _llama_200m_runs().set_index("training_wandb_run_id")[SEEDS]
     pulled = wandb_pulls.read(WANDB_PULL).data_seed.to_frame().assign(trainer_seed=np.nan)
-    seeds = pd.concat([validation_seeds, repeats, pulled])
+    seeds = pd.concat([validation_seeds, repeats, llama, pulled])
     assert seeds.index.is_unique, "a training run appears in two launch records"
     return seeds
 
 
-def _with_pulled_components(out: pd.DataFrame, runs: pd.DataFrame, run_keys: pd.Series) -> pd.DataFrame:
+def _with_pulled_components(out: pd.DataFrame, runs: pd.DataFrame, run_ids: pd.Series) -> pd.DataFrame:
     """`out` with the Uncheatable components of the runs in WANDB_PULL, which the registry lacks.
 
     Raises unless each pulled run is a held-out run without registry components for those tasks whose recorded
     Uncheatable aggregate is the pulled pooled value.
     """
     pulls = wandb_pulls.read(WANDB_PULL)
-    pulled = run_keys[run_keys.isin(pulls.index)]
+    pulled = run_ids[run_ids.isin(pulls.index)]
     if sorted(pulled) != sorted(pulls.index):
         raise ValueError(f"pulled runs that are not held-out runs: {sorted(set(pulls.index) - set(pulled))}")
     pull = pulls.loc[pulled].set_axis(pulled.index)
@@ -193,14 +213,14 @@ def _with_pulled_components(out: pd.DataFrame, runs: pd.DataFrame, run_keys: pd.
     return out
 
 
-def _seeds(runs: pd.DataFrame, run_keys: pd.Series) -> pd.DataFrame:
-    """Each run's seeds: the registry's, completed from the launch record that holds the run.
+def _seeds(runs: pd.DataFrame, run_ids: pd.Series) -> pd.DataFrame:
+    """Each run's seeds: the registry's, completed from the launch record or W&B pull that holds the run.
 
-    `run_keys` is `observation_keys(runs)`, which gives the training run name wherever one is known. Raises
-    AssertionError where the registry and the launch record give different seeds.
+    `run_ids` is `observation_ids(runs)`. Raises AssertionError where the registry and a launch record or W&B pull give
+    different seeds.
     """
     recorded = runs[SEEDS]
-    launched = _launch_seeds().reindex(run_keys).set_axis(runs.index)
+    launched = _launch_seeds().reindex(run_ids).set_axis(runs.index)
     agree = (recorded == launched) | recorded.isna() | launched.isna()
     assert agree.all().all(), "the registry's seeds differ from the launch records'"
     return recorded.fillna(launched)
@@ -224,18 +244,24 @@ def _components(ctx: ExportContext, runs: pd.DataFrame) -> pd.DataFrame:
     return wide
 
 
-def observation_keys(runs: pd.DataFrame) -> pd.Series:
-    """The string each held-out run's observation id hashes, aligned with `runs` (rows of heldout_runs.csv).
+def observation_ids(runs: pd.DataFrame) -> pd.Series:
+    """Each held-out run's observation id, its W&B run id, aligned with `runs` (rows of heldout_runs.csv).
 
-    The training run name wherever one is known (the module docstring gives the sources), else the registry's row_id.
-    `fits` keys its held-out predictions with the same rule.
+    The module docstring gives the sources; `fits` keys its held-out predictions with the same rule. Raises ValueError
+    for a run without a W&B run id, or one that LLAMA_200M_RUNS gives an id the registry already records.
     """
     frozen_ids = set(tables.read_csv(paths.require(FROZEN / "heldout_runs.csv")).row_id)
     names = _validation_run_names()
     assert set(runs.row_id) - frozen_ids <= set(names.index), "every expanded run needs its training run name"
     recorded = runs.training_wandb_run_id
     assert recorded.dropna().str.fullmatch(run_names.RUN_DIRECTORY.pattern).all(), "W&B run ids must be run names"
-    return runs.row_id.map(names).fillna(recorded).fillna(runs.row_id)
+    pulled = _llama_200m_runs().training_wandb_run_id
+    if runs.row_id[recorded.notna()].isin(pulled.index).any():
+        raise ValueError(f"{LLAMA_200M_RUNS.name} gives W&B run ids to runs whose registry records one")
+    ids = runs.row_id.map(names).fillna(recorded).fillna(runs.row_id.map(pulled))
+    if ids.isna().any():
+        raise ValueError(f"held-out runs without a W&B run id: {runs.row_id[ids.isna()].tolist()[:5]}")
+    return ids
 
 
 def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
@@ -243,10 +269,10 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     assert runs.eligible.all() and runs.exclusion_reason.isna().all()
     assert set(runs.panel) == set(SWARM), f"panels {sorted(set(runs.panel))}"
     frozen_ids = set(tables.read_csv(paths.require(FROZEN / "heldout_runs.csv")).row_id)
-    run_keys = observation_keys(runs)
-    runs[SEEDS] = _seeds(runs, run_keys)
+    run_ids = observation_ids(runs)
+    runs[SEEDS] = _seeds(runs, run_ids)
 
-    out = pd.DataFrame({"observation_id": run_keys.map(ctx.registry.id_for)})
+    out = pd.DataFrame({"observation_id": run_ids})
     out["swarm"] = runs.panel.map(SWARM)
     out["cohort"] = ["frozen" if r in frozen_ids else "expanded" for r in runs.row_id]
     for src, dst in META.items():
@@ -279,7 +305,7 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     unimax8 = (out.proposal_objective == "none") & (out.mixture_id == _unimax8_mixture())
     out.loc[unimax8, "epoch_cap"] = UNIMAX8_EPOCH_CAP
     out = out.join(_components(ctx, runs).reindex(runs.row_id).reset_index(drop=True))
-    out = _with_pulled_components(out, runs, run_keys)
+    out = _with_pulled_components(out, runs, run_ids)
     out["components_available"] = out[[f"bpb__{t}" for t in ctx.tasks]].notna().all(axis=1)
     recorded = pd.DataFrame({"uncheatable": runs.uncheatable_bpb, "obe_easy": runs.table9_macro_bpb})
     fixed_rule = pd.DataFrame(

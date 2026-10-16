@@ -17,8 +17,8 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture(scope="module")
-def ctx(tmp_path_factory):
-    return context.build(private_dir=tmp_path_factory.mktemp("private"))
+def ctx():
+    return context.build()
 
 
 @pytest.fixture(scope="module")
@@ -102,12 +102,12 @@ def test_validation_join_reports_unmatched_candidates(tmp_path):
     candidates.to_csv(broken, index=False)
     manifest["candidates_csv"] = str(broken)
     with pytest.raises(ValueError, match=manifest.launch.iloc[0]):
-        validation.export_launches(context.build(private_dir=tmp_path / "p"), manifest)
+        validation.export_launches(context.build(), manifest)
 
 
 def test_runs_shared_with_heldout_keep_their_ids_and_values(ctx, table):
-    # Both tables key a run on its hashed training run name, so the 116 validation runs of the expanded held-out
-    # cohort and the ladder's UniMax-8 seed-0 run (a frozen archive row) get one id, one set of values and one
+    # Both tables key a run on its W&B run id, its hashed training run name, so the 116 validation runs of the expanded
+    # held-out cohort and the ladder's UniMax-8 seed-0 run (a frozen archive row) get one id, one set of values and one
     # objective and epoch cap.
     held = heldout.export(ctx)["heldout"]
     expanded = held[(held.swarm == "qwen3_360m_1p6b") & (held.cohort == "expanded")]
@@ -179,10 +179,9 @@ def test_unimax8_weights_are_the_trained_mixture():
 
 def test_no_internal_strings(table):
     text = table.to_csv(index=False)
-    for needle in ["gs://", "http", "wandb", "pinlin_calvin_xu", "/Users/"]:
+    for needle in ["gs://", "http", "pinlin_calvin_xu", "/Users/"]:
         assert needle not in text
     assert not re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", text)  # email addresses
     # Fieldbook ids are `exp_`/`run_`/`job_` plus a 26-character ULID; public exposure ids are `exp_` plus 16 hex digits.
     assert not re.search(r"(?:exp|run|job)_01[a-z0-9]{24}", text)
     assert not re.search(r"[0-9a-f]{64}", text)
-    assert not re.search(r"\w-[0-9a-f]{6}(?![0-9a-z])", text)  # run names end in a six-hex-digit hash

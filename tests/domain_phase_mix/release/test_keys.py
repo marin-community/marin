@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import re
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -36,33 +34,6 @@ def test_exposure_id_separates_pool_fractions():
 def test_schedule_id_is_order_sensitive():
     a, b = {"a": 0.6, "b": 0.4}, {"a": 0.4, "b": 0.6}
     assert keys.schedule_id(a, b, 2400, 3007) != keys.schedule_id(b, a, 2400, 3007)
-
-
-def test_observation_registry_is_stable_and_opaque(tmp_path):
-    reg = keys.ObservationRegistry(salt="unit-test-salt", map_path=tmp_path / "map.csv")
-    first = reg.id_for("lwspu_t9_snc_cap08_3e18-6c15f1")
-    assert first == reg.id_for("lwspu_t9_snc_cap08_3e18-6c15f1")
-    assert first.startswith("obs_") and len(first) == 16 and "6c15f1" not in first
-    reg.save()
-    # The map undoes the pseudonymization: owner-only, also when it replaces a map that others could read.
-    assert (tmp_path / "map.csv").stat().st_mode & 0o777 == 0o600
-    reloaded = keys.ObservationRegistry(salt="unit-test-salt", map_path=tmp_path / "map.csv")
-    assert reloaded.id_for("lwspu_t9_snc_cap08_3e18-6c15f1") == first
-    (tmp_path / "map.csv").chmod(0o644)
-    reloaded.save()
-    assert (tmp_path / "map.csv").stat().st_mode & 0o777 == 0o600
-
-
-def test_load_salt_rejects_malformed_file(tmp_path):
-    empty = tmp_path / "empty_salt"
-    empty.touch()
-    with pytest.raises(ValueError):
-        keys.load_salt(empty)
-    fresh = tmp_path / "private" / "salt"
-    salt = keys.load_salt(fresh)
-    assert re.fullmatch(r"[0-9a-f]{64}", salt)
-    assert fresh.stat().st_mode & 0o777 == 0o600
-    assert keys.load_salt(fresh) == salt
 
 
 def test_add_aggregates_uses_given_weights():

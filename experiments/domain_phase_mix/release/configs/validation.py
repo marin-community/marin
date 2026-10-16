@@ -12,11 +12,11 @@ UniMax-8 construction of launch_delphi_baseline_mixtures.py, and only the seed-0
 the frozen held-out registry. `components_key` formats each run's key in its components file from `{candidate}`,
 `{trainer_seed}` and `{run_name}`; `component_rows` counts the launch's runs with all 58 per-task values.
 
-Observation ids key on the training run name, as in `heldout`: the hashed run directory in each run's
-evaluation-metrics URI, or the `run` column where a launch records run names directly. Seeds come from the directory
-that holds each run, checked against any seeds the results record. `method` and `proposal_objective` are one value,
-or `pattern:value` entries (glob patterns over candidate ids) for a launch whose candidates differ; an empty
-`proposal_objective` keeps the results' `target`, and the manifest names the objective of each subset proposal.
+Observation ids are W&B run ids, as in `heldout`: the hashed run directory in each run's evaluation-metrics URI, or the
+`run` column where a launch records run names directly. Seeds come from the directory that holds each run, checked
+against any seeds the results record. `method` and `proposal_objective` are one value, or `pattern:value` entries (glob
+patterns over candidate ids) for a launch whose candidates differ; an empty `proposal_objective` keeps the results'
+`target`, and the manifest names the objective of each subset proposal.
 Objectives take their public names (`naming.objective_public`): `obe_easy` for the results' `table9`, and `none` for
 the UniMax-8 baseline, which optimizes no objective. `epoch_cap` gives the cap of a launch whose results record none
 (UniMax-8's 8); an empty cell keeps the results' `epoch_cap`.
@@ -142,7 +142,7 @@ def _launch(ctx: ExportContext, launch: Any) -> pd.DataFrame:
     names = _training_run_names(results)
     seeds = _seeds(results, launch.launch)
     df = results[[c for c in RESULT_META if c in results]].rename(columns=RESULT_META)
-    df.insert(0, "observation_id", [ctx.registry.id_for(name) for name in names])
+    df.insert(0, "observation_id", names)
     df.insert(1, "launch", launch.launch)
     df.insert(2, "method", _per_candidate(launch.method, candidates))
     if not pd.isna(launch.proposal_objective):  # a subset proposal's objective, or UniMax-8's none

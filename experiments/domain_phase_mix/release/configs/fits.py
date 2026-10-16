@@ -15,12 +15,12 @@ same runs; tasks by the paper's task ids (`naming.task_public`); objectives as `
   each swarm's fit rows, with anchors from its ten proportional repeats, and commits them as `archived_swarm_fits.csv`.
 - `fits_swarm_predictions`: the reference fit's per-task predictions at the swarm's 280 fit mixtures. The fit trained on
   these runs, so these are in-sample fitted values, not out-of-fold predictions: mixture-selection's self-test compares
-  them with `fit.predict_tasks(swarm.weights)` of the full fit. The bundle names each run by its hash-less training run
-  name, as `swarm_qwen3` keys its fit rows.
+  them with `fit.predict_tasks(swarm.weights)` of the full fit. The bundle names each run by its training run name
+  without the hash; `swarm_qwen3.observation_ids` gives the run's W&B run id.
 - `fits_heldout_predictions`: the reference fit's per-task predictions at the held-out mixtures of mixture-selection's
   bank (247 OlmoBaseEval Easy and 408 Uncheatable mixtures of the Qwen3 held-out registry), which are the MARINER
   predictions of the held-out analysis figures. The bank keys each prediction by registry coordinate (one exposure);
-  every held-out run at that coordinate carries it, keyed by `heldout.observation_keys`.
+  every held-out run at that coordinate carries it, keyed by `heldout.observation_ids`.
 - `fits_reliability`: per-task signal-to-noise ratios and the out-of-fold fit quality of MARINER, Olmix and tuned RegMix
   over ten fold assignments of the 279 scored swarm mixtures (`table9_reliability_mariner_20260908`, the source of the
   appendix's SNR and fit tables). `source_table` names the block: OlmoBaseEval Easy components, its collapsed tasks, or
@@ -60,7 +60,7 @@ import numpy as np
 import pandas as pd
 
 from experiments.domain_phase_mix.release import naming, paths, tables
-from experiments.domain_phase_mix.release.configs import heldout, validation
+from experiments.domain_phase_mix.release.configs import heldout, swarm_qwen3, validation
 from experiments.domain_phase_mix.release.context import ExportContext
 from experiments.domain_phase_mix.release.regenerate_mixture_selection_data import (
     ARCHIVED_FITS,
@@ -235,6 +235,7 @@ def required_sources() -> list[Path]:
             TASK_FITS,
             ARCHIVED_FITS,
             SWARM_RUNS,
+            swarm_qwen3.INVENTORY,
             *data,
             heldout.EXPANDED / "heldout_runs.csv",
             *(RELIABILITY / f"{table}.csv" for table in RELIABILITY_TABLES),
@@ -272,20 +273,23 @@ def _long_tasks(wide: pd.DataFrame, key: str) -> pd.DataFrame:
     return wide.rename(columns=tasks).melt(id_vars=[key], var_name="task_id", value_name="predicted_bpb")
 
 
-def _swarm_predictions(ctx: ExportContext) -> pd.DataFrame:
+def _swarm_predictions() -> pd.DataFrame:
+    """The reference fit's predictions at the swarm's fit runs, each keyed by its W&B run id."""
     runs = _csv(SWARM_RUNS, usecols=["run"]).run
+    ids = swarm_qwen3.observation_ids()
+    assert set(runs) <= set(ids.index), "every bundle run needs its W&B run id"
     frames = []
     for name in MIXSEL_OBJECTIVES:
         wide = _csv(DATA / f"{SWARM_PREDICTIONS}_{name}.csv")
         assert wide.run.is_unique and set(wide.run) == set(runs), f"{name}: predictions cover other runs than the swarm"
         long = _long_tasks(wide, key="run")
         long.insert(0, "objective", naming.objective_public(name))
-        long.insert(1, "observation_id", long.pop("run").map(ctx.registry.id_for))
+        long.insert(1, "observation_id", long.pop("run").map(ids))
         frames.append(long)
     return pd.concat(frames, ignore_index=True)
 
 
-def _heldout_runs(ctx: ExportContext, heldout_table: pd.DataFrame) -> pd.DataFrame:
+def _heldout_runs(heldout_table: pd.DataFrame) -> pd.DataFrame:
     """Coordinate, observation id and exposure id of each Qwen3 held-out run; a registry coordinate is one exposure."""
     runs = _csv(
         heldout.EXPANDED / "heldout_runs.csv", usecols=["panel", "row_id", "training_wandb_run_id", "coordinate_id"]
@@ -294,7 +298,7 @@ def _heldout_runs(ctx: ExportContext, heldout_table: pd.DataFrame) -> pd.DataFra
     frame = pd.DataFrame(
         {
             "coordinate_id": runs.coordinate_id,
-            "observation_id": heldout.observation_keys(runs).map(ctx.registry.id_for),
+            "observation_id": heldout.observation_ids(runs),
         }
     )
     frame = frame.merge(
@@ -633,11 +637,11 @@ def export(
         heldout_table = heldout.export(ctx)["heldout"]
     if validation_table is None:
         validation_table = validation.export(ctx)["validation_3e18"]
-    runs = _heldout_runs(ctx, heldout_table)
+    runs = _heldout_runs(heldout_table)
     exposures = runs.drop_duplicates("coordinate_id").set_index("coordinate_id").exposure_id
     return {
         "fits_task_parameters": _task_parameters(),
-        "fits_swarm_predictions": _swarm_predictions(ctx),
+        "fits_swarm_predictions": _swarm_predictions(),
         "fits_heldout_predictions": _heldout_predictions(runs),
         "fits_reliability": _reliability(),
         "fits_learning_curves": _learning_curves(exposures),

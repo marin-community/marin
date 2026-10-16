@@ -13,11 +13,22 @@ from experiments.domain_phase_mix.release.run_names import training_run_name_fro
 
 SRC = paths.RO / "single_phase_heldout_benchmark_expanded_20260913"
 pytestmark = pytest.mark.skipif(not SRC.exists(), reason="held-out registry absent")
+# The launch records of the 134 Llama 200M held-out runs, which name each run and its data seed. The perturbation and
+# gradient-step launches trained each run at two scales.
+LLAMA_200M_LAUNCHES = [
+    paths.RO / f"{folder}/training_manifest.csv"
+    for folder in (
+        "proportional_controllability_300m_20260520",
+        "proportional_perturbation_scale_transfer_20260507",
+        "proportional_gradient_step_validation_20260510",
+    )
+]
+LLAMA_200M_SCALE = "300m_6b"
 
 
 @pytest.fixture(scope="module")
-def ctx(tmp_path_factory):
-    return context.build(private_dir=tmp_path_factory.mktemp("private"))
+def ctx():
+    return context.build()
 
 
 @pytest.fixture(scope="module")
@@ -33,7 +44,7 @@ def test_cohorts_and_swarms(table):
     assert (table[table.swarm != "qwen3_360m_1p6b"].cohort == "frozen").all()
 
 
-def test_expanded_rows_key_on_training_run_names(ctx, table):
+def test_expanded_rows_key_on_training_run_names(table):
     # validation_3e18 keys these runs on the hashed training run names in their eval_metrics_uri. The table keeps the
     # registry's row order.
     runs = pd.read_csv(SRC / "heldout_runs.csv")
@@ -46,24 +57,37 @@ def test_expanded_rows_key_on_training_run_names(ctx, table):
         on = ["source_row_id", "trainer_seed"] if "trainer_seed" in results else ["source_row_id"]
         uris = group[on].merge(results[[*on, "eval_metrics_uri"]], on=on, how="left", validate="one_to_one")
         names.update(zip(group.index, map(training_run_name_from_uri, uris.eval_metrics_uri), strict=True))
-    expected = pd.Series({i: ctx.registry.id_for(name) for i, name in names.items()})
+    expected = pd.Series(names)
     assert len(expected) == 116 and (table.observation_id[expected.index] == expected).all()
-    assert not table.observation_id[expanded.index].isin([ctx.registry.id_for(r) for r in expanded.row_id]).any()
 
 
-def test_frozen_rows_key_on_recorded_run_names(ctx, table):
+def test_frozen_rows_key_on_recorded_run_names(table):
     # The registry records the W&B training run id (the run name with its hash) for every frozen run except the 200M
     # ones; `delphi_archive::` row ids wrap that name.
     runs = pd.read_csv(SRC / "heldout_runs.csv")
     archive = runs.row_id.str.startswith("delphi_archive::")
-    stripped = runs.row_id[archive].str.removeprefix("delphi_archive::").map(ctx.registry.id_for)
+    stripped = runs.row_id[archive].str.removeprefix("delphi_archive::")
     assert archive.sum() == 187 and (table.observation_id[archive] == stripped).all()
     recorded = runs.training_wandb_run_id.notna()
     assert recorded.sum() == 679 and (table.cohort[recorded] == "frozen").all()
-    assert (table.observation_id[recorded] == runs.training_wandb_run_id[recorded].map(ctx.registry.id_for)).all()
-    unnamed = (table.cohort == "frozen") & ~recorded
-    assert (table.swarm[unnamed] == "llama_200m_6b").all() and unnamed.sum() == 134
-    assert (table.observation_id[unnamed] == runs.row_id[unnamed].map(ctx.registry.id_for)).all()
+    assert (table.observation_id[recorded] == runs.training_wandb_run_id[recorded]).all()
+
+
+def test_llama_200m_runs_take_their_w_and_b_ids_and_seeds(table):
+    # The registry records neither the W&B run id nor the seeds of its 134 Llama 200M runs; both come from W&B. A W&B
+    # run id is the run's name, which W&B shortened from the front for 20 runs, and a six-hex-digit hash. Each run's
+    # launch record gives its data seed; the launches left the trainer seed at Marin's default, 0.
+    runs = pd.read_csv(SRC / "heldout_runs.csv")
+    llama = runs.panel == "300m_39bucket"
+    assert llama.sum() == 134 and runs.training_wandb_run_id[llama].isna().all()
+    rows = table[llama].set_axis(runs.row_id[llama].str.removeprefix("300m::"))
+    kept = rows.observation_id.str.extract(r"^(?P<name>.+)-[0-9a-f]{6}$")["name"]
+    assert kept.notna().all() and all(name.endswith(k) for name, k in zip(rows.index, kept, strict=True))
+    assert (kept != rows.index).sum() == 20 and rows.observation_id.is_unique
+    launches = pd.concat([pd.read_csv(path) for path in LLAMA_200M_LAUNCHES])
+    launches = launches[launches.scale == LLAMA_200M_SCALE].set_index("run_name")
+    assert (rows.data_seed == launches.data_seed.reindex(rows.index)).all()
+    assert launches.trainer_seed.reindex(rows.index).isna().all() and (rows.trainer_seed == 0).all()
 
 
 def test_runs_shared_with_validation_have_its_seeds(ctx, table):
@@ -109,10 +133,11 @@ def test_aggregates_recompute_the_recorded_values(table):
     # under the fixed rule, except the path-midpoint and RegMix-reference launches, which recorded the BPB-schema-2
     # pooled aggregate, about 0.01 BPB above the fixed weighting of the same components; the Llama panels recorded it
     # under the legacy weights, within 1e-4 of the fixed rule for the registry's components, and no row copies a legacy
-    # record. The run whose components come from W&B pooled its record 3.6e-4 away from the fixed rule; its own test
-    # checks its pull. OlmoBaseEval Easy is a plain mean in every panel, so it checks each swarm's component join.
+    # record. The Llama 160M run whose components come from W&B pooled its record 3.6e-4 away from the fixed rule; its
+    # own test checks its pull. OlmoBaseEval Easy is a plain mean in every panel, so it checks each swarm's component
+    # join.
     runs = tables.read_csv(SRC / "heldout_runs.csv")
-    pulled = runs.training_wandb_run_id.isin(tables.read_csv(heldout.WANDB_PULL, comment="#").training_wandb_run_id)
+    pulled = table.observation_id.isin(tables.read_csv(heldout.WANDB_PULL, comment="#").training_wandb_run_id)
     complete = {
         objective: table[[f"bpb__{t}" for t in weights]].notna().all(axis=1)
         for objective, weights in naming.task_weights().items()
@@ -138,13 +163,13 @@ def test_aggregates_recompute_the_recorded_values(table):
     assert not (~complete["uncheatable"] & ~fixed & runs.uncheatable_bpb.notna()).any()
 
 
-def test_wandb_pull_completes_the_run_the_registry_scores_by_its_pooled_aggregate(ctx, table):
+def test_wandb_pull_completes_the_run_the_registry_scores_by_its_pooled_aggregate(table):
     # One archived Llama 160M run has only its pooled Uncheatable aggregate in the registry. Its seven components and
     # data seed come from its W&B summary and config, frozen in the repository; it logged no OlmoBaseEval Easy metrics.
     pull = tables.read_csv(heldout.WANDB_PULL, comment="#")
     (name,) = pull.training_wandb_run_id.unique()
     values = pull.set_index("metric").value
-    run = table.set_index("observation_id").loc[ctx.registry.id_for(name)]
+    run = table.set_index("observation_id").loc[name]
     weights = naming.task_weights()["uncheatable"]
     components = {t: values[f"eval/uncheatable_eval/{t.removeprefix('uncheatable/')}/bpb"] for t in weights}
     assert all(run[f"bpb__{t}"] == value for t, value in components.items())
@@ -164,9 +189,8 @@ def test_weights_and_pool_fractions(table):
 
 def test_no_internal_strings(table):
     text = table.to_csv(index=False)
-    for needle in ["gs://", "wandb", "pinlin_calvin_xu", "/Users/", "http"]:
+    for needle in ["gs://", "pinlin_calvin_xu", "/Users/", "http"]:
         assert needle not in text
     # Fieldbook ids are `exp_`/`run_` plus a 26-character ULID; public exposure ids are `exp_` plus 16 hex digits.
     assert not re.search(r"(?:exp|run)_01[0-9a-hjkmnp-tv-z]{24}", text)
     assert not re.search(r"[0-9a-f]{64}", text)  # registry coordinate ids
-    assert not re.search(r"\w-[0-9a-f]{6}(?![0-9a-z])", text)  # run names end in a six-hex-digit hash

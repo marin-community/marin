@@ -12,12 +12,12 @@ from experiments.domain_phase_mix.release.configs import swarm_qwen3
 
 pytestmark = pytest.mark.skipif(not paths.MIXSEL.exists(), reason="mixture-selection checkout absent")
 BUNDLE_RUN_PREFIX = r"^singleavg_fit_\d{3}_"  # the bundle's `run` is `singleavg_fit_<NNN>_<design name>`
+SWARM_SEED_BASE = 7_141_000  # the swarm's launch trained its run NNN with data seed 7,141,000 + NNN
 
 
 @pytest.fixture(scope="module")
-def table(tmp_path_factory):
-    ctx = context.build(private_dir=tmp_path_factory.mktemp("private"))
-    return swarm_qwen3.export(ctx)["swarm_qwen3_360m_1p6b"]
+def table():
+    return swarm_qwen3.export(context.build())["swarm_qwen3_360m_1p6b"]
 
 
 def test_counts_and_fit_inclusion(table):
@@ -73,10 +73,22 @@ def test_aggregates_recomputed_with_fixed_weights(table):
     assert np.allclose(table.bpb__obe_easy, obe_mean, rtol=0, atol=1e-12)
 
 
+def test_fit_rows_key_on_the_w_and_b_runs_that_trained_them(table):
+    # A sampled design's W&B run is the bundle's run name with a six-hex-digit hash. A phase-constant design (baseline
+    # or deletion) reuses the two-phase swarm's run that trained its mixture in both phases, which the swarm's launch
+    # named without the `singleavg_` prefix.
+    fit = table[table.fit_inclusion]
+    bundle = "singleavg_fit_" + (fit.data_seed - SWARM_SEED_BASE).map("{:03d}".format) + "_" + fit.run_label
+    assert set(bundle) == set(pd.read_csv(paths.MIXSEL / "data/swarm_weights.csv").run)
+    trained = bundle.where(fit.design_kind == "sampled", bundle.str.removeprefix("singleavg_"))
+    assert (fit.design_kind != "sampled").sum() == 42
+    assert fit.observation_id.str.fullmatch(r".+-[0-9a-f]{6}").all()
+    assert (fit.observation_id.str[: -len("-0123ab")] == trained).all()
+
+
 def test_no_internal_strings(table):
     text = table.to_csv(index=False)
-    for needle in ["gs://", "wandb", "pinlin_calvin_xu", "/Users/"]:
+    for needle in ["gs://", "pinlin_calvin_xu", "/Users/"]:
         assert needle not in text
     # Fieldbook ids are `exp_`/`run_` plus a 26-character ULID; public exposure ids are `exp_` plus 16 hex digits.
     assert not re.search(r"(?:exp|run)_01[0-9a-hjkmnp-tv-z]{24}", text)
-    assert not table.run_label.str.contains(r"-[0-9a-f]{6}$").any()

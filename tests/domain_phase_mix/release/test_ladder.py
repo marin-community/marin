@@ -32,8 +32,8 @@ CAP_SWEEP_README_UNCHEATABLE = {1.0: 1.0364, 4.0: 1.0238, 12.0: 1.0251}
 
 
 @pytest.fixture(scope="module")
-def ctx(tmp_path_factory):
-    return context.build(private_dir=tmp_path_factory.mktemp("private"))
+def ctx():
+    return context.build()
 
 
 @pytest.fixture(scope="module")
@@ -153,13 +153,13 @@ def test_3e18_rows_copy_their_runs(plotted, validation_table, swarm_table):
     assert rung.components_available.sum() == len(rung) - 2
 
 
-def test_june_proportional_run_has_the_figures_components(ctx, out):
+def test_june_proportional_run_has_the_figures_components(out):
     t = out["ladder"]
     june = t[t.compute_flops == 3e18].iloc[0]
     assert june.components_available
     # The figure's input lists the June run among the eleven proportional runs; its seven components are the run's.
     source = tables.read_csv(PROPORTIONAL_UNCHEATABLE)
-    source = source.set_index(source.run.map(ctx.registry.id_for)).loc[june.observation_id]
+    source = source.set_index("run").loc[june.observation_id]
     for task in naming.TASKS[:7]:
         assert june[f"bpb__{task}"] == source[f"eval/uncheatable_eval/{task.removeprefix('uncheatable/')}/bpb"]
 
@@ -196,9 +196,9 @@ def test_runs_match_their_launch_records(out):
     assert size == (spec["total_trainable_params"], spec["non_embedding_params"], spec["realized_train_tokens"])
 
 
-def _recorded_aggregates(ctx) -> pd.DataFrame:
-    """Each ladder source run's recorded aggregates, indexed by observation id: the audited MARINER and Olmix runs and
-    the June baselines' W&B export."""
+def _recorded_aggregates() -> pd.DataFrame:
+    """Each ladder source run's recorded aggregates, indexed by W&B run id: the audited MARINER and Olmix runs and the
+    June baselines' W&B export."""
     audited = pd.concat([tables.read_csv(folder / ladder.AUDIT_FILE) for folder in ladder.AUDITED])
     audited = audited[audited.status == "measured"]
     wandb = tables.read_csv(ladder.PROGRESS)
@@ -208,13 +208,13 @@ def _recorded_aggregates(ctx) -> pd.DataFrame:
             "uncheatable": [*audited.uncheatable_bpb, *wandb.eval_uncheatable_eval_bpb],
             "obe_easy": [*audited.table9_macro_bpb, *wandb.olmo_base_easy_table9_51_component_macro_bpb],
         },
-        index=[ctx.registry.id_for(name) for name in [*audited.run_name, *wandb.wandb_name]],
+        index=[*audited.run_name, *wandb.wandb_name],
     )
     assert recorded.index.is_unique
     return recorded
 
 
-def test_components_cover_every_run_but_the_mid_ladder_baselines(ctx, out):
+def test_components_cover_every_run_but_the_mid_ladder_baselines(out):
     t = out["ladder"]
     obe = t[[f"bpb__{task}" for task in naming.TASKS[7:]]]
     assert t[[f"bpb__{task}" for task in naming.TASKS[:7]]].notna().all().all()
@@ -230,7 +230,7 @@ def test_components_cover_every_run_but_the_mid_ladder_baselines(ctx, out):
     # Each run's components reproduce its recorded aggregates: Uncheatable within the 1e-7 by which legacy payloads
     # differ from the fixed weighting, OlmoBaseEval Easy (a plain mean) to rounding. The four runs without OlmoBaseEval
     # Easy components keep the recorded mean.
-    recorded = _recorded_aggregates(ctx).reindex(t.observation_id).set_axis(t.index)
+    recorded = _recorded_aggregates().reindex(t.observation_id).set_axis(t.index)
     assert np.allclose(t.bpb__uncheatable, recorded.uncheatable, rtol=0, atol=1e-7)
     assert np.allclose(t.bpb__obe_easy, recorded.obe_easy, rtol=0, atol=1e-12)
     assert t.bpb__obe_easy[~t.components_available].equals(recorded.obe_easy[~t.components_available])
@@ -250,10 +250,9 @@ def test_accuracy_rows_are_the_1e21_ladder_runs(out):
 
 def test_no_internal_strings(out):
     text = "".join(table.to_csv(index=False) for table in out.values())
-    for needle in ["gs://", "http", "wandb", "pinlin_calvin_xu", "/Users/"]:
+    for needle in ["gs://", "http", "pinlin_calvin_xu", "/Users/"]:
         assert needle not in text
     assert not re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", text)  # email addresses
     # Fieldbook ids are `exp_`/`run_`/`job_` plus a 26-character ULID; public exposure ids are `exp_` plus 16 hex digits.
     assert not re.search(r"(?:exp|run|job)_01[a-z0-9]{24}", text)
     assert not re.search(r"[0-9a-f]{64}", text)
-    assert not re.search(r"\w-[0-9a-f]{6}(?![0-9a-z])", text)  # run names end in a six-hex-digit hash

@@ -17,7 +17,7 @@ figure's five series, labeled as `train_loss_jump.csv` labels them:
 
 The confirmation runs come from their launch design (W&B run id = run name; seed = data seed); the gradient-conflict
 trajectories from the v9 trajectory manifest (W&B run id `gcfv9_<trajectory_id>`; seed = training seed). `run_name`
-is the training run's name, which the export replaces by an observation id.
+is the training run's name, which the export replaces by its W&B run id.
 
 `train/loss` is logged at every step from step 2. W&B serves `scan_history(keys=...)` from its sampled-history
 endpoint, which returns at most 10,000 rows per request and thins a request whose step window holds more rows than it
@@ -44,6 +44,7 @@ import pyarrow.parquet as pq
 import wandb
 
 from experiments.domain_phase_mix.release import paths, tables
+from experiments.domain_phase_mix.release.configs.starcoder import GRADIENT_CONFLICT_MANIFEST, GRADIENT_CONFLICT_RUN_ID
 
 TRANSITION = paths.RO / "starcoder_wsd80_transition_transient_20261006"
 ENTITY_PROJECT = "marin-community/marin"
@@ -51,8 +52,6 @@ CONFIRMATION_DESIGN = (
     paths.REPO
     / "experiments/domain_phase_mix/starcoder_wsd80_dense_support_empirical_optimum_confirmation_design_20260811.json.gz"
 )
-GRADIENT_CONFLICT_MANIFEST = paths.RO / "starcoder_wsd80_gradient_conflict_design_20260811_v9/trajectory_manifest.csv"
-GRADIENT_CONFLICT_RUN_ID = "gcfv9_{}"
 # run_label -> run-name prefix of the five confirmation seeds (the figure's `conf_m200` and `conf_m400`).
 CONFIRMATION = {
     "conf_m200_untied": "dsopt_r3d28260_m200_untied_c011_s",

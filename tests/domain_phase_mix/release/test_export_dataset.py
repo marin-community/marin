@@ -26,14 +26,12 @@ CONFIGS = {
     "fits",
     "run_sets",
 }
-# What must never reach the upload: GCS and W&B references, user paths, e-mail addresses, 64-hex policy hashes,
-# Fieldbook ids and run names, which end in a six-hex-digit hash.
+# What must never reach the upload: GCS paths, user paths, e-mail addresses, 64-hex policy hashes and Fieldbook ids.
 INTERNAL = [
-    re.compile(r"gs://|wandb|/Users/|pinlin_calvin_xu"),
+    re.compile(r"gs://|/Users/|pinlin_calvin_xu"),
     re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"),
     re.compile(r"[0-9a-f]{64}"),
     re.compile(r"(?:exp|run|job)_01[a-z0-9]{24}"),
-    re.compile(r"\w-[0-9a-f]{6}(?![0-9a-z])"),
 ]
 SPECIAL_CONFIGS = {"deferred", "constant"}  # figures_tables.csv entries that name no config
 # The tables with one row per training run, which carry the 58 per-task BPB columns and the two aggregates.
@@ -87,17 +85,16 @@ def test_full_export_writes_every_config(build, manifest):
     for name, columns in run_tables.items():
         assert [c for c in columns if c.startswith("bpb__")] == bpb, name
     assert (out / "figures_tables.csv").read_bytes() == export_dataset.FIGURES_TABLES.read_bytes()
-    # The run-name map and the absolute source paths stay in the private directory, never in the upload.
-    assert (build / "private/observation_map.csv").exists()
+    # The absolute source paths stay in the private directory, never in the upload.
     sources = json.loads((build / "private/SOURCES.json").read_text())
     assert set(sources["tables"]) == set(layout) and all(p.startswith("/") for p in sources["context"])
-    assert not [p for p in out.rglob("*") if p.name in ("observation_map.csv", "SOURCES.json", "salt")]
+    assert not [p for p in out.rglob("*") if p.name == "SOURCES.json"]
 
 
 @pytest.mark.timeout(1800)
 def test_written_files_hold_the_exported_values_exactly(build, manifest):
-    # The same salt and run-name map give the same ids; every value survives its file bit for bit.
-    built = export_dataset.build_tables(context.build(private_dir=build / "private"))
+    # Every value survives its file bit for bit.
+    built = export_dataset.build_tables(context.build())
     assert set(built) == {t["table"] for t in manifest["tables"]}
     for t in manifest["tables"]:
         path = build / "build" / t["path"]
@@ -113,10 +110,10 @@ def test_manifest_and_figure_index_name_nothing_internal(build, manifest):
     text = json.dumps(public) + (build / "build/figures_tables.csv").read_text()
     for pattern in INTERNAL:
         assert not pattern.search(text), pattern.search(text)
-    # Source paths are relative to a repository and replace run names and hash-named folders by `*`.
+    # Source paths are relative to a repository and replace hash-named folders by `*`.
     for source in [s for t in manifest["tables"] for s in t["sources"]]:
         assert not source.startswith(("/", "~")) and "calvinxu" not in source
-        assert not INTERNAL[2].search(source) and not INTERNAL[-1].search(source), source
+        assert not INTERNAL[2].search(source), source
 
 
 def test_figures_tables_lists_every_figure_and_table_of_the_paper(manifest):
@@ -144,10 +141,10 @@ def test_write_refuses_to_replace_a_data_folder_it_did_not_write(tmp_path):
 
 @pytest.mark.parametrize("private", ["private", "."], ids=["inside", "same"])
 def test_private_dir_must_lie_outside_the_build(tmp_path, private):
-    # The salt, the run-name map and SOURCES.json must never reach the uploaded tree.
+    # SOURCES.json, which holds absolute local paths, must never reach the uploaded tree.
     out = tmp_path / "build"
     with pytest.raises(ValueError, match="inside the build"):
         export_dataset.main(["--out", str(out), "--private-dir", str(out / private)])
     with pytest.raises(ValueError, match="inside the build"):
         export_dataset.write({}, out, out / private)
-    assert not out.exists()  # refused before the salt or any file was written
+    assert not out.exists()  # refused before any file was written

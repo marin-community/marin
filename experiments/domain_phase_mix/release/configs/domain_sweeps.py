@@ -43,8 +43,8 @@ tokenizer, pooling the scored bits and bytes of each set (Levanter's BPB schema 
   unmatched FineMath proxies, the source converts token loss to BPB with the shared web-only run's ratio of the two.
 
 Every run has trainer seed 20260910 and the launcher's data seed 20260910. `subset_seed` is 20260912 for the matched
-proxies and null for runs that draw the domain from the whole pool. Observation ids key on the training run name (these
-launches append no hash); the runs appear in no other config.
+proxies and null for runs that draw the domain from the whole pool. Observation ids are the runs' W&B run ids, their
+training run names, to which these launches append no hash; the runs appear in no other config.
 
 `domain_sweeps_olmix_fits` holds Olmix's log-linear fit to each matched-proxy curve that the figure draws:
 BPB(p) = exp(log_c) + exp(coefficient_domain * p + coefficient_web * (1 - p)) at domain weight p, fitted to the
@@ -67,7 +67,6 @@ import numpy as np
 import pandas as pd
 
 from experiments.domain_phase_mix.release import naming, paths, tables
-from experiments.domain_phase_mix.release.context import ExportContext
 
 SOURCES = paths.REPO / "experiments/domain_phase_mix/release/configs/domain_sweeps_sources.json"
 DESIGN = paths.REPO / "experiments/domain_phase_mix/starcoder_tpp10_assets/design.json"
@@ -219,7 +218,7 @@ def _olmix_fit(entry: dict, domain: str, arms: pd.DataFrame) -> dict:
     return row
 
 
-def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
+def export() -> dict[str, pd.DataFrame]:
     sources = json.loads(paths.require(SOURCES).read_text())
     design = json.loads(paths.require(DESIGN).read_text())
     arms = _arm_designs(design)
@@ -247,7 +246,7 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
         raise ValueError(f"missing evaluations of {sorted(set(df.run_name[df.bpb.isna()]))}")
     df["domain_weight"] = df.percent / 100
     df["tokenizer"] = design["tokenizer_pins"]["tokenizer_repo"]
-    df["observation_id"] = df.run_name.map(ctx.registry.id_for)
+    df["observation_id"] = df.run_name
     df["evaluation"] = df.evaluation.map(_public_evaluation)
     df = df.astype({"trainer_seed": "int64", "subset_seed": "Int64"})
     if df.duplicated(["observation_id", "evaluation"]).any():
