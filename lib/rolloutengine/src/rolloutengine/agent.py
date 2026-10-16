@@ -10,7 +10,7 @@ from typing import Any, Protocol
 
 from taskcompendium.grading_result import GradeResult
 
-from rolloutengine.contracts import ModelTurn, Prompt, RolloutContractError, RolloutData, Transition
+from rolloutengine.contracts import ModelTurn, Prompt, RolloutData, Transition
 from rolloutengine.harness import Episode, Harness, HarnessContext
 from rolloutengine.shell import task_prompt
 from rolloutengine.spec import RolloutSpec
@@ -53,18 +53,22 @@ def agent_harness(
 ) -> Harness[Episode]:
     """A harness for an agent that owns its prompts and tool loop.
 
-    Each completion call sends one prompt and returns the engine's exact ``ModelTurn``. The calls can
-    come from tasks that the agent does not await, such as an HTTP server's handlers. A prompt that
-    extends the previous one with the model's message, under the same options, adds observations (with
-    its pinned token IDs, if any); any other prompt resets the conversation and starts a new training
-    record. An identical prompt is a retry, for example after an HTTP client disconnect, and receives the
-    same turn without a new generation; a turn that the agent never receives is marked with
-    ``TURN_UNDELIVERED``, and training must exclude its step. When the rollout ends, a request that is
-    still open fails with ``RolloutEnded``. ``grade`` grades the record of a ``SessionGrader`` task;
-    without it, the engine grades the task. The default ``check`` rejects a task that declares tools other
-    than a shell binding, such as an answer tool or a tool provider; an agent that serves them passes its
-    own ``check``. The agent must release its own subprocesses and network resources when it is cancelled;
-    the engine owns the task machine's lifetime.
+    Each completion call sends one prompt and returns the engine's exact ``ModelTurn``. The calls can come
+    from tasks that the agent does not await, such as an HTTP server's handlers, but only one request can be
+    open at a time. A prompt that extends the previous one with the model's message, under the same options,
+    adds observations, with its pinned token IDs if it has them. Any other prompt resets the conversation and
+    starts a new training record. An identical prompt is a retry, for example after an HTTP client
+    disconnect, and it receives the same turn without a new generation. A turn that the agent never receives
+    gets ``TURN_UNDELIVERED``, and training must exclude its step. When the rollout ends, a request that is
+    still open fails with ``RolloutEnded``.
+
+    A second request while one is open fails with ``RuntimeError``. When the agent fails, or exits with an
+    unanswered request, only its own attempt ends, as ``RolloutInterrupted`` with the record so far.
+
+    ``grade`` grades the record of a ``SessionGrader`` task. Without it, the engine grades the task. The
+    default ``check`` rejects a task that declares tools other than a shell binding, such as an answer tool
+    or a tool provider. An agent that serves those tools gives its own ``check``. The agent must release its
+    own subprocesses and network resources when it is cancelled. The engine owns the task machine.
     """
 
     def open_episode(context: HarnessContext) -> Episode:
@@ -105,7 +109,7 @@ class _AgentEpisode:
             raise RolloutEnded("The rollout ended before this request")
         # A cancelled caller's future is done, so its replacement request is not a concurrent one.
         if self.in_flight is not None and not self.in_flight.done():
-            raise RolloutContractError("An agent sends only one model request at a time")
+            raise RuntimeError("An agent sends only one model request at a time")
         while not self.requests.empty():
             # Only a request whose caller was cancelled before the engine took it can still be queued.
             self.requests.get_nowait()
@@ -126,7 +130,7 @@ class _AgentEpisode:
                 if self.agent in completed:
                     await self.agent
                     if receive in completed and not receive.result().response.done():
-                        raise RolloutContractError("The agent exited with an unanswered model request")
+                        raise RuntimeError("The agent exited with an unanswered model request")
                     return None
                 request = receive.result()
             finally:
@@ -141,7 +145,7 @@ class _AgentEpisode:
         self.agent = asyncio.create_task(self.run(self.context, self._complete))
         self.pending = await self._next_request()
         if self.pending is None:
-            raise RolloutContractError("The agent exited before requesting a model response")
+            raise RuntimeError("The agent exited before requesting a model response")
         return self.pending.prompt
 
     async def advance(self, turn: ModelTurn) -> Transition:
