@@ -7,8 +7,9 @@ Forward, dQ and dK/dV are separate ``pallas_call``s in the FlashAttention-2 layo
 
 - Every mask is reduced to one inclusive key lower bound per query, ``lb[b, q]``. A query ``q`` attends to keys
   ``lb[q] <= k <= q``. A sliding window ``W`` gives ``lb[q] >= q - W + 1`` and packed segment IDs give
-  ``lb[q] >= start of q's segment``. Key blocks entirely outside ``[lb, q]`` are never visited, so a window-2048
-  layer at 4096 tokens does about 37.5% of the dense work and a causal layer about 50%.
+  ``lb[q] >= start of q's segment``; a mask carrying ``fa4_bounds`` supplies the bounds directly. Key blocks
+  entirely outside ``[lb, q]`` are never visited, so a window-2048 layer at 4096 tokens does about 37.5% of the
+  dense work and a causal layer about 50%.
 - Blocks entirely inside the allowed band skip the mask computation.
 - Grouped-query attention indexes the shared K/V head per query head instead of materializing repeated K/V. The
   dK/dV program owns one KV head and accumulates over its query-head group.
@@ -98,9 +99,12 @@ def _key_lower_bounds(mask: AttentionMask, *, batch: int, seq_len: int) -> Int[A
     """Inclusive lowest key position each query may attend to, for a causal ``AttentionMask``."""
     if not mask.is_causal:
         raise NotImplementedError("gpu_pallas_triton_flash supports causal self-attention only")
-    if mask.fa4_bounds is not None:
-        raise NotImplementedError("gpu_pallas_triton_flash does not read FA4/CuTe precomputed bounds")
     positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
+    if mask.fa4_bounds is not None:
+        # The precomputed bounds take precedence over segment IDs and the window, as in gpu_fa4_cute. A padding
+        # query (valid=False) attends only to itself, which keeps the bounds nondecreasing.
+        fa4_lower, valid = mask.fa4_bounds
+        return jnp.where(valid, fa4_lower, positions)
     lower = jnp.zeros((batch, seq_len), dtype=jnp.int32)
     if mask.segment_ids is not None:
         q_seg, kv_seg = mask.segment_ids

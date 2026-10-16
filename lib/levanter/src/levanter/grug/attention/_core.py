@@ -56,8 +56,8 @@ class AttentionMask(eqx.Module):
     segment_ids: tuple[jax.Array, jax.Array] | None = None
     sliding_window: int | None = eqx.field(default=None, static=True)
     # Optional precomputed FA4/CuTe per-token metadata (lower_bounds, valid), both [B, S] int32/bool.
-    # When set, ``gpu_fa4_cute_attention`` uses these directly instead of rebuilding from
-    # ``segment_ids``/``sliding_window``. This lets a caller compute the metadata once outside a
+    # When set, ``gpu_fa4_cute_attention`` and the AMD Triton flash kernels use these directly instead of
+    # rebuilding from ``segment_ids``/``sliding_window``. This lets a caller compute the metadata once outside a
     # ``lax.scan`` and select a per-layer sliding window (a static field the scan body cannot vary).
     fa4_bounds: tuple[jax.Array, jax.Array] | None = None
 
