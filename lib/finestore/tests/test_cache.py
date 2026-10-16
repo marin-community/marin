@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 import random
 import subprocess
 import sys
@@ -11,12 +10,14 @@ from dataclasses import replace
 import finestore.cache as cache_module
 import finestore.store as store_module
 import fsspec
+import pyarrow as pa
 import pyarrow.dataset as pds
 from finestore import shard_writer
 from finestore.admin import drop_table
 from finestore.cache import PersistentKvCache
 from finestore.commit import read_snapshot
-from finestore.layout import BlobTables, FineStoreLayout
+from finestore.compaction import compact_table
+from finestore.layout import BlobTables, FineStoreLayout, OnConflict
 from finestore.reader import ReadView
 from finestore.store import OBJECT_PART_BYTES, DataStore
 from fsspec.implementations.local import LocalFileSystem
@@ -26,6 +27,7 @@ from rigging.filesystem import factory
 from rigging.filesystem.storage_path import StoragePath
 
 _BLOB_URI_SCHEME = "blobread"
+_RANGE_DEFAULT_BLOCK_BYTES = 50 * 1024 * 1024
 
 _CACHE_PROCESS = textwrap.dedent(
     """
@@ -109,6 +111,7 @@ _CACHE_EXIT_COMPACTION_PROCESS = textwrap.dedent(
 class _RangeFile(AbstractBufferedFile):
     def _fetch_range(self, start, end):
         self.fs.fetched_bytes += end - start
+        self.fs.largest_fetch = max(self.fs.largest_fetch, end - start)
         with open(self.path, "rb") as source:
             source.seek(start)
             return source.read(end - start)
@@ -120,10 +123,13 @@ class _RangeFileSystem(LocalFileSystem):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.fetched_bytes = 0
+        self.largest_fetch = 0
 
-    def _open(self, path, mode="rb", *, cache_type="readahead", **_kwargs):
+    def _open(self, path, mode="rb", *, cache_type="readahead", block_size=None, **_kwargs):
         assert mode == "rb"
-        return _RangeFile(self, path, mode=mode, block_size=50 * 1024 * 1024, cache_type=cache_type)
+        return _RangeFile(
+            self, path, mode=mode, block_size=block_size or _RANGE_DEFAULT_BLOCK_BYTES, cache_type=cache_type
+        )
 
 
 class _BlobUriFileSystem(_RangeFileSystem):
@@ -235,6 +241,34 @@ def test_blob_lookup_avoids_remote_readahead_of_unmatched_row_groups(tmp_path, m
     assert bounded_bytes < 512 * 1024
 
 
+def test_compaction_buffers_compressed_file_reads(tmp_path, monkeypatch):
+    root = str(tmp_path / "archive")
+    row_bytes = 1024 * 1024
+    monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", row_bytes // 2)
+    with DataStore.open(root, flush_interval=3600, max_buffer_bytes=2**40, compaction_levels=(1000,)) as store:
+        table = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
+        expected = {}
+        for revision in range(2):
+            for index in range(4):
+                doc = random.Random(1729 + revision * 4 + index).randbytes(row_bytes)
+                table.append({"id": index, "revision": revision, "doc": doc})
+                if revision == 1:
+                    expected[index] = doc
+            store.flush()
+
+        filesystem = _RangeFileSystem(skip_instance_cache=True)
+        with monkeypatch.context() as patch:
+            patch.setattr(factory, "url_to_fs", lambda path: (filesystem, path))
+            result = compact_table(root, "samples")
+        assert result.written + result.superseded == 8
+        assert filesystem.fetched_bytes > 0
+        assert filesystem.largest_fetch <= 2 * row_bytes
+        rows = ReadView(root).iter_rows("samples")
+        assert [(row["id"], row["revision"], row["doc"]) for row in rows] == [
+            (index, 1, expected[index]) for index in range(4)
+        ]
+
+
 def test_persistent_cache_round_trips_and_supersedes_named_bytes(tmp_path):
     root = str(tmp_path / "cache")
     cache = PersistentKvCache.at(root)
@@ -302,38 +336,21 @@ def test_batch_cache_lookup_bounds_decoding_of_unrequested_inline_values(tmp_pat
         for index in range(8192):
             store.write_object(f"{index:08d}", index.to_bytes(8, "little") + b"x" * (8192 - 8))
 
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            textwrap.dedent(
-                """
-                import json
-                import sys
-                import pyarrow as pa
-                from finestore.cache import PersistentKvCache
-
-                indexes = range(0, 8192, 128)
-                cache = PersistentKvCache.at(sys.argv[1])
-                values = cache.load_many([f"{index:08d}" for index in indexes])
-                cache.close()
-                assert values == {
-                    f"{index:08d}": index.to_bytes(8, "little") + b"x" * (8192 - 8)
-                    for index in indexes
-                }
-                print(json.dumps({"peak_bytes": pa.default_memory_pool().max_memory()}))
-                """
-            ),
-            root,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    default_pool = pa.default_memory_pool()
+    pool = pa.proxy_memory_pool(default_pool)
+    pa.set_memory_pool(pool)
+    try:
+        cache = PersistentKvCache.at(root)
+        indexes = range(0, 8192, 128)
+        values = cache.load_many([f"{index:08d}" for index in indexes])
+        cache.close()
+        peak_bytes = pool.max_memory()
+    finally:
+        pa.set_memory_pool(default_pool)
+    assert values == {f"{index:08d}": index.to_bytes(8, "little") + b"x" * (8192 - 8) for index in indexes}
     # The requested values occupy 512 KiB. A batch read should not decode all
     # 64 MiB of inline payloads into Arrow memory at once.
-    assert json.loads(result.stdout)["peak_bytes"] < 64 * 1024 * 1024
+    assert peak_bytes < 64 * 1024 * 1024
 
 
 def test_cache_reads_an_archive_without_its_format_marker_and_the_next_store_recreates_it(tmp_path):

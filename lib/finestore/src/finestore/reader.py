@@ -22,6 +22,7 @@ import pyarrow.compute as pc
 import pyarrow.dataset as pds
 import pyarrow.parquet as pq
 import rigging.filesystem.factory as factory
+from fsspec.spec import AbstractFileSystem
 from pyarrow.fs import FSSpecHandler, PyFileSystem
 from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
@@ -82,6 +83,17 @@ class _NoReadAheadHandler(FSSpecHandler):
         # Arrow's pre_buffer=False does not disable fsspec's independent 50 MiB
         # read-ahead, which can fetch unrelated inline blobs after a small read.
         return pa.PythonFile(self.fs.open(path, mode="rb", cache_type="none"), mode="r")
+
+
+class _BoundedReadAheadHandler(FSSpecHandler):
+    def __init__(self, fs: AbstractFileSystem, block_size: int) -> None:
+        super().__init__(fs)
+        self._block_size = block_size
+
+    def open_input_file(self, path: str) -> pa.PythonFile:
+        return pa.PythonFile(
+            self.fs.open(path, mode="rb", cache_type="readahead", block_size=self._block_size), mode="r"
+        )
 
 
 @dataclass(frozen=True)
@@ -318,30 +330,62 @@ def iter_shard_batches(
         fragment_readahead=scan_profile.fragment_readahead,
         fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
     ).to_reader() as batches:
-        for batch in batches:
-            commit_index = batch.schema.get_field_index(SystemColumns.COMMIT)
-            if commit_index < 0:
-                batch = batch.append_column(
-                    SystemColumns.COMMIT, pa.array([shard.commit_sequence] * batch.num_rows, type=pa.int64())
-                )
-            elif batch.column(commit_index).null_count:
-                batch = batch.set_column(
-                    commit_index,
-                    SystemColumns.COMMIT,
-                    pc.fill_null(batch.column(commit_index), shard.commit_sequence),
-                )
-            generation_index = batch.schema.get_field_index(SystemColumns.GENERATION)
-            if generation_index < 0:
-                batch = batch.append_column(
-                    SystemColumns.GENERATION, pa.array([shard.generation] * batch.num_rows, type=pa.int32())
-                )
-            elif batch.column(generation_index).null_count:
-                batch = batch.set_column(
-                    generation_index,
-                    SystemColumns.GENERATION,
-                    pc.fill_null(batch.column(generation_index), shard.generation),
-                )
-            yield batch
+        yield from _resolved_shard_batches(shard, batches)
+
+
+def iter_shard_row_group_batches(
+    shard: _ReadableShard,
+    unified: pa.Schema,
+    pa_fs: PyFileSystem,
+    *,
+    batch_rows: int,
+) -> Generator[pa.RecordBatch, None, None]:
+    """Scan one Parquet row group at a time."""
+    dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
+    fragment = next(dataset.get_fragments())
+    assert isinstance(fragment, pds.ParquetFileFragment)
+    fragment.ensure_complete_metadata()
+    assert fragment.metadata is not None
+    for index in range(fragment.metadata.num_row_groups):
+        row_group = fragment.subset(row_group_ids=[index])
+        with row_group.scanner(
+            schema=unified,
+            use_threads=False,
+            batch_size=batch_rows,
+            batch_readahead=1,
+            fragment_readahead=1,
+            fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=False),
+        ).to_reader() as batches:
+            yield from _resolved_shard_batches(shard, batches)
+
+
+def _resolved_shard_batches(
+    shard: _ReadableShard, batches: Iterable[pa.RecordBatch]
+) -> Generator[pa.RecordBatch, None, None]:
+    for batch in batches:
+        commit_index = batch.schema.get_field_index(SystemColumns.COMMIT)
+        if commit_index < 0:
+            batch = batch.append_column(
+                SystemColumns.COMMIT, pa.array([shard.commit_sequence] * batch.num_rows, type=pa.int64())
+            )
+        elif batch.column(commit_index).null_count:
+            batch = batch.set_column(
+                commit_index,
+                SystemColumns.COMMIT,
+                pc.fill_null(batch.column(commit_index), shard.commit_sequence),
+            )
+        generation_index = batch.schema.get_field_index(SystemColumns.GENERATION)
+        if generation_index < 0:
+            batch = batch.append_column(
+                SystemColumns.GENERATION, pa.array([shard.generation] * batch.num_rows, type=pa.int32())
+            )
+        elif batch.column(generation_index).null_count:
+            batch = batch.set_column(
+                generation_index,
+                SystemColumns.GENERATION,
+                pc.fill_null(batch.column(generation_index), shard.generation),
+            )
+        yield batch
 
 
 def iter_shard_rows(

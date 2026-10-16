@@ -5,12 +5,10 @@
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import random
-import subprocess
-import sys
-import textwrap
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -736,166 +734,46 @@ def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
     assert rows == {f"{i:03d}": float(i) for i in range(10)}
 
 
-def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(tmp_path):
-    # A row exceeds the scaled row-group budget, just like large evaluation documents.
-    # Doubling groups per shard must not double decoded payload memory. Children
-    # isolate Arrow's allocator from fixture construction and other pytest tests.
+def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(tmp_path, monkeypatch):
     row_bytes = 4 * 1024 * 1024
-    probe = textwrap.dedent(
-        """
-        import gc
-        import hashlib
-        import json
-        import sys
-        from pathlib import Path
-
-        import pyarrow as pa
-        from finestore import shard_writer
-        from finestore.compaction import compact_table
-        from finestore.layout import OnConflict
-        from finestore.reader import ReadView
-        from finestore.store import DataStore
-
-        root = sys.argv[1]
-        row_bytes = int(sys.argv[3])
-        shard_writer.ROW_GROUP_TARGET_BYTES = row_bytes // 2
-        with DataStore.open(root, flush_interval=3600, max_buffer_bytes=2**40,
-                            compaction_levels=(1000,)) as store:
-            table = store.table('samples', primary_key=('id',), on_conflict=OnConflict.SUPERSEDE)
+    monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", row_bytes // 2)
+    measurements = []
+    for rows_per_shard in (32, 64):
+        root = str(tmp_path / f"run-{rows_per_shard}")
+        with DataStore.open(root, flush_interval=3600, max_buffer_bytes=2**40, compaction_levels=(1000,)) as store:
+            table = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
             for revision in range(4):
-                for index in range(int(sys.argv[2])):
-                    table.append({'id': index, 'revision': revision,
-                                  'doc': f'{revision}:{index}:' + 'x' * row_bytes})
+                for index in range(rows_per_shard):
+                    table.append({"id": index, "revision": revision, "doc": f"{revision}:{index}:" + "x" * row_bytes})
                 store.flush()
             pinned = ReadView(root)
-            assert len(pinned.list_shards('samples')) == 4
+            assert len(pinned.list_shards("samples")) == 4
+
             default_pool = pa.default_memory_pool()
             pool = pa.proxy_memory_pool(default_pool)
             pa.set_memory_pool(pool)
             try:
-                result = compact_table(root, 'samples')
-                peak_arrow_bytes = pool.max_memory()
+                result = compact_table(root, "samples")
+                measurements.append(pool.max_memory())
             finally:
                 pa.set_memory_pool(default_pool)
             gc.collect()
-            view = ReadView(root)
-            rows = view.scan('samples').to_pylist()
-            actual = [{'id': row['id'], 'revision': row['revision'],
-                       'sha256': hashlib.sha256(row['doc'].encode()).hexdigest()} for row in rows]
-            assert all(Path(shard.path).exists()
-                       for shard in pinned.list_shards('samples'))
-            print(json.dumps({'peak_arrow_bytes': peak_arrow_bytes,
-                              'written': result.written, 'superseded': result.superseded,
-                              'rows': sorted(actual, key=lambda row: row['id'])}))
-    """
-    )
-    measurements = []
-    for rows_per_shard in (32, 64):
-        completed = subprocess.run(
-            [sys.executable, "-c", probe, str(tmp_path / f"run-{rows_per_shard}"), str(rows_per_shard), str(row_bytes)],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=50,
-        )
-        result = json.loads(completed.stdout)
-        assert rows_per_shard <= result["written"] <= 4 * rows_per_shard
-        assert result["written"] + result["superseded"] == 4 * rows_per_shard
-        assert result["rows"] == [
-            {
-                "id": index,
-                "revision": 3,
-                "sha256": hashlib.sha256((f"3:{index}:" + "x" * row_bytes).encode()).hexdigest(),
-            }
-            for index in range(rows_per_shard)
-        ]
-        measurements.append(result["peak_arrow_bytes"])
-    # Allow one additional decoded value per input cursor at pipeline boundaries,
-    # independent of the additional 512 MiB of input payloads in the larger case.
+
+            assert rows_per_shard <= result.written <= 4 * rows_per_shard
+            assert result.written + result.superseded == 4 * rows_per_shard
+            observed = 0
+            for row in ReadView(root).iter_rows("samples"):
+                assert (row["id"], row["revision"], row["doc"]) == (
+                    observed,
+                    3,
+                    f"3:{observed}:" + "x" * row_bytes,
+                )
+                observed += 1
+            assert observed == rows_per_shard
+            assert all(StoragePath(shard.path).exists() for shard in pinned.list_shards("samples"))
+
+    # More row groups must not grow decoded input memory with total file size.
     assert measurements[1] <= measurements[0] + 4 * row_bytes, measurements
-
-
-def test_compaction_does_not_prefetch_all_compressed_row_groups(tmp_path):
-    row_bytes = 1024 * 1024
-    input_shards = 4
-    probe = textwrap.dedent(
-        """
-        import base64
-        import hashlib
-        import json
-        import random
-        import resource
-        import sys
-
-        from finestore import shard_writer
-        from finestore.compaction import compact_table
-        from finestore.layout import OnConflict
-        from finestore.reader import ReadView
-        from finestore.store import DataStore
-
-        root, mode = sys.argv[1:3]
-        rows_per_shard, row_bytes, input_shards = map(int, sys.argv[3:6])
-        shard_writer.ROW_GROUP_TARGET_BYTES = row_bytes // 2
-        if mode == 'prepare':
-            # Close compacts writer shards itself. Flush the fixture and stop
-            # maintenance, then let this child exit with four readable inputs.
-            store = DataStore.open(root, flush_interval=3600, max_buffer_bytes=2**40,
-                                   compaction_levels=(1000,))
-            table = store.table('samples', primary_key=('id',), on_conflict=OnConflict.SUPERSEDE)
-            expected = []
-            for revision in range(input_shards):
-                for index in range(rows_per_shard):
-                    raw = random.Random(1729 + revision * 1000 + index).randbytes(row_bytes * 3 // 4)
-                    doc = base64.b64encode(raw).decode()
-                    table.append({'id': index, 'revision': revision, 'doc': doc})
-                    if revision == input_shards - 1:
-                        expected.append({'id': index, 'revision': revision,
-                                         'sha256': hashlib.sha256(doc.encode()).hexdigest()})
-                store.flush()
-            store.request_stop()
-            print(json.dumps(expected))
-            sys.exit(0)
-
-        assert len(ReadView(root).list_shards('samples')) == input_shards
-        result = compact_table(root, 'samples')
-        # This fresh child has never materialized the fixture or output table.
-        # Arrow's memory pool does not account for its compressed-file cache.
-        peak_rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == 'darwin' else 1024)
-        rows = ReadView(root).scan('samples').to_pylist()
-        actual = [{'id': row['id'], 'revision': row['revision'],
-                   'sha256': hashlib.sha256(row['doc'].encode()).hexdigest()} for row in rows]
-        print(json.dumps({'peak_rss_bytes': peak_rss_bytes,
-                          'written': result.written, 'superseded': result.superseded,
-                          'rows': sorted(actual, key=lambda row: row['id'])}))
-    """
-    )
-    measurements = []
-    for rows_per_shard in (32, 64):
-        arguments = [str(tmp_path / f"run-{rows_per_shard}"), str(rows_per_shard), str(row_bytes), str(input_shards)]
-        prepared = subprocess.run(
-            [sys.executable, "-c", probe, arguments[0], "prepare", *arguments[1:]],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=50,
-        )
-        completed = subprocess.run(
-            [sys.executable, "-c", probe, arguments[0], "compact", *arguments[1:]],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=50,
-        )
-        result = json.loads(completed.stdout)
-        assert rows_per_shard <= result["written"] <= input_shards * rows_per_shard
-        assert result["written"] + result["superseded"] == input_shards * rows_per_shard
-        assert result["rows"] == json.loads(prepared.stdout)
-        measurements.append(result["peak_rss_bytes"])
-    # Budget compressed, Arrow, Python and writer copies per input cursor,
-    # plus equal allocator/pipeline slack. Doubling file bytes must fit this
-    # fixed allowance; prefetching all extra compressed groups needs ~96 MiB.
-    rss_growth_budget = input_shards * row_bytes * (4 + 4)
-    assert measurements[1] <= measurements[0] + rss_growth_budget, measurements
 
 
 def test_typed_on_disk_metadata(tmp_path):

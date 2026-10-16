@@ -157,14 +157,15 @@ Close-time compaction does not repair archives left by terminated writers or gua
 one shard across repeated writer sessions. Ordinary leveled maintenance still handles
 larger groups; explicit compaction remains available across all active shards.
 
-Compaction pins a manifest and scans its exact input shards in Arrow batches sized from
-Parquet row-group metadata toward 4 MiB per shard and 64 MiB across inputs. Scanner
-read-ahead is limited to one batch and fragment; Parquet pre-buffering and fsspec
-read-ahead are disabled.
-It retains the newest version seen per key in a buffer capped at four 100 MiB row-group
-targets or 65,536 rows, then concatenates and sorts the retained Arrow tables. Each
+Compaction pins a manifest and scans one Parquet row group at a time from each input
+shard. It decodes batches of at most 4,096 rows within each group, with one batch of
+read-ahead. A 1 MiB fsspec file buffer limits speculative byte reads; Parquet
+pre-buffering is disabled. A required column read or decoded row group can be larger
+than the file buffer.
+Compaction retains the newest version seen per key in a buffer targeting four 100 MiB
+row groups or 65,536 rows, then concatenates and sorts the retained Arrow tables. Each
 buffer becomes a sorted output shard at the next level. A single input batch or row can
-exceed the byte target. Duplicate keys in different output shards remain valid; readers
+exceed the target. Duplicate keys in different output shards remain valid; readers
 resolve them, and the seal records only duplicates removed during that compaction.
 The manifest replaces the input paths with the output shards through the same `HEAD`
 compare and swap. If another compactor removes an input first, the losing output remains

@@ -9,7 +9,7 @@ import logging
 import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, closing
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from functools import partial
 from itertools import zip_longest
 from typing import Protocol
@@ -25,16 +25,15 @@ from rigging.timing import retry_with_backoff
 from finestore import shard_writer
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
 from finestore.layout import BlobTables, CommitToken, FineStoreLayout, Shard, SystemColumns
-from finestore.reader import ReadView, _NoReadAheadHandler, _ScanProfile, iter_shard_batches
+from finestore.reader import ReadView, _BoundedReadAheadHandler, iter_shard_row_group_batches
 from finestore.shard_writer import ShardWriter
 
 logger = logging.getLogger(__name__)
 
 _COMPACTOR = "compactor"
 _CLOSE_COMPACTION_MAX_ATTEMPTS = 3
-_COMPACTION_INPUT_BYTES = 64 * 1024 * 1024
-_COMPACTION_SHARD_BATCH_BYTES = 4 * 1024 * 1024
-_COMPACTION_MAX_BATCH_ROWS = 4096
+_COMPACTION_BATCH_ROWS = 4096
+_COMPACTION_FILE_READ_AHEAD_BYTES = 1024 * 1024
 _COMPACTION_BUFFER_ROW_GROUPS = 4
 
 
@@ -50,20 +49,6 @@ class CompactionResult:
 
     written: int
     superseded: int = 0
-
-
-def _scan_batch_rows(metadata: pq.FileMetaData, shard_count: int) -> int:
-    """Estimate a scan batch from the largest Parquet row-group average."""
-    bytes_per_row = max(
-        (
-            (group.total_byte_size + group.num_rows - 1) // group.num_rows
-            for group in (metadata.row_group(index) for index in range(metadata.num_row_groups))
-            if group.num_rows
-        ),
-        default=1,
-    )
-    budget = min(_COMPACTION_SHARD_BATCH_BYTES, _COMPACTION_INPUT_BYTES // shard_count)
-    return max(1, min(_COMPACTION_MAX_BATCH_ROWS, budget // max(1, bytes_per_row)))
 
 
 def _sorted_buffer(
@@ -202,9 +187,10 @@ def _compact_shards(
     )
 
     fs, _ = factory.url_to_fs(root)
-    pa_fs = PyFileSystem(_NoReadAheadHandler(fs))
-    metadata = [pq.read_metadata(shard.path, filesystem=pa_fs) for shard in shards]
-    unified = pa.unify_schemas([item.schema.to_arrow_schema() for item in metadata], promote_options="permissive")
+    pa_fs = PyFileSystem(_BoundedReadAheadHandler(fs, _COMPACTION_FILE_READ_AHEAD_BYTES))
+    unified = pa.unify_schemas(
+        [pq.read_schema(shard.path, filesystem=pa_fs) for shard in shards], promote_options="permissive"
+    )
     if SystemColumns.COMMIT not in unified.names:
         unified = unified.append(pa.field(SystemColumns.COMMIT, pa.int64()))
     if SystemColumns.GENERATION not in unified.names:
@@ -213,27 +199,26 @@ def _compact_shards(
     written = 0
     superseded = 0
     outputs: list[Shard] = []
-    profile = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
     with ExitStack() as stack:
         inputs = sorted(
-            zip(shards, metadata, strict=True),
-            key=lambda item: (item[0].commit_sequence, item[0].generation),
+            shards,
+            key=lambda shard: (shard.commit_sequence, shard.generation),
             reverse=True,
         )
         streams = [
             stack.enter_context(
                 closing(
-                    iter_shard_batches(
+                    iter_shard_row_group_batches(
                         shard,
                         unified,
                         pa_fs,
-                        scan_profile=replace(profile, batch_rows=_scan_batch_rows(item, len(shards))),
+                        batch_rows=_COMPACTION_BATCH_ROWS,
                     )
                 )
             )
-            for shard, item in inputs
+            for shard in inputs
         ]
-        # Interleave sorted shard scans so versions of nearby keys can meet in one buffer.
+        # Interleave shard scans so versions of nearby keys can meet in one buffer.
         batches = (batch for group in zip_longest(*streams) for batch in group if batch is not None)
         for batch, dropped in _compaction_groups(batches, unified, primary_key):
             output_path = layout.shard_path(table, _COMPACTOR, next_generation, 0, uuid.uuid4().hex[:8])
