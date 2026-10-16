@@ -2533,6 +2533,23 @@ async def test_agent_harness_answer_call_task_is_rejected_before_the_model_runs(
     assert model.requests == []
 
 
+async def test_an_agent_with_two_open_requests_ends_only_its_own_attempt():
+    # Callers such as SkyRL drop an interrupted attempt and stop on a token-contract error.
+    async def agent(_context, complete):
+        prompt = Prompt(({"role": "user", "content": "Return 12."},), {})
+        turn = await complete(prompt)
+        follow_up = Prompt((*prompt.messages, turn.message, {"role": "user", "content": "Again."}), {})
+        await asyncio.gather(complete(follow_up), complete(follow_up))
+
+    model = ReplayModel([{"role": "assistant", "content": "12"}] * 2)
+    with pytest.raises(RolloutInterrupted) as interrupted:
+        await engine(model, harnesses={"agent": agent_harness(agent)}).run(
+            rollout_spec(arithmetic_task(), harness="agent")
+        )
+    assert interrupted.value.operation == RolloutOperation.ADVANCE
+    assert interrupted.value.rollout.steps
+
+
 async def test_a_session_graded_harness_keeps_a_state_answer_without_a_task_machine():
     class Session:
         def __init__(self, _context):

@@ -158,7 +158,9 @@ engine = RolloutEngine(machine_factories, {"agent": agent_harness(run_agent)})
   observations, and its `token_ids`, if any, pin the next request. Any other prompt resets the conversation
   and starts a new training record.
 - `complete` can be called from tasks that the agent does not await, such as HTTP handlers. Only one request
-  can be open at a time.
+  can be open at a time, and a second request fails with `RuntimeError`.
+- An agent that fails, or exits with an unanswered request, ends only its own attempt: `run` raises
+  `RolloutInterrupted` with the record so far. Only a token-contract violation raises `RolloutContractError`.
 - An identical prompt is a retry, for example after a client disconnect, and receives the same turn without a
   new generation. A turn that no caller receives has `metrics["turn_undelivered"] = 1.0` (`TURN_UNDELIVERED`);
   training must exclude that step. The engine still grades with that turn's message.
