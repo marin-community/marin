@@ -63,13 +63,13 @@ token = view.token
 A view pins one manifest. Commits and compactions that happen afterward do not change
 its results. Create a new view to observe a newer token.
 
-Each view caches immutable Parquet bytes for tables other than blob tables whose active shards
-total at most 8 MiB. Shards load on first access and share a 64 MiB budget per view;
-later queries reuse them for schema reads, filtering, and projection. Admission
-reserves the table's full stored size, so concurrent reads stay within the budget.
-`ReadView(root, cache_bytes=...)` sets that budget; zero disables it. Large tables
-and blob tables keep their existing storage reads. Caching does not eagerly
-decode rows; the reader still applies projection and Parquet row-group filters.
+Each view caches the immutable byte ranges requested by Parquet, including footers
+and selected row-group columns, across all shard handles. The cache shares a
+64 MiB budget across tables and evicts the least recently used ranges when full.
+It reads only the requested ranges, regardless of table or shard size. Reads larger
+than the budget bypass the cache. `ReadView(root, cache_bytes=...)` sets the budget;
+zero disables it. Cached bytes remain compressed, and blob readers retain their
+row-batch limits.
 
 `scan` supports column projection and `==`, `!=`, and `in` filters. FineStore unifies
 compatible Parquet schemas across active shards and keeps the row from the latest
