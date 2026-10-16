@@ -82,8 +82,8 @@ is `marin-ops-agent[bot]` or `loom-oa-dev[bot]`. A gate step reads the pull
 request's size and file patches through the API: the review runs when the
 change has at least 250 changed lines or adds a class, dataclass, or
 `Protocol` under `lib/*/src/` or `experiments/`. The session runs the
-`review-pr-holistic` skill with the `pr-holistic-review` profile (Claude
-Fable) and maintains one compact overview ending in
+`review-pr-holistic` skill with the `pr-holistic-review` profile and maintains
+one compact overview ending in
 `<!-- marin-holistic-review:<sha> -->`. Re-reviews replace the original
 overview by comment ID, preserving finding numbers and updating their status.
 A separate new top-level comment may announce only new or materially changed
