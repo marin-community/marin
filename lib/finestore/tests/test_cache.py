@@ -13,6 +13,7 @@ import finestore.store as store_module
 import fsspec
 import pyarrow as pa
 import pyarrow.dataset as pds
+import pytest
 from finestore import shard_writer
 from finestore.admin import drop_table
 from finestore.cache import PersistentKvCache
@@ -25,6 +26,7 @@ from fsspec.implementations.local import LocalFileSystem
 from fsspec.spec import AbstractBufferedFile
 from pyarrow.fs import FSSpecHandler, PyFileSystem
 from rigging.filesystem import factory
+from rigging.filesystem.cross_region import MARIN_CROSS_REGION_OVERRIDE_ENV, CrossRegionGuardedFS, TransferBudget
 from rigging.filesystem.storage_path import StoragePath
 
 _BLOB_URI_SCHEME = "blobread"
@@ -133,6 +135,11 @@ class _RangeFileSystem(LocalFileSystem):
             self, path, mode=mode, block_size=block_size or _RANGE_DEFAULT_BLOCK_BYTES, cache_type=cache_type
         )
 
+    def cat_file(self, path, start=None, end=None, **_kwargs):
+        with self.open(path, "rb", cache_type="none") as source:
+            source.seek(start or 0)
+            return source.read() if end is None else source.read(end - (start or 0))
+
 
 class _BlobUriFileSystem(_RangeFileSystem):
     """Exercise URI routing with file options rejected by the storage constructor."""
@@ -228,13 +235,43 @@ def test_read_view_caches_selected_row_groups_from_a_shard_larger_than_its_budge
     snapshot = read_snapshot(FineStoreLayout(root))
     stored_bytes = sum(shard.size_bytes for shard in snapshot.manifest.tables["samples"].shards)
     filesystem = _RangeFileSystem(skip_instance_cache=True)
-    monkeypatch.setattr(factory, "url_to_fs", lambda path: (filesystem, path))
+    budget = TransferBudget(limit_bytes=2 * 1024 * 1024)
+    guarded = CrossRegionGuardedFS(filesystem, cross_region_checker=lambda _: True, budget=budget)
+    monkeypatch.delenv(MARIN_CROSS_REGION_OVERRIDE_ENV, raising=False)
+    monkeypatch.setattr(factory, "url_to_fs", lambda path: (guarded, path))
     view = ReadView(root, snapshot=snapshot, cache_bytes=2 * 1024 * 1024)
     assert view.point("samples", id=7)["payload"] == payloads[7]
     warm_bytes = filesystem.fetched_bytes
     assert 0 < warm_bytes < stored_bytes // 2
+    assert budget.bytes_used == warm_bytes
     assert view.point("samples", id=7)["payload"] == payloads[7]
     assert filesystem.fetched_bytes == warm_bytes
+    assert budget.bytes_used == warm_bytes
+
+
+def test_read_view_retries_a_short_storage_read_without_caching_it(tmp_path, monkeypatch):
+    root = str(tmp_path / "archive")
+    with DataStore.open(root, flush_interval=600) as store:
+        store.table("samples", primary_key=("id",)).append({"id": "a", "value": "complete"})
+    snapshot = read_snapshot(FineStoreLayout(root))
+    filesystem = _RangeFileSystem(skip_instance_cache=True)
+    full_read = filesystem.cat_file
+    truncate = True
+
+    def short_first_read(path, start=None, end=None, **kwargs):
+        nonlocal truncate
+        data = full_read(path, start=start, end=end, **kwargs)
+        if truncate:
+            truncate = False
+            return data[:-1]
+        return data
+
+    monkeypatch.setattr(filesystem, "cat_file", short_first_read)
+    monkeypatch.setattr(factory, "url_to_fs", lambda path: (filesystem, path))
+    view = ReadView(root, snapshot=snapshot)
+    with pytest.raises(ValueError, match=r"shard .*\.parquet.*: read \d+ of \d+ bytes at \d+"):
+        view.point("samples", id="a")
+    assert view.point("samples", id="a")["value"] == "complete"
 
 
 def test_blob_uri_keeps_file_cache_options_out_of_storage_constructor(tmp_path):

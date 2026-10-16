@@ -102,12 +102,11 @@ class _ReadRangeCache:
 
     def __init__(self, filesystem: AbstractFileSystem, shards: Sequence[Shard], capacity: int) -> None:
         self._filesystem = filesystem
-        self._sizes = {shard.path: shard.size_bytes for shard in shards}
         self._capacity = capacity
         self._bytes = 0
-        self._ranges: dict[str, dict[tuple[int, int], bytes]] = {path: {} for path in self._sizes}
+        self._ranges: dict[str, dict[tuple[int, int], bytes]] = {shard.path: {} for shard in shards}
         self._entries: OrderedDict[tuple[str, int, int], bytes] = OrderedDict()
-        self._file_locks = {path: threading.Lock() for path in self._sizes}
+        self._file_locks = {path: threading.Lock() for path in self._ranges}
         self._lock = threading.Lock()
 
     def read(self, path: str, start: int, end: int) -> bytes:
@@ -118,11 +117,9 @@ class _ReadRangeCache:
                     if cached_start <= start and end <= cached_end:
                         self._entries.move_to_end((path, cached_start, cached_end))
                         return data[start - cached_start : end - cached_start]
-            with cast(
-                BinaryIO, self._filesystem.open(path, mode="rb", cache_type="none", size=self._sizes[path])
-            ) as source:
-                source.seek(start)
-                data = source.read(end - start)
+            data = cast(bytes, self._filesystem.cat_file(path, start=start, end=end))
+            if len(data) != end - start:
+                raise ValueError(f"shard {path!r}: read {len(data)} of {end - start} bytes at {start}")
             # Oversized caller reads remain transient and do not evict the working set.
             if len(data) > self._capacity:
                 return data
