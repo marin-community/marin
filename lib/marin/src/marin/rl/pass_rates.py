@@ -25,11 +25,12 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
-from functools import partial
+from functools import partial, reduce
 from itertools import batched
 from typing import Any, Protocol
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import requests
 from iris.rpc import job_pb2
@@ -214,6 +215,40 @@ def with_pass_counts(table: pa.Table, samples: list[Sample], task: PassRateTask,
     ]
     count_table = pa.Table.from_pylist(count_rows, schema=schema)
     return pa.Table.from_arrays(table.columns + count_table.columns, names=table.column_names + count_table.column_names)
+
+
+def pool_pass_rates(*, pass_rates_paths: list[str], output_path: str) -> None:
+    """Write ``pass_rates.parquet`` counting every sample of several runs over the same rows.
+
+    The runs must have measured the same rows in the same order, such as runs that differ only in
+    seed, so K samples from each of N runs give pass rates over N*K samples. A row excluded by any
+    run is excluded.
+    """
+    tables = [_read_table(StoragePath(path) / PASS_RATES_FILENAME) for path in pass_rates_paths]
+    first = tables[0]
+    components = [name for name in first.column_names if name.startswith("passed_")]
+    row_columns = [name for name in first.column_names if name not in {*PASS_COUNT_SCHEMA.names, *components}]
+    for table in tables[1:]:
+        if table.column_names != first.column_names or not table.select(row_columns).equals(first.select(row_columns)):
+            raise ValueError("pooled pass-rate runs must cover the same rows in the same order")
+
+    exclusion = pc.coalesce(*(table["exclusion"] for table in tables))
+    excluded = pc.is_valid(exclusion)
+
+    def pooled(name: str) -> pa.ChunkedArray:
+        return pc.if_else(excluded, 0, reduce(pc.add, (table[name] for table in tables))).cast(pa.int32())
+
+    passed, total = pooled("passed"), pooled("total")
+    pass_rate = pc.if_else(
+        pc.equal(total, 0), pa.scalar(None, pa.float64()), pc.divide(passed.cast(pa.float64()), total)
+    )
+    columns = [passed, total, pass_rate, exclusion, *(pooled(name) for name in components)]
+    count_table = pa.Table.from_arrays(
+        columns, schema=pa.schema([*PASS_COUNT_SCHEMA, *(pa.field(n, pa.int32()) for n in components)])
+    )
+    rows = first.select(row_columns)
+    pooled = pa.Table.from_arrays(rows.columns + count_table.columns, names=rows.column_names + count_table.column_names)
+    _write_table(pooled, StoragePath(output_path) / PASS_RATES_FILENAME)
 
 
 def pass_count(samples: list[Sample], samples_per_row: int, components: tuple[str, ...]) -> PassCount:

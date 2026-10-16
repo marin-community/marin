@@ -11,6 +11,8 @@ Print the plan with ``uv run python -m experiments.post_training.pivotrl.pipelin
 choose runs with ``--experiment``, and add ``--run`` to build them.
 """
 
+from dataclasses import replace
+
 import click
 from fray.types import ResourceConfig
 from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
@@ -21,7 +23,7 @@ from marin.experiment.cli import build_options
 from marin.experiment.data import hf_download
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.openhands_pivot import TOOLS_FILENAME, TRAJECTORIES_FILENAME, prepare_openhands_candidates
-from marin.rl.pass_rates import measure_pass_rates
+from marin.rl.pass_rates import measure_pass_rates, pool_pass_rates
 
 from experiments.datasets.nemotron_pivot import nemotron_pivot_datasets
 from experiments.post_training.pivotrl.runs import (
@@ -77,29 +79,46 @@ def candidate_step(
     )
 
 
-def pivot_steps(run: PivotRLRun) -> dict[str, ArtifactStep[Artifact]]:
-    """The pass-rate and selection artifacts for one run."""
-    dataset = run.candidates.label
+def policy_label(run: PivotRLRun, seed: int | None) -> str:
     # Seeded runs of the same candidates and policy get their own artifacts.
-    policy = run.model.name if run.sampling.seed is None else f"{run.model.name}/seed-{run.sampling.seed}"
-    candidates = candidate_step(run.candidates)
+    return run.model.name if seed is None else f"{run.model.name}/seed-{seed}"
+
+
+def measured_pass_rates(run: PivotRLRun, seed: int | None) -> ArtifactStep[Artifact]:
+    """Pass rates of the run's policy on its candidates, sampled with ``seed``."""
     grading_env = env_vars_from_keys(run.secret_env_keys)
-    pass_rates = apply(
-        user_owned_name(f"pivotrl/{dataset}/pass-rates/{policy}"),
+    return apply(
+        user_owned_name(f"pivotrl/{run.candidates.label}/pass-rates/{policy_label(run, seed)}"),
         # The orchestrator is a CPU job; remote inference launches the GPU serving job beside it.
         remote(
             measure_pass_rates,
             resources=ResourceConfig.with_cpu(cpu=8, ram="64g"),
             env_vars={**env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS), **grading_env},
         ),
-        rows_path=candidates,
+        rows_path=candidate_step(run.candidates),
         rows_filename=run.candidates.filename,
         output_path=OUT,
         task=run.candidates.task,
         model=run.model,
         accelerator=run.accelerator,
-        sampling=run.sampling,
+        sampling=replace(run.sampling, seed=seed),
     )
+
+
+def pivot_steps(run: PivotRLRun) -> dict[str, ArtifactStep[Artifact]]:
+    """The pass-rate and selection artifacts for one run."""
+    dataset = run.candidates.label
+    policy = policy_label(run, run.sampling.seed)
+    pass_rates = measured_pass_rates(run, run.sampling.seed)
+    if run.extra_seeds:
+        # Each seed's samples stay their own artifact; the pooled counts are a small one over them.
+        policy += "".join(f"+seed-{seed}" for seed in run.extra_seeds)
+        pass_rates = apply(
+            user_owned_name(f"pivotrl/{dataset}/pass-rates/{policy}"),
+            remote(pool_pass_rates, resources=ResourceConfig.with_cpu(cpu=2, ram="16g")),
+            pass_rates_paths=[pass_rates, *(measured_pass_rates(run, seed) for seed in run.extra_seeds)],
+            output_path=OUT,
+        )
     # Each criterion and lambda is its own small artifact over the same pass rates.
     criterion = "" if run.criterion == "passed" else f"/{run.criterion}"
     pivots = apply(

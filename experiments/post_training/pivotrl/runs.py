@@ -76,6 +76,8 @@ class PivotRLRun:
     """Which pass count selection uses: ``passed`` (the task's reward) or ``passed_<component>``."""
     secret_env_keys: tuple[str, ...] = ()
     """Credentials the graders read, such as a judge's API key, forwarded to grading jobs."""
+    extra_seeds: tuple[int, ...] = ()
+    """Further seeds sampled like ``sampling``; selection counts every seed's samples, so K grows per seed."""
 
 
 # Every expert turn of each trajectory's longest release row, with the teacher's earlier reasoning.
@@ -206,6 +208,19 @@ GRUG_SMOKE_RUNS = tuple(
     for run in (SWE_QWEN_SMOKE, TERMINAL_QWEN_SMOKE, OPENHANDS_QWEN_SMOKE)
 )
 
+# The unseeded runs' eight samples per candidate plus eight more at seed 1: pass rates and selection at K=16.
+GRUG_K16_RUNS = tuple(
+    replace(run, name=f"{run.name}-k16", extra_seeds=(1,))
+    for run in (SWE_GRUG, TERMINAL_GRUG, OPENHANDS_GRUG)
+)
+
+# SWE and Terminal pivots from the same K=16 pass rates at lambda 0.65: 1 to 10 passes of 16.
+GRUG_K16_LAMBDA_065_RUNS = tuple(
+    replace(run, name=f"{run.name}-lambda-0.65", difficulty_threshold=0.65)
+    for run in GRUG_K16_RUNS
+    if run.candidates in (SWE_CANDIDATES, TERMINAL_CANDIDATES)
+)
+
 RUNS = {
     run.name: run
     for run in (
@@ -213,6 +228,8 @@ RUNS = {
         TERMINAL_GRUG,
         OPENHANDS_GRUG,
         OPENHANDS_GRUG_JUDGED,
+        *GRUG_K16_RUNS,
+        *GRUG_K16_LAMBDA_065_RUNS,
         *SMOKE_RUNS,
         *GRUG_SMOKE_RUNS,
     )
