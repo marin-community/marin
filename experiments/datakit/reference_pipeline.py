@@ -112,6 +112,7 @@ import argparse
 import logging
 import posixpath
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 
@@ -659,6 +660,11 @@ class DecontaminationSteps:
     marks: dict[str, StepSpec]
     report: StepSpec
 
+    @property
+    def shared_pool_steps(self) -> list[StepSpec]:
+        """The stages that receive the shared Zephyr context."""
+        return [self.bloom, self.drop_sets, *self.marks.values()]
+
 
 @dataclass(frozen=True)
 class ZephyrDatakitSteps:
@@ -668,6 +674,11 @@ class ZephyrDatakitSteps:
     tokenize: dict[str, StepSpec]
     minhash: dict[str, StepSpec]
     fuzzy_dedup: StepSpec
+
+    @property
+    def shared_pool_steps(self) -> list[StepSpec]:
+        """The stages that receive the shared Zephyr context."""
+        return [self.exact_dedup, *self.tokenize.values(), *self.minhash.values(), self.fuzzy_dedup]
 
 
 def zephyr_datakit_steps(
@@ -1144,20 +1155,11 @@ def reference_datakit_steps(
     for s in per_source.values():
         all_steps += list(s.values())
     all_steps += [dedup, cluster_plan, cluster_text, verified_dedup, store, *reports]
-    shared_pool_steps = [
-        exact_dedup,
-        *zephyr_steps.tokenize.values(),
-        *zephyr_steps.minhash.values(),
-        dedup,
-        decontamination.bloom,
-        decontamination.drop_sets,
-        *decontamination.marks.values(),
-    ]
     return DatakitSteps(
         sources=sources,
         output_buckets=store,
         all_steps=all_steps,
-        shared_pool_steps=shared_pool_steps,
+        shared_pool_steps=zephyr_steps.shared_pool_steps + decontamination.shared_pool_steps,
     )
 
 
@@ -1192,19 +1194,15 @@ def run_reference_steps(steps: DatakitSteps, zephyr_context: ZephyrContext, *, m
     runner = StepRunner()
     runner.run(steps.sources.values(), max_concurrent=max_concurrent)
     stop = threading.Event()
-    with zephyr_context:
-        watcher = threading.Thread(
-            target=_release_shared_pool,
-            args=(zephyr_context, steps.shared_pool_steps, stop),
-            name="datakit-shared-pool-release",
-            daemon=True,
-        )
-        watcher.start()
+    with zephyr_context, ThreadPoolExecutor(max_workers=1, thread_name_prefix="datakit-shared-pool-release") as watcher:
+        # A failed watcher leaves the pool to hold its workers until the DAG ends.
+        # ``result()`` sends the error to the caller, so the run does not pass silently.
+        release = watcher.submit(_release_shared_pool, zephyr_context, steps.shared_pool_steps, stop)
         try:
             runner.run(steps.all_steps, max_concurrent=max_concurrent)
         finally:
             stop.set()
-            watcher.join()
+        release.result()
 
 
 def _release_shared_pool(zephyr_context: ZephyrContext, pool_steps: list[StepSpec], stop: threading.Event) -> None:
