@@ -51,14 +51,12 @@ from rigging.filesystem.storage_path import StoragePath
 
 
 def _parquet_metadata(path: str) -> pq.FileMetaData:
-    fs, _ = factory.url_to_fs(path)
-    with fs.open(path, "rb") as handle:
+    with StoragePath(path).open("rb") as handle:
         return pq.ParquetFile(handle).metadata
 
 
 def _read_parquet(path: str, **kwargs) -> pa.Table:
-    fs, _ = factory.url_to_fs(path)
-    with fs.open(path, "rb") as handle:
+    with StoragePath(path).open("rb") as handle:
         return pq.read_table(handle, **kwargs)
 
 

@@ -69,6 +69,13 @@ class RequestLog:
             if request in (Request.PUT, Request.CAS_PUT):
                 self.bytes_written += nbytes
 
+    def record_cas(self, *, succeeded: bool) -> None:
+        with self._lock:
+            if succeeded:
+                self.cas_successes += 1
+            else:
+                self.cas_conflicts += 1
+
     def total(self) -> int:
         with self._lock:
             return sum(self.requests.values())
@@ -304,11 +311,11 @@ class SimulatedS3(MemoryFileSystem):
                 entry = self.store.get(key)
                 current = None if entry is None else self._etag(entry.getvalue())
                 if contended or current != expected_version:
-                    self.log.cas_conflicts += 1
+                    self.log.record_cas(succeeded=False)
                     reason = "ConditionalRequestConflict" if contended else "PreconditionFailed"
                     raise ConditionalWriteError(f"conditional write failed for {path}: {reason}")
                 self.store[key] = MemoryFile(self, key, data)
-                self.log.cas_successes += 1
+                self.log.record_cas(succeeded=True)
                 return self._etag(data)
         finally:
             with self._store_lock:

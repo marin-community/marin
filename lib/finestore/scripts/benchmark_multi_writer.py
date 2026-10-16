@@ -11,7 +11,7 @@ shard count and manifest size, so layouts and commit strategies can be compared.
 
 Example:
 
-    uv run --package marin-finestore lib/finestore/benchmarks/multi_writer.py \\
+    uv run --package marin-finestore lib/finestore/scripts/benchmark_multi_writer.py \\
         --writers 1 4 16 --commits 8 --time-scale 0.1
 """
 
@@ -23,16 +23,25 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from enum import StrEnum
 
 import pyarrow as pa
 from finestore.layout import FineStoreLayout
 from finestore.reader import ReadView
 from finestore.simulated_s3 import Request, simulated_s3
 from finestore.store import DataStore
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 ROWS_PER_COMMIT = 64
 IDLE_INTERVAL = 1e9
+COMPACTION_LOGGER = "finestore.compaction"
+
+
+class Layout(StrEnum):
+    """How the benchmark's writers share archive roots."""
+
+    SHARED_ROOT = "shared-root"
+    PER_WRITER_ROOT = "per-writer-root"
 
 
 class _CompactionLog(logging.Handler):
@@ -86,15 +95,18 @@ def run(
     latency: float,
     time_scale: float,
     flush_interval: float,
-    per_writer_root: bool,
+    layout: Layout,
     maintainers: int | None,
 ) -> RunResult:
     compaction_log = _CompactionLog()
-    logging.getLogger("finestore.compaction").addHandler(compaction_log)
+    logging.getLogger(COMPACTION_LOGGER).addHandler(compaction_log)
     try:
         with simulated_s3(latency=latency, time_scale=time_scale) as fs:
             shared_root = "s3://bench/archive"
-            roots = [f"{shared_root}/w{index}" if per_writer_root else shared_root for index in range(writers)]
+            roots = [
+                prefix_join(shared_root, f"w{index}") if layout is Layout.PER_WRITER_ROOT else shared_root
+                for index in range(writers)
+            ]
             started = time.monotonic()
             with ThreadPoolExecutor(max_workers=writers) as pool:
                 futures = [
@@ -123,8 +135,7 @@ def run(
             lookup = fs.log.delta(before)
             return RunResult(
                 writers=writers,
-                layout=("per-writer-root" if per_writer_root else "shared-root")
-                + ("" if maintainers is None else f"/{maintainers}m"),
+                layout=str(layout) + ("" if maintainers is None else f"/{maintainers}m"),
                 wall_seconds=wall,
                 requests=summary.total(),
                 cas_puts=summary.requests[Request.CAS_PUT],
@@ -136,7 +147,7 @@ def run(
                 point_lookup_requests=lookup.total(),
             )
     finally:
-        logging.getLogger("finestore.compaction").removeHandler(compaction_log)
+        logging.getLogger(COMPACTION_LOGGER).removeHandler(compaction_log)
 
 
 def main() -> None:
@@ -146,7 +157,13 @@ def main() -> None:
     parser.add_argument("--latency", type=float, default=0.1, help="simulated round trip in seconds")
     parser.add_argument("--time-scale", type=float, default=0.1, help="compress latency and backoff by this factor")
     parser.add_argument("--flush-interval", type=float, default=5.0, help="maintenance interval in unscaled seconds")
-    parser.add_argument("--per-writer-root", action="store_true", help="give each writer its own archive root")
+    parser.add_argument(
+        "--layout",
+        type=Layout,
+        choices=list(Layout),
+        default=Layout.SHARED_ROOT,
+        help="whether writers share one archive root or each get their own",
+    )
     parser.add_argument(
         "--maintainers",
         type=int,
@@ -154,13 +171,14 @@ def main() -> None:
         help="run background maintenance on only this many writers, emulating an elected compactor",
     )
     args = parser.parse_args()
-    # Arrow's CPU thread pool aborts interpreter teardown ("terminate called without an
-    # active exception") after worker threads have used it; the benchmark counts requests,
-    # not scan parallelism, so a single Arrow thread is sufficient.
+    # Arrow's thread pools abort interpreter teardown ("terminate called without an active
+    # exception") after worker threads have used them; the benchmark counts requests, so a
+    # single thread in each pool is sufficient.
     pa.set_cpu_count(1)
+    pa.set_io_thread_count(1)
     logging.basicConfig(level=logging.ERROR)
-    logging.getLogger("finestore.compaction").setLevel(logging.INFO)
-    logging.getLogger("finestore.compaction").propagate = False
+    logging.getLogger(COMPACTION_LOGGER).setLevel(logging.INFO)
+    logging.getLogger(COMPACTION_LOGGER).propagate = False
 
     header = (
         f"{'writers':>7} {'layout':>16} {'wall_s':>8} {'requests':>9} {'cas':>5} {'conflicts':>9} "
@@ -174,7 +192,7 @@ def main() -> None:
             latency=args.latency,
             time_scale=args.time_scale,
             flush_interval=args.flush_interval,
-            per_writer_root=args.per_writer_root,
+            layout=args.layout,
             maintainers=args.maintainers,
         )
         print(

@@ -8,16 +8,11 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from finestore.reader import ReadView
-from finestore.simulated_s3 import Request, SimulatedConditionalObject, SimulatedS3, simulated_s3
+from finestore.simulated_s3 import Request, SimulatedConditionalObject, simulated_s3
 from finestore.store import DataStore
 from rigging.filesystem.conditional_object import ConditionalWriteError
 
 ROOT = "s3://finestore-tests/run"
-
-
-def assert_requests_at_most(fs: SimulatedS3, before, limit: int) -> None:
-    delta = fs.log.delta(before)
-    assert delta.total() <= limit, f"expected at most {limit} requests, saw {delta.total()}: {dict(delta.requests)}"
 
 
 def test_overlapping_conditional_writes_let_exactly_one_writer_win():
@@ -79,7 +74,8 @@ def test_read_view_costs_three_requests(simulated_bucket):
     view = ReadView(ROOT)
     assert view.token is not None
     # The format marker, HEAD, and the manifest it names.
-    assert_requests_at_most(fs, before, 3)
+    delta = fs.log.delta(before)
+    assert delta.total() <= 3, dict(delta.requests)
 
 
 def test_concurrent_writers_publish_every_row_through_conflicts():
