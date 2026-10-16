@@ -1,0 +1,90 @@
+{
+  "scope": "Optimizer TISseed2 full native300 original-grader replay,exact previously prepared input package. Reuse2IO released by complete SCseed1 native1200 CPU archive downloads;source/data/graders/lock/packages/runner/deadlines unchanged. No duplicate healthy grader.",
+  "cases": [
+    {
+      "job_id": "/romain/score-grader-qwen-optimizer-tis-s2-a0-01a126ce",
+      "run_id": "sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce",
+      "arm": "tis-s2",
+      "cohort_kind": "main300",
+      "stage": "optimizer",
+      "workspace": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/score-grader-qwen-optimizer-tis-s2-a0-01a126ce-workspace",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "analysis_source": "213f2fed2a2954c50c973c742bfff998f9a2edef",
+      "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e",
+      "spec_sha256": "6d2aebeddc249b7cd43b2f8ddf722074d42ca3b785ae9aa6d80dc9286a6c9721",
+      "requested_cpu": 32,
+      "requested_memory": "64GB",
+      "requested_disk": "50GB",
+      "requested_accelerators": 0,
+      "cpu_workers": 32,
+      "io_workers": 2,
+      "timeout_seconds": 43200,
+      "failure_retries": 0,
+      "preemption_retries": 0,
+      "expected_records": 249984,
+      "selected_archives": 19217,
+      "native_archive_bytes": 742320422,
+      "output_prefix": "marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-optimizer-tis-s2-a0-01a126ce",
+      "local_input_validation_passed": true,
+      "bundle": {
+        "bytes": 8580455,
+        "sha256": "9a1d30fd5de45ceb918cc650326dcc35f54e6fe7325e7259075b101484c7df2c",
+        "spec_sha256": "6d2aebeddc249b7cd43b2f8ddf722074d42ca3b785ae9aa6d80dc9286a6c9721",
+        "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e",
+        "all_input_files_verified": true
+      },
+      "native_bundle_validation_passed": true,
+      "native_submission_confirmed": true,
+      "retained_input_objects": {
+        "bundle": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-optimizer-tis-s2-a0-01a126ce/inputs/bundle.zip",
+          "bytes": 8580455,
+          "etag": "\"9d45eee7d6a1ebacce3b8819935ec6af\"",
+          "sha256": "9a1d30fd5de45ceb918cc650326dcc35f54e6fe7325e7259075b101484c7df2c"
+        },
+        "spec": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-optimizer-tis-s2-a0-01a126ce/inputs/spec.json",
+          "bytes": 157760,
+          "etag": "\"409a586bfa00e845d1d09ddc29d5932d\"",
+          "sha256": "6d2aebeddc249b7cd43b2f8ddf722074d42ca3b785ae9aa6d80dc9286a6c9721"
+        }
+      },
+      "controller_row": {
+        "job_id": "/romain/score-grader-qwen-optimizer-tis-s2-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "9a1d30fd5de45ceb918cc650326dcc35f54e6fe7325e7259075b101484c7df2c",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-optimizer-tis-s2-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "45d2d8de9707a722",
+        "task_state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792120571879",
+        "finished_at_ms": "",
+        "node_name": "g463dd6",
+        "terminal_reason": ""
+      },
+      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+    }
+  ],
+  "native_bundle_validation_passed": true,
+  "total_requested_cpu": 32,
+  "total_requested_memory_gib": 64,
+  "total_requested_gpu": 0,
+  "maximum_archive_io_workers": 2,
+  "status": "Optimizer TISseed2 main300 original-grader replay controller-running32CPU/64GiB/50GiB BATCH,zeroGPU. Exact previously prepared input nativebundle/spec durably retained/fullSHA read back.249984physical responses require full replay with native placeholders counted separately. Original source/data/graders/lock/packages/runner/deadlines unchanged. Two released SCseed1 long-replay archive-download slots reassigned;healthy existing graders preserved.",
+  "resource_board_ids": [
+    1104,
+    1105
+  ],
+  "released_io_board": 1101,
+  "released_io_evidence": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/cpu-wave-status-20261016T0311-sc1.json",
+  "released_io_evidence_kind": "verified_download_manifest",
+  "before_submit_controller": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/cpu-and-memory-diagnostic-controller-20261016T031318.csv"
+}

@@ -70,7 +70,34 @@
         "node_name": "gb95f20",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+      "status": "Controller exit0; full physical249984 cohort verified, available original responses graded and native failure placeholders retained separately.",
+      "full_response_replay_passed": true,
+      "terminal_controller": {
+        "job_id": "/romain/score-grader-qwen-optimizer-sc-s2-a0-01a126ce",
+        "job_state": "4",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "c3baff9079e487fbeab153853fa4eb084cf9bd8cf58a479dc1ddf567178dc9bf",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-optimizer-sc-s2-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "0f9b68efa5464107",
+        "task_state": "4",
+        "exit_code": "0",
+        "started_at_ms": "1792113614542",
+        "finished_at_ms": "1792120279650",
+        "node_name": "gb95f20",
+        "terminal_reason": ""
+      },
+      "allocated_cpu_hours": 59.245404444444446,
+      "physical_records": 249984,
+      "actual_original_grade_calls": 249982,
+      "native_failure_placeholders": 2,
+      "completed_report": "sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce-regrading.json.gz"
     },
     {
       "job_id": "/romain/score-grader-qwen-pilot-advantages-tis-s0-a0-01a126ce",
@@ -177,7 +204,7 @@
   "maximum_archive_io_workers": 4,
   "native_bundle_validation_passed": true,
   "local_manager_loss_evidence": "qwen_local_replay_manager_loss_20261015.json",
-  "status": "The advantages TIS seed0 pilot passed38551 original grades from38552 physical records,with one native failure placeholder retained separately. All three native evaluation count/mean checks passed. The optimizer SC seed2 full300 replay remains running;both archive download manifests are complete. All original source/data/graders/lock/packages/runner/deadlines remain frozen.",
+  "status": "Both wave2 original-grader gates PASS: optimizerSCseed2 native300 and advantagesTISseed0 pilot40. Controller exit0;available original grades249982/38551,physical249984/38552,native placeholders2/1 separately retained,zero differences. Original SDK setup failure/all inputs unchanged and preserved.",
   "resource_board_ids": [
     1088,
     1089

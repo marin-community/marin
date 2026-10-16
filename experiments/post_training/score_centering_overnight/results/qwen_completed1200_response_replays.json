@@ -1,10 +1,10 @@
 {
   "scope": "Complete available-response original-grader replays for declared Qwen batching/native-window1200 mains. Separate from18 native300 mains; other full1200 comparisons remain required. Native failure placeholders are counted separately and never claimed as original grade calls.",
   "planned_arms": 12,
-  "completed_arms": 1,
-  "physical_records": 222132,
-  "actual_original_grade_replays": 222132,
-  "native_failures_without_original_response": 0,
+  "completed_arms": 3,
+  "physical_records": 666396,
+  "actual_original_grade_replays": 666393,
+  "native_failures_without_original_response": 3,
   "grade_discrepancies": 0,
   "runs": [
     {
@@ -20,6 +20,72 @@
       "record_payloads_sha256": "fec833761ae632250bcbe4a9638b24106c8bc1b1bb7b0df4e163ace6e1526784",
       "report": "sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce-regrading.json.gz",
       "report_sha256": "7b241447d3aaa288635dbe7e0f062b415af0c0a6f4838ff0d530527cbf527fb5"
+    },
+    {
+      "run_id": "sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "completed_updates": 1200,
+      "physical_records": 222132,
+      "actual_original_grade_replays": 222131,
+      "native_failures_not_regraded": [
+        {
+          "mismatch": false,
+          "native_error": true,
+          "native_quality": null,
+          "phase": "train",
+          "quality": 0.0,
+          "reason": "Native execution failure; attempted response may be removed and replaced by a masked placeholder.",
+          "record_id": "867b6458a102bdaeabf0b7c435101ef515af0b581dec680995c2fad1987c3873",
+          "replayed": false,
+          "source_row": 9739,
+          "step": 485
+        }
+      ],
+      "grade_discrepancies": 0,
+      "evaluation_points_crosschecked": 61,
+      "all_replayed_evaluations_match_native": true,
+      "record_payloads_sha256": "08a7a9a2fd3a9ca285ce3dfd886989773b24824e8bd007dffd95298dc7d48e1d",
+      "report": "sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce-regrading.json.gz",
+      "report_sha256": "a95679a39427cfd8c29221e08083cbbe1f40b57664376173b37d54973347cded"
+    },
+    {
+      "run_id": "sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "completed_updates": 1200,
+      "physical_records": 222132,
+      "actual_original_grade_replays": 222130,
+      "native_failures_not_regraded": [
+        {
+          "mismatch": false,
+          "native_error": true,
+          "native_quality": null,
+          "phase": "train",
+          "quality": 0.0,
+          "reason": "Native execution failure; attempted response may be removed and replaced by a masked placeholder.",
+          "record_id": "0f88e53bf42f1f2c84041aa3fdfb4e0868c48d86c50b47c3d00b9e2ce3060f34",
+          "replayed": false,
+          "source_row": 6590,
+          "step": 357
+        },
+        {
+          "mismatch": false,
+          "native_error": true,
+          "native_quality": null,
+          "phase": "train",
+          "quality": 0.0,
+          "reason": "Native execution failure; attempted response may be removed and replaced by a masked placeholder.",
+          "record_id": "53363148871d35a2a0f2864bf455d40c505b7e2da8bad744d9b636b85922b973",
+          "replayed": false,
+          "source_row": 5440,
+          "step": 1085
+        }
+      ],
+      "grade_discrepancies": 0,
+      "evaluation_points_crosschecked": 61,
+      "all_replayed_evaluations_match_native": true,
+      "record_payloads_sha256": "cc1fa9e8b144747fcc876ce27aca86a85073f7b3457490aef7ccb7b0b4abffe6",
+      "report": "sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce-regrading.json.gz",
+      "report_sha256": "ed865021d00f72c2699e85b53b7f6af58278bddf504207eab2182442a8e49a5c"
     }
   ]
 }

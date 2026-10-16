@@ -1,10 +1,10 @@
 {
   "scope": "Complete original-grader replay gates for selected native300-update Qwen mains. Other native audits remain valid but their full original-response replays are pending. This is not an independent verifier.",
   "planned_arms": 18,
-  "completed_arms": 14,
-  "physical_records": 3499776,
-  "actual_original_grade_replays": 3499744,
-  "native_failures_without_original_response": 32,
+  "completed_arms": 15,
+  "physical_records": 3749760,
+  "actual_original_grade_replays": 3749726,
+  "native_failures_without_original_response": 34,
   "grade_discrepancies": 0,
   "runs": [
     {
@@ -596,6 +596,45 @@
       "record_payloads_sha256": "ab04d51232ac652fc40b074ef22ddd65d30c4c2ef05aa89d337e94ceb9adb7a2",
       "report": "sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce-regrading.json.gz",
       "report_sha256": "0426eeebb4048e470f30349e6a5ad8ce7b4e4cd413c10a510bb4c2128c912a87"
+    },
+    {
+      "run_id": "sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "completed_updates": 300,
+      "physical_records": 249984,
+      "actual_original_grade_replays": 249982,
+      "native_failures_not_regraded": [
+        {
+          "mismatch": false,
+          "native_error": true,
+          "native_quality": null,
+          "phase": "train",
+          "quality": 0.0,
+          "reason": "Native execution failure; attempted response may be removed and replaced by a masked placeholder.",
+          "record_id": "7683887b8b086971a82737743d7531d15054681a6900f37e293e451064fb63cd",
+          "replayed": false,
+          "source_row": 9437,
+          "step": 191
+        },
+        {
+          "mismatch": false,
+          "native_error": true,
+          "native_quality": null,
+          "phase": "train",
+          "quality": 0.0,
+          "reason": "Native execution failure; attempted response may be removed and replaced by a masked placeholder.",
+          "record_id": "65d0defbf5c7fa8dc56bfec1582ece2da479e4539a89f66edea76a5a6d830150",
+          "replayed": false,
+          "source_row": 9566,
+          "step": 277
+        }
+      ],
+      "grade_discrepancies": 0,
+      "evaluation_points_crosschecked": 16,
+      "all_replayed_evaluations_match_native": true,
+      "record_payloads_sha256": "614bdab615229b2414034e1ff236f6e446837129ce1ae5f297f8210baaa91f7c",
+      "report": "sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce-regrading.json.gz",
+      "report_sha256": "35507460bcc8b4e094efac2157bad4df3fb4712f87ff95725a1b93bd02633d97"
     }
   ]
 }

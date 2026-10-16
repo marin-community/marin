@@ -2516,7 +2516,9 @@
       "status": "terminal",
       "priority_band": 3,
       "bundle_id": "0ed704e4210016ba347990e9bdbb1aed76a6451b2c48ffdbfd361f431fee5bf3",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce.json.gz",
+      "scientific_completed_updates": 1200
     },
     {
       "job_id": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a2-01a126ce",
@@ -2988,5 +2990,5 @@
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-16T02:32:17.087897+00:00"
+  "observed_at": "2026-10-16T02:57:28.476788+00:00"
 }
