@@ -50,6 +50,18 @@ from rigging.filesystem.conditional_object import ConditionalWriteError, LocalCo
 from rigging.filesystem.storage_path import StoragePath
 
 
+def _parquet_metadata(path: str) -> pq.FileMetaData:
+    fs, _ = factory.url_to_fs(path)
+    with fs.open(path, "rb") as handle:
+        return pq.ParquetFile(handle).metadata
+
+
+def _read_parquet(path: str, **kwargs) -> pa.Table:
+    fs, _ = factory.url_to_fs(path)
+    with fs.open(path, "rb") as handle:
+        return pq.read_table(handle, **kwargs)
+
+
 def _rows(reader: ReadView, table: str, **kwargs) -> list[dict]:
     result = reader.scan(table, **kwargs)
     return [] if result is None else result.to_pylist()
@@ -85,8 +97,8 @@ def test_local_shard_write_creates_parent_directories(tmp_path, prefix):
     assert pq.read_table(path).to_pylist() == [{"score": 1}, {"score": 2}]
 
 
-def test_round_trip_and_projection(tmp_path):
-    root = str(tmp_path / "run")
+def test_round_trip_and_projection(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         samples = store.table("samples", primary_key=("task", "doc_id"))
         samples.append({"task": "arc", "doc_id": "1", "correct": True, "logprobs": [0.1, 0.2]})
@@ -102,8 +114,8 @@ def test_round_trip_and_projection(tmp_path):
     assert set(projected.column_names) == {"task", "doc_id", "correct"}
 
 
-def test_point_lookup(tmp_path):
-    root = str(tmp_path / "run")
+def test_point_lookup(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
         table.extend([{"task": "arc", "doc_id": str(i), "score": float(i)} for i in range(5)])
@@ -115,8 +127,8 @@ def test_point_lookup(tmp_path):
     assert ReadView(root).point("samples", task="arc", doc_id="99") is None
 
 
-def test_iter_rows_streams_latest_values_in_primary_key_order(tmp_path):
-    root = str(tmp_path / "run")
+def test_iter_rows_streams_latest_values_in_primary_key_order(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
         table = store.table("samples", primary_key=("doc_id",), on_conflict=OnConflict.SUPERSEDE)
         table.extend([{"doc_id": "b", "score": 1}, {"doc_id": "a", "score": 2}])
@@ -130,8 +142,8 @@ def test_iter_rows_streams_latest_values_in_primary_key_order(tmp_path):
     ]
 
 
-def test_supersede_keeps_latest_seq(tmp_path):
-    root = str(tmp_path / "run")
+def test_supersede_keeps_latest_seq(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"), on_conflict=OnConflict.SUPERSEDE)
         table.append({"task": "arc", "doc_id": "1", "score": 1.0})
@@ -145,8 +157,8 @@ def test_supersede_keeps_latest_seq(tmp_path):
     assert rows[0]["score"] == 2.0
 
 
-def test_filter_applies_to_latest_row_after_supersede(tmp_path):
-    root = str(tmp_path / "run")
+def test_filter_applies_to_latest_row_after_supersede(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("doc_id",), on_conflict=OnConflict.SUPERSEDE)
         table.append({"doc_id": "1", "status": "pending"})
@@ -161,17 +173,17 @@ def test_filter_applies_to_latest_row_after_supersede(tmp_path):
 
 
 @pytest.mark.parametrize("column", sorted(RESERVED_COLUMNS))
-def test_append_rejects_reserved_stamp_columns(tmp_path, column):
-    root = str(tmp_path / "run")
+def test_append_rejects_reserved_stamp_columns(column, archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("doc_id",))
         with pytest.raises(ValueError, match="reserved FineStore column"):
             table.append({"doc_id": "1", column: 999})
 
 
-def test_conflicting_primary_key_raises(tmp_path):
+def test_conflicting_primary_key_raises(archive_root):
     """A key repeat that would silently discard a differing row is rejected, not folded."""
-    root = str(tmp_path / "run")
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
         table.append({"task": "gsm8k", "doc_id": "0", "score": 0.0})
@@ -184,9 +196,9 @@ def test_conflicting_primary_key_raises(tmp_path):
     assert [row["score"] for row in rows] == [0.0]
 
 
-def test_identical_redelivery_is_not_a_conflict(tmp_path):
+def test_identical_redelivery_is_not_a_conflict(archive_root):
     """At-least-once delivery of the same row loses nothing, so it collapses without raising."""
-    root = str(tmp_path / "run")
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
         table.append({"task": "arc", "doc_id": "1", "score": 1.0})
@@ -198,9 +210,9 @@ def test_identical_redelivery_is_not_a_conflict(tmp_path):
     assert len(rows) == 1
 
 
-def test_conflict_detected_across_flushes(tmp_path):
+def test_conflict_detected_across_flushes(archive_root):
     """The earlier row already being durable does not hide the conflict."""
-    root = str(tmp_path / "run")
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
         table.append({"task": "gsm8k", "doc_id": "0", "score": 0.0})
@@ -209,9 +221,9 @@ def test_conflict_detected_across_flushes(tmp_path):
             table.append({"task": "gsm8k", "doc_id": "0", "score": 1.0})
 
 
-def test_seal_records_superseded_rows(tmp_path):
+def test_seal_records_superseded_rows(archive_root):
     """Supersession is legal but never silent: the seal marker carries the count."""
-    root = str(tmp_path / "run")
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"), on_conflict=OnConflict.SUPERSEDE)
         table.append({"task": "arc", "doc_id": "1", "score": 1.0})
@@ -224,8 +236,8 @@ def test_seal_records_superseded_rows(tmp_path):
     assert marker.superseded["samples"] == 1
 
 
-def test_multi_writer_compose(tmp_path):
-    root = str(tmp_path / "run")
+def test_multi_writer_compose(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="worker-a") as a:
         ta = a.table("samples", primary_key=("task", "doc_id"))
         ta.append({"task": "arc", "doc_id": "a", "score": 1.0})
@@ -239,10 +251,10 @@ def test_multi_writer_compose(tmp_path):
     assert {r["doc_id"] for r in rows} == {"a", "b"}
 
 
-def test_later_commit_prevents_compaction_shadowing(tmp_path):
+def test_later_commit_prevents_compaction_shadowing(archive_root):
     # A key compacted into a higher generation must still be overwritten by a later low-generation
     # append. The user commit sequence ranks before compaction generation.
-    root = str(tmp_path / "run")
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
         table.append({"task": "arc", "doc_id": "1", "score": 1.0})
@@ -258,10 +270,10 @@ def test_later_commit_prevents_compaction_shadowing(tmp_path):
     assert {row["doc_id"]: row["score"] for row in rows} == {"1": 2.0, "2": 1.0}
 
 
-def test_keys_lists_deduped_primary_keys(tmp_path):
+def test_keys_lists_deduped_primary_keys(archive_root):
     # keys() is the resume primitive: the deduplicated set of primary-key tuples already committed, so a
     # writer can skip finished work. A re-delivered key appears once; an absent table is the empty set.
-    root = str(tmp_path / "run")
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
         table.extend([{"task": "arc", "doc_id": "1"}, {"task": "arc", "doc_id": "2"}])
@@ -309,26 +321,26 @@ def test_arrow_byte_cap_requests_an_early_flush(tmp_path):
     assert scheduler.flushes == 1
 
 
-def test_large_flush_splits_into_prunable_row_groups(tmp_path, monkeypatch):
+def test_large_flush_splits_into_prunable_row_groups(monkeypatch, archive_root):
     # A flush larger than the row-group cap writes several row groups, not one, so a reader can prune
     # to the groups a filter needs. Shrink the cap so a handful of rows spans several groups.
     monkeypatch.setattr(shard_writer, "ROW_GROUP_ROWS", 2)
-    root = str(tmp_path / "run")
+    root = archive_root
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
         table.extend([{"task": "arc", "doc_id": f"{i:03d}"} for i in range(7)])
         store.flush()
     shard = ReadView(root).list_shards("samples")[0].path
-    metadata = pq.ParquetFile(shard).metadata
+    metadata = _parquet_metadata(shard)
     assert metadata.num_rows == 7
     assert metadata.num_row_groups == 4  # ceil(7 / 2)
 
 
 @pytest.mark.parametrize("explicit_schema", [False, True])
-def test_row_groups_use_arrow_buffer_bytes(tmp_path, monkeypatch, explicit_schema):
+def test_row_groups_use_arrow_buffer_bytes(monkeypatch, explicit_schema, archive_root):
     # Each stamped row occupies 76 Arrow bytes, so the target fits two rows per group.
     monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", 160)
-    root = str(tmp_path / "run")
+    root = archive_root
     schema = pa.schema([("id", pa.int64()), ("payload", pa.binary())]) if explicit_schema else None
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
         table = store.table("samples", primary_key=("id",), schema=schema)
@@ -336,13 +348,13 @@ def test_row_groups_use_arrow_buffer_bytes(tmp_path, monkeypatch, explicit_schem
         store.flush()
 
     shard = ReadView(root).list_shards("samples")[0].path
-    metadata = pq.ParquetFile(shard).metadata
+    metadata = _parquet_metadata(shard)
     assert metadata.num_rows == 3
     assert metadata.num_row_groups == 2
 
 
-def test_schema_evolution_null_promotes_missing_column(tmp_path):
-    root = str(tmp_path / "run")
+def test_schema_evolution_null_promotes_missing_column(archive_root):
+    root = archive_root
     # An "old" writer without the difficulty column.
     with DataStore.open(root, writer_id="old") as store:
         store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
@@ -358,10 +370,10 @@ def test_schema_evolution_null_promotes_missing_column(tmp_path):
     assert by_doc == {"1": None, "2": 3}
 
 
-def test_empty_dict_column_is_writable(tmp_path):
+def test_empty_dict_column_is_writable(archive_root):
     # Every row's metrics is empty: the column would be a zero-field parquet struct, so it is dropped
     # at write time and reads back as absent rather than failing the flush.
-    root = str(tmp_path / "run")
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
         table.append({"task": "arc", "doc_id": "1", "metrics": {}})
@@ -370,8 +382,8 @@ def test_empty_dict_column_is_writable(tmp_path):
     assert rows[0]["doc_id"] == "1"
 
 
-def test_blob_write_and_resolve(tmp_path):
-    root = str(tmp_path / "run")
+def test_blob_write_and_resolve(archive_root):
+    root = archive_root
     payload = b'{"steps": [1, 2, 3]}'
     with DataStore.open(root, writer_id="w1") as store:
         uri = store.write_object("traj/t1.json", payload, {"task": "arc"})
@@ -412,14 +424,14 @@ def test_large_blob_uses_bounded_parts_without_migrating_inline_blobs(tmp_path):
     ]
     part_shards = view.list_shards(BlobTables.PARTS)
     assert len(part_shards) == 1
-    assert pq.ParquetFile(part_shards[0].path).metadata.num_row_groups == 2
+    assert _parquet_metadata(part_shards[0].path).num_row_groups == 2
 
     manifest = json.loads(StoragePath(token.manifest_path).read_text())
     assert manifest["required_features"] == [CHUNKED_BLOBS_FEATURE]
 
 
-def test_blob_inline_boundary_and_batch_parts_survive_rewrites(tmp_path, monkeypatch):
-    root = str(tmp_path / "run")
+def test_blob_inline_boundary_and_batch_parts_survive_rewrites(monkeypatch, archive_root):
+    root = archive_root
     monkeypatch.setattr(store_module, "OBJECT_PART_BYTES", 64 * 1024)
     inline = b"a" * INLINE_BLOB_BYTES
     first = b"b" * (INLINE_BLOB_BYTES + 1)
@@ -450,8 +462,8 @@ def test_blob_inline_boundary_and_batch_parts_survive_rewrites(tmp_path, monkeyp
     }
 
 
-def test_blob_descriptor_row_groups_remain_bounded_after_compaction(tmp_path):
-    root = str(tmp_path / "run")
+def test_blob_descriptor_row_groups_remain_bounded_after_compaction(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
         for index in range(513):
             store.write_object(f"{index:04d}", b"value")
@@ -462,14 +474,14 @@ def test_blob_descriptor_row_groups_remain_bounded_after_compaction(tmp_path):
 
     compact_table(root, BlobTables.DESCRIPTORS)
     shard = ReadView(root).list_shards(BlobTables.DESCRIPTORS)[0].path
-    metadata = pq.ParquetFile(shard).metadata
+    metadata = _parquet_metadata(shard)
     assert metadata.num_rows == 1025
     assert metadata.num_row_groups == 2
     assert all(metadata.row_group(index).num_rows <= 1024 for index in range(metadata.num_row_groups))
 
 
-def test_open_blob_reads_incrementally_across_parts(tmp_path):
-    root = str(tmp_path / "run")
+def test_open_blob_reads_incrementally_across_parts(archive_root):
+    root = archive_root
     payload = b"a" * (OBJECT_PART_BYTES - 2) + b"bcdef"
     with DataStore.open(root, writer_id="w1") as store:
         store.write_object("large", payload)
@@ -487,8 +499,8 @@ def test_open_blob_reads_incrementally_across_parts(tmp_path):
     assert view.open_blob("missing") is None
 
 
-def test_chunked_blob_stream_detects_missing_parts_at_eof(tmp_path):
-    root = str(tmp_path / "run")
+def test_chunked_blob_stream_detects_missing_parts_at_eof(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         store.write_object("large", b"x" * (OBJECT_PART_BYTES + 1))
         token = store.flush()
@@ -508,8 +520,8 @@ def test_chunked_blob_stream_detects_missing_parts_at_eof(tmp_path):
         ReadView(root).read_blobs(["large"])
 
 
-def test_chunked_blob_rewrite_ignores_stale_tail_parts(tmp_path):
-    root = str(tmp_path / "run")
+def test_chunked_blob_rewrite_ignores_stale_tail_parts(archive_root):
+    root = archive_root
     first = b"a" * (2 * OBJECT_PART_BYTES + 1)
     second = b"b" * (OBJECT_PART_BYTES + 1)
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
@@ -528,8 +540,8 @@ def test_chunked_blob_rewrite_ignores_stale_tail_parts(tmp_path):
     assert ReadView(root).read_blob("archive.log") == b"inline"
 
 
-def test_later_writer_chunked_blob_supersedes_descriptor_and_parts(tmp_path):
-    root = str(tmp_path / "run")
+def test_later_writer_chunked_blob_supersedes_descriptor_and_parts(archive_root):
+    root = archive_root
     first_payload = b"a" * (OBJECT_PART_BYTES + 1)
     second_payload = b"b" * (OBJECT_PART_BYTES + 1)
     with DataStore.open(root, writer_id="first", flush_interval=3600) as first:
@@ -542,10 +554,10 @@ def test_later_writer_chunked_blob_supersedes_descriptor_and_parts(tmp_path):
     assert ReadView(root).read_blob("shared") == second_payload
 
 
-def test_blob_rewrite_supersedes_by_name(tmp_path):
+def test_blob_rewrite_supersedes_by_name(archive_root):
     # Blobs are a table keyed by name, so re-writing a name buffers a higher-_seq row that the reader's
     # dedup keeps -- the latest payload wins, like any other primary-key collision.
-    root = str(tmp_path / "run")
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         uri = store.write_object("t1.json", b"first")
         store.write_object("t1.json", b"second")
@@ -553,8 +565,8 @@ def test_blob_rewrite_supersedes_by_name(tmp_path):
     assert ReadView(root).resolve(uri) == b"second"
 
 
-def test_compaction_replaces_sources_logically_and_retains_objects(tmp_path):
-    root = str(tmp_path / "run")
+def test_compaction_replaces_sources_logically_and_retains_objects(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
         for i in range(3):
@@ -574,8 +586,8 @@ def test_compaction_replaces_sources_logically_and_retains_objects(tmp_path):
     assert {r["doc_id"] for r in rows} == {"0", "1", "2"}
 
 
-def test_manifest_binds_flush_and_compaction_shard_bytes(tmp_path):
-    root = str(tmp_path / "run")
+def test_manifest_binds_flush_and_compaction_shard_bytes(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("doc_id",))
         table.append({"doc_id": "1"})
@@ -595,8 +607,8 @@ def test_manifest_binds_flush_and_compaction_shard_bytes(tmp_path):
     assert compacted.content_sha256 == hashlib.sha256(compacted_bytes).hexdigest()
 
 
-def test_read_view_remains_valid_after_compaction(tmp_path):
-    root = str(tmp_path / "run")
+def test_read_view_remains_valid_after_compaction(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
         table.extend([{"task": "arc", "doc_id": str(i)} for i in range(2)])
@@ -611,9 +623,9 @@ def test_read_view_remains_valid_after_compaction(tmp_path):
     assert {row["doc_id"] for row in _rows(pinned, "samples")} == {"0", "1", "2", "3"}
 
 
-def test_recompaction_merges_all_generations(tmp_path):
+def test_recompaction_merges_all_generations(archive_root):
     # Recompaction must merge an already compacted shard with a later level-zero shard.
-    root = str(tmp_path / "run")
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
         table.extend([{"task": "arc", "doc_id": str(i), "score": float(i)} for i in range(2)])
@@ -633,8 +645,8 @@ def test_recompaction_merges_all_generations(tmp_path):
     assert rows == {"0": 0.0, "1": 1.0, "2": 2.0, "3": 3.0, "4": 4.0}
 
 
-def test_compaction_deduplicates_one_level_zero_shard_then_becomes_stable(tmp_path):
-    root = str(tmp_path / "run")
+def test_compaction_deduplicates_one_level_zero_shard_then_becomes_stable(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("doc_id",), on_conflict=OnConflict.SUPERSEDE)
         table.append({"doc_id": "1", "score": 1})
@@ -654,10 +666,10 @@ def test_compaction_deduplicates_one_level_zero_shard_then_becomes_stable(tmp_pa
     assert unchanged.list_shards("samples") == stable_shards
 
 
-def test_compaction_unifies_evolved_schema(tmp_path):
+def test_compaction_unifies_evolved_schema(archive_root):
     # Two writers wrote different columns; the compacted shard carries both columns,
     # null where a source lacked one.
-    root = str(tmp_path / "run")
+    root = archive_root
     with DataStore.open(root, writer_id="old") as store:
         store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "a": 1})
         store.flush()
@@ -670,8 +682,8 @@ def test_compaction_unifies_evolved_schema(tmp_path):
     assert rows == {"1": (1, None), "2": (None, 2)}
 
 
-def test_compaction_sorts_unsorted_shard_and_keeps_latest_value(tmp_path):
-    root = str(tmp_path / "run")
+def test_compaction_sorts_unsorted_shard_and_keeps_latest_value(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="old") as store:
         table = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
         table.extend([{"id": "b", "value": 1}, {"value": 2}, {"id": "a", "value": 3}])
@@ -689,8 +701,8 @@ def test_compaction_sorts_unsorted_shard_and_keeps_latest_value(tmp_path):
     ]
 
 
-def test_compaction_preserves_newest_value_across_output_buffers(tmp_path):
-    root = str(tmp_path / "run")
+def test_compaction_preserves_newest_value_across_output_buffers(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="old") as store:
         store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE).extend(
             [{"id": "a", "value": "old"}, {"id": "b", "value": "only"}]
@@ -708,11 +720,11 @@ def test_compaction_preserves_newest_value_across_output_buffers(tmp_path):
     assert list(view.iter_rows("samples", columns=["id", "value"])) == expected
 
 
-def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
+def test_compaction_streams_multiple_row_groups(monkeypatch, archive_root):
     # A tiny output row group forces a compacted shard to span several groups; re-compacting it with a
     # fresh level-0 shard must read those groups and preserve every value.
     monkeypatch.setattr(shard_writer, "ROW_GROUP_ROWS", 2)
-    root = str(tmp_path / "run")
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
         table.extend([{"task": "arc", "doc_id": f"{i:03d}", "score": float(i)} for i in range(4)])
@@ -733,21 +745,19 @@ def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
     assert rows == {f"{i:03d}": float(i) for i in range(10)}
 
 
-def test_compaction_orders_row_groups_by_first_key(tmp_path, monkeypatch):
-    root = str(tmp_path / "run")
+def test_compaction_orders_row_groups_by_first_key(monkeypatch, archive_root):
+    root = archive_root
     monkeypatch.setattr(shard_writer, "ROW_GROUP_ROWS", 2)
     for writer, keys in (("old", (1, 2, 5, 6)), ("new", (3, 4, 7, 8))):
         with DataStore.open(root, writer_id=writer) as store:
             store.table("samples", primary_key=("id",)).extend({"id": key} for key in keys)
             store.flush()
 
-    assert all(
-        pq.ParquetFile(shard.path).metadata.num_row_groups == 2 for shard in ReadView(root).list_shards("samples")
-    )
+    assert all(_parquet_metadata(shard.path).num_row_groups == 2 for shard in ReadView(root).list_shards("samples"))
     assert compact_table(root, "samples", target_bytes=1).written == 8
     output_shards = ReadView(root).list_shards("samples")
     assert len(output_shards) == 4
-    assert [pq.read_table(shard.path, columns=["id"])["id"][0].as_py() for shard in output_shards] == [1, 3, 5, 7]
+    assert [_read_parquet(shard.path, columns=["id"])["id"][0].as_py() for shard in output_shards] == [1, 3, 5, 7]
 
 
 def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(tmp_path, monkeypatch):
@@ -798,11 +808,11 @@ def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(
     assert measurements[1] <= measurements[0] + 4 * row_bytes, measurements
 
 
-def test_typed_on_disk_metadata(tmp_path):
+def test_typed_on_disk_metadata(archive_root):
     # The three on-disk contracts are typed pydantic objects with clear owners: the store stamps the
     # archive-wide metadata at open, the per-table metadata at registration, and the seal marker at
     # seal. Each round-trips through its model.
-    root = str(tmp_path / "run")
+    root = archive_root
     layout = FineStoreLayout(root)
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"), schema_version=3)
@@ -821,10 +831,10 @@ def test_typed_on_disk_metadata(tmp_path):
     assert seal.writer == "w1"
 
 
-def test_reader_refuses_a_future_format(tmp_path):
+def test_reader_refuses_a_future_format(archive_root):
     # A reader must not silently misread an archive a newer finestore wrote; the archive metadata
     # records the format version and scan refuses one it does not understand.
-    root = str(tmp_path / "run")
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
         store.flush()
@@ -837,8 +847,8 @@ def test_reader_refuses_a_future_format(tmp_path):
         DataStore.open(root)
 
 
-def test_reader_refuses_unknown_required_manifest_feature(tmp_path):
-    root = str(tmp_path / "run")
+def test_reader_refuses_unknown_required_manifest_feature(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         store.table("samples", primary_key=("doc_id",)).append({"doc_id": "1"})
         token = store.flush()
@@ -853,8 +863,8 @@ def test_reader_refuses_unknown_required_manifest_feature(tmp_path):
         ReadView(root)
 
 
-def test_required_feature_survives_commit_rebase(tmp_path):
-    root = str(tmp_path / "run")
+def test_required_feature_survives_commit_rebase(archive_root):
+    root = archive_root
     coordinator = CommitCoordinator(FineStoreLayout(root))
     with DataStore.open(root, writer_id="initializer", flush_interval=3600):
         stale = coordinator.snapshot()
@@ -874,8 +884,8 @@ def test_required_feature_survives_commit_rebase(tmp_path):
     assert manifest["required_features"] == [CHUNKED_BLOBS_FEATURE]
 
 
-def test_commit_refreshes_head_after_conflict_backoff(tmp_path, monkeypatch):
-    root = str(tmp_path / "run")
+def test_commit_refreshes_head_after_conflict_backoff(monkeypatch, archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="initializer", flush_interval=3600):
         pass
 
@@ -911,8 +921,8 @@ def test_commit_refreshes_head_after_conflict_backoff(tmp_path, monkeypatch):
     assert token.sequence == 2
 
 
-def test_commit_preserves_unknown_optional_manifest_fields(tmp_path):
-    root = str(tmp_path / "run")
+def test_commit_preserves_unknown_optional_manifest_fields(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="first") as store:
         store.table("samples", primary_key=("doc_id",)).append({"doc_id": "1"})
         token = store.flush()
@@ -936,11 +946,11 @@ def test_commit_preserves_unknown_optional_manifest_fields(tmp_path):
     assert committed["tables"]["samples"]["shards"][0]["future_shard"] == 17
 
 
-def test_read_view_reads_a_populated_archive_without_its_format_marker(tmp_path):
+def test_read_view_reads_a_populated_archive_without_its_format_marker(archive_root):
     # Bucket lifecycle rules expire each object on its own clock. The write-once marker expires
     # while HEAD, rewritten by every commit, remains. HEAD carries the format version, so the
     # archive stays readable and the next writer open recreates the marker.
-    root = str(tmp_path / "run")
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         store.table("samples", primary_key=("doc_id",)).append({"doc_id": "1"})
         store.flush()
@@ -962,8 +972,8 @@ def test_read_view_refuses_an_older_format_with_migration_instructions(tmp_path)
         ReadView(str(root))
 
 
-def test_seal_marker(tmp_path):
-    root = str(tmp_path / "run")
+def test_seal_marker(archive_root):
+    root = archive_root
     reader = ReadView(root)
     with DataStore.open(root, writer_id="w1") as store:
         store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
@@ -973,11 +983,11 @@ def test_seal_marker(tmp_path):
     assert ReadView(root).is_sealed()
 
 
-def test_seal_compacts_each_table_to_one_generation(tmp_path):
+def test_seal_compacts_each_table_to_one_generation(archive_root):
     # seal is the materialize contract: it flushes then compacts every table, so a sealed archive is
     # one deduplicated Parquet shard per table. Two flushes of the same key collapse to a single
     # generation-1 shard holding the latest row -- readable without applying finestore's dedup rule.
-    root = str(tmp_path / "run")
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"), on_conflict=OnConflict.SUPERSEDE)
         table.append({"task": "arc", "doc_id": "1", "score": 1.0})
@@ -990,8 +1000,8 @@ def test_seal_compacts_each_table_to_one_generation(tmp_path):
     assert ReadView(root).scan("samples", columns=["doc_id", "score"]).to_pylist() == [{"doc_id": "1", "score": 2.0}]
 
 
-def test_seal_compacts_tables_not_registered_by_the_sealing_writer(tmp_path):
-    root = str(tmp_path / "run")
+def test_seal_compacts_tables_not_registered_by_the_sealing_writer(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="first", flush_interval=3600) as store:
         table = store.table("history", primary_key=("id",))
         table.append({"id": "1"})
@@ -1007,18 +1017,18 @@ def test_seal_compacts_tables_not_registered_by_the_sealing_writer(tmp_path):
     assert len(view.list_shards("history")) == 1
 
 
-def test_reader_none_for_absent_table(tmp_path):
-    root = str(tmp_path / "run")
+def test_reader_none_for_absent_table(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
         store.flush()
     assert ReadView(root).scan("does-not-exist") is None
 
 
-def test_single_table_flush_is_independent(tmp_path):
+def test_single_table_flush_is_independent(archive_root):
     # DataTable.flush() persists just its own buffer; a sibling table's rows stay buffered. A long
     # flush interval keeps the background thread from flushing the sibling during the test.
-    root = str(tmp_path / "run")
+    root = archive_root
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
         samples = store.table("samples", primary_key=("task", "doc_id"))
         steps = store.table("steps", primary_key=("task", "step_id"))
@@ -1029,10 +1039,10 @@ def test_single_table_flush_is_independent(tmp_path):
         assert ReadView(root).scan("steps") is None
 
 
-def test_table_returns_shared_handle(tmp_path):
+def test_table_returns_shared_handle(archive_root):
     # Re-registering a table returns the same handle, so two appenders share one buffer and one
     # sequence counter rather than splitting rows across two.
-    root = str(tmp_path / "run")
+    root = archive_root
     with DataStore.open(root, writer_id="w1") as store:
         first = store.table("samples", primary_key=("task", "doc_id"))
         second = store.table("samples", primary_key=("task", "doc_id"))
@@ -1044,11 +1054,11 @@ def test_table_returns_shared_handle(tmp_path):
     assert {r["doc_id"] for r in rows} == {"1", "2"}
 
 
-def test_explicit_schema_pins_types_and_rejects_mismatch(tmp_path):
+def test_explicit_schema_pins_types_and_rejects_mismatch(archive_root):
     # An explicit schema pins each column's type. A row that violates it fails the flush loudly rather
     # than silently writing an inferred type a later reader would see drift from; a conforming row
     # persists with exactly the declared types.
-    root = str(tmp_path / "run")
+    root = archive_root
     schema = pa.schema(
         [
             ("task", pa.string()),
@@ -1073,8 +1083,8 @@ def test_explicit_schema_pins_types_and_rejects_mismatch(tmp_path):
     assert result.to_pylist() == [{"task": "arc", "doc_id": "2", "count": 5}]
 
 
-def test_transaction_publishes_tables_and_objects_with_one_token(tmp_path):
-    root = str(tmp_path / "run")
+def test_transaction_publishes_tables_and_objects_with_one_token(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
         store.table("purchases", primary_key=("order_id",))
         before = store.read_view()
@@ -1093,8 +1103,8 @@ def test_transaction_publishes_tables_and_objects_with_one_token(tmp_path):
         assert after.resolve(uri) == b"paid"
 
 
-def test_transaction_publishes_chunked_object_with_related_table(tmp_path):
-    root = str(tmp_path / "run")
+def test_transaction_publishes_chunked_object_with_related_table(archive_root):
+    root = archive_root
     payload = b"x" * (OBJECT_PART_BYTES + 1)
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
         store.table("purchases", primary_key=("order_id",))
@@ -1111,8 +1121,8 @@ def test_transaction_publishes_chunked_object_with_related_table(tmp_path):
         assert parts.num_rows == 2
 
 
-def test_transaction_exception_publishes_nothing(tmp_path):
-    root = str(tmp_path / "run")
+def test_transaction_exception_publishes_nothing(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
         store.table("purchases", primary_key=("order_id",))
         with pytest.raises(RuntimeError, match="abort"):
@@ -1126,8 +1136,8 @@ def test_transaction_exception_publishes_nothing(tmp_path):
         assert view.read_blob("receipts/o1") is None
 
 
-def test_transaction_limit_uses_arrow_buffer_bytes(tmp_path):
-    root = str(tmp_path / "run")
+def test_transaction_limit_uses_arrow_buffer_bytes(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
         store.table(
             "samples",
@@ -1143,8 +1153,8 @@ def test_transaction_limit_uses_arrow_buffer_bytes(tmp_path):
         assert ReadView(root).scan("samples", columns=["id"]).to_pylist() == [{"id": 0}]
 
 
-def test_transaction_counts_chunk_arrow_buffers_toward_payload_bound(tmp_path):
-    root = str(tmp_path / "run")
+def test_transaction_counts_chunk_arrow_buffers_toward_payload_bound(archive_root):
+    root = archive_root
     payload = b"x" * (OBJECT_PART_BYTES + 1)
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
         with pytest.raises(TransactionTooLarge):
@@ -1155,8 +1165,8 @@ def test_transaction_counts_chunk_arrow_buffers_toward_payload_bound(tmp_path):
         assert ReadView(root).scan(BlobTables.PARTS) is None
 
 
-def test_transaction_lookup_is_pinned_to_its_starting_commit(tmp_path):
-    root = str(tmp_path / "run")
+def test_transaction_lookup_is_pinned_to_its_starting_commit(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="first", flush_interval=3600) as first:
         transaction = first.transaction()
         with DataStore.open(root, writer_id="second", flush_interval=3600) as second:
@@ -1166,8 +1176,8 @@ def test_transaction_lookup_is_pinned_to_its_starting_commit(tmp_path):
         transaction.commit()
 
 
-def test_failed_multi_table_flush_restores_every_buffer(tmp_path, monkeypatch):
-    root = str(tmp_path / "run")
+def test_failed_multi_table_flush_restores_every_buffer(monkeypatch, archive_root):
+    root = archive_root
     payload = b"x" * (OBJECT_PART_BYTES + 1)
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
         store.table("purchases", primary_key=("order_id",)).append({"order_id": "o1"})
@@ -1200,8 +1210,8 @@ def test_failed_multi_table_flush_restores_every_buffer(tmp_path, monkeypatch):
         assert ReadView(root).read_blob("receipt") == payload
 
 
-def test_maintenance_compacts_after_shard_threshold(tmp_path):
-    root = str(tmp_path / "run")
+def test_maintenance_compacts_after_shard_threshold(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1", flush_interval=3600, compaction_levels=(2,)) as store:
         table = store.table("samples", primary_key=("doc_id",))
         for index in range(3):
@@ -1215,8 +1225,8 @@ def test_maintenance_compacts_after_shard_threshold(tmp_path):
         assert shards[0].generation == 1
 
 
-def test_close_compacts_small_blob_archive_and_preserves_pinned_view(tmp_path):
-    root = str(tmp_path / "run")
+def test_close_compacts_small_blob_archive_and_preserves_pinned_view(archive_root):
+    root = archive_root
     expected = {str(index): bytes([index]) * 4096 for index in range(22)}
     with DataStore.open(root, flush_interval=3600) as store:
         for start in range(0, 22, 2):
@@ -1291,8 +1301,8 @@ def test_concurrent_close_preserves_other_writers_and_newer_values(tmp_path, mon
     assert final.scan("unrelated", columns=["id"]).to_pylist() == [{"id": "retained"}]
 
 
-def test_close_does_not_shadow_newer_foreign_level_zero_value(tmp_path):
-    root = str(tmp_path / "run")
+def test_close_does_not_shadow_newer_foreign_level_zero_value(archive_root):
+    root = archive_root
     with (
         DataStore.open(root, writer_id="first", flush_interval=3600) as first,
         DataStore.open(root, writer_id="second", flush_interval=3600) as second,
@@ -1310,8 +1320,8 @@ def test_close_does_not_shadow_newer_foreign_level_zero_value(tmp_path):
 
 
 @pytest.mark.parametrize("budget", ["bytes", "rows"])
-def test_close_budget_skips_large_group_and_continues_with_smaller_table(tmp_path, monkeypatch, budget):
-    root = str(tmp_path / "run")
+def test_close_budget_skips_large_group_and_continues_with_smaller_table(monkeypatch, budget, archive_root):
+    root = archive_root
     payload = random.Random(0).randbytes(4096)
     with DataStore.open(root, flush_interval=3600) as store:
         for name, batch_rows in (("c", 1), ("b", 2), ("a", 1)):
@@ -1361,8 +1371,8 @@ def test_close_compaction_failure_leaves_flushed_data_readable(tmp_path, monkeyp
     assert len(view.list_shards(BlobTables.DESCRIPTORS)) == 2
 
 
-def test_close_prioritizes_descriptors_over_chunked_payloads(tmp_path, monkeypatch):
-    root = str(tmp_path / "run")
+def test_close_prioritizes_descriptors_over_chunked_payloads(monkeypatch, archive_root):
+    root = archive_root
     monkeypatch.setattr(store_module, "INLINE_BLOB_BYTES", 64)
     monkeypatch.setattr(store_module, "OBJECT_PART_BYTES", 64)
     payload = random.Random(0).randbytes(128)
@@ -1413,8 +1423,8 @@ def test_close_retries_transient_storage_and_propagates_exhaustion(tmp_path, mon
     assert len(view.list_shards(BlobTables.DESCRIPTORS)) == (1 if failures == 1 else 2)
 
 
-def test_maintenance_compaction_levels_are_terminal(tmp_path):
-    root = str(tmp_path / "run")
+def test_maintenance_compaction_levels_are_terminal(archive_root):
+    root = archive_root
     with DataStore.open(root, writer_id="w1", flush_interval=3600, compaction_levels=(2, 1, 1)) as store:
         table = store.table("samples", primary_key=("doc_id",))
         next_id = 0
@@ -1438,8 +1448,8 @@ def test_maintenance_compaction_levels_are_terminal(tmp_path):
         assert stable.list_shards("samples") == terminal_shards
 
 
-def test_background_maintenance_recovers_from_transient_s3_failure(tmp_path, monkeypatch):
-    root = str(tmp_path / "run")
+def test_background_maintenance_recovers_from_transient_s3_failure(monkeypatch, archive_root):
+    root = archive_root
     persisted = threading.Event()
     attempts = 0
     slowdown = ClientError({"Error": {"Code": "SlowDown", "Message": "reduce request rate"}}, "PutObject")
@@ -1467,8 +1477,8 @@ def test_background_maintenance_recovers_from_transient_s3_failure(tmp_path, mon
         assert ReadView(root).point("samples", doc_id="1") is not None
 
 
-def test_compaction_losing_an_input_race_is_a_benign_noop(tmp_path):
-    root = str(tmp_path / "run")
+def test_compaction_losing_an_input_race_is_a_benign_noop(archive_root):
+    root = archive_root
     real = CommitCoordinator(FineStoreLayout(root))
 
     class LosingCoordinator:
