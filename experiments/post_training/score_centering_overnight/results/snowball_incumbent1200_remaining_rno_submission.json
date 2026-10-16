@@ -1,0 +1,245 @@
+{
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "source_preparation_commit": "a6d38b7b872ff1bd1332a349e49b9d47b3d5141d",
+  "source_preparation_file": "snowball_incumbent_remaining_seeds_rno_preparation.json",
+  "source_preparation_sha256": "ab30ebb03a77337ca14a2bcbff56522389a419d3c9ee6a1ccff26da6ac6902e3",
+  "admission_proof": "snowball_incumbent1200_rno_first_two_update_admission.json",
+  "admission_proof_sha256": "86df46d62fc7fad344ba520013249602b2e3800b46bc7b9960d74b1abece8a19",
+  "retained_admission_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/admission/first-two-20261016T115356/admission-manifest.json",
+    "bytes": 488170,
+    "sha256": "e3a6633b67fcce30ca0fca3a2a61c80f2790430fa2bf66cb92996959971f654b",
+    "full_byte_readback_verified": true
+  },
+  "resource_board_ids": [
+    1138,
+    1139
+  ],
+  "interactive_nodes_including_queued_before_submission": 4,
+  "cases": [
+    {
+      "seed": 1,
+      "job_id": "/romain/sc-snowball-incumbent-main-s1-rno-a3-01a126ce",
+      "source_configuration": "experiments/post_training/score_centering_overnight/snowball_incumbent_main_v2/s1.yaml",
+      "source_configuration_sha256": "42292aca383f5b50b3ee8b225872887d0c0f192dcefefbcb6a40d71934976b7a",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/ordinary-s1.yaml",
+      "configuration_sha256": "8997cee98a3eb289966821a4f83f4689d61663e6ba121eed79cbfefaf335eefd",
+      "prepare_configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/ordinary-s1-prepare.yaml",
+      "prepare_configuration_sha256": "a04ace429bb70436a45cd6db0f99ede53ec2bbeb1e7e61d4d41b20f93ef8dc87",
+      "actual_decoded_changed_fields": [
+        "run.id",
+        "iris.cluster",
+        "iris.cluster_config",
+        "iris.job_name",
+        "ray.rendezvous_dir",
+        "ray.log_dir",
+        "artifacts.checkpoint_root",
+        "artifacts.export_root",
+        "artifacts.attempts_root",
+        "artifacts.resolved_config_uri",
+        "artifacts.terminal_manifest_uri",
+        "skyrl.trainer.rollout_buffer.object_store_root",
+        "skyrl.trainer.policy.megatron_config.torch_profiler_config.save_path"
+      ],
+      "actual_nonpath_changed_fields": [
+        "iris.cluster",
+        "iris.cluster_config"
+      ],
+      "native_preparation_passed": true,
+      "native_submission_confirmed": true,
+      "native_preparation_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-snowball-incumbent-main-s1-rno-a3-01a126ce-native-prepare.log",
+      "native_preparation_log_sha256": "4ed65439287bef3497e9dabed0bb00ab648677779459c4b55169c211547d98ca",
+      "native_submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/ordinary-remaining-s1-native-submit.log",
+      "native_submission_log_sha256": "124190b36b07f7b4e1dd2a417c45b0f34063d3db328548517a49a29eafb67608",
+      "controller_task_row_confirmation_pending": false,
+      "controller_job_confirmation": {
+        "job_id": "/romain/sc-snowball-incumbent-main-s1-rno-a3-01a126ce",
+        "state": "1",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "3db873ba590c2aeb03525c9b77f59dda890429e9678ba7465e4098becba864cf",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "1932735283200",
+        "res_disk_bytes": "536870912000",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "controller_task_rows": [
+        {
+          "task_id": "/romain/sc-snowball-incumbent-main-s1-rno-a3-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "794799440e9a7cde",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-incumbent-main-s1-rno-a3-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "992896d37fa19a20",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-incumbent-main-s1-rno-a3-01a126ce/2",
+          "attempt_id": "0",
+          "attempt_uid": "c197111d2214dd03",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-incumbent-main-s1-rno-a3-01a126ce/3",
+          "attempt_id": "0",
+          "attempt_uid": "deb6443b3bacd7ca",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-incumbent-main-s1-rno-a3-01a126ce/4",
+          "attempt_id": "0",
+          "attempt_uid": "39cc448512df9e8b",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        }
+      ]
+    },
+    {
+      "seed": 2,
+      "job_id": "/romain/sc-snowball-incumbent-main-s2-rno-a3-01a126ce",
+      "source_configuration": "experiments/post_training/score_centering_overnight/snowball_incumbent_main_v2/s2.yaml",
+      "source_configuration_sha256": "3a5b5baf038564ce9a05593bb53fcaaa01a7655200c48b9df958e9cacd1d512a",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/ordinary-s2.yaml",
+      "configuration_sha256": "0d2f6d63cf66e355764b611f70df55d6410ac0c31a46f9dbcd80f6952217c983",
+      "prepare_configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/ordinary-s2-prepare.yaml",
+      "prepare_configuration_sha256": "2d6731bb6c49689b45596f57f16cc405ba9d3128796bce3e9dac0a0e019d31da",
+      "actual_decoded_changed_fields": [
+        "run.id",
+        "iris.cluster",
+        "iris.cluster_config",
+        "iris.job_name",
+        "ray.rendezvous_dir",
+        "ray.log_dir",
+        "artifacts.checkpoint_root",
+        "artifacts.export_root",
+        "artifacts.attempts_root",
+        "artifacts.resolved_config_uri",
+        "artifacts.terminal_manifest_uri",
+        "skyrl.trainer.rollout_buffer.object_store_root",
+        "skyrl.trainer.policy.megatron_config.torch_profiler_config.save_path"
+      ],
+      "actual_nonpath_changed_fields": [
+        "iris.cluster",
+        "iris.cluster_config"
+      ],
+      "native_preparation_passed": true,
+      "native_submission_confirmed": true,
+      "native_preparation_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-snowball-incumbent-main-s2-rno-a3-01a126ce-native-prepare.log",
+      "native_preparation_log_sha256": "11bd2ce421cb40bdbb768116234e72e0df7f6dc407262694139176646f2904f8",
+      "native_submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/ordinary-remaining-s2-native-submit.log",
+      "native_submission_log_sha256": "edb770fcc70726b08a2dd50a6d12bd1e1f7fa3e6e097d162942c1eef833389f4",
+      "controller_task_row_confirmation_pending": false,
+      "controller_job_confirmation": {
+        "job_id": "/romain/sc-snowball-incumbent-main-s2-rno-a3-01a126ce",
+        "state": "1",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "48934d3261d77b148b3705b3123f3a1122b247482ba25894437847c8784794cd",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "1932735283200",
+        "res_disk_bytes": "536870912000",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+      },
+      "controller_task_rows": [
+        {
+          "task_id": "/romain/sc-snowball-incumbent-main-s2-rno-a3-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "9c2e2ec31dcd4279",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-incumbent-main-s2-rno-a3-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "a1749cba67160c19",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-incumbent-main-s2-rno-a3-01a126ce/2",
+          "attempt_id": "0",
+          "attempt_uid": "e8457e9658ed2319",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-incumbent-main-s2-rno-a3-01a126ce/3",
+          "attempt_id": "0",
+          "attempt_uid": "8bf9f986ccb376d1",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-snowball-incumbent-main-s2-rno-a3-01a126ce/4",
+          "attempt_id": "0",
+          "attempt_uid": "f2208ff0d04127c6",
+          "state": "2",
+          "exit_code": "",
+          "started_at_ms": "",
+          "finished_at_ms": "",
+          "node_name": "",
+          "terminal_reason": ""
+        }
+      ]
+    }
+  ],
+  "scope": "Two remaining declared ordinary asynchronous no-head/no-TIS/no-SC Snowball1200 seeds after actual ordinary seed0 first-two-native-update admission and full selected evidence retention. Source0212 only; five BATCH nodes per seed, no prior jobs to cancel. No full1200 endpoint, original-response replay or checkpoint-source qualification is established.",
+  "both_seeds_native_submitted": true,
+  "controller_all_ten_task_rows_confirmed": true,
+  "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T120414",
+  "controller_task_snapshot_sha256": "62223cc8240b0451f24b9720c47b282316ca14cbd2925a568337a1a4dce00a0a",
+  "retained_native_submission_evidence_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/ordinary-remaining-submission-20261016T1204/ordinary1200-remaining-native-evidence-manifest.json",
+    "bytes": 16300,
+    "sha256": "bef53a5e542cebae9945dd23c0011a9270687aaffc3483fd912c7e2241b105ee",
+    "full_byte_readback_verified": true
+  },
+  "retained_native_submission_evidence_files": 14,
+  "retained_native_submission_evidence_bytes": 415498,
+  "all_native_submission_evidence_full_byte_readback_verified": true
+}

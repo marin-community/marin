@@ -47,7 +47,14 @@
     "cluster": "cw-rno2a",
     "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
     "submission_proof": "snowball_main_rno_provider_replacement_submission.json",
-    "first_actual_main_admission_gate_passed": false,
-    "other_two_seeds_submitted": false
+    "first_actual_main_admission_gate_passed": true,
+    "other_two_seeds_submitted": true,
+    "first_two_update_admission_proof": "snowball_incumbent1200_rno_first_two_update_admission.json",
+    "first_two_update_admission_proof_sha256": "86df46d62fc7fad344ba520013249602b2e3800b46bc7b9960d74b1abece8a19",
+    "remaining_seeds_submission_proof": "snowball_incumbent1200_remaining_rno_submission.json",
+    "remaining_seed_job_ids": [
+      "/romain/sc-snowball-incumbent-main-s1-rno-a3-01a126ce",
+      "/romain/sc-snowball-incumbent-main-s2-rno-a3-01a126ce"
+    ]
   }
 }

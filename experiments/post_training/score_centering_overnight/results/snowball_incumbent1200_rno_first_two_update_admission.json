@@ -1,0 +1,1641 @@
+{
+  "run_id": "sc-snowball-incumbent-main-s0-rno-a3-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "scope": "Actual first two RNO ordinary incumbent main updates only; no full1200 scientific endpoint. Full physical response membership is checked in native archives; log probabilities and no-head learner fields are checked only on the retained learner rows/tokens whose coverage is reported.",
+  "planned_updates": 1200,
+  "controller_attempt": 0,
+  "archive_after_ms": 1792148832998,
+  "sampler_refresh_period": 1,
+  "sampler_weight_noise_scale": 0,
+  "sampler_generating_versions_checked": {
+    "1": [
+      0
+    ],
+    "2": [
+      0
+    ]
+  },
+  "learner_evidence": [
+    {
+      "step": 1,
+      "gradient_norm": 0.1848651021718979,
+      "sampler_age_min": 0,
+      "sampler_age_max": 0,
+      "logical_rows": 512,
+      "retained_rows": 2,
+      "retained_source_row_indices": [
+        0,
+        1
+      ],
+      "excluded_from_baseline_count": 0,
+      "loss_tokens_checked": 179,
+      "ppo_clip_ratio": 0.0,
+      "requested_logprobs": 0,
+      "metric_sha256": "e2851840052a6b61284272e04d920054d63f40e8bc53ba474b8123fbeb2fe22a",
+      "capture_sha256": "950da8856b7d6247ae2216804ab81ea963d705b3ab94d4c12d09bdfef73363db"
+    },
+    {
+      "step": 2,
+      "gradient_norm": 0.19318221509456635,
+      "sampler_age_min": 1,
+      "sampler_age_max": 1,
+      "logical_rows": 512,
+      "retained_rows": 2,
+      "retained_source_row_indices": [
+        0,
+        1
+      ],
+      "excluded_from_baseline_count": 0,
+      "loss_tokens_checked": 240,
+      "ppo_clip_ratio": 0.0,
+      "requested_logprobs": 0,
+      "metric_sha256": "ffb16b0e7309834c12f11bd69569c9833bf3c619d3322af04cb9dee7586e593a",
+      "capture_sha256": "3d65131b761605cdff9fe4c59455a17142189fa021e0c546b6e17e47f57a8cd2"
+    }
+  ],
+  "native_training_responses": 1024,
+  "native_initial_evaluation_responses": 4796,
+  "native_errors": [],
+  "native_failed_physical_responses": 0,
+  "native_available_verdicts": 5820,
+  "native_failed_response_treatment": "Preserve every physical record and unavailable verdict; require existing mask contract, empty trainable spans, zero native outcome/shaped reward and matching training failure/mask/baseline-exclusion counts. Serving errors fail the audit. No original verdict is invented.",
+  "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/checkpoint-probe-and-admission-tasks-20261016T115356.csv",
+  "controller_snapshot_sha256": "4adedd5552b37eee8cc0599dab16c0c5086f6dde96cf4710ce3cdd055a8d8e8c",
+  "configuration_sha256": "98747e51abbd50c9e3802ff44b298d0052e55283c08c54d0ffb4771915f265c6",
+  "source_inventory_sha256": "90ad140790f86b8c656c55d4b44b50a50e977e9735706cfadd56755b11909f30",
+  "offline_existing_capture_snapshot": true,
+  "archive_inventory": [
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=eval/step=00000000/1cb8e3233fa07b92f0e688264d99ada9cb2660076b3cc704c007c02a443a9a74.zip",
+      "Size": 21335521,
+      "ETag": "\"7a6156b728522a76362c6f2db8a3639f\"",
+      "last_modified_ms": 1792151019927
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=eval/step=00000000/122fbd6e9734564ee38931027555f20408f3d1083790f0f21937456cc81445bf.zip",
+      "Size": 2702265,
+      "ETag": "\"c819dfd4bceb8a675e0f5672f6cc8274\"",
+      "last_modified_ms": 1792151168514
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/e492956b111754e3ce12daf9a55fd017823bbbfdbd2411ddec8b559cbae807ba.zip",
+      "Size": 25163,
+      "ETag": "\"b678bed45c1c5bd5f3cc511512cd95bb\"",
+      "last_modified_ms": 1792151261777
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/dc801b85619dfcada38434404bc53e0994e99f0f880ed876f822aa6ee314f297.zip",
+      "Size": 22704,
+      "ETag": "\"2136ad68fa5b370cb791f53e83280789\"",
+      "last_modified_ms": 1792151309982
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/1f43f414029ecf7aff900bf23d349c0950b44ad2c93c3c83f84846891f1fe994.zip",
+      "Size": 23849,
+      "ETag": "\"bd5c07390f89943e3b867dcd67057460\"",
+      "last_modified_ms": 1792151313506
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/5f41389e9b5c3e67029c355993336d670c6eb423e0623f984ad2046acc7d3dd6.zip",
+      "Size": 10700,
+      "ETag": "\"3a4a40c8c16525dbf1429584d9130753\"",
+      "last_modified_ms": 1792151221099
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/8026e6dea9ad51da5fe04e5302b41ba719ce4bb70bca1f013b3950a534263980.zip",
+      "Size": 13575,
+      "ETag": "\"336a0410273bde0c359a2696e8fa345f\"",
+      "last_modified_ms": 1792151238584
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/378a119d3785c0af756d5c70f775bc993c147f100e4094a6bc7ffe43bc4fbbd2.zip",
+      "Size": 12981,
+      "ETag": "\"874bc784017b40592a661f58e06b6063\"",
+      "last_modified_ms": 1792151271466
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/d6254669c4c56d16301afb9e7635a347301d6d69fe8d5e6299dc858a04d24899.zip",
+      "Size": 11577,
+      "ETag": "\"9125a265ba7cdfb45ffe1df4d3dd3cf2\"",
+      "last_modified_ms": 1792151222874
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/db2a9235f59484b13d890fe307f50b141c7f74acb07f293c7250cf0b4b39729a.zip",
+      "Size": 12598,
+      "ETag": "\"c68a2af5905c72eb0533ad33045002c1\"",
+      "last_modified_ms": 1792151245864
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/6491c5838c3827eca5fc3c5545cf34938c4919b26f14e43f28471f66f41dbf57.zip",
+      "Size": 14677,
+      "ETag": "\"7514d07b571b33b00bb16414267a0e2d\"",
+      "last_modified_ms": 1792151314387
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/af1d2d14672a182bbfd9fd96af77e638a8e443318d2cdef8215fcbd610cdad7d.zip",
+      "Size": 28214,
+      "ETag": "\"9d42ed89fdcd200195a3453fd5f59975\"",
+      "last_modified_ms": 1792151281960
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/c8449c87922d9e3cac770838e79769d6735f130ebd25f2edd8522b24b4b79904.zip",
+      "Size": 32723,
+      "ETag": "\"a2ead6a942dc67fb79c0e1cb18fdb449\"",
+      "last_modified_ms": 1792151329088
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/e3c9f0e98d0cab2c36b96a19005b811ca13af5eaa5ab4ad9243cdf197ba094af.zip",
+      "Size": 34662,
+      "ETag": "\"198c296e6e3c10d9536c9ad10bdadf6b\"",
+      "last_modified_ms": 1792151337761
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/a58cedddd0233d1fd85dbfda01d4d5e8ad89c7bc71041193ef5ab442a6b7422f.zip",
+      "Size": 32556,
+      "ETag": "\"6aeda16d8b0af01a055ebe4e292b35c1\"",
+      "last_modified_ms": 1792151287326
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/2cd0d3cd00733d53c826eb7ee5616c0be56e03ee77d122c1551822b40d67232b.zip",
+      "Size": 43042,
+      "ETag": "\"9cdd931bff00a8d916bd0618d31f0e5f\"",
+      "last_modified_ms": 1792151348894
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/1537a2f3caebfccaa337b31fc4da65abcf26b3271057cd4c6579b0a62f158d9c.zip",
+      "Size": 18538,
+      "ETag": "\"f6317032e48f7fc796da24e4dd3f550a\"",
+      "last_modified_ms": 1792151268745
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/5e332b5b533ea7ce6b85775ebfed8730bae5dd888cbd265a5a2cfbe08b1e897b.zip",
+      "Size": 12953,
+      "ETag": "\"7dbad5a49c1aa67b93350f222aba2154\"",
+      "last_modified_ms": 1792151267898
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/4b014bfc600b3496765131d7ae1ec7ee2139eafead005e310f000f90aee35d97.zip",
+      "Size": 14422,
+      "ETag": "\"a071f39c4fb9264f29076356e7418f2d\"",
+      "last_modified_ms": 1792151265722
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/32d0e7eae602157087b47836ab0a59af4e3ed1e9da945fa321a52242171fde4b.zip",
+      "Size": 29018,
+      "ETag": "\"82715c5abb497a93b66d4a4d46d89f91\"",
+      "last_modified_ms": 1792151276094
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/01d30967f64f8325ff702abedf3924cb718da3712dbf7fafd55ba71f083df145.zip",
+      "Size": 13656,
+      "ETag": "\"901114db154a6ba60c84750b46997ceb\"",
+      "last_modified_ms": 1792151250746
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/c550402bb893435fe04c937f4754b93c9e47fa2433952a4996b547255ce96f42.zip",
+      "Size": 14683,
+      "ETag": "\"2f9795a41656995087b79096beb123d1\"",
+      "last_modified_ms": 1792151221532
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/55d9dbd7a7774ac2fd46cba34d21d945ff7690a7eb4764ff6a027021d6facc91.zip",
+      "Size": 29092,
+      "ETag": "\"73119dd5e85868c919bf35895a379889\"",
+      "last_modified_ms": 1792151315681
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/f03b48eafd67a9d2bad5fdda1c83c8ba8d616f97dec117df5efc0b4605c8f5c8.zip",
+      "Size": 25401,
+      "ETag": "\"72fa5cde7dbfa2a9abac3a15bb4aa68c\"",
+      "last_modified_ms": 1792151274724
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/c45dff53ccffbc237126abf061f6b416868d973e0543a54e2756cf53848432dd.zip",
+      "Size": 25827,
+      "ETag": "\"4580852b5e119836a9397b883df31525\"",
+      "last_modified_ms": 1792151279695
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/eed00404de690fb1f666b63c31dbb57b0167a687d8c9556a1eba1ac099f3440b.zip",
+      "Size": 28425,
+      "ETag": "\"fda7ebbcf9b41f6045d2ff781066a516\"",
+      "last_modified_ms": 1792151305500
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/197dc7d90030eb302a02c4a807155059c89dcf59dc7260b4214d1f6102c1fd83.zip",
+      "Size": 11554,
+      "ETag": "\"a272baddc7d92fba05257f92f045a08a\"",
+      "last_modified_ms": 1792151277459
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/3d53753b39e2476078a6bb497f75e631f396805fe17a1b7496ca8ca25e3dbd2d.zip",
+      "Size": 16950,
+      "ETag": "\"43e4bba2a76eae06070f11e8cf86dcea\"",
+      "last_modified_ms": 1792151291118
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/aa7de6ce322d689b6a9ffbead5ab443d8c98f7872159ce67c76c7ee53b86effd.zip",
+      "Size": 12248,
+      "ETag": "\"1300d16041955fad40ee78c3333ffd94\"",
+      "last_modified_ms": 1792151262215
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/0b439f6574bcce64890979b67aa060ed6fb15a68c6166135a90d813ebd34e844.zip",
+      "Size": 24700,
+      "ETag": "\"bfff6d7806df2495b4621dc336c9aa85\"",
+      "last_modified_ms": 1792151291596
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/6355c60b58eb4b6251e1646853af83b698c967458c7cc5610e848a38841ac382.zip",
+      "Size": 25420,
+      "ETag": "\"46ddff2287e00f2a72ecfacb9d585e47\"",
+      "last_modified_ms": 1792151334037
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/1a322a07097055d7a0f090c588b71c4b2b1df6940b500f72c0032478ca6bd1ea.zip",
+      "Size": 10199,
+      "ETag": "\"2db297de2d9016c577e1eca0873b562f\"",
+      "last_modified_ms": 1792151260027
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/1f1a71318cc8e07db962b47c0f30649cb438e6bd7b9be9493a8af35d7d4094c1.zip",
+      "Size": 16447,
+      "ETag": "\"c226a01d384a132bb1454f880212a41a\"",
+      "last_modified_ms": 1792151298057
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/590dd611c25eacfad48cddbd6d03b1da00ad3a86c2c1e410dde3afb0725aa951.zip",
+      "Size": 12931,
+      "ETag": "\"7cd65f302d33e0551944f724a4225c04\"",
+      "last_modified_ms": 1792151299944
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/1f94ebd7d480cbd91cdc3254c296d801bccda3de5f6eb98c7fa5f2e474fdaefb.zip",
+      "Size": 10724,
+      "ETag": "\"2456ea8b4fb17ed5e7f41433542800a2\"",
+      "last_modified_ms": 1792151277001
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/5cd648e6e817fdf38df0e873f9ff084aee432241c4360167209f3bc1d4e8ac87.zip",
+      "Size": 37634,
+      "ETag": "\"9939ccf7cb3d5c6390a3032750713b1e\"",
+      "last_modified_ms": 1792151325649
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/c510f244a46085099a74f55eb8148d1b3a740dcf2b83b1d60caee4bf0c8b60fa.zip",
+      "Size": 33220,
+      "ETag": "\"ece199435b3b4c7fb78238777d20aca2\"",
+      "last_modified_ms": 1792151317874
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/018874fbb01c724c04c43eddd826b9ad73cd1b8a811a70f4917faf0721928536.zip",
+      "Size": 36438,
+      "ETag": "\"a33f1a95e2c49171615a06def9dea78a\"",
+      "last_modified_ms": 1792151271960
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/28bb97a6be0dc5ab20afa08e531dfeee8b3739d9a7177e4d8e081ac36eba1833.zip",
+      "Size": 9271,
+      "ETag": "\"8a3e4c6a7ce7fad25ccaf97f9996a3a9\"",
+      "last_modified_ms": 1792151259606
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/d0973f9f00653e954245014ba155106a4733c529cd80998a77903e3c4138f46b.zip",
+      "Size": 13650,
+      "ETag": "\"ceafdeaebf2e85cc39d2fab30f835859\"",
+      "last_modified_ms": 1792151278356
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/b169d5ee7ea56521a945d937790851242fe4c597a78c4bc6ce5aba118b834b37.zip",
+      "Size": 14478,
+      "ETag": "\"8aba164e2036c42391c5dcf94d298b33\"",
+      "last_modified_ms": 1792151257465
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/603a52d7337b3e3900491d59f4691e26b79f8a589e1a63e0c675feb9c60f2fee.zip",
+      "Size": 37061,
+      "ETag": "\"c8be4bcf5ef8afc756b58780076279cb\"",
+      "last_modified_ms": 1792151304575
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/1381c2b12298172fb9853d38483f472d8c2cdd2288c43f0c9dcfe9a7c1fab680.zip",
+      "Size": 10756,
+      "ETag": "\"212fda0299416191dcf66033e95af2b9\"",
+      "last_modified_ms": 1792151258754
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/9cddc1fd683e91a1e0aeefd04db0412a4eb4327e94695f192ca13ee5b4263cdd.zip",
+      "Size": 34737,
+      "ETag": "\"2816b674883a512f52e16b15866666e5\"",
+      "last_modified_ms": 1792151335897
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/5499415dbabb33ca52348474eb5f9d688050a98561b81ef4800a793b18c86fd8.zip",
+      "Size": 36502,
+      "ETag": "\"dca76a8a84c9be59e2159c94c4f38f88\"",
+      "last_modified_ms": 1792151329975
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/d19153e04db2e15ab911b0f7c0f8de48b83ca97e496d1d7abbaab3581e17548b.zip",
+      "Size": 23687,
+      "ETag": "\"80e9f60cfb336c077c3393bb64ad1e65\"",
+      "last_modified_ms": 1792151317009
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/042ee2b5cb873573cb9d9c277af17bff5ff3fe6ccbbe943854220e2beaca77db.zip",
+      "Size": 14463,
+      "ETag": "\"204a9733301f01feef3b5826afecc79f\"",
+      "last_modified_ms": 1792151260907
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/ee3025c688efced68e4493a8eabd3d090f8bb5a4b4cc809b4a0e38c6a3c8f8a3.zip",
+      "Size": 11302,
+      "ETag": "\"9b7c0fee1b86049828d4423b1e3bfa54\"",
+      "last_modified_ms": 1792151228888
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/564d2178458726f471a81c6a951cf78a0d4a3fb0c46d59026d4ff751672e2b97.zip",
+      "Size": 40043,
+      "ETag": "\"ca8d1a8ef29e2f82337d7cd6033076cf\"",
+      "last_modified_ms": 1792151301811
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/58fda38157dc052a7522ca7cf94bedce5ba616e9a5654ed7e6e24cfd22fde4d4.zip",
+      "Size": 21463,
+      "ETag": "\"242b65ae96191d55193b74209b61f354\"",
+      "last_modified_ms": 1792151324356
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/3e425e6381449fefa976207544b423b927596fef05ed2e9d8acb1c1f6a477b14.zip",
+      "Size": 14007,
+      "ETag": "\"0f6346b73f64531221663c7b29161627\"",
+      "last_modified_ms": 1792151248532
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/0b3f1fae9d01dd32ae56e25e2a8c87ac54458e10283134dbb2a937398af72f20.zip",
+      "Size": 36951,
+      "ETag": "\"2b771fb010e8da99ecc54a31213142ac\"",
+      "last_modified_ms": 1792151313960
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/8b36440b7580648259590750795a5ce68df1ba2a21a09729cd5ae57c274eef10.zip",
+      "Size": 35366,
+      "ETag": "\"2a9f80d829f685336a23284c7338752a\"",
+      "last_modified_ms": 1792151299026
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/2fb9911bebaa2809a226c6c3bc12b579505bc00c680811ab8f953a6f01a47f09.zip",
+      "Size": 25270,
+      "ETag": "\"58109b26680f664196c1d48785d0eb7c\"",
+      "last_modified_ms": 1792151328641
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/80ee4a2ce2d83876ffbf1fbfdc100be955f4cbcc5af00460c548f8d6134cefbf.zip",
+      "Size": 11721,
+      "ETag": "\"9960d36aa22dc1cd1a3610b76fc2b58c\"",
+      "last_modified_ms": 1792151284149
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/1ae3e30c288b483289805e3e2347ba55b46abec8ab807ed1bb51e26e907ed901.zip",
+      "Size": 25944,
+      "ETag": "\"c4bedd4b829203f54790c17660ef2595\"",
+      "last_modified_ms": 1792151341009
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/95235e4f4eee2f5ea90e88f9cb1e380582f7a3285fa97fb9a1db4962945ddbfa.zip",
+      "Size": 11580,
+      "ETag": "\"b825caf3981a2d35f2a3d59f895ade0a\"",
+      "last_modified_ms": 1792151218901
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/16dfe2478ee4ca6b107b2fc2054cca3427313f23b913f20f3b632c471459bee8.zip",
+      "Size": 11805,
+      "ETag": "\"30031e166d337d289699b0c0919ccd10\"",
+      "last_modified_ms": 1792151279249
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/a618265981b9ccbaa9651401ba5651fb2d6c33da0de0f3beba4476148dd6cd51.zip",
+      "Size": 12264,
+      "ETag": "\"05ef653313ff353877596fdab7675519\"",
+      "last_modified_ms": 1792151277890
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/5cd0b078b31f62b5618d144c842d8d93135c45795334e198c1c113d59c3e42b8.zip",
+      "Size": 25303,
+      "ETag": "\"5ad3224c050cad8b9e4fa2e914f3459c\"",
+      "last_modified_ms": 1792151282841
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/d864b23d785d39bdd2f34ee5c3fe0522530672c4f4edb89847833282d388b2ab.zip",
+      "Size": 18303,
+      "ETag": "\"ca99c1f18d53015162ed13703fe50ce3\"",
+      "last_modified_ms": 1792151256162
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/d4d39f7ba6fcb9cf4f0e4e01c1e6441c3bc3a0c6b4b6a6d183299bbfd0ad2ad4.zip",
+      "Size": 16607,
+      "ETag": "\"832eb02b4e96d1c5cbb5bd25b04aa171\"",
+      "last_modified_ms": 1792151250317
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/714d1d7515e08870756dd37686fa3cd9601c4ccdfdb830a0f8fdc6943d874729.zip",
+      "Size": 14751,
+      "ETag": "\"9e867b1c9f6b421a6770735325e6df06\"",
+      "last_modified_ms": 1792151242276
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/ac207147db8d9fea0416ca01cde0bcd845bf6c80e3aa83748ed0e2a3c2f2bc1e.zip",
+      "Size": 22113,
+      "ETag": "\"cb66825f63808b5163c4fbe9edd6dbee\"",
+      "last_modified_ms": 1792151300414
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/c2a2d4aab7388c3c5c75fb87faa1dd3f1e40c548069798b55ecf66eb6b7046a2.zip",
+      "Size": 24569,
+      "ETag": "\"fc906d9b85c130652a41fff51980c26a\"",
+      "last_modified_ms": 1792151299491
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/8edbe73f992d0a70677c67debf10407b851a763973b5938f66b92d037065c4d1.zip",
+      "Size": 42628,
+      "ETag": "\"b89528f730bcadddda307a3615afa3cb\"",
+      "last_modified_ms": 1792151343629
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/dc22c93d03b5ae389fc9ecc0aaa58e1c6d1aaff7bff81357612a2eedf4b1ea1e.zip",
+      "Size": 13405,
+      "ETag": "\"49776806cffcbb307efec2bb9c7c4281\"",
+      "last_modified_ms": 1792151249414
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/4c71769bdad9c4139632d175198e1ea6bbec7939cd857a08f482f3996ec560e8.zip",
+      "Size": 25763,
+      "ETag": "\"a7ba324b096bf9f9371af2c7f932d8f1\"",
+      "last_modified_ms": 1792151298544
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/ae1630c3bc626f9c9d6673ca0f608271d5205281d61455056471cf5b37ee15ed.zip",
+      "Size": 22107,
+      "ETag": "\"cee2756c291320c0b1ce1c132f210f5b\"",
+      "last_modified_ms": 1792151293376
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/f5d6c26513ead9cfaaaa6b8feae82085ff33209e601a58f43e1e0ce72ae8b441.zip",
+      "Size": 14307,
+      "ETag": "\"314b843121d5ff9fced33436a1092cd4\"",
+      "last_modified_ms": 1792151251181
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/eac5f295361cef07d4cbc4e94697abcd8148c67469abac27768eb24ea33aaa73.zip",
+      "Size": 24835,
+      "ETag": "\"f0c1ecc9ecbceb5cb43e4a98906838bc\"",
+      "last_modified_ms": 1792151276571
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/d54514586e1f718d51d653b61834858bd677fe4bc8aaa3eacbee06cea85f8f4c.zip",
+      "Size": 11546,
+      "ETag": "\"f17a4d28e7c95ab65569b8d774138b5d\"",
+      "last_modified_ms": 1792151244505
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/295473204ab188fb5996470490f4725d617b76da37d1e5b50d815ff09b16694d.zip",
+      "Size": 12921,
+      "ETag": "\"49ca732f402abe2f03c46ace6aed4fd8\"",
+      "last_modified_ms": 1792151286862
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/3236b951b51e97e2610cf45bfff01c2abdacf4115fab5c3361847d87b65c5239.zip",
+      "Size": 12642,
+      "ETag": "\"e97764ebff4a8ae61e6f1292e0207bcf\"",
+      "last_modified_ms": 1792151239482
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/f4b2916d0fb3bd56524020f653a2dbc97e69ec99f3be9c251bdd83dd48cab1fb.zip",
+      "Size": 10997,
+      "ETag": "\"351a134e6a99940133d3845135096671\"",
+      "last_modified_ms": 1792151215344
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/904a610ad1becf38684a64e2078034fba2824cfa510891148a282862e9dc3ecf.zip",
+      "Size": 12407,
+      "ETag": "\"60ddfdab1a539ad1e15836e665f6c3d1\"",
+      "last_modified_ms": 1792151281512
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/ee9e5717d3ada5d1dbbce4c64173f2befc10ebd23be38017c4e209c11e430406.zip",
+      "Size": 19688,
+      "ETag": "\"2bb71b6d5a98db46592d920fe4f13b56\"",
+      "last_modified_ms": 1792151313072
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/124c95e63ef2516c6e6e284bc48cdb1a8c841cd4874072179cc38f1e7864a0bf.zip",
+      "Size": 12787,
+      "ETag": "\"2d943b39ddce2de2bd32867fc8ac6178\"",
+      "last_modified_ms": 1792151248968
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/9fd16eef19264751973dfd924dfc42447970b7904a8253984501b95bc6639840.zip",
+      "Size": 12528,
+      "ETag": "\"c78e7ffa1ae2a5c4efcc7f557fb130b1\"",
+      "last_modified_ms": 1792151223787
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/2baf79a77b07acc6535059df302ee03c378b2eb36e605506602ca6f0098d1571.zip",
+      "Size": 13201,
+      "ETag": "\"6320658e4be25bee0c0f637cffca755a\"",
+      "last_modified_ms": 1792151283270
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/7f7d3e51109738e5c8deed06cb0afaae0a307b937751ca44d9ff113f5c150a63.zip",
+      "Size": 10640,
+      "ETag": "\"c920d0d5289b96908555366bff94318d\"",
+      "last_modified_ms": 1792151271025
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/2bb4bc79d3a0e42ea06efa8858d3d90a78afde5f3731a79f39c40e34c5b4a4c3.zip",
+      "Size": 10916,
+      "ETag": "\"03ee739a756ae41527c940de10a23cf0\"",
+      "last_modified_ms": 1792151263983
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/81bb3fe152950cb91ba7f2d4e72f7df2b81693f517192da96e2c4d1a8734ed80.zip",
+      "Size": 13440,
+      "ETag": "\"a8568e6e8530d18829707e7493198a93\"",
+      "last_modified_ms": 1792151243178
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/35efcb87221f2060cfdc14873936adf7da5e20e0a25cb4177bf9236a260f3e5f.zip",
+      "Size": 13061,
+      "ETag": "\"6d8c45b6f309f5f97e7488f980ab0a0f\"",
+      "last_modified_ms": 1792151296613
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/a7b77051fd7b40e56a5980475621af2d2827e1b6e6043c519a9599d692dfae18.zip",
+      "Size": 26705,
+      "ETag": "\"fe73ba67e9beb12cc0ecedf93d09a35f\"",
+      "last_modified_ms": 1792151320880
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/83da29f9330e6eb44a5b7615f4273601f75f2da9f1843d363a1b7f49809a4f5d.zip",
+      "Size": 11950,
+      "ETag": "\"1226cad5c08a7abd80a858e10457266d\"",
+      "last_modified_ms": 1792151272400
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/485e8d1f2f85766a12f5da8615cb288e657a56a50d85ce442a0b2c5184edb359.zip",
+      "Size": 13994,
+      "ETag": "\"facfe806a8642ee6bf5ed01848719021\"",
+      "last_modified_ms": 1792151278791
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/423a8a8be473c2f9775884f29cf54445e128dcf474f065d80cb60f34d52ac2fd.zip",
+      "Size": 8803,
+      "ETag": "\"09cb17002c2a421f3168b30b8be954c2\"",
+      "last_modified_ms": 1792151244064
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/330b0812a4e085d1dab4b6a6e4e55e1440550ebd3395d3ac78a2ae1e5631f8a8.zip",
+      "Size": 27281,
+      "ETag": "\"1390d9362cdfc0fb9b83d0e3656be60b\"",
+      "last_modified_ms": 1792151302286
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/452d21bf4e72aa9962180131edbe2fc9350aa515238cd276cf7835211dbc2a83.zip",
+      "Size": 14034,
+      "ETag": "\"351384a9e90e268fbbe4b8d575ed9ff1\"",
+      "last_modified_ms": 1792151275190
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/07eb3f7d422046217d840e80308ea2c24223bd41b8713b95ef0812d106e8c373.zip",
+      "Size": 36471,
+      "ETag": "\"996087ab7d4beb8cdde87e8911eb4985\"",
+      "last_modified_ms": 1792151322654
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/4503aee9bd7a3d86b4e853c94a3ed56579cbd3f380e17fa3ab2d6ebd5c3792ad.zip",
+      "Size": 11847,
+      "ETag": "\"bd286228df2fe39256477af377ab87fe\"",
+      "last_modified_ms": 1792151240462
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/021a381284dee1b95434443ddc37947f999692752c1422bfdd7a43b15425e567.zip",
+      "Size": 24529,
+      "ETag": "\"b13c3fca03df120feb366d6d494e8c62\"",
+      "last_modified_ms": 1792151343134
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/ead4333c14fd01cc9edae4ef2966b6b64db99caeb378031966272496c5688390.zip",
+      "Size": 9538,
+      "ETag": "\"4c918ee33370360d768e55855f86b69c\"",
+      "last_modified_ms": 1792151267447
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/fbb8e73812e6d850cbbf230b3b5a3fc6a37fe6a59a854bc6bd57ffb78bc83ec3.zip",
+      "Size": 21901,
+      "ETag": "\"b389aa85b80223d204f2408327fbd622\"",
+      "last_modified_ms": 1792151309501
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/8783ae6d550ffb32e9b90838c8c14bcb73f1bb45c7c7011ff28e9f2fd45044af.zip",
+      "Size": 13201,
+      "ETag": "\"365537ac91eb6b50e6f5ef2458f2983e\"",
+      "last_modified_ms": 1792151241350
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/8923c8a804f043c72dbd62e8937ce2e79c890dac58af23dfa872e1d3fa8e16f5.zip",
+      "Size": 35507,
+      "ETag": "\"c3cd398049ccefffa6ebc0ff8abc3cf8\"",
+      "last_modified_ms": 1792151331275
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/8fd4551dfc0001f94a6d69d7e18fc8490ce20059ebcaaecfb2491566ddfdc2a1.zip",
+      "Size": 11903,
+      "ETag": "\"9c0188088f959fea3c17c93586bb0126\"",
+      "last_modified_ms": 1792151256583
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/bcf8f90c21493eeaff167a00c0f8b578794648edb18ea11399d88510110b3307.zip",
+      "Size": 26921,
+      "ETag": "\"687db1a20a80c54178f105d172b9985f\"",
+      "last_modified_ms": 1792151265283
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/5c0c78a13e57c1463b41c7152e27a867944fa7845afb80b28620d3feca23b432.zip",
+      "Size": 18266,
+      "ETag": "\"af8635dddce692667cce5a8b2a35d832\"",
+      "last_modified_ms": 1792151270558
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/007705ff5b7073a6417f8f682db9eb4502529b4026539de9b2c0666a86ccea30.zip",
+      "Size": 12304,
+      "ETag": "\"0be1a5c4d53e0de7039fb57a0dcc0f8e\"",
+      "last_modified_ms": 1792151217120
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/685de4c5e151d62e32ce651d4e67ba7fcdad665779d494aa68665d1251b75e68.zip",
+      "Size": 13559,
+      "ETag": "\"48906405d1d96207e6fb5b553212667a\"",
+      "last_modified_ms": 1792151259175
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/f34af7044e3756eaeac32123d95747881f1de65d47574bf1c5c035bee5f1993b.zip",
+      "Size": 42737,
+      "ETag": "\"ba703655cb2949cd5ff67f015aa6e477\"",
+      "last_modified_ms": 1792151272900
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/be2722b69246537f76a988b8dc1ade013865a6e11be69ba9f8e7265ded500823.zip",
+      "Size": 44153,
+      "ETag": "\"8255006ec780b2689216118a8717c1d7\"",
+      "last_modified_ms": 1792151263559
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/7e2629b2a8058f0a3de12597dc5fa27774d4f63bc49a034713d92f491151b369.zip",
+      "Size": 13459,
+      "ETag": "\"d92156b67afcd7dd12796072600043c1\"",
+      "last_modified_ms": 1792151264845
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/24efff29be442a7bfc97041d3b2d86774c122dd74b5d37c0faaadfe9d8d7b2e9.zip",
+      "Size": 12592,
+      "ETag": "\"dacb9105d391f94f5bbcbceb83bd3df4\"",
+      "last_modified_ms": 1792151240900
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/a0b1bbf189d3a47baa4b70cb16ec5358eb478f940d06da2bc0de11a6b0c7704c.zip",
+      "Size": 33925,
+      "ETag": "\"b1a67903b9d78d5387b034e8f22b04c0\"",
+      "last_modified_ms": 1792151316126
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/a3123afb995ae15ecb23c5d31887eab31d0fb2db6414a640aea57ae522984b37.zip",
+      "Size": 11889,
+      "ETag": "\"6550a75d37be4997104681a51ca89f5b\"",
+      "last_modified_ms": 1792151273808
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/d24d98b3390b9d465f5abcfb29a240dfd892a8f848f521771d7f11b669ad8d6a.zip",
+      "Size": 16853,
+      "ETag": "\"a92df8d43b91a3f9ea02a2ee3edb1668\"",
+      "last_modified_ms": 1792151306827
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/3b0a8b63630ba6ff2cba4ce3633a5cf79d889e80bfa871f5d9205fecc525b9b9.zip",
+      "Size": 11310,
+      "ETag": "\"fd7d30c45fcbf86d264c95d03431c514\"",
+      "last_modified_ms": 1792151257899
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/6a89f040a7e75f2bdfc17a4bdffcdcb25d263b59c37d4131e099437dc99a581d.zip",
+      "Size": 11145,
+      "ETag": "\"70fb439b0cc7700fffdfc7a1c52ff98f\"",
+      "last_modified_ms": 1792151285054
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/3452c0350222421e568698c3b6a3a17650ad7e1f6c3618235aa8ba2510e5b6fb.zip",
+      "Size": 17286,
+      "ETag": "\"d572662656bcad93ff460ce3b3d0a5e4\"",
+      "last_modified_ms": 1792151255271
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/e190cb5e0a91875a366a6142a060ab31f0d3163e0e4d4c76306757656affe14f.zip",
+      "Size": 36248,
+      "ETag": "\"ae20a69bf83151dce8832a48b0216b20\"",
+      "last_modified_ms": 1792151297568
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/8ab17b9011e96af49a84fb631f2e71f4de70b358ca8d817cb7e42c114ff265a5.zip",
+      "Size": 11156,
+      "ETag": "\"45f7a3a781f3a1d9c9e709fb0f630679\"",
+      "last_modified_ms": 1792151268322
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/b5311047c0e39e4d38deae21ccb409f3a3278769af3ec37494a6d29b637f2973.zip",
+      "Size": 11791,
+      "ETag": "\"f567f6fa5aec812acf0f470622730c21\"",
+      "last_modified_ms": 1792151269177
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/d41dc27c509e05f60a8c2e6f67c93a3376c65886f71b90511ae3282ca6d11c15.zip",
+      "Size": 10973,
+      "ETag": "\"fb11b7ba2d4ebde6d03f5dedb3035eae\"",
+      "last_modified_ms": 1792151266145
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/94431b8c0b94740cdbd8329f19d6ea971718d002088f9935c61593fbac1952a1.zip",
+      "Size": 18213,
+      "ETag": "\"3bcf6054b7fd1ce384aa35913d7eeeaa\"",
+      "last_modified_ms": 1792151288429
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/9f9959696e15e1d9bdeacc3c8f4d1307fc4633e25fe751b38b05fd87bc23e475.zip",
+      "Size": 14902,
+      "ETag": "\"7d6cae5762ce7fdff0d06a66afbcf983\"",
+      "last_modified_ms": 1792151258323
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/e28c71a30c6f6285eeb2d9277caa67c2c13f04d15409ebb205db686cb984d043.zip",
+      "Size": 14138,
+      "ETag": "\"48a3ac36a1fa3e037b3864ba5487f67a\"",
+      "last_modified_ms": 1792151254360
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/c73db89c59a13d7324308a4fd1e0b7cb3fbca4672c8a54fb6f63a61b730016fe.zip",
+      "Size": 16103,
+      "ETag": "\"5064364b788db0ddea739fdbf085940f\"",
+      "last_modified_ms": 1792151253925
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/c81d1667d119ba81be951d509d4c45af4d2dd65c4a580c829329b10f71428017.zip",
+      "Size": 20697,
+      "ETag": "\"a1e1e1f5368973de58ccb975547d39b0\"",
+      "last_modified_ms": 1792151330408
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/a231ac72c6bfd05275158a4bd2b9c1b81a6b8c129e12c6387aecce8bad2fa4ea.zip",
+      "Size": 15389,
+      "ETag": "\"74df7e0101af29d96b5e43ffd2f653a7\"",
+      "last_modified_ms": 1792151296139
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/0cdb27934bdf167e4b734cc45fa14fa5703676825eb06b577fdc67e862b13878.zip",
+      "Size": 10647,
+      "ETag": "\"a2c8e20c327128b415f7247aac5535fd\"",
+      "last_modified_ms": 1792151243615
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/56a8a3ba56a674bddd45f8c11acb54a4e13e68cee1fa9440c112fb75cafff567.zip",
+      "Size": 8989,
+      "ETag": "\"56a1b5d0105e3278f5eed9a028fa819e\"",
+      "last_modified_ms": 1792151238154
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/027fcc7278964eb691e50bf815c997c48ef614768a526d71ae284ef3afa21c3d.zip",
+      "Size": 14589,
+      "ETag": "\"8ce8d491ac25051f8978c07070200305\"",
+      "last_modified_ms": 1792151262645
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/6c55c91bc942d7b8020e599a2b2c7336730c0dec487dfa0311cd87b04f897a50.zip",
+      "Size": 11382,
+      "ETag": "\"8f82e74d63290935e7bd977f215e1f33\"",
+      "last_modified_ms": 1792151286397
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/9c79857653780e9258687e60b6769241089746aa776177d4b3baf8a9ddb4edbd.zip",
+      "Size": 14539,
+      "ETag": "\"fdf1045a45beb15f698f69a0b9faf5b7\"",
+      "last_modified_ms": 1792151266588
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/56c463d1d381c8a9bf08269b2f50f81170b54bb16d01727ef420a2435cd1158d.zip",
+      "Size": 33396,
+      "ETag": "\"27b8f805c41734b983648692178f2299\"",
+      "last_modified_ms": 1792151316572
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/2699fce0384687d42815230b5c20f65992319851b16f09ceb794ebfafe47e3ed.zip",
+      "Size": 9542,
+      "ETag": "\"2ac6ba142f215a62cc72b8d8ec388783\"",
+      "last_modified_ms": 1792151273342
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/cff67038804886ea2e30fdaf5f4a3c2c83956be4c813ea47969777e4d09798ef.zip",
+      "Size": 35473,
+      "ETag": "\"3c4e207ec2eed725e826a43f545d070e\"",
+      "last_modified_ms": 1792151321751
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/62e35a12753f154faaa92967cf3ee7247fc2c643b335eed5d31b86525e075757.zip",
+      "Size": 16351,
+      "ETag": "\"55ff442cb4e6f214cccb37c41befd5a8\"",
+      "last_modified_ms": 1792151212739
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/9ec3b6399acb22f54d823223df8edb837f0fda7fda33df2bce5524a90fa816c6.zip",
+      "Size": 13610,
+      "ETag": "\"bcadc123d515e9fdd037f12400849cb9\"",
+      "last_modified_ms": 1792151228449
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/3390f9d9fefc39f4c59fa8a45b6ca02ea6760e0544671bf200a68744d4d68b0d.zip",
+      "Size": 13175,
+      "ETag": "\"2b2081cf6cc4d710df4b251b1ee75001\"",
+      "last_modified_ms": 1792151224687
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/3cc4b5e578083fe1b81dc3ff816e85dd6e628245c0e0e2c0188256549101e958.zip",
+      "Size": 30160,
+      "ETag": "\"9cbcd63eb89498d28244cbad4836b40b\"",
+      "last_modified_ms": 1792151232244
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/d147904492ac06129e83d63e838a9e127384d1ed078d2b2c15aab918149fb972.zip",
+      "Size": 10166,
+      "ETag": "\"de743c96d5e8c101f8458b97db883540\"",
+      "last_modified_ms": 1792151183038
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/e78ffc351215fa2fd384260f7105563ce250a404efb2e1689fc1cc529209539e.zip",
+      "Size": 34802,
+      "ETag": "\"572ece917ae36f47d28531582caefa64\"",
+      "last_modified_ms": 1792151226376
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/6bc36f206934fe700a82639bfcd9a1db46f040725bda3dec09d0e59b5cbf6b87.zip",
+      "Size": 38827,
+      "ETag": "\"562b8d92c8146fa9462c5535a03a3c14\"",
+      "last_modified_ms": 1792151255725
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/2c22f6741f509979c4d6f6a5436f1e8a743b05de7150ccf05e8569b875647c39.zip",
+      "Size": 15466,
+      "ETag": "\"3c6c299686be3c242aef98b931c9e385\"",
+      "last_modified_ms": 1792151220222
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/9b634d7263c3ec9f7a48a90a27ed351f6e4146e923fe59b942951774ba86be68.zip",
+      "Size": 15894,
+      "ETag": "\"ec3c5617f9b5d27e295571b1455433f6\"",
+      "last_modified_ms": 1792151210872
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/92917ee2ef828cda6bfe8f920d6f357cb847ce1fb2c0f1b6f226b97e7c9aaad8.zip",
+      "Size": 12950,
+      "ETag": "\"e123cc7b4ccc4609f36c549644b0ebff\"",
+      "last_modified_ms": 1792151211712
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/d41c4b5f2a1fa1d621ac4fb7d6e68b01880040d94713cfcebd7e50e00dac1a99.zip",
+      "Size": 15019,
+      "ETag": "\"7930ba1ad6b88c20a4923c410ab77716\"",
+      "last_modified_ms": 1792151253483
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/f0d08a067465511940001910a2ae50dd280410f1cb4cc94c52979ee362543d48.zip",
+      "Size": 22711,
+      "ETag": "\"bb059fbcd5a1eb60ebad1f7294da320c\"",
+      "last_modified_ms": 1792151223336
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/e040bf7f391917bab86acb83abf84bc2a1b1644afb75bb697d448f99091c00a9.zip",
+      "Size": 11045,
+      "ETag": "\"118da2b6dd8a925e77b4e5380f18a92f\"",
+      "last_modified_ms": 1792151204079
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/26fa1a59f086822bc77c0e4bd848289e0a57e19b34264ce66cfc1ba7a1ea00de.zip",
+      "Size": 29848,
+      "ETag": "\"8844e078c574ce33be1c7bba98f6f33a\"",
+      "last_modified_ms": 1792151251629
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/f2d1096ad9d4e3e4ea791223168c884db20278bd2177d6f5b613c16cb72e6026.zip",
+      "Size": 41419,
+      "ETag": "\"2bc7e13335dd641a03187c5f0b32ebcc\"",
+      "last_modified_ms": 1792151295232
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/d1a54e8198857f3902c2390899434d68672b0d58afc5d6d8e5b5e81ff3b63089.zip",
+      "Size": 10143,
+      "ETag": "\"04e2a760f9094cb51b86db87b297573d\"",
+      "last_modified_ms": 1792151180882
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/9fc46b73899e7413e640972a9169ad25b10fae4fae29ba879b451a1a32d0b5f0.zip",
+      "Size": 22706,
+      "ETag": "\"0c90282dfbce1ba6cf96e00e527deb9d\"",
+      "last_modified_ms": 1792151218021
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/11772050c2b8263c153dc73e627993bace382d95d90fb74f28e1536c80a70d91.zip",
+      "Size": 23686,
+      "ETag": "\"5c8d4d8e4612b82f6b20ace32088fe87\"",
+      "last_modified_ms": 1792151280599
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/f30f2ebe4cb459d4439ccfa7af7723acb16a41713d6e6b51c6cd3df308f6a427.zip",
+      "Size": 55552,
+      "ETag": "\"a0ba333a83066d642eba87f6cca987e7\"",
+      "last_modified_ms": 1792151234118
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/299417932eb71d31c53e4d34f542cbe8be6ec80d187b98eccbc93fe7317e9f49.zip",
+      "Size": 26638,
+      "ETag": "\"06468785eb0c38583afe1f9806a71c56\"",
+      "last_modified_ms": 1792151237277
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/fe56d6319ee6c10631a5dfbf8eeb1735ea377ac126dff56a45e3fc0c738fef36.zip",
+      "Size": 12830,
+      "ETag": "\"ccd4653487c96541bcdf857c6a591a65\"",
+      "last_modified_ms": 1792151218454
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/48e827bd8c166b9b2967131e08ed3dbaf04eabf5cc8c73dce57dd889831805ed.zip",
+      "Size": 15186,
+      "ETag": "\"ab6827e6abca68219de4b4b459caedc1\"",
+      "last_modified_ms": 1792151194695
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/9f75a140f49ec102334380d77d3a9002347a6218adee8304f379a7d570189526.zip",
+      "Size": 10877,
+      "ETag": "\"9aee4cc0afdab2e573ac11552f17b77a\"",
+      "last_modified_ms": 1792151179190
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/d873422369831dbacae1cc386ac92cf2674d57a817e7d0a61eb7b669b27b9e9d.zip",
+      "Size": 17477,
+      "ETag": "\"708b32f3c1c767ca886b7f2cf8108228\"",
+      "last_modified_ms": 1792151225910
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/7958a00303fcd74a00816a7d8906279322e88f66d5744408826b4242dfe06198.zip",
+      "Size": 29123,
+      "ETag": "\"b14c48953f72a5291816d0e3cd1fdb7c\"",
+      "last_modified_ms": 1792151226848
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/531a78658f631c50bfaadce82686bdf9027e385e6306e0fe97e1bf8d172e1a8c.zip",
+      "Size": 30535,
+      "ETag": "\"fba34b5cc98e526b4bb4bc67d580f454\"",
+      "last_modified_ms": 1792151234556
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/18880b373a7645daaea410ccda1f328d73fccdca0cc43a58b29c83c1a505557d.zip",
+      "Size": 20304,
+      "ETag": "\"b2e3d90ae50cb48da478c27fbe05c058\"",
+      "last_modified_ms": 1792151249873
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/cdf5f8fc0934715add15c29a908b23c84348c093b89aa5e989e64f43c384a7dd.zip",
+      "Size": 21104,
+      "ETag": "\"edbbd0280bd8807560932387cbf4a6ba\"",
+      "last_modified_ms": 1792151290193
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/f0904cdc78261f2a77fefab7835ee5ff71d85708338e396229f1d44c3ad0ebcf.zip",
+      "Size": 25869,
+      "ETag": "\"170d8e001a22eb7ce3bb5ef4d9a0a7d8\"",
+      "last_modified_ms": 1792151217581
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/d33aff823e68946867541154084ebfa3f0a69e611faa49fc8195e957fa10d94c.zip",
+      "Size": 21561,
+      "ETag": "\"064d862975954a626ddda4bbbf532524\"",
+      "last_modified_ms": 1792151247657
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/9f7416e128e78e58f86d83c65060cd987ccb8dcf7bd821f439325179fc62e569.zip",
+      "Size": 13246,
+      "ETag": "\"991d885006ceb3816e05b4ea13c50839\"",
+      "last_modified_ms": 1792151192098
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/7de4f305074809d49e4d5733978191a3ad4484ad5b214439121afbbda5bdaf1c.zip",
+      "Size": 19317,
+      "ETag": "\"afd0a33798896c207861b40092244b60\"",
+      "last_modified_ms": 1792151222429
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/2c5954a5a5efb5a7c7af6423363c588d4ae9dbc36e2ed0c080a77edf38ab1a29.zip",
+      "Size": 10804,
+      "ETag": "\"2c5660654f4ef24873333674d9f095ac\"",
+      "last_modified_ms": 1792151180447
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/1bd62406e5d18f50fef56115a4718a5d82fd0f1a0ebd84fe56f97824f039370b.zip",
+      "Size": 12894,
+      "ETag": "\"433ca0e02a17021889db48faa2c9c3f1\"",
+      "last_modified_ms": 1792151184509
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/8e452a7e919ef281bde0d34b8f735264f4339b0eb0d474f3133e9f3ef991adbc.zip",
+      "Size": 27181,
+      "ETag": "\"fb2ad2921dbae75d6bb81d2d37e39e10\"",
+      "last_modified_ms": 1792151281076
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/982567fd6de562ac9377fca531fac0b1e8b1099ce89d4d92d0f29fe942d42923.zip",
+      "Size": 17750,
+      "ETag": "\"b8acea414af8481ffa4292cf80d6cc51\"",
+      "last_modified_ms": 1792151205829
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/f7ce100919919edb55463f5558b34f16af2184428a1032a5db378d96037f7d7c.zip",
+      "Size": 13812,
+      "ETag": "\"b5295e8fbdcfae3c8c425cb118f48498\"",
+      "last_modified_ms": 1792151191633
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/3b76852a06433b196fc021d07db04b59db79a58f1594a492dc95ca58a8a13580.zip",
+      "Size": 26507,
+      "ETag": "\"b405ac8cada96254363f347496e12205\"",
+      "last_modified_ms": 1792151235018
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ddf2fa1311bc1e02c28221703c55668529a4819b06ea90444c696c53255c7166.zip",
+      "Size": 12527,
+      "ETag": "\"f801022d8474653baadc29aca2a66d98\"",
+      "last_modified_ms": 1792151183453
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/e507b046799d53dab29f8184138080d92c43d5cc4a80416e25bfd0ec93edfc73.zip",
+      "Size": 10536,
+      "ETag": "\"8c7d36b6dd6a8ed47dc8d31d21c40334\"",
+      "last_modified_ms": 1792151195145
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/95983f787b8577773ae8988d6036afd93a4380514f3dd397852b08c5632fefe8.zip",
+      "Size": 25303,
+      "ETag": "\"3ea2a0270d9f0672b2920e52dace4dc0\"",
+      "last_modified_ms": 1792151261348
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/bb6a5bff02b02cb67c195b77306cdcacf91d26c556cbe9cc936caf73ba3a8465.zip",
+      "Size": 12578,
+      "ETag": "\"1621939b633aa7c46a8f20ef4ce6663e\"",
+      "last_modified_ms": 1792151193133
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/7a0062b5598ad59f246e52d03c58412e8edca20595713d6b80dd0ae688b70ce6.zip",
+      "Size": 33404,
+      "ETag": "\"d18bd31cab0eba8c13dd0656be2c16a1\"",
+      "last_modified_ms": 1792151233620
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/62f586d1952686ec49120f239f23420c13b7b98e58b3277c541d4e0f467c1bcf.zip",
+      "Size": 11541,
+      "ETag": "\"392cf445b3c64aaa2290b10a739d08f8\"",
+      "last_modified_ms": 1792151221979
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/c6ba7399e462292ca17d82fa0ae2c15d54cb9d200dd0636b067b472e8a011242.zip",
+      "Size": 20207,
+      "ETag": "\"b4a33b3e7b17b640731aa2fc09d83ee3\"",
+      "last_modified_ms": 1792151264417
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/5128829272e3314c9ecf91c740289563bd1f3eceb82f364f98d30f3ecdac40ae.zip",
+      "Size": 27077,
+      "ETag": "\"eed9523c7af347983aebcdd29882b57f\"",
+      "last_modified_ms": 1792151248101
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ad3f450f28f03d7323321e17e7f769bbb0217d657e03a089e55f46e7771cec0b.zip",
+      "Size": 9966,
+      "ETag": "\"335ad0fe04c44ac8ad43ba634e639c8b\"",
+      "last_modified_ms": 1792151189416
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/2ef518eb95009011f2990beb0eac0e48ad26176e2f2820c2d8bc8cb63d53766e.zip",
+      "Size": 34183,
+      "ETag": "\"e5efc1f4a19aed34b0019b98cf685b5d\"",
+      "last_modified_ms": 1792151231807
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/971c5734a8db655fbd921740f1266da462535f1d4c3e7a224814abbadb550b77.zip",
+      "Size": 26212,
+      "ETag": "\"71bcb4818a82e70392a1f03590105f04\"",
+      "last_modified_ms": 1792151239041
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/713b0f5402aaa77fd259c12a87bd391323935c129929619ad91d92a5ed5f6437.zip",
+      "Size": 36202,
+      "ETag": "\"82386fc266ca0e4827d954620522feb6\"",
+      "last_modified_ms": 1792151240000
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/3df9a6d30e859767531b1bd1787c51801faf6a5f30be530f17e72bf802916351.zip",
+      "Size": 16642,
+      "ETag": "\"41552d25a56ad570237614f27b5f36e2\"",
+      "last_modified_ms": 1792151202485
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/fea7ba3ff44ff49f9b8c94f0a99bd86d181c8cd12c8ed47e4a873eace8cf6e98.zip",
+      "Size": 12057,
+      "ETag": "\"7aa54079f3f3de326f374c340963c0fb\"",
+      "last_modified_ms": 1792151182610
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/5a1b9a4c4ffa757f574b100ffb832c23df750967f6dadbc4279839cdfd14d40c.zip",
+      "Size": 21853,
+      "ETag": "\"e87cc7d39c489fd7ab9eecdf3298391c\"",
+      "last_modified_ms": 1792151235928
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/a9f4cc1f7735902e8979d767b748cc08973f99ae9d21d08f7946b795cbb99bc8.zip",
+      "Size": 34026,
+      "ETag": "\"bbf778940d21c2a9e9da382e396e4a62\"",
+      "last_modified_ms": 1792151260482
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/122d0139f066867c3a2a73567216d94eb82b74b431371411dfdbe35a10162953.zip",
+      "Size": 25451,
+      "ETag": "\"243e3cf361c08eefd47925fc5b51305c\"",
+      "last_modified_ms": 1792151225132
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/2f459dc6b3652b623f58d325829f5552d3b4d05da0b64f82935b619890e19649.zip",
+      "Size": 31025,
+      "ETag": "\"088a1d4ab157c90f4ec114002dacbdb9\"",
+      "last_modified_ms": 1792151233180
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/5fa24303bff56a617fef0a7c72a77e07d09a5ed7c0584746ae4cf260c589b5f7.zip",
+      "Size": 38531,
+      "ETag": "\"01be51a49d558481e7bee3d88c307529\"",
+      "last_modified_ms": 1792151232717
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/bbd3ca1648b1a936bceb3cc978b0ed89d8091e2d4eb55aeafb6c5f9b55e049dc.zip",
+      "Size": 11405,
+      "ETag": "\"3c45596cb163ed5f48b6a00795858a7d\"",
+      "last_modified_ms": 1792151180015
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/2e8a14b731450eb7e0048f3e71181f410d68ce89af7f7f0163f9b60fdf52c65f.zip",
+      "Size": 25242,
+      "ETag": "\"c7eb56bee22082f74f248dd5bfc5cf57\"",
+      "last_modified_ms": 1792151275646
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/d3389a92b5ffa23aca18276d1333021046b0b301ea1f363ce40c2074512629e2.zip",
+      "Size": 15186,
+      "ETag": "\"9083f267e45c936e7fcad391b8f51375\"",
+      "last_modified_ms": 1792151245422
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/0afc79729590ddfba3d39672d1058e6ad411a2a451755f44f500924d3e3b8838.zip",
+      "Size": 9505,
+      "ETag": "\"55c6caa6c50a647bc1ff9ad50c791b13\"",
+      "last_modified_ms": 1792151187400
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/11b009d15eb9d164f8ec7ff403e6b9c968d665bc2998326a1851d73141aadc9f.zip",
+      "Size": 32838,
+      "ETag": "\"eca55743caf6a826eca2b013a4646ef7\"",
+      "last_modified_ms": 1792151257041
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/a3c0216de37986b77d8a37ff39a45303a2ad48d8ba10f4ad8699a844e6f7d48f.zip",
+      "Size": 10764,
+      "ETag": "\"d6ce73bc28a1dfe3992e1fc063efbcdc\"",
+      "last_modified_ms": 1792151178781
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/0c1ffd2c234bbe943acee283c61cc1d38c9cb50c9808a94d23e8f1a0e3188fb2.zip",
+      "Size": 13182,
+      "ETag": "\"61a253648cb20234ca19952f43d971b1\"",
+      "last_modified_ms": 1792151189853
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/da8d25b39f52bcf3f4de7126cc24bacf56da636ee7ef85a1456d423c85b68788.zip",
+      "Size": 13340,
+      "ETag": "\"c8e29450e1db5508cfe00a57235ea3db\"",
+      "last_modified_ms": 1792151184067
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/45db673bb825370c4fbbd5be09ebd29c68a03a89315a5b827af86b532747fb4b.zip",
+      "Size": 38598,
+      "ETag": "\"15db05f665e6b7d4a86b40e1e1db1227\"",
+      "last_modified_ms": 1792151244980
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/4a1a02ccfbffe5b82c3455aa8a73c3b9d920cc438f509fce2bfc9096dd04c396.zip",
+      "Size": 20896,
+      "ETag": "\"cd87fe5d97761137ebb65fd05826556c\"",
+      "last_modified_ms": 1792151267016
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/72f2318610a55d53e44d7dd749572f2d18df1e9009d268f1fb3e8f64baf04331.zip",
+      "Size": 35335,
+      "ETag": "\"15c116abbe7fbe8bbd904e97e69c5633\"",
+      "last_modified_ms": 1792151241818
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/189c75f36f6a25e043b8befc446307868cdb0ff4338dfeebd0acea54a951f146.zip",
+      "Size": 24801,
+      "ETag": "\"ba96566a2552c4b4a4b1a2e44775c61c\"",
+      "last_modified_ms": 1792151231332
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/b8cd0bf49e258270e7caeb7ccc2c8918249d61edf6a646f41cddfc470addf18c.zip",
+      "Size": 20097,
+      "ETag": "\"b3a83973b1bbc322783fcf2864fef7d2\"",
+      "last_modified_ms": 1792151214174
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/dfcbc3a6daa311cb9b5fcaa250b70631b3c26ad3aa90c8e08d9214c3ae73e922.zip",
+      "Size": 16055,
+      "ETag": "\"ff3f7d3fcf8cc6c78cb66df1f19e67b5\"",
+      "last_modified_ms": 1792151213282
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/77446b7f8c9f0fbc1556b344f814b1f4f217e556acb3b39bc9486dbcf71e1c5d.zip",
+      "Size": 11309,
+      "ETag": "\"89a574107750c47c770bd5299e28ad73\"",
+      "last_modified_ms": 1792151202908
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/3e990260273b0787e5d291a75bc9502ca13c8951e6db8c55a50451f80d6e672e.zip",
+      "Size": 12813,
+      "ETag": "\"719ceab831a5681e3d0e981d1ad70b52\"",
+      "last_modified_ms": 1792151196210
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/a36dc8f82faee028b2aa72cfc4d924d2a89487a893a8b94854472ce78e77f1e6.zip",
+      "Size": 31181,
+      "ETag": "\"a123520395e968c56e0114b58be09ef6\"",
+      "last_modified_ms": 1792151294300
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/635e2c64f06d36c44f93c4f4bdb8e02f37c4bd0e3e5f84db87c8f098c7e1cf36.zip",
+      "Size": 11416,
+      "ETag": "\"85643b923871c3ea4dc83ed57e336187\"",
+      "last_modified_ms": 1792151179606
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/359e4f1972208e1a4f005482ce1b9127fa063569d6ae408be7dad65d6c550ff1.zip",
+      "Size": 30685,
+      "ETag": "\"b51045e354c1c9c32735a8251b2bf483\"",
+      "last_modified_ms": 1792151270074
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ec2a4a5513905e16de7dbbb41c430c4aeade1375d790b7aa38b22ed733711ced.zip",
+      "Size": 12629,
+      "ETag": "\"36ac6af8d7275fd095f3ef1b9bfc1567\"",
+      "last_modified_ms": 1792151181783
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/65590c8d06be310cac05ca6fe97baef972ff5990ce4ed26a311d9d6727d728c4.zip",
+      "Size": 33201,
+      "ETag": "\"0c816eacb4d1460fa0ac38e705bffdc9\"",
+      "last_modified_ms": 1792151252088
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/3560352146e24f0a4bff8abad8a554cb15b56201c091c1c5c5b76955124bfb5a.zip",
+      "Size": 12494,
+      "ETag": "\"8851a8c7bef1a618e68dc19b99234774\"",
+      "last_modified_ms": 1792151219790
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/bb7a20f97fb00d54b581d5f91db7a8e873cec0ec2608c5d62e6257d34c155cd5.zip",
+      "Size": 9736,
+      "ETag": "\"61318c6fb9c196cd83e7881bcd7dd16e\"",
+      "last_modified_ms": 1792151178375
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/10b0acf191d611df7d0a790890ee060b2fef26b8e9c2f434983122adfab138ee.zip",
+      "Size": 15872,
+      "ETag": "\"bfcf996e93378c3fca4cd22ece4e5f0f\"",
+      "last_modified_ms": 1792151209990
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/590c75f7117a98500c4e2df02602ac6c751efef0afeb0c0d0133c2c1c2e3c467.zip",
+      "Size": 15046,
+      "ETag": "\"a6610fe6c8c8d5f3b914ba6a61b6e45c\"",
+      "last_modified_ms": 1792151210420
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/be07c6d70d44a149fc92550bf2e8bd2487a95f9a8fa0f517830a724d3e65cc3c.zip",
+      "Size": 40175,
+      "ETag": "\"a056911773e1b0be3003e26e40345f0f\"",
+      "last_modified_ms": 1792151236375
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/d352f20bee1f1d525ff6768171efb70b042462a9dd4128cdbc90710287cb4e3e.zip",
+      "Size": 10640,
+      "ETag": "\"c378c1cc711f0ca3b8242c0f9aa76170\"",
+      "last_modified_ms": 1792151213730
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/95468fc0788e66cdbb6e5854357423ccd829db1864603c51bbd7f167d1868eec.zip",
+      "Size": 14330,
+      "ETag": "\"076e006802799572a8cae40c5f3afeec\"",
+      "last_modified_ms": 1792151192616
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/e950da3735276bab4eb04f4dd342de4a2460ce5bc322bfb1ecaae83d5665d367.zip",
+      "Size": 36136,
+      "ETag": "\"73181b2596829a4242b88e18eeb8277d\"",
+      "last_modified_ms": 1792151246767
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/c6ed75196bdc298302593e6422c0e0cdcd55cbeedc8228511894e8981ce96392.zip",
+      "Size": 22805,
+      "ETag": "\"ffbcfd40c4c4936828ae8950f19b460a\"",
+      "last_modified_ms": 1792151246309
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/8f9540af750a495ff9974cfca6a6fd069927bc7f0af897dbe2a61d8b319f205c.zip",
+      "Size": 12154,
+      "ETag": "\"96c5c7c084e72bc600067d087190a2d6\"",
+      "last_modified_ms": 1792151214621
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/86ce8c85594fd43863c665493b0e45e1842e2f0470ec4f6f5e593aa16e4460aa.zip",
+      "Size": 39151,
+      "ETag": "\"281a913bd646ea118ddeaf076bb9efb0\"",
+      "last_modified_ms": 1792151230856
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/a7f6e592c9839af6cb6c1ca14dbcb0cc83c224b8d5880b94e832f73ada68dc2c.zip",
+      "Size": 46395,
+      "ETag": "\"4ea90b86ca583e84f0011777d5a279c7\"",
+      "last_modified_ms": 1792151235473
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/869221040d960ea93beb0e6b202215e8602a9ff815b3ca03629769af076f3a46.zip",
+      "Size": 28312,
+      "ETag": "\"93fd9e9ca0f21b0e708142966b52b80a\"",
+      "last_modified_ms": 1792151263100
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/a07f7e0af2032b35aab4734fa66662c7bb071fc5059c4cdaf21c59a415f8d55f.zip",
+      "Size": 17188,
+      "ETag": "\"a228e2aa0e80a933f75d37c7fa6bc553\"",
+      "last_modified_ms": 1792151188068
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/624671374a313ae4548ced1f45846f112e9fb9d5aa94dcf7f69239379f36b53b.zip",
+      "Size": 18127,
+      "ETag": "\"7c984cc7d902f421c70f4a14f14bb25e\"",
+      "last_modified_ms": 1792151216695
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/5552f9d0fa1abc9e42fa7176f498133f90c562e354cc647fec0e9cf5441bebbf.zip",
+      "Size": 19783,
+      "ETag": "\"9db86bd3e98e7ff2e42ad6464357f120\"",
+      "last_modified_ms": 1792151206387
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/9d550d760a2f34d42ab7ecece8f86ef6e7f7794e006c9f347c9783a73dd6245e.zip",
+      "Size": 15437,
+      "ETag": "\"9a4b45845ff3e4078373684427288a4a\"",
+      "last_modified_ms": 1792151204968
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/b217c67bc23cb1fe9db95a4831fdd19292a3db58890939318f1ff60625a0c011.zip",
+      "Size": 10789,
+      "ETag": "\"ce7db97ab9651034e0b7d21cd1e0321f\"",
+      "last_modified_ms": 1792151216257
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/a1f50a4d4de5503164ca8f72014d2162a20feb17beea5422744cc5cb184510d8.zip",
+      "Size": 11565,
+      "ETag": "\"9d08492eebe41cf26db585989bcfac44\"",
+      "last_modified_ms": 1792151202048
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/6e84e6b7b88ac42a1b910532afc4dc825244d5aef6aaf762dc98eeff96388c24.zip",
+      "Size": 30521,
+      "ETag": "\"baecbabf35155954725ba2ce0c88b826\"",
+      "last_modified_ms": 1792151236830
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/51a471658fe8c5cafab3a142543200448a204597a5ace1bba11a765cfdc61ddf.zip",
+      "Size": 30969,
+      "ETag": "\"c0e2bd4fc244076cbb87af4b3304511b\"",
+      "last_modified_ms": 1792151247213
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/dadc6c736e16acd23be7e45fb6e9f1a7770031d8218be188e50bb0f0315dd38c.zip",
+      "Size": 14352,
+      "ETag": "\"a1b0db5cd8155d709d6d04e6ab034886\"",
+      "last_modified_ms": 1792151215828
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/3f9f3eb71edabd4f8302e6cb40591e58323280f1f6a1d7f9554eb5512faad982.zip",
+      "Size": 14820,
+      "ETag": "\"fd56e5a5bc427d51177d2d64c5828a94\"",
+      "last_modified_ms": 1792151203658
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/20c236dbb41054a3207f171dde77843bc4cd84b140168a800bb3eb777ba63058.zip",
+      "Size": 12337,
+      "ETag": "\"5e6459f4801b8b609ed551614dc42706\"",
+      "last_modified_ms": 1792151186656
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/90908ff999731294593c0817e754557e5edb4944973c46d11452f09ca09259ad.zip",
+      "Size": 12447,
+      "ETag": "\"c6ac43b75b448ab8b3e3421feb60a8f4\"",
+      "last_modified_ms": 1792151199452
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ee951ba93cdd52669c8f32957a99060fbc91f0204a74b6889710b22801b69748.zip",
+      "Size": 18634,
+      "ETag": "\"7b7cd1f46fac778caa82e9c2b0c4c03c\"",
+      "last_modified_ms": 1792151207096
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/0f24ca7fbdfdb71b6ce584d333819e475abc3e59b6bce0554cbad188eb376820.zip",
+      "Size": 13932,
+      "ETag": "\"75723655bfed72eddb6fb04b23124143\"",
+      "last_modified_ms": 1792151188955
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ed043352071af2fd4f2c6678c162e59d1d92239182f4219a7eb00b5efc93d0a5.zip",
+      "Size": 10136,
+      "ETag": "\"8dd4cc42ff06cce05125b62455ecc1d0\"",
+      "last_modified_ms": 1792151205401
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/25d63b18ee52df74ee9c287cdd9b9f9aa327195344ff4ba4349602de07b053c2.zip",
+      "Size": 26947,
+      "ETag": "\"60bed1006192a87b5882f8ca9e79fa1d\"",
+      "last_modified_ms": 1792151237735
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ed550a5feed0083e2e324f4ae2fe152f250e50988187211ff0a988eb313032fe.zip",
+      "Size": 32229,
+      "ETag": "\"ffeed93212b570098f511cafa8e9496a\"",
+      "last_modified_ms": 1792151242731
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/aa2349a122606b7d3834ebdfc8f82364e66ec00c89883f918edf4819639bce82.zip",
+      "Size": 16602,
+      "ETag": "\"88ff2fb6e5b730c38c40158541a172c2\"",
+      "last_modified_ms": 1792151224232
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/fbb6f3346b40e8de8a241660ee7d3223d086afda3967f2f5f6a22def914abdc4.zip",
+      "Size": 12117,
+      "ETag": "\"2dea0108ca4234a48bab1903d002cadd\"",
+      "last_modified_ms": 1792151219353
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/2801bb0c9b885540174231d60f53a5e23dcbf18d23b07d8b6408ec6b78c1fe22.zip",
+      "Size": 27572,
+      "ETag": "\"be64dcbd55d05ede63b68cdd425ffe31\"",
+      "last_modified_ms": 1792151254832
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/39f2ca3bca1143d02b311728c74d09fecd2fcea284925f1cc019c0980f69cdd3.zip",
+      "Size": 48379,
+      "ETag": "\"49f5252f2946fab818a6617fdc096f8c\"",
+      "last_modified_ms": 1792151252560
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/357366795720391a0b98f9d730f6d7bc5ecd348a734952f5633ffe1d71d90566.zip",
+      "Size": 12486,
+      "ETag": "\"2b7ed8c7c39f13519de1f9358d40aa3a\"",
+      "last_modified_ms": 1792151190287
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/4da3504c91ebcc79f4e1038a05a9b0c8d7849163f1faeb7029d799cf1fbe18fa.zip",
+      "Size": 9647,
+      "ETag": "\"b04a481a4ec1d72d74be0b3a03672567\"",
+      "last_modified_ms": 1792151177968
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ff6d50729b878ba028a2b8ecfe1616a6c7f07cc1ba485031e59b2a9ee5bb5389.zip",
+      "Size": 11224,
+      "ETag": "\"5b0973b888ddd7596845150985ee69b4\"",
+      "last_modified_ms": 1792151181327
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/f46c5d5d1a40e713a59998b07b209d3e03a325783403819a62a10ad60426f90a.zip",
+      "Size": 15718,
+      "ETag": "\"e24d1159dcb66a85723d793ccc86cf71\"",
+      "last_modified_ms": 1792151193770
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/3901fcff131b6e134d23849bea4170173101335e1f0ff9829c9b2d4f3b5074c2.zip",
+      "Size": 11434,
+      "ETag": "\"1967ce1dda78adde26ecd707ba002045\"",
+      "last_modified_ms": 1792151182196
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/fe4ef616746549a7d986504f14dec1924efc98c4364f221f217d675f024ab3af.zip",
+      "Size": 23075,
+      "ETag": "\"6eec7ef623d1c96831201ad3222dff85\"",
+      "last_modified_ms": 1792151269624
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/183cb11759a9925b4879d60ebb71e2a0249fdc8e3ce590c9b2eb5f6cb916855e.zip",
+      "Size": 14835,
+      "ETag": "\"3f1d8a018fb3a16e8001393f2c948931\"",
+      "last_modified_ms": 1792151191197
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/e16d21c7e6269ca035364f61f0b863accfa8788329d8038f536c5fed3b82022f.zip",
+      "Size": 12931,
+      "ETag": "\"87616ca6e382a8e1de288c51b4a53de7\"",
+      "last_modified_ms": 1792151220673
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/91afc21bd1c5d184ceefd91df68cb8d80dc96b9b9d6260e88944b379ac857e49.zip",
+      "Size": 15687,
+      "ETag": "\"a73a5791076d92c60177c4d0a1b69a47\"",
+      "last_modified_ms": 1792151186218
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/cac4ff9e57a54b3aac203d6dc969853413d0a8ae847270b2632a9c3a16c4e9ec.zip",
+      "Size": 13566,
+      "ETag": "\"47ad8f59bdc6e62bb14eba033c025726\"",
+      "last_modified_ms": 1792151184929
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/2f722249abd35c987d03ae3bd7c116b515f218d857b571769659ddeda2d2d302.zip",
+      "Size": 20532,
+      "ETag": "\"1c5d3920b1c9a8815ce790458b3bb55f\"",
+      "last_modified_ms": 1792151204538
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/4ca7c0b9c74ec253f15626bc2d2ddaacaea63618591cd339485474323fd21a61.zip",
+      "Size": 38558,
+      "ETag": "\"f935c1a74d136e6d358ef69cda7ca392\"",
+      "last_modified_ms": 1792151253062
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/571bc1c42f100c4a13d0d22966d6d7aae91c31f4f591241d899a3a6e4a5ce8d1.zip",
+      "Size": 13873,
+      "ETag": "\"cf5cdfb307c5b4eb11f5108c3713a9e6\"",
+      "last_modified_ms": 1792151190754
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/eebdb6cff3acd9f761edd410b6d2a6d7e3b1d7615917d13b701d9757c4a09add.zip",
+      "Size": 14364,
+      "ETag": "\"65ac74c0ca2370927580098d364339cc\"",
+      "last_modified_ms": 1792151188512
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/457feb069856d9c25e023448abbf3cb0d1c8e8a0224fcd4ebe292944a18d96cb.zip",
+      "Size": 17284,
+      "ETag": "\"a4e94a6d2b619046cb1dbc0ae0f011c6\"",
+      "last_modified_ms": 1792151212169
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/527e2ae44033719769ee73c387c13600aee3e4021b109e86a78f9f10cf08fdd7.zip",
+      "Size": 12644,
+      "ETag": "\"42e257c455e6d94d068f251991799d06\"",
+      "last_modified_ms": 1792151185389
+    }
+  ],
+  "first_two_update_gate_passed": true,
+  "expert_fixed_delta_gate_required_separately": false,
+  "phase_specific_native_logprobs": {
+    "train": 0,
+    "eval": null
+  },
+  "admission_audit_correction": {
+    "reason": "Initial auditor applied the training chosen-token logprobs=0 assertion to clean evaluation records. Frozen resolved eval_sampling_params and all4796 actual initial-evaluation records use None; all1024 first-two training records use0. Check each phase against the unchanged frozen request.",
+    "before_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/audit-first-snowball-incumbent1200-rno-before-native-eval-provenance-correction.py",
+    "source_config_or_grader_changed": false
+  },
+  "retained_evidence_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/admission/first-two-20261016T115356/admission-manifest.json",
+    "bytes": 488170,
+    "sha256": "e3a6633b67fcce30ca0fca3a2a61c80f2790430fa2bf66cb92996959971f654b",
+    "full_byte_readback_verified": true
+  },
+  "retained_evidence_files": 273,
+  "retained_evidence_bytes": 30521072,
+  "original_grader_utility_sha256": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+  "original_verifier_timeout_seconds": 10,
+  "full1200_endpoint_complete": false,
+  "remaining_seeds_submission_authorized_after_preflight": true,
+  "full_original_grade_replay_established": false
+}

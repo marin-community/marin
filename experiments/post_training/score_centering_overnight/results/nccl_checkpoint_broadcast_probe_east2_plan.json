@@ -1,0 +1,125 @@
+{
+  "job_id": "/romain/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce",
+  "source": "57b0c60bb0a92f7fc22f258b05fff125ac1a9ff0",
+  "cluster": "cw-us-east-02a",
+  "resource_board_ids": [
+    1140,
+    1141
+  ],
+  "resources": {
+    "cpu": 32,
+    "memory": "256GB",
+    "disk": "200GB",
+    "gpu": {
+      "variant": "H100",
+      "count": 2
+    },
+    "tasks": 1,
+    "priority": "batch"
+  },
+  "queue_and_run_timeout_seconds": 3600,
+  "failure_retries": 0,
+  "preemption_retries": 0,
+  "max_task_failures": 0,
+  "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+  "configuration": "experiments/post_training/score_centering_overnight/engineering_nccl_broadcast_probe_east2_v1/detach.yaml",
+  "configuration_sha256": "5802841be9b3370678f1cd30978cd790bac2d46931d43f37eeb4f8622ae6ea3c",
+  "workspace": "/home/romain/work/marin-community/MarinSkyRL/score-centering-qwen-owner-probe-01a126ce/runtime-workspace",
+  "workspace_uncompressed_bytes": 14332325,
+  "source_file_hashes": {
+    "uv.lock": "c9ff3b70074681e62f2683acd7b4b9487c9dc222d6065f61198c6e5e5d9ae891",
+    "cloud/iris/bootstrap_runtime.sh": "6c9215412ffd658cc93ca36c8b2b3acf7179ec1bc8700283968a772c22b028a5",
+    "skyrl-train/skyrl_train/tensor_ownership.py": "3e4e1b077d978efbacc1f72f4bdc5aa2eac6cbfca90b873455c66a41c2966cdf"
+  },
+  "payload_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/nccl-checkpoint-broadcast-memory-probe-east2.py",
+  "payload_sha256": "d1fefb7e33df9bd327a1c000628e76a399609986720c2c3bd8011533f0a05fde",
+  "setup_script": "set -euo pipefail\ncheckout=/app/marinskyrl\ngit init -q \"$checkout\"\ngit -C \"$checkout\" remote add origin https://github.com/marin-community/MarinSkyRL.git\ngit -C \"$checkout\" fetch --depth=1 origin 57b0c60bb0a92f7fc22f258b05fff125ac1a9ff0\ngit -C \"$checkout\" checkout -q --detach FETCH_HEAD\ntest \"$(git -C \"$checkout\" rev-parse HEAD)\" = 57b0c60bb0a92f7fc22f258b05fff125ac1a9ff0\nbash /app/marinskyrl/cloud/iris/bootstrap_runtime.sh   \"$checkout\"   \"$IRIS_VENV\"   /app/marinskyrl/.iris-runtime-env   megatron   production\nsource /app/marinskyrl/.iris-runtime-env\n",
+  "setup_sha256": "84a179144d9eb7c10401767cb17c8593955ff2350e27c516000645bf8926f700",
+  "command": [
+    "bash",
+    "-c",
+    "set -euo pipefail\nsource /app/marinskyrl/.iris-runtime-env\nexport PYTHONPATH=/app/marinskyrl/skyrl-train:/app/marinskyrl:/app/marinskyrl/skyrl-gym\ncd /app/marinskyrl\nexec \"$IRIS_VENV/bin/python\" -c \"$1\"\n",
+    "nccl-broadcast-probe",
+    "import base64,pathlib,runpy;p=pathlib.Path('/tmp/nccl-checkpoint-broadcast-memory-probe-east2.py');p.write_bytes(base64.b64decode('IiIiT2JzZXJ2ZSBkcm9wcGVkIE5DQ0wgYnJvYWRjYXN0IGhhbmRsZXMgaW4gdGhlIGV4YWN0IFNub3diYWxsIFRvcmNoIHJ1bnRpbWUuIiIiCgpmcm9tIGRhdGV0aW1lIGltcG9ydCB0aW1lZGVsdGEKaW1wb3J0IGpzb24KaW1wb3J0IG9zCmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aAoKaW1wb3J0IHRvcmNoCmltcG9ydCB0b3JjaC5kaXN0cmlidXRlZCBhcyBkaXN0CmltcG9ydCB0b3JjaC5tdWx0aXByb2Nlc3NpbmcgYXMgbXAKCmZyb20gc2t5cmxfdHJhaW4udGVuc29yX293bmVyc2hpcCBpbXBvcnQgdGVuc29yX293bmVyc2hpcF9yZXBvcnQKClNPVVJDRSA9ICI1N2IwYzYwYmIwYTkyZjdmYzIyZjI1OGIwNWZmZjEyNWFjMWE5ZmYwIgpUT1JDSF9HSVQgPSAiY2YzMDE1M2M0YzEzMWM4MTY0ZWU3Nzk4ZTUwMjJkODEwNjgyZTJjYiIKUk9PVCA9ICJzMzovL21hcmluLXVzLWVhc3QtMDJhL21hcmluL3VzZXJzL3JvbWFpbi9zY29yZS1jZW50ZXJpbmctb3Zlcm5pZ2h0LTAxYTEyM2MwL2VuZ2luZWVyaW5nL3NjLWNvcmUtcnVudGltZS1uY2NsLWJyb2FkY2FzdC1wcm9iZS1lYXN0Mi1hMS0wMWExMjZjZSIKV09SSyA9IFBhdGgoIi90bXAvbmNjbC1jaGVja3BvaW50LWJyb2FkY2FzdC1wcm9iZS1lYXN0Mi0wMWExMjZjZSIpCklURVJBVElPTlMgPSAyNTYKCgpkZWYgd29ya2VyKHJhbmssIG1vZGUsIGRpcmVjdG9yeSk6CiAgICB0b3JjaC5zZXRfbnVtX3RocmVhZHMoMSkKICAgIHRvcmNoLmN1ZGEuc2V0X2RldmljZShyYW5rKQogICAgZGlyZWN0b3J5ID0gUGF0aChkaXJlY3RvcnkpCiAgICBkaXN0LmluaXRfcHJvY2Vzc19ncm91cCgKICAgICAgICAibmNjbCIsIHJhbms9cmFuaywgd29ybGRfc2l6ZT0yLAogICAgICAgIGluaXRfbWV0aG9kPSJmaWxlOi8vIiArIHN0cihkaXJlY3RvcnkgLyAicmVuZGV6dm91cyIpLAogICAgICAgIGRldmljZV9pZD10b3JjaC5kZXZpY2UoImN1ZGEiLCByYW5rKSwgdGltZW91dD10aW1lZGVsdGEoc2Vjb25kcz0xODApLAogICAgKQogICAgZXhjaGFuZ2UgPSBOb25lCiAgICBvYnNlcnZhdGlvbnMgPSBbXQogICAgdHJ5OgogICAgICAgIGV4Y2hhbmdlID0gZGlzdC5uZXdfZ3JvdXAocmFua3M9WzAsIDFdLCBiYWNrZW5kPSJuY2NsIiwgdGltZW91dD10aW1lZGVsdGEoc2Vjb25kcz0xODApKQogICAgICAgIHNvdXJjZSA9IHRvcmNoLnplcm9zKCgyNTYwLCAxMjgwKSwgZHR5cGU9dG9yY2guYmZsb2F0MTYsIGRldmljZT1yYW5rKQogICAgICAgIGRpc3QuYnJvYWRjYXN0KHNvdXJjZSwgc3JjPTAsIGdyb3VwPWV4Y2hhbmdlKQogICAgICAgIGRpc3QuYmFycmllcigpCiAgICAgICAgdG9yY2guY3VkYS5zeW5jaHJvbml6ZSgpCgogICAgICAgIGRlZiBvYnNlcnZlKGxhYmVsKToKICAgICAgICAgICAgdG9yY2guY3VkYS5zeW5jaHJvbml6ZSgpCiAgICAgICAgICAgIGFsbG9jYXRlZCA9IHRvcmNoLmN1ZGEubWVtb3J5X2FsbG9jYXRlZCgpCiAgICAgICAgICAgIHJlcG9ydCA9IHRlbnNvcl9vd25lcnNoaXBfcmVwb3J0KGRldmljZT10b3JjaC5kZXZpY2UoImN1ZGEiLCByYW5rKSwga25vd25fdGVuc29ycz17InJldXNlZF9zb3VyY2VfYnVmZmVyIjogW3NvdXJjZV19KQogICAgICAgICAgICByb3cgPSB7Im1vZGUiOiBtb2RlLCAicmFuayI6IHJhbmssICJib3VuZGFyeSI6IGxhYmVsLCAiYWxsb2NhdGVkX2J5dGVzIjogYWxsb2NhdGVkLCAiYWxsb2NhdGVkX2FmdGVyX2NlbnN1c19ieXRlcyI6IHRvcmNoLmN1ZGEubWVtb3J5X2FsbG9jYXRlZCgpLCAicmVzZXJ2ZWRfYnl0ZXMiOiB0b3JjaC5jdWRhLm1lbW9yeV9yZXNlcnZlZCgpLCAib3duZXJzaGlwIjogcmVwb3J0fQogICAgICAgICAgICBvYnNlcnZhdGlvbnMuYXBwZW5kKHJvdykKICAgICAgICAgICAgKGRpcmVjdG9yeSAvIGYicmFuay17cmFua30uanNvbiIpLndyaXRlX3RleHQoanNvbi5kdW1wcyhvYnNlcnZhdGlvbnMsIGluZGVudD0yKSArICJcbiIpCiAgICAgICAgICAgIHByaW50KGpzb24uZHVtcHMoe2tleTogcm93W2tleV0gZm9yIGtleSBpbiBbIm1vZGUiLCAicmFuayIsICJib3VuZGFyeSIsICJhbGxvY2F0ZWRfYnl0ZXMiXX0pLCBmbHVzaD1UcnVlKQoKICAgICAgICBvYnNlcnZlKCJiZWZvcmVfdHJhbnNmZXJzIikKICAgICAgICBmb3IgaW5kZXggaW4gcmFuZ2UoSVRFUkFUSU9OUyk6CiAgICAgICAgICAgIHNyYyA9IGluZGV4ICUgMgogICAgICAgICAgICBpZiByYW5rID09IHNyYzoKICAgICAgICAgICAgICAgIHNvdXJjZS5maWxsXyhpbmRleCkKICAgICAgICAgICAgICAgIGRpc3QuYnJvYWRjYXN0KHNvdXJjZSwgc3JjPXNyYywgZ3JvdXA9ZXhjaGFuZ2UsIGFzeW5jX29wPUZhbHNlKQogICAgICAgICAgICBlbHNlOgogICAgICAgICAgICAgICAgdGVtcG9yYXJ5ID0gdG9yY2guZW1wdHlfbGlrZShzb3VyY2UpCiAgICAgICAgICAgICAgICB3b3JrID0gZGlzdC5icm9hZGNhc3QodGVtcG9yYXJ5LCBzcmM9c3JjLCBncm91cD1leGNoYW5nZSwgYXN5bmNfb3A9VHJ1ZSkKICAgICAgICAgICAgICAgIGlmIG1vZGUgPT0gIndhaXRlZCI6CiAgICAgICAgICAgICAgICAgICAgd29yay53YWl0KCkKICAgICAgICAgICAgICAgIGRlbCB3b3JrLCB0ZW1wb3JhcnkKICAgICAgICB0b3JjaC5jdWRhLnN5bmNocm9uaXplKCkKICAgICAgICAjIEEgd29ybGQgYmFycmllciBpcyBvbiBhbm90aGVyIHByb2Nlc3MgZ3JvdXAuIEl0IGRvZXMgbm90IGV4cGxpY2l0bHkKICAgICAgICAjIGpvaW4gYW55IGRpc2NhcmRlZCBhc3luYyB3b3JrIGhhbmRsZSBmcm9tIHRoZSBleGNoYW5nZSBzdWJncm91cC4KICAgICAgICBkaXN0LmJhcnJpZXIoKQogICAgICAgIG9ic2VydmUoImFmdGVyX3dvcmxkX2JhcnJpZXIiKQogICAgICAgIGRpc3QuYmFycmllcihncm91cD1leGNoYW5nZSkKICAgICAgICBvYnNlcnZlKCJhZnRlcl9leGNoYW5nZV9ncm91cF9iYXJyaWVyIikKICAgIGZpbmFsbHk6CiAgICAgICAgaWYgZXhjaGFuZ2UgaXMgbm90IE5vbmU6CiAgICAgICAgICAgIGRpc3QuZGVzdHJveV9wcm9jZXNzX2dyb3VwKGV4Y2hhbmdlKQogICAgICAgIGRpc3QuZGVzdHJveV9wcm9jZXNzX2dyb3VwKCkKCgpkZWYgbWFpbigpOgogICAgaW1wb3J0IGJvdG8zCiAgICBmcm9tIGJvdG9jb3JlLmNvbmZpZyBpbXBvcnQgQ29uZmlnCiAgICBpbXBvcnQgaGFzaGxpYgogICAgaW1wb3J0IHN1YnByb2Nlc3MKCiAgICBhc3NlcnQgdG9yY2gudmVyc2lvbi5naXRfdmVyc2lvbiA9PSBUT1JDSF9HSVQgYW5kIHRvcmNoLl9fdmVyc2lvbl9fID09ICIyLjEzLjArY3UxMzIiCiAgICBhc3NlcnQgc3VicHJvY2Vzcy5jaGVja19vdXRwdXQoWyJnaXQiLCAicmV2LXBhcnNlIiwgIkhFQUQiXSwgdGV4dD1UcnVlKS5zdHJpcCgpID09IFNPVVJDRQogICAgV09SSy5ta2RpcihleGlzdF9vaz1GYWxzZSkKICAgIHZlcnNpb25zID0geyJzb3VyY2UiOiBTT1VSQ0UsICJ0b3JjaCI6IHRvcmNoLl9fdmVyc2lvbl9fLCAidG9yY2hfZ2l0X3ZlcnNpb24iOiB0b3JjaC52ZXJzaW9uLmdpdF92ZXJzaW9uLCAibmNjbCI6IHRvcmNoLmN1ZGEubmNjbC52ZXJzaW9uKCksICJhbGxvY2F0ZWRfbm9kZV9ncHVzIjogdG9yY2guY3VkYS5kZXZpY2VfY291bnQoKSwgInBvbGljeV9tb2RlbCI6IE5vbmUsICJyYW5rcyI6IDIsICJkdHlwZSI6ICJiZmxvYXQxNiIsICJzaGFwZSI6IFsyNTYwLCAxMjgwXSwgImJyb2FkY2FzdHMiOiBJVEVSQVRJT05TLCAiZGlzY2FyZGVkX3JlY2VpdmVfdGVuc29yc19wZXJfcmFuayI6IElURVJBVElPTlMgLy8gMn0KICAgIChXT1JLIC8gInJ1bnRpbWUuanNvbiIpLndyaXRlX3RleHQoanNvbi5kdW1wcyh2ZXJzaW9ucywgaW5kZW50PTIpICsgIlxuIikKICAgIHRyeToKICAgICAgICBmb3IgbW9kZSBpbiBbImRyb3BwZWQiLCAid2FpdGVkIl06CiAgICAgICAgICAgIGRpcmVjdG9yeSA9IFdPUksgLyBtb2RlCiAgICAgICAgICAgIGRpcmVjdG9yeS5ta2RpcigpCiAgICAgICAgICAgIG1wLnNwYXduKHdvcmtlciwgYXJncz0obW9kZSwgc3RyKGRpcmVjdG9yeSkpLCBucHJvY3M9Miwgam9pbj1UcnVlKQogICAgZmluYWxseToKICAgICAgICBjbGllbnQgPSBib3RvMy5jbGllbnQoInMzIiwgZW5kcG9pbnRfdXJsPW9zLmVudmlyb25bIkNXX1MzX0VORFBPSU5UIl0sIGF3c19hY2Nlc3Nfa2V5X2lkPW9zLmVudmlyb25bIkNXX0tFWV9JRCJdLCBhd3Nfc2VjcmV0X2FjY2Vzc19rZXk9b3MuZW52aXJvblsiQ1dfS0VZX1NFQ1JFVCJdLCBjb25maWc9Q29uZmlnKHMzPXsiYWRkcmVzc2luZ19zdHlsZSI6ICJ2aXJ0dWFsIn0pKQogICAgICAgIGJ1Y2tldCwgcHJlZml4ID0gUk9PVC5yZW1vdmVwcmVmaXgoInMzOi8vIikuc3BsaXQoIi8iLCAxKQogICAgICAgIGZpbGVzID0gW10KICAgICAgICBmb3IgcGF0aCBpbiBzb3J0ZWQoV09SSy5yZ2xvYigiKi5qc29uIikpOgogICAgICAgICAgICBib2R5ID0gcGF0aC5yZWFkX2J5dGVzKCkKICAgICAgICAgICAga2V5ID0gcHJlZml4ICsgIi9yZXN1bHRzLyIgKyBzdHIocGF0aC5yZWxhdGl2ZV90byhXT1JLKSkKICAgICAgICAgICAgY2xpZW50LnB1dF9vYmplY3QoQnVja2V0PWJ1Y2tldCwgS2V5PWtleSwgQm9keT1ib2R5KQogICAgICAgICAgICBhc3NlcnQgY2xpZW50LmdldF9vYmplY3QoQnVja2V0PWJ1Y2tldCwgS2V5PWtleSlbIkJvZHkiXS5yZWFkKCkgPT0gYm9keQogICAgICAgICAgICBmaWxlcy5hcHBlbmQoeyJ1cmkiOiAiczM6Ly8iICsgYnVja2V0ICsgIi8iICsga2V5LCAiYnl0ZXMiOiBsZW4oYm9keSksICJzaGEyNTYiOiBoYXNobGliLnNoYTI1Nihib2R5KS5oZXhkaWdlc3QoKSwgImZ1bGxfYnl0ZV9yZWFkYmFja192ZXJpZmllZCI6IFRydWV9KQogICAgICAgIHBheWxvYWQgPSAoanNvbi5kdW1wcyh7InNjb3BlIjogIk9uZS1ub2RlIHR3by1yYW5rIGNvbW11bmljYXRpb24tb25seSBlbmdpbmVlcmluZyBvYnNlcnZhdGlvbjsgbm8gbW9kZWwsIG9wdGltaXplciwgc2NpZW50aWZpYyByZXNwb25zZSBvciBTbm93YmFsbCByZWNvdmVyeSBxdWFsaWZpY2F0aW9uLiIsICJydW50aW1lIjogdmVyc2lvbnMsICJmaWxlcyI6IGZpbGVzfSwgaW5kZW50PTIpICsgIlxuIikuZW5jb2RlKCkKICAgICAgICBrZXkgPSBwcmVmaXggKyAiL3Jlc3VsdHMvbWFuaWZlc3QuanNvbiIKICAgICAgICBjbGllbnQucHV0X29iamVjdChCdWNrZXQ9YnVja2V0LCBLZXk9a2V5LCBCb2R5PXBheWxvYWQpCiAgICAgICAgYXNzZXJ0IGNsaWVudC5nZXRfb2JqZWN0KEJ1Y2tldD1idWNrZXQsIEtleT1rZXkpWyJCb2R5Il0ucmVhZCgpID09IHBheWxvYWQKICAgICAgICBwcmludChqc29uLmR1bXBzKHsibWFuaWZlc3RfdXJpIjogInMzOi8vIiArIGJ1Y2tldCArICIvIiArIGtleSwgImJ5dGVzIjogbGVuKHBheWxvYWQpLCAic2hhMjU2IjogaGFzaGxpYi5zaGEyNTYocGF5bG9hZCkuaGV4ZGlnZXN0KCksICJmaWxlcyI6IGxlbihmaWxlcyl9KSwgZmx1c2g9VHJ1ZSkKCgppZiBfX25hbWVfXyA9PSAiX19tYWluX18iOgogICAgbWFpbigpCg=='));runpy.run_path(str(p),run_name='__main__')"
+  ],
+  "environment": {
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1"
+  },
+  "durable_root": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce",
+  "exact_torch_version": "2.13.0+cu132",
+  "exact_torch_git_version": "cf30153c4c131c8164ee7798e5022d810682e2cb",
+  "scope": "One-node2H100/two-rank NCCL communication-only placement replacement; the same exact source57/Torchcf30153 experiment as the queued one-node8H100 request. Algorithm/rank count/shapes/modes/barriers unchanged; payload differs only in unique output paths. No policy model, optimizer, scientific source promotion or completed checkpoint-recovery qualification. Every actually allocated GPU is costed; the old unallocated request may be retired only after guarded replacement confirmation.",
+  "hypothesis": "MCore0.18 broadcast exchange discards async handles for unneeded shards. The exact native PyTorch implementation stashes async input/output tensors in C++ and defers completed-work shelf cleanup until a later call on that same process group. Test whether this mechanism leaves live tensor storage after a world barrier, and whether explicit waits remove it. This candidate is not yet established as the Snowball OOM cause.",
+  "native_submission_confirmed": false,
+  "candidate_primary_source_evidence": {
+    "native_runtime_observation": {
+      "file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball57-native-torch-version-and-nccl-flags.log",
+      "sha256": "a88dd49c3d5f2bc8d4e42cc04cbe1b33b76212ca66e1692d1c019fdd22832364",
+      "torch": "2.13.0+cu132",
+      "git_version": "cf30153c4c131c8164ee7798e5022d810682e2cb"
+    },
+    "pytorch_files": [
+      {
+        "url": "https://raw.githubusercontent.com/pytorch/pytorch/cf30153c4c131c8164ee7798e5022d810682e2cb/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp",
+        "file": "/home/romain/work/marin-community/MarinSkyRL/score-centering-qwen-owner-probe-01a126ce/dependency-source/pytorch-cf30153c4c131c8164ee7798e5022d810682e2cb/ProcessGroupNCCL.cpp",
+        "bytes": 228336,
+        "sha256": "bf4210311fe0c2a61ac9ccfcda0656edb281b985109881315e0b5dfd6beec9cc"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/pytorch/pytorch/cf30153c4c131c8164ee7798e5022d810682e2cb/torch/csrc/distributed/c10d/ProcessGroupNCCL.hpp",
+        "file": "/home/romain/work/marin-community/MarinSkyRL/score-centering-qwen-owner-probe-01a126ce/dependency-source/pytorch-cf30153c4c131c8164ee7798e5022d810682e2cb/ProcessGroupNCCL.hpp",
+        "bytes": 55980,
+        "sha256": "7f243554c188253779c78d83075f209ad0c85bf656f1ee7469bab0be7f44b9fb"
+      }
+    ],
+    "pytorch_cpp_lines": {
+      "completed_work_shelves_deferred_to_same_group_next_call": [
+        2432,
+        2462
+      ],
+      "next_work_enqueue_unstashes": [
+        3550,
+        3557
+      ],
+      "async_input_output_tensor_shelving": [
+        3822,
+        3831
+      ],
+      "work_synchronize_unstashes": [
+        815,
+        830
+      ]
+    },
+    "megatron_core_sdist": {
+      "version": "0.18.0",
+      "url": "https://files.pythonhosted.org/packages/4e/5f/31dbdff0e758598050fbee8bacad0f034447817db34b6399100acd5d3929/megatron_core-0.18.0.tar.gz",
+      "bytes": 1602287,
+      "sha256": "8feff0cd371e5ef26dc36636a23e197983ddddf10b43847871697b89be8cd6ea",
+      "source_file": "megatron/core/dist_checkpointing/exchange_utils.py",
+      "broadcast_exchange_lines": [
+        460,
+        543
+      ],
+      "observed_behavior": "For unneeded shard orig_device=None, asynchronous broadcast Work is discarded without an explicit wait."
+    },
+    "native_full_geometry_observation": "results/snowball_checkpoint_tensor_ownership_terminal_optimizer_backload_oom.json",
+    "root_cause_established": false
+  },
+  "placement_replacement": {
+    "original_job_id": "/romain/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce",
+    "original_configuration": "experiments/post_training/score_centering_overnight/engineering_nccl_broadcast_probe_v1/detach.yaml",
+    "original_plan_sha256": "cd0bb2b05367a3f1e0665119703382cc75d2a5a3fc449a89be2f710d1f0c1a47",
+    "reason": "Original one-node8H100 RNO request remains unallocated after32minutes. Native Kueue cannot fit1pod across64nodes. Payload always uses2NCCL ranks; request only2H100 in the other authorized provider. Preserve exact source/runtime/broadcast operation; only output identity, visible GPU allocation and placement differ.",
+    "proof": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/nccl-probe-rno-capacity-20261016T1205.json",
+    "proof_sha256": "f43c48386b45e95836243fd8d129ba67dc593f9a30e3cfd991741234bd8fd3e7",
+    "original_unallocated_retirement_rule": "Confirm replacement native resources, then re-read original. Cancel exact original only if every latest task is still unallocated. If original starts first, withdraw still-unallocated replacement. Do not submit any duplicate scientific trial.",
+    "capacity_evidence_retained_manifest": {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/ordinary-remaining-submission-20261016T1204/ordinary1200-remaining-native-evidence-manifest.json",
+      "bytes": 16300,
+      "sha256": "bef53a5e542cebae9945dd23c0011a9270687aaffc3483fd912c7e2241b105ee",
+      "full_byte_readback_verified": true
+    }
+  }
+}
