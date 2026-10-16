@@ -1,0 +1,170 @@
+{
+  "scope": "Engineering baseline for fresh forward and training CUDA memory during two initial updates on observation-only source 26cc99. The qualified five-update fresh result on checkpoint source 173 remains valid and reused. This run requests no terminal checkpoint or evaluation. It establishes no repair, scientific endpoint or source/resume qualification.",
+  "comparison_failed_restore_proof": "snowball_checkpoint_memory_diagnostic_physical3_optimizer_backload_oom.json",
+  "checked_telemetry_query_evidence": {
+    "snowball-fresh173-versus-resume26-cuda-events.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "snowball26-hub-any-job-telemetry-counts.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cuda-memory-hub-bounded-event-probe.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "case": {
+    "run_id": "sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce",
+    "job_id": "/romain/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce",
+    "predecessor_configuration": "experiments/post_training/score_centering_overnight/snowball_checkpoint_recovery_qualification_v1/save5-detach.yaml",
+    "predecessor_job": "/romain/sc-snowball-checkpoint-periodic3-save5-noise005-sc-s0-a0-01a126ce",
+    "configuration": "experiments/post_training/score_centering_overnight/snowball_checkpoint_memory_fresh_baseline_v1/fresh2-detach.yaml",
+    "prepare_configuration": "experiments/post_training/score_centering_overnight/snowball_checkpoint_memory_fresh_baseline_v1/fresh2-prepare.yaml",
+    "configuration_sha256": "a2e577fd518004ff02bac243318b2fc7eba926d9441d78e2cda3e69464267964",
+    "source": "26cc99a426737309a60a490ce219138f8cae4818",
+    "horizon": 2,
+    "nodes": 5,
+    "gpus_per_node": 8,
+    "priority": "batch",
+    "diagnostic_only": true,
+    "submission_authorized_after_preflight": true,
+    "native_preparation_passed": true,
+    "native_submission_confirmed": true,
+    "changes": "Only run-owned identities/paths,observation-only source26cc99,max_steps2,and disabled terminal checkpoint/evaluation. Prefix through the first2trainingupdates matches the qualified173save5 run. Preserve initial eval0/periodic5 and checkpoint3;none is due before step2. No allocator,optimizer/loss/data/noise/geometry/source repair.",
+    "actual_decoded_changed_fields": [
+      "run.id",
+      "runtime.launcher_commit",
+      "iris.job_name",
+      "ray.rendezvous_dir",
+      "ray.log_dir",
+      "artifacts.checkpoint_root",
+      "artifacts.export_root",
+      "artifacts.attempts_root",
+      "artifacts.resolved_config_uri",
+      "artifacts.terminal_manifest_uri",
+      "skyrl.trainer.max_steps",
+      "skyrl.trainer.rollout_buffer.object_store_root",
+      "skyrl.trainer.policy.megatron_config.torch_profiler_config.save_path",
+      "skyrl.trainer.callbacks.0.save_on_train_end",
+      "skyrl.trainer.callbacks.1.eval_on_train_end"
+    ],
+    "actual_nonpath_changed_fields": [
+      "runtime.launcher_commit",
+      "skyrl.trainer.max_steps",
+      "skyrl.trainer.callbacks.0.save_on_train_end",
+      "skyrl.trainer.callbacks.1.eval_on_train_end"
+    ],
+    "native_preparation_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce-native-prepare-engineering-only.log",
+    "native_preparation_log_sha256": "2b65a36da27985de17924a9c0112c3d509f592b7e5e223e79d6e9722bc1d1da2",
+    "empty_output_roots": [
+      {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce",
+        "observed_empty": true
+      },
+      {
+        "uri": "s3://marin-us-east-02a/tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce",
+        "observed_empty": true
+      }
+    ],
+    "expected_training_updates": [
+      1,
+      2
+    ],
+    "expected_evaluations": [
+      0
+    ],
+    "expected_physical_response_records": 5820,
+    "terminal_checkpoint_requested": false,
+    "full_source_qualification_claimed": false,
+    "diagnostic_scope_reason": "Only missing fresh forward/train allocator baseline is measured. Existing173save5 checkpoint/fullgrading/terminaleval qualification is reused. Avoid writing another large model checkpoint and running another full terminal evaluation for a memory-only control;do not use this2updatecontrol as an endpoint/source/resume qualification.",
+    "resource_board_ids": [
+      1116,
+      1117
+    ],
+    "native_submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce-native-submit.log",
+    "native_submission_log_sha256": "4b5827818b70e8ab39839c767aaacd47d7d4669d157030cc71b396885a678a97",
+    "status": "Controller confirms5BATCH H100node tasks;actual allocation state retained per task. No completed diagnostic/calibration or sourcequalification claimed.",
+    "controller_confirmation": [
+      {
+        "job_id": "/romain/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "d24510ca2f16049f37f1cdc9bd34a3389f26807d7a82f9765340753b77478088",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+        "task_id": "/romain/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "66f2c4dd6883a1a1",
+        "task_state": "2",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "d24510ca2f16049f37f1cdc9bd34a3389f26807d7a82f9765340753b77478088",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+        "task_id": "/romain/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce/1",
+        "attempt_id": "0",
+        "attempt_uid": "8a4dc7aad5219bc4",
+        "task_state": "2",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "d24510ca2f16049f37f1cdc9bd34a3389f26807d7a82f9765340753b77478088",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+        "task_id": "/romain/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce/2",
+        "attempt_id": "0",
+        "attempt_uid": "4e26b43116301728",
+        "task_state": "2",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "d24510ca2f16049f37f1cdc9bd34a3389f26807d7a82f9765340753b77478088",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+        "task_id": "/romain/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce/3",
+        "attempt_id": "0",
+        "attempt_uid": "984ca8b2dd4c1eec",
+        "task_state": "2",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "d24510ca2f16049f37f1cdc9bd34a3389f26807d7a82f9765340753b77478088",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+        "task_id": "/romain/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce/4",
+        "attempt_id": "0",
+        "attempt_uid": "66b3032df5700da6",
+        "task_state": "2",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      }
+    ],
+    "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/fresh-memory-and-rno-stale130-controller-confirmation.csv",
+    "controller_snapshot_sha256": "61de14012816abc8e92b42c9b7c1f64528828687d4c8863711c17ae43e8f7c65"
+  }
+}

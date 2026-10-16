@@ -21,7 +21,7 @@
     7
   ],
   "expected_responses": 5820,
-  "status": "Observation-only source26cc99 physical3 currently running5BATCHx8H100 tasks. Initial physical3 snapshot captures160observations across32ranks in32nativeworkerfiles:64offload entries/exits and32checkpoint-training-state-load entries;zero checkpoint-load exits,optimizer-backload boundaries or new published training updates. Prior0/1/2nativeprioritypreemptions55.0890733333H100h remain retained. No OOMrepair,resumedupdate or fullqualification established. Scientific source remains0212;restore7-to9 unsubmitted/gated.",
+  "status": "Physical attempt 3 on observation-only source 26cc99 is terminal after native CUDA OOM during optimizer backload, before a new applied update. All 32 checkpoint-state-load spans and all 64 weight-load spans succeeded. Of 32 optimizer-backload spans, 21 succeeded and 11 failed. The original error requests 14 MiB with 9.19 MiB free. This five-node allocation cost 32.0909022222 H100-hours; the earlier three priority preemptions cost 55.0890733333 H100-hours and remain separate. The memory cause is unresolved. No repair, source promotion or full resume qualification is established. Scientific source 0212 remains frozen; restore7-to9 is unsubmitted and gated.",
   "preparation_failures": [
     {
       "attempt": 0,
@@ -56,7 +56,7 @@
   "latest_controller_rows": [
     {
       "job_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce",
-      "job_state": "3",
+      "job_state": "5",
       "num_tasks": "5",
       "priority_band": "3",
       "bundle_id": "475c0520c5412658a35f4acd4e77fcc26ad7080f4c526100ac7af23b439b837b",
@@ -68,16 +68,16 @@
       "task_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/0",
       "attempt_id": "3",
       "attempt_uid": "21d30c03d3ae8aa3",
-      "task_state": "3",
-      "exit_code": "",
+      "task_state": "5",
+      "exit_code": "1",
       "started_at_ms": "1792121231431",
-      "finished_at_ms": "",
+      "finished_at_ms": "1792124131440",
       "node_name": "g86299e",
-      "terminal_reason": ""
+      "terminal_reason": " 60.31 GiB is allocated by PyTorch, and 1.93 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)\n2026-10-16 04:14:38.546 | ERROR    | skyrl_train.entrypoints.main_base:run_ray_driver:747 - Preserved original training-driver excep"
     },
     {
       "job_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce",
-      "job_state": "3",
+      "job_state": "5",
       "num_tasks": "5",
       "priority_band": "3",
       "bundle_id": "475c0520c5412658a35f4acd4e77fcc26ad7080f4c526100ac7af23b439b837b",
@@ -89,16 +89,16 @@
       "task_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/1",
       "attempt_id": "3",
       "attempt_uid": "ea265179f5edf382",
-      "task_state": "3",
+      "task_state": "11",
       "exit_code": "",
       "started_at_ms": "1792121231431",
-      "finished_at_ms": "",
+      "finished_at_ms": "1792124131440",
       "node_name": "g1cbf32",
       "terminal_reason": ""
     },
     {
       "job_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce",
-      "job_state": "3",
+      "job_state": "5",
       "num_tasks": "5",
       "priority_band": "3",
       "bundle_id": "475c0520c5412658a35f4acd4e77fcc26ad7080f4c526100ac7af23b439b837b",
@@ -110,16 +110,16 @@
       "task_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/2",
       "attempt_id": "3",
       "attempt_uid": "03adf3c19720ac41",
-      "task_state": "3",
+      "task_state": "11",
       "exit_code": "",
       "started_at_ms": "1792121231431",
-      "finished_at_ms": "",
+      "finished_at_ms": "1792124131440",
       "node_name": "g1cc242",
       "terminal_reason": ""
     },
     {
       "job_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce",
-      "job_state": "3",
+      "job_state": "5",
       "num_tasks": "5",
       "priority_band": "3",
       "bundle_id": "475c0520c5412658a35f4acd4e77fcc26ad7080f4c526100ac7af23b439b837b",
@@ -131,16 +131,16 @@
       "task_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/3",
       "attempt_id": "3",
       "attempt_uid": "726dd2f3f08b74e9",
-      "task_state": "3",
+      "task_state": "11",
       "exit_code": "",
       "started_at_ms": "1792121264189",
-      "finished_at_ms": "",
+      "finished_at_ms": "1792124131440",
       "node_name": "gb9a8e0",
       "terminal_reason": ""
     },
     {
       "job_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce",
-      "job_state": "3",
+      "job_state": "5",
       "num_tasks": "5",
       "priority_band": "3",
       "bundle_id": "475c0520c5412658a35f4acd4e77fcc26ad7080f4c526100ac7af23b439b837b",
@@ -152,15 +152,15 @@
       "task_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/4",
       "attempt_id": "3",
       "attempt_uid": "3ec5d79165bb2c7c",
-      "task_state": "3",
+      "task_state": "11",
       "exit_code": "",
       "started_at_ms": "1792121257812",
-      "finished_at_ms": "",
+      "finished_at_ms": "1792124131440",
       "node_name": "ga8afb0",
       "terminal_reason": ""
     }
   ],
-  "controller_observation_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/cpu-memory-and-batching-controller-20261016T035519.csv",
+  "controller_observation_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/cpu-memory-and-batching-controller-20261016T041732.csv",
   "native_bundle_sha256": "475c0520c5412658a35f4acd4e77fcc26ad7080f4c526100ac7af23b439b837b",
   "source_observation_validation": {
     "source": "26cc99a426737309a60a490ce219138f8cae4818",
@@ -599,5 +599,14 @@
     }
   ],
   "priority_preemption_proof": "snowball_checkpoint_memory_diagnostic_preemptions_0_2.json",
-  "current_native_memory_observation_proof": "snowball_checkpoint_memory_diagnostic_physical3_initial_observations.json"
+  "current_native_memory_observation_proof": "snowball_checkpoint_memory_diagnostic_physical3_optimizer_backload_oom.json",
+  "failed_physical_attempts": [
+    {
+      "controller_attempt": 3,
+      "kind": "native_optimizer_backload_cuda_oom",
+      "allocated_h100_hours": 32.090902222222226,
+      "proof": "snowball_checkpoint_memory_diagnostic_physical3_optimizer_backload_oom.json",
+      "new_published_training_updates": 0
+    }
+  ]
 }

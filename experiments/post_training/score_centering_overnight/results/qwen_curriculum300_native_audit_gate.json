@@ -94,8 +94,73 @@
   ],
   "full_native_audits_passed": true,
   "identity_checkpoint_crosscheck": "results/qwen_curriculum300_identity_checkpoint_crosscheck.json",
-  "full_new_response_grade_replay_complete": false,
-  "main_comparison_complete": false,
-  "reason": "All six full frozen-grader replays remain required. Native-grade paired analysis is retained only in the owned session artifacts until that gate is resolved.",
-  "allocated_cost_scope": "Every original retained recovery mapping and all terminal controller task intervals, including failed, preempted and never-started zero-cost attempts."
+  "full_new_response_grade_replay_complete": true,
+  "main_comparison_complete": true,
+  "reason": "All six original-response replay gates now pass. Every available response agrees with the native verdict; native failure placeholders remain counted separately.",
+  "allocated_cost_scope": "Every original retained recovery mapping and all terminal controller task intervals, including failed, preempted and never-started zero-cost attempts.",
+  "completion_claim": true,
+  "remaining_gate": null,
+  "original_replay_crosschecks": [
+    {
+      "run_id": "sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce",
+      "native_audit_sha256": "ef49507c9805b463609a22e0773098726f82dce67ef7b6095c30d8d1b83f3229",
+      "original_replay": "sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "0f8916c3f81cf2b33c174136693914eb431058aadafb07a8e57e7207fd5bc151",
+      "actual_original_grades": 249984,
+      "native_failure_placeholders": 0,
+      "all_16_native_evaluations_match_original_replay": true,
+      "all_recovery_costs_match_current_ledger": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-curriculum-sc-s1-main-rno-a1-01a126ce",
+      "native_audit_sha256": "9c227cad5343be2666103cff4a5980260aa158ac3c13246bdd1e6ca448859b67",
+      "original_replay": "sc-qwen-transfer-curriculum-sc-s1-main-rno-a1-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "b9ccb9b77160cd676521e484a24c6a15a51b2856d7f7b9e655d59edd5191d176",
+      "actual_original_grades": 249983,
+      "native_failure_placeholders": 1,
+      "all_16_native_evaluations_match_original_replay": true,
+      "all_recovery_costs_match_current_ledger": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-curriculum-sc-s2-main-rno-a1-01a126ce",
+      "native_audit_sha256": "c00eafb985442ea39a955b33479acc0d09a5655b69ba133094c964ffb241de7d",
+      "original_replay": "sc-qwen-transfer-curriculum-sc-s2-main-rno-a1-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "f4cb45a8661958335ab4cf17317fec93cf0c6759bd4ddfe555b0f45062982513",
+      "actual_original_grades": 249980,
+      "native_failure_placeholders": 4,
+      "all_16_native_evaluations_match_original_replay": true,
+      "all_recovery_costs_match_current_ledger": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-curriculum-tis-s0-main-interactive-a2-01a126ce",
+      "native_audit_sha256": "f559791c1d4d2e47d93955a993f6678b22e22717f9aec7c54f58188e988d9b93",
+      "original_replay": "sc-qwen-transfer-curriculum-tis-s0-main-interactive-a2-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "6d37f62b1b865d9f79978c957711b17b3c2e8196080b359b0d1127f3e7dad074",
+      "actual_original_grades": 249984,
+      "native_failure_placeholders": 0,
+      "all_16_native_evaluations_match_original_replay": true,
+      "all_recovery_costs_match_current_ledger": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-curriculum-tis-s1-main-interactive-a1-01a126ce",
+      "native_audit_sha256": "632fef59d9c35dd0805e72542c9fb7eb6ed680dea45eba7d0a992b04042164ff",
+      "original_replay": "sc-qwen-transfer-curriculum-tis-s1-main-interactive-a1-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "e4dd9b1aa49bc9b0a3091d866c6b78ab7086da84a8abd7f0193a8348b2e180c5",
+      "actual_original_grades": 249979,
+      "native_failure_placeholders": 5,
+      "all_16_native_evaluations_match_original_replay": true,
+      "all_recovery_costs_match_current_ledger": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce",
+      "native_audit_sha256": "e681b299b99949e552e3589aefc8dc7a6a10f101edd72cb0823c2db2331d0684",
+      "original_replay": "sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "b83e271afd72aa2c96ce08960b1f4337273e39913a28d0f96305d987aabfe1af",
+      "actual_original_grades": 249984,
+      "native_failure_placeholders": 0,
+      "all_16_native_evaluations_match_original_replay": true,
+      "all_recovery_costs_match_current_ledger": true
+    }
+  ],
+  "qualified_analysis_artifacts": "results/qwen_first_three300_complete_analysis_artifacts.json"
 }

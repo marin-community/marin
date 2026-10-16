@@ -13,5 +13,7 @@
   "sampler_refresh_period": 65,
   "role": "separate TIS-only staleness calibration, not a main effect comparison",
   "submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-stale65-tis130-v4-submit.log",
-  "matched_fresh_control": "unsubmitted until first two actual stale updates pass the published capture/optimizer/version/archive gate"
+  "matched_fresh_control": "unsubmitted until first two actual stale updates pass the published capture/optimizer/version/archive gate",
+  "successor_submission": "snowball_stale65_rno_replacement_submission.json",
+  "latest_recorded_disposition": "The exact latest queued and never-started East attempt 5 was retired after controller confirmation of its source-identical RNO replacement. All prior costs and output bytes remain retained."
 }

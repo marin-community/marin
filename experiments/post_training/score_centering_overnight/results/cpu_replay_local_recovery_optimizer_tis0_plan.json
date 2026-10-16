@@ -70,7 +70,34 @@
         "node_name": "gb95c40",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+      "status": "Controller exit0; full physical249984 cohort verified, available original responses graded and native failure placeholders retained separately.",
+      "full_response_replay_passed": true,
+      "terminal_controller": {
+        "job_id": "/romain/score-grader-qwen-optimizer-tis-s0-a0-01a126ce",
+        "job_state": "4",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "7f8c77bc4b3d46a6fa6d72843167862e6c54ff06af7a063f3d5c69d9313c667e",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-optimizer-tis-s0-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "9282c54af9c0c987",
+        "task_state": "4",
+        "exit_code": "0",
+        "started_at_ms": "1792117562641",
+        "finished_at_ms": "1792124803969",
+        "node_name": "gb95c40",
+        "terminal_reason": ""
+      },
+      "allocated_cpu_hours": 64.36736,
+      "physical_records": 249984,
+      "actual_original_grade_calls": 249984,
+      "native_failure_placeholders": 0,
+      "completed_report": "sc-qwen-transfer-optimizer-tis-s0-main-interactive-a1-01a126ce-regrading.json.gz"
     }
   ],
   "total_requested_cpu": 32,
@@ -78,7 +105,7 @@
   "total_requested_gpu": 0,
   "maximum_archive_io_workers": 2,
   "native_bundle_validation_passed": true,
-  "status": "Optimizer TISseed0 main300 original-grader replay controller-running32CPU/64GiB/50GiB BATCH,zeroGPU. Exact previously prepared input nativebundle/spec durably retained/fullSHA read back.249984physical responses require full replay with native placeholders counted separately. Original source/data/graders/lock/packages/runner/deadlines unchanged. Two released TISseed2-download slots reassigned;healthy existing graders preserved.",
+  "status": "Complete original-grader replay PASS:249984 actual grades,zero native failures/differences,all16 evaluation counts/means match. Nativecontrollerexit0,64.36736CPUh,0H100h.",
   "resource_board_ids": [
     1097,
     1098

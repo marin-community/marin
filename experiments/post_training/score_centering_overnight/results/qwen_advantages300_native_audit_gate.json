@@ -95,7 +95,72 @@
   "full_native_audits_passed": true,
   "identity_checkpoint_crosscheck": "results/qwen_advantages300_identity_checkpoint_crosscheck.json",
   "last_tis1_error_inspection": "results/qwen_advantages_tis1_300_native_error_inspection.json",
-  "full_new_response_grade_replay_complete": false,
-  "main_comparison_complete": false,
-  "reason": "All six complete frozen-grader replays remain required. Masked native failures retain their exact original dispositions and zero-quality denominators; no response is invented."
+  "full_new_response_grade_replay_complete": true,
+  "main_comparison_complete": true,
+  "reason": "All six original-response replay gates now pass. Every available response agrees with the native verdict; native failure placeholders remain counted separately.",
+  "completion_claim": true,
+  "remaining_gate": null,
+  "original_replay_crosschecks": [
+    {
+      "run_id": "sc-qwen-transfer-advantages-sc-s0-main-rno-a1-01a126ce",
+      "native_audit_sha256": "ff21dd78bfa81263e90be512f0737487aaef1ff4f6ca43f3146d914f52a6ab50",
+      "original_replay": "sc-qwen-transfer-advantages-sc-s0-main-rno-a1-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "73016c7d46d6edfe6656facdb88596f9d8f6dd3139973358193c04dc2cf0d463",
+      "actual_original_grades": 249983,
+      "native_failure_placeholders": 1,
+      "all_16_native_evaluations_match_original_replay": true,
+      "all_recovery_costs_match_current_ledger": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-advantages-sc-s1-main-rno-a1-01a126ce",
+      "native_audit_sha256": "49fdcdeb5c48abc356abe32f5c1502afa97a041941d429561da2c059402998a9",
+      "original_replay": "sc-qwen-transfer-advantages-sc-s1-main-rno-a1-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "788a6464ce9b2313f6ca30ce362804a35d4c7e2c506ae98a1db6027e9a08874f",
+      "actual_original_grades": 249983,
+      "native_failure_placeholders": 1,
+      "all_16_native_evaluations_match_original_replay": true,
+      "all_recovery_costs_match_current_ledger": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce",
+      "native_audit_sha256": "eda669da923a9ae2233eb47fe7753304c830d5957358bfb2c31df27cc95f9eda",
+      "original_replay": "sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "e9861874c9cb6d8f5309c75f5100d4f56936cbaa83c0673c4e91da5215d9250d",
+      "actual_original_grades": 249983,
+      "native_failure_placeholders": 1,
+      "all_16_native_evaluations_match_original_replay": true,
+      "all_recovery_costs_match_current_ledger": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce",
+      "native_audit_sha256": "a500321cd9f984e421ddba0fe5c241f9000df3b1e02fe491477faa6a25e7bae6",
+      "original_replay": "sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "5ae4cae8a3cc346737775f589073fcf38e7c6883a99737b60c40dfba312fcd95",
+      "actual_original_grades": 249984,
+      "native_failure_placeholders": 0,
+      "all_16_native_evaluations_match_original_replay": true,
+      "all_recovery_costs_match_current_ledger": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-advantages-tis-s1-main-interactive-a1-01a126ce",
+      "native_audit_sha256": "8668031f7a478d8cf8435e2243ecce30e9e2a10d91c4f36ce6e1483be8d93f7f",
+      "original_replay": "sc-qwen-transfer-advantages-tis-s1-main-interactive-a1-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "7491e924ddf893dba8bdc78e542b9d57b342c4e73d95b3e95f035f10363794ba",
+      "actual_original_grades": 249978,
+      "native_failure_placeholders": 6,
+      "all_16_native_evaluations_match_original_replay": true,
+      "all_recovery_costs_match_current_ledger": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-advantages-tis-s2-main-rno-a1-01a126ce",
+      "native_audit_sha256": "d528fcebcfa5b10a18a3aa499c46a71b540c69490a304aa385398ce5f1375762",
+      "original_replay": "sc-qwen-transfer-advantages-tis-s2-main-rno-a1-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "f51b94bb15bcc1d209b55a980ea89fa88f9b3c7b004edabd1e018b17e2ecb62a",
+      "actual_original_grades": 249983,
+      "native_failure_placeholders": 1,
+      "all_16_native_evaluations_match_original_replay": true,
+      "all_recovery_costs_match_current_ledger": true
+    }
+  ],
+  "qualified_analysis_artifacts": "results/qwen_first_three300_complete_analysis_artifacts.json"
 }

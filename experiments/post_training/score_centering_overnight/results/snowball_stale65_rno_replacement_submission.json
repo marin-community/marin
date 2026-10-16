@@ -1,0 +1,344 @@
+{
+  "scope": "Replace the exact owned queued East 130-update stale calibration with a run in cw-rno2a. Source 0212, model, data, loss, optimizer, noise, actual 65-update sampler refresh, capture, deadlines and full130 horizon remain unchanged. The RNO five-node qualification is complete. Both jobs use five BATCH nodes. Retire only the never-started East attempt after replacement confirmation.",
+  "rno_qualification": {
+    "proof": "results/snowball_rno0212_qualification_complete.json",
+    "sha256": "15c90525f9ebf26ef219aa025e7f953a42d8bd69fa28ea02e8ef0a6305b82ab4",
+    "native_updates": 5,
+    "original_grades": 12152,
+    "grade_discrepancies": 0
+  },
+  "case": {
+    "run_id": "sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce",
+    "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce",
+    "predecessor_configuration": "experiments/post_training/score_centering_overnight/snowball_stale_calibration_v4/stale64-tis-s0.yaml",
+    "predecessor_job": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+    "configuration": "experiments/post_training/score_centering_overnight/snowball_stale_calibration_rno_v1/stale64-tis-s0.yaml",
+    "prepare_configuration": "experiments/post_training/score_centering_overnight/snowball_stale_calibration_rno_v1/stale64-tis-s0-prepare.yaml",
+    "configuration_sha256": "58143f3b1dfa3ad352150bdb8e627a9b0002c814a813b006bd73e6d8c6c12d29",
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "horizon": 130,
+    "nodes": 5,
+    "gpus_per_node": 8,
+    "priority": "batch",
+    "diagnostic_only": false,
+    "submission_authorized_after_preflight": true,
+    "native_preparation_passed": true,
+    "native_submission_confirmed": true,
+    "changes": "Only run-owned identities/output paths and provider/client configuration;all model/data/loss/optimizer/noise/capture/deadline/evaluation/checkpoint/full130 fields unchanged.",
+    "actual_decoded_changed_fields": [
+      "run.id",
+      "iris.cluster",
+      "iris.cluster_config",
+      "iris.job_name",
+      "ray.rendezvous_dir",
+      "ray.log_dir",
+      "artifacts.checkpoint_root",
+      "artifacts.export_root",
+      "artifacts.attempts_root",
+      "artifacts.resolved_config_uri",
+      "artifacts.terminal_manifest_uri",
+      "skyrl.trainer.rollout_buffer.object_store_root",
+      "skyrl.trainer.policy.megatron_config.torch_profiler_config.save_path"
+    ],
+    "actual_nonpath_changed_fields": [
+      "iris.cluster",
+      "iris.cluster_config"
+    ],
+    "native_preparation_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce-native-prepare.log",
+    "native_preparation_log_sha256": "cd0f118eed3528eee6008ef6ab97e9070dd86c43e588d08b04d1830c4e697de4",
+    "empty_output_roots": [
+      {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce",
+        "observed_empty": true
+      },
+      {
+        "uri": "s3://marin-us-east-02a/tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce",
+        "observed_empty": true
+      }
+    ],
+    "resource_board_ids": [
+      1118,
+      1119
+    ],
+    "native_submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce-native-submit.log",
+    "native_submission_log_sha256": "a0625a017d190e01b1b13b95e4eef08c5a2470dff1a516ddb36c4a690f0ddbe2",
+    "status": "Controller confirms5BATCH H100node tasks;actual allocation state retained per task. No completed diagnostic/calibration or sourcequalification claimed.",
+    "controller_confirmation": [
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "c0bbb6d52b46e0c23a7d28e6cf054dcfa05446f23cba14e26f41f053415554b0",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "ef076a41b670b985",
+        "task_state": "2",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "c0bbb6d52b46e0c23a7d28e6cf054dcfa05446f23cba14e26f41f053415554b0",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/1",
+        "attempt_id": "0",
+        "attempt_uid": "0104a091f8123949",
+        "task_state": "2",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "c0bbb6d52b46e0c23a7d28e6cf054dcfa05446f23cba14e26f41f053415554b0",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/2",
+        "attempt_id": "0",
+        "attempt_uid": "fe62a9b7221892ac",
+        "task_state": "2",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "c0bbb6d52b46e0c23a7d28e6cf054dcfa05446f23cba14e26f41f053415554b0",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/3",
+        "attempt_id": "0",
+        "attempt_uid": "440555800347d183",
+        "task_state": "2",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "bundle_id": "c0bbb6d52b46e0c23a7d28e6cf054dcfa05446f23cba14e26f41f053415554b0",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/4",
+        "attempt_id": "0",
+        "attempt_uid": "9590aaf569e69695",
+        "task_state": "2",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      }
+    ],
+    "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/fresh-memory-and-rno-stale130-controller-confirmation.csv",
+    "controller_snapshot_sha256": "61de14012816abc8e92b42c9b7c1f64528828687d4c8863711c17ae43e8f7c65"
+  },
+  "predecessor_retirement": {
+    "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+    "controller_attempt": 5,
+    "before_rows": [
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/0",
+        "attempt_id": "5",
+        "attempt_uid": "64f7b4ba3f9f35f3",
+        "task_state": "2",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/1",
+        "attempt_id": "5",
+        "attempt_uid": "2c1c78555be2906c",
+        "task_state": "2",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/2",
+        "attempt_id": "5",
+        "attempt_uid": "4ae8bdfeac5a9a2d",
+        "task_state": "2",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/3",
+        "attempt_id": "5",
+        "attempt_uid": "e768beb16896bba5",
+        "task_state": "2",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+        "job_state": "3",
+        "num_tasks": "5",
+        "priority_band": "3",
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/4",
+        "attempt_id": "5",
+        "attempt_uid": "6e400516c0dc6867",
+        "task_state": "2",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": ""
+      }
+    ],
+    "before_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/stale130-east-final-retirement-guard.csv",
+    "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/stale130-east-exact-queued-predecessor-retirement.log",
+    "log_sha256": "a641b57a2dbb9ab8bbaf0225c322c0bafc125bf9f68e6365b33b7707320d79d7",
+    "native_cli_exit_code": 0,
+    "latest_attempt_never_started": true,
+    "all_previous_costs_and_output_roots_retained": true,
+    "after_rows": [
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+        "job_state": "6",
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/0",
+        "attempt_id": "5",
+        "attempt_uid": "64f7b4ba3f9f35f3",
+        "task_state": "6",
+        "started_at_ms": "",
+        "finished_at_ms": "1792126251744",
+        "node_name": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+        "job_state": "6",
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/1",
+        "attempt_id": "5",
+        "attempt_uid": "2c1c78555be2906c",
+        "task_state": "6",
+        "started_at_ms": "",
+        "finished_at_ms": "1792126251744",
+        "node_name": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+        "job_state": "6",
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/2",
+        "attempt_id": "5",
+        "attempt_uid": "4ae8bdfeac5a9a2d",
+        "task_state": "6",
+        "started_at_ms": "",
+        "finished_at_ms": "1792126251744",
+        "node_name": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+        "job_state": "6",
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/3",
+        "attempt_id": "5",
+        "attempt_uid": "e768beb16896bba5",
+        "task_state": "6",
+        "started_at_ms": "",
+        "finished_at_ms": "1792126251744",
+        "node_name": ""
+      },
+      {
+        "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+        "job_state": "6",
+        "task_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/4",
+        "attempt_id": "5",
+        "attempt_uid": "6e400516c0dc6867",
+        "task_state": "6",
+        "started_at_ms": "",
+        "finished_at_ms": "1792126251744",
+        "node_name": ""
+      }
+    ],
+    "after_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/stale130-east-after-exact-queued-retirement.csv",
+    "native_terminal_state_confirmed": true
+  },
+  "matched_fresh_prepared_case": {
+    "run_id": "sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce",
+    "job_id": "/romain/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce",
+    "predecessor_configuration": "experiments/post_training/score_centering_overnight/snowball_stale_calibration_v4/fresh-tis-s0.yaml",
+    "predecessor_job": "/romain/sc-snowball-stale-calibration-fresh-tis-s0-a3-01a126ce",
+    "configuration": "experiments/post_training/score_centering_overnight/snowball_stale_calibration_rno_v1/fresh-tis-s0.yaml",
+    "prepare_configuration": "experiments/post_training/score_centering_overnight/snowball_stale_calibration_rno_v1/fresh-tis-s0-prepare.yaml",
+    "configuration_sha256": "2230a8332ae9b696035f0a9e1512aab64b6297e06f21ba10f986cf08d5cbbd6c",
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "horizon": 130,
+    "nodes": 5,
+    "gpus_per_node": 8,
+    "priority": "batch",
+    "diagnostic_only": false,
+    "submission_authorized_after_preflight": false,
+    "native_preparation_passed": true,
+    "native_submission_confirmed": false,
+    "changes": "Only run-owned identities/output paths and provider/client configuration;all model/data/loss/optimizer/noise/capture/deadline/evaluation/checkpoint/full130 fields unchanged.",
+    "actual_decoded_changed_fields": [
+      "run.id",
+      "iris.cluster",
+      "iris.cluster_config",
+      "iris.job_name",
+      "ray.rendezvous_dir",
+      "ray.log_dir",
+      "artifacts.checkpoint_root",
+      "artifacts.export_root",
+      "artifacts.attempts_root",
+      "artifacts.resolved_config_uri",
+      "artifacts.terminal_manifest_uri",
+      "skyrl.trainer.rollout_buffer.object_store_root",
+      "skyrl.trainer.policy.megatron_config.torch_profiler_config.save_path"
+    ],
+    "actual_nonpath_changed_fields": [
+      "iris.cluster",
+      "iris.cluster_config"
+    ],
+    "native_preparation_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce-native-prepare.log",
+    "native_preparation_log_sha256": "2add2dfab81343c000c926fc8378dcb726045e2372e0170a059f9586e303b9f6",
+    "empty_output_roots": [
+      {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce",
+        "observed_empty": true
+      },
+      {
+        "uri": "s3://marin-us-east-02a/tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce",
+        "observed_empty": true
+      }
+    ]
+  },
+  "matched_fresh_submitted": false,
+  "matched_fresh_submission_gate": "At least2actualfinite staleupdates with aligned natural128/chosen-q/TIS2,actualgeneratingversion0atsteps1/2,unchangedmodel/data/grader/geometry and append-onlynativearchives;full130calibrationsbeforefreezingstale1200main."
+}

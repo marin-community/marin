@@ -20,6 +20,8 @@ def stage(job_id: str) -> str:
         return "Qwen checkpoint qualification"
     if "sc-snowball-checkpoint" in job_id:
         return "Snowball checkpoint qualification"
+    if "sc-snowball-memory-" in job_id:
+        return "Snowball memory diagnostic"
     if "sc-snowball-main-noise" in job_id:
         return "Snowball noise main"
     if "sc-snowball-main-fresh" in job_id:

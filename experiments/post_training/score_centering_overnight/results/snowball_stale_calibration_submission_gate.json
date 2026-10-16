@@ -108,5 +108,18 @@
   },
   "matched_fresh_submission_gate": "At least two actual finite applied stale-calibration updates with aligned natural K128/chosen-q/TIS2 evidence, generating snapshot0 at updates1/2, unchanged model/data/grading/geometry and required append-only archives, before submitting the separately prepared matched fresh130 control.",
   "main_submission_gate": "Full separate stale/fresh130 audits, measured actual age/version, mismatch and usability, then a justified frozen setting and horizon before stale1200 main seeds. Earlier controlled-noise calibration selects noise.05 separately. No full Snowball main is admitted by this calibration gate.",
-  "submitted": false
+  "submitted": true,
+  "current_submission": {
+    "configuration": "experiments/post_training/score_centering_overnight/snowball_stale_calibration_rno_v1/stale64-tis-s0.yaml",
+    "configuration_sha256": "58143f3b1dfa3ad352150bdb8e627a9b0002c814a813b006bd73e6d8c6c12d29",
+    "run_id": "sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce",
+    "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce",
+    "cluster": "cw-rno2a",
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "horizon": 130,
+    "sampler_refresh_period": 65,
+    "proof": "snowball_stale65_rno_replacement_submission.json"
+  },
+  "matched_fresh_prepared_configuration": "experiments/post_training/score_centering_overnight/snowball_stale_calibration_rno_v1/fresh-tis-s0.yaml",
+  "matched_fresh_submitted": false
 }
