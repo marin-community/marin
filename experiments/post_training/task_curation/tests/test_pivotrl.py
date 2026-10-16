@@ -14,6 +14,7 @@ from rolloutengine.spec import LoweredTaskSpec
 from taskcompendium.models import AnswerType, AssistantToolCalls, TaskSpec, TextMessage
 from taskcompendium.pipeline.models import CheckStatus, ImportRejection, NormalizedTask
 from taskcompendium.pipeline.verification import verify_task
+from taskcompendium.submission import conversation_messages
 
 from experiments.post_training.pivotrl.compendium import (
     CANDIDATE_TAG_PREFIX,
@@ -74,10 +75,9 @@ def test_swe_candidates_become_native_action_tasks_without_earlier_reasoning(tmp
     assert task.answer_type == AnswerType.NATIVE_ACTION
     assert [tool.name for tool in task.final_tools] == ["list_dir", "edit_file"]
     assert CANDIDATE_TAG_PREFIX + last["extra_info"]["source_id"] in task.tags
-    assert isinstance(task.context.events[2], AssistantToolCalls)
-    # The candidate prompt keeps the teacher's reasoning; the task records dropping it.
-    assert last["prompt"][2]["reasoning_content"] == "look around"
-    assert [change.field for change in converted.changes] == ["prompt[*].reasoning_content"]
+    call = task.context.events[2]
+    assert isinstance(call, AssistantToolCalls) and call.reasoning == last["prompt"][2]["reasoning_content"]
+    assert conversation_messages(task.context.events)[2]["reasoning_content"] == "look around"
     assert _checks(task) == {"empty": CheckStatus.PASS, "reference": CheckStatus.PASS}
     assert _checks(_converted("pivotrl-swe", first).task) == {"empty": CheckStatus.PASS, "reference": CheckStatus.PASS}
 

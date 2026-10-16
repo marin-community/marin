@@ -148,17 +148,22 @@ def render_instruction(task: TaskSpec) -> str:
     return f"{format_conversation(task.context.events)}\n\n{submission_instruction(task.answer_format)}\n"
 
 
+def _reasoning(event: TextMessage | AssistantToolCalls) -> dict[str, str]:
+    return {} if event.reasoning is None else {"reasoning_content": event.reasoning}
+
+
 def conversation_messages(events: tuple[ConversationEvent, ...]) -> list[dict[str, Any]]:
     """Convert conversation events to OpenAI-compatible chat messages."""
     messages: list[dict[str, Any]] = []
     for event in events:
         if isinstance(event, TextMessage):
-            messages.append({"role": event.role, "content": event.content})
+            messages.append({"role": event.role, "content": event.content, **_reasoning(event)})
         elif isinstance(event, AssistantToolCalls):
             messages.append(
                 {
                     "role": "assistant",
                     "content": event.content,
+                    **_reasoning(event),
                     "tool_calls": [
                         {
                             "id": call.call_id,

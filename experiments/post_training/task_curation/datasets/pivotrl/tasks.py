@@ -16,9 +16,9 @@ each task's expert turn, which must score 1, and an empty reply, which must scor
 expert action is a text message accepts any reply, even an empty one, so curation rejects it. A task carries
 its candidate's ``source_id`` as a :data:`CANDIDATE_TAG_PREFIX` tag, which joins it to pass rates.
 
-The prompts differ from the candidate rows in two ways. TaskSpec conversations carry no reasoning,
-so the teacher's earlier reasoning, which candidate prompts keep as ``reasoning_content``, is dropped.
-Terminal tasks answer in plain text, whose answer format adds its instruction as a final user message.
+Tasks keep the teacher's earlier reasoning on its assistant messages, as candidate prompts keep it
+in ``reasoning_content``. Terminal tasks answer in plain text, whose answer format adds its
+instruction as a final user message, so their prompts differ from the candidates' there.
 """
 
 import json
@@ -36,6 +36,7 @@ from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.nemotron_ultra import functions
 from taskcompendium.models import (
     AnswerType,
+    ConversationInput,
     EnvironmentRequirements,
     FinalAction,
     FunctionDefinition,
@@ -44,7 +45,7 @@ from taskcompendium.models import (
     VerifyitGrader,
 )
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
-from taskcompendium.pipeline.models import ImportRejection, IntendedUse, NormalizationChange, NormalizedTask, RawRow
+from taskcompendium.pipeline.models import ImportRejection, IntendedUse, NormalizedTask, RawRow
 from verifyit.spec import Mode
 
 from experiments.datasets.nemotron_pivot import nemotron_pivot_datasets
@@ -95,21 +96,23 @@ def openhands_grade(data: Mapping[str, Any]) -> PivotGrade:
     return PivotGrade(Mode.NEXT_ACTION, parameters, functions(json.loads(turn["tools_json"])))
 
 
-def public_messages(prompt: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], tuple[NormalizationChange, ...]]:
-    """The chat fields a TaskSpec conversation keeps, dropping Parquet's nulls and earlier reasoning."""
+def candidate_context(prompt: list[dict[str, Any]]) -> ConversationInput:
+    """The candidate's conversation, keeping each earlier assistant turn's reasoning as PivotRL's prompts do."""
     messages = [
         {key: message[key] for key in PUBLIC_MESSAGE_FIELDS if message.get(key) is not None} for message in prompt
     ]
-    reasoned = sum(bool(message.get("reasoning_content")) for message in prompt)
-    if not reasoned:
-        return messages, ()
-    change = NormalizationChange(
-        field="prompt[*].reasoning_content",
-        reason="TaskSpec conversations carry no reasoning; the teacher's earlier reasoning is dropped",
-        original=f"reasoning on {reasoned} assistant messages",
-        replacement="Removed",
+    events = chat_input(messages).events
+    # chat_input yields one event per message, in order.
+    return ConversationInput(
+        events=tuple(
+            (
+                event.model_copy(update={"reasoning": message["reasoning_content"]})
+                if message.get("reasoning_content")
+                else event
+            )
+            for event, message in zip(events, prompt, strict=True)
+        )
     )
-    return messages, (change,)
 
 
 def convert_candidate(
@@ -119,9 +122,8 @@ def convert_candidate(
     pivot = grade(row.data)
     if pivot.mode != Mode.TERMINUS and not pivot.tools:
         return source_defect("missing_tools", f"A {pivot.mode} candidate advertises no tools to answer with")
-    messages, changes = public_messages(row.data["prompt"])
     try:
-        context = chat_input(messages)
+        context = candidate_context(row.data["prompt"])
     except (ValueError, ValidationError) as error:
         return source_defect("malformed_prompt", str(error))
     task = TaskSpec(
@@ -135,7 +137,7 @@ def convert_candidate(
         grader=VerifyitGrader(mode=pivot.mode, parameters=pivot.parameters),
         tags=("pivotrl", f"{CANDIDATE_TAG_PREFIX}{row.data['extra_info']['source_id']}"),
     )
-    return NormalizedTask(task, changes)
+    return NormalizedTask(task, ())
 
 
 @dataclass(frozen=True)

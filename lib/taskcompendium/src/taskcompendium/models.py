@@ -116,11 +116,16 @@ class TextMessage(BaseModel):
     type: Literal["message"] = "message"
     role: str
     content: str
+    reasoning: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    """An earlier assistant turn's reasoning, rendered as ``reasoning_content``; set only by converters
+    whose source keeps it, and omitted from serialized tasks when unset."""
 
     @model_validator(mode="after")
     def validate_message(self) -> "TextMessage":
         if self.role not in {"system", "developer", "user", "assistant"}:
             raise ValueError("Conversation messages require a supported role")
+        if self.reasoning is not None and self.role != "assistant":
+            raise ValueError("Only assistant messages carry reasoning")
         return self
 
 
@@ -148,6 +153,8 @@ class AssistantToolCalls(BaseModel):
     type: Literal["assistant_tool_calls"] = "assistant_tool_calls"
     calls: tuple[ConversationToolCall, ...] = Field(min_length=1)
     content: str | None = None
+    reasoning: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    """As ``TextMessage.reasoning``."""
 
 
 class ToolResult(BaseModel):
@@ -182,7 +189,7 @@ def format_conversation(events: tuple[ConversationEvent, ...]) -> str:
 
 
 class ConversationInput(BaseModel):
-    """Model-visible conversation prefix, without provider reasoning state."""
+    """Model-visible conversation prefix. Earlier assistant reasoning appears only where a converter opts in."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
