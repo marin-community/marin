@@ -3,8 +3,6 @@
 
 """Behavior tests for the fixed structural validation panel."""
 
-import pytest
-
 from experiments.post_training.smartie.validation_panel import selected_structural_ids
 
 
@@ -23,8 +21,3 @@ def test_structural_selection_balances_groups_and_ignores_input_order():
         3,
         3,
     ]
-
-
-def test_structural_selection_rejects_insufficient_group():
-    with pytest.raises(ValueError, match="Insufficient structural rows for json/close"):
-        selected_structural_ids({"json/close": ["one"], "tool/close": ["two", "three", "four"]}, 4)

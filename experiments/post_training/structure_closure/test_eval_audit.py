@@ -91,6 +91,20 @@ def test_audit_reports_early_control_closure_without_changing_recorded_reward(co
     assert audit.summary()["control_outcomes"] == {"json_object/continue_required": {"reference_prefix_closed_early": 1}}
 
 
+@pytest.mark.parametrize("marker", ["<|eot_id|>", "<|end_of_text|>"])
+def test_audit_matches_training_reward_for_signed_zero_and_terminal_markers(cohort, rows, marker):
+    case = cohort[0]
+    case.update(prefix='{"a":', expected='{"a":0.0}')
+    row = rows[0]
+    row["output_response"] = "-0.0}" + marker
+    row["env_metrics"]["closure_region_v1/json_object/close_required/trailing_content"] = 0.0
+    row["env_metrics"]["closure_region_v1/json_object/close_required/whole_response_success"] = 1.0
+    audit = audit_evaluation([case], [row], uid_source=UidSource.ROW_INDEX)
+    assert audit.complete
+    assert audit.results[0].success
+    assert audit.results[0].whole_response_success
+
+
 @pytest.mark.parametrize(
     "failure", ["missing", "duplicate", "prefix", "unavailable", "metric", "reward", "infra", "legacy_scorer"]
 )

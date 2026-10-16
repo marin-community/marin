@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from rolloutengine.closure_scoring import (
+from verifyit.closure_scoring import (
     ClosureFormat,
     ClosureScore,
     closure_state,

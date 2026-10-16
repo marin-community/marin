@@ -10,7 +10,7 @@ from collections import Counter
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from rolloutengine.closure_scoring import ContinuationOutcome, continuation_outcome
+from verifyit.closure_scoring import ContinuationOutcome, continuation_outcome
 
 from experiments.post_training.structure_closure.benchmark import (
     ClosureCase,

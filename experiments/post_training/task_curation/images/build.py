@@ -323,10 +323,7 @@ def _inside_git_worktree(directory: Path) -> bool:
 
 
 def _require_tracked(environment: Environment) -> None:
-    """Check tracked inputs when Git metadata is present and reject executable runtime files.
-
-    Iris source bundles omit Git metadata but retain the content-hashed files that define the identity.
-    """
+    """Require tracked inputs inside Git worktrees and reject executable runtime files."""
     fragment = environment.dockerfile
     if (
         fragment is not None

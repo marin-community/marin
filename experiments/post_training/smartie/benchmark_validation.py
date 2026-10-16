@@ -13,6 +13,7 @@ import shutil
 from collections import defaultdict
 from dataclasses import asdict
 from pathlib import Path
+from types import MappingProxyType
 
 import click
 import pyarrow as pa
@@ -26,7 +27,9 @@ from taskcompendium.harbor.snapshots import file_map_snapshot
 
 from experiments.post_training.smartie.validation_panel import selected_structural_ids
 
-BENCHMARKS = {"bfcl_parity": "1.0", "swebench-verified": "1.0", "openthoughts-tblite": "2.0"}
+BENCHMARKS = MappingProxyType({"bfcl_parity": "1.0", "swebench-verified": "1.0", "openthoughts-tblite": "2.0"})
+NATIVE_REAL_COUNT = 667
+NATIVE_STRUCTURAL_COUNT = 243
 SELECTION_SALT = "smartie-target-benchmarks-20261015-v1"
 SAMPLES_PER_BENCHMARK = 30
 
@@ -44,9 +47,9 @@ def build_native_panel(source: Path, output: Path) -> dict:
         else:
             extras = grader_config(LoweredTaskSpec.model_validate_json(row["lowered_task_spec"]).task)["extras"]
             groups[f"{extras['family']}/{extras['control']}"].append(identity)
-    if len(selected) != 667 or len(set(ids)) != len(ids):
+    if len(selected) != NATIVE_REAL_COUNT or len(set(ids)) != len(ids):
         raise ValueError("Expected a unique native holdout with 667 real tasks")
-    selected.update(selected_structural_ids(groups, 243))
+    selected.update(selected_structural_ids(groups, NATIVE_STRUCTURAL_COUNT))
     training_ids = {
         json.loads(payload)["task"]["id"]
         for payload in pq.read_table(source / "train.parquet", columns=["lowered_task_spec"])[
@@ -65,9 +68,9 @@ def build_native_panel(source: Path, output: Path) -> dict:
     report = {
         "source": str(source),
         "selection": "Reuse native panel's fixed hash rank and family/control quotas",
-        "native_real": 667,
-        "native_structural": 243,
-        "external_benchmark_tasks": 90,
+        "native_real": NATIVE_REAL_COUNT,
+        "native_structural": NATIVE_STRUCTURAL_COUNT,
+        "external_benchmark_tasks": len(BENCHMARKS) * SAMPLES_PER_BENCHMARK,
         "selected_native_ids": sorted(selected),
         "sha256": hashes,
         "training_id_overlap": 0,

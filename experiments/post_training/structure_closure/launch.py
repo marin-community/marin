@@ -35,6 +35,19 @@ MODEL_URI = (
     "2026.10.12.2/exports/global_step_4/policy"
 )
 CLUSTER = "cw-us-east-02a"
+EXECUTION = IrisSkyRLExecution(
+    cluster=CLUSTER,
+    cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
+    cpu=48,
+    memory="1800GB",
+    disk="2TB",
+    priority="interactive",
+    max_retries=0,
+    target_cluster=CLUSTER,
+    parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
+    coordinator_timeout_hours=24,
+    wandb_entity=None,
+)
 
 
 def build_run(
@@ -88,19 +101,7 @@ def build_run(
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=42,
         ),
-        IrisSkyRLExecution(
-            cluster=CLUSTER,
-            cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
-            cpu=48,
-            memory="1800GB",
-            disk="2TB",
-            priority="interactive",
-            max_retries=0,
-            target_cluster=CLUSTER,
-            parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=24,
-            wandb_entity=None,
-        ),
+        EXECUTION,
         export_hf=True,
     )
 

@@ -11,6 +11,8 @@ from marin.experiment.namespacing import user_owned_name
 
 class ClosureCohort(StrEnum):
     COPY_V1 = "copy-v1"
+    EXPLICIT_V3 = "explicit-v3"
+    VARIED_V4 = "varied-v4"
     VALUE_CONTROLS_V5 = "value-controls-v5"
     NATIVE_TOOLS_V6 = "native-tools-v6"
     NEAR_BOUNDARY_V7 = "near-boundary-v7"
@@ -28,6 +30,20 @@ def tool_prompt_probe_dataset() -> ArtifactStep:
 
 def structure_closure_dataset(cohort: ClosureCohort) -> ArtifactStep:
     """Adopt a verified native-task cohort with its immutable content hashes."""
+    if cohort == ClosureCohort.EXPLICIT_V3:
+        return ArtifactStep.adopt(
+            user_owned_name("datasets/structure-closure-explicit"),
+            "2026.10.12.3",
+            "s3://marin-us-east-02a/marin/users/benfeuer/structure-closure/data/closure-explicit-tasks-v3",
+            config={"validation_sha256": "f64e9ae5724ab081c3e119ee39efc850f12eeaf39f0c5a05ceaf017454a7b011"},
+        )
+    if cohort == ClosureCohort.VARIED_V4:
+        return ArtifactStep.adopt(
+            user_owned_name("datasets/structure-closure-varied"),
+            "2026.10.12.4",
+            "s3://marin-us-east-02a/marin/users/benfeuer/structure-closure/data/closure-varied-tasks-v4",
+            config={"validation_sha256": "2a3e293887f809b5e21473ae0e400c5d9fd8ed650a3d431dcddb940366426cc8"},
+        )
     if cohort == ClosureCohort.COPY_V1:
         return ArtifactStep.adopt(
             user_owned_name("datasets/structure-closure"),

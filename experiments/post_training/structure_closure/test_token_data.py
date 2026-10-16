@@ -3,9 +3,9 @@
 
 import json
 
-from rolloutengine.closure_scoring import ClosureFormat, score_closure
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
+from verifyit.closure_scoring import ClosureFormat, score_closure
 
 from experiments.post_training.structure_closure.benchmark import (
     ClosureCase,

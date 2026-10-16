@@ -7,6 +7,7 @@ import hashlib
 import json
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 
 import click
 import pyarrow as pa
@@ -16,7 +17,7 @@ from rigging.filesystem.transfer import copy
 from rolloutengine.spec import LoweredTaskSpec
 from taskcompendium.grader import grader_config
 
-REAL_ROUTE_COUNTS = {"calendar": 167, "competitive_code": 167, "reasoning_gym": 167, "stem_mcqa": 166}
+REAL_ROUTE_COUNTS = MappingProxyType({"calendar": 167, "competitive_code": 167, "reasoning_gym": 167, "stem_mcqa": 166})
 STRUCTURAL_COUNT = 333
 RANK_SALT = "smartie-fast-val-v2"
 
@@ -110,7 +111,7 @@ def build_validation_panel(source: StoragePath, output: StoragePath) -> dict:
         "source_train_sha256": source_train_hash,
         "selection": "SHA-256 rank by fixed salt and task ID within each structural family/control group",
         "rank_salt": RANK_SALT,
-        "real_routes": REAL_ROUTE_COUNTS,
+        "real_routes": dict(REAL_ROUTE_COUNTS),
         "structural_groups": {key: {"eligible": len(ids)} for key, ids in sorted(groups.items())},
         "selected_structural_ids": sorted(structural_ids),
         "train_rows": sum(

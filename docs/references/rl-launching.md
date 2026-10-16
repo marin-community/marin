@@ -48,6 +48,31 @@ validation path. The submitter forwards `DAYTONA_API_KEY`, `DAYTONA_RL_API_KEY`,
 are present in its environment. The RL and eval keys let rollout and evaluation
 workloads use separate Daytona credentials.
 
+## Structure-closure evaluation
+
+Use one evaluation entry point for a registered closure cohort, the paired tool-prompt
+probe, or an immutable native dataset URI:
+
+```bash
+uv run python -m experiments.post_training.structure_closure.evaluate \
+  --version 2026.10.16.1 --name evals/closure-validation \
+  --data value-controls-v5 --model base
+```
+
+`--data` accepts `copy-v1`, `explicit-v3`, `varied-v4`, `value-controls-v5`,
+`native-tools-v6`, `near-boundary-v7`, `tool-prompt-probe`, or `URI@version`.
+URI datasets also require `--data-name` with their original artifact name (for
+example, `datasets/structure-closure-parity`). Registered cohorts retain their
+historical names, versions, source URIs, and content-hash configs.
+`--model base` selects the pinned initializer. To evaluate an exported checkpoint,
+pass `--model URI@version --manifest-identity sha256:...` using the identity from
+its export manifest. `--name` is a user-owned artifact name. The command prints
+and validates the artifact graph; add `--run` to submit it.
+
+Offline closure audits use Verifyit's canonical scorer with the Snowball terminal
+markers supplied explicitly. This matches training's typed JSON comparison,
+including equality of positive and negative floating-point zero.
+
 ## One Hydra launch document
 
 Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no parallel request

@@ -12,6 +12,8 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+STRUCTURAL_TASK_PREFIX = "structure-closure:"
+
 
 def file_hash(path: Path) -> str:
     with path.open("rb") as stream:
@@ -44,16 +46,16 @@ def filter_structural(tokens: Path, native: Path, output: Path) -> dict:
         native_path = native / f"{split}.parquet"
         table = pq.read_table(native_path)
         native_ids = [json.loads(value)["task"]["id"] for value in table["lowered_task_spec"].to_pylist()]
-        expected_ids = ["structure-closure:" + row["case_id"] for row in rows[split]]
+        expected_ids = [STRUCTURAL_TASK_PREFIX + row["case_id"] for row in rows[split]]
         if len(set(expected_ids)) != len(expected_ids) or set(native_ids) != set(expected_ids):
             raise ValueError(f"Native/token identity mismatch in {split}")
         if len(native_ids) != len(expected_ids):
             raise ValueError(f"Duplicate native identities in {split}")
-        rejected = {"structure-closure:" + case_id for case_id in excluded} if split == "train" else set()
+        rejected = {STRUCTURAL_TASK_PREFIX + case_id for case_id in excluded} if split == "train" else set()
         selected = [
             (line, row)
             for line, row in zip(lines[split], rows[split], strict=True)
-            if "structure-closure:" + row["case_id"] not in rejected
+            if STRUCTURAL_TASK_PREFIX + row["case_id"] not in rejected
         ]
         filtered = table.filter(pa.array([task_id not in rejected for task_id in native_ids]))
         output_tokens = output / f"{split}.jsonl"

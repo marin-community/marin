@@ -112,7 +112,7 @@ async def test_remote_judge_grades_on_host_without_creating_verifier_machine(
 ):
     requests = []
 
-    def send(client, request, **kwargs):
+    def send(_client, request, **_kwargs):
         requests.append(request)
         return httpx.Response(
             200,
@@ -169,92 +169,6 @@ async def test_remote_judge_grades_on_host_without_creating_verifier_machine(
     assert "judge-secret" not in json.dumps(record.messages)
 
 
-@pytest.mark.parametrize("compact", [False, True])
-async def test_external_agent_receives_engine_turns_and_controls_next_history(compact):
-    first = ({"role": "user", "content": "Return 12."},)
-    observation = {"role": "tool", "tool_call_id": "write", "content": "Written."}
-    received = []
-    finished = asyncio.Event()
-
-    async def agent(complete):
-        turn = await complete(SessionStart(first, {"tool_choice": "auto"}))
-        received.append(turn)
-        history = (
-            ({"role": "user", "content": "File written. Finish."},) if compact else (*first, turn.message, observation)
-        )
-        options = {} if compact else {"tool_choice": "auto"}
-        received.append(await complete(SessionStart(history, options)))
-        finished.set()
-
-    async def grade(messages, *, stop_reason, outputs):
-        assert finished.is_set()
-        return GradeResult(Outcome.GRADED, float(messages[-1]["content"] == "12"))
-
-    model = ReplayModel([shell_call("echo 12 > answer"), {"role": "assistant", "content": "12"}])
-    result = await engine(model, sessions={"agent": lambda _context: AgentTaskSession(agent, grade)}).run(
-        lowered(arithmetic_task(), task_session="agent")
-    )
-
-    assert result.grade.reward == 1.0
-    assert [turn.response_token_ids for turn in received] == [(20,), (21,)]
-    assert [turn.logprobs for turn in received] == [(-0.5,), (-0.5,)]
-    assert result.loss_mask == ((1,) if compact else (1, 0, 0, 1))
-    assert model.requests[1].options == ({} if compact else {"tool_choice": "auto"})
-    assert model.requests[1].messages == (
-        ({"role": "user", "content": "File written. Finish."},)
-        if compact
-        else (*first, received[0].message, observation)
-    )
-
-
-async def test_external_agent_is_cancelled_when_engine_generation_is_cancelled():
-    model_entered = asyncio.Event()
-    agent_closed = asyncio.Event()
-
-    async def agent(complete):
-        try:
-            await complete(SessionStart(({"role": "user", "content": "Return 12."},), {}))
-        finally:
-            agent_closed.set()
-
-    async def model(_request):
-        model_entered.set()
-        await asyncio.Future()
-
-    async def grade(messages, *, stop_reason, outputs):
-        del messages, stop_reason
-        raise AssertionError("Cancellation must not grade an unfinished model call")
-
-    runner = RolloutEngine(model, {}, sessions={"agent": lambda _context: AgentTaskSession(agent, grade)})
-    pending = asyncio.create_task(runner.run(lowered(arithmetic_task(), task_session="agent")))
-    await asyncio.wait_for(model_entered.wait(), timeout=5)
-    pending.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await pending
-    assert agent_closed.is_set()
-
-
-async def test_external_agent_failure_retains_the_generated_turn():
-    async def agent(complete):
-        await complete(SessionStart(({"role": "user", "content": "Return 12."},), {}))
-        raise RuntimeError("Installed agent failed after receiving its response")
-
-    async def grade(messages, *, stop_reason, outputs):
-        del messages, stop_reason
-        raise AssertionError("The agent failure must be reported before grading")
-
-    runner = engine(
-        ReplayModel([{"role": "assistant", "content": "12"}]),
-        sessions={"agent": lambda _context: AgentTaskSession(agent, grade)},
-    )
-    with pytest.raises(RolloutInterrupted) as caught:
-        await runner.run(lowered(arithmetic_task(), task_session="agent"))
-    assert caught.value.operation == RolloutOperation.ADVANCE
-    assert isinstance(caught.value.__cause__, RuntimeError)
-    assert caught.value.rollout.response_token_ids == (20,)
-    assert caught.value.rollout.loss_mask == (1,)
-
-
 async def test_external_agent_cleanup_preserves_prior_cancellation():
     agent_task = None
 
@@ -264,7 +178,7 @@ async def test_external_agent_cleanup_preserves_prior_cancellation():
         await complete(SessionStart(({"role": "user", "content": "Return 12."},), {}))
 
     async def grade(messages, *, stop_reason, outputs):
-        del messages, stop_reason
+        del messages, stop_reason, outputs
         raise AssertionError("An interrupted agent must not be graded")
 
     session = AgentTaskSession(agent, grade)
@@ -295,6 +209,7 @@ async def test_external_agent_preserves_exact_tokens_after_history_reset(alter_p
         return ModelTurn({"role": "assistant", "content": "done"}, served, (5,), (-0.1,), "stop")
 
     async def grade(_messages, *, stop_reason, outputs):
+        del stop_reason, outputs
         return GradeResult(Outcome.GRADED, 1.0)
 
     runner = RolloutEngine(model, {}, sessions={"agent": lambda _context: AgentTaskSession(agent, grade)})

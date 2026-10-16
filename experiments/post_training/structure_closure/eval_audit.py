@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from rolloutengine.closure_scoring import (
+from verifyit.closure_scoring import (
     CLOSURE_REGION_SCORER,
     ClosureFormat,
     ContinuationOutcome,
@@ -23,6 +23,8 @@ from rolloutengine.closure_scoring import (
 from verifyit.tool_call_markup import ToolCallStatus, tool_call_regions
 
 from experiments.post_training.structure_closure.token_data import TokenizedCaseRecord
+
+SNOWBALL_TURN_END_MARKERS = ("<|eot_id|>", "<|end_of_text|>")
 
 
 class UidSource(StrEnum):
@@ -138,7 +140,9 @@ def audit_evaluation(
             verification = row.get("verification")
             if verification is None or verification["status"] != "verified":
                 raise ValueError("Verifier score is unavailable")
-            content = closure_response_content(row["output_response"], stop_reason=row["stop_reason"])
+            content = closure_response_content(
+                row["output_response"], stop_reason=row["stop_reason"], terminal_markers=SNOWBALL_TURN_END_MARKERS
+            )
             score = score_closure_region(case["prefix"] + content, case["expected"], ClosureFormat(case["format"]))
             metric = f"{CLOSURE_REGION_SCORER}/{case['family']}/{case['control']}"
             for name, value in asdict(score).items():

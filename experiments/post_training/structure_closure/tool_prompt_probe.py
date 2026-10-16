@@ -9,8 +9,8 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from rolloutengine.closure_scoring import ClosureFormat, score_closure_region
 from transformers import PreTrainedTokenizerFast
+from verifyit.closure_scoring import ClosureFormat, score_closure_region
 from verifyit.tool_call_markup import TOOL_CLOSE, TOOL_OPEN
 
 from experiments.post_training.structure_closure.token_data import TokenizedCaseRecord, write_result_tool

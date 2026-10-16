@@ -12,10 +12,8 @@ from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
-    IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
     ArtifactHfModel,
-    IrisSkyRLExecution,
     SkyRLRetentionPolicy,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
@@ -25,11 +23,11 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 
-from experiments.post_training.structure_closure.launch import CLUSTER, MODEL_REPOSITORY, MODEL_REVISION, MODEL_URI
+from experiments.datasets.structure_closure import ClosureCohort, structure_closure_dataset, tool_prompt_probe_dataset
+from experiments.post_training.structure_closure.launch import EXECUTION, MODEL_REPOSITORY, MODEL_REVISION, MODEL_URI
 from experiments.post_training.structure_closure.recipe import ROLE_PLAN, ClosureSupervision, training_config
 
 EVAL_ROLE_PLAN = replace(ROLE_PLAN, colocate_all=True, policy_num_nodes=1, reference_num_nodes=1)
-DATA_URI = "s3://marin-us-east-02a/marin/users/benfeuer/structure-closure/data/closure-explicit-tasks-v3"
 
 
 def evaluation_config() -> dict:
@@ -97,35 +95,42 @@ def build_evaluation(*, name: str, data: ArtifactStep, model: ArtifactHfModel) -
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=42,
         ),
-        IrisSkyRLExecution(
-            cluster=CLUSTER,
-            cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
-            cpu=48,
-            memory="1800GB",
-            disk="2TB",
-            priority="interactive",
-            max_retries=0,
-            target_cluster=CLUSTER,
-            parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=24,
-            wandb_entity=None,
-        ),
+        EXECUTION,
         export_hf=False,
     )
 
 
 @click.command(help=__doc__)
+@click.option("--data", required=True, help="Closure cohort name, tool-prompt-probe, or immutable URI@version.")
+@click.option("--data-name", default=None, help="Required artifact name for URI datasets; preserve the original name.")
+@click.option("--model", required=True, help="base or immutable checkpoint URI@version.")
+@click.option("--manifest-identity", default=None, help="Required for checkpoint models.")
+@click.option("--name", required=True, help="User-owned evaluation artifact name.")
 @rl_build_options
-def main() -> ArtifactStep:
-    data = ArtifactStep.adopt(
-        user_owned_name("datasets/structure-closure-explicit"),
-        "2026.10.12.3",
-        DATA_URI,
-        config={"validation_sha256": "f64e9ae5724ab081c3e119ee39efc850f12eeaf39f0c5a05ceaf017454a7b011"},
-    )
-    return build_evaluation(
-        name=user_owned_name("evals/structure-closure-explicit"), data=data, model=initializer_model()
-    )
+def main(data: str, data_name: str | None, model: str, manifest_identity: str | None, name: str) -> ArtifactStep:
+    if data_name is not None and (data in ClosureCohort or data == "tool-prompt-probe"):
+        raise click.BadParameter("Registered cohorts already define their artifact name", param_hint="--data-name")
+    if data in ClosureCohort:
+        dataset = structure_closure_dataset(ClosureCohort(data))
+    elif data == "tool-prompt-probe":
+        dataset = tool_prompt_probe_dataset()
+    else:
+        uri, separator, version = data.rpartition("@")
+        if not separator or not uri or not version or not data_name:
+            raise click.BadParameter("Expected a cohort name or URI@version with --data-name", param_hint="--data")
+        dataset = ArtifactStep.adopt(user_owned_name(data_name), version, uri)
+    if model == "base":
+        if manifest_identity is not None:
+            raise click.BadParameter("Only checkpoint models accept a manifest identity")
+        selected_model = initializer_model()
+    else:
+        uri, separator, version = model.rpartition("@")
+        if not separator or not uri or not version or not manifest_identity:
+            raise click.BadParameter("Expected checkpoint URI@version and --manifest-identity", param_hint="--model")
+        selected_model = exported_model(
+            checkpoint_uri=uri, checkpoint_version=version, manifest_identity=manifest_identity
+        )
+    return build_evaluation(name=user_owned_name(name), data=dataset, model=selected_model)
 
 
 if __name__ == "__main__":

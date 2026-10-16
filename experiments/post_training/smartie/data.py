@@ -133,7 +133,7 @@ def build_real_dataset(
         try:
             manifest_bytes = (root / "manifest.json").read_bytes()
             manifest = json.loads(manifest_bytes)
-            if manifest["datasets"]["final"].rstrip("/") != str(root / "final").rstrip("/"):
+            if StoragePath(manifest["datasets"]["final"]) != root / "final":
                 raise ValueError("Admission manifest points to a different final view")
             if manifest["admission_counts"]["admitted"] != source.expected_rows:
                 raise ValueError("Admission count differs from the selected source contract")
