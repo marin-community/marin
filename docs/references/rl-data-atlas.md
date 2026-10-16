@@ -115,14 +115,28 @@ The default keeps production updates independent of an operator's local curation
 
 Production FULL campaigns add `--publish-catalog
 s3://marin-us-east-02a/marin/rl-data/catalog/production` to the
-[campaign command](task-curation.md#run-a-campaign). This requires assessment and
-disallows `--cache-dir`. The campaign report and artifacts retain their versioned
-paths; run history, assessments and evidence accumulate in the shared catalog.
+[campaign command](task-curation.md#run-a-campaign) with assessment enabled.
+`--cache-dir` selects local execution and a local artifact root, so production
+publication rejects it. Production uses the shared artifact cache under
+`--artifact-root` (default `s3://marin-us-east-02a/marin`) and an explicit
+`--review-cache` for model requests. Reuse the existing cache locations, pinned
+inputs, recipe versions, rubric and model revisions to reuse completed work.
+Assessment can use cached results; enabling it does not force regrading.
+A new report directory does not invalidate the caches. Switching a local or GCP
+artifact root to S3 does not move its cached work. Verify retained artifacts and
+model-request caches are available before running a campaign from the new root.
+The publication destination is independent: a GCP campaign can keep its existing
+`--artifact-root` and `--review-cache` while publishing to the S3 catalog. Run
+beside those caches. The default S3 artifact root will not reuse work present
+only at a different GCP root.
+Run history, assessments and evidence accumulate in the shared catalog.
 Without this option, SAMPLE/FULL publish beside their report. QUICK does not publish
 a grading snapshot. Adding a dataset declaration alone does not execute its pipeline.
 
 Publication updates selected sources and preserves all other production entries,
-including their pinned declarations. Metadata-only edits to names, tags or URLs
+including their pinned declarations. Use `--source` to grade only new or changed
+sources; the other sources' assessments carry forward without executing their
+pipelines. Metadata-only edits to names, tags or URLs
 therefore reach production when that source is selected. Removing a declaration
 from code does not retire its production entry. Older attempts are ignored per
 source, so an out-of-order campaign can still publish its other sources. Failed
@@ -146,10 +160,13 @@ separate metadata cache and keeps evidence packet reads batched. A bounded impor
 can run from a workstation; prefer the catalog's storage region for large transfers.
 
 The production catalog was seeded from the relocated October 12 snapshot. Its initial
-manifest retains immutable schemas and shards in
+manifest retains immutable shards in
 `s3://marin-us-east-02a/marin/rl-data/migrations/2026-10-15/`.
 That verified archive remains part of production storage and must be retained.
-New writes use the production root. The legacy catalog remains historical evidence.
+Schemas were copied into the production root so writers can extend the catalog.
+New writes use that root. The legacy catalog remains historical evidence.
+This catalog bootstrap preserves published grades and evidence; it does not
+relocate the original GCP execution artifacts or model-request cache.
 
 Packets are stored separately as JSON text, preserving escaped null characters.
 Inventory queries scan structured metadata and verdict rows. Atlas performs no

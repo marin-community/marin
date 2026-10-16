@@ -135,10 +135,18 @@ updates use the [explicit loader](../../../docs/references/rl-data-atlas.md#upda
 
 For a production FULL campaign, add
 `--publish-catalog s3://marin-us-east-02a/marin/rl-data/catalog/production`.
-This requires assessment and forbids `--cache-dir`. The report and source artifacts
-stay in their versioned directories; the shared catalog retains run history and
-accumulates assessments. Omit the option for local previews and SAMPLE campaigns.
-Unselected production sources retain their declarations and grades. Older attempts
+Enable assessment and omit `--cache-dir`, which selects local execution and a
+local artifact root. Production reuses the remote artifact cache under
+`--artifact-root` (default `s3://marin-us-east-02a/marin`) and model requests under
+the explicit `--review-cache`. Reuse those locations, pinned inputs, recipe
+versions, rubric and model revisions across campaigns. A new report directory or
+enabling assessment does not force recomputation of completed work. Switching
+artifact roots does not move cached work; verify artifact and model-cache reuse
+before executing a campaign from a new root. `--publish-catalog` alone does not
+change either cache location. The shared catalog retains run history
+and accumulates assessments. Omit the option for local previews and SAMPLE campaigns.
+Use `--source` to grade only new or changed sources; other production sources keep
+their declarations and grades without executing their pipelines. Older attempts
 are ignored per source, and removing a declaration does not retire its published entry.
 After publication, run the Atlas loader to refresh Postgres; no inference is repeated.
 
