@@ -9,6 +9,8 @@ are rows of `swarm_llama_160m_1p2b` and of `heldout`, 117 validation runs are ro
 pool fractions, BPB and seeds, and that every content id hashes its own row.
 """
 
+from collections.abc import Iterable
+
 import numpy as np
 import pandas as pd
 
@@ -20,6 +22,11 @@ SHARED_SEEDS = ("data_seed", "trainer_seed")
 SWARMS = ("swarm_qwen3_360m_1p6b", "swarm_llama_160m_1p2b", "swarm_llama_200m_6b")
 # Configs whose every run forms one set, whichever of their tables and id columns names it.
 RUN_GROUPS = ("starcoder", "domain_sweeps")
+
+
+def id_columns(columns: Iterable[str]) -> list[str]:
+    """The columns that hold observation ids: `observation_id` and every `<role>_observation_id`."""
+    return [c for c in columns if c == "observation_id" or c.endswith("_observation_id")]
 
 
 def consistency(tables: dict[str, pd.DataFrame]) -> list[str]:
@@ -101,8 +108,7 @@ def run_sets(tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
     for group in RUN_GROUPS:
         for name, t in tables.items():
             if name == group or name.startswith(f"{group}_"):
-                ids = [c for c in t.columns if c == "observation_id" or c.endswith("_observation_id")]
-                parts.extend(_members(t[c].dropna(), group) for c in ids)
+                parts.extend(_members(t[c].dropna(), group) for c in id_columns(t.columns))
     members = pd.concat(parts, ignore_index=True).drop_duplicates()
     return members.sort_values(["run_set", "observation_id"]).reset_index(drop=True)
 
