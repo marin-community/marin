@@ -980,7 +980,7 @@ def test_health_sums_nonfinite_deltas_and_keeps_exporter_processes_separate(stor
     ]
 
 
-def test_native_work_and_residuals_are_not_clamped_or_merged_across_attempts(store):
+def test_megatron_detail_limits_history_per_rank_without_truncating_wall_summaries(store):
     store.execute(f"DELETE FROM {TABLE} WHERE name='phase_duration_seconds'")
     observed = []
     for rank, old_tail, restart in (("0", range(20, 30), range(1, 4)), ("1", range(50, 60), range(1, 3))):
@@ -1284,7 +1284,7 @@ def test_consumed_staleness_panels_count_groups_and_sum_tokens_per_staleness(sto
     assert query(store, "Staleness of trained groups: tokens per step") == []
 
 
-def test_ratio_panels_read_mismatch_and_learner_drift_families_separately(store):
+def test_missing_staleness_buckets_remain_absent_from_mismatch(store):
     store.execute(f"DELETE FROM {TABLE} WHERE json_get(attributes_json,'metric') LIKE 'policy/mismatch/staleness1/%'")
     assert not any(
         "/staleness1/" in row["series"] for row in query(store, "Trainer/vLLM logprob mismatch by staleness bucket")
