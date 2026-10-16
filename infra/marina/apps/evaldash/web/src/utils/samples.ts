@@ -4,7 +4,7 @@ import type { SampleRow } from '@/types/api'
 
 export type SampleOutcome = 'passed' | 'failed' | 'scored' | 'ungraded' | 'errored'
 
-// The correctness filters a sample list offers. 'ungraded' is a real bucket, not a synonym for wrong.
+// Sample outcome filters. 'ungraded' is a real bucket, not a synonym for wrong.
 export type SampleFilter = 'all' | 'correct' | 'incorrect' | 'scored' | 'ungraded'
 
 /** Offer score filtering for continuous tasks and correctness filtering for binary tasks. */
@@ -39,10 +39,8 @@ function graderError(row: SampleRow): string | null {
 }
 
 /**
- * One sample's outcome. A recorded grader error is `errored`; an unscored sample (no primary metric,
- * `correct === null`) is `scored` when the primary score exists, else `ungraded`;
- * otherwise pass/fail follows `correct`. `errored` is only claimed
- * when the grader actually reported one — it is never inferred from an empty answer.
+ * One sample's outcome. A recorded grader error is `errored`. With no pass/fail verdict, a numeric
+ * primary score is `scored` and its absence is `ungraded`. Binary verdicts are passed or failed.
  */
 export function sampleOutcome(row: SampleRow): SampleOutcome {
   if (graderError(row)) return 'errored'

@@ -252,7 +252,7 @@ def review_run_samples(
         task,
         offset=0,
         limit=n,
-        correct=sample_filter,
+        outcome_filter=sample_filter,
         primary_metric_name=primary_metric_name,
         primary_metric_kind=primary_metric_kind,
     )

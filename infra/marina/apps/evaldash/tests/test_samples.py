@@ -50,7 +50,7 @@ def test_sample_reader_returns_typed_filtered_page(tmp_path) -> None:
     write_sample_parquet(fs, f"{root}/samples_arc_20260719.parquet", samples)
 
     tasks = list_sample_tasks(str(tmp_path))
-    page = fetch_samples(str(tmp_path), "arc", offset=0, limit=1, correct="incorrect")
+    page = fetch_samples(str(tmp_path), "arc", offset=0, limit=1, outcome_filter="incorrect")
 
     assert tasks.model_dump(mode="json") == {
         "available": True,
@@ -81,7 +81,7 @@ def test_sample_reader_uses_the_declared_primary_metric(tmp_path) -> None:
         "drop",
         offset=0,
         limit=1,
-        correct="all",
+        outcome_filter="all",
         primary_metric_name="f1",
         primary_metric_kind=MetricKind.CONTINUOUS,
     )
@@ -110,7 +110,7 @@ def test_grading_is_derived_and_round_trips(tmp_path) -> None:
     )
     write_sample_parquet(fs, f"{root}/samples_gsm8k_20260723.parquet", [sample])
 
-    page = fetch_samples(str(tmp_path), "gsm8k", offset=0, limit=1, correct="all")
+    page = fetch_samples(str(tmp_path), "gsm8k", offset=0, limit=1, outcome_filter="all")
 
     (row,) = page.rows
     assert row.grading is not None
@@ -160,7 +160,7 @@ def test_mrcr_sample_scores_survive_export_and_repair_existing_rows(tmp_path) ->
     write_sample_parquet(fs, f"{root}/samples_mrcr_20260927.parquet", [old_row, perfect])
 
     page = fetch_samples(
-        str(tmp_path), "mrcr", offset=0, limit=10, correct="incorrect", primary_metric_name="mrcr_accuracy"
+        str(tmp_path), "mrcr", offset=0, limit=10, outcome_filter="incorrect", primary_metric_name="mrcr_accuracy"
     )
     assert page.primary_metric == "accuracy"
     assert page.counts.model_dump() == {"all": 2, "correct": 1, "incorrect": 1, "scored": 2, "ungraded": 0}
@@ -188,7 +188,9 @@ def test_repeated_sample_scores_recover_grades_and_filters(tmp_path, metric) -> 
         store.add_sample(EvalSample(task="gpqa-diamond", doc_id="1", kind=SampleKind.GENERATION))
         store.seal()
 
-    page = fetch_samples(root, "gpqa-diamond", offset=0, limit=10, correct="all", primary_metric_name="accuracy_avg")
+    page = fetch_samples(
+        root, "gpqa-diamond", offset=0, limit=10, outcome_filter="all", primary_metric_name="accuracy_avg"
+    )
 
     assert page.primary_metric == metric
     assert page.counts.model_dump() == {"all": 4, "correct": 2, "incorrect": 1, "scored": 3, "ungraded": 1}
@@ -206,7 +208,7 @@ def test_repeated_sample_scores_recover_grades_and_filters(tmp_path, metric) -> 
 
     for outcome, expected in (("correct", [True, True]), ("incorrect", [False]), ("ungraded", [None])):
         filtered = fetch_samples(
-            root, "gpqa-diamond", offset=0, limit=10, correct=outcome, primary_metric_name="accuracy_avg"
+            root, "gpqa-diamond", offset=0, limit=10, outcome_filter=outcome, primary_metric_name="accuracy_avg"
         )
         assert filtered.total == len(expected)
         assert [row.correct for row in filtered.rows] == expected
@@ -239,7 +241,7 @@ def test_truthfulqa_mc2_archive_scores_are_not_failures(tmp_path) -> None:
         stored.task,
         offset=0,
         limit=10,
-        correct="all",
+        outcome_filter="all",
         primary_metric_name="acc",
         primary_metric_kind=MetricKind.BINARY,
     )
@@ -255,8 +257,8 @@ def test_truthfulqa_mc2_archive_scores_are_not_failures(tmp_path) -> None:
     assert scored.target_choice is None
     assert json.loads(scored.doc)["mc2_targets"]["labels"] == labels
     assert missing.grading is None
-    assert fetch_samples(root, stored.task, offset=0, limit=10, correct="scored").total == 1
-    assert fetch_samples(root, stored.task, offset=0, limit=10, correct="incorrect").total == 0
+    assert fetch_samples(root, stored.task, offset=0, limit=10, outcome_filter="scored").total == 1
+    assert fetch_samples(root, stored.task, offset=0, limit=10, outcome_filter="incorrect").total == 0
 
 
 def test_legacy_lm_eval_export_respects_continuous_metric_kind() -> None:
@@ -404,7 +406,7 @@ def test_evaldash_reads_the_archive(tmp_path):
     assert tasks.available
     assert [task.task for task in tasks.tasks] == ["arc"]
 
-    page = fetch_samples(root, "arc", offset=0, limit=10, correct="all")
+    page = fetch_samples(root, "arc", offset=0, limit=10, outcome_filter="all")
     assert page.available
     assert page.counts == page.counts.model_copy(
         update={"all": 2, "correct": 1, "incorrect": 1, "scored": 2, "ungraded": 0}
@@ -412,7 +414,7 @@ def test_evaldash_reads_the_archive(tmp_path):
     assert {row.doc_id for row in page.rows} == {"1", "2"}
     assert page.primary_metric == "acc"
 
-    incorrect = fetch_samples(root, "arc", offset=0, limit=10, correct="incorrect")
+    incorrect = fetch_samples(root, "arc", offset=0, limit=10, outcome_filter="incorrect")
     assert [row.doc_id for row in incorrect.rows] == ["2"]
 
 
@@ -426,7 +428,7 @@ def test_ungraded_sample_reads_back_with_empty_metrics(tmp_path):
     store.seal()
     store.close()
 
-    page = fetch_samples(root, "gsm8k", offset=0, limit=10, correct="all")
+    page = fetch_samples(root, "gsm8k", offset=0, limit=10, outcome_filter="all")
     assert page.available
     assert page.counts.ungraded == 1
     assert page.primary_metric is None
@@ -447,14 +449,16 @@ def test_evaldash_serves_one_extraction_filter_at_a_time(tmp_path):
     )
     export_lm_eval_samples(str(results))
 
-    page = fetch_samples(str(results), "gsm8k", offset=0, limit=10, correct="all")
+    page = fetch_samples(str(results), "gsm8k", offset=0, limit=10, outcome_filter="all")
     assert page.extraction_filters == ("flexible-extract", "strict-match")
     # FILTER_PRIORITY ranks flexible-extract first, matching the headline metric's filter.
     assert page.extraction_filter == "flexible-extract"
     assert page.counts.all == 1
     assert page.rows[0].correct is True
 
-    strict = fetch_samples(str(results), "gsm8k", offset=0, limit=10, correct="all", extraction_filter="strict-match")
+    strict = fetch_samples(
+        str(results), "gsm8k", offset=0, limit=10, outcome_filter="all", extraction_filter="strict-match"
+    )
     assert strict.extraction_filter == "strict-match"
     assert strict.counts.all == 1
     assert strict.rows[0].correct is False
@@ -504,7 +508,7 @@ def test_evaldash_reads_an_unsealed_v1_finestore_archive(tmp_path):
     assert tasks.available
     assert [(task.task, task.files) for task in tasks.tasks] == [("arc", 2)]
 
-    page = fetch_samples(str(results), "arc", offset=0, limit=10, correct="all")
+    page = fetch_samples(str(results), "arc", offset=0, limit=10, outcome_filter="all")
     assert page.available
     assert page.counts == page.counts.model_copy(
         update={"all": 2, "correct": 1, "incorrect": 1, "scored": 2, "ungraded": 0}

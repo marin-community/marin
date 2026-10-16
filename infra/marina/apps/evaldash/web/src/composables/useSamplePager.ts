@@ -1,5 +1,5 @@
 /**
- * Client-side pager over a run's sample rows for one (task, correctness, extraction filter) selection.
+ * Client-side pager over a run's sample rows for one (task, outcome, extraction filter) selection.
  *
  * Fetches 25-row pages on demand and caches them by `task|filter|extraction|page`, so scrubbing back
  * and forth over already-seen rows is instant. `ensure(i)` fetches the page containing row `i` and

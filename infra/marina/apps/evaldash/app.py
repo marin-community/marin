@@ -1191,14 +1191,14 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
         if not task:
             return JSONResponse({"error": "task is required"}, status_code=400)
         typed_record = EvalRunRecord.model_validate(record)
-        primary_metric_name, primary_metric_kind = samples.declared_primary_metric(typed_record, task)
+        primary_metric_name, primary_metric_kind = samples.sample_metric_declaration(typed_record, task)
         payload = await asyncio.to_thread(
             samples.fetch_samples,
             record.get("results_path"),
             task,
             offset=_parse_int(offset, default=0, low=0, high=10_000_000),
             limit=_parse_int(limit, default=DEFAULT_SAMPLE_LIMIT, low=1, high=MAX_SAMPLE_LIMIT),
-            correct=correct or "all",
+            outcome_filter=correct or "all",
             extraction_filter=extraction_filter or None,
             primary_metric_name=primary_metric_name,
             primary_metric_kind=primary_metric_kind,
@@ -1230,7 +1230,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
         if sample_filter not in REVIEW_FILTERS:
             return JSONResponse({"error": f"filter must be one of {REVIEW_FILTERS}"}, status_code=400)
         typed_record = EvalRunRecord.model_validate(record)
-        primary_metric_name, primary_metric_kind = samples.declared_primary_metric(typed_record, task)
+        primary_metric_name, primary_metric_kind = samples.sample_metric_declaration(typed_record, task)
         payload = await asyncio.to_thread(
             review.review_run_samples,
             record.get("results_path"),
