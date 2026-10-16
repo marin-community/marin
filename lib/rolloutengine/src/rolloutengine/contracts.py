@@ -16,18 +16,30 @@ BUDGET_STOP_REASON = "budget_reached"
 
 
 @dataclass(frozen=True)
-class ModelRequest:
-    """Request chat generation or an exact token-prefix replay.
+class Continuation:
+    """Tokens already served in this training record, which the next prompt must start with.
 
-    When prompt_token_ids is set, messages are retained for display only and
-    options are completion sampling options, not chat-template options.
+    The transport keeps them unchanged, so that it never tokenizes sampled text again.
     """
 
-    messages: tuple[dict[str, Any], ...]
-    options: dict[str, Any]
-    prefix_token_ids: tuple[int, ...]
-    assistant_message_index: int | None
-    prompt_token_ids: tuple[int, ...] | None = None
+    served_token_ids: tuple[int, ...]  # The prompt and sampled response tokens of the earlier turns, as served.
+    assistant_message_index: int  # Where the served tokens end in `messages`: the last assistant message.
+
+
+@dataclass(frozen=True)
+class ModelRequest:
+    """One request to the model transport, of one of three kinds.
+
+    With neither ``continuation`` nor ``prompt_token_ids``, the transport renders all ``messages``. With
+    ``continuation``, it renders only the messages after the served tokens and appends their tokens. With
+    ``prompt_token_ids``, it serves those tokens unchanged, ``messages`` are only for display, and ``options``
+    are sampling settings. A request never has both.
+    """
+
+    messages: tuple[dict[str, Any], ...]  # The chat so far, one dict per message. New observations come last.
+    options: dict[str, Any]  # Other request fields, such as tools and sampling settings. The engine does not read them.
+    continuation: Continuation | None = None  # Tokens to keep unchanged. Tokenize only the messages after them.
+    prompt_token_ids: tuple[int, ...] | None = None  # A full prompt that the harness pinned. Serve it unchanged.
 
 
 @dataclass(frozen=True)
