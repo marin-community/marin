@@ -121,14 +121,6 @@ class VersionedRow:
     row: dict
 
 
-@dataclass(frozen=True)
-class MergedRow:
-    """The winning row for one key and the number of older rows it replaced."""
-
-    row: dict
-    superseded: int
-
-
 class BlobCorruptionError(ValueError):
     """A committed blob is missing data or has inconsistent size metadata."""
 
@@ -416,14 +408,12 @@ def iter_shard_rows(
                 )
 
 
-def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[MergedRow]:
+def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[dict]:
     """Merge sorted shard streams and retain the newest row for each key."""
     merged = heapq.merge(*streams, key=lambda item: item.key)
     for _key, group in itertools.groupby(merged, key=lambda item: item.key):
         winner: VersionedRow | None = None
-        count = 0
         for item in group:
-            count += 1
             if winner is None or (item.commit_sequence, item.sequence, item.generation) > (
                 winner.commit_sequence,
                 winner.sequence,
@@ -431,7 +421,7 @@ def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[M
             ):
                 winner = item
         assert winner is not None
-        yield MergedRow(row=winner.row, superseded=count - 1)
+        yield winner.row
 
 
 def _read_plan(
@@ -616,8 +606,7 @@ class _ReadOperations:
                 )
                 for shard in plan.shards
             ]
-            for merged in merge_deduplicated_rows(streams):
-                row = merged.row
+            for row in merge_deduplicated_rows(streams):
                 if not _matches_filter(row, plan.post_dedup_where):
                     continue
                 if columns is not None:
