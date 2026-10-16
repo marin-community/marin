@@ -33,8 +33,10 @@ from marin.datakit.download.huggingface import (
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
+from marin.external_dependencies import HARBOR
 from marin.inference.openai_batch import OpenAIBatchClient
 from marin.inference.openai_chat import OpenAIChatClient
+from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.image import RegistryImage
 from shellbox.machine import (
@@ -97,7 +99,6 @@ URL_TIMEOUT = 60
 IMAGE_MACHINE_CPUS = 4
 INPUT_OVERRIDES_REVISION = "2"
 
-HARBOR_PROJECT = Path(__file__).resolve().parents[3] / "config/external/harbor"
 HARBOR_EXPORTER = Path(__file__).with_name("harbor_hub.py")
 
 
@@ -194,6 +195,9 @@ class HarborHubSource:
         return SourceFormat.JSONL
 
 
+type RecipeSource = HfSource | UrlSource | HarborHubSource
+
+
 def environment_requirements(
     environment: Environment, built: EnvironmentArtifact | None = None
 ) -> EnvironmentRequirements:
@@ -245,18 +249,18 @@ class CurationRecipe:
     """
 
     name: str
-    source: HfSource | UrlSource | HarborHubSource
+    source: RecipeSource
     convert: Converter
     version: str
     intended_use: IntendedUse
     rubric: str | None = None
     controls: Controls | None = None
-    inputs: Mapping[str, HfSource | UrlSource | HarborHubSource] = field(default_factory=dict)
+    inputs: Mapping[str, RecipeSource] = field(default_factory=dict)
     grader: Environment | None = None
     resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
 
     @property
-    def dataset(self) -> HfSource | UrlSource | HarborHubSource:
+    def dataset(self) -> RecipeSource:
         return self.source
 
     @property
@@ -496,7 +500,7 @@ def review_rubric(pipeline: CurationRecipe) -> ReviewRubric | None:
     return ReviewRubric(id=pipeline.name, version=pipeline.version, criteria=criteria)
 
 
-def source_files(source: HfSource | UrlSource | HarborHubSource) -> SourceFiles:
+def source_files(source: RecipeSource) -> SourceFiles:
     if isinstance(source, HarborHubSource):
         return SourceFiles(source.name, source.revision, source.files, source.format)
     if isinstance(source, HfSource):
@@ -584,7 +588,7 @@ def _run_curation(
     )
 
 
-def download_identity(source: HfSource | UrlSource | HarborHubSource) -> dict[str, Any]:
+def download_identity(source: RecipeSource) -> dict[str, Any]:
     """The pinned bytes and shared preparation staged by a source download."""
     if isinstance(source, HfSource):
         return {
@@ -602,10 +606,7 @@ def download_identity(source: HfSource | UrlSource | HarborHubSource) -> dict[st
             "harbor_hub": source.name,
             "revision": source.revision,
             "exporter_sha256": hashlib.sha256(HARBOR_EXPORTER.read_bytes()).hexdigest(),
-            "runtime_sha256": {
-                name: hashlib.sha256((HARBOR_PROJECT / name).read_bytes()).hexdigest()
-                for name in ("pyproject.toml", "uv.lock")
-            },
+            "harbor_commit": HARBOR.commit,
         }
     return {"url": source.url, "sha256": source.sha256, "filename": source.filename}
 
@@ -650,7 +651,7 @@ def pipeline_identity(
 
 @dataclass(frozen=True)
 class DownloadRequest:
-    source: HfSource | UrlSource | HarborHubSource
+    source: RecipeSource
     output_path: str
 
 
@@ -677,13 +678,16 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
                 source.prepare(task.destination_path, campaign.context)
         return
     if isinstance(source, HarborHubSource):
+        root = find_project_root(HARBOR_EXPORTER)
+        if root is None:
+            raise RuntimeError("Harbor acquisition requires a Marin workspace")
         subprocess.run(
             [
                 "uv",
                 "run",
                 "--isolated",
                 "--project",
-                str(HARBOR_PROJECT),
+                str(root / "config/external" / HARBOR.config_name),
                 "--frozen",
                 "python",
                 str(HARBOR_EXPORTER),
@@ -709,11 +713,11 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
         raise ValueError(f"{source.url} has SHA-256 {digest.hexdigest()}; expected {source.sha256}")
 
 
-def _download_request(source: HfSource | UrlSource | HarborHubSource, ctx: StepContext) -> DownloadRequest:
+def _download_request(source: RecipeSource, ctx: StepContext) -> DownloadRequest:
     return DownloadRequest(source, ctx.output_path)
 
 
-def download_step(source: HfSource | UrlSource | HarborHubSource, campaign: CampaignRuntime) -> ArtifactStep[Artifact]:
+def download_step(source: RecipeSource, campaign: CampaignRuntime) -> ArtifactStep[Artifact]:
     """One shared artifact per distinct set of pinned bytes."""
     identity = hashlib.sha256(canonical_json(download_identity(source)).encode()).hexdigest()[:16]
     return ArtifactStep(
@@ -752,7 +756,7 @@ def _staged_file_overrides(root: str, hashes: Mapping[str, str]) -> dict[str, So
     return {name: SourceFileOverride(str(StoragePath(root) / name), checksum) for name, checksum in hashes.items()}
 
 
-def _staged_input_identity(path: str, source: HfSource | UrlSource | HarborHubSource) -> dict[str, Any]:
+def _staged_input_identity(path: str, source: RecipeSource) -> dict[str, Any]:
     files = {}
     for logical in staged_files(path, source_files(source)):
         with (StoragePath(path) / logical).open("rb") as stream:

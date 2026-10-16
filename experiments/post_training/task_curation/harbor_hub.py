@@ -13,6 +13,7 @@ import re
 import stat
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import NotRequired, TypedDict
 
 from harbor.models.task.id import PackageTaskId
 from harbor.publisher.packager import Packager
@@ -24,26 +25,36 @@ MAX_TASK_BYTES = 8 * 1024 * 1024
 LOGGER = logging.getLogger(__name__)
 
 
-def export_task(root: Path, task_ref: str) -> dict:
+class ExportedTask(TypedDict):
+    task_ref: str
+    release: str
+    files: NotRequired[dict[str, str]]
+    modes: NotRequired[dict[str, str]]
+    unsupported: NotRequired[str]
+    bytes: NotRequired[int]
+
+
+def export_task(root: Path, task_ref: str, release: str) -> ExportedTask:
     """Check the native package hash before encoding only its hash-covered files."""
     paths = Packager.collect_files(root)
     if any(path.is_symlink() or not path.is_file() for path in paths):
-        return {"task_ref": task_ref, "unsupported": "unsupported_package_links"}
+        return {"task_ref": task_ref, "release": release, "unsupported": "unsupported_package_links"}
     digest, paths = Packager.compute_content_hash(root)
     if task_ref.rsplit("@", 1)[1] != f"sha256:{digest}":
         raise ValueError(f"Downloaded task differs from the pinned package: {task_ref}")
     size = sum(path.stat().st_size for path in paths)
     if size > MAX_TASK_BYTES:
-        return {"task_ref": task_ref, "unsupported": "resources_over_budget", "bytes": size}
+        return {"task_ref": task_ref, "release": release, "unsupported": "export_size_ceiling", "bytes": size}
     return {
         "task_ref": task_ref,
+        "release": release,
         "files": {path.relative_to(root).as_posix(): base64.b64encode(path.read_bytes()).decode() for path in paths},
         "modes": {path.relative_to(root).as_posix(): format(stat.S_IMODE(path.stat().st_mode), "o") for path in paths},
     }
 
 
 async def export_release(release: str, output: StoragePath, selected: list[str]) -> None:
-    """Resolve the pinned release and export one hash-verified package at a time."""
+    """Export hash-verified task rows and the pinned release manifest."""
     _, digest = release.rsplit("@", 1)
     if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
         raise ValueError("Select a release by content digest, not a tag")
@@ -67,14 +78,21 @@ async def export_release(release: str, output: StoragePath, selected: list[str])
     client = TaskClient()
     task_output = output / "tasks"
     for ref in selected_refs:
+        # Filenames preserve task identity even when multiple names share package contents.
+        task_identity = hashlib.sha256(ref.encode()).hexdigest()
+        destination = task_output / f"{task_identity}.jsonl"
+        if destination.exists():
+            existing = json.loads(destination.read_text())
+            if existing["task_ref"] != ref or existing["release"] != release:
+                raise ValueError("Export directory contains a different task or release")
+            continue
         with TemporaryDirectory(prefix="harbor-hub-task-") as directory:
             downloaded = await client.download_tasks([refs[ref]], output_dir=Path(directory), export=True)
             root = downloaded.results[0].path
-            row = export_task(root, ref)
-            row["release"] = release
-            # The shared pipeline uses filename and row index as the task identity.
-            task_identity = hashlib.sha256(ref.encode()).hexdigest()
-            (task_output / f"{task_identity}.jsonl").write_text(json.dumps(row) + "\n", auto_mkdir=True)
+            row = export_task(root, ref, release)
+            pending = task_output / f"{task_identity}.partial"
+            pending.write_text(json.dumps(row) + "\n", auto_mkdir=True)
+            pending.rename(destination)
             LOGGER.info("Exported %s", ref)
 
     (output / "release.json").write_text(

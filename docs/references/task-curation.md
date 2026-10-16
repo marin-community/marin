@@ -228,7 +228,7 @@ The `CurationRecipe` configuration has these fields:
 | `controls` | Optional `Controls(golden, negative, memory_mb, negative_reward)` for grader verification. |
 | `inputs` | Auxiliary pinned sources, staged by name in `ConversionContext.inputs`. |
 | `grader` | The `Environment` that grade scripts need, such as `GRADER_PACKAGES` from `datasets/environments.py`. The pipeline builds it and decides where it runs (see [Environments](#environments)); the converter reads the result as `ConversionContext.grader_environment`. |
-| `resource_budget_bytes` | Decoded resource bytes admitted by reviewed modes, default 1,000,000; larger tasks are deferred as `resources_over_budget`. Quick mode skips this budget. |
+| `resource_budget_bytes` | Decoded resource bytes admitted by reviewed modes, default 1,000,000; larger tasks are deferred as `resources_over_budget`. Quick mode skips this budget. Harbor Hub export has a separate 8 MiB ceiling (`export_size_ceiling`) before conversion. |
 
 Families whose members differ only by data are tables: one module builds every
 declaration of the family in a loop.
@@ -250,11 +250,14 @@ more than 8 MiB of exported files produce explicit unsupported rows.
 
 Release membership is resolved by Harbor using the pinned release digest.
 
-The download identity includes the release, exporter code, and locked runtime.
+The download identity includes the release, exporter code, and pinned Harbor commit;
+unrelated runtime dependency updates do not invalidate downloaded tasks.
 Curation sampling happens after acquisition. Existing `--input-root` and
 `--input-file` overrides bypass acquisition; for a bounded local export, run
 `python -m experiments.post_training.task_curation.harbor_hub --help` in the
-pinned Harbor environment. Use a fresh output directory per export.
+pinned Harbor environment. Retries reuse completed task rows; partial writes are
+not treated as completed exports. Use a fresh directory when changing the release
+or selected task set.
 
 ## Environments
 
