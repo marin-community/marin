@@ -4,6 +4,7 @@
 import json
 
 import pytest
+from verifyit.structure_closure import json_closure_state
 
 from rolloutengine.closure_repair import (
     ClosureTargetKind,
@@ -12,7 +13,6 @@ from rolloutengine.closure_repair import (
     verified_continuation_boundary,
 )
 from rolloutengine.closure_scoring import ClosureFormat, closure_state, score_closure
-from rolloutengine.structure_closure import json_closure_state
 
 
 def codepoints(text: str) -> list[int]:

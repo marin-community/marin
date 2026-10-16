@@ -24,7 +24,7 @@ from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_u
 from experiments.post_training.task_curation.datasets.nemotron_ultra.calibrate_tool_judge import CASES
 
 
-async def replay(message: dict, request: ModelRequest) -> ModelTurn:
+async def replay(message: dict, _request: ModelRequest) -> ModelTurn:
     # Tokens are placeholders: this probe measures grading, not generation or loss.
     return ModelTurn(message, (1,), (2,), None, "stop")
 

@@ -17,8 +17,8 @@ from rolloutengine.closure_scoring import (
     closure_state,
     score_closure,
 )
-from rolloutengine.structure_closure import PrefixStatus, json_closure_state
-from rolloutengine.tool_protocol import THINK_CLOSE, THINK_OPEN, TOOL_CLOSE, TOOL_OPEN
+from verifyit.structure_closure import PrefixStatus, json_closure_state
+from verifyit.tool_call_markup import THINK_CLOSE, THINK_OPEN, TOOL_CLOSE, TOOL_OPEN
 
 CLOSE_REQUIRED = "close_required"
 STRING_ENDINGS = (

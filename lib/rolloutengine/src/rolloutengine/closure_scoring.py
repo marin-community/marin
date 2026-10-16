@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from enum import StrEnum
 
-from rolloutengine.structure_closure import (
+from verifyit.structure_closure import (
     ClosureState,
     PrefixStatus,
     delimited_json_closure_state,
@@ -15,7 +15,7 @@ from rolloutengine.structure_closure import (
     paired_marker_closure_state,
     required_code_fence_state,
 )
-from rolloutengine.tool_protocol import JSON_WHITESPACE, THINK_CLOSE, THINK_OPEN, TOOL_CLOSE, TOOL_OPEN
+from verifyit.tool_call_markup import JSON_WHITESPACE, THINK_CLOSE, THINK_OPEN, TOOL_CLOSE, TOOL_OPEN
 
 SNOWBALL_TURN_END_MARKERS = ("<|eot_id|>", "<|end_of_text|>")
 CLOSURE_REGION_SCORER = "closure_region_v1"

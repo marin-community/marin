@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from transformers import PreTrainedTokenizerFast
+from verifyit.tool_call_markup import TOOL_CLOSE, TOOL_OPEN
 
 from experiments.post_training.structure_closure.benchmark import ClosureCase, Family, Split, closure_format, score_case
 
@@ -39,7 +40,7 @@ def write_result_tool() -> dict:
 
 def native_tool_case(case: ClosureCase, tokenizer: PreTrainedTokenizerFast) -> ClosureCase:
     """Keep known tool content and control boundaries in the tokenizer's tool format."""
-    body = json.loads(case.expected.removeprefix("<tool_call>").removesuffix("</tool_call>"))
+    body = json.loads(case.expected.removeprefix(TOOL_OPEN).removesuffix(TOOL_CLOSE))
     rendered = tokenizer.apply_chat_template(
         [
             {"role": "user", "content": case.instruction},
@@ -49,11 +50,11 @@ def native_tool_case(case: ClosureCase, tokenizer: PreTrainedTokenizerFast) -> C
         tokenize=False,
         enable_thinking=False,
     )
-    expected = "<tool_call>" + rendered.rsplit("<tool_call>", 1)[1].split("</tool_call>", 1)[0] + "</tool_call>"
-    if json.loads(expected.removeprefix("<tool_call>").removesuffix("</tool_call>")) != body:
+    expected = TOOL_OPEN + rendered.rsplit(TOOL_OPEN, 1)[1].split(TOOL_CLOSE, 1)[0] + TOOL_CLOSE
+    if json.loads(expected.removeprefix(TOOL_OPEN).removesuffix(TOOL_CLOSE)) != body:
         raise ValueError("Native serialization changed tool content")
     if case.control == "close_required":
-        cut = len(expected) - len("</tool_call>")
+        cut = len(expected) - len(TOOL_CLOSE)
     elif case.control == "opener_retention":
         cut = expected.index("{")
     elif case.control == "continue_required":

@@ -20,7 +20,7 @@ from rolloutengine.closure_scoring import (
     continuation_outcome,
     score_closure_region,
 )
-from rolloutengine.tool_protocol import ToolCallStatus, tool_call_regions
+from verifyit.tool_call_markup import ToolCallStatus, tool_call_regions
 
 from experiments.post_training.structure_closure.token_data import TokenizedCaseRecord
 

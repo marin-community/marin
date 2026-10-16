@@ -85,7 +85,7 @@ def convert_admitted_source(
                 task_machine=None if task.environment_requirements == EnvironmentRequirements() else machine,
                 verifier_machine=None if verifier_environment is None else machine,
             )
-            tasks.append(lower_task(task, runtime, session, factories=factories, sessions={}))
+            tasks.append(lower_task(task, runtime, session, factories=factories, sessions={}, providers={}))
         except (ValueError, NotImplementedError, KeyError, TypeError, OSError) as error:
             # Preserve every conversion failure; never publish a partial passing subset.
             failures.append(ConversionFailure(task_id, str(error)))

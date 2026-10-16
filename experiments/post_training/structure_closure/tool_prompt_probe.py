@@ -11,20 +11,21 @@ from pathlib import Path
 
 from rolloutengine.closure_scoring import ClosureFormat, score_closure_region
 from transformers import PreTrainedTokenizerFast
+from verifyit.tool_call_markup import TOOL_CLOSE, TOOL_OPEN
 
 from experiments.post_training.structure_closure.token_data import TokenizedCaseRecord, write_result_tool
 
 
 def paired_tool_probes(record: TokenizedCaseRecord, tokenizer: PreTrainedTokenizerFast) -> list[dict]:
     """Keep task content fixed across declared/undeclared and compact/native formats."""
-    body = json.loads(record["prefix"].removeprefix("<tool_call>"))
+    body = json.loads(record["prefix"].removeprefix(TOOL_OPEN))
     messages = [{"role": "user", "content": record["instruction"]}]
     complete = tokenizer.apply_chat_template(
         [*messages, {"role": "assistant", "content": "", "tool_calls": [{"type": "function", "function": body}]}],
         tokenize=False,
         enable_thinking=False,
     )
-    native = "<tool_call>" + complete.rsplit("<tool_call>", 1)[1].split("</tool_call>", 1)[0]
+    native = TOOL_OPEN + complete.rsplit(TOOL_OPEN, 1)[1].split(TOOL_CLOSE, 1)[0]
     records = []
     for declaration, tools in (("undeclared", None), ("declared", [write_result_tool()])):
         rendered = tokenizer.apply_chat_template(
@@ -34,12 +35,12 @@ def paired_tool_probes(record: TokenizedCaseRecord, tokenizer: PreTrainedTokeniz
             variant = f"{declaration}-{serialization}"
             prompt = rendered + prefix
             prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
-            target_ids = tokenizer.encode("</tool_call>", add_special_tokens=False)
-            expected = prefix + "</tool_call>"
+            target_ids = tokenizer.encode(TOOL_CLOSE, add_special_tokens=False)
+            expected = prefix + TOOL_CLOSE
             decoded = tokenizer.decode(
                 prompt_ids + target_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
-            if decoded != prompt + "</tool_call>":
+            if decoded != prompt + TOOL_CLOSE:
                 raise ValueError(f"Conditional token round trip failed: {variant}")
             if not score_closure_region(expected, expected, ClosureFormat.TOOL).success:
                 raise ValueError(f"Reference tool closure failed: {variant}")
@@ -57,7 +58,7 @@ def paired_tool_probes(record: TokenizedCaseRecord, tokenizer: PreTrainedTokeniz
                     "target_token_ids": target_ids,
                     "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
                     "canonical_joint_encoding_matches": (
-                        tokenizer.encode(prompt + "</tool_call>", add_special_tokens=False) == prompt_ids + target_ids
+                        tokenizer.encode(prompt + TOOL_CLOSE, add_special_tokens=False) == prompt_ids + target_ids
                     ),
                 }
             )

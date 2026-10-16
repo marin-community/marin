@@ -7,8 +7,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
+from verifyit.structure_closure import ClosureState, PrefixStatus
+
 from rolloutengine.closure_scoring import ClosureFormat, ContinuationOutcome, continuation_outcome
-from rolloutengine.structure_closure import ClosureState, PrefixStatus
 
 
 class ClosureTargetKind(StrEnum):
