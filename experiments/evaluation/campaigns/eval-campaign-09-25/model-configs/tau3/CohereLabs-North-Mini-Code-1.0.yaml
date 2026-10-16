@@ -1,0 +1,28 @@
+# Tau³ serving limits: 131072 context, 32768 per-turn output.
+name: CohereLabs-North-Mini-Code-1.0
+location: CohereLabs/North-Mini-Code-1.0
+revision: d11e61a842617a22dc328552fa5bb86231ee4f37
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 2
+  memory: 192g
+serve:
+  tensor_parallel_size: 2
+  max_model_len: 131072
+  tool_call_parser: cohere_command4
+  reasoning_parser: cohere_command4
+  vllm_plugin_requirements:
+  - cohere-melody==0.15.2
+  vllm_extra_args:
+  - --enable-prefix-caching
+generation:
+  max_gen_toks: 32768
+  chat_template_kwargs:
+    reasoning: true
+  thinking_off_template_kwargs:
+    reasoning: false
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+    extra_body: '{"chat_template_kwargs":{"reasoning":true}}'

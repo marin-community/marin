@@ -44,6 +44,10 @@ harbor_eval_harness_profiles:
 # context/output limits. Selection is benchmark-specific; neither launcher nor
 # refill manager changes the serving settings in these canonical YAML files.
 model_config_overrides:
+  CohereLabs-North-Mini-Code-1.0:
+    tau3-pi: model-configs/tau3/CohereLabs-North-Mini-Code-1.0.yaml
+  google-gemma-4-31B-it:
+    tau3-pi: model-configs/tau3/google-gemma-4-31B-it.yaml
   open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05:
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05.yaml
   Aleph-Alpha-Kolibri-1:
