@@ -100,7 +100,9 @@ session when a holistic packet is posted on a pull request carrying
 `agent-generated`, or when a maintainer review contains `deslop`. The session
 applies only the packet's mechanical items and the `noslop` skill, pushes one
 `Deslop` commit after the narrow checks pass, and replies with
-`<!-- marin-deslop:<sha> -->`. Pull requests without `agent-generated` receive
+`<!-- marin-deslop:<sha> -->`. The launcher's per-PR idempotency key permits
+one automatic deslop session; follow-up findings are advisory.
+Pull requests without `agent-generated` receive
 committable suggestions and no push. The holistic session ignores a head whose
 delta is only `Deslop` commits, which closes the review-then-deslop loop.
 
