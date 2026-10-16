@@ -13,6 +13,9 @@ Example:
 
     uv run --package marin-finestore lib/finestore/scripts/benchmark_multi_writer.py \\
         --writers 1 4 16 --commits 8 --time-scale 0.1
+
+Arrow's thread pools may print "terminate called without an active exception" while the
+interpreter exits after the report; the exit status is still zero.
 """
 
 from __future__ import annotations
@@ -25,7 +28,6 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
 
-import pyarrow as pa
 from finestore.layout import FineStoreLayout
 from finestore.reader import ReadView
 from finestore.simulated_s3 import Request, simulated_s3
@@ -171,11 +173,6 @@ def main() -> None:
         help="run background maintenance on only this many writers, emulating an elected compactor",
     )
     args = parser.parse_args()
-    # Arrow's thread pools abort interpreter teardown ("terminate called without an active
-    # exception") after worker threads have used them; the benchmark counts requests, so a
-    # single thread in each pool is sufficient.
-    pa.set_cpu_count(1)
-    pa.set_io_thread_count(1)
     logging.basicConfig(level=logging.ERROR)
     logging.getLogger(COMPACTION_LOGGER).setLevel(logging.INFO)
     logging.getLogger(COMPACTION_LOGGER).propagate = False

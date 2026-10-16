@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import threading
+import time
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -16,10 +17,20 @@ from types import TracebackType
 from typing import Protocol
 
 import pyarrow as pa
+from rigging import telemetry
+from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, LeaseLostError, create_lock
 from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.timing import ExponentialBackoff
 
-from finestore.commit import ClearSeal, CommitCoordinator, CommitDelta, TableAddition, initialize_archive, write_schema
+from finestore.commit import (
+    ClearSeal,
+    CommitConflict,
+    CommitCoordinator,
+    CommitDelta,
+    TableAddition,
+    initialize_archive,
+    write_schema,
+)
 from finestore.compaction import COMPACTION_TARGET_BYTES, CompactionResult, compact_table, compact_writer_tables
 from finestore.layout import (
     CHUNKED_BLOBS_FEATURE,
@@ -50,6 +61,9 @@ OBJECT_PART_BYTES = 8 * 1024 * 1024
 INLINE_BLOB_BYTES = 128 * 1024
 _MAINTENANCE_BACKOFF_INITIAL = 1.0
 _MAINTENANCE_BACKOFF_MAXIMUM = 10 * 60.0
+
+_LEASE_ACQUIRED = telemetry.counter("finestore_maintenance_lease_acquired", unit="{acquisition}")
+_LEASE_LOST = telemetry.counter("finestore_maintenance_lease_lost", unit="{loss}")
 
 _BLOB_SCHEMA = pa.schema(
     [
@@ -181,7 +195,10 @@ class DataStore:
         self._stop = threading.Event()
         self._error: BaseException | None = None
         self._closed = False
-        snapshot = self._commits.snapshot()
+        self._lease = create_lock(self._layout.maintenance_lease_path, worker_id=self.writer_id)
+        self._lease_epoch: int | None = None
+        self._lease_refreshed = 0.0
+        snapshot = self._commits.last_snapshot()
         if snapshot.manifest.sealed is not None:
             self._commits.commit(CommitDelta(seal_update=ClearSeal()), base=snapshot)
             logger.info("FineStore reopened sealed archive %s for writing", self.root)
@@ -363,23 +380,71 @@ class DataStore:
                 target_bytes=self._compaction_target_bytes,
             )
 
+    def _acquire_maintenance(self) -> bool:
+        """Hold the archive's maintenance lease, announcing a new epoch when first acquired.
+
+        One writer per archive compacts at a time. Acquisition publishes a manifest with the
+        next ``maintainer_epoch``; compactions prepared under an older epoch are then rejected
+        at commit, so a holder whose lease silently lapsed cannot publish stale work.
+        """
+        if self._lease_epoch is not None:
+            if time.monotonic() - self._lease_refreshed < HEARTBEAT_INTERVAL:
+                return True
+            try:
+                self._lease.refresh()
+            except LeaseLostError:
+                self._lease_epoch = None
+                _LEASE_LOST.add()
+                logger.warning("FineStore maintenance lease for %s was taken over", self.root)
+                return False
+            self._lease_refreshed = time.monotonic()
+            return True
+        if not self._lease.try_acquire():
+            return False
+        self._lease_refreshed = time.monotonic()
+        snapshot = self._commits.snapshot()
+        epoch = snapshot.manifest.maintainer_epoch + 1
+        try:
+            self._commits.commit(CommitDelta(epoch_update=epoch), base=snapshot)
+        except CommitConflict:
+            # Another maintainer announced a newer epoch between the stale-lease takeover and ours.
+            self._lease.release()
+            return False
+        self._lease_epoch = epoch
+        _LEASE_ACQUIRED.add()
+        return True
+
+    def _release_maintenance(self) -> None:
+        if self._lease_epoch is None:
+            return
+        self._lease_epoch = None
+        self._lease.release()
+
     def maintain(self) -> CommitToken | None:
-        """Flush pending rows and compact each overfull level once."""
+        """Flush pending rows and, while holding the maintenance lease, compact each overfull level once."""
         token = self.flush()
-        view = self.read_view()
+        if not self._acquire_maintenance():
+            return token
+        view = ReadView(self.root, self._commits.snapshot())
         for name in view.table_names():
             for generation, shard_limit in enumerate(self._compaction_levels):
                 level_shards = [shard for shard in view.list_shards(name) if shard.generation == generation]
                 if len(level_shards) <= shard_limit:
                     continue
                 self.compact(name, generation=generation)
-                view = self.read_view()
+                view = ReadView(self.root, self._commits.last_snapshot())
                 token = view.token
         return token
 
     def seal(self) -> CommitToken:
-        """Flush, compact active tables, and publish sealed state in the manifest."""
+        """Flush, compact active tables, and publish sealed state in the manifest.
+
+        Sealing compacts without the maintenance lease when another writer holds it; the epoch
+        check still rejects its compactions if that holder is replaced meanwhile.
+        """
         self.flush()
+        if not self._acquire_maintenance():
+            logger.info("FineStore sealing %s while another writer holds the maintenance lease", self.root)
         superseded = {}
         for name in self.read_view().table_names():
             result = self.compact(name)
@@ -395,16 +460,28 @@ class DataStore:
         self.request_stop()
         self._thread.join()
         self.flush()
-        with self._commit_lock:
-            compact_writer_tables(
-                self.root,
-                list(self._tables),
-                writer_id=self.writer_id,
-                max_input_bytes=_CLOSE_COMPACTION_MAX_INPUT_BYTES,
-                max_input_rows=_CLOSE_COMPACTION_MAX_INPUT_ROWS,
-                target_bytes=self._compaction_target_bytes,
-                coordinator=self._commits,
-            )
+        try:
+            if self._has_residual_shards() and self._acquire_maintenance():
+                with self._commit_lock:
+                    compact_writer_tables(
+                        self.root,
+                        list(self._tables),
+                        writer_id=self.writer_id,
+                        max_input_bytes=_CLOSE_COMPACTION_MAX_INPUT_BYTES,
+                        max_input_rows=_CLOSE_COMPACTION_MAX_INPUT_ROWS,
+                        target_bytes=self._compaction_target_bytes,
+                        coordinator=self._commits,
+                    )
+        finally:
+            self._release_maintenance()
+
+    def _has_residual_shards(self) -> bool:
+        """Whether this writer left at least two level-zero shards in some registered table."""
+        view = ReadView(self.root, self._commits.last_snapshot())
+        return any(
+            sum(1 for shard in view.list_shards(name) if shard.generation == 0 and shard.writer == self.writer_id) >= 2
+            for name in self._tables
+        )
 
     def request_stop(self) -> None:
         """Request maintenance shutdown without waiting or performing storage I/O.

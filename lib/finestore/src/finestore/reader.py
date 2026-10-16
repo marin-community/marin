@@ -27,7 +27,7 @@ from pyarrow.fs import FSSpecHandler, PyFileSystem
 from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
 
-from finestore.commit import ArchiveSnapshot, read_snapshot, validate_archive
+from finestore.commit import ArchiveSnapshot, read_snapshot
 from finestore.layout import (
     BlobColumns,
     BlobTables,
@@ -735,11 +735,6 @@ class ReadView(_ReadOperations):
         super().__init__()
         self.root = root
         self._layout = FineStoreLayout(self.root)
-        # The marker only distinguishes a v1 archive from an empty root: v1 archives have no
-        # HEAD, and read_snapshot validates the format version HEAD carries. A missing marker
-        # is expected under a lifecycle rule that expires write-once objects, and the next
-        # writer open recreates it.
-        validate_archive(self._layout)
         self._snapshot = snapshot or read_snapshot(self._layout)
         self._meta_cache: dict[str, TableMetadata] = {}
 

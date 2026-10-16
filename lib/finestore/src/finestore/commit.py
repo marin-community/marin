@@ -10,6 +10,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 
+from rigging import telemetry
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import ExponentialBackoff, retry_with_backoff
@@ -30,9 +31,14 @@ from finestore.layout import (
 )
 
 _MAX_COMMIT_ATTEMPTS = 32
-_COMMIT_BACKOFF_INITIAL = 1.0
-_COMMIT_BACKOFF_MAXIMUM = 10 * 60.0
+# A lost compare-and-swap means another writer published; re-reading HEAD costs two requests,
+# so the retry delay only needs to spread concurrent writers apart, not wait out an outage.
+_COMMIT_BACKOFF_INITIAL = 0.05
+_COMMIT_BACKOFF_MAXIMUM = 2.0
 _ROOT_COMMIT_ID = "root"
+
+_COMMITS = telemetry.counter("finestore_commits", unit="{commit}")
+_COMMIT_CONFLICTS = telemetry.counter("finestore_commit_conflicts", unit="{conflict}")
 
 
 class CommitConflict(RuntimeError):
@@ -78,6 +84,10 @@ class CommitDelta:
     removals: frozenset[str] = frozenset()
     required_features: frozenset[str] = frozenset()
     seal_update: SealMarker | ClearSeal | None = None
+    # ``expected_epoch`` rejects the commit, without rebasing, once another maintainer has
+    # taken over; ``epoch_update`` is how a new maintainer announces itself.
+    expected_epoch: int | None = None
+    epoch_update: int | None = None
 
 
 def _empty_manifest() -> Manifest:
@@ -134,14 +144,19 @@ def write_schema(layout: FineStoreLayout, metadata: TableMetadata) -> str:
 
 
 def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:
-    """Pin and return the manifest selected by one HEAD read."""
+    """Pin and return the manifest selected by one HEAD read.
+
+    A populated archive is validated from HEAD alone. Only an absent HEAD reads the format
+    marker, which distinguishes an empty root from a format-v1 archive that has no HEAD.
+    """
     head_object = conditional_object(layout.head_path)
     versioned = head_object.read()
     if versioned is None:
+        validate_archive(layout)
         return ArchiveSnapshot(manifest=_empty_manifest(), token=None)
     head = HeadMetadata.model_validate_json(versioned.data)
     if head.format_version != FORMAT_VERSION:
-        raise ValueError(f"HEAD at {layout.root} is FineStore format v{head.format_version}; expected v{FORMAT_VERSION}")
+        raise FormatVersionError(layout.root, found=head.format_version)
     manifest = Manifest.model_validate_json(StoragePath(head.manifest_path).read_bytes())
     if manifest.format_version != FORMAT_VERSION:
         raise ValueError(
@@ -163,6 +178,12 @@ def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:
 
 
 def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
+    if delta.expected_epoch is not None and base.maintainer_epoch != delta.expected_epoch:
+        raise CommitConflict(
+            f"maintenance epoch is {base.maintainer_epoch}, commit was prepared under {delta.expected_epoch}"
+        )
+    if delta.epoch_update is not None and delta.epoch_update <= base.maintainer_epoch:
+        raise CommitConflict(f"maintenance epoch {base.maintainer_epoch} already passed {delta.epoch_update}")
     sequence = base.sequence + 1
     tables = dict(base.tables)
     for name, addition in delta.additions.items():
@@ -214,6 +235,7 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
             "required_features": tuple(sorted(set(base.required_features) | delta.required_features)),
             "tables": tables,
             "sealed": sealed,
+            "maintainer_epoch": base.maintainer_epoch if delta.epoch_update is None else delta.epoch_update,
         }
     )
 
@@ -225,14 +247,34 @@ class CommitCoordinator:
         self._layout = layout
         self._head = conditional_object(layout.head_path)
         self._lock = threading.Lock()
+        self._published: ArchiveSnapshot | None = None
 
     def snapshot(self) -> ArchiveSnapshot:
+        """Read the current HEAD and manifest."""
         return read_snapshot(self._layout)
 
-    def commit(self, delta: CommitDelta, *, base: ArchiveSnapshot | None = None) -> CommitToken:
-        """Publish ``delta`` and return the new durable commit token."""
+    def last_snapshot(self) -> ArchiveSnapshot:
+        """Return the snapshot this coordinator last published, reading HEAD only when it has none.
+
+        The result is current for this writer's own commits and may lag other writers; a commit
+        based on it rebases after a lost compare-and-swap exactly as a fresh read would.
+        """
         with self._lock:
-            current = base or read_snapshot(self._layout)
+            if self._published is None:
+                self._published = read_snapshot(self._layout)
+            return self._published
+
+    def commit(self, delta: CommitDelta, *, base: ArchiveSnapshot | None = None) -> CommitToken:
+        """Publish ``delta`` and return the new durable commit token.
+
+        Without ``base`` the commit starts from the last snapshot this coordinator published,
+        so an uncontended commit reads nothing before its compare-and-swap.
+        """
+        with self._lock:
+            if base is None and self._published is None:
+                self._published = read_snapshot(self._layout)
+            current = base or self._published
+            assert current is not None
             refresh = False
 
             def publish() -> CommitToken:
@@ -252,14 +294,18 @@ class CommitCoordinator:
                 try:
                     version = self._head.write(head.model_dump_json().encode(), expected_version=expected_version)
                 except ConditionalWriteError:
+                    _COMMIT_CONFLICTS.add()
                     refresh = True
                     raise
-                return CommitToken(
+                _COMMITS.add()
+                token = CommitToken(
                     commit_id=manifest.commit_id,
                     sequence=manifest.sequence,
                     version=version,
                     manifest_path=manifest_path,
                 )
+                self._published = ArchiveSnapshot(manifest=manifest, token=token)
+                return token
 
             try:
                 return retry_with_backoff(

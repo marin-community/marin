@@ -23,6 +23,7 @@ from enum import StrEnum
 from typing import Any
 from unittest import mock
 
+import rigging.filesystem.distributed_lock as distributed_lock
 import rigging.filesystem.factory as factory
 from fsspec.core import OpenFile
 from fsspec.implementations.memory import MemoryFile, MemoryFileSystem
@@ -368,6 +369,7 @@ def simulated_s3(
         mock.patch.object(factory, "url_to_fs", url_to_fs),
         mock.patch.object(factory, "open_url", open_url),
         mock.patch.object(finestore.commit, "conditional_object", lambda path: SimulatedConditionalObject(path, fs)),
+        mock.patch.object(distributed_lock, "conditional_object", lambda path: SimulatedConditionalObject(path, fs)),
         mock.patch("rigging.timing.time.sleep", scaled_sleep),
     ):
         yield fs

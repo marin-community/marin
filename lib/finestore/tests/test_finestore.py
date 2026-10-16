@@ -19,7 +19,7 @@ from botocore.exceptions import ClientError
 from finestore import shard_writer
 from finestore import store as store_module
 from finestore.commit import CommitConflict, CommitCoordinator, CommitDelta
-from finestore.compaction import CompactionResult, compact_table
+from finestore.compaction import COMPACTION_TARGET_BYTES, CompactionResult, _compact_shards, compact_table
 from finestore.layout import (
     CHUNKED_BLOBS_FEATURE,
     FORMAT_VERSION,
@@ -29,6 +29,7 @@ from finestore.layout import (
     BlobTables,
     FineStoreLayout,
     FormatVersionError,
+    HeadMetadata,
     OnConflict,
 )
 from finestore.migrations import LegacyReadView, migrate
@@ -46,7 +47,7 @@ from fsspec.implementations.local import LocalFileSystem
 from fsspec.implementations.memory import MemoryFileSystem
 from rigging import timing
 from rigging.filesystem import factory
-from rigging.filesystem.conditional_object import ConditionalWriteError, LocalConditionalObject
+from rigging.filesystem.conditional_object import ConditionalWriteError
 from rigging.filesystem.storage_path import StoragePath
 
 
@@ -836,8 +837,12 @@ def test_reader_refuses_a_future_format(archive_root):
     with DataStore.open(root, writer_id="w1") as store:
         store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
         store.flush()
-    StoragePath(FineStoreLayout(root).archive_path).write_text(
-        ArchiveMetadata(format_version=FORMAT_VERSION + 1).model_dump_json()
+    # A newer build's migration advances the marker and republishes HEAD with its format.
+    layout = FineStoreLayout(root)
+    StoragePath(layout.archive_path).write_text(ArchiveMetadata(format_version=FORMAT_VERSION + 1).model_dump_json())
+    head = HeadMetadata.model_validate_json(StoragePath(layout.head_path).read_bytes())
+    StoragePath(layout.head_path).write_text(
+        head.model_copy(update={"format_version": FORMAT_VERSION + 1}).model_dump_json()
     )
     with pytest.raises(FormatVersionError, match="upgrade marin-finestore"):
         ReadView(root).scan("samples")
@@ -1247,8 +1252,10 @@ def test_close_compacts_small_blob_archive_and_preserves_pinned_view(archive_roo
     assert ReadView(root).token == final.token
 
 
-def test_concurrent_close_preserves_other_writers_and_newer_values(tmp_path, monkeypatch):
-    root = str(tmp_path / "run")
+def test_concurrent_close_merges_one_writer_and_preserves_every_value(archive_root):
+    # Close-time merges run under the maintenance lease: a writer that finds the lease held
+    # leaves its shards at level zero, and either way every value stays readable.
+    root = archive_root
     with DataStore.open(root, writer_id="seed", flush_interval=3600) as seed:
         for name in ("seed-a", "seed-b"):
             seed.write_object(name, name.encode())
@@ -1267,23 +1274,6 @@ def test_concurrent_close_preserves_other_writers_and_newer_values(tmp_path, mon
         second.table("unrelated", primary_key=("id",)).append({"id": "retained"})
         second.flush()
         pinned = ReadView(root)
-        barrier = threading.Barrier(2)
-        seen = set()
-        seen_lock = threading.Lock()
-        real_write = LocalConditionalObject.write
-
-        def synchronized_write(head, data, *, expected_version):
-            if head.path == FineStoreLayout(root).head_path:
-                with seen_lock:
-                    thread = threading.get_ident()
-                    wait = thread not in seen
-                    seen.add(thread)
-                if wait:
-                    # Both replacements start from the same HEAD, forcing one real CAS rebase.
-                    barrier.wait(timeout=5)
-            return real_write(head, data, expected_version=expected_version)
-
-        monkeypatch.setattr(LocalConditionalObject, "write", synchronized_write)
         with ThreadPoolExecutor(max_workers=2) as executor:
             futures = [executor.submit(store.close) for store in (first, second)]
             for future in futures:
@@ -1291,8 +1281,11 @@ def test_concurrent_close_preserves_other_writers_and_newer_values(tmp_path, mon
 
     final = ReadView(root)
     shards = final.list_shards(BlobTables.DESCRIPTORS)
-    assert len(shards) == 3
     assert set(shard.path for shard in seed_shards).issubset(shard.path for shard in shards)
+    seed_paths = {shard.path for shard in seed_shards}
+    merged = [shard for shard in shards if shard.generation == 1 and shard.path not in seed_paths]
+    assert 1 <= len(merged) <= 2
+    assert len(shards) == len(seed_shards) + len(merged) + 2 * (2 - len(merged))
     expected = {"seed-a": b"seed-a", "seed-b": b"seed-b", "first": b"older", "second": b"newer", "shared": b"newer"}
     assert final.read_blobs(list(expected)) == expected
     assert pinned.read_blobs(list(expected)) == expected
@@ -1582,3 +1575,52 @@ def test_manifest_migration_requires_a_sealed_archive(tmp_path, open_archive):
 
     with pytest.raises(ValueError, match="not sealed"):
         open_archive(str(root))
+
+
+def _overfill_level_zero(store: DataStore, table: str, shards: int) -> None:
+    handle = store.table(table, primary_key=("id",))
+    for index in range(shards):
+        handle.append({"id": index})
+        store.flush()
+
+
+def test_only_the_maintenance_lease_holder_compacts(archive_root):
+    root = archive_root
+    holder = DataStore.open(root, writer_id="holder", flush_interval=3600)
+    other = DataStore.open(root, writer_id="other", flush_interval=3600)
+    _overfill_level_zero(holder, "samples", 2)
+    holder.maintain()
+    _overfill_level_zero(other, "samples", 17)
+
+    other.maintain()
+    assert len(ReadView(root).list_shards("samples")) == 19
+
+    holder.maintain()
+    assert len(ReadView(root).list_shards("samples")) == 1
+    holder.close()
+
+    _overfill_level_zero(other, "samples", 17)
+    other.maintain()
+    assert [shard.generation for shard in ReadView(root).list_shards("samples")] == [1, 1]
+    other.close()
+
+
+def test_compaction_prepared_under_an_older_epoch_is_rejected(archive_root):
+    root = archive_root
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        _overfill_level_zero(store, "samples", 3)
+        stale = CommitCoordinator(FineStoreLayout(root))
+        stale_snapshot = stale.snapshot()
+        store.maintain()  # acquires the lease and announces a new maintainer epoch
+        shards_before = ReadView(root).list_shards("samples")
+
+        result = _compact_shards(
+            root,
+            "samples",
+            shards_before,
+            snapshot=stale_snapshot,
+            coordinator=stale,
+            target_bytes=COMPACTION_TARGET_BYTES,
+        )
+        assert result.written == 0
+        assert ReadView(root).list_shards("samples") == shards_before

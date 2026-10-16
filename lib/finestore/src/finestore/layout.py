@@ -19,6 +19,7 @@ from rigging.filesystem.storage_path import prefix_join
 
 ARCHIVE_FILE = "_archive.json"
 HEAD_FILE = "HEAD"
+MAINTENANCE_LEASE_FILE = "_maintenance"
 FORMAT_VERSION = 2
 DATA_DIR = "data"
 MANIFESTS_DIR = "manifests"
@@ -138,6 +139,9 @@ class Manifest(_FormatModel):
     required_features: tuple[str, ...] = ()
     tables: dict[str, ManifestTable] = Field(default_factory=dict)
     sealed: SealMarker | None = None
+    # Advanced by each writer that acquires the maintenance lease. A compaction prepared under
+    # an older epoch cannot be published after a takeover.
+    maintainer_epoch: int = 0
 
 
 class HeadMetadata(_FormatModel):
@@ -181,6 +185,10 @@ class FineStoreLayout:
 
     def table_dir(self, table: str) -> str:
         return prefix_join(self.root, f"{DATA_DIR}/{table}")
+
+    @property
+    def maintenance_lease_path(self) -> str:
+        return prefix_join(self.root, MAINTENANCE_LEASE_FILE)
 
     def shard_path(self, table: str, writer: str, generation: int, seq: int, uid: str) -> str:
         return prefix_join(self.table_dir(table), f"w={writer}/g={generation}/{seq:016d}-{uid}.parquet")

@@ -47,22 +47,21 @@ def test_single_row_flush_fits_the_request_budget(simulated_bucket):
         before = fs.log.snapshot()
         store.flush()
         delta = fs.log.delta(before)
-    # One shard upload (temp PUT, COPY, HEAD, DELETE), the HEAD read, the manifest PUT, and
-    # the compare-and-swap.
+    # The shard PUT, the manifest PUT, and the compare-and-swap.
     assert delta.requests[Request.CAS_PUT] == 1
-    assert delta.total() <= 7, dict(delta.requests)
+    assert delta.total() <= 3, dict(delta.requests)
 
 
-def test_read_view_costs_three_requests(simulated_bucket):
+def test_read_view_costs_two_requests(simulated_bucket):
     fs = simulated_bucket
     with DataStore.open(ROOT, writer_id="w1", flush_interval=3600) as store:
         store.table("samples", primary_key=("id",)).append({"id": 1})
         store.flush()
     before = fs.log.snapshot()
     ReadView(ROOT)
-    # The format marker, HEAD, and the manifest it names.
+    # HEAD and the manifest it names.
     delta = fs.log.delta(before)
-    assert delta.total() <= 3, dict(delta.requests)
+    assert delta.total() <= 2, dict(delta.requests)
 
 
 def test_concurrent_writers_publish_every_row_through_conflicts():
