@@ -42,7 +42,9 @@ the agent runs, and tests to /tests for verification. The agent performs the tas
 declared environment; repository checkout or dependency installation in public instructions is
 part of the task. Inspect the original grader and original instructions. A passing oracle shows
 one reference execution succeeded, not that the task is fair, leak-free or impossible to exploit.
-The cohort label admitted means admitted to review after oracle success, not admitted to training.
+The cohort label admitted means admitted to review, not admitted to training. Check execution.status:
+when oracle validation was skipped, there is no evidence of a successful reference execution.
+Do not infer oracle success from the cohort label or treat a skipped check as a failed execution.
 """
 
 
@@ -133,6 +135,7 @@ def prepare(source: Path, results: tuple[Path, ...], output: Path, task_paths: t
                 "files": files,
                 "oracle_files": oracle,
                 "execution": {
+                    "status": "oracle_passed",
                     "backend": "daytona",
                     "agent": "oracle",
                     "verifier_result": verifier,
@@ -171,6 +174,55 @@ def prepare(source: Path, results: tuple[Path, ...], output: Path, task_paths: t
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
+def prepare_without_oracle(source: Path, staged: Path, output: Path, reason: str) -> None:
+    """Prepare byte-matched quality evidence with an explicit oracle-validation exemption."""
+    packets = []
+    identities = set()
+    for batch in pq.ParquetFile(source).iter_batches(batch_size=64):
+        for row in batch.to_pylist():
+            name = Path(row["path"])
+            if name.is_absolute() or ".." in name.parts:
+                raise ValueError(f"Unsafe task path: {name}")
+            identity = f"{row['source']}/{row['path']}"
+            if identity in identities:
+                raise ValueError(f"Duplicate task identity: {identity}")
+            identities.add(identity)
+            files, omissions, budget = archive_evidence(row["task_binary"], staged / name, PREVIEW_CHARACTERS)
+            oracle, oracle_omissions, _ = archive_evidence(row["solution_binary"], staged / name, budget)
+            evidence = {
+                "files": files,
+                "oracle_files": oracle,
+                "execution": {"status": "oracle_validation_skipped", "reason": reason},
+                "source": {
+                    "task_archive_sha256": hashlib.sha256(row["task_binary"]).hexdigest(),
+                    "solution_archive_sha256": hashlib.sha256(row["solution_binary"]).hexdigest(),
+                },
+            }
+            packets.append(
+                {
+                    "task_id": identity,
+                    "cohort": "admitted",
+                    "packet_json": json.dumps(evidence),
+                    "omissions": omissions + oracle_omissions,
+                    "exclusion_reason": None,
+                }
+            )
+    if not packets:
+        raise ValueError("No quality-review candidates")
+    output.mkdir(parents=True, exist_ok=False)
+    pq.write_table(pa.Table.from_pylist(packets, schema=PACKET_SCHEMA), output / "packets.parquet")
+    manifest = {
+        "source": source.name,
+        "mode": "original-harbor-assessment",
+        "status": "oracle validation skipped; quality not yet certified",
+        "oracle_validation": "skipped",
+        "oracle_validation_reason": reason,
+        "processed_rows": len(packets),
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+    }
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+
 @click.group(help=__doc__)
 def main() -> None:
     pass
@@ -185,6 +237,15 @@ def prepare_command(source: Path, results: tuple[Path, ...], output: Path, task_
     prepare(source, results, output, task_paths)
 
 
+@main.command("prepare-without-oracle")
+@click.option("--source", type=click.Path(path_type=Path, exists=True), required=True)
+@click.option("--staged", type=click.Path(path_type=Path, exists=True), required=True)
+@click.option("--output", type=click.Path(path_type=Path), required=True)
+@click.option("--reason", required=True)
+def prepare_without_oracle_command(source: Path, staged: Path, output: Path, reason: str) -> None:
+    prepare_without_oracle(source, staged, output, reason)
+
+
 @main.command("review")
 @click.option("--inputs", type=click.Path(path_type=Path, exists=True), required=True)
 @click.option("--output", type=click.Path(path_type=Path), required=True)
@@ -195,7 +256,7 @@ def review(inputs: Path, output: Path, relay_job: str, model_revision: str, conc
     packets = pq.read_table(inputs / "packets.parquet").to_pylist()
     metadata = AssessmentInputs(
         source=json.loads((inputs / "manifest.json").read_text())["source"],
-        scope="Every oracle-passing candidate in the supplied packet file",
+        scope="Every candidate in the supplied packet file; execution evidence is stated separately per task",
         sampling=AssessmentSampling(admitted=len(packets), excluded=0),
         populations=[SamplePopulation(cohort="admitted", population=len(packets), sample_count=len(packets))],
         sample=[SelectedTask(task_id=row["task_id"], cohort="admitted") for row in packets],

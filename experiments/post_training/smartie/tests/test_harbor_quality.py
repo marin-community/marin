@@ -9,7 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from experiments.post_training.smartie.harbor_quality import prepare
+from experiments.post_training.smartie.harbor_quality import prepare, prepare_without_oracle
 
 
 def archive(files):
@@ -79,6 +79,27 @@ def test_quality_rejects_oracle_evidence_from_different_task_bytes(candidates, t
     with pytest.raises(ValueError, match="Executed task differs from source"):
         prepare(source, (results,), tmp_path / "packets", ())
     assert not (tmp_path / "packets").exists()
+
+
+def test_quality_without_oracle_records_exemption_without_fabricating_results(candidates, tmp_path):
+    source, _ = candidates
+    output = tmp_path / "no-oracle"
+    prepare_without_oracle(source, tmp_path / "tasks", output, "Source exempted from oracle validation")
+    packets = pq.read_table(output / "packets.parquet").to_pylist()
+    assert {row["task_id"] for row in packets} == {"source/pass", "source/fail"}
+    for packet in packets:
+        evidence = json.loads(packet["packet_json"])
+        assert evidence["execution"] == {
+            "status": "oracle_validation_skipped",
+            "reason": "Source exempted from oracle validation",
+        }
+        assert next(row for row in evidence["files"] if row["path"] == "tests/test.sh")["role"] == "verifier"
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["oracle_validation"] == "skipped"
+    assert "oracle_passing_rows" not in manifest
+    (tmp_path / "tasks/pass/instruction.md").write_text("changed task")
+    with pytest.raises(ValueError, match="differs from source"):
+        prepare_without_oracle(source, tmp_path / "tasks", tmp_path / "changed", "Source exemption")
 
 
 def test_quality_accepts_infrastructure_retry_but_not_rescoring(candidates, tmp_path):
