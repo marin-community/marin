@@ -5,13 +5,13 @@
 
 from __future__ import annotations
 
+import heapq
 import logging
 import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, closing
 from dataclasses import dataclass
 from functools import partial
-from itertools import zip_longest
 from typing import Protocol
 
 import pyarrow as pa
@@ -25,7 +25,7 @@ from rigging.timing import retry_with_backoff
 from finestore import shard_writer
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
 from finestore.layout import BlobTables, CommitToken, FineStoreLayout, Shard, SystemColumns
-from finestore.reader import ReadView, _BoundedReadAheadHandler, iter_shard_row_group_batches
+from finestore.reader import ReadView, _BoundedReadAheadHandler, iter_shard_row_groups
 from finestore.shard_writer import ShardWriter
 
 logger = logging.getLogger(__name__)
@@ -56,9 +56,12 @@ def _sorted_buffer(
     return pa.concat_tables([row for _, row in pending.values()], promote_options="none").sort_by(sort_keys)
 
 
-def _compaction_groups(
-    batches: Iterator[pa.RecordBatch], schema: pa.Schema, primary_key: tuple[str, ...]
-) -> Iterator[tuple[pa.Table, int]]:
+def _first_key(group: pa.Table, primary_key: tuple[str, ...]) -> tuple:
+    values = (group[name][0].as_py() for name in primary_key)
+    return tuple((value is None, value) for value in values)
+
+
+def _compaction_groups(groups: Iterator[pa.Table], primary_key: tuple[str, ...]) -> Iterator[tuple[pa.Table, int]]:
     """Yield sorted rows and the count of superseded rows for each accumulator flush.
 
     A key may recur in a later output shard; read paths resolve those versions.
@@ -68,17 +71,16 @@ def _compaction_groups(
     sort_keys = [(key, "ascending") for key in primary_key]
     buffer_target = _COMPACTION_BUFFER_ROW_GROUPS * shard_writer.ROW_GROUP_TARGET_BYTES
     row_target = _COMPACTION_BUFFER_ROW_GROUPS * shard_writer.ROW_GROUP_ROWS
-    for batch in batches:
-        if pending and (pending_bytes + batch.nbytes > buffer_target or len(pending) + batch.num_rows > row_target):
+    for group in groups:
+        if pending and (pending_bytes + group.nbytes > buffer_target or len(pending) + group.num_rows > row_target):
             yield _sorted_buffer(pending, sort_keys), superseded
             pending = {}
             pending_bytes = superseded = 0
-        table = pa.Table.from_batches([batch], schema=schema)
-        key_columns = [batch.column(batch.schema.get_field_index(name)) for name in primary_key]
-        commits = batch.column(batch.schema.get_field_index(SystemColumns.COMMIT))
-        sequences = batch.column(batch.schema.get_field_index(SystemColumns.SEQUENCE))
-        generations = batch.column(batch.schema.get_field_index(SystemColumns.GENERATION))
-        for index in range(batch.num_rows):
+        key_columns = [group.column(group.schema.get_field_index(name)) for name in primary_key]
+        commits = group.column(group.schema.get_field_index(SystemColumns.COMMIT))
+        sequences = group.column(group.schema.get_field_index(SystemColumns.SEQUENCE))
+        generations = group.column(group.schema.get_field_index(SystemColumns.GENERATION))
+        for index in range(group.num_rows):
             key = tuple(column[index].as_py() for column in key_columns)
             version = (commits[index].as_py(), sequences[index].as_py() or 0, generations[index].as_py())
             previous = pending.get(key)
@@ -86,7 +88,7 @@ def _compaction_groups(
                 superseded += 1
                 continue
             # Copy the winner so the pending-byte count tracks retained Arrow data.
-            row = table.take(pa.array([index], type=pa.int64()))
+            row = group.take(pa.array([index], type=pa.int64()))
             if previous is not None:
                 pending_bytes -= previous[1].nbytes
                 superseded += 1
@@ -204,10 +206,10 @@ def _compact_shards(
             key=lambda shard: (shard.commit_sequence, shard.generation),
             reverse=True,
         )
-        streams = [stack.enter_context(closing(iter_shard_row_group_batches(shard, unified, pa_fs))) for shard in inputs]
-        # Interleave shard scans so versions of nearby keys can meet in one buffer.
-        batches = (batch for group in zip_longest(*streams) for batch in group if batch is not None)
-        for batch, dropped in _compaction_groups(batches, unified, primary_key):
+        streams = [stack.enter_context(closing(iter_shard_row_groups(shard, unified, pa_fs))) for shard in inputs]
+        # First-key order is a best-effort deduplication heuristic for unsorted input shards.
+        groups = heapq.merge(*streams, key=lambda group: _first_key(group, primary_key))
+        for batch, dropped in _compaction_groups(groups, primary_key):
             output_path = layout.shard_path(table, _COMPACTOR, next_generation, 0, uuid.uuid4().hex[:8])
             with ShardWriter(output_path, unified) as writer:
                 rows = (batch.slice(index, 1) for index in range(batch.num_rows))

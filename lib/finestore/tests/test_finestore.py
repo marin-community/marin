@@ -734,6 +734,24 @@ def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
     assert rows == {f"{i:03d}": float(i) for i in range(10)}
 
 
+def test_compaction_orders_row_groups_by_first_key(tmp_path, monkeypatch):
+    root = str(tmp_path / "run")
+    monkeypatch.setattr(shard_writer, "ROW_GROUP_ROWS", 2)
+    for writer, keys in (("old", (1, 2, 5, 6)), ("new", (3, 4, 7, 8))):
+        with DataStore.open(root, writer_id=writer) as store:
+            store.table("samples", primary_key=("id",)).extend({"id": key} for key in keys)
+            store.flush()
+
+    assert all(
+        pq.ParquetFile(shard.path).metadata.num_row_groups == 2 for shard in ReadView(root).list_shards("samples")
+    )
+    monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", 1)
+    assert compact_table(root, "samples").written == 8
+    output_shards = ReadView(root).list_shards("samples")
+    assert len(output_shards) == 4
+    assert [pq.read_table(shard.path, columns=["id"])["id"][0].as_py() for shard in output_shards] == [1, 3, 5, 7]
+
+
 def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(tmp_path, monkeypatch):
     row_bytes = 1024 * 1024
     monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", row_bytes // 2)

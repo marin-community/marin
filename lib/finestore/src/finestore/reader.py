@@ -326,12 +326,12 @@ def iter_shard_batches(
         yield from _resolved_shard_batches(shard, batches)
 
 
-def iter_shard_row_group_batches(
+def iter_shard_row_groups(
     shard: _ReadableShard,
     unified: pa.Schema,
     pa_fs: PyFileSystem,
-) -> Generator[pa.RecordBatch, None, None]:
-    """Scan one Parquet row group at a time."""
+) -> Generator[pa.Table, None, None]:
+    """Yield one resolved Arrow table per Parquet row group."""
     dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
     fragment = next(dataset.get_fragments())
     assert isinstance(fragment, pds.ParquetFileFragment)
@@ -339,14 +339,15 @@ def iter_shard_row_group_batches(
     assert fragment.metadata is not None
     for index in range(fragment.metadata.num_row_groups):
         row_group = fragment.subset(row_group_ids=[index])
-        with row_group.scanner(
+        group = row_group.scanner(
             schema=unified,
             use_threads=False,
             batch_readahead=1,
             fragment_readahead=1,
             fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=False),
-        ).to_reader() as batches:
-            yield from _resolved_shard_batches(shard, batches)
+        ).to_table()
+        if group.num_rows:
+            yield _resolved_version_columns(group, shard.commit_sequence, shard.generation)
 
 
 def _resolved_shard_batches(

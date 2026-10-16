@@ -336,17 +336,17 @@ def test_batch_cache_lookup_bounds_decoding_of_unrequested_inline_values(tmp_pat
         for index in range(8192):
             store.write_object(f"{index:08d}", index.to_bytes(8, "little") + b"x" * (8192 - 8))
 
+    cache = PersistentKvCache.at(root)
     default_pool = pa.default_memory_pool()
     pool = pa.proxy_memory_pool(default_pool)
     pa.set_memory_pool(pool)
     try:
-        cache = PersistentKvCache.at(root)
         indexes = range(0, 8192, 128)
         values = cache.load_many([f"{index:08d}" for index in indexes])
-        cache.close()
         peak_bytes = pool.max_memory()
     finally:
         pa.set_memory_pool(default_pool)
+        cache.close()
     assert values == {f"{index:08d}": index.to_bytes(8, "little") + b"x" * (8192 - 8) for index in indexes}
     # The requested values occupy 512 KiB. A batch read should not decode all
     # 64 MiB of inline payloads into Arrow memory at once.

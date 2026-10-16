@@ -158,9 +158,10 @@ one shard across repeated writer sessions. Ordinary leveled maintenance still ha
 larger groups; explicit compaction remains available across all active shards.
 
 Compaction pins a manifest and scans one Parquet row group at a time from each input
-shard, with one batch of read-ahead within that group. A 1 MiB fsspec file buffer
-limits speculative byte reads; Parquet pre-buffering is disabled. A required column
-read or decoded row group can be larger than the file buffer.
+shard. It takes the next group by its first primary key, then adds that group's rows
+to the output buffer. The ordering is approximate for unsorted input shards. A 1 MiB
+fsspec file buffer limits speculative byte reads; Parquet pre-buffering is disabled.
+A required column read or decoded row group can be larger than the file buffer.
 Compaction retains the newest version seen per key in a buffer targeting four 100 MiB
 row groups or 65,536 possible keys, then concatenates and sorts the retained Arrow tables. Each
 buffer becomes a sorted output shard at the next level. A single input batch or row can
