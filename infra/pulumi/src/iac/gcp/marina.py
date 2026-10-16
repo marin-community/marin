@@ -18,6 +18,7 @@ from iac.gcp.iam import (
     GcpBucketIam,
     GcpCloudRunIapIam,
     GcpEncryptedMember,
+    GcpIamCondition,
     GcpIamGrantSet,
     GcpRoleGrant,
     GcpSecretIam,
@@ -93,6 +94,18 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                 service=_SERVICE,
                 service_grants=(GcpRoleGrant(role="roles/run.invoker", members=(iap_agent,)),),
                 iap_grants=(
+                    GcpRoleGrant(
+                        role="roles/iap.httpsResourceAccessor",
+                        members=(f"serviceAccount:iris-worker@{project}.iam.gserviceaccount.com",),
+                        condition=GcpIamCondition(
+                            title="snowball-probes-applet",
+                            expression=(
+                                'request.host == "applets.marina.oa.dev" && '
+                                'request.path.startsWith("/a/25f504c6-c6fb-4e14-8401-07dd8e6fbfba/api/")'
+                            ),
+                            description="Run the Snowball conversation lab independently of a user machine",
+                        ),
+                    ),
                     GcpRoleGrant(
                         role="roles/iap.httpsResourceAccessor",
                         members=(
