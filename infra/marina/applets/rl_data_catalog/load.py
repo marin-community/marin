@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Load a published curation catalog into Atlas; run beside its object storage."""
+"""Load a published curation catalog into Atlas."""
 
 import json
 import time
@@ -17,6 +17,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
+DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
 TABLE_COLUMNS = {
     "sources": (
         "id TEXT, declaration JSONB, assessment_key TEXT, latest_attempt_key TEXT, "
@@ -70,20 +71,22 @@ def insert_rows(query: Query, table: str, columns: str, load_id: str, rows: Iter
 
 
 def load_catalog(catalog: CurationCatalog, query: Query) -> dict[str, Any]:
-    """Stage, check and select one snapshot using a single operator."""
+    """Stage and validate a snapshot, then select it if the serving pointer is unchanged."""
     started = time.monotonic()
     snapshot = catalog.current()
     current = query(
         """
-        SELECT l.catalog_root, l.snapshot_id FROM atlas_current c
+        SELECT c.load_id, l.catalog_root, l.snapshot_id FROM atlas_current c
         JOIN atlas_loads l USING (load_id) WHERE c.name = 'latest'
     """,
         {},
     )["rows"]
-    if current and current[0] == {"catalog_root": catalog.root, "snapshot_id": snapshot.snapshot_id}:
+    if current and (current[0]["catalog_root"], current[0]["snapshot_id"]) == (catalog.root, snapshot.snapshot_id):
         return {"changed": False, "snapshot_id": snapshot.snapshot_id}
+    expected_load_id = current[0]["load_id"] if current else None
+    obsolete_load_ids = json.dumps([row["load_id"] for row in query("SELECT load_id FROM atlas_loads", {})["rows"]])
     load_id = uuid.uuid4().hex
-    requests = 1
+    requests = 2
 
     def execute(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
         nonlocal requests
@@ -93,13 +96,6 @@ def load_catalog(catalog: CurationCatalog, query: Query) -> dict[str, Any]:
     def insert(table: str, rows: Iterable[dict[str, Any]]) -> int:
         return insert_rows(execute, f"atlas_{table}", TABLE_COLUMNS[table], load_id, rows)
 
-    # Discard abandoned and obsolete staging data before loading; retain the selected snapshot.
-    for table in [*TABLE_COLUMNS, "loads"]:
-        execute(
-            f"DELETE FROM atlas_{table} WHERE load_id NOT IN "
-            "(SELECT load_id FROM atlas_current WHERE load_id IS NOT NULL)",
-            {},
-        )
     execute(
         """
         INSERT INTO atlas_loads (load_id, catalog_root, snapshot_id, created_at)
@@ -160,7 +156,23 @@ def load_catalog(catalog: CurationCatalog, query: Query) -> dict[str, Any]:
     """,
         {"load_id": load_id},
     )["rows"][0]
-    execute("UPDATE atlas_current SET load_id = :load_id WHERE name = 'latest'", {"load_id": load_id})
+    if CurationCatalog(catalog.root).current().snapshot_id != snapshot.snapshot_id:
+        raise RuntimeError("Catalog selection changed during import; retry the load")
+    selected = execute(
+        "UPDATE atlas_current SET load_id = :load_id WHERE name = 'latest' "
+        "AND load_id IS NOT DISTINCT FROM :expected_load_id",
+        {"load_id": load_id, "expected_load_id": expected_load_id},
+    )
+    if selected["row_count"] != 1:
+        raise RuntimeError("Atlas selection changed during import; retry the load")
+    # Only collect loads observed before staging. A loader starting after our cutover may still succeed.
+    for table in [*TABLE_COLUMNS, "loads"]:
+        execute(
+            f"DELETE FROM atlas_{table} WHERE load_id IN "
+            "(SELECT jsonb_array_elements_text(CAST(:obsolete_load_ids AS JSONB))) "
+            "AND load_id NOT IN (SELECT load_id FROM atlas_current WHERE load_id IS NOT NULL)",
+            {"obsolete_load_ids": obsolete_load_ids},
+        )
     return {
         "changed": True,
         "load_id": load_id,
@@ -190,7 +202,9 @@ def applet_query(service_url: str, applet_id: str) -> Query:
 
 
 @click.command(help=__doc__)
-@click.option("--catalog-root", required=True, help="Published FineStore catalog; run in its storage region.")
+@click.option(
+    "--catalog-root", default=DEFAULT_CATALOG_ROOT, show_default=True, help="Published FineStore catalog to import."
+)
 @click.option("--applet-id", required=True)
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 def main(catalog_root: str, applet_id: str, service_url: str) -> None:
