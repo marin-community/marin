@@ -29,6 +29,7 @@ from marin.evaluation.evalchemy.runtime import (
 from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
 from marin.evaluation.lm_eval_samples import (
     preserved_sample_sources,
+    read_native_evalchemy_results,
     rebuild_lm_eval_samples,
     summarize_native_eval_samples,
 )
@@ -386,7 +387,7 @@ def _run_evalchemy_once(
             output_dir,
             tasks=config.tasks,
         )
-        if preserved_sample_sources(output_dir):
+        if not read_native_evalchemy_results(output_dir):
             rebuild_lm_eval_samples(
                 output_dir,
                 tasks=summary.tasks,

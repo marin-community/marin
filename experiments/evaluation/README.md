@@ -192,14 +192,14 @@ mean acceptance length, and draft acceptance rate. The normalized model configur
 record pins the target identity, tokenizer identity, and optional draft identity.
 
 Within its FineStore archive, each evaluator writes individually scored questions to the `samples`
-table using `EvalSample`, the shared schema in `finestore.eval`. Evalchemy writes its native
-aggregate JSON and `--log_samples` JSONL directly as FineStore source artifacts. Harbor preserves
+table using `EvalSample`, the shared schema in `finestore.eval`. Evalchemy writes aggregate
+result documents to the `evalchemy_results` table. Readers also support older source-blob archives. Harbor preserves
 its native results and trajectories and writes flattened trajectory steps to the `steps` table; its
 ordinary job tree remains resume state. Load the normalized tables with
 pandas/duckdb, or read rows back with `EvalSample.model_validate`, to zoom into any run.
 
-Evalchemy transport failures retain their `failure_category` in the source artifact and an
-infrastructure-error marker in the normalized sample. Coverage excludes these items from `n_scored`,
+Evalchemy transport failures carry an infrastructure-error marker in the normalized sample.
+Coverage excludes these items from `n_scored`,
 and metrics are recomputed from scored items. A run with infrastructure errors and less than 90%
 attempted-item coverage records `infra_failed`; pipeline steps do not cache it as a successful eval.
 

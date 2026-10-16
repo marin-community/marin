@@ -16,6 +16,7 @@ from marin.evaluation.evalchemy.client import EVALCHEMY_RESULTS_PREFIX, EVALCHEM
 from marin.evaluation.lm_eval_samples import (
     is_scratch_artifact,
     read_native_evalchemy_artifacts,
+    read_native_evalchemy_results,
 )
 from marin.execution.artifact import Artifact, result_type_name
 
@@ -101,6 +102,13 @@ class FineStoreEvalchemyResult(EvalResult):
 
     @functools.cached_property
     def _task_metrics(self) -> dict[str, dict[str, float]]:
+        documents = read_native_evalchemy_results(self.path)
+        if documents:
+            return {
+                key: value
+                for prefix, document in documents.items()
+                for key, value in _metrics_for_task_dir(document.get("results", {}), prefix).items()
+            }
         result_payloads = read_native_evalchemy_artifacts(self.path).result_payloads
         if not result_payloads:
             raise FileNotFoundError(f"no Evalchemy results artifacts in FineStore archive {self.path}")

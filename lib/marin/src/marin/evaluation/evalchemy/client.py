@@ -7,9 +7,7 @@ Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG``; the parent builds it in
 :mod:`marin.evaluation.evalchemy.runner`. Each task runs through the evalchemy fork's ``evalchemy``
 CLI once (one invocation per task so each carries its own ``num_fewshot``) with lm-eval's
 ``local-completions`` (or ``local-chat-completions``) API model pointed at the served URL. Evalchemy
-writes its aggregate JSON, sample JSONL, and normalized sample rows directly to the FineStore archive
-at ``out_path``. The ordinary ``--output_path`` is a temporary directory used for Evalchemy's local
-completion check and is discarded after each task.
+writes result documents and normalized samples directly to FineStore at ``out_path``.
 """
 
 from __future__ import annotations
@@ -20,6 +18,7 @@ import os
 import subprocess
 import sys
 import urllib.request
+from importlib import import_module
 from importlib.util import find_spec
 from pathlib import Path
 
@@ -244,9 +243,10 @@ def completed_result(root: str, source_prefix: str) -> bool:
         row.get("source_prefix") == source_prefix and row.get("scored") is True
         for row in table.to_pylist(maps_as_pydicts="strict")
     )
-
-
 def main() -> None:
+    # Evalchemy is installed only in the isolated evaluator environment.
+    completed_finestore_output = import_module("eval.contracts.finestore_output").completed_finestore_output
+
     config = json.loads(os.environ[CONFIG_ENV_KEY])
     tasks = config["tasks"]
     if not tasks:
@@ -267,8 +267,8 @@ def main() -> None:
         result = subprocess.run(cmd)
         if result.returncode != 0:
             failures.append(f"{task['name']}: evalchemy exited {result.returncode}")
-        elif not completed_result(out_path, task["dir"]):
-            failures.append(f"{task['name']}: FineStore has no completed scored result")
+        elif not completed_finestore_output(out_path, task["dir"]):
+            failures.append(f"{task['name']}: no committed successful FineStore result")
     print(f"evalchemy client wrote {len(tasks)} task result(s) to FineStore at {out_path}", flush=True)
     if failures:
         raise SystemExit("evalchemy task failures: " + "; ".join(failures))

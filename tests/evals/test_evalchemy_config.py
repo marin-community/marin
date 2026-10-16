@@ -216,7 +216,7 @@ def test_effective_reasoning_effort_reaches_chat_generation_overrides(effort, us
         )
     )
 
-    command = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", 32768)
+    command = build_command(config, config["tasks"][0], "/opt/py", 32768)
     generation_kwargs = dict(pair.split("=", 1) for pair in command[command.index("--gen_kwargs") + 1].split(","))
 
     assert generation_kwargs["reasoning_effort"] == (effort if use_chat else "high")

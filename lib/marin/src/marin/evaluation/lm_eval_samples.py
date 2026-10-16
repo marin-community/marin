@@ -54,6 +54,8 @@ from marin.evaluation.metric_selection import (
 )
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, BenchmarkMetadataRef, EvalTaskRef, TaskCoverage
 
+_EVALCHEMY_RESULTS_TABLE = "evalchemy_results"
+
 
 class TaskDeclaration(Protocol):
     """Fields shared by launch-time and recorded task declarations."""
@@ -404,6 +406,7 @@ class _TaskCoverageAccumulator:
     n_benchmark: int | None = None
     n_attempted: int | None = None
     score_from_aggregate: bool = False
+    primary_metric_name: str | None = None
     graded: dict[str, list[_GradedSampleSummary]] = field(default_factory=dict)
     first: dict[str, _GradedSampleSummary] = field(default_factory=dict)
     recovered_values: dict[str, tuple[float, int]] = field(default_factory=dict)
@@ -412,10 +415,15 @@ class _TaskCoverageAccumulator:
     any_metrics: bool = False
 
     def _summary(self, sample: EvalSample) -> _GradedSampleSummary:
+        grading = (
+            _lm_eval_grading(sample.metrics, sample.grading.filter if sample.grading else None, self.primary_metric_name)
+            if self.primary_metric_name is not None
+            else sample.grading
+        )
         return _GradedSampleSummary(
-            filter=sample.grading.filter if sample.grading is not None else None,
-            score=sample.grading.score if sample.grading is not None else None,
-            correct=sample.correct,
+            filter=grading.filter if grading is not None else None,
+            score=grading.score if grading is not None else None,
+            correct=(grading.passed if grading is not None else None) if self.primary_metric_name else sample.correct,
             generation=sample.kind is SampleKind.GENERATION,
             unanswered=sample.kind is SampleKind.GENERATION and not sample.extracted,
             infrastructure_error=_is_infrastructure_error(sample),
@@ -426,14 +434,14 @@ class _TaskCoverageAccumulator:
         self.seen.add(sample.doc_id)
         self.any_metrics = self.any_metrics or bool(sample.metrics)
         self.first.setdefault(sample.doc_id, summary)
-        if sample.grading is None:
+        if summary.score is None:
             return
         self.graded.setdefault(sample.doc_id, []).append(summary)
         if summary.infrastructure_error:
             return
         self.recovered_doc_ids.add(sample.doc_id)
         for name, value in sample.metrics.items():
-            metric = name if "," in name or sample.grading.filter is None else f"{name},{sample.grading.filter}"
+            metric = name if "," in name or summary.filter is None else f"{name},{summary.filter}"
             total, count = self.recovered_values.get(metric, (0.0, 0))
             self.recovered_values[metric] = (total + value, count + 1)
 
@@ -484,6 +492,7 @@ def task_coverage_and_metrics(
     n_benchmark: int | None = None,
     n_attempted: int | None = None,
     score_from_aggregate: bool = False,
+    primary_metric_name: str | None = None,
 ) -> tuple[TaskCoverage, dict[str, float]]:
     """Compute one task's coverage and metrics recovered after request failures.
 
@@ -495,7 +504,10 @@ def task_coverage_and_metrics(
     as scored even though the sample rows carry no per-item score. No per-item pass tally exists.
     """
     accumulator = _TaskCoverageAccumulator(
-        n_benchmark=n_benchmark, n_attempted=n_attempted, score_from_aggregate=score_from_aggregate
+        n_benchmark=n_benchmark,
+        n_attempted=n_attempted,
+        score_from_aggregate=score_from_aggregate,
+        primary_metric_name=primary_metric_name,
     )
     for sample in samples:
         accumulator.add(sample)
@@ -525,14 +537,12 @@ def _task_keys(
 
 
 def _result_contracts(
-    result_payloads: Mapping[str, bytes],
+    documents: Mapping[str, Mapping],
 ) -> tuple[dict[str, dict[str, BenchmarkMetadataRef]], dict[str, dict[str, dict[str, float]]]]:
     """Read evaluator-owned benchmark metadata and canonical results by task directory."""
     benchmarks: dict[str, dict[str, BenchmarkMetadataRef]] = {}
     canonical: dict[str, dict[str, dict[str, float]]] = {}
-    for relative, payload in result_payloads.items():
-        directory = PurePosixPath(relative).parent.parent.name
-        result = json.loads(payload)
+    for directory, result in documents.items():
         raw_benchmarks = result.get("benchmark_metadata") or {}
         if isinstance(raw_benchmarks, Mapping):
             for leaf, raw in raw_benchmarks.items():
@@ -599,7 +609,16 @@ class _EvalchemyContractSummary:
 def _evalchemy_contract_summary(
     result_payloads: Mapping[str, bytes], tasks: Sequence[TaskDeclaration]
 ) -> _EvalchemyContractSummary:
-    benchmarks, canonical_results = _result_contracts(result_payloads)
+    documents = {
+        PurePosixPath(relative).parent.parent.name: json.loads(payload) for relative, payload in result_payloads.items()
+    }
+    return _evalchemy_document_summary(documents, tasks)
+
+
+def _evalchemy_document_summary(
+    documents: Mapping[str, Mapping], tasks: Sequence[TaskDeclaration]
+) -> _EvalchemyContractSummary:
+    benchmarks, canonical_results = _result_contracts(documents)
     return _EvalchemyContractSummary(
         benchmarks=benchmarks,
         canonical_metrics={
@@ -863,6 +882,14 @@ def evalchemy_result_committed(out_path: str, source_prefix: str) -> bool:
     )
 
 
+def read_native_evalchemy_results(out_path: str) -> dict[str, dict]:
+    """Read Evalchemy result documents keyed by their task configuration prefix."""
+    reader = ReadView(out_path)
+    if _EVALCHEMY_RESULTS_TABLE not in reader.table_names():
+        return {}
+    return {row["source_prefix"]: json.loads(row["document"]) for row in reader.iter_rows(_EVALCHEMY_RESULTS_TABLE)}
+
+
 def summarize_native_eval_samples(
     out_path: str,
     *,
@@ -870,15 +897,34 @@ def summarize_native_eval_samples(
 ) -> EvaluationArchiveSummary:
     """Read coverage and evaluator metadata from native Evalchemy FineStore output."""
     reader = ReadView(out_path)
-    artifacts = read_native_evalchemy_artifacts(out_path)
-    if not artifacts.result_payloads:
-        raise FileNotFoundError(f"archive at {out_path!r} preserves no native Evalchemy results artifacts")
-
-    contracts = _evalchemy_contract_summary(artifacts.result_payloads, tasks)
+    documents = read_native_evalchemy_results(out_path)
+    if documents:
+        contracts = _evalchemy_document_summary(documents, tasks)
+        sample_sources = ()
+        task_benchmarks = {
+            _task_key(directory, leaf, len(values)): benchmark
+            for directory, values in contracts.benchmarks.items()
+            for leaf, benchmark in values.items()
+        }
+    else:
+        artifacts = read_native_evalchemy_artifacts(out_path)
+        if not artifacts.result_payloads:
+            raise FileNotFoundError(f"archive at {out_path!r} preserves no native Evalchemy results artifacts")
+        contracts = _evalchemy_contract_summary(artifacts.result_payloads, tasks)
+        sample_sources = artifacts.sample_sources
+        task_keys = _task_keys(sample_sources, contracts.benchmarks)
+        task_benchmarks = {
+            task_keys[name]: (
+                contracts.benchmarks.get(PurePosixPath(name).parent.parent.name, {}).get(
+                    _task_from_filename(PurePosixPath(name).name, ".jsonl")
+                )
+            )
+            for name in sample_sources
+        }
     coverage = dict(contracts.coverage)
 
     table = reader.scan(ARCHIVE_SAMPLES_TABLE)
-    if table is None and artifacts.sample_sources:
+    if table is None and sample_sources:
         raise FileNotFoundError(f"archive at {out_path!r} contains no normalized evaluation samples")
     by_task: dict[str, list[EvalSample]] = {}
     if table is not None:
@@ -886,20 +932,22 @@ def summarize_native_eval_samples(
             sample = sample_from_archive_row(row)
             by_task.setdefault(sample.task, []).append(sample)
 
-    task_keys = _task_keys(artifacts.sample_sources, contracts.benchmarks)
+    if documents:
+        task_benchmarks = {**dict.fromkeys(by_task), **task_benchmarks}
     sample_count = 0
     recovered_metrics: dict[str, dict[str, float]] = {}
-    for name in artifacts.sample_sources:
-        task_key = task_keys[name]
+    for task_key, benchmark in task_benchmarks.items():
         samples = by_task.get(task_key, [])
         sample_count += len(samples)
-        directory = PurePosixPath(name).parent.parent.name
-        leaf = _task_from_filename(PurePosixPath(name).name, ".jsonl")
-        benchmark = contracts.benchmarks.get(directory, {}).get(leaf)
         task_coverage_result, task_metrics = task_coverage_and_metrics(
             samples,
             n_benchmark=benchmark.n_benchmark if benchmark is not None else None,
             n_attempted=benchmark.n_attempted if benchmark is not None else None,
+            primary_metric_name=(
+                next(metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric)
+                if documents and benchmark is not None
+                else None
+            ),
         )
         coverage[task_key] = task_coverage_result
         if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):

@@ -29,6 +29,7 @@ from finestore.reader import ReadView
 from finestore.store import DataStore
 from fsspec.core import url_to_fs
 from marin.evaluation.evalchemy.client import completed_result
+from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.lm_eval_samples import (
     evalchemy_result_committed,
@@ -98,32 +99,26 @@ def test_archive_row_round_trips_each_sample_kind():
         assert sample_from_archive_row(row) == sample
 
 
-def test_native_summary_reads_evalchemy_normalized_rows(tmp_path):
+@pytest.mark.parametrize("result_table", [False, True])
+def test_native_summary_reads_evalchemy_normalized_rows(tmp_path, result_table):
     root = str(tmp_path / "run" / "results")
     store = EvaluationStore.open(root, writer_id="evalchemy")
     try:
-        store.add_source_artifact(
-            "evalchemy/gsm8k_5shot/native/samples_gsm8k_native.jsonl",
-            b'{"doc_id": 999}\n',
-            content_type="application/x-ndjson",
-        )
-        store.add_source_artifact(
-            "evalchemy/gsm8k_5shot/native/results_gsm8k.json",
-            json.dumps(
-                {
-                    "results": {"gsm8k": {"exact_match,flexible-extract": 1.0}},
-                    **_result_contract(
-                        "gsm8k",
-                        "exact_match",
-                        "accuracy",
-                        1.0,
-                        n_benchmark=1,
-                        n_attempted=1,
-                    ),
-                }
-            ).encode(),
-            content_type="application/json",
-        )
+        document = {
+            "results": {"gsm8k": {"exact_match,flexible-extract": 1.0}},
+            **_result_contract("gsm8k", "exact_match", "accuracy", 1.0, n_benchmark=1, n_attempted=1),
+        }
+        if not result_table:
+            store.add_source_artifact(
+                "evalchemy/gsm8k_5shot/native/samples_gsm8k_native.jsonl",
+                b'{"doc_id": 999}\n',
+                content_type="application/x-ndjson",
+            )
+            store.add_source_artifact(
+                "evalchemy/gsm8k_5shot/native/results_gsm8k.json",
+                json.dumps(document).encode(),
+                content_type="application/json",
+            )
         store.add_sample(
             EvalSample(
                 task="gsm8k_5shot",
@@ -131,16 +126,34 @@ def test_native_summary_reads_evalchemy_normalized_rows(tmp_path):
                 kind=SampleKind.GENERATION,
                 output="4",
                 extracted="4",
-                grading=Grading(method="lm-eval:exact_match", metric="exact_match", score=1.0, passed=True),
-                metrics={"exact_match": 1.0},
-                correct=True,
+                grading=Grading(
+                    method="lm-eval:acc_norm" if result_table else "lm-eval:exact_match",
+                    metric="acc_norm" if result_table else "exact_match",
+                    score=0.0 if result_table else 1.0,
+                    passed=not result_table,
+                ),
+                metrics={"exact_match": 1.0, "acc_norm": 0.0},
+                correct=not result_table,
             )
         )
         store.seal()
     finally:
         store.close()
 
+    if result_table:
+        with DataStore.open(root, writer_id="native-results") as results:
+            table = results.table(
+                "evalchemy_results",
+                primary_key=("source_prefix",),
+                schema=pa.schema(
+                    [("source_prefix", pa.string()), ("document", pa.large_string()), ("scored", pa.bool_())]
+                ),
+            )
+            table.append({"source_prefix": "gsm8k_5shot", "document": json.dumps(document), "scored": True})
+            results.flush()
+
     summary = summarize_native_eval_samples(root, tasks=(EvalTaskConfig("gsm8k", 5),))
+    assert FineStoreEvalchemyResult(path=root).task_metrics() == {"gsm8k_5shot": {"exact_match,flexible-extract": 1.0}}
 
     assert summary.samples == 1
     assert summary.coverage == {
