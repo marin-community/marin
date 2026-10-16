@@ -95,9 +95,6 @@ RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=2)
 class TrainingRecipe:
     """Topology, parallel geometry, and optimizer settings for one policy."""
 
-    strategy: str
-    # Nodes the job holds: the policy nodes plus one per engine.
-    num_nodes: int
     # Placement and batch shape; Marin writes these into the SkyRL config from the role plan.
     role_plan: SkyRLRolePlan
     # AdamW learning rate; MarinSkyRL's Snowball Megatron configs use 1e-6.
@@ -118,8 +115,6 @@ class TrainingRecipe:
 # pipeline depth 2 with 16-way data parallelism and experts sharded eight ways, and one engine node
 # sharding experts across its eight ranks (DP8/EP8).
 SNOWBALL_RECIPE = TrainingRecipe(
-    strategy="megatron",
-    num_nodes=5,
     role_plan=SkyRLRolePlan(
         colocate_all=False,
         policy_num_nodes=4,
@@ -332,7 +327,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "max_turns": 1,
     }
     config["trainer"] = {
-        "strategy": recipe.strategy,
+        "strategy": "megatron",
         # Keep Transformer Engine's attention backend; true forces the flash-attn package
         # (NVTE_FUSED_ATTN=0).
         "flash_attn": False,
@@ -500,7 +495,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
             train_data=(ArtifactDataSource(pool, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(pool, relative_path=VALIDATION_FILENAME),),
             topology=SkyRLTopology(
-                num_nodes=recipe.num_nodes,
+                num_nodes=recipe.role_plan.num_nodes,
                 gpus_per_node=GPUS_PER_NODE,
                 gpu_variant=GPU_VARIANT,
                 role_plan=recipe.role_plan,

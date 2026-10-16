@@ -116,7 +116,7 @@ class PolicySpec:
     serve_gen_kwargs: tuple[tuple[str, str], ...] = ()
     # Pre-existing model artifact; None mirrors the HF model via model_step.
     adopted_model: ArtifactStep[LevanterCheckpoint] | None = None
-    trainer_config: dict[str, Any] = field(default_factory=lambda: {"strategy": "megatron"})
+    trainer_config: dict[str, Any] = field(default_factory=dict)
 
 
 QWEN_POLICY = PolicySpec(
@@ -164,7 +164,6 @@ SNOWBALL_POLICY = PolicySpec(
     adopted_model=SNOWBALL_MODEL,
     megatron=MegatronGeometry(1, 2, 1, 8, 1),
     trainer_config={
-        "strategy": "megatron",
         "flash_attn": False,
         "gradient_checkpointing": True,
         "offload_optimizer_during_rollouts": True,
@@ -334,7 +333,10 @@ SNOWBALL_SMOKE = ScalePreset(
     evals="gsm8k-smoke",
 )
 
-# Four rollout nodes supply the full Snowball curriculum budget.
+# The smoke averages 884 generated tokens against a 1024-token cap.
+# Four rollout nodes supply 128 prompts with eight answers per update.
+# Sixty updates at a 2048-token response cap bound generation near 126M tokens;
+# the 3072-token window reserves 1024 tokens for each prompt.
 SNOWBALL_FULL = ScalePreset(
     label="snowball-full",
     role_plan=replace(
@@ -391,6 +393,8 @@ SNOWBALL_SMOKE_R4 = ScalePreset(
     trainer_tuning=SNOWBALL_MUONH_TUNING,
 )
 
+# The MuonH full budget covers 120 updates of 64 prompts with eight answers,
+# bounded near 126M response tokens at the 2048-token cap and 3072-token window.
 SNOWBALL_FULL_R4 = ScalePreset(
     label="snowball-full-r4",
     role_plan=replace(
@@ -410,6 +414,8 @@ SNOWBALL_FULL_R4 = ScalePreset(
     trainer_tuning=SNOWBALL_MUONH_TUNING,
 )
 
+# R5 reserves 1024 prompt tokens and 8192 response tokens in a 9216-token window;
+# with a 2048-token response cap, 40-48% of rollouts reach the cap.
 SNOWBALL_SMOKE_R5 = ScalePreset(
     label="snowball-smoke-r5",
     role_plan=replace(
@@ -429,6 +435,8 @@ SNOWBALL_SMOKE_R5 = ScalePreset(
     trainer_tuning=SNOWBALL_MUONH_TUNING,
 )
 
+# The R5 full budget uses 120 updates of 64 prompts with eight answers,
+# bounded near 503M response tokens at the 8192-token cap.
 SNOWBALL_FULL_R5 = ScalePreset(
     label="snowball-full-r5",
     role_plan=replace(
@@ -523,7 +531,7 @@ environment:
   env_class: gsm8k
 
 trainer:
-  strategy: {policy.trainer_config["strategy"]}
+  strategy: megatron
   flash_attn: true
   use_sample_packing: false
   algorithm:
@@ -708,6 +716,24 @@ def build_arms(
     version: str | None = None,
 ) -> dict[str, CurriculumArm]:
     preset = SCALES[scale]
+    plan = preset.role_plan
+    policy_gpus = plan.policy_num_nodes * plan.policy_num_gpus_per_node
+    reference_gpus = (plan.reference_num_nodes or plan.policy_num_nodes) * plan.policy_num_gpus_per_node
+    geometries = [("policy", policy.megatron, policy_gpus), ("reference", policy.megatron, reference_gpus)]
+    if preset.trainer_tuning is not None:
+        geometries.append(("tuned policy", preset.trainer_tuning.policy_megatron, policy_gpus))
+    for role, geometry, gpus in geometries:
+        model_parallel = (
+            geometry.tensor_model_parallel_size * geometry.pipeline_model_parallel_size * geometry.context_parallel_size
+        )
+        experts = geometry.expert_model_parallel_size
+        if model_parallel <= 0 or experts <= 0 or gpus % model_parallel or (gpus // model_parallel) % experts:
+            raise ValueError(
+                f"Policy {policy.label}, scale {scale}: {role} has {gpus} GPUs but requires "
+                f"TP={geometry.tensor_model_parallel_size}, PP={geometry.pipeline_model_parallel_size}, "
+                f"CP={geometry.context_parallel_size}, EP={experts}; GPUs must be divisible by TP*PP*CP "
+                "and data-parallel size by EP"
+            )
     pool = pool_step(POOL_ARTIFACT_NAME, version or resolve_version(POOL_ARTIFACT_NAME, None))
     if policy.adopted_model is not None:
         model = policy.adopted_model

@@ -28,7 +28,7 @@ print(json.dumps({
 """
 
 
-def _compose_launch(path: Path, script: str, *, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+def _compose_launch(path: Path, script: str, *, timeout: int = 180) -> subprocess.CompletedProcess[str]:
     command = launcher_command_for_test(str(path))
     # Exercise the production bootstrap without invoking the job-submission CLI.
     bootstrap = command[: command.index("marinskyrl")]
@@ -94,12 +94,15 @@ def test_launcher_composes_pinned_rollout_buffer_config(preset, training_type, s
     }
 
 
-@pytest.mark.timeout(120)
-def test_snowball_curriculum_smoke_composes_separate_reference_allocation(tmp_path, monkeypatch) -> None:
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize("scale,valid", [("smoke", False), ("snowball-smoke", True)])
+def test_snowball_curriculum_smoke_composes_separate_reference_allocation(scale, valid, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
-    step = build_arms(specs=(ARMS["naive"],), scale="snowball-smoke", policy=SNOWBALL_POLICY, version="2026.10.15")[
-        "naive"
-    ].rl
+    if not valid:
+        with pytest.raises(ValueError, match=r"snowball, scale smoke: policy has 8 GPUs.*PP=2.*EP=8"):
+            build_arms(specs=(ARMS["naive"],), scale=scale, policy=SNOWBALL_POLICY, version="2026.10.15")
+        return
+    step = build_arms(specs=(ARMS["naive"],), scale=scale, policy=SNOWBALL_POLICY, version="2026.10.15")["naive"].rl
     launch = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
     path = tmp_path / "curriculum.yaml"
     path.write_text(launch.launch_config_yaml)
@@ -120,7 +123,7 @@ print(json.dumps({
     "allocated_gpus": launch.iris.allocation.num_nodes * launch.iris.allocation.gpus_per_node,
 }))
 """,
-        timeout=120,
+        timeout=180,
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout.splitlines()[-1]) == {

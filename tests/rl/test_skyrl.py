@@ -590,3 +590,26 @@ def test_launcher_survives_undecodable_bytes_on_stderr() -> None:
     )
 
     assert completed.returncode == 4
+
+
+def test_megatron_microbatch_mismatch_fails_before_launch() -> None:
+    # Reject incompatible microbatch sizes before allocating the GPU workers.
+    base = _spec()
+    plan = dataclasses.replace(base.topology.role_plan, micro_train_batch_size_per_gpu=2)
+    recipe = yaml.safe_load(_config_yaml(strategy="megatron"))
+    recipe["trainer"]["micro_forward_batch_size_per_gpu"] = 1
+    with pytest.raises(ValueError, match="equal micro_forward_batch_size_per_gpu"):
+        dataclasses.replace(
+            base,
+            runtime=SkyRLRuntime(),
+            topology=dataclasses.replace(base.topology, role_plan=plan),
+            config_yaml=yaml.safe_dump(recipe),
+        )
+    # Matching sizes still validate: the gate rejects the mismatch, not Megatron itself.
+    recipe["trainer"]["micro_forward_batch_size_per_gpu"] = 2
+    dataclasses.replace(
+        base,
+        runtime=SkyRLRuntime(),
+        topology=dataclasses.replace(base.topology, role_plan=plan),
+        config_yaml=yaml.safe_dump(recipe),
+    )
