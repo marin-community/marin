@@ -20,17 +20,15 @@ TOTAL_METRICS = ("denominator", "assigned", "subject_only", "out_of_scope", "ins
 class CoverageQuery:
     intended_use: str
     source_id: str
-    column: str
     release: str
 
 
 def coverage_query(
     intended_use: Literal["all", "train", "eval"] = "all",
     source_id: str = "",
-    column: str = "",
     release: str = "",
 ) -> CoverageQuery:
-    return CoverageQuery(intended_use, source_id, column, release)
+    return CoverageQuery(intended_use, source_id, release)
 
 
 def loaded_release(connection: Connection, release_id: str) -> dict[str, Any]:
@@ -56,11 +54,10 @@ def loaded_release(connection: Connection, release_id: str) -> dict[str, Any]:
 
 SOURCES_SQL = """
 WITH selected_sources AS (
-    SELECT s.*, s.source_id AS column_id
+    SELECT s.*
     FROM curriculum_sources s WHERE s.load_id=:load_id
         AND (:source_id='' OR s.source_id=:source_id)
         AND (:intended_use='all' OR s.alignment IS NULL OR s.alignment->>'intended_use'=:intended_use)
-        AND (:column='' OR s.source_id=:column)
  )
 """
 
@@ -68,17 +65,17 @@ SAMPLE_SQL = (
     SOURCES_SQL
     + """
 , selected_tasks AS (
-    SELECT t.load_id,t.source_id,t.task_id,t.content_hash,t.description_status,s.column_id
+    SELECT t.load_id,t.source_id,t.task_id,t.content_hash,t.description_status
     FROM curriculum_tasks t JOIN selected_sources s USING (load_id, source_id)
 ), members AS (
-    SELECT t.source_id, t.task_id, t.content_hash, t.column_id, m.subject_id, m.capability_id,
+    SELECT t.source_id, t.task_id, t.content_hash, m.subject_id, m.capability_id,
         m.capability_similarity
     FROM selected_tasks t JOIN curriculum_matches m USING (load_id, source_id, task_id)
     WHERE m.membership_similarity >= CAST(:subject_similarity AS DOUBLE PRECISION)
 ), placements AS (
-    SELECT source_id, task_id, content_hash, column_id, subject_id, 'subject:' || subject_id AS node_id FROM members
+    SELECT source_id, task_id, content_hash, subject_id, 'subject:' || subject_id AS node_id FROM members
     UNION ALL
-    SELECT m.source_id, m.task_id, m.content_hash, m.column_id, m.subject_id, a.ancestor_id AS node_id
+    SELECT m.source_id, m.task_id, m.content_hash, m.subject_id, a.ancestor_id AS node_id
     FROM members m JOIN curriculum_ancestors a ON a.load_id=:load_id
         AND a.subject_id=m.subject_id AND a.node_id=m.capability_id
     WHERE m.capability_similarity >= CAST(:capability_similarity AS DOUBLE PRECISION)
@@ -105,8 +102,6 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
     def coverage(
         filters: Annotated[CoverageQuery, Depends(coverage_query)],
         subject_id: str = "",
-        parent_id: str = "",
-        search: str = "",
     ) -> dict[str, Any]:
         with engine.connect() as connection:
             metadata = loaded_release(connection, filters.release)
@@ -114,42 +109,7 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                 **asdict(filters),
                 "load_id": metadata["load_id"],
                 "subject_id": subject_id,
-                "parent_id": parent_id,
-                "search": search,
             }
-            nodes = [
-                dict(row)
-                for row in connection.execute(
-                    text(
-                        """
-                SELECT subject_id,node_id,parent_id,kind,name,description FROM curriculum_nodes
-                WHERE load_id=:load_id AND (
-                    (:search<>'' AND strpos(lower(name || ' ' || description),lower(:search))>0)
-                    OR (:search='' AND ((:parent_id='' AND parent_id IS NULL)
-                        OR (parent_id=:parent_id AND subject_id=:subject_id)))
-                ) ORDER BY kind DESC,name,node_id LIMIT 100
-            """
-                    ),
-                    params,
-                ).mappings()
-            ]
-            node_ids = [row["node_id"] for row in nodes]
-            cells = [
-                dict(row)
-                for row in connection.execute(
-                    text(
-                        SOURCES_SQL
-                        + """
-                SELECT c.subject_id,c.node_id,s.column_id,CAST(SUM(c.instances) AS BIGINT) AS count
-                FROM curriculum_statistics c JOIN selected_sources s USING (load_id,source_id)
-                WHERE c.load_id=:load_id AND c.metric='placement'
-                    AND c.node_id IN (SELECT jsonb_array_elements_text(CAST(:node_ids AS JSONB)))
-                GROUP BY c.subject_id,c.node_id,s.column_id
-            """
-                    ),
-                    {**params, "node_ids": json.dumps(node_ids)},
-                ).mappings()
-            ]
             area_counts = [
                 dict(row)
                 for row in connection.execute(
@@ -160,24 +120,6 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                 FROM curriculum_statistics c JOIN selected_sources s USING (load_id,source_id)
                 WHERE c.load_id=:load_id AND c.metric='placement'
                 GROUP BY c.subject_id,c.node_id
-            """
-                    ),
-                    params,
-                ).mappings()
-            ]
-            columns = [
-                dict(row)
-                for row in connection.execute(
-                    text(
-                        SOURCES_SQL
-                        + """
-                SELECT s.column_id, MAX(s.declaration->>'display_name') AS name,
-                    COUNT(s.source_id) AS sources,
-                    COUNT(s.source_id) FILTER (WHERE s.alignment IS NOT NULL) AS processed_sources,
-                    CAST(COALESCE(SUM(c.instances),0) AS BIGINT) AS denominator
-                FROM selected_sources s LEFT JOIN curriculum_statistics c
-                    ON c.load_id=s.load_id AND c.source_id=s.source_id AND c.metric='denominator'
-                GROUP BY s.column_id ORDER BY denominator DESC,s.column_id
             """
                     ),
                     params,
@@ -243,10 +185,7 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             "examples": {
                 key: manifest["coverage"][key] for key in ("sample_task_count", "source_sample_size", "area_sample_size")
             },
-            "nodes": nodes,
-            "cells": cells,
             "area_counts": area_counts,
-            "columns": columns,
             "sources": sources,
             "hierarchy": manifest["nodes"],
             "lineage": manifest["lineage"],

@@ -4,7 +4,6 @@ const compact = new Intl.NumberFormat('en-US', {notation: 'compact', maximumFrac
 const percent = value => `${(100 * value).toFixed(1)}%`;
 const outcomes = {assigned: 'Capability match', subject_only: 'Subject only', out_of_scope: 'Outside cutoff', insufficient_context: 'Insufficient context', skipped: 'Embedding skipped'};
 const state = { data: null, parent: '', subject: '', nodes: new Map(), request: 0, taskRequest: 0, next: '', taskQuery: null};
-let searchTimer;
 
 function parameters() {
   return new URLSearchParams({intended_use: $('use').value, source_id: $('source').value});
@@ -18,7 +17,7 @@ async function loadCoverage() {
   $('task-panel').hidden = true;
   $('task-detail').close();
   const params = parameters();
-  params.set('parent_id', state.parent); params.set('subject_id', state.subject); params.set('search', $('search').value.trim());
+  params.set('subject_id', state.subject);
   $('message').textContent = 'Loading curriculum…';
   $('curriculum-map').setAttribute('aria-busy', 'true'); $('curriculum-map').inert = true; $('outcomes').inert = true;
   try {
@@ -265,7 +264,7 @@ for (const id of ['source', 'use']) $(id).addEventListener('change', () => {
 });
 $('domain').addEventListener('change', () => navigate($('domain').value ? state.nodes.get(`${$('domain').value}/subject:${$('domain').value}`) : null));
 $('search').addEventListener('input', () => {
-  clearTimeout(searchTimer); searchTimer = setTimeout(loadCoverage, 300);
+  ++state.taskRequest; $('task-panel').hidden = true; renderCoverage();
 });
 $('more-tasks').addEventListener('click', loadTasks);
 $('close-tasks').addEventListener('click', () => { ++state.taskRequest; $('task-panel').hidden = true; });
