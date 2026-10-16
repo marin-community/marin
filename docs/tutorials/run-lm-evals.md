@@ -304,6 +304,10 @@ and source-policy digest. A Harbor infrastructure exception remains ungraded and
 completion gate after its artifacts are saved; a verifier-scored zero remains a completed evaluation
 with a zero score.
 
+Evalchemy owns aggregate metrics, including partial-result aggregation. After infrastructure
+failures, its reported `scored_count` must match the valid saved samples; Marin rejects a mismatch.
+Marin does not rebuild scores, uncertainty estimates, or breakdowns by averaging per-sample fields.
+
 [Evaldash](https://evaldash.oa.dev) indexes records from both default stores. The record is the
 source of truth for model, evaluation identity, status, metrics, hardware, provenance, and Iris job
 paths.

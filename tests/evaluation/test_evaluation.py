@@ -542,7 +542,12 @@ def _lm_eval_generation(doc_id: int, metric: str, score: float, response: str) -
 
 
 def _write_evalchemy_output(
-    output_dir: str, task_dir: str, results: dict[str, dict[str, float]], samples: dict[str, list[dict]]
+    output_dir: str,
+    task_dir: str,
+    results: dict[str, dict[str, float]],
+    samples: dict[str, list[dict]],
+    *,
+    scored_counts: Mapping[str, int] | None = None,
 ) -> None:
     sample_counts = {task: max((int(row["doc_id"]) for row in rows), default=-1) + 1 for task, rows in samples.items()}
     benchmark_metadata = {}
@@ -579,6 +584,10 @@ def _write_evalchemy_output(
                     "results": results,
                     "benchmark_metadata": benchmark_metadata,
                     "canonical_results": canonical_results,
+                    "task_outcomes": {
+                        task: {"status": "succeeded", "scored_count": (scored_counts or {}).get(task, count)}
+                        for task, count in sample_counts.items()
+                    },
                 }
             ).encode(),
             content_type="application/json",
@@ -931,7 +940,7 @@ def test_aggregate_coverage_keeps_the_full_benchmark_extent():
     assert reconciled["custom"] == TaskCoverage(n_benchmark=100, n_attempted=10, n_scored=10)
 
 
-def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypatch):
+def test_evalchemy_executor_rejects_aggregates_that_include_infrastructure_failures(tmp_path, monkeypatch):
     marker = f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}] request failed"
     partial_output_dir = f"file://{tmp_path / 'partial'}"
     _write_evalchemy_output(
@@ -961,14 +970,11 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
         )
     )
 
-    outcome = executor(_remote_session(), partial_output_dir, {})
+    with pytest.raises(EvaluationError) as partial_error:
+        executor(_remote_session(), partial_output_dir, {})
 
-    assert outcome.metrics == {
-        "mmlu_5shot/mmlu_anatomy": {"acc,none": 1.0, "sample_len": 1.0},
-        "mmlu_5shot/mmlu_astronomy": {"acc,none": 1.0},
-    }
-    assert outcome.canonical_metrics["mmlu_5shot/mmlu_anatomy"]["accuracy"] == 1.0
-    assert outcome.coverage == {
+    assert partial_error.value.status is RunStatus.INFRA_FAILED
+    assert partial_error.value.coverage == {
         "mmlu_5shot/mmlu_anatomy": TaskCoverage(
             n_benchmark=2,
             n_attempted=2,
@@ -1021,7 +1027,7 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
         ("mmlu-pro", "MMLUPro", "accuracy_avg"),
     ],
 )
-def test_evalchemy_executor_preserves_native_transport_failure_when_rebuilding(
+def test_evalchemy_executor_rejects_native_transport_failure_when_rebuilding(
     tmp_path, monkeypatch, task_name, benchmark_name, source_metric
 ):
     output_dir = f"file://{tmp_path / task_name}"
@@ -1044,9 +1050,11 @@ def test_evalchemy_executor_preserves_native_transport_failure_when_rebuilding(
         )
     )
 
-    outcome = executor(_remote_session(), output_dir, {})
+    with pytest.raises(EvaluationError) as exc_info:
+        executor(_remote_session(), output_dir, {})
 
-    assert outcome.coverage == {
+    assert exc_info.value.status is RunStatus.INFRA_FAILED
+    assert exc_info.value.coverage == {
         task_name: TaskCoverage(
             n_benchmark=2,
             n_attempted=2,
@@ -1055,13 +1063,11 @@ def test_evalchemy_executor_preserves_native_transport_failure_when_rebuilding(
             errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
         )
     }
-    assert outcome.metrics[task_name]["accuracy,none"] == 1.0
-    assert outcome.canonical_metrics[task_name]["accuracy"] == 1.0
     samples = [sample_from_archive_row(row) for row in ReadView(output_dir).scan("samples").to_pylist()]
     assert sum("[EVALCHEMY_INFRASTRUCTURE_ERROR]" in (sample.output or "") for sample in samples) == 1
 
 
-def test_evalchemy_executor_excludes_failed_multiple_choice_request(tmp_path, monkeypatch):
+def test_evalchemy_executor_rejects_failed_multiple_choice_request(tmp_path, monkeypatch):
     output_dir = f"file://{tmp_path / 'multiple-choice-transport-failure'}"
     successful = {
         "doc_id": 0,
@@ -1087,21 +1093,68 @@ def test_evalchemy_executor_excludes_failed_multiple_choice_request(tmp_path, mo
     )
     executor = EvalchemyExecutor(EvalchemyRunConfig(name="mmlu", tasks=(EvalTaskConfig(name="mmlu", num_fewshot=0),)))
 
-    outcome = executor(_remote_session(), output_dir, {})
+    with pytest.raises(EvaluationError) as exc_info:
+        executor(_remote_session(), output_dir, {})
 
-    assert outcome.coverage["mmlu_0shot"] == TaskCoverage(
+    assert exc_info.value.status is RunStatus.INFRA_FAILED
+    assert exc_info.value.coverage["mmlu_0shot"] == TaskCoverage(
         n_benchmark=2,
         n_attempted=2,
         n_scored=1,
         n_correct=1,
         errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
     )
-    assert outcome.metrics["mmlu_0shot"]["acc,none"] == 1.0
-    assert outcome.canonical_metrics["mmlu_0shot"]["accuracy"] == 1.0
     samples = [sample_from_archive_row(row) for row in ReadView(output_dir).scan("samples").to_pylist()]
     assert any(
         sample.kind is SampleKind.MULTIPLE_CHOICE and EVALCHEMY_INFRASTRUCTURE_ERROR in (sample.output or "")
         for sample in samples
+    )
+
+
+@pytest.mark.parametrize(
+    ("benchmark", "source_metric", "aggregate"),
+    [("MRCR", "mrcr_accuracy", 0.6), ("WeightedTask", "weighted_score", 0.7)],
+)
+def test_evalchemy_executor_preserves_evaluator_partial_aggregates(
+    tmp_path, monkeypatch, benchmark, source_metric, aggregate
+):
+    output_dir = f"file://{tmp_path / benchmark}"
+    sample_metric = "accuracy" if benchmark == "MRCR" else source_metric
+    failed = {**_lm_eval_generation(2, sample_metric, 0.0, ""), "failure_category": "model_transport"}
+    metrics = {source_metric: aggregate, "bucket_low": 0.4, "bucket_high": 0.8, "num_total": 2.0}
+    _write_evalchemy_output(
+        output_dir,
+        "partial",
+        {benchmark: metrics},
+        {
+            benchmark: [
+                _lm_eval_generation(0, sample_metric, 0.4, "4"),
+                _lm_eval_generation(1, sample_metric, 0.8, "4"),
+                failed,
+            ]
+        },
+        scored_counts={benchmark: 2},
+    )
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
+        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+    )
+    executor = EvalchemyExecutor(
+        EvalchemyRunConfig(
+            name="partial",
+            tasks=(EvalTaskConfig(name=benchmark, num_fewshot=0, task_alias="partial", generation=True),),
+        )
+    )
+
+    outcome = executor(_remote_session(), output_dir, {})
+
+    assert outcome.metrics == {"partial": metrics}
+    assert outcome.canonical_metrics == {"partial": {source_metric: aggregate}}
+    assert outcome.coverage["partial"] == TaskCoverage(
+        n_benchmark=3,
+        n_attempted=3,
+        n_scored=2,
+        errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
     )
 
 
