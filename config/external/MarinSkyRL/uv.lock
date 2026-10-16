@@ -1563,29 +1563,22 @@ secrets = [
 
 [[package]]
 name = "marin-rolloutengine"
-version = "0.2.174.dev38551128746"
-source = { registry = "https://pypi.org/simple" }
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Frolloutengine&rev=23a7a6c2fd95841f9daf7a36f3a22f5350c60a94#23a7a6c2fd95841f9daf7a36f3a22f5350c60a94" }
 dependencies = [
     { name = "marin-shellbox" },
     { name = "marin-taskcompendium" },
+    { name = "marin-verifyit" },
     { name = "pydantic" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/6e/33/10510c8e4ae746df742b35445edb44bb0ba4fbeac6896b72e223994a7a83/marin_rolloutengine-0.2.174.dev38551128746.tar.gz", hash = "sha256:07fbe24f0c64f9979552f800c7e280781866a69c26d38ba7f983a92be2f536c9", size = 31817, upload-time = "2026-10-14T10:42:25.045Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3e/66/793afd549b7d1c247b0db0c18b98db393538a3ae49aec0e3ee05da4697f9/marin_rolloutengine-0.2.174.dev38551128746-py3-none-any.whl", hash = "sha256:28c8c1607636a5b28934a524980303de9ba8d16e0f3d1a3135319a9d783566ea", size = 18376, upload-time = "2026-10-14T10:42:05.11Z" },
 ]
 
 [[package]]
 name = "marin-shellbox"
-version = "0.2.174.dev38551128746"
-source = { registry = "https://pypi.org/simple" }
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fshellbox&rev=23a7a6c2fd95841f9daf7a36f3a22f5350c60a94#23a7a6c2fd95841f9daf7a36f3a22f5350c60a94" }
 dependencies = [
     { name = "bubblewrap-bin", marker = "sys_platform == 'linux'" },
     { name = "httpx" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/0f/34/84dc09a6627b6be7db7888f1c3348831f389eb04ea762eb5609a6e21c48e/marin_shellbox-0.2.174.dev38551128746.tar.gz", hash = "sha256:16dde66770afac40c4728b27edef64db298888846f7f8bf969738a6b00368d17", size = 103153, upload-time = "2026-10-14T10:42:26.171Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/81/ce/e691b9312e270f9e51709aa403a0e628bcb8e5a69519ba0965c36d314ac4/marin_shellbox-0.2.174.dev38551128746-py3-none-any.whl", hash = "sha256:d2894853c7d0d4d8a87a184f474f230ed2c1bcb656fe9ffa50cfd98e918bf966", size = 75409, upload-time = "2026-10-14T10:42:06.535Z" },
 ]
 
 [package.optional-dependencies]
@@ -1600,8 +1593,8 @@ shellsim = [
 
 [[package]]
 name = "marin-taskcompendium"
-version = "0.2.174.dev38551128746"
-source = { registry = "https://pypi.org/simple" }
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=23a7a6c2fd95841f9daf7a36f3a22f5350c60a94#23a7a6c2fd95841f9daf7a36f3a22f5350c60a94" }
 dependencies = [
     { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "marin-shellbox" },
@@ -1609,21 +1602,13 @@ dependencies = [
     { name = "pydantic" },
     { name = "tomlkit" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cb/2e/38e3cea3fe156831c87c1c8bd99c0338a051d96b9bede483d2cf1535618f/marin_taskcompendium-0.2.174.dev38551128746.tar.gz", hash = "sha256:a6fe66105ba956cf064c898c62485abd0a25cb3e14d6f2c6f041bdc72931a3d0", size = 226132, upload-time = "2026-10-14T10:42:27.516Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/72/4c/49123a96822b037b850897171f340a458664648b374c39fb5465cf467c97/marin_taskcompendium-0.2.174.dev38551128746-py3-none-any.whl", hash = "sha256:5f4cfadfa4311fe484119da63f40e23de16abc82131badf101f0c4e772d82513", size = 161874, upload-time = "2026-10-14T10:42:08.011Z" },
-]
 
 [[package]]
 name = "marin-verifyit"
-version = "0.2.174.dev38551128746"
-source = { registry = "https://pypi.org/simple" }
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fverifyit&rev=23a7a6c2fd95841f9daf7a36f3a22f5350c60a94#23a7a6c2fd95841f9daf7a36f3a22f5350c60a94" }
 dependencies = [
     { name = "tomli-w" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/8c/16/e74b5a8293a751ce5d15ebb4b215d3952ce1a020cb8b410fc141b32b276a/marin_verifyit-0.2.174.dev38551128746.tar.gz", hash = "sha256:42a9857443ab7069587905bd5ee146ac5fe1807d1e5cb4c6f7f22a7d65561e2d", size = 109448, upload-time = "2026-10-14T10:42:28.969Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ef/93/d33fb6f07c36aaa5374aa0e4b726d7f02a82db1e0259b6ec7b3df35c3040/marin_verifyit-0.2.174.dev38551128746-py3-none-any.whl", hash = "sha256:bae89d74207fcea82caf03a2a4ad610139c1b4f7903b24df7c1412fce2a43f67", size = 146650, upload-time = "2026-10-14T10:42:09.703Z" },
 ]
 
 [package.optional-dependencies]
@@ -1645,7 +1630,7 @@ schema = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#b52875912249c86f760f19277f6195e5fa12d7c3" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#d361d939926a0308a0892f25adbbe851e709de34" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
@@ -2842,16 +2827,16 @@ wheels = [
 
 [[package]]
 name = "shellsim"
-version = "0.1.36"
+version = "0.1.38"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "packaging" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8e/1c/f88a11c0acdfa8a0b0e3678fbaa505ee549c5c2e1e496607a93d0125753e/shellsim-0.1.36.tar.gz", hash = "sha256:b845d82bb7ec00f0cfb1fc6e743aa1a0c32421aa1e27653389f10b8bcfd5a060", size = 1759273, upload-time = "2026-10-14T01:02:03.614Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f5/a0/0a6f774e1f3ab8d685a548ca02a2ade499aed3372bd7ca35c62e950fefa7/shellsim-0.1.38.tar.gz", hash = "sha256:e5c1ab11626bccf2c73628dd22c47a07aec8e8955719418c36a9b07958aa9b2a", size = 1769304, upload-time = "2026-10-15T16:22:00.279Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/74/17/1484341b5ebedabb4b5966a90868a1c343446871d7a92435ac9975f29b65/shellsim-0.1.36-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:5a3d17ed4310142096af4a7e83e0a74509020c85aaa31c9b0bf76e311b633df8", size = 4384763, upload-time = "2026-10-14T01:01:57.562Z" },
-    { url = "https://files.pythonhosted.org/packages/79/ea/9147a39907f60f2040818d9f9d9e50e77512d89cf0cd28ff26e90c831945/shellsim-0.1.36-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:ef950014094fdcfee1f4a7acdfae0b33532dfbac0c309d1a8a023a43a0e0ce55", size = 4872378, upload-time = "2026-10-14T01:01:59.79Z" },
-    { url = "https://files.pythonhosted.org/packages/52/8f/c5a6e278714b6eff7cfc0a9c1fb77b0a586b838f65094cd38b7b200c912f/shellsim-0.1.36-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:f7b8ea4cc140313e65cd3f6103669ffe95b22636df8630f3d8164859f2fc7c78", size = 5180661, upload-time = "2026-10-14T01:02:01.969Z" },
+    { url = "https://files.pythonhosted.org/packages/10/a2/518503faa0662dd519e8d1126b5fc59c77e2750e2c08e911a6c2034138ce/shellsim-0.1.38-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:da8a793f13eb5998ea14fb7e12e19952302a310144d50c5990bbf55c83bd4d78", size = 4396151, upload-time = "2026-10-15T16:21:55.088Z" },
+    { url = "https://files.pythonhosted.org/packages/51/95/ed8ff22dc616aed4a444c7bea2ccd5700c56de7a00372d31e733cc35a221/shellsim-0.1.38-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:b603afc9bd7e71a47c82a0cfa162b69564179bebd3f48b6f650231c0d18b4dd4", size = 4881484, upload-time = "2026-10-15T16:21:57.072Z" },
+    { url = "https://files.pythonhosted.org/packages/35/be/b9f2b7ad2bfbd4024b833e10b9695534b580f32b66c7701b5a5091cb760f/shellsim-0.1.38-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:b8bd9e59858b1adb09a8d9533fdadbacbceed9c88a9b74cd119da6711ae7c248", size = 5191203, upload-time = "2026-10-15T16:21:58.703Z" },
 ]
 
 [package.optional-dependencies]
