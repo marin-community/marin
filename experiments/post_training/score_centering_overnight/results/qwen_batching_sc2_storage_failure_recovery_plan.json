@@ -13,7 +13,7 @@
   "prepare_configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v2/batching-sc-s2-prepare.yaml",
   "all_scientific_fields_unchanged": true,
   "actual_changes": "Fresh run-owned ID and output/archive/group/Ray namespaces only; same frozen source,seed2,model,data,noise,loss,optimizer,batching,capture and1200-update horizon.",
-  "status": "Latest recorded native progress was physical7 at23:06;full1200 endpoint remains pending. Earlier physical2 retained219interrupted updates. All export/nativearchive/controller snapshots and bulk raw for replacement physical0..6 are now complete. Source/recipe/grader/checkpoint-cadence fields remain unchanged.",
+  "status": "This a3 logical job is now terminal after physical7nativeprioritypreemption and physical8ledgerinitializationpublicationtimeout600seconds. Prior dated progress observations remain historical. Freshnamespace identicalsource a4 is natively submitted; its complete gate remains pending.",
   "submission_confirmed": true,
   "old_retention_ledger": {
     "present": false
@@ -141,5 +141,11 @@
     "scope": "Exact interrupted allocation only; not a final1200 endpoint.",
     "bulk_raw_retention_evidence": "new_terminal_runtime_20261015T2229.json.gz"
   },
-  "pending_raw_retention_batches": []
+  "pending_raw_retention_batches": [
+    "new_terminal_runtime_20261016T033338.json.gz"
+  ],
+  "successor_recovery_plan": "qwen_batching_sc2_second_storage_failure_recovery_plan.json",
+  "latest_terminal_controller_evidence": "new_terminal_controller_evidence_20261016T033338.json.gz",
+  "latest_raw_retention_board": 1114,
+  "latest_terminal_controller_attempt": 8
 }

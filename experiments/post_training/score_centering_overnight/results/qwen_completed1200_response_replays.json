@@ -1,10 +1,10 @@
 {
   "scope": "Complete available-response original-grader replays for declared Qwen batching/native-window1200 mains. Separate from18 native300 mains; other full1200 comparisons remain required. Native failure placeholders are counted separately and never claimed as original grade calls.",
   "planned_arms": 12,
-  "completed_arms": 3,
-  "physical_records": 666396,
-  "actual_original_grade_replays": 666393,
-  "native_failures_without_original_response": 3,
+  "completed_arms": 4,
+  "physical_records": 888528,
+  "actual_original_grade_replays": 888524,
+  "native_failures_without_original_response": 4,
   "grade_discrepancies": 0,
   "runs": [
     {
@@ -86,6 +86,33 @@
       "record_payloads_sha256": "cc1fa9e8b144747fcc876ce27aca86a85073f7b3457490aef7ccb7b0b4abffe6",
       "report": "sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce-regrading.json.gz",
       "report_sha256": "ed865021d00f72c2699e85b53b7f6af58278bddf504207eab2182442a8e49a5c"
+    },
+    {
+      "run_id": "sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "completed_updates": 1200,
+      "physical_records": 222132,
+      "actual_original_grade_replays": 222131,
+      "native_failures_not_regraded": [
+        {
+          "mismatch": false,
+          "native_error": true,
+          "native_quality": null,
+          "phase": "train",
+          "quality": 0.0,
+          "reason": "Native execution failure; attempted response may be removed and replaced by a masked placeholder.",
+          "record_id": "cdde090f95ae0250cb7196617d5d2848f2024172aba0c203853efe345b338178",
+          "replayed": false,
+          "source_row": 5440,
+          "step": 385
+        }
+      ],
+      "grade_discrepancies": 0,
+      "evaluation_points_crosschecked": 61,
+      "all_replayed_evaluations_match_native": true,
+      "record_payloads_sha256": "bdf5923acf10d63ce4134c70520d6cebb3b4be70cd6088a3f46032056594a8f7",
+      "report": "sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce-regrading.json.gz",
+      "report_sha256": "bc5fb73b9ebaa160713d5d0ca8da4e5ef21cfef26101f7dd6319f1ee67dee7cd"
     }
   ]
 }

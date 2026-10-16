@@ -1,0 +1,112 @@
+{
+  "native_bundle_validation_passed": true,
+  "cases": [
+    {
+      "job_id": "/romain/score-grader-qwen-pilot-native-window-tis-s0-a0-01a126ce",
+      "run_id": "sc-qwen-transfer-native-window-tis-s0-pilot-a4-01a126ce",
+      "arm": "tis-s0",
+      "cohort_kind": "pilot40",
+      "stage": "native-window",
+      "workspace": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/score-grader-qwen-pilot-native-window-tis-s0-a0-01a126ce-workspace",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "analysis_source": "213f2fed2a2954c50c973c742bfff998f9a2edef",
+      "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e",
+      "spec_sha256": "9018358b9b6e8da78760949065c7c4dfafafc21d7943b2ea343ca728fcc883ba",
+      "requested_cpu": 32,
+      "requested_memory": "64GB",
+      "requested_disk": "50GB",
+      "requested_accelerators": 0,
+      "cpu_workers": 32,
+      "io_workers": 2,
+      "timeout_seconds": 43200,
+      "failure_retries": 0,
+      "preemption_retries": 0,
+      "expected_records": 10352,
+      "selected_archives": 323,
+      "native_archive_bytes": 33307335,
+      "output_prefix": "marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-pilot-native-window-tis-s0-a0-01a126ce",
+      "local_input_validation_passed": true,
+      "bundle": {
+        "bytes": 7127788,
+        "sha256": "ffd19ff5822f3cf1e348a42b3e6cffcb46de586de7337166cf1b03cc71a32632",
+        "spec_sha256": "9018358b9b6e8da78760949065c7c4dfafafc21d7943b2ea343ca728fcc883ba",
+        "runner_sha256": "1126b158bcc8cac181976342b7ad3aaf3171de5724039dc23b8a113d01016d5e",
+        "all_input_files_verified": true
+      },
+      "native_bundle_validation_passed": true,
+      "native_submission_confirmed": true,
+      "retained_input_objects": {
+        "bundle": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-pilot-native-window-tis-s0-a0-01a126ce/inputs/bundle.zip",
+          "bytes": 7127788,
+          "etag": "\"3af9b611f3fa9ddd3187de8a687c76e4\"",
+          "sha256": "ffd19ff5822f3cf1e348a42b3e6cffcb46de586de7337166cf1b03cc71a32632"
+        },
+        "spec": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-pilot-native-window-tis-s0-a0-01a126ce/inputs/spec.json",
+          "bytes": 157771,
+          "etag": "\"43cd7de9dbe6ab7f0872045ce37ca294\"",
+          "sha256": "9018358b9b6e8da78760949065c7c4dfafafc21d7943b2ea343ca728fcc883ba"
+        }
+      },
+      "controller_row": {
+        "job_id": "/romain/score-grader-qwen-pilot-native-window-tis-s0-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "ffd19ff5822f3cf1e348a42b3e6cffcb46de586de7337166cf1b03cc71a32632",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-pilot-native-window-tis-s0-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "a615bc1fd2c82f1b",
+        "task_state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792121895716",
+        "finished_at_ms": "",
+        "node_name": "gb95f20",
+        "terminal_reason": ""
+      },
+      "status": "Controllerexit0;complete native40 pilot original-grade/evaluation count+quality gates passed.",
+      "full_response_replay_passed": true,
+      "terminal_controller": {
+        "job_id": "/romain/score-grader-qwen-pilot-native-window-tis-s0-a0-01a126ce",
+        "job_state": "4",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "ffd19ff5822f3cf1e348a42b3e6cffcb46de586de7337166cf1b03cc71a32632",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-pilot-native-window-tis-s0-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "a615bc1fd2c82f1b",
+        "task_state": "4",
+        "exit_code": "0",
+        "started_at_ms": "1792121895716",
+        "finished_at_ms": "1792122164465",
+        "node_name": "gb95f20",
+        "terminal_reason": ""
+      },
+      "allocated_cpu_hours": 2.38888,
+      "physical_records": 10352,
+      "actual_original_grade_calls": 10352,
+      "native_failure_placeholders": 0,
+      "completed_report": "sc-qwen-transfer-native-window-tis-s0-pilot-a4-01a126ce-regrading.json.gz"
+    }
+  ],
+  "resource_board_ids": [
+    1112,
+    1113
+  ],
+  "released_io_board": 1109,
+  "released_io_evidence": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/cpu-wave-status-pilot-batching-tis0-downloads-complete-20261016T0337.json",
+  "released_io_evidence_kind": "verified_download_manifest",
+  "before_submit_controller": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/cpu-and-memory-diagnostic-controller-20261016T033606.csv",
+  "status": "Complete original-grader replay PASS for sc-qwen-transfer-native-window-tis-s0-pilot-a4-01a126ce: 10352 actual grades and zero differences. Native failure placeholders remain separate. All scheduled evaluation counts and means match. Native controllerexit0, 2.38888000 allocatedCPUh and0H100h."
+}

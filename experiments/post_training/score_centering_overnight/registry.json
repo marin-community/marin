@@ -2949,8 +2949,8 @@
       "configuration_sha256": "8aa2ffacb69ea6cb935a8586b47f5de3b9585a9465c6414d477625ef33d63464",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s2-main-rno-a3-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 5,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "0ae3587411c6924c6741f174c8b0b656ddf9d19fdb21f9bcfbdc0ef31ee03c9e",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
@@ -2988,7 +2988,24 @@
       "priority_band": 3,
       "bundle_id": "475c0520c5412658a35f4acd4e77fcc26ad7080f4c526100ac7af23b439b837b",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "h100_nodes": 2,
+      "h100_per_node": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v3/batching-sc-s2.yaml",
+      "configuration_sha256": "48abb4e5e0a9da6d3c166e449bf74717b8e34299b21e21232293548922ef0f8d",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "d5a69aa6f8369460c83be6b493bd61485815bb6fdb2fee21dd490002079ecb7e",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-16T02:57:28.476788+00:00"
+  "observed_at": "2026-10-16T03:56:19.952303+00:00"
 }

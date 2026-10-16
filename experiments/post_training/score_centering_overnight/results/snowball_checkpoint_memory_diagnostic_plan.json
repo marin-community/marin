@@ -21,7 +21,7 @@
     7
   ],
   "expected_responses": 5820,
-  "status": "Source26cc99 physical attempts0/1/2 were each priority-preempted,55.0890733333 allocatedH100h total and0 surviving new training metrics. Physical3 is queued/unallocated at02:52; latest full cluster snapshot02:57 retains823 terminal attempts and4INTER nodes including queued. Exact physical0 original-worker376-observation proof remains separate from replacement logs. Original optimizer-backload OOM cause remains unresolved; no memory repair, new-update or full resume qualification claimed. Keep RNO queue after observing11 other East Snowball gangs queued; no duplicate diagnostic or healthy training cancellation.",
+  "status": "Observation-only source26cc99 physical3 currently running5BATCHx8H100 tasks. Initial physical3 snapshot captures160observations across32ranks in32nativeworkerfiles:64offload entries/exits and32checkpoint-training-state-load entries;zero checkpoint-load exits,optimizer-backload boundaries or new published training updates. Prior0/1/2nativeprioritypreemptions55.0890733333H100h remain retained. No OOMrepair,resumedupdate or fullqualification established. Scientific source remains0212;restore7-to9 unsubmitted/gated.",
   "preparation_failures": [
     {
       "attempt": 0,
@@ -68,11 +68,11 @@
       "task_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/0",
       "attempt_id": "3",
       "attempt_uid": "21d30c03d3ae8aa3",
-      "task_state": "2",
+      "task_state": "3",
       "exit_code": "",
-      "started_at_ms": "",
+      "started_at_ms": "1792121231431",
       "finished_at_ms": "",
-      "node_name": "",
+      "node_name": "g86299e",
       "terminal_reason": ""
     },
     {
@@ -89,11 +89,11 @@
       "task_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/1",
       "attempt_id": "3",
       "attempt_uid": "ea265179f5edf382",
-      "task_state": "2",
+      "task_state": "3",
       "exit_code": "",
-      "started_at_ms": "",
+      "started_at_ms": "1792121231431",
       "finished_at_ms": "",
-      "node_name": "",
+      "node_name": "g1cbf32",
       "terminal_reason": ""
     },
     {
@@ -110,11 +110,11 @@
       "task_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/2",
       "attempt_id": "3",
       "attempt_uid": "03adf3c19720ac41",
-      "task_state": "2",
+      "task_state": "3",
       "exit_code": "",
-      "started_at_ms": "",
+      "started_at_ms": "1792121231431",
       "finished_at_ms": "",
-      "node_name": "",
+      "node_name": "g1cc242",
       "terminal_reason": ""
     },
     {
@@ -131,11 +131,11 @@
       "task_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/3",
       "attempt_id": "3",
       "attempt_uid": "726dd2f3f08b74e9",
-      "task_state": "2",
+      "task_state": "3",
       "exit_code": "",
-      "started_at_ms": "",
+      "started_at_ms": "1792121264189",
       "finished_at_ms": "",
-      "node_name": "",
+      "node_name": "gb9a8e0",
       "terminal_reason": ""
     },
     {
@@ -152,15 +152,15 @@
       "task_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/4",
       "attempt_id": "3",
       "attempt_uid": "3ec5d79165bb2c7c",
-      "task_state": "2",
+      "task_state": "3",
       "exit_code": "",
-      "started_at_ms": "",
+      "started_at_ms": "1792121257812",
       "finished_at_ms": "",
-      "node_name": "",
+      "node_name": "ga8afb0",
       "terminal_reason": ""
     }
   ],
-  "controller_observation_file": "cpu-and-memory-diagnostic-controller-20261016T025217.csv",
+  "controller_observation_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/cpu-memory-and-batching-controller-20261016T035519.csv",
   "native_bundle_sha256": "475c0520c5412658a35f4acd4e77fcc26ad7080f4c526100ac7af23b439b837b",
   "source_observation_validation": {
     "source": "26cc99a426737309a60a490ce219138f8cae4818",
@@ -253,7 +253,7 @@
   "initial_queued_controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T005325",
   "native_memory_observation_proof": "results/snowball_checkpoint_memory_diagnostic_initial_observations.json",
   "current_physical_attempt": 3,
-  "current_allocation_started_at_ms": null,
+  "current_allocation_started_at_ms": 1792121231431,
   "preempted_physical_attempts": [
     {
       "controller_attempt": 0,
@@ -598,5 +598,6 @@
       "native_raw_retention": "All native returned controller logs/events retained with full byte readback in new_terminal_controller_evidence_20261016T025706.json.gz; surviving raw groups/Ray/debug retention pending."
     }
   ],
-  "priority_preemption_proof": "snowball_checkpoint_memory_diagnostic_preemptions_0_2.json"
+  "priority_preemption_proof": "snowball_checkpoint_memory_diagnostic_preemptions_0_2.json",
+  "current_native_memory_observation_proof": "snowball_checkpoint_memory_diagnostic_physical3_initial_observations.json"
 }
