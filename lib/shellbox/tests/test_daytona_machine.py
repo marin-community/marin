@@ -104,8 +104,17 @@ def test_daytona_creation_retries_only_rejected_http_requests(monkeypatch, failu
                     assert len(delays) == 1 and 17 <= delays[0] <= 18
                 elif failure == "deadline":
                     with pytest.raises(TimeoutError):
-                        async with asyncio.timeout(0.1):
-                            await _create_sandbox(client, params, 60)
+                        async with asyncio.timeout(None) as deadline:
+
+                            async def expire_when_waiting():
+                                await waiting.wait()
+                                deadline.reschedule(asyncio.get_running_loop().time())
+
+                            expiration = asyncio.create_task(expire_when_waiting())
+                            try:
+                                await _create_sandbox(client, params, 60)
+                            finally:
+                                await expiration
                     assert requests == ["POST"]
                 elif failure == "cancelled":
                     task = asyncio.create_task(_create_sandbox(client, params, 60))
