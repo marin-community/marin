@@ -3036,8 +3036,8 @@
       "configuration_sha256": "58143f3b1dfa3ad352150bdb8e627a9b0002c814a813b006bd73e6d8c6c12d29",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 5,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "c0bbb6d52b46e0c23a7d28e6cf054dcfa05446f23cba14e26f41f053415554b0",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
@@ -3366,7 +3366,24 @@
       "priority_band": 3,
       "bundle_id": "edb7afd04966bf3edf3ef30562dd35125b147eddf113de6b3f7f08ea71fdb095",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-snowball-main-noise005-tis-s1-parser-rno-a3-01a126ce",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "h100_nodes": 5,
+      "h100_per_node": 8,
+      "source": "d6d6628f4cbf7a8bbf38b6803cc5a5b59dba12d9",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_parser_only_main_retry_v1/detach.yaml",
+      "configuration_sha256": "c7ff7d28f55151bd0b98c5b0942172df7bb1b1b2f93ee338090029e082c67496",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-main-noise005-tis-s1-parser-rno-a3-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "734889e5d2fe75baf78d12d4a1c82a9a1a09258cd2da267226105b5c63840730",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-16T18:05:57.530376+00:00"
+  "observed_at": "2026-10-16T18:25:30.286219+00:00"
 }

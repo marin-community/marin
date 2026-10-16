@@ -153,7 +153,7 @@
   ],
   "native_preparation_passed": true,
   "native_submission_confirmed": true,
-  "scientific_main_retry_submitted": false,
+  "scientific_main_retry_submitted": true,
   "full_gpu_qualification_passed": true,
   "checkpoint_recovery_qualified": false,
   "native_preparation_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-parser-only-qualification-native-prepare.log",
@@ -392,5 +392,7 @@
     "files": 21,
     "file_bytes": 162375,
     "full_byte_readback_verified": true
-  }
+  },
+  "qualified_main_retry_job": "/romain/sc-snowball-main-noise005-tis-s1-parser-rno-a3-01a126ce",
+  "qualified_main_retry_submission": "snowball_parser_qualified_tis1_main_retry_submission.json"
 }
