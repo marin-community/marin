@@ -1,16 +1,13 @@
 const bayesian = `from pathlib import Path
-import json
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import beta
 
-# Edit config.json to explore trial counts and decision thresholds.
-config = json.loads(Path("config.json").read_text())
-n = config["trials"]
-failures = config["failures"]
-threshold = config["target_success_rate"]
-confidence = config["required_confidence"]
-prior_a, prior_b = config["prior_alpha"], config["prior_beta"]
+n = 100
+failures = 2
+threshold = 0.95
+confidence = 0.95
+prior_a, prior_b = 1, 1
 assert 0 <= failures <= n and n > 0
 assert 0 < threshold < 1 and 0 < confidence < 1
 assert prior_a > 0 and prior_b > 0
@@ -126,18 +123,17 @@ print(frame.groupby("model").agg({"score": ["mean", "std"], "latency_ms": "mean"
 `;
 
 const storage = `from pathlib import Path
-import json
 import os
 from importlib.metadata import version
 from rigging.fsutil.parquet import parquet_lines
 
 # marina's installed marin-rigging and PyArrow are available by default.
 # filesystem_for() inside parquet_lines() routes gs:// and s3:// URLs and
-# reads inherited credentials. Never copy keys into config.json or reports.
-config = json.loads(Path("config.json").read_text())
-rows = config["preview_rows"]
+# reads inherited credentials. Keep keys in the environment.
+url = "s3://marin-us-east-02a/marin/data/rl/data/rl/gretel_text_to_sql-56330d3f5621db60/2026.10.07.1/final/part-00000.parquet"
+rows = 5
 assert 1 <= rows <= 20
-preview = "\\n".join(parquet_lines(config["url"], rows=rows))
+preview = "\\n".join(parquet_lines(url, rows=rows))
 
 pairs = {
     "CoreWeave": ("CW_KEY_ID", "CW_KEY_SECRET"),
@@ -148,7 +144,7 @@ credentials = [f"| {backend} | {'Available' if all(os.environ.get(key) for key i
                for backend, keys in pairs.items()]
 report = f"""# Object storage preview
 
-Source: {config["url"]}
+Source: {url}
 
 Read with **marin-rigging {version("marin-rigging")}** and **PyArrow {version("pyarrow")}**.
 The preview reads the Parquet footer and up to {rows} rows from its first row group.
@@ -173,7 +169,7 @@ GCS URLs use the host's application default credentials.
 """
 Path("output/index.md").write_text(report)
 Path("output/preview.txt").write_text(preview)
-print(f"Previewed {config['url']}")
+print(f"Previewed {url}")
 `;
 
 export const examples = {
@@ -181,25 +177,7 @@ export const examples = {
     title: "Bayesian eval",
     entrypoint: "main.py",
     packages: "numpy\nscipy\nmatplotlib",
-    files: [
-      { path: "main.py", content: bayesian, encoding: "utf-8" },
-      {
-        path: "config.json",
-        content: JSON.stringify(
-          {
-            trials: 100,
-            failures: 2,
-            target_success_rate: 0.95,
-            required_confidence: 0.95,
-            prior_alpha: 1,
-            prior_beta: 1,
-          },
-          null,
-          2,
-        ),
-        encoding: "utf-8",
-      },
-    ],
+    files: [{ path: "main.py", content: bayesian, encoding: "utf-8" }],
   },
   seaborn: {
     title: "Seaborn report",
@@ -211,21 +189,7 @@ export const examples = {
     title: "Object storage preview",
     entrypoint: "main.py",
     packages: "",
-    files: [
-      { path: "main.py", content: storage, encoding: "utf-8" },
-      {
-        path: "config.json",
-        content: JSON.stringify(
-          {
-            url: "s3://marin-us-east-02a/marin/data/rl/data/rl/gretel_text_to_sql-56330d3f5621db60/2026.10.07.1/final/part-00000.parquet",
-            preview_rows: 5,
-          },
-          null,
-          2,
-        ),
-        encoding: "utf-8",
-      },
-    ],
+    files: [{ path: "main.py", content: storage, encoding: "utf-8" }],
   },
   blank: {
     title: "Untitled project",

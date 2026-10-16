@@ -89,8 +89,8 @@ prototype on the same origin. There is no durable run queue.
 ## Examples
 
 The Bayesian example computes a beta-binomial posterior and a failure budget from
-editable `config.json`: the largest number of failures at the given trial count
-whose posterior probability of exceeding the target success rate still meets the
+values at the top of `main.py`: the largest number of failures at the given trial
+count whose posterior probability of exceeding the target success rate still meets the
 required confidence. Its conclusions assume independent Bernoulli trials and
 the selected prior. The Seaborn example generates a report from seeded synthetic
 data without downloading a dataset.
@@ -175,9 +175,9 @@ its installed native extensions remain compatible.
 
 Choose “Object storage preview” under “Create a new example”. It reads a small
 Parquet object through `rigging.fsutil.parquet.parquet_lines`, which uses the same
-bucket routing as `filesystem_for()`. Edit `config.json` to change the `gs://` or
-`s3://` object and preview row count. The report includes its schema and bounded
-row preview, plus a downloadable text file.
+bucket routing as `filesystem_for()`. Edit `url` and `rows` at the top of
+`main.py` to change the `gs://` or `s3://` object and preview row count. The report
+includes its schema and bounded row preview, plus a downloadable text file.
 
 The subprocess inherits the host environment, including `CW_KEY_ID` /
 `CW_KEY_SECRET`, `R2_KEY_ID` / `R2_KEY_SECRET`, standard AWS variables and GCS
