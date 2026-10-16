@@ -912,6 +912,9 @@ class GrugModelConfig:
     (alpha init 0.01, b init 0); False sums the streams (the paper's "w/o H^pre" ablation)."""
     attn_res_stream_sources: AttnResStreamSources = AttnResStreamSources.ALL
     """The sources MSAR streams ``r >= 1`` read; conv taps exist only for those slots."""
+    attn_res_stream_gates: tuple[str, ...] = ()
+    """The layer gates that add MSAR streams ``r >= 1``, as ``"<layer><a|m>"`` (attention / MLP gate), e.g.
+    ``("0a", "0m", "3m")``; every other gate is the plain AttnRes gate (``h = z_0``). Empty: every gate."""
     attn_res_stream_scalar_taps: bool = False
     """MSAR stream convs share one tap set across channels (``[N, K_r]`` per stream instead of ``[N, K_r, D]``)."""
     attn_res_embed_out: bool = False
@@ -1132,9 +1135,15 @@ class GrugModelConfig:
         if self.attn_res_streams < 1:
             raise ValueError(f"attn_res_streams must be >= 1, got {self.attn_res_streams}")
         if self.attn_res_streams == 1 and (
-            self.attn_res_stream_sources != AttnResStreamSources.ALL or self.attn_res_stream_scalar_taps
+            self.attn_res_stream_sources != AttnResStreamSources.ALL
+            or self.attn_res_stream_scalar_taps
+            or self.attn_res_stream_gates
         ):
-            raise ValueError("attn_res_stream_sources and attn_res_stream_scalar_taps need attn_res_streams > 1")
+            raise ValueError(
+                "attn_res_stream_sources, attn_res_stream_scalar_taps and attn_res_stream_gates need "
+                "attn_res_streams > 1"
+            )
+        _attn_res_stream_gate_set(self)
         if unknown := set(self.sconv_sites) - set(SCONV_SITES):
             raise ValueError(f"sconv_sites: unknown sites {sorted(unknown)}; valid: {SCONV_SITES}")
         moe_sites = {"latent_in", "latent_out", "shared_in", "shared_out"} & set(self.sconv_sites)
@@ -4502,6 +4511,21 @@ def _attn_res_stream_slots(cfg: GrugModelConfig) -> int:
     return schedule.num_sources(cfg.num_layers - 1) + 1
 
 
+def _attn_res_stream_gate_set(cfg: GrugModelConfig) -> frozenset[tuple[int, int]] | None:
+    """``attn_res_stream_gates`` as ``(layer, gate)`` pairs (gate 0: attention, 1: MLP); None: every gate."""
+    if not cfg.attn_res_stream_gates:
+        return None
+    gates = []
+    for entry in cfg.attn_res_stream_gates:
+        layer, kind = entry[:-1], entry[-1:]
+        if not layer.isdigit() or kind not in ("a", "m") or not 0 <= int(layer) < cfg.num_layers:
+            raise ValueError(f"attn_res_stream_gates: {entry!r} is not <layer in 0..{cfg.num_layers - 1}><a|m>")
+        gates.append((int(layer), 0 if kind == "a" else 1))
+    if len(set(gates)) != len(gates):
+        raise ValueError(f"attn_res_stream_gates has duplicates: {cfg.attn_res_stream_gates}")
+    return frozenset(gates)
+
+
 def _embed_slot(cfg: GrugModelConfig) -> int:
     """History index of the token-embedding source: after the extra sources (``second_embed``)."""
     return int(cfg.second_embed)
@@ -4665,9 +4689,13 @@ def _attn_res_layer(
             )
             if streams is None:
                 return h, z, weights
-            h, mean_mix = _attn_res_stream_gate(
-                layer, gate_index - 2 * layer_index, h, p, streams, _sconv_segment_ids(mask), eps
-            )
+            gate = gate_index - 2 * layer_index
+            selected = _attn_res_stream_gate_set(cfg)
+            if selected is not None and (layer_index % cfg.num_layers, gate) not in selected:
+                # Not an attn_res_stream_gates gate: the plain gate, logged with zero stream weights.
+                stream_mix.append(jnp.zeros((cfg.attn_res_streams,), jnp.float32))
+                return h, z, weights
+            h, mean_mix = _attn_res_stream_gate(layer, gate, h, p, streams, _sconv_segment_ids(mask), eps)
             stream_mix.append(mean_mix)
             return h, z, weights
         # The leading layers' sources: the extra sources, then the blocks rolled at layers 0, seg, ... <= the
