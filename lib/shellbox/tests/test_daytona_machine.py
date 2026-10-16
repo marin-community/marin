@@ -16,20 +16,115 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 
 pytest.importorskip("daytona")
 
-from daytona import CreateSandboxFromSnapshotParams, DaytonaNotFoundError
+from daytona import (
+    AsyncDaytona,
+    CreateSandboxFromSnapshotParams,
+    DaytonaConfig,
+    DaytonaNotFoundError,
+    DaytonaRateLimitError,
+)
 from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.machine import (
     DaytonaMachine,
     DaytonaMachineFactory,
     DaytonaNetworkMode,
     DaytonaNetworkPolicy,
+    _create_sandbox,
 )
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec, UnsupportedMachineSpec
+
+
+@pytest.mark.parametrize("failure", ["rejected_post", "late_get", "exhausted", "deadline", "cancelled"])
+def test_daytona_creation_retries_only_rejected_http_requests(monkeypatch, failure):
+    async def scenario():
+        requests = []
+        delays = []
+        waiting = asyncio.Event()
+
+        async def wait(delay):
+            delays.append(delay)
+            waiting.set()
+            if failure in {"deadline", "cancelled"}:
+                await asyncio.Future()
+
+        monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
+
+        async def endpoint(request):
+            if request.headers.get("Upgrade", "").lower() == "websocket":
+                websocket = web.WebSocketResponse()
+                await websocket.prepare(request)
+                async for _ in websocket:
+                    pass
+                return websocket
+            requests.append(request.method)
+            if request.method == "POST" and (
+                failure == "late_get" or (failure == "rejected_post" and requests.count("POST") == 2)
+            ):
+                return web.json_response(
+                    {
+                        "id": "created-once",
+                        "organizationId": "fixture",
+                        "name": "fixture",
+                        "user": "root",
+                        "env": {},
+                        "labels": {},
+                        "public": False,
+                        "networkBlockAll": False,
+                        "target": "us",
+                        "cpu": 2,
+                        "gpu": 0,
+                        "memory": 4,
+                        "disk": 10,
+                        "state": "started",
+                        "toolboxProxyUrl": "" if failure == "late_get" else "https://fixture.invalid/toolbox",
+                    }
+                )
+            return web.json_response(
+                {"message": "rate limited"}, status=429, headers={"Retry-After-sandbox-create": "17"}
+            )
+
+        app = web.Application()
+        app.router.add_route("*", "/{path:.*}", endpoint)
+        async with TestServer(app) as server:
+            async with AsyncDaytona(
+                DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/"))
+            ) as client:
+                params = CreateSandboxFromSnapshotParams(snapshot="fixture")
+                if failure == "rejected_post":
+                    sandbox = await _create_sandbox(client, params, 60)
+                    assert sandbox.id == "created-once"
+                    assert requests == ["POST", "POST"]
+                    assert len(delays) == 1 and 17 <= delays[0] <= 18
+                elif failure == "deadline":
+                    with pytest.raises(TimeoutError):
+                        async with asyncio.timeout(0.1):
+                            await _create_sandbox(client, params, 60)
+                    assert requests == ["POST"]
+                elif failure == "cancelled":
+                    task = asyncio.create_task(_create_sandbox(client, params, 60))
+                    await waiting.wait()
+                    task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await task
+                    assert requests == ["POST"]
+                else:
+                    with pytest.raises(DaytonaRateLimitError):
+                        await _create_sandbox(client, params, 60)
+                    if failure == "late_get":
+                        assert requests == ["POST", "GET"]
+                        assert delays == []
+                    else:
+                        assert requests == ["POST"] * 8
+                        assert len(delays) == 7
+
+    asyncio.run(scenario())
 
 
 class LocalFiles:
