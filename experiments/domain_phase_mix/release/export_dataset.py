@@ -79,7 +79,7 @@ KEYING = {
     "heldout": (
         "Each run's W&B run id: the training run name with its six-hex-digit hash that the registry or a validation "
         "launch records, or for the 134 Llama 200M runs, which the registry records without one, the id read from W&B. "
-        "W&B shortened 20 of those ids by dropping leading characters of the run name."
+        "20 of those ids keep only the last 54 characters of the run name."
     ),
     "validation_3e18": (
         "Each run's W&B run id: its training run name with its six-hex-digit hash, from its evaluation-metrics path or "

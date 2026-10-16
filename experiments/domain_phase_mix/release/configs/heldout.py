@@ -73,7 +73,7 @@ WANDB_PULLS = tuple(
     for name in ("heldout_wandb_components_20261015.csv", "heldout_llama200m_wandb_components_20261015.csv")
 )
 # The W&B run ids and the seeds of the W&B configs of the 134 Llama 200M runs, which the registry records without them
-# (`wandb_pulls.read_runs`). W&B shortened 20 of the ids by dropping leading characters of the run name.
+# (`wandb_pulls.read_runs`). 20 of the ids keep only the last 54 characters of the run name.
 LLAMA_200M_RUNS = paths.REPO / "experiments/domain_phase_mix/release/configs/heldout_llama200m_wandb_runs_20261015.csv"
 LLAMA_200M_ROW = "300m::"  # the registry's prefix before a Llama 200M run's name
 # Result folders of the validation launches in the expanded cohort, from the launch registry of
@@ -174,8 +174,8 @@ def _wandb_pulls() -> pd.DataFrame:
 def _llama_200m_runs() -> pd.DataFrame:
     """LLAMA_200M_RUNS by registry row id, after checking that each W&B run id names its registry run.
 
-    The id is the run's name and six-hex-digit hash. The registry row id is LLAMA_200M_ROW and the same name, of which
-    the id keeps the end where W&B shortened it. Raises ValueError for an id that ends in another name.
+    The id is the run's name, of which 20 ids keep only the last 54 characters, and a six-hex-digit hash. The registry
+    row id is LLAMA_200M_ROW and the whole name. Raises ValueError for an id that ends in another name.
     """
     runs = wandb_pulls.read_runs(LLAMA_200M_RUNS)
     names = runs.index.str.removeprefix(LLAMA_200M_ROW)

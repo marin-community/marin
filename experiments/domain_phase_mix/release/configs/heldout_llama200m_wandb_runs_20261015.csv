@@ -3,9 +3,9 @@
 # (`source_row_id`) is the run whose W&B tags hold its name and one of the three launches' experiment tags
 # (proportional controllability 300M, proportional perturbation scale transfer 300M/6B, proportional gradient-step
 # validation 300M/6B); the three names longer than 64 characters, whose tags W&B truncated, are the runs whose ids end in
-# the same name. W&B truncates long run ids from the front, so 20 ids drop leading characters of the name. Every run
-# finished, its phase-constant weights equal the registry's 39 weights to 1e-15, and its seven Uncheatable components
-# equal the registry's exactly wherever the registry has them (117 runs).
+# the same name. 20 ids keep only the last 54 characters of the run name. Every run finished, its phase-constant
+# weights equal the registry's 39 weights to 1e-15, and its seven Uncheatable components equal the registry's exactly
+# wherever the registry has them (117 runs).
 registry_row_id,training_wandb_run_id,data_seed,trainer_seed,pulled_at
 300m::pctrl_tilt_domain_dolma3_cc_art_and_design_high_plus,pctrl_tilt_domain_dolma3_cc_art_and_design_high_plus-460b81,800039,0,2026-10-15
 300m::pctrl_tilt_domain_dolma3_cc_art_and_design_high_minus,pctrl_tilt_domain_dolma3_cc_art_and_design_high_minus-c0338f,800040,0,2026-10-15

@@ -75,7 +75,7 @@ def test_frozen_rows_key_on_recorded_run_names(table):
 
 def test_llama_200m_runs_take_their_w_and_b_ids_and_seeds(table):
     # The registry records neither the W&B run id nor the seeds of its 134 Llama 200M runs; both come from W&B. A W&B
-    # run id is the run's name, which W&B shortened from the front for 20 runs, and a six-hex-digit hash. Each run's
+    # run id is the run's name, of which 20 ids keep only the last 54 characters, and a six-hex-digit hash. Each run's
     # launch record gives its data seed; the launches left the trainer seed at Marin's default, 0.
     runs = pd.read_csv(SRC / "heldout_runs.csv")
     llama = runs.panel == "300m_39bucket"
@@ -83,7 +83,8 @@ def test_llama_200m_runs_take_their_w_and_b_ids_and_seeds(table):
     rows = table[llama].set_axis(runs.row_id[llama].str.removeprefix("300m::"))
     kept = rows.observation_id.str.extract(r"^(?P<name>.+)-[0-9a-f]{6}$")["name"]
     assert kept.notna().all() and all(name.endswith(k) for name, k in zip(rows.index, kept, strict=True))
-    assert (kept != rows.index).sum() == 20 and rows.observation_id.is_unique
+    assert set(kept[kept != rows.index].str.len()) == {54} and (kept != rows.index).sum() == 20
+    assert rows.observation_id.is_unique
     launches = pd.concat([pd.read_csv(path) for path in LLAMA_200M_LAUNCHES])
     launches = launches[launches.scale == LLAMA_200M_SCALE].set_index("run_name")
     assert (rows.data_seed == launches.data_seed.reindex(rows.index)).all()
