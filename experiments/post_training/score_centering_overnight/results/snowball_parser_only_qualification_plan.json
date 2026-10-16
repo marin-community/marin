@@ -1,0 +1,169 @@
+{
+  "run_id": "sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce",
+  "job_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce",
+  "source": "d6d6628f4cbf7a8bbf38b6803cc5a5b59dba12d9",
+  "source_base": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "configuration": "experiments/post_training/score_centering_overnight/snowball_parser_only_qualification_v1/detach.yaml",
+  "configuration_sha256": "47761ecbca40c605afe0269b5355c789f214bede34b25e32375d255e7ee3664f",
+  "prepare_configuration": "experiments/post_training/score_centering_overnight/snowball_parser_only_qualification_v1/prepare.yaml",
+  "prepare_configuration_sha256": "7d0712d016cd22f57b87c6bc89a68930a64a7876444b86b6df227e0a8036721d",
+  "failed_main_configuration": "experiments/post_training/score_centering_overnight/snowball_noise_main_v3/tis-s1.yaml",
+  "failed_main_configuration_sha256": "8d788f92385f7462bb85d1674f67f7313253be689e9652f5707531455d1338c9",
+  "source_policy": "This parser-only head needs this separate exact-head five-node fresh-start qualification and all available original-response replays before a scientific main retry. It does not include or qualify checkpoint recovery. The existing source173 policy still requires all three native five-node Snowball phases and their complete response replays; no source173 promotion follows from this test.",
+  "reason": "Known fatal SymPy invalid-input TypeError in noisyTISseed1 requires a runtime repair. Backport only the three-file parser/cause/test change onto qualified0212, avoiding adoption of unqualified checkpoint-recovery changes. Do not rerun completed valid science or interrupt healthy training.",
+  "geometry": "Five BATCH nodes, 8H100 each; four learners PP2/EP8 with TP/CP/SP1 and one inference node.",
+  "horizon": 5,
+  "seed": 1,
+  "relative_initial_sampler_noise": 0.05,
+  "sampler_refresh_period": 1,
+  "actual_decoded_changed_fields": [
+    "run.id",
+    "runtime.launcher_commit",
+    "iris.cluster",
+    "iris.cluster_config",
+    "iris.job_name",
+    "ray.rendezvous_dir",
+    "ray.log_dir",
+    "artifacts.checkpoint_root",
+    "artifacts.export_root",
+    "artifacts.attempts_root",
+    "artifacts.resolved_config_uri",
+    "artifacts.terminal_manifest_uri",
+    "skyrl.trainer.max_steps",
+    "skyrl.trainer.eval_interval",
+    "skyrl.trainer.ckpt_interval",
+    "skyrl.trainer.rollout_buffer.object_store_root",
+    "skyrl.trainer.policy.megatron_config.torch_profiler_config.enable",
+    "skyrl.trainer.policy.megatron_config.torch_profiler_config.save_path"
+  ],
+  "actual_nonpath_changed_fields": [
+    "runtime.launcher_commit",
+    "iris.cluster",
+    "iris.cluster_config",
+    "skyrl.trainer.max_steps",
+    "skyrl.trainer.eval_interval",
+    "skyrl.trainer.ckpt_interval",
+    "skyrl.trainer.policy.megatron_config.torch_profiler_config.enable"
+  ],
+  "cpu_regression_receipt": {
+    "base": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "backported_from": "a1c31f04da2295cca2eaef0e82262c4f493304c5",
+    "unfixed_real_parser_regressions_failed": 2,
+    "fixed_affected_suites_exit_code": 0,
+    "affected_test_paths": [
+      "skyrl-train/tests/cpu/rollouts/test_engine.py",
+      "skyrl-train/tests/cpu/rollouts/test_source_sessions.py",
+      "skyrl-train/tests/cpu/trajectory_runners/test_task_session_execution.py",
+      "skyrl-train/tests/cpu/trajectory_runners/test_projections.py",
+      "skyrl-gym/tests/test_aime.py",
+      "skyrl-gym/tests/test_task_sessions.py"
+    ],
+    "candidate": "Exact native decimal candidate; full response wrapper and reference1 synthetic",
+    "native_original_failed_response_replay_established": false,
+    "source": "d6d6628f4cbf7a8bbf38b6803cc5a5b59dba12d9",
+    "affected_tests_passed": 203,
+    "affected_tests_elapsed_seconds": 53.14
+  },
+  "source_compatibility": {
+    "base": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "actual_changed_paths": [
+      "skyrl-gym/skyrl_gym/envs/aime/verifier.py",
+      "skyrl-train/skyrl_train/rollouts/task_worker.py",
+      "skyrl-train/tests/cpu/rollouts/test_engine.py"
+    ],
+    "checkpoint_recovery_changes_included": false,
+    "shared_files": {
+      "uv.lock": {
+        "sha256": "c9ff3b70074681e62f2683acd7b4b9487c9dc222d6065f61198c6e5e5d9ae891",
+        "bytes_identical": true
+      },
+      "skyrl-train/skyrl_train/trainer.py": {
+        "sha256": "18cde609a758085581f788f8b61c35bde203de231d9c6699f994bae2d08f4622",
+        "bytes_identical": true
+      },
+      "skyrl-train/skyrl_train/workers/megatron/megatron_worker.py": {
+        "sha256": "caa1ba816ec3f6f14581eca2fd911842f6451b29ca378eb2c0f97fa3a8d338d8",
+        "bytes_identical": true
+      },
+      "skyrl-train/skyrl_train/objective/score_centering.py": {
+        "sha256": "bdfa50f95408da1e229eed83a15cac9bba3f8782516381ddf56d2877b6708871",
+        "bytes_identical": true
+      },
+      "skyrl-train/skyrl_train/inference_engines/vllm/fixed_sampler_noise.py": {
+        "sha256": "2e86d08aa514608890b342f43df85322a2f599461c6c152bc26be46f3c7c0bca",
+        "bytes_identical": true
+      },
+      "skyrl-train/skyrl_train/inference_engines/vllm/vllm_engine.py": {
+        "sha256": "c8b1266977b58b95147c78ad4948ea119c874392abfbca1a2951046379fc8219",
+        "bytes_identical": true
+      },
+      "skyrl-gym/skyrl_gym/envs/aime/utils.py": {
+        "sha256": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+        "bytes_identical": true
+      }
+    },
+    "known_native_candidate_sha256": "bfb2c060ea886f7c57fcb2cc4bd6ab71899d9fa13e834bd704ba2cf1853f6ff6"
+  },
+  "cpu_proof_artifacts": [
+    {
+      "path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/parser-only-source0212-before-fix-regression.log",
+      "bytes": 33760,
+      "sha256": "b3ff678413fa095b4f86dd4c8a0b66e6a222991f5a2b729f520652f0e1d66c84"
+    },
+    {
+      "path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/parser-only-source0212-affected-cpu-tests.log",
+      "bytes": 70619,
+      "sha256": "25fe4f96888716374d82bcbb04654a14a178e7072a3f6b374e27072f796ba10e"
+    },
+    {
+      "path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/parser-only-source0212-precommit.log",
+      "bytes": 247,
+      "sha256": "64f0bf0de5de27cf20b6ea02ce0da12eb3e407e9dafe95a2605deafc1dcab123"
+    },
+    {
+      "path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/parser-only-source0212-cpu-regression-receipt.json",
+      "bytes": 874,
+      "sha256": "cd1ecd0ccd005fd8a4a18f14ed0581fcb67d1a3bce11a6e248970a03a67724f7"
+    },
+    {
+      "path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/parser-only-source0212-compatibility-receipt.json",
+      "bytes": 1659,
+      "sha256": "f9ed3a6ce03b8e81e1dab4352ff7aa740b6ffaedbc5fc77f5d2c38f2b321fdd3"
+    },
+    {
+      "path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/parser-only-source0212-commit-message.txt",
+      "bytes": 1223,
+      "sha256": "0eff50f8e561656feb4471098a595a5a95cbaae71d23f22966b1859da3bb5c52"
+    }
+  ],
+  "full_original_failed_response_available": false,
+  "known_candidate_regression_scope": "Exact native decimal candidate with synthetic full response wrapper and reference1. This is not a replay of the unavailable original failed full response.",
+  "gates": [
+    "All five native node tasks succeed; verify actual source, bundle, GPU/profile closure, initial model/data identities and declared geometry.",
+    "Five finite applied optimizer updates, all512 physical responses per update, full native append-only archives, model/checkpoint5 and all32 learner control records.",
+    "Capture/rescoring checks on every retained learner row: nonuniform natural128 candidate heads, aligned chosen logq, TIS truncation2, p=old and correct fresh generating-policy versions/ages. Report retained row/token coverage separately from full archive membership.",
+    "Actual CUDA FlashAttention kernels on both pipeline stages and unchanged fixed-noise fingerprints across sampler synchronizations; preserve every native error and validate existing masking/baseline-exclusion contracts.",
+    "Both full clean evaluations at updates0 and5 contain4796 responses from1199 members, four each; total physical training/evaluation records12152.",
+    "Replay every response with a native available verdict using original utility/EOS handling and unchanged ten-second per-response grading deadline; zero grade differences and evaluation counts/means agree. Missing original text for an available native verdict fails the gate. Only native unavailable-verdict placeholders stay unreplayed in physical counts with native zero quality and no trainable tokens.",
+    "No positive-quality or equivalence margin gate; publish failures, complete costs and evidence. Only a full pass admits a labeled fresh scientific retry on this new source."
+  ],
+  "resource_board_ids": [
+    1131,
+    1132
+  ],
+  "native_preparation_passed": true,
+  "native_submission_confirmed": false,
+  "scientific_main_retry_submitted": false,
+  "full_gpu_qualification_passed": false,
+  "checkpoint_recovery_qualified": false,
+  "native_preparation_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-parser-only-qualification-native-prepare.log",
+  "native_preparation_log_sha256": "77c91bd4fb238cede46aa0d93fa57e70a164a5034c67da82f02ff5b3350bcb6c",
+  "retained_cpu_proof_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/parser-only-d6d6628f-01a126ce/manifest.json",
+    "bytes": 2564,
+    "sha256": "ecb54969788bc98b0f86004b8f598a8d43448091f6352910347be58482533d29",
+    "full_byte_readback_verified": true
+  },
+  "retained_cpu_proof_files": 6,
+  "retained_cpu_proof_bytes": 108382
+}
