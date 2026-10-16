@@ -11,8 +11,8 @@ RLVR rows come first and the sampler shuffles the ``rlvr`` pool before the other
 list ``rlvr`` first and share a sampling seed draw RLVR prompts in the same order; arm A uses
 domain-weighted sampling too, with ``rlvr`` alone.
 
-Upstream pass-rate and selection artifacts were built at version ``2026.10.09``; build at the same
-version so they are reused: ``uv run python -m experiments.post_training.pivotrl.mixed_rlvr --version 2026.10.09``.
+The arm datasets pin their own version. Upstream pass-rate and selection artifacts were built at
+version ``2026.10.09``; build at that version so they are reused: ``uv run python -m experiments.post_training.pivotrl.mixed_rlvr --version 2026.10.09``.
 """
 
 import json
@@ -159,6 +159,7 @@ def arm_datasets() -> dict[str, ArtifactStep[Artifact]]:
         name: apply(
             user_owned_name(f"pivotrl/mixed-rlvr/{name}"),
             remote(mix_routes, resources=ResourceConfig.with_cpu(cpu=4, ram="64g")),
+            version="2026.10.16",
             train={**rlvr, **pools},
             validation=validation,
             output_path=OUT,
