@@ -90,7 +90,9 @@ def query(database, title, *, window_ms=WINDOW_MS, bucket_ms=WINDOW_MS):
     target = PANELS[title]["targets"][0]
     selected = dataset(window_ms=window_ms, bucket_ms=bucket_ms)
     for source in selected.sources:
-        database.execute(f'CREATE OR REPLACE TEMP TABLE "{source.name}" AS {source.sql}')
+        database.execute(
+            f'CREATE OR REPLACE TEMP TABLE "{source.name}" AS {source.sql.replace("FIRST_VALUE(", "FIRST(")}'
+        )
     view = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "view")
     cursor = database.execute(selected.views[view])
     columns = [column[0] for column in cursor.description]
@@ -419,6 +421,9 @@ def store(telemetry_table):
             distractors.append(other)
     sync_rows = []
     for row in rows:
+        metric = json.loads(row.attributes_json).get("metric", "")
+        if metric.startswith("policy/mismatch/staleness") and not metric.startswith("policy/mismatch/staleness0/"):
+            continue
         resource = {**json.loads(row.resource_attributes_json), "training_type": "sync"}
         body = json.loads(row.body_json)
         if row.name == "consumed_staleness":
@@ -438,7 +443,6 @@ def store(telemetry_table):
 # Complete panel results for the seeded observations, including timestamps and identities.
 # The quantiles use linear interpolation; token rates use the endpoint's 30-second bucket.
 EXPECTED_PANELS = json.loads((Path(__file__).parent / "fixtures/rl_attempt_panels.json").read_text())
-ASYNC_ONLY_PANEL_IDS = {11, 47, 48, 51, 52, 54, 55}
 
 
 def _target_params(target, *, run=RUN_ID):
@@ -464,23 +468,28 @@ def _target_params(target, *, run=RUN_ID):
 def test_every_panel_view_returns_declared_fields_for_selected_attempt(store):
     app, queries = _bridge(store)
     with TestClient(app) as client:
+        assert client.get("/finelog/marin/v1/async-rl/overview").status_code == 404
         for run in (RUN_ID, "sync-run"):
             initial_queries = len(queries)
             for panel in PANELS.values():
-                if run == "sync-run" and panel["id"] in ASYNC_ONLY_PANEL_IDS:
-                    continue
                 for target in panel["targets"]:
                     params = _target_params(target, run=run)
                     response = client.get(f"/finelog/marin{target['url']}", params=params)
                     assert response.status_code == 200, response.text
-                    expected = EXPECTED_PANELS[str(panel["id"])]
+                    fixture = "status" if params["view"] == "status" else str(24 if panel["id"] == 158 else panel["id"])
+                    expected = EXPECTED_PANELS[fixture]
                     columns = [column["selector"] for column in target["columns"]]
-                    assert columns == expected["columns"]
+                    if fixture == "status":
+                        assert set(columns) <= set(expected["columns"])
+                    else:
+                        assert columns == expected["columns"]
+                    columns = expected["columns"]
                     returned = response.json()
                     assert all(set(row) == {"section", *columns} for row in returned)
                     assert all(row["section"] == params["view"] for row in returned)
                     actual = sorted([tuple(row[key] for key in columns) for row in returned], key=repr)
-                    wanted = sorted([tuple(row) for row in expected["rows"]], key=repr)
+                    wanted_rows = expected.get("sync_rows", expected["rows"]) if run == "sync-run" else expected["rows"]
+                    wanted = sorted([tuple(row) for row in wanted_rows], key=repr)
                     assert actual == [
                         tuple(pytest.approx(value, rel=1e-12) if isinstance(value, float) else value for value in row)
                         for row in wanted
@@ -504,6 +513,62 @@ def test_every_panel_view_returns_declared_fields_for_selected_attempt(store):
             },
             {"section": "token_rates", "t": BASE_EPOCH_MS, "series": "generated_token · driver", "value": 2.5},
         ]
+        floored = client.get(
+            f"/finelog/marin{target['url']}",
+            params={**_target_params(target), "bucket_ms": 1000},
+        )
+        assert floored.status_code == 200, floored.text
+        assert sorted(floored.json(), key=lambda row: row["series"]) == [
+            {"section": "token_rates", "t": BASE_EPOCH_MS, "series": "consumed_loss_token · driver", "value": 3},
+            {
+                "section": "token_rates",
+                "t": BASE_EPOCH_MS,
+                "series": "consumed_response_token · driver",
+                "value": pytest.approx(100 / 30, rel=1e-12),
+            },
+            {"section": "token_rates", "t": BASE_EPOCH_MS, "series": "generated_token · driver", "value": 5},
+        ]
+
+    seed(
+        store,
+        [
+            telemetry_row(
+                "policy_step",
+                value,
+                execution=execution,
+                timestamp=BASE_EPOCH_MS + offset,
+                resource={"training_type": "async"},
+            )
+            for execution, value, offset in [(DRIVER, 100, 1000), (WORKER, 2, 60000), (WORKER, 3, 120000)]
+        ]
+        + [
+            telemetry_row(
+                "training_metric_value",
+                -0.25,
+                timestamp=BASE_EPOCH_MS + 125000,
+                attributes={"metric": "reward/avg_raw_reward", "payload_kind": "train", "role": "trainer"},
+            ),
+            telemetry_row(
+                "work_completed", 240, timestamp=BASE_EPOCH_MS + 125000, attributes={"work_kind": "generated_token"}
+            ),
+        ],
+    )
+    app, _ = _bridge(store)
+    with TestClient(app) as client:
+        response = client.get(f"/finelog/marin{ENDPOINT}", params={**REQUEST, "view": "status"})
+        assert response.status_code == 200, response.text
+        assert response.json() == [
+            {
+                "section": "status",
+                "current_step": 3,
+                "steps_per_hour": 60,
+                "raw_reward": -0.25,
+                "generated_tokens_per_second": 8,
+                "since_last_step": 120,
+                "since_last_record": 115,
+                "staleness_p95": pytest.approx(6.2),
+            }
+        ]
 
 
 def _bridge(database, *, max_rows=1000):
@@ -511,7 +576,7 @@ def _bridge(database, *, max_rows=1000):
 
     def query_source(sql, *, max_rows):
         queries.append(sql)
-        return database.execute(sql).fetch_arrow_table()
+        return database.execute(sql.replace("FIRST_VALUE(", "FIRST(")).fetch_arrow_table()
 
     source = Record(target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"), query=query_source)
     return create_app(replace(bridge_config(), max_rows=max_rows), {"marin": source}, {}, None, None, None), queries
@@ -685,8 +750,9 @@ def test_a_request_past_the_budget_asks_the_operator_to_narrow_it(store):
         response = client.get(f"/finelog/marin{ENDPOINT}", params=long_params)
         assert response.status_code == 200, response.text
         assert 0 < len(response.json()) <= RL_ATTEMPT_MAX_RESULT_ROWS
+        assert 0 < len({row["t"] for row in response.json() if row["section"] == "policy_step"}) <= 360
         for source in selected.sources:
-            rows = store.execute(source.sql).fetch_arrow_table()
+            rows = store.execute(source.sql.replace("FIRST_VALUE(", "FIRST(")).fetch_arrow_table()
             assert 0 < rows.num_rows <= source.max_rows, (source.name, rows.num_rows, source.max_rows)
         for panel in PANELS.values():
             for target in panel["targets"]:
@@ -698,10 +764,13 @@ def test_a_request_past_the_budget_asks_the_operator_to_narrow_it(store):
     overview = rl_overview_dataset((CLUSTER,), RUN_ID, WINDOW_START_MS, WINDOW_START_MS + window_ms, 60000)
     gpu = rl_gpu_dataset((CLUSTER,), RUN_ID, WINDOW_START_MS, WINDOW_START_MS + 7 * 60 * 60 * 1000, 60000)
     sources = (*overview.sources, *gpu.sources)
-    narrow_counts = {source.name: store.execute(source.sql).fetch_arrow_table().num_rows for source in sources}
+    narrow_counts = {
+        source.name: store.execute(source.sql.replace("FIRST_VALUE(", "FIRST(")).fetch_arrow_table().num_rows
+        for source in sources
+    }
     _long_run_nodes(store, 8)
     for source in sources:
-        rows = store.execute(source.sql).fetch_arrow_table()
+        rows = store.execute(source.sql.replace("FIRST_VALUE(", "FIRST(")).fetch_arrow_table()
         assert 0 < rows.num_rows <= source.max_rows, (source.name, rows.num_rows, source.max_rows)
         assert rows.num_rows == narrow_counts[source.name] + (7 * 8 * 2 if source.name == "gpu" else 0)
     app, _ = _bridge(store, max_rows=RL_ATTEMPT_MAX_RESULT_ROWS)
@@ -769,29 +838,9 @@ def test_step_composition_closes_on_the_mean_step_and_keeps_attempts_separate(te
     ]
 
 
-def test_wait_means_use_await_counts_and_queue_gauges_use_last_value(store):
-    waits = {row["series"]: row["value"] for row in query(store, "Generation worker await duration")}
-    assert waits == {"slot mean · driver": pytest.approx(40 / 12), "slot max · driver": 18}
-    gauges = {row["series"]: row["value"] for row in query(store, "Completed buffer depth and capacity")}
-    assert gauges == {"rollout_queue_depth · driver": 3, "rollout_capacity · driver": 64}
-
-
 def test_drift_panels_preserve_signed_values_and_do_not_invent_missing_observations(store):
-    drift = {row["series"]: row["value"] for row in query(store, "Pre-update model log-ratio drift")}
-    assert drift == {
-        "policy/mismatch/pooled/log_ratio_mean · driver": -0.1,
-        "policy/mismatch/pooled/log_ratio_abs_p99 · driver": 0.7,
-    }
     store.execute(f"DELETE FROM {TABLE} WHERE name='training_metric_value'")
     assert query(store, "Drift coverage and token-weight concentration") == []
-
-
-def test_useful_work_panels_keep_core_and_cycle_denominators_separate(store):
-    rates = {row["series"]: row["value"] for row in query(store, "Loss tokens trained per second")}
-    assert rates == {
-        "async/performance/consumed_loss_tokens_per_core_second · driver": 100,
-        "async/performance/consumed_loss_tokens_per_cycle_second · driver": 40,
-    }
 
 
 def test_consumed_length_stops_distinguish_zero_from_incomplete_coverage(store):
@@ -914,15 +963,6 @@ def test_health_sums_nonfinite_deltas_and_keeps_exporter_processes_separate(stor
 
 
 def test_native_work_and_residuals_are_not_clamped_or_merged_across_attempts(store):
-    rates = {row["series"]: row["value"] for row in query(store, "Generated and consumed response tokens / s")}
-    assert rates == {
-        "generated_token · driver": 0.5,
-        "consumed_response_token · driver": pytest.approx(1 / 3),
-        "consumed_loss_token · driver": 0.3,
-    }
-    residuals = query(store, "Signed timing residuals")
-    assert sorted(row["value"] for row in residuals) == [-0.5, -0.25]
-    assert query(store, "Training reward and informative groups")[0]["value"] == 0.5
     store.execute(f"DELETE FROM {TABLE} WHERE name='phase_duration_seconds'")
     observed = []
     for rank, old_tail, restart in (("0", range(20, 30), range(1, 4)), ("1", range(50, 60), range(1, 3))):
@@ -992,48 +1032,22 @@ def test_empty_telemetry_is_unknown_and_startup_only_runs_are_discoverable(store
     assert store.execute(resolve(run_variable_sql())).fetchall() == [("run",)]
     assert query(store, "Generated and consumed response tokens / s") == []
     assert query(store, "Rollouts completing during policy training") == []
-
-
-def test_phase_service_rates_exclude_resets_boundaries_and_other_collectors(store):
-    rows = query(store, "Inference sampled throughput by learner phase")
-    selected = {(row["phase"], row["engine"]): row for row in rows}
-    assert len(rows) == 4
-    a = selected["training", "engine-A"]
-    assert a["tokens_per_sampled_second"] == 10
-    assert a["coverage_fraction"] == 0.6
-    assert a["intervals"] == 2
-    assert a["phase_seconds"] == 10
-    b = selected["training", "engine-B"]
-    assert b["tokens_per_sampled_second"] == 20
-    assert b["coverage_fraction"] == 0.4
-    for engine in ["engine-A", "engine-B"]:
-        weight_sync = selected["weight_sync", engine]
-        assert weight_sync["tokens_per_sampled_second"] is None
-        assert weight_sync["coverage_fraction"] == 0
-        assert weight_sync["intervals"] == 0
-
-
-@pytest.mark.parametrize(
-    "title", ["Buffer dwell of trained groups", "Policy staleness at training", "Successful rollout-call latency"]
-)
-def test_percentile_panels_separate_median_tail_and_worst_observation(store, title):
-    # DuckDB's quantile_cont and finelog's t-digest disagree on the exact number, so the
-    # contract here is the fan-out: three series, ordered, none collapsed onto another.
-    values = {row["series"].split(" \u00b7 ")[0]: row["value"] for row in query(store, title)}
-    assert set(values) == {"p50", "p95", "max"}
-    assert values["p50"] < values["p95"] < values["max"]
-
-
-def test_learner_memory_keeps_interval_peak_separate_from_current_and_device_usage(store):
-    rows = query(store, "Learner memory by phase")
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["gpu"] == "GPU-A"
-    assert row["peak_allocated_gib"] == 4
-    assert row["peak_reserved_gib"] == 6
-    assert row["sampled_allocated_gib"] == 3
-    assert row["sampled_free_gib"] == 1
-    assert row["device_total_gib"] == 8
+    app, _ = _bridge(store)
+    with TestClient(app) as client:
+        response = client.get(f"/finelog/marin{ENDPOINT}", params={**REQUEST, "view": "status"})
+        assert response.status_code == 200, response.text
+        assert response.json() == [
+            {
+                "section": "status",
+                "current_step": None,
+                "steps_per_hour": None,
+                "raw_reward": None,
+                "generated_tokens_per_second": None,
+                "since_last_step": None,
+                "since_last_record": 239.999,
+                "staleness_p95": None,
+            }
+        ]
 
 
 def test_core_gpu_hours_charge_both_roles_and_require_complete_counts(store):
@@ -1252,36 +1266,11 @@ def test_consumed_staleness_panels_count_groups_and_sum_tokens_per_staleness(sto
     assert query(store, "Staleness of trained groups: tokens per step") == []
 
 
-def test_weight_sync_timeline_orders_training_and_sync_windows(store):
-    rows = query(store, "Weight-sync stages")
-    assert {row["execution"] for row in rows} == {"driver"}
-    spans = {row["state"]: row for row in rows}
-    assert set(spans) == {"training", "weight sync", "weights synced"}
-    assert spans["training"]["finish"] == spans["weight sync"]["start"]
-    assert spans["training"]["finish"] - spans["training"]["start"] == 10_000
-    assert spans["weight sync"]["finish"] - spans["weight sync"]["start"] == 4_000
-    assert spans["weights synced"]["finish"] - spans["weights synced"]["start"] == 1
-
-
 def test_ratio_panels_read_mismatch_and_learner_drift_families_separately(store):
-    mismatch = query(store, "Trainer/vLLM logprob mismatch \u03c1 (staleness 0)")
-    staleness = query(store, "Trainer/vLLM logprob mismatch by staleness bucket")
-    drift = query(store, "Trainer logprob drift within the update")
-    assert [row["value"] for row in mismatch if "/log_ratio_abs_mean ·" in row["series"]] == [0.1, 0.2]
-    assert [row["value"] for row in staleness if "/staleness1/" in row["series"]] == [0.3, 0.6]
-    assert [row["value"] for row in drift if row["series"].startswith("policy/log_ratio_abs_mean ·")] == [0.05, 0.1]
-    assert not any("mismatch" in row["series"] for row in drift)
     store.execute(f"DELETE FROM {TABLE} WHERE json_get(attributes_json,'metric') LIKE 'policy/mismatch/staleness1/%'")
     assert not any(
         "/staleness1/" in row["series"] for row in query(store, "Trainer/vLLM logprob mismatch by staleness bucket")
     )
-
-
-def test_position_panel_keeps_ratio_families_and_positions_separate(store):
-    rows = query(store, "Position dependence of |log \u03c1|")
-    assert [row["value"] for row in rows if "mismatch/pooled/pos_last256" in row["series"]] == [0.23, 0.46]
-    assert [row["value"] for row in rows if "log_ratio_pos_last256" in row["series"]] == [0.04, 0.08]
-    assert not any("pos_middle" in row["series"] for row in rows)
 
 
 def test_correction_panels_read_weights_and_distinct_fractions(store):

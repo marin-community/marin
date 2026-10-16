@@ -340,6 +340,27 @@ Execution pickers select the same attempt data for both types. All executions in
 identified execution of the selected job. Run-wide panels state that they ignore these two
 pickers. MarinSkyRL documents telemetry export at `docs/grafana-rl-runs.md`.
 
+The RL board has 75 panels: 42 open and 33 in collapsed diagnostic rows.
+Eight status tiles lead into learning, progress, step-wall, generation and
+vLLM questions. Evaluation response lengths and stop-class score contributions
+sit beside evaluation scores. All collapsed rows follow the open rows.
+Seven tiles share the attempt dataset's one-row `status` view; the services
+tile counts distinct services from the same producer result as the diagnostic
+table. No status tile adds a Finelog source: overview still reads two sources,
+GPU detail one, attempts ten, and the producer census reads each available
+namespace among MarinSkyRL, vLLM and Harbor.
+
+Status ages are relative to the selected range end. The newest step-reporting
+execution supplies the current step and its observed step rate; two distinct
+observation times are needed for a rate. Record age covers the selected policy,
+training-metric and lifecycle/export observations. A fresh record age beside an
+old step age can distinguish a trainer stall from missing telemetry. Both turn
+orange at 300 seconds and red at 900 seconds. Staleness p95 uses the latest
+per-execution observation; sync observations show zero and missing data stays
+empty. The two optimizer panels share one view and filter its series for their
+respective axes. The learner-memory bars show the largest phase peaks across
+selected ranks and executions, rather than summing ranks.
+
 RL panels have a 360-point budget. Overview, GPU and attempt requests pass
 Grafana's interval. Attempt panels use a 30-second minimum; run-wide charts use one minute.
 The bridge raises either interval as needed to keep each trend within 360 points.

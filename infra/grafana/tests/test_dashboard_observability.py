@@ -233,7 +233,7 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
         "rl_runs.json": {
             "/v1/rl/overview": (10, sections["rl"]),
             "/v1/rl/gpu": (5, sections["rl_gpu"]),
-            "/v1/rl/attempt": (50, sections["rl_attempt"]),
+            "/v1/rl/attempt": (58, sections["rl_attempt"]),
         },
         "jobs.json": {"/v1/jobs/overview": (17, sections["jobs"])},
         "accelerators.json": {"/v1/accelerator/overview": (18, sections["accelerator"])},

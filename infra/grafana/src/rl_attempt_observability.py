@@ -324,7 +324,11 @@ WITH selected AS (
            MIN(value) AS min_value,
            MAX(value) AS max_value,
            CAST(NULL AS DOUBLE) AS p50,
-           CAST(NULL AS DOUBLE) AS p95
+           CAST(NULL AS DOUBLE) AS p95,
+           MIN(timestamp_ms) AS first_ms,
+           MAX(timestamp_ms) AS last_ms,
+           FIRST_VALUE(value ORDER BY timestamp_ms DESC, seq DESC) AS last_value,
+           MAX(CASE WHEN json_get(resource_attributes_json, 'training_type') = 'async' THEN 1 ELSE 0 END) AS is_async
     FROM selected
     WHERE name NOT IN ({sql_values(_GAUGE_NAMES + _PERCENTILE_NAMES)})
     GROUP BY 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
@@ -336,9 +340,13 @@ WITH selected AS (
            value AS min_value,
            value AS max_value,
            CAST(NULL AS DOUBLE) AS p50,
-           CAST(NULL AS DOUBLE) AS p95
+           CAST(NULL AS DOUBLE) AS p95,
+           timestamp_ms AS first_ms,
+           timestamp_ms AS last_ms,
+           value AS last_value,
+           CASE WHEN json_get(resource_attributes_json, 'training_type') = 'async' THEN 1 ELSE 0 END AS is_async
     FROM (
-        SELECT t, name, execution_uid, value,
+        SELECT t, name, execution_uid, value, timestamp_ms, resource_attributes_json,
                ROW_NUMBER() OVER (
                    PARTITION BY t, execution_uid, resource_attributes_json, name
                    ORDER BY timestamp_ms DESC, seq DESC
@@ -353,7 +361,11 @@ WITH selected AS (
            MIN(value) AS min_value,
            MAX(value) AS max_value,
            approx_percentile_cont(value, 0.5) AS p50,
-           approx_percentile_cont(value, 0.95) AS p95
+           approx_percentile_cont(value, 0.95) AS p95,
+           MIN(timestamp_ms) AS first_ms,
+           MAX(timestamp_ms) AS last_ms,
+           FIRST_VALUE(value ORDER BY timestamp_ms DESC, seq DESC) AS last_value,
+           MAX(CASE WHEN json_get(resource_attributes_json, 'training_type') = 'async' THEN 1 ELSE 0 END) AS is_async
     FROM selected
     WHERE name = 'rollout_staleness_steps'
        OR (name = 'rollout_buffer_dwell_seconds' AND disposition = 'consumed')
@@ -649,6 +661,40 @@ ORDER BY execution, phase, engine, counter
 LIMIT {RL_ATTEMPT_MAX_PROCESS_ROWS + 1}
 """.strip()
     views = {
+        "status": (
+            f"""
+WITH steps AS (
+    SELECT execution_uid,
+           FIRST(last_value ORDER BY last_ms DESC) AS current_step,
+           (MAX(max_value) - MIN(min_value)) * 3600000.0
+               / NULLIF(MAX(last_ms) - MIN(first_ms), 0) AS steps_per_hour,
+           MAX(last_ms) AS last_step_ms
+    FROM core WHERE statistic = 'aggregate' AND name = 'policy_step'
+    GROUP BY execution_uid
+), current_step AS (
+    SELECT * FROM steps ORDER BY last_step_ms DESC, execution_uid DESC LIMIT 1
+), observations AS (
+    SELECT MAX(last_ms) AS last_ms FROM core
+    UNION ALL SELECT MAX(timestamp_ms) FROM metrics
+    UNION ALL SELECT MAX(last_record_ms) FROM processes
+)
+SELECT (SELECT current_step FROM current_step) AS current_step,
+       (SELECT steps_per_hour FROM current_step) AS steps_per_hour,
+       (SELECT value FROM metrics
+        WHERE metric = 'reward/avg_raw_reward' AND payload_kind = 'train' AND role = 'trainer'
+        ORDER BY timestamp_ms DESC, seq DESC, execution_uid DESC LIMIT 1) AS raw_reward,
+       (SELECT SUM(sum_value) * 1000.0 / {bucket_ms} FROM core
+        WHERE statistic = 'aggregate' AND name = 'work_completed' AND work_kind = 'generated_token'
+          AND t = (SELECT MAX(t) FROM core WHERE statistic = 'aggregate'
+                   AND name = 'work_completed' AND work_kind = 'generated_token')) AS generated_tokens_per_second,
+       ({end_ms} - (SELECT last_step_ms FROM current_step)) / 1000.0 AS since_last_step,
+       ({end_ms} - (SELECT MAX(last_ms) FROM observations)) / 1000.0 AS since_last_record,
+       CASE WHEN (SELECT MAX(last_ms) FROM core) IS NULL THEN NULL
+            WHEN (SELECT MAX(is_async) FROM core) = 0 THEN 0
+            ELSE (SELECT p95 FROM core WHERE statistic = 'percentile' AND name = 'rollout_staleness_steps'
+                  ORDER BY last_ms DESC, execution_uid DESC LIMIT 1) END AS staleness_p95
+""".strip()
+        ),
         "policy_step": (
             """
 SELECT t, name || ' · ' || execution_uid AS series,

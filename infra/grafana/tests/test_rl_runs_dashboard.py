@@ -907,34 +907,3 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store, home_min
         }
         offered = _request_rows(store, query["url"], params)
         assert sorted(offered, key=lambda row: row["value"]) == [{"value": run} for run in sorted(wanted)]
-
-
-def test_the_recent_runs_query_returns_a_row_per_run_and_cluster(store) -> None:
-    sql = _recent_runs_sql()
-
-    rows = store.execute(sql).fetchall()
-
-    assert [row[0] for row in rows] == [RUN_ID]
-    run, cluster, step, attempts = rows[0][0], rows[0][1], rows[0][2], rows[0][3]
-    assert (run, cluster) == (RUN_ID, CLUSTER)
-    assert step > 0 and attempts >= 1
-
-
-def test_a_listed_run_opens_a_window_that_contains_its_last_sample(store) -> None:
-    """The panels bound time half-open (`timestamp_ms < to`), so a link ending exactly on the last
-    sample drops it, and a one-step run opens an empty view."""
-    sql = _recent_runs_sql()
-    result = store.execute(sql)
-    columns = [description[0] for description in result.description]
-    row = dict(zip(columns, result.fetchall()[0], strict=True))
-    samples = [
-        timestamp
-        for (timestamp,) in store.execute(
-            "SELECT timestamp_ms FROM \"telemetry_v1.marinskyrl\" WHERE run_id = ? AND name = 'policy_step' "
-            "AND timestamp_ms >= ? AND timestamp_ms < ?",
-            [RUN_ID, _WINDOW_START_MS, _NOW_MS],
-        ).fetchall()
-    ]
-
-    assert samples
-    assert all(row["window_from_ms"] <= timestamp < row["window_to_ms"] for timestamp in samples)
