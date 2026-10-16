@@ -562,8 +562,7 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None, *, scan_profile: 
         parts.append(_resolved_version_columns(part, commit_sequence, generation))
 
     combined = parts[0] if len(parts) == 1 else pa.concat_tables(parts, promote_options="permissive")
-    if all(name in combined.column_names for name in plan.primary_key):
-        combined = _deduplicate(combined, plan.primary_key)
+    combined = _deduplicate(combined, plan.primary_key)
     if plan.post_dedup_where:
         combined = pds.dataset(combined).to_table(filter=_build_filter(plan.post_dedup_where))
     if columns is not None:

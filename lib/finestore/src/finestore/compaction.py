@@ -24,7 +24,7 @@ from rigging.timing import retry_with_backoff
 from finestore import shard_writer
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
 from finestore.layout import BlobTables, CommitToken, FineStoreLayout, KeyRange, Shard, SystemColumns
-from finestore.merge import merge_sorted_runs, sorted_by_key
+from finestore.merge import key_values, merge_sorted_runs, sorted_by_key
 from finestore.reader import ReadView, _BoundedReadAheadHandler, iter_shard_row_groups, shard_schema
 from finestore.shard_writer import ShardWriter
 
@@ -63,10 +63,6 @@ def _sorted_run(
         yield from groups if shard.primary_key_sorted else sorted_by_key(groups, primary_key)
 
 
-def _key(rows: pa.Table, index: int, primary_key: tuple[str, ...]) -> tuple:
-    return tuple(rows[name][index].as_py() for name in primary_key)
-
-
 def _write_output_shards(
     layout: FineStoreLayout,
     table: str,
@@ -99,7 +95,7 @@ def _write_output_shards(
                 decoded_bytes += group.nbytes
                 last = group
                 group = next(groups, None)
-        bounds = KeyRange.of([_key(first, 0, primary_key), _key(last, last.num_rows - 1, primary_key)])
+        bounds = KeyRange.of([key_values(first, 0, primary_key), key_values(last, last.num_rows - 1, primary_key)])
         outputs.append(
             Shard(
                 path=path,

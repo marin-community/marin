@@ -754,6 +754,25 @@ def test_rows_without_every_key_column_merge_in_key_order_before_and_after_compa
     assert list(ReadView(root).iter_rows("samples", columns=["task", "doc", "value"])) == expected
 
 
+def test_a_key_column_no_row_sets_is_null_for_every_row(archive_root):
+    # No row carries "doc", so the column is absent from every shard and versions resolve on "task" alone.
+    root = archive_root
+    store = DataStore.open(root, writer_id="w1", flush_interval=3600)
+    table = store.table("samples", primary_key=("task", "doc"), on_conflict=OnConflict.SUPERSEDE)
+    table.extend([{"task": "b", "value": 1}, {"task": "a", "value": 1}])
+    store.flush()
+    table.append({"task": "b", "value": 2})
+    store.flush()
+    store.request_stop()
+    expected = [{"task": "a", "value": 1}, {"task": "b", "value": 2}]
+
+    view = ReadView(root)
+    assert list(view.iter_rows("samples", columns=["task", "value"])) == expected
+    assert sorted(_rows(view, "samples", columns=["task", "value"]), key=lambda row: row["task"]) == expected
+    assert compact_table(root, "samples") == CompactionResult(written=2, superseded=1)
+    assert list(ReadView(root).iter_rows("samples", columns=["task", "value"])) == expected
+
+
 def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(tmp_path, monkeypatch):
     row_bytes = 1024 * 1024
     monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", row_bytes // 2)
