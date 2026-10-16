@@ -6,6 +6,10 @@
 `uv run python -m experiments.domain_phase_mix.release.scan_upload release_build` prints the first 200 hits and exits 1
 on any hit. `scan(root, include)` reads only the files `include` names, so an upload scans exactly the files it sends.
 
+The patterns catch storage paths and bucket names, local and checkpoint paths, the author's user names, e-mail
+addresses, Fieldbook ids, long hex hashes and URLs. Training run names and W&B run ids pass: the observation ids are the
+runs' ids in the public W&B project marin-community/marin.
+
 Every file is read by its structure: a CSV cell by cell, header included; a Parquet file's column names, the keys and
 values of its schema and field metadata, and the cells of its string columns, a stored index among them; a JSON file's
 keys and values; any other file line by line as UTF-8 text. Each file's own path is scanned too. Whatever would hide a
@@ -13,8 +17,8 @@ string from the patterns stops the scan: a binary or compressed file, a ragged C
 Parquet column of any type but string, number, boolean or time. A few fields hold hex digests by design: `ALLOWED`
 exempts each of them from the hash pattern alone, so the same digest under any other field, or any other pattern in an
 allowed field, is still a hit. `ALLOWED` also lets the dataset card at the root link to `LINK_HOSTS`: the `url` pattern
-skips the `https://` that begins an inline Markdown link or an autolink to one of them, so any other URL of the card,
-or any other pattern inside such a link, is still a hit.
+skips the `https://` that begins an inline Markdown link or an autolink to one of them under its path, so any other URL
+of the card, or any other pattern inside such a link, is still a hit.
 """
 
 import argparse
@@ -24,7 +28,7 @@ import fnmatch
 import json
 import re
 import urllib.parse
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 
 import pyarrow as pa
@@ -35,14 +39,11 @@ from experiments.domain_phase_mix.release import tables
 PATTERNS = {
     # GCS paths and Marin's bucket names on GCS and S3-compatible stores (marin-us-east5, marin-us-east-02a, marin-na).
     "bucket": re.compile(r"gs://|marin-(?:us|eu)-[a-z]+-?\d|marin-(?:na|eu|cw)\b"),
-    # Not the bare word: a public source file name ends in `_wandb.csv`.
-    "wandb": re.compile(r"wandb\.ai|wandb_url|wandb_run|wandb:", re.I),
     "home_path": re.compile(r"/Users/|/home/\w+/"),
     # Fieldbook ids are ULIDs after a lowercase prefix (`exp_`, `run_`, `note_`, ...); a public id continues its prefix
     # with at most 16 characters and may begin `_01`, but it is too short.
     "fieldbook": re.compile(r"(?<![a-z0-9])[a-z]+_01[a-z0-9]{24}(?![a-z0-9])|(?i:fieldbook)"),
     "checkpoint": re.compile(r"/checkpoints/|hf/step-"),
-    "run_hash": re.compile(r"[A-Za-z0-9_]+-[0-9a-f]{6}(?![0-9A-Za-z])"),  # run names end in a six-hex-digit hash
     "long_hash": re.compile(r"[0-9a-f]{40,}"),  # git commits, SHA-256 digests, policy hashes
     "personal": re.compile(r"pinlin_calvin_xu|calvinxu", re.I),
     "email": re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"),
@@ -59,8 +60,16 @@ TEXTLESS = (
 )
 EXCERPT = 30  # characters of context on each side of a match
 SHOWN = 200  # hits the command prints
-# Hosts the dataset card may link to: the paper, its code and data, and the sources of its evaluations and buckets.
-LINK_HOSTS = frozenset({"huggingface.co", "arxiv.org", "github.com", "allenai.org", "marin.community"})
+# Hosts the dataset card may link to, each with the path its links must begin with: the paper, its code and data, the
+# sources of its evaluations and buckets, and the public W&B project that logged the runs.
+LINK_HOSTS = {
+    "huggingface.co": "",
+    "arxiv.org": "",
+    "github.com": "",
+    "allenai.org": "",
+    "marin.community": "",
+    "wandb.ai": "/marin-community/",
+}
 # An inline link `[text](url)` or an autolink `<url>`. A title, a bracket inside the text, or a space, parenthesis or
 # angle bracket inside the URL leaves a link unrecognized, so its URL stays a hit.
 MARKDOWN_LINK = re.compile(r"\[[^\[\]]*\]\((?P<inline>[^\s()<>]+)\)|<(?P<auto>[^\s<>]+)>")
@@ -84,12 +93,13 @@ class Allowance:
 class LinkAllowance:
     """Markdown links of a text file to `hosts`: the `url` pattern may match the `https://` that begins each one.
 
-    A link counts when it is an inline link `[text](url)` or an autolink `<url>` whose URL has the scheme https and one
-    of `hosts` as its whole network location, without a user, password or port.
+    A link counts when it is an inline link `[text](url)` or an autolink `<url>` whose URL has the scheme https, one of
+    `hosts` as its whole network location, without a user, password or port, and a path that begins with that host's
+    path in `hosts`.
     """
 
     path_glob: str  # the file, relative to the scanned root
-    hosts: frozenset[str]
+    hosts: Mapping[str, str]  # host -> the path its links must begin with
 
     def exempts(self, relative: str, field: str, pattern: str, match: re.Match[str]) -> bool:
         """Whether this allows `match`, a match of `pattern` in `field` of the file at `relative`."""
@@ -225,13 +235,13 @@ def _json_strings(value: object, field: str) -> Iterator[tuple[Sequence[int], st
         yield (0,), field, str(value)
 
 
-def _link_starts(text: str, hosts: frozenset[str]) -> set[int]:
-    """The offsets in `text` at which the https URL of a Markdown link to one of `hosts` begins."""
+def _link_starts(text: str, hosts: Mapping[str, str]) -> set[int]:
+    """The offsets in `text` at which the https URL of a Markdown link to one of `hosts`, under its path, begins."""
     starts = set()
     for link in MARKDOWN_LINK.finditer(text):
         group = "inline" if link.group("inline") is not None else "auto"
         parts = urllib.parse.urlsplit(link.group(group))
-        if parts.scheme == "https" and parts.netloc in hosts:
+        if parts.scheme == "https" and parts.netloc in hosts and parts.path.startswith(hosts[parts.netloc]):
             starts.add(link.start(group))
     return starts
 

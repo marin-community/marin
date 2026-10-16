@@ -23,10 +23,6 @@ PLANTS = [
     ("s3://marin-us-east-02a/x", "bucket"),
     ("s3://marin-na/x", "bucket"),
     ("marin-us-west-04a", "bucket"),
-    ("wandb.ai/marin/runs/abc", "wandb"),
-    ("wandb_run_id", "wandb"),
-    ("wandb_url", "wandb"),
-    ("wandb:marin/abc", "wandb"),
     ("/Users/someone/Projects/x", "home_path"),
     ("/home/someone/x", "home_path"),
     ("exp_01m4wyyvz7b90mkbr7c8y1fwgb", "fieldbook"),
@@ -35,8 +31,6 @@ PLANTS = [
     ("see the Fieldbook entry", "fieldbook"),
     ("/checkpoints/step-1000", "checkpoint"),
     ("hf/step-1000", "checkpoint"),
-    ("lwspu_t9_snc_cap08_3e18-6c15f1", "run_hash"),
-    ("lwspu_t9_snc_cap08_3e18-6c15f1_eval_metrics.csv", "run_hash"),
     ("a" * 64, "long_hash"),
     ("coordinate_" + "b" * 64, "long_hash"),
     ("pinlin_calvin_xu", "personal"),
@@ -48,6 +42,14 @@ PLANTS = [
     ("x_s3://private-bucket/x", "url"),
 ]
 DIGEST = hashlib.sha256(b"table").hexdigest()  # 64 hex digits, like a file's SHA-256
+# W&B run ids of the public project marin-community/marin, the observation ids: a training run name and its hash, one
+# that W&B shortened from the front, and two that a launch prefixed.
+RUN_IDS = [
+    "lwspu_t9_snc_cap08_3e18-6c15f1",
+    "trl_tilt_domain_dolma3_cc_education_and_jobs_high_plus-f9b90f",
+    "gcfv9_gcf_b_h5d28160_m100a_boundary_beta_0p60_s2026084000",
+    "c2v4c_lrcd_ds_m100_0p60_c000_s0711",
+]
 REVISION = hashlib.sha1(b"commit").hexdigest()  # 40 hex digits, like a git commit
 
 
@@ -80,18 +82,18 @@ def release_sources():
 
 
 def _write_clean_tree(root: Path) -> dict:
-    """A build tree holding only public strings: the public id forms (each continuing `_01`, like a Fieldbook id), an
-    exposure id that begins `exp_01`, `marin-` names that are no bucket, a source file name ending in `_wandb.csv`, and
-    hex digests in the fields that hold them by design. Returns the manifest."""
+    """A build tree holding only public strings: W&B run ids, the content id forms (each continuing `_01`, like a
+    Fieldbook id), an exposure id that begins `exp_01`, `marin-` names that are no bucket, a source file name ending in
+    `_wandb.csv`, and hex digests in the fields that hold them by design. Returns the manifest."""
     (root / "data/heldout").mkdir(parents=True)
     (root / "data/tasks").mkdir(parents=True)
     pd.DataFrame(
         {
-            "observation_id": ["obs_0123456789ab"],
-            "mixture_id": ["mix_0123456789abcdef"],
-            "exposure_id": ["exp_01585550f65360b9"],
-            "schedule_id": ["sch_0123456789abcdef"],
-            "bpb__arc_challenge": [0.81],
+            "observation_id": RUN_IDS,
+            "mixture_id": "mix_0123456789abcdef",
+            "exposure_id": "exp_01585550f65360b9",
+            "schedule_id": "sch_0123456789abcdef",
+            "bpb__arc_challenge": 0.81,
         }
     ).to_csv(root / "data/heldout/heldout.csv", index=False)
     pd.DataFrame(
@@ -103,10 +105,12 @@ def _write_clean_tree(root: Path) -> dict:
     ).to_csv(root / "data/tasks/tasks.csv", index=False)
     manifest = {
         "commit": REVISION,
+        "notes": ["Each run's logs are at wandb.ai/marin-community/marin/runs/<observation_id>."],
         "tables": [
             {
                 "table": "heldout",
                 "sha256": DIGEST,
+                "keying": f"Each run's W&B run id, such as {RUN_IDS[0]}.",
                 "sources": ["experiments/reference_outputs/delphi_scaling_completed_wandb.csv"],
             }
         ],
@@ -124,7 +128,7 @@ def test_scan_covers_every_file(tmp_path):
     pd.DataFrame({LEAK: [0.5]}).to_parquet(tmp_path / "data/x/name.parquet", index=False)
     (tmp_path / "MANIFEST.json").write_text(json.dumps({"tables": [{"note": LEAK}], LEAK: 1}))
     (tmp_path / "README.md").write_text(f"# Card\n\nsee {LEAK}\n")
-    (tmp_path / "data/x/notes-6c15f1.md").write_text("ok\n")  # a run name in the file's own name
+    (tmp_path / "data/x/notes-pinlin_calvin_xu.md").write_text("ok\n")  # a user name in the file's own name
     hits = scan_upload.scan(tmp_path)
     # Each hit names its file, its line (text), row (tables: 0 for the header, a quoted multi-line cell is one row) or
     # 0 (JSON), and its field. pandas' own Parquet metadata repeats the column names.
@@ -138,7 +142,7 @@ def test_scan_covers_every_file(tmp_path):
         ("MANIFEST.json", 0, "$.tables[0].note"),
         ("MANIFEST.json", 0, f"$.{LEAK}"),
         ("README.md", 3, ""),
-        ("notes-6c15f1.md", 0, ""),
+        ("notes-pinlin_calvin_xu.md", 0, ""),
     }
 
 
@@ -181,6 +185,23 @@ def test_every_pattern_fires_and_clean_text_passes(tmp_path):
     clean = tmp_path / "clean"
     _write_clean_tree(clean)
     assert scan_upload.scan(clean) == []
+
+
+def test_run_ids_pass_but_the_runs_storage_paths_do_not(tmp_path):
+    # W&B run ids are the public observation ids, in a table, the manifest or a W&B link's path; the same run's
+    # checkpoint path is still a hit.
+    (tmp_path / "data/validation_3e18").mkdir(parents=True)
+    checkpoints = [f"gs://marin-us-central1/checkpoints/{run}/hf/step-3006" for run in RUN_IDS]
+    pd.DataFrame({"observation_id": RUN_IDS, "checkpoint": checkpoints}).to_csv(
+        tmp_path / "data/validation_3e18/validation_3e18.csv", index=False
+    )
+    notes = [f"wandb.ai/marin-community/marin/runs/{run}" for run in RUN_IDS]
+    (tmp_path / "MANIFEST.json").write_text(json.dumps({"notes": notes}))
+    hits = scan_upload.scan(tmp_path)
+    assert {(h.path.name, h.field, h.pattern) for h in hits} == {
+        ("validation_3e18.csv", "checkpoint", pattern) for pattern in ("bucket", "checkpoint", "url")
+    }
+    assert sorted(h.line_or_row for h in hits if h.pattern == "bucket") == [1, 2, 3, 4]
 
 
 def test_allowance_exempts_only_its_field_and_pattern(tmp_path):
@@ -251,6 +272,9 @@ CARD_LINES = [
     ("[https://example.org](https://github.com/x)", {"url"}),  # a URL in a link's text
     ("[x]: https://github.com/x", {"url"}),  # a reference definition, outside an inline link
     ("[x](https://huggingface.co/pinlin_calvin_xu)", {"personal"}),  # other patterns inside an allowed link
+    ("[logs](https://wandb.ai/marin-community/marin/runs/lwspu_t9_snc_cap08_3e18-6c15f1)", set()),
+    ("[x](https://wandb.ai/someone/marin/runs/x)", {"url"}),  # another W&B entity than the public project's
+    ("[x](https://wandb.ai/marin-community-x/marin)", {"url"}),  # an entity that only begins with it
 ]
 
 
