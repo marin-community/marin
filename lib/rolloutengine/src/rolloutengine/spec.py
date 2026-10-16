@@ -20,7 +20,7 @@ class TraceMode(StrEnum):
 
 
 TRACE_METRIC = "trace"
-"""``RolloutData.metrics`` key that marks every ``TraceMode.MESSAGES`` record with the mode's value."""
+"""``Rollout.metrics`` key that marks every ``TraceMode.MESSAGES`` record with the mode's value."""
 
 
 class MachineRuntimeSpec(BaseModel):
@@ -59,7 +59,7 @@ class RolloutLimits(BaseModel):
     cleanup_timeout: float = Field(gt=0)
 
 
-class RolloutSpec(BaseModel):
+class TaskRolloutSpec(BaseModel):
     """An unchanged task definition and the choices that run it.
 
     ``harness`` names a harness registered with the engine. A machine selection of ``None``

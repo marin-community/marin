@@ -3,7 +3,7 @@
 
 """The harness contract: what the model sees and does in one task attempt.
 
-The engine holds harnesses by name; ``RolloutSpec.harness`` selects one. For each attempt the engine
+The engine holds harnesses by name; ``TaskRolloutSpec.harness`` selects one. For each attempt the engine
 calls ``check`` before any machine starts and ``open`` when the task machine is ready. It then drives
 the episode that ``open`` returns: it sends the episode's prompt to the model and passes each model turn
 to ``advance``, until the episode is done or a limit ends the attempt. A task whose grader is
@@ -18,8 +18,8 @@ from typing import Protocol
 from shellbox.machine import Machine
 from taskcompendium.grading_result import GradeResult
 
-from rolloutengine.contracts import EventSink, ModelTurn, Prompt, RolloutData, Transition
-from rolloutengine.spec import RolloutSpec
+from rolloutengine.contracts import EventSink, ModelTurn, Prompt, Rollout, Transition
+from rolloutengine.spec import TaskRolloutSpec
 
 
 @dataclass(frozen=True)
@@ -27,13 +27,13 @@ class HarnessContext:
     """One attempt's inputs for a harness.
 
     ``machine`` is the prepared task machine, or ``None`` when the spec selects none. A harness may
-    report its own events, such as tool calls, to ``events``. ``run_key`` identifies the attempt.
+    report its own events, such as tool calls, to ``events``. ``run_id`` identifies the attempt.
     """
 
-    spec: RolloutSpec
+    spec: TaskRolloutSpec
     machine: Machine | None
     events: EventSink
-    run_key: str
+    run_id: str
 
 
 class Episode(Protocol):
@@ -46,7 +46,7 @@ class Episode(Protocol):
     async def close(self) -> None: ...
 
 
-def accept(spec: RolloutSpec) -> None:
+def accept(spec: TaskRolloutSpec) -> None:
     """A check that accepts every spec."""
 
 
@@ -61,5 +61,5 @@ class Harness[E: Episode]:
     """
 
     open: Callable[[HarnessContext], E]
-    check: Callable[[RolloutSpec], None] = accept
-    grade: Callable[[E, RolloutData], Awaitable[GradeResult]] | None = None
+    check: Callable[[TaskRolloutSpec], None] = accept
+    grade: Callable[[E, Rollout], Awaitable[GradeResult]] | None = None

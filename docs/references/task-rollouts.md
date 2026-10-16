@@ -1,6 +1,7 @@
 # Task rollouts
 
-`RolloutEngine.run(spec, model)` runs one attempt of a single-stage task and returns `RolloutData`.
+`RolloutEngine.run_task(spec, model)` runs and grades one attempt of a single-stage task. It returns a
+`GradedRollout`: the `Rollout`, which records what happened, and the `grade`.
 The engine holds the machine factories and the harnesses; each run passes the model, the policy under rollout.
 The caller owns concurrency, retries, group grading, and training projections.
 TaskCompendium defines `TaskSpec`, its graders, and grading outcomes. VerifyIT supplies grading modes and their implementations.
@@ -9,7 +10,7 @@ Shellbox supplies machine backends. RolloutEngine supplies the turn loop, the ha
 ```mermaid
 flowchart TD
     Source[Source row or task package] --> Task[TaskSpec: task definition, answer format, and grader]
-    Task --> Spec[RolloutSpec: task, harness, machines, limits, trace]
+    Task --> Spec[TaskRolloutSpec: task, harness, machines, limits, trace]
     Config[Deployment configuration] --> Spec
     Spec --> Caller[Caller: task scheduler or rollout worker]
     Caller --> Engine[RolloutEngine]
@@ -18,7 +19,7 @@ flowchart TD
     Engine --> Episode[Harness episode: prompt, tools, transitions]
     Episode --> Machine[Shellbox task machine]
     Engine --> Grader[Grader: in process, in a verifier machine, or the harness]
-    Engine --> Record[RolloutData: conversation, tokens, masks, logprobs, grade]
+    Engine --> Record[Rollout: conversation, tokens, masks, logprobs, grade]
     Record --> Caller
     Caller --> Train[Whole-rollout or step-wise training]
 ```
@@ -29,13 +30,13 @@ flowchart TD
 Its `environment_requirements` includes capabilities, an optional digest-pinned Docker image, workdir, setup commands, environment variables, and named tool-provider contracts.
 A `ScriptGrader`, or a `VerifyitGrader` with an environment, declares separate requirements in `grader.environment`.
 
-`RolloutSpec` keeps the task definition unchanged and adds the choices that run it:
+`TaskRolloutSpec` keeps the task definition unchanged and adds the choices that run it:
 
 | Spec | Fields |
 | --- | --- |
 | `MachineRuntimeSpec` | `backend`, `network`, `cpus`, `memory_mb`, `storage_mb`, `gpus`, `user`, `startup_timeout`, `cleanup_timeout` |
 | `RolloutLimits` | `max_turns`, `max_total_tokens`, `model_turn_timeout`, `tool_turn_timeout`, `total_turn_timeout`, `attempt_timeout`, `verifier_timeout`, `cleanup_timeout` |
-| `RolloutSpec` | `task: TaskSpec`, `harness`, `task_machine`, `verifier_machine`, `limits: RolloutLimits`, `trace` |
+| `TaskRolloutSpec` | `task: TaskSpec`, `harness`, `task_machine`, `verifier_machine`, `limits: RolloutLimits`, `trace` |
 
 Fields require explicit values except `trace`, which defaults to `TraceMode.EXACT_TOKENS`.
 Optional fields accept `None`.
@@ -48,12 +49,12 @@ The engine resolves two registries by key:
 | `RolloutEngine` argument | Keyed by | Provides |
 | --- | --- | --- |
 | `machine_factories` | `MachineRuntimeSpec.backend` | Task and verifier machines |
-| `harnesses` | `RolloutSpec.harness` | The `Harness` that runs the model side of the task |
+| `harnesses` | `TaskRolloutSpec.harness` | The `Harness` that runs the model side of the task |
 
 No harness is registered by default. Register the shell harness under the name that your specs use, for
 example `RolloutEngine(machine_factories, {"shellbox": shell_harness(command_timeout=30)})`.
 Harness options, such as the shell tool's name and command timeout, belong to the registered harness:
-register one harness for each configuration, and select it with `RolloutSpec.harness`.
+register one harness for each configuration, and select it with `TaskRolloutSpec.harness`.
 A machine selection of `None` supplies no machine.
 Answer-only tasks can omit the task machine.
 A grader with an environment requires a `verifier_machine` selection. Every other grader requires `verifier_machine=None`.
@@ -100,9 +101,9 @@ A harness runs the model side of a task: the prompt, the tools, and the response
 
 - `check(spec)` rejects a spec that the harness cannot run. The engine calls it before any machine starts.
 - `open(context)` starts an episode for one attempt. `HarnessContext` holds the spec, the prepared task
-  machine or `None`, an event sink, and the attempt's run key. An episode class whose constructor takes the
+  machine or `None`, an event sink, and the attempt's run ID. An episode class whose constructor takes the
   context can be the `open` function itself.
-- `grade(episode, record)` grades the attempt of a task whose grader is `SessionGrader`. An unbound episode
+- `grade(episode, rollout)` grades the attempt of a task whose grader is `SessionGrader`. An unbound episode
   method gives the grader the episode's own state, for example `Harness(MathEpisode, grade=MathEpisode.grade)`.
   `RolloutEngine.check` rejects a `SessionGrader` spec when the harness has no `grade`.
 
@@ -121,7 +122,7 @@ A `Transition` has these fields:
 - `done` ends the turn loop.
 - `observations` extend the conversation for the next request, and `token_ids` can pin that request's exact prompt tokens.
 - `reset` replaces the conversation with a new `Prompt`, and the engine starts a new training record.
-- `metrics` holds the step's metrics; `RolloutData.metrics` starts from the last step's metrics.
+- `metrics` holds the step's metrics; `Rollout.metrics` starts from the last step's metrics.
 - `data` is the harness's own record of the step, for example the rewards and token credit that a trainer
   reads. The engine keeps it unchanged in `RolloutStep.transition` and does not interpret it. A consumer that
   aligns rewards or credit with response tokens must check their lengths against `RolloutStep.response_end`.
@@ -165,7 +166,7 @@ engine = RolloutEngine(machine_factories, {"agent": agent_harness(run_agent)})
   new generation. A turn that no caller receives has `metrics["turn_undelivered"] = 1.0` (`TURN_UNDELIVERED`);
   training must exclude that step. The engine still grades with that turn's message.
 - When the rollout ends, a request that is still open fails with `RolloutEnded`, so a bridge can answer its client.
-- Without `grade`, the engine grades the task. With `grade(record)`, the harness grades `SessionGrader` tasks.
+- Without `grade`, the engine grades the task. With `grade(rollout)`, the harness grades `SessionGrader` tasks.
 - The default `check` rejects a task that declares tools other than a shell binding: final tools, the
   `submit_answer` tool of an engine-graded `AnswerCall` task, other interaction tools, and tool providers.
   The bridge does not give these tools to the agent. An agent that serves them passes its own `check`.
@@ -278,17 +279,17 @@ advertises the tools its environment supplies. Trajectories retain the chosen na
 IDs. Graders consume the resulting submission independently of the tool interface.
 
 The model receives only public context, answer-format instructions, tool definitions, and task observations.
-The serialized task and `RolloutSpec` contain the grader and verifier resources. Do not send them to the model.
+The serialized task and `TaskRolloutSpec` contain the grader and verifier resources. Do not send them to the model.
 Oracle resources contain control inputs for task-curation checks. They do not enter a rollout.
 
 ## Run outputs
 
 After the turn loop and before grading, the engine captures the regular files under `TaskSpec.output_paths`
 from the task machine once, for every grader kind including `SessionGrader`.
-`RolloutData.outputs` maps each absolute file path to its bytes. Files outside `output_paths` are not returned.
+`Rollout.outputs` maps each absolute file path to its bytes. Files outside `output_paths` are not returned.
 A task without a task machine or without output paths returns an empty mapping.
 Capture uses the budgets of `taskcompendium.runtime.output_capture`: at most 1,024 files and 16 MiB in total.
-The task's grader, or the harness's `grade` through `RolloutData.outputs`, grades this capture without downloading the files again.
+The task's grader, or the harness's `grade` through `Rollout.outputs`, grades this capture without downloading the files again.
 
 Capture runs inside the verifier deadline, as part of the final grading phase.
 A capture failure or expired deadline raises `RolloutInterrupted` with operation `grade`.
@@ -320,9 +321,10 @@ Archive command failures, archive timeouts, and provider or host I/O failures re
 
 `RolloutEngine(machine_factories, harnesses, observer=observer)` reports progress while an attempt runs.
 The observer implements `async def on_event(self, event: RolloutEvent) -> None`.
-A `RolloutEvent` carries the attempt's `run_key`, the task's `task_id`, and a `payload`.
-`run(spec, model, run_key=...)` sets the run key. Without one, each attempt gets a new random key, so the events of
-repeated attempts of a task stay apart. Pass a key to match an attempt's events with your own records.
+A `RolloutEvent` carries the attempt's `run_id`, the task's `task_id`, and a `payload`.
+`run_task(spec, model, run_id=...)` sets the run ID. Without one, each attempt gets a new random ID, so the events
+of repeated attempts of a task stay apart. `Rollout.run_id` returns the ID, so a caller can match a rollout with
+its events.
 Each payload is a frozen dataclass from `rolloutengine.contracts` whose `type` field is a `RolloutEventType`, so a payload serialized with `dataclasses.asdict` keeps its type.
 Durations are wall-clock seconds.
 
@@ -335,7 +337,7 @@ Durations are wall-clock seconds.
 | `ToolCallCompleted` | By a harness, per tool call that returns an observation | `call_id`, `name`, `observation_bytes`, `done`, `duration` |
 | `TransitionCompleted` | After `advance(turn)` | `turn_index`, `done`, `observations`, `reset`, `duration` |
 | `Graded` | After grading returns | `status`, `reward`, `error`, `failure`, `duration` of output capture and grading |
-| `AttemptEnded` | After cleanup, when `run()` returns or raises `RolloutInterrupted` | `stop_reason`, or the interrupted `operation` and its `error`; `duration` of the whole attempt |
+| `AttemptEnded` | After cleanup, when `run_task()` returns or raises `RolloutInterrupted` | `stop_reason`, or the interrupted `operation` and its `error`; `duration` of the whole attempt |
 
 The engine's events carry the conversation: `HarnessPrepared` the first request, then for each turn
 `ModelTurnCompleted` the assistant message and `TransitionCompleted` the observations or the new conversation
@@ -350,7 +352,7 @@ Each attempt queues its events, up to 1,024, and one task delivers them in order
 After the attempt releases its machines, the engine delivers the remaining events within `cleanup_timeout`.
 An observer exception is logged and ends delivery for that attempt.
 Neither a slow nor a failing observer changes the rollout's record, grade, or deadlines.
-`RolloutData.metrics` counts events the observer did not receive: `observer_dropped_events`, `observer_undelivered_events` and `observer_error_count` appear only when nonzero.
+`Rollout.metrics` counts events the observer did not receive: `observer_dropped_events`, `observer_undelivered_events` and `observer_error_count` appear only when nonzero.
 Events still queued when the process dies are lost.
 Concurrent attempts deliver to a shared observer concurrently.
 No end event is emitted when a token-contract error or cancellation propagates.
@@ -396,6 +398,8 @@ Final grading receives the conversation through the last response, without its o
 
 `RolloutInterrupted` retains the failed operation, served token evidence, and original exception cause.
 Its `rollout` field contains the retained record. Its `operation` field identifies the failed operation.
+Its `grade` field contains the grade of the completed turns, or an unavailable grade when the attempt stopped
+before grading.
 Startup failures retain an empty record.
 A model failure after a completed turn triggers grading of the completed state.
 An interrupted transition retains a terminal step with `metrics["advance_incomplete"] = 1.0` (`ADVANCE_INCOMPLETE`).
@@ -427,7 +431,7 @@ The engine grades by grader kind:
 | `VerifyitGrader` without an environment | `taskcompendium.grading.grade_answer` on the host, in a worker thread |
 | `VerifyitGrader` with an environment | `taskcompendium.runtime.grading.grade_in_sandbox` runs the verifyit command on the verifier machine |
 | `ScriptGrader` | `grade_in_sandbox` runs the grader command on the verifier machine |
-| `SessionGrader` | The harness's `grade(episode, record)`; `check` rejects a harness without it |
+| `SessionGrader` | The harness's `grade(episode, rollout)`; `check` rejects a harness without it |
 | `NoGrader` | `GradeResult(Outcome.UNAVAILABLE, None, reason)` |
 
 Group grading belongs to the caller.
@@ -479,7 +483,8 @@ Optional log probabilities align with response tokens.
 A continuation prompt preserves the full served prefix, including earlier response tokens.
 The engine rejects changed prefixes, empty response evidence, and misaligned log probabilities.
 
-`RolloutData` contains the conversation, token IDs, loss mask, optional log probabilities, grade, per-step records, and run outputs.
+`Rollout` contains the run ID, the conversation, token IDs, loss mask, optional log probabilities, per-step records,
+and run outputs. `GradedRollout` pairs it with the grade.
 `prompt_token_ids` contains the initial prompt. `response_token_ids` contains subsequent model responses and intervening observation tokens.
 The loss mask and log probabilities align with `response_token_ids`, which excludes the initial prompt.
 Model tokens have loss mask 1. Observation tokens have mask 0 and log probability 0.
@@ -498,7 +503,7 @@ It does not add an oversized observation to retained response evidence.
 
 ## Trace modes
 
-`RolloutSpec.trace` selects the evidence that the engine records.
+`TaskRolloutSpec.trace` selects the evidence that the engine records.
 `TraceMode.EXACT_TOKENS`, the default, enforces the exact-token contract above.
 `TraceMode.MESSAGES` lets a model behind a chat endpoint drive a rollout for evaluation, task validation, or data collection.
 Chat endpoints re-tokenize the conversation for every request, so the exact-token contract cannot hold there:
@@ -508,7 +513,7 @@ It still checks token replay: a chat endpoint cannot serve `Prompt.token_ids` or
 so a `MESSAGES` rollout whose harness pins prompt tokens raises `RolloutContractError`
 unless the model reports serving exactly those tokens.
 A model may return a `ModelTurn` with empty token fields and `logprobs=None`.
-The engine keeps the token IDs a model does report: `RolloutData.prompt_token_ids` is the first prompt, `response_token_ids`
+The engine keeps the token IDs a model does report: `Rollout.prompt_token_ids` is the first prompt, `response_token_ids`
 is the last served sequence after it, and both are informational only.
 The loss mask is all zeros with one value per response token, and `logprobs` is `None`.
 Every `MESSAGES` record, including an empty or interrupted one, carries `metrics["trace"] = "messages"`.
@@ -520,15 +525,15 @@ Do not train on `MESSAGES` rollouts; reject records that carry the `trace` metri
 The task's `answer_format` controls final-answer extraction and model-visible submission instructions.
 `rolloutengine.shell.task_prompt(task, shell_tool, provider_tools)` renders the first prompt: the public messages, with the format's instruction and tools for text, number, JSON, and native-action answers.
 
-Construct a `RolloutSpec`, and check it with `RolloutEngine.check` before you start a batch. The
+Construct a `TaskRolloutSpec`, and check it with `RolloutEngine.check` before you start a batch. The
 [rollout tests](https://github.com/marin-community/marin/blob/main/lib/rolloutengine/tests/test_rollout.py) contain executable examples.
 One engine serves every attempt; each run passes its model:
 
 ```python
-from rolloutengine.contracts import RolloutData
+from rolloutengine.contracts import GradedRollout
 from rolloutengine.engine import Model, RolloutEngine
 from rolloutengine.shell import shell_harness
-from rolloutengine.spec import RolloutSpec
+from rolloutengine.spec import TaskRolloutSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 
@@ -538,8 +543,8 @@ engine = RolloutEngine(
 )
 
 
-async def run_task(spec: RolloutSpec, model: Model) -> RolloutData:
-    return await engine.run(spec, model)
+async def run_task(spec: TaskRolloutSpec, model: Model) -> GradedRollout:
+    return await engine.run_task(spec, model)
 ```
 
 From the Marin repository root, with the test environment installed:

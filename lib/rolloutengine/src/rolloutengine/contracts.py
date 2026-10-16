@@ -116,14 +116,14 @@ class RolloutFailure:
 
 
 @dataclass(frozen=True)
-class RolloutData:
-    """The record of one attempt: the conversation, the token evidence, the grade, and the run outputs.
+class Rollout:
+    """What happened in one attempt: the conversation, the token evidence, the steps, and the run outputs.
 
-    A ``Transition.reset`` starts a new training record. Thus the record holds only the part after the last reset.
+    A ``Transition.reset`` starts a new training record. Thus the rollout holds only the part after the last reset.
     """
 
-    task_id: str
-    """The ID of the task that the attempt ran."""
+    run_id: str
+    """The ID of the attempt, the same as in its events."""
     messages: tuple[dict[str, Any], ...]
     """The chat of this training record, through the last model response. The grader reads it."""
     prompt_token_ids: tuple[int, ...]
@@ -134,8 +134,6 @@ class RolloutData:
     """One value per response token: 1 for a sampled token, 0 for an observation. All 0 in a messages trace."""
     logprobs: tuple[float, ...] | None
     """The sampling log probability of each response token, 0.0 for observation tokens. None if a turn had none."""
-    grade: GradeResult
-    """The verdict of the task's grader, or of the harness for a ``SessionGrader`` task. Unavailable if no response."""
     stop_reason: str
     """Why the turn loop ended, for example ``"stop"``, ``"length"``, ``"max_turns"``, or ``"budget_reached"``."""
     steps: tuple["RolloutStep", ...] = ()
@@ -148,6 +146,16 @@ class RolloutData:
     """For an interrupted attempt: the exception type and the operation that failed."""
 
 
+@dataclass(frozen=True)
+class GradedRollout:
+    """One attempt of a task, and its grade."""
+
+    rollout: Rollout
+    """What happened in the attempt."""
+    grade: GradeResult
+    """The verdict of the task's grader, or of the harness for a ``SessionGrader`` task. Unavailable if no response."""
+
+
 class RolloutOperation(StrEnum):
     ATTEMPT = "attempt"
     START = "start"
@@ -158,11 +166,16 @@ class RolloutOperation(StrEnum):
 
 
 class RolloutInterrupted(RuntimeError):
-    """An execution failure with the last completed rollout and original exception cause."""
+    """An attempt that failed during ``operation``, with the rollout so far and the original exception as cause.
 
-    def __init__(self, rollout: RolloutData, operation: RolloutOperation):
+    ``grade`` grades the completed turns, because the engine still grades them when the model fails. It is
+    unavailable when the attempt stopped before grading.
+    """
+
+    def __init__(self, rollout: Rollout, operation: RolloutOperation, grade: GradeResult):
         self.rollout = rollout
         self.operation = operation
+        self.grade = grade
         super().__init__(f"Rollout interrupted during {operation}")
 
 
@@ -183,7 +196,7 @@ class Transition:
     reset: Prompt | None = None
     """A new prompt that replaces the chat in a new training record. Skipped on the last turn or at the token budget."""
     metrics: dict[str, Any] = field(default_factory=dict)
-    """The step's metrics. ``RolloutData.metrics`` starts from the metrics of the last step."""
+    """The step's metrics. ``Rollout.metrics`` starts from the metrics of the last step."""
     data: object = None
     """The harness's own data for the step, for example rewards for a trainer. The engine does not read it."""
 
@@ -315,9 +328,9 @@ RolloutEventPayload = (
 
 @dataclass(frozen=True)
 class RolloutEvent:
-    """One event of the attempt that ``RolloutEngine.run`` started with ``run_key`` for task ``task_id``."""
+    """One event of the attempt that ``RolloutEngine.run`` started with ``run_id`` for task ``task_id``."""
 
-    run_key: str
+    run_id: str
     task_id: str
     payload: RolloutEventPayload
 
