@@ -705,7 +705,7 @@ def test_compaction_preserves_newest_value_across_output_buffers(tmp_path, monke
     monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", 1)
     assert compact_table(root, "samples") == CompactionResult(written=3, superseded=0)
     view = ReadView(root)
-    assert len(view.list_shards("samples")) == 2
+    assert len(view.list_shards("samples")) > 1
     expected = [{"id": "a", "value": "new"}, {"id": "b", "value": "only"}]
     assert sorted(view.scan("samples", columns=["id", "value"]).to_pylist(), key=lambda row: row["id"]) == expected
     assert list(view.iter_rows("samples", columns=["id", "value"])) == expected

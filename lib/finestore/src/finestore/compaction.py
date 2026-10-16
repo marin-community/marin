@@ -226,7 +226,6 @@ def _compact_shards(
                     iter_shard_batches(
                         shard,
                         unified,
-                        primary_key,
                         pa_fs,
                         scan_profile=replace(profile, batch_rows=_scan_batch_rows(item, len(shards))),
                     )

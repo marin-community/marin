@@ -32,14 +32,13 @@ BLOB_PART_ROW_GROUP_ROWS = 1
 BLOB_DESCRIPTOR_ROW_GROUP_ROWS = 1024
 
 
-def row_groups(row_tables: Iterable[pa.Table], *, max_rows: int | None = None) -> Iterator[pa.Table]:
+def row_groups(row_tables: Iterable[pa.Table], *, max_rows: int) -> Iterator[pa.Table]:
     """Group retained Arrow rows by row count and actual buffer size."""
-    row_limit = ROW_GROUP_ROWS if max_rows is None else max_rows
     group: list[pa.Table] = []
     group_rows = 0
     group_bytes = 0
     for table in row_tables:
-        if group and (group_rows + table.num_rows > row_limit or group_bytes + table.nbytes > ROW_GROUP_TARGET_BYTES):
+        if group and (group_rows + table.num_rows > max_rows or group_bytes + table.nbytes > ROW_GROUP_TARGET_BYTES):
             yield pa.concat_tables(group)
             group = []
             group_rows = 0

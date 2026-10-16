@@ -302,31 +302,22 @@ def _matches_filter(row: dict, where: list[tuple[str, str, object]]) -> bool:
 def iter_shard_batches(
     shard: _ReadableShard,
     unified: pa.Schema,
-    primary_key: tuple[str, ...],
     pa_fs: PyFileSystem,
     columns: list[str] | None = None,
     where: list[tuple[str, str, object]] | None = None,
     scan_profile: _ScanProfile = _TABLE_SCAN_PROFILE,
 ) -> Generator[pa.RecordBatch, None, None]:
-    """Yield batches in primary-key order with resolved commit sequences."""
+    """Yield shard batches with resolved commit and generation coordinates."""
     dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
-    with ExitStack() as stack:
-        if shard.primary_key_sorted:
-            batches = stack.enter_context(
-                dataset.scanner(
-                    columns=columns,
-                    filter=_build_filter(where),
-                    use_threads=False,
-                    batch_size=scan_profile.batch_rows,
-                    batch_readahead=scan_profile.batch_readahead,
-                    fragment_readahead=scan_profile.fragment_readahead,
-                    fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
-                ).to_reader()
-            )
-        else:
-            source = dataset.to_table(columns=columns, filter=_build_filter(where))
-            sort_columns = [(name, "ascending") for name in primary_key if name in source.column_names]
-            batches = source.sort_by(sort_columns).to_batches(max_chunksize=scan_profile.batch_rows)
+    with dataset.scanner(
+        columns=columns,
+        filter=_build_filter(where),
+        use_threads=False,
+        batch_size=scan_profile.batch_rows,
+        batch_readahead=scan_profile.batch_readahead,
+        fragment_readahead=scan_profile.fragment_readahead,
+        fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
+    ).to_reader() as batches:
         for batch in batches:
             commit_index = batch.schema.get_field_index(SystemColumns.COMMIT)
             if commit_index < 0:
@@ -363,8 +354,18 @@ def iter_shard_rows(
     scan_profile: _ScanProfile = _TABLE_SCAN_PROFILE,
 ) -> Generator[VersionedRow, None, None]:
     """Yield rows from one shard in primary-key order with version coordinates."""
-    with closing(iter_shard_batches(shard, unified, primary_key, pa_fs, columns, where, scan_profile)) as batches:
-        for batch in batches:
+    with closing(iter_shard_batches(shard, unified, pa_fs, columns, where, scan_profile)) as batches:
+        if shard.primary_key_sorted:
+            ordered_batches = batches
+        else:
+            buffered = list(batches)
+            if not buffered:
+                return
+            sort_columns = [(name, "ascending") for name in primary_key if name in buffered[0].schema.names]
+            ordered_batches = (
+                pa.Table.from_batches(buffered).sort_by(sort_columns).to_batches(max_chunksize=scan_profile.batch_rows)
+            )
+        for batch in ordered_batches:
             for row in batch.to_pylist():
                 key = tuple((row.get(name) is None, row.get(name)) for name in primary_key)
                 generation = row.pop(SystemColumns.GENERATION)
