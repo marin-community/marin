@@ -2329,9 +2329,9 @@ class RecordingObserver:
     async def on_event(self, event: RolloutEvent) -> None:
         self.events.append(event)
 
-    def payloads(self, run_key: str) -> list[RolloutEventPayload]:
-        """The untimed payloads, after checking that every event belongs to ``run_key`` of the arithmetic task."""
-        assert {(event.run_key, event.task_id) for event in self.events} == {(run_key, "arithmetic")}
+    def payloads(self) -> list[RolloutEventPayload]:
+        """The untimed payloads, after checking that every event belongs to one attempt of the arithmetic task."""
+        assert {(event.run_key, event.task_id) for event in self.events} == {(self.events[0].run_key, "arithmetic")}
         return [
             (
                 replace(event.payload, duration=0.0)
@@ -2362,7 +2362,7 @@ async def test_observer_receives_ordered_events_for_a_multi_turn_shell_rollout()
         rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()), run_key="arithmetic/3"
     )
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
-    assert observer.payloads("arithmetic/3") == [
+    assert observer.payloads() == [
         *shell_turn_payloads(model),
         ModelTurnCompleted(1, record.messages[-1], "stop", 5, 1, None, {}, 0.0),
         TransitionCompleted(1, True, (), None, 0.0),
@@ -2397,12 +2397,20 @@ async def test_observer_receives_interrupted_operation_after_grading_completed_t
             rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
         )
     assert interrupted.value.operation == RolloutOperation.MODEL
-    # Without a run key, events carry the task id.
-    assert observer.payloads("arithmetic") == [
+    assert observer.payloads() == [
         *shell_turn_payloads(model),
         Graded(Outcome.GRADED, 1.0, None, None, 0.0),
         AttemptEnded(None, RolloutOperation.MODEL, repr(ConnectionError("inference server unavailable")), 0.0),
     ]
+
+
+async def test_attempts_without_a_run_key_keep_their_events_apart():
+    observer = RecordingObserver()
+    runner = engine(ReplayModel([{"role": "assistant", "content": "12"}] * 2), observer=observer)
+    for _ in range(2):
+        await runner.run(rollout_spec(arithmetic_task()))
+    keys = [event.run_key for event in observer.events]
+    assert len(set(keys)) == 2
 
 
 async def test_observer_failure_leaves_the_rollout_unchanged():

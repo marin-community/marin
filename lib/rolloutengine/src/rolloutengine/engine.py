@@ -5,6 +5,7 @@
 
 import asyncio
 import time
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, replace
@@ -208,14 +209,15 @@ class RolloutEngine:
     async def run(self, spec: RolloutSpec, model: Model, *, run_key: str | None = None) -> RolloutData:
         """Run one attempt of ``spec`` with ``model``; release its resources outside the attempt deadline.
 
-        Every event of the attempt carries ``run_key``, which defaults to the task id; callers that run
-        a task more than once pass a key per attempt to tell the attempts' events apart.
+        Every event of the attempt carries ``run_key``, a new random key unless the caller passes one.
+        A spec is reused for many attempts, so the key is an argument of the attempt, not of the spec;
+        pass one to match the attempt's events with the caller's own records.
         Queued events are delivered within the cleanup deadline after the attempt's resources are
         released; events the observer did not receive are counted in ``RolloutData.metrics``.
         An attempt that fails raises ``RolloutInterrupted`` with the record so far.
         """
         self.check(spec)
-        run_key = spec.task.id if run_key is None else run_key
+        run_key = uuid.uuid4().hex if run_key is None else run_key
         attempt = _Attempt(
             spec,
             self.harnesses[spec.harness],
