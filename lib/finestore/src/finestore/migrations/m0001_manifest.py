@@ -21,6 +21,7 @@ from finestore.layout import (
     CommitToken,
     FineStoreLayout,
     HeadMetadata,
+    KeyBound,
     Manifest,
     ManifestTable,
     OnConflict,
@@ -80,6 +81,8 @@ class LegacyReadShard:
     generation: int
     commit_sequence: int = 0
     primary_key_sorted: bool = False
+    min_key: KeyBound | None = None
+    max_key: KeyBound | None = None
 
 
 @dataclasses.dataclass(frozen=True)

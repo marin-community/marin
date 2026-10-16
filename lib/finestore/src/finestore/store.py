@@ -45,6 +45,7 @@ from finestore.layout import (
     SystemColumns,
     TableMetadata,
     build_uri,
+    key_bounds,
 )
 from finestore.migrations import migrate_for_write
 from finestore.reader import ReadView
@@ -460,20 +461,20 @@ class DataStore:
         self.request_stop()
         self._thread.join()
         self.flush()
-        try:
-            if self._has_residual_shards() and self._acquire_maintenance():
-                with self._commit_lock:
-                    compact_writer_tables(
-                        self.root,
-                        list(self._tables),
-                        writer_id=self.writer_id,
-                        max_input_bytes=_CLOSE_COMPACTION_MAX_INPUT_BYTES,
-                        max_input_rows=_CLOSE_COMPACTION_MAX_INPUT_ROWS,
-                        target_bytes=self._compaction_target_bytes,
-                        coordinator=self._commits,
-                    )
-        finally:
-            self._release_maintenance()
+        self._release_maintenance()
+        # Merging only this writer's shards needs no lease: other closers touch disjoint
+        # inputs, and a maintainer that consumed them first makes the merge a benign no-op.
+        if self._has_residual_shards():
+            with self._commit_lock:
+                compact_writer_tables(
+                    self.root,
+                    list(self._tables),
+                    writer_id=self.writer_id,
+                    max_input_bytes=_CLOSE_COMPACTION_MAX_INPUT_BYTES,
+                    max_input_rows=_CLOSE_COMPACTION_MAX_INPUT_ROWS,
+                    target_bytes=self._compaction_target_bytes,
+                    coordinator=self._commits,
+                )
 
     def _has_residual_shards(self) -> bool:
         """Whether this writer left at least two level-zero shards in some registered table."""
@@ -757,6 +758,7 @@ class DataTable:
             for group in table_row_groups(self.name, arrow_rows):
                 writer.write_table(group)
         written = writer.result
+        bounds = key_bounds(row.key for row in rows) if primary_key_sorted else None
         return Shard(
             path=path,
             writer=self._writer_id,
@@ -767,6 +769,8 @@ class DataTable:
             size_bytes=written.size_bytes,
             content_sha256=written.content_sha256,
             primary_key_sorted=primary_key_sorted,
+            min_key=None if bounds is None else bounds[0],
+            max_key=None if bounds is None else bounds[1],
         )
 
     def flush(self) -> CommitToken | None:

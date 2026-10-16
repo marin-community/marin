@@ -64,6 +64,27 @@ def test_read_view_costs_two_requests(simulated_bucket):
     assert delta.total() <= 2, dict(delta.requests)
 
 
+def test_point_lookup_reads_only_shards_whose_bounds_match(simulated_bucket):
+    fs = simulated_bucket
+    store = DataStore.open(ROOT, writer_id="w1", flush_interval=3600)
+    table = store.table("samples", primary_key=("id",))
+    for first in (0, 100, 200, 300):
+        table.extend({"id": first + offset} for offset in range(10))
+        store.flush()
+    store.request_stop()
+    view = ReadView(ROOT)
+    assert len(view.list_shards("samples")) == 4
+    before = fs.log.snapshot()
+    found = view.point("samples", id=205)
+    assert found is not None and found["id"] == 205
+    delta = fs.log.delta(before)
+    # The table metadata plus the footer and rows of the one shard that can hold the key;
+    # manifest shards are never stat'ed before they are opened.
+    assert delta.requests[Request.HEAD] == 0
+    assert delta.total() <= 3, dict(delta.requests)
+    assert view.point("samples", id=999) is None
+
+
 def test_concurrent_writers_publish_every_row_through_conflicts():
     writers = 6
     commits = 3

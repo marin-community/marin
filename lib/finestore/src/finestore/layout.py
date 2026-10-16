@@ -10,6 +10,7 @@ commit token for every table and object in a transaction.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from urllib.parse import urlsplit
@@ -107,8 +108,36 @@ class SealMarker(_FormatModel):
     superseded: dict[str, int] = Field(default_factory=dict)
 
 
+KeyBound = tuple[str | int, ...]
+
+
+def key_bounds(keys: Iterable[tuple]) -> tuple[KeyBound, KeyBound] | None:
+    """Return the smallest and largest primary key among ``keys``, or ``None`` when unbounded.
+
+    Bounds are recorded only for keys made of strings and integers, so readers can compare
+    a lookup key against them without ambiguity. A row count of zero or any other key type
+    leaves the shard unbounded.
+    """
+    smallest: tuple | None = None
+    largest: tuple | None = None
+    for key in keys:
+        if not all(type(value) in (str, int) for value in key):
+            return None
+        if smallest is None or key < smallest:
+            smallest = key
+        if largest is None or key > largest:
+            largest = key
+    if smallest is None or largest is None:
+        return None
+    return smallest, largest
+
+
 class Shard(_FormatModel):
-    """One immutable Parquet segment referenced by a manifest."""
+    """One immutable Parquet segment referenced by a manifest.
+
+    ``min_key`` and ``max_key`` bound the primary keys stored in the shard when they are
+    strings and integers; a reader skips the shard for lookups outside that range.
+    """
 
     path: str
     writer: str
@@ -120,6 +149,8 @@ class Shard(_FormatModel):
     content_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
     commit_sequence: int = 0
     primary_key_sorted: bool = False
+    min_key: KeyBound | None = None
+    max_key: KeyBound | None = None
 
 
 class ManifestTable(_FormatModel):

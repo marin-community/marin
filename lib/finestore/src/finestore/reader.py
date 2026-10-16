@@ -10,7 +10,7 @@ import io
 import itertools
 import threading
 import time
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, closing
@@ -33,6 +33,7 @@ from finestore.layout import (
     BlobTables,
     CommitToken,
     FineStoreLayout,
+    KeyBound,
     SealMarker,
     Shard,
     SystemColumns,
@@ -76,6 +77,17 @@ _BLOB_DESCRIPTOR_LOOKUPS = telemetry.counter("finestore_blob_descriptor_lookups"
 _BLOB_DESCRIPTOR_SECONDS = telemetry.histogram("finestore_blob_descriptor_seconds", unit="s")
 _BLOB_PAYLOAD_SECONDS = telemetry.histogram("finestore_blob_payload_seconds", unit="s")
 _BLOB_SELECTED_SHARDS = telemetry.histogram("finestore_blob_selected_shards", unit="{shard}")
+
+
+class _ShardHandler(FSSpecHandler):
+    """Open manifest shards without the existence check Arrow's handler issues first.
+
+    Every shard in a snapshot is immutable and already published, so the HEAD request
+    Arrow would send before each open is wasted on object storage.
+    """
+
+    def open_input_file(self, path: str) -> pa.PythonFile:
+        return pa.PythonFile(self.fs.open(path, mode="rb"), mode="r")
 
 
 class _NoReadAheadHandler(FSSpecHandler):
@@ -250,6 +262,71 @@ class _ReadableShard(Protocol):
 
     @property
     def primary_key_sorted(self) -> bool: ...
+
+    @property
+    def min_key(self) -> KeyBound | None: ...
+
+    @property
+    def max_key(self) -> KeyBound | None: ...
+
+
+_SCHEMA_CACHE_SIZE = 8192
+_schema_cache: OrderedDict[str, pa.Schema] = OrderedDict()
+_schema_cache_lock = threading.Lock()
+
+
+def shard_schema(path: str, filesystem: PyFileSystem) -> pa.Schema:
+    """Return the Arrow schema of an immutable shard, reading its footer once per process."""
+    with _schema_cache_lock:
+        cached = _schema_cache.get(path)
+        if cached is not None:
+            _schema_cache.move_to_end(path)
+            return cached
+    schema = pq.read_schema(path, filesystem=filesystem)
+    with _schema_cache_lock:
+        _schema_cache[path] = schema
+        while len(_schema_cache) > _SCHEMA_CACHE_SIZE:
+            _schema_cache.popitem(last=False)
+    return schema
+
+
+def _comparable(value: object, bound: object) -> bool:
+    return type(value) is type(bound) and type(value) in (str, int)
+
+
+def shard_may_contain(shard: _ReadableShard, primary_key: tuple[str, ...], where: list[tuple[str, str, object]]) -> bool:
+    """Whether ``where`` can match a row inside the shard's recorded primary-key bounds.
+
+    Equality clauses on a prefix of the primary key are compared as a tuple against the
+    bounds, and a membership clause on the first key column is checked value by value. An
+    unbounded shard, or a lookup value of another type than the bounds, always matches.
+    """
+    if shard.min_key is None or shard.max_key is None:
+        return True
+    equalities = {column: value for column, operator, value in where if operator == "=="}
+    prefix: list[object] = []
+    for index, column in enumerate(primary_key):
+        if column not in equalities:
+            break
+        value = equalities[column]
+        if not _comparable(value, shard.min_key[index]) or not _comparable(value, shard.max_key[index]):
+            break
+        prefix.append(value)
+    if prefix:
+        width = len(prefix)
+        return shard.min_key[:width] <= tuple(prefix) <= shard.max_key[:width]
+    first = primary_key[0]
+    for column, operator, values in where:
+        if column != first or operator != "in":
+            continue
+        candidates = list(cast(Iterable[object], values))
+        if not all(
+            _comparable(value, shard.min_key[0]) and _comparable(value, shard.max_key[0]) for value in candidates
+        ):
+            return True
+        lowest, highest = shard.min_key[:1], shard.max_key[:1]
+        return any(lowest <= (cast(str | int, value),) <= highest for value in candidates)
+    return True
 
 
 @dataclass(frozen=True)
@@ -426,8 +503,12 @@ def _read_plan(
     if not shards:
         return None
     pushdown_where, post_dedup_where = _partition_filter(where, primary_key)
+    if pushdown_where:
+        shards = tuple(shard for shard in shards if shard_may_contain(shard, primary_key, pushdown_where))
+        if not shards:
+            return None
     schema = pa.unify_schemas(
-        [pq.read_schema(shard.path, filesystem=filesystem) for shard in shards],
+        [shard_schema(shard.path, filesystem) for shard in shards],
         promote_options="permissive",
     )
     read_columns = None
@@ -539,7 +620,7 @@ class _ReadOperations:
         if not shards:
             return None
         fs, _ = factory.url_to_fs(self.root)
-        handler = _NoReadAheadHandler(fs) if table in (BlobTables.DESCRIPTORS, BlobTables.PARTS) else FSSpecHandler(fs)
+        handler = _NoReadAheadHandler(fs) if table in (BlobTables.DESCRIPTORS, BlobTables.PARTS) else _ShardHandler(fs)
         return _read_plan(PyFileSystem(handler), shards, self.primary_key(table), columns, where)
 
     def scan(
@@ -673,14 +754,21 @@ class _ReadOperations:
         if diagnostics is not None:
             diagnostics.descriptor_lookups += 1
         try:
-            shards = tuple(self.list_shards(BlobTables.DESCRIPTORS))
+            if not self.list_shards(BlobTables.DESCRIPTORS):
+                return None
+            primary_key = self.primary_key(BlobTables.DESCRIPTORS)
+            membership = [(BlobColumns.NAME, "in", list(names))]
+            shards = tuple(
+                shard
+                for shard in self.list_shards(BlobTables.DESCRIPTORS)
+                if shard_may_contain(shard, primary_key, membership)
+            )
             if not shards:
                 return None
             if diagnostics is not None:
                 diagnostics.selected_shards += len(shards)
             fs, _ = factory.url_to_fs(self.root)
             filesystem = PyFileSystem(_NoReadAheadHandler(fs))
-            primary_key = self.primary_key(BlobTables.DESCRIPTORS)
             # Read footers and matching rows together, with bounded concurrent decoding.
             # Version resolution still spans every shard in the committed snapshot.
             with ThreadPoolExecutor(max_workers=min(MAX_DESCRIPTOR_READS, len(shards))) as executor:

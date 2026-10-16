@@ -11,6 +11,7 @@ import json
 import random
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -33,7 +34,7 @@ from finestore.layout import (
     OnConflict,
 )
 from finestore.migrations import LegacyReadView, migrate
-from finestore.reader import BlobCorruptionError, ReadView
+from finestore.reader import BlobCorruptionError, ReadView, shard_may_contain
 from finestore.store import (
     INLINE_BLOB_BYTES,
     OBJECT_PART_BYTES,
@@ -1252,9 +1253,7 @@ def test_close_compacts_small_blob_archive_and_preserves_pinned_view(archive_roo
     assert ReadView(root).token == final.token
 
 
-def test_concurrent_close_merges_one_writer_and_preserves_every_value(archive_root):
-    # Close-time merges run under the maintenance lease: a writer that finds the lease held
-    # leaves its shards at level zero, and either way every value stays readable.
+def test_concurrent_closes_merge_each_writers_shards_and_preserve_every_value(archive_root):
     root = archive_root
     with DataStore.open(root, writer_id="seed", flush_interval=3600) as seed:
         for name in ("seed-a", "seed-b"):
@@ -1282,10 +1281,9 @@ def test_concurrent_close_merges_one_writer_and_preserves_every_value(archive_ro
     final = ReadView(root)
     shards = final.list_shards(BlobTables.DESCRIPTORS)
     assert set(shard.path for shard in seed_shards).issubset(shard.path for shard in shards)
-    seed_paths = {shard.path for shard in seed_shards}
-    merged = [shard for shard in shards if shard.generation == 1 and shard.path not in seed_paths]
-    assert 1 <= len(merged) <= 2
-    assert len(shards) == len(seed_shards) + len(merged) + 2 * (2 - len(merged))
+    merged = [shard for shard in shards if shard.path not in {seed.path for seed in seed_shards}]
+    assert sorted(shard.writer for shard in merged) == ["compactor", "compactor"]
+    assert [shard.generation for shard in merged] == [1, 1]
     expected = {"seed-a": b"seed-a", "seed-b": b"seed-b", "first": b"older", "second": b"newer", "shared": b"newer"}
     assert final.read_blobs(list(expected)) == expected
     assert pinned.read_blobs(list(expected)) == expected
@@ -1575,6 +1573,53 @@ def test_manifest_migration_requires_a_sealed_archive(tmp_path, open_archive):
 
     with pytest.raises(ValueError, match="not sealed"):
         open_archive(str(root))
+
+
+@dataclass(frozen=True)
+class _BoundedShard:
+    min_key: tuple | None
+    max_key: tuple | None
+    path: str = "shard"
+    generation: int = 0
+    commit_sequence: int = 1
+    primary_key_sorted: bool = True
+
+
+@pytest.mark.parametrize(
+    ("bounds", "where", "expected"),
+    [
+        ((("b", 1), ("d", 9)), [("name", "==", "c")], True),
+        ((("b", 1), ("d", 9)), [("name", "==", "e")], False),
+        ((("b", 1), ("d", 9)), [("name", "==", "b"), ("part", "==", 0)], False),
+        ((("b", 1), ("d", 9)), [("name", "==", "d"), ("part", "==", 9)], True),
+        ((("b", 1), ("d", 9)), [("part", "==", 50)], True),
+        ((("b", 1), ("d", 9)), [("name", "in", ["a", "e"])], False),
+        ((("b", 1), ("d", 9)), [("name", "in", ["a", "c"])], True),
+        ((("b", 1), ("d", 9)), [("name", "==", 3)], True),
+        ((None, None), [("name", "==", "z")], True),
+    ],
+)
+def test_shard_bounds_prune_only_lookups_outside_a_typed_key_prefix(bounds, where, expected):
+    shard = _BoundedShard(min_key=bounds[0], max_key=bounds[1])
+    assert shard_may_contain(shard, ("name", "part"), where) is expected
+
+
+def test_flushed_and_compacted_shards_record_primary_key_bounds(archive_root):
+    with DataStore.open(archive_root, writer_id="w1", flush_interval=3600) as store:
+        table = store.table("samples", primary_key=("id",))
+        table.extend({"id": value} for value in (7, 3, 5))
+        store.flush()
+        table.extend({"id": value} for value in (None, 1))
+        store.flush()
+        (first, second) = ReadView(archive_root).list_shards("samples")
+        assert (first.min_key, first.max_key) == ((3,), (7,))
+        assert (second.min_key, second.max_key) == (None, None)
+        store.compact("samples")
+        (compacted,) = ReadView(archive_root).list_shards("samples")
+        assert (compacted.min_key, compacted.max_key) == (None, None)
+        found = ReadView(archive_root).point("samples", id=1)
+        assert found is not None and found["id"] == 1
+        assert ReadView(archive_root).scan("samples", where=[("id", "in", [5, 7])]).num_rows == 2
 
 
 def _overfill_level_zero(store: DataStore, table: str, shards: int) -> None:

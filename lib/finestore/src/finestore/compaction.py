@@ -16,7 +16,6 @@ from typing import Protocol
 
 import pyarrow as pa
 import pyarrow.compute as pc
-import pyarrow.parquet as pq
 import rigging.filesystem.factory as factory
 from pyarrow.fs import PyFileSystem
 from rigging import telemetry
@@ -25,8 +24,8 @@ from rigging.timing import retry_with_backoff
 
 from finestore import shard_writer
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
-from finestore.layout import BlobTables, CommitToken, FineStoreLayout, Shard, SystemColumns
-from finestore.reader import ReadView, _BoundedReadAheadHandler, iter_shard_row_groups
+from finestore.layout import BlobTables, CommitToken, FineStoreLayout, Shard, SystemColumns, key_bounds
+from finestore.reader import ReadView, _BoundedReadAheadHandler, iter_shard_row_groups, shard_schema
 from finestore.shard_writer import ShardWriter
 
 logger = logging.getLogger(__name__)
@@ -208,9 +207,7 @@ def _compact_shards(
 
     fs, _ = factory.url_to_fs(root)
     pa_fs = PyFileSystem(_BoundedReadAheadHandler(fs, _COMPACTION_FILE_READ_AHEAD_BYTES))
-    unified = pa.unify_schemas(
-        [pq.read_schema(shard.path, filesystem=pa_fs) for shard in shards], promote_options="permissive"
-    )
+    unified = pa.unify_schemas([shard_schema(shard.path, pa_fs) for shard in shards], promote_options="permissive")
     if SystemColumns.COMMIT not in unified.names:
         unified = unified.append(pa.field(SystemColumns.COMMIT, pa.int64()))
     if SystemColumns.GENERATION not in unified.names:
@@ -235,6 +232,9 @@ def _compact_shards(
                 for row_group in shard_writer.table_row_groups(table, rows):
                     writer.write_table(row_group)
             sequences = pc.fill_null(batch[SystemColumns.SEQUENCE], 0)
+            # The batch is sorted by primary key, so its first and last rows bound every key.
+            edge_rows = batch.select(list(primary_key)).take([0, batch.num_rows - 1]).to_pylist()
+            bounds = key_bounds(tuple(row[column] for column in primary_key) for row in edge_rows)
             outputs.append(
                 Shard(
                     path=output_path,
@@ -246,6 +246,8 @@ def _compact_shards(
                     size_bytes=writer.result.size_bytes,
                     content_sha256=writer.result.content_sha256,
                     primary_key_sorted=True,
+                    min_key=None if bounds is None else bounds[0],
+                    max_key=None if bounds is None else bounds[1],
                 )
             )
             written += batch.num_rows
