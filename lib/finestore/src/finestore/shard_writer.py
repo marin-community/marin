@@ -1,16 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shard write primitive: stream Arrow batches to one immutable, atomically-published Parquet object.
-
-:class:`ShardWriter` is the single write path shared by a store flush (buffered rows) and a
-compaction merge (a k-way-merged stream). Callers group fixed-schema rows toward
-:data:`ROW_GROUP_ROWS` and :data:`ROW_GROUP_TARGET_BYTES`, isolating a row that exceeds either
-target. Chunked objects bound each binary value separately.
-Blob parts occupy separate row groups so a reader can decode them incrementally.
-The shard is written to a temp sibling key and renamed into place on close, so its manifest commit
-can never expose a half-written object.
-"""
+"""Write immutable Parquet shards with bounded row groups and atomic publication."""
 
 from __future__ import annotations
 
@@ -41,14 +32,13 @@ BLOB_PART_ROW_GROUP_ROWS = 1
 BLOB_DESCRIPTOR_ROW_GROUP_ROWS = 1024
 
 
-def row_groups(row_tables: Iterable[pa.Table], *, max_rows: int | None = None) -> Iterator[pa.Table]:
+def row_groups(row_tables: Iterable[pa.Table], *, max_rows: int) -> Iterator[pa.Table]:
     """Group retained Arrow rows by row count and actual buffer size."""
-    row_limit = ROW_GROUP_ROWS if max_rows is None else max_rows
     group: list[pa.Table] = []
     group_rows = 0
     group_bytes = 0
     for table in row_tables:
-        if group and (group_rows + table.num_rows > row_limit or group_bytes + table.nbytes > ROW_GROUP_TARGET_BYTES):
+        if group and (group_rows + table.num_rows > max_rows or group_bytes + table.nbytes > ROW_GROUP_TARGET_BYTES):
             yield pa.concat_tables(group)
             group = []
             group_rows = 0
@@ -63,12 +53,12 @@ def row_groups(row_tables: Iterable[pa.Table], *, max_rows: int | None = None) -
 def table_row_groups(table: str, row_tables: Iterable[pa.Table]) -> Iterator[pa.Table]:
     """Apply the row-group policy for ``table`` to retained Arrow rows."""
     if table == BlobTables.PARTS:
-        max_rows = BLOB_PART_ROW_GROUP_ROWS
+        limit = BLOB_PART_ROW_GROUP_ROWS
     elif table == BlobTables.DESCRIPTORS:
-        max_rows = BLOB_DESCRIPTOR_ROW_GROUP_ROWS
+        limit = BLOB_DESCRIPTOR_ROW_GROUP_ROWS
     else:
-        max_rows = None
-    yield from row_groups(row_tables, max_rows=max_rows)
+        limit = ROW_GROUP_ROWS
+    yield from row_groups(row_tables, max_rows=limit)
 
 
 @dataclass(frozen=True)
@@ -136,8 +126,7 @@ class ShardWriter:
 
     def write_table(self, table: pa.Table) -> None:
         """Append ``table``, split into row groups of at most :data:`ROW_GROUP_ROWS` rows; its schema
-        must match the writer's. A caller streaming a merge passes one bounded batch per call, so this
-        usually writes a single group."""
+        must match the writer's."""
         self._writer.write_table(table, row_group_size=ROW_GROUP_ROWS)
 
     def close(self) -> ShardWriteResult:

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import random
@@ -654,8 +655,8 @@ def test_compaction_deduplicates_one_level_zero_shard_then_becomes_stable(tmp_pa
 
 
 def test_compaction_unifies_evolved_schema(tmp_path):
-    # Two writers wrote different columns; the streaming merge reads through the unified schema, so
-    # the compacted shard carries both columns, null where a source lacked one.
+    # Two writers wrote different columns; the compacted shard carries both columns,
+    # null where a source lacked one.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="old") as store:
         store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "a": 1})
@@ -669,10 +670,47 @@ def test_compaction_unifies_evolved_schema(tmp_path):
     assert rows == {"1": (1, None), "2": (None, 2)}
 
 
+def test_compaction_sorts_unsorted_shard_and_keeps_latest_value(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="old") as store:
+        table = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
+        table.extend([{"id": "b", "value": 1}, {"value": 2}, {"id": "a", "value": 3}])
+        store.flush()
+    with DataStore.open(root, writer_id="new") as store:
+        store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE).append({"id": "b", "value": 4})
+        store.flush()
+
+    assert any(not shard.primary_key_sorted for shard in ReadView(root).list_shards("samples"))
+    assert compact_table(root, "samples") == CompactionResult(written=3, superseded=1)
+    assert [(row["id"], row["value"]) for row in _rows(ReadView(root), "samples")] == [
+        ("a", 3),
+        ("b", 4),
+        (None, 2),
+    ]
+
+
+def test_compaction_preserves_newest_value_across_output_buffers(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="old") as store:
+        store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE).extend(
+            [{"id": "a", "value": "old"}, {"id": "b", "value": "only"}]
+        )
+        store.flush()
+    with DataStore.open(root, writer_id="new") as store:
+        store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE).append({"id": "a", "value": "new"})
+        store.flush()
+
+    assert compact_table(root, "samples", target_bytes=1) == CompactionResult(written=3, superseded=0)
+    view = ReadView(root)
+    assert len(view.list_shards("samples")) > 1
+    expected = [{"id": "a", "value": "new"}, {"id": "b", "value": "only"}]
+    assert sorted(view.scan("samples", columns=["id", "value"]).to_pylist(), key=lambda row: row["id"]) == expected
+    assert list(view.iter_rows("samples", columns=["id", "value"])) == expected
+
+
 def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
     # A tiny output row group forces a compacted shard to span several groups; re-compacting it with a
-    # fresh level-0 shard must stream those groups in primary-key order and merge correctly, proving the
-    # merge never materializes the whole table.
+    # fresh level-0 shard must read those groups and preserve every value.
     monkeypatch.setattr(shard_writer, "ROW_GROUP_ROWS", 2)
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
@@ -693,6 +731,71 @@ def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
     assert {s.generation for s in ReadView(root).list_shards("samples")} == {2}
     rows = {r["doc_id"]: r["score"] for r in _rows(ReadView(root), "samples")}
     assert rows == {f"{i:03d}": float(i) for i in range(10)}
+
+
+def test_compaction_orders_row_groups_by_first_key(tmp_path, monkeypatch):
+    root = str(tmp_path / "run")
+    monkeypatch.setattr(shard_writer, "ROW_GROUP_ROWS", 2)
+    for writer, keys in (("old", (1, 2, 5, 6)), ("new", (3, 4, 7, 8))):
+        with DataStore.open(root, writer_id=writer) as store:
+            store.table("samples", primary_key=("id",)).extend({"id": key} for key in keys)
+            store.flush()
+
+    assert all(
+        pq.ParquetFile(shard.path).metadata.num_row_groups == 2 for shard in ReadView(root).list_shards("samples")
+    )
+    assert compact_table(root, "samples", target_bytes=1).written == 8
+    output_shards = ReadView(root).list_shards("samples")
+    assert len(output_shards) == 4
+    assert [pq.read_table(shard.path, columns=["id"])["id"][0].as_py() for shard in output_shards] == [1, 3, 5, 7]
+
+
+def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(tmp_path, monkeypatch):
+    row_bytes = 1024 * 1024
+    monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", row_bytes // 2)
+    measurements = []
+    for rows_per_shard in (16, 32):
+        root = str(tmp_path / f"run-{rows_per_shard}")
+        with DataStore.open(
+            root,
+            flush_interval=3600,
+            max_buffer_bytes=2**40,
+            compaction_levels=(1000,),
+            compaction_target_bytes=4 * row_bytes,
+        ) as store:
+            table = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
+            for revision in range(4):
+                for index in range(rows_per_shard):
+                    table.append({"id": index, "revision": revision, "doc": f"{revision}:{index}:" + "x" * row_bytes})
+                store.flush()
+            pinned = ReadView(root)
+            assert len(pinned.list_shards("samples")) == 4
+
+            default_pool = pa.default_memory_pool()
+            pool = pa.proxy_memory_pool(default_pool)
+            pa.set_memory_pool(pool)
+            try:
+                result = store.compact("samples")
+                measurements.append(pool.max_memory())
+            finally:
+                pa.set_memory_pool(default_pool)
+            gc.collect()
+
+            assert rows_per_shard <= result.written <= 4 * rows_per_shard
+            assert result.written + result.superseded == 4 * rows_per_shard
+            observed = 0
+            for row in ReadView(root).iter_rows("samples"):
+                assert (row["id"], row["revision"], row["doc"]) == (
+                    observed,
+                    3,
+                    f"3:{observed}:" + "x" * row_bytes,
+                )
+                observed += 1
+            assert observed == rows_per_shard
+            assert all(StoragePath(shard.path).exists() for shard in pinned.list_shards("samples"))
+
+    # More row groups must not grow decoded input memory with total file size.
+    assert measurements[1] <= measurements[0] + 4 * row_bytes, measurements
 
 
 def test_typed_on_disk_metadata(tmp_path):
