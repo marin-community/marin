@@ -21,7 +21,7 @@
     7
   ],
   "expected_responses": 5820,
-  "status": "All five8-H100 BATCH tasks controller-running at02:06UTC. Actual224 native CUDA observations from all32 learner ranks: checkpoint-training-state load exited successfully and checkpoint-weight load entered. No weight-load exit, optimizer backload, new update, evaluation, repaired source or complete restore qualification yet. Original scientific settings and all qualification gates unchanged.",
+  "status": "Physical0 was priority-preempted at02:16:03UTC after0 published new training updates,35.0607777778H100h. Its376 native observations from32 known original learner workers are retained separately from replacement1; no optimizer-backload boundary captured. All five identical-source physical1 BATCH tasks started02:17:09UTC and are controller-running at02:29. No repaired source or complete resume qualification established; original native/control/Flash/noise/membership/original-response gates unchanged.",
   "preparation_failures": [
     {
       "attempt": 0,
@@ -66,11 +66,32 @@
       "res_disk_bytes": "536870912000",
       "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
       "task_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/0",
-      "attempt_id": "0",
-      "attempt_uid": "eb1ac18b5f410c3c",
+      "attempt_id": "1",
+      "attempt_uid": "a508f423f3b2e54b",
       "task_state": "3",
       "exit_code": "",
-      "started_at_ms": "1792113808057",
+      "started_at_ms": "1792117029594",
+      "finished_at_ms": "",
+      "node_name": "gb95a00",
+      "terminal_reason": ""
+    },
+    {
+      "job_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce",
+      "job_state": "3",
+      "num_tasks": "5",
+      "priority_band": "3",
+      "bundle_id": "475c0520c5412658a35f4acd4e77fcc26ad7080f4c526100ac7af23b439b837b",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_cpu_millicores": "32000",
+      "res_memory_bytes": "1932735283200",
+      "res_disk_bytes": "536870912000",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/1",
+      "attempt_id": "1",
+      "attempt_uid": "d031f86f32ab85aa",
+      "task_state": "3",
+      "exit_code": "",
+      "started_at_ms": "1792117029594",
       "finished_at_ms": "",
       "node_name": "g1cc352",
       "terminal_reason": ""
@@ -86,12 +107,12 @@
       "res_memory_bytes": "1932735283200",
       "res_disk_bytes": "536870912000",
       "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
-      "task_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/1",
-      "attempt_id": "0",
-      "attempt_uid": "9dcb1d2562b2b45c",
+      "task_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/2",
+      "attempt_id": "1",
+      "attempt_uid": "f7f6d0abd00e0da0",
       "task_state": "3",
       "exit_code": "",
-      "started_at_ms": "1792113808057",
+      "started_at_ms": "1792117029594",
       "finished_at_ms": "",
       "node_name": "gf62afe",
       "terminal_reason": ""
@@ -107,35 +128,14 @@
       "res_memory_bytes": "1932735283200",
       "res_disk_bytes": "536870912000",
       "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
-      "task_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/2",
-      "attempt_id": "0",
-      "attempt_uid": "7e432a2b731c9923",
-      "task_state": "3",
-      "exit_code": "",
-      "started_at_ms": "1792113808057",
-      "finished_at_ms": "",
-      "node_name": "g530748",
-      "terminal_reason": ""
-    },
-    {
-      "job_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce",
-      "job_state": "3",
-      "num_tasks": "5",
-      "priority_band": "3",
-      "bundle_id": "475c0520c5412658a35f4acd4e77fcc26ad7080f4c526100ac7af23b439b837b",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
-      "res_cpu_millicores": "32000",
-      "res_memory_bytes": "1932735283200",
-      "res_disk_bytes": "536870912000",
-      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
       "task_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/3",
-      "attempt_id": "0",
-      "attempt_uid": "7f9bd359106fdd45",
+      "attempt_id": "1",
+      "attempt_uid": "572eeceb7323a10d",
       "task_state": "3",
       "exit_code": "",
-      "started_at_ms": "1792113808057",
+      "started_at_ms": "1792117029594",
       "finished_at_ms": "",
-      "node_name": "g538100",
+      "node_name": "g7596c2",
       "terminal_reason": ""
     },
     {
@@ -150,17 +150,17 @@
       "res_disk_bytes": "536870912000",
       "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
       "task_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce/4",
-      "attempt_id": "0",
-      "attempt_uid": "18bc4b639f70032e",
+      "attempt_id": "1",
+      "attempt_uid": "4186d669c6d7a2bb",
       "task_state": "3",
       "exit_code": "",
-      "started_at_ms": "1792113808057",
+      "started_at_ms": "1792117029594",
       "finished_at_ms": "",
-      "node_name": "g5b3dfe",
+      "node_name": "gb95a50",
       "terminal_reason": ""
     }
   ],
-  "controller_observation_file": "cpu-and-memory-diagnostic-controller-20261016T020601.csv",
+  "controller_observation_file": "cpu-and-memory-diagnostic-controller-20261016T022955.csv",
   "native_bundle_sha256": "475c0520c5412658a35f4acd4e77fcc26ad7080f4c526100ac7af23b439b837b",
   "source_observation_validation": {
     "source": "26cc99a426737309a60a490ce219138f8cae4818",
@@ -251,5 +251,15 @@
     }
   ],
   "initial_queued_controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T005325",
-  "native_memory_observation_proof": "results/snowball_checkpoint_memory_diagnostic_initial_observations.json"
+  "native_memory_observation_proof": "results/snowball_checkpoint_memory_diagnostic_initial_observations.json",
+  "current_physical_attempt": 1,
+  "current_allocation_started_at_ms": 1792117029594,
+  "preempted_physical_attempts": [
+    {
+      "attempt": 0,
+      "allocated_h100_hours": 35.06077777777777,
+      "proof": "snowball_checkpoint_memory_diagnostic_attempt0_preemption_observations.json",
+      "new_published_training_updates": 0
+    }
+  ]
 }

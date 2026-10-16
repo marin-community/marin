@@ -38,5 +38,14 @@
   "already_audited_final_controls_sha256": "adc28a0e6f721789f7d636c64119b5522fb07603c3522f437e84c08809e5f1ec",
   "resource_board_id": 1094,
   "workers": 2,
-  "status": "Bounded native cache download running; native and original replay gates pending."
+  "status": "Complete native1200 and final8rank controls pass;three reused records uniquely match actual current groups. One native training709 AgentTimeoutError placeholder retained separately.222131 available original responses require full replay;original source/data/grader/tolerances/deadlines unchanged.",
+  "native_cache_complete": true,
+  "native_audit_exit_code": 1,
+  "native_audit_passed": true,
+  "native_audit_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce-complete1200-native-audit.log",
+  "complete_native_audit_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/batching-sc-s1-complete1200-strict-native-audit.log",
+  "verified_reused_records": 3,
+  "native_training_timeout_placeholders": 1,
+  "final_checkpoint_controls_passed": true,
+  "original_response_replay_passed": false
 }

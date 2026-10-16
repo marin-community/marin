@@ -1,0 +1,94 @@
+{
+  "run_id": "sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "archive_after_ms": 1792071213874,
+  "scope": "Existing original record IDs only, re-derived with the frozen native serializer from actual selected-attempt rollout groups; every serialized field equals the older archived record. No synthetic record IDs or inferred response content.",
+  "verified_reused_records": [
+    {
+      "record_id": "692d73e5e1208888ae7097b239b0d6a58e5b2e9f29b618c69bc9bcad01d849e2",
+      "phase": "train",
+      "step": 1,
+      "instance_id": "1",
+      "repetition_id": 1,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/e2381ee5ce8341ba0c51cb15eb4f4e6759f10adcdb37a6ae5edcc5797c7daa0c.zip",
+      "archive_etag": "\"b0a2cb43d8f598d1ee481840e491a3a0\"",
+      "archive_modified_ms": 1792024380192,
+      "record_payload_sha256": "4ea004ce6fa189fcd11045b91454de12f5ea1c2ad8027ca181b12ce8d15a3c0c",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/groups/1374659f94c0424c876f23b8d20748b9.pkl",
+      "current_group_etag": "\"bcd5b49e2a55afedfcc87e6328f4fb47\"",
+      "current_group_sha256": "16dfbd93be73f6cbf7c88b47d3b4135c05819eef8311653207100e3b10e83514",
+      "current_group_modified_ms": 1792072111473,
+      "older_candidates_considered": 3,
+      "all_serialized_fields_equal": true,
+      "durable_current_group_bytes": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/qualification-observations/native1200-audit/reused-groups/16dfbd93be73f6cbf7c88b47d3b4135c05819eef8311653207100e3b10e83514.pkl",
+        "bytes": 1068059,
+        "sha256": "16dfbd93be73f6cbf7c88b47d3b4135c05819eef8311653207100e3b10e83514",
+        "full_readback_verified": true
+      }
+    },
+    {
+      "record_id": "f1c1c7093aedf394522e33abefb53433b79905f159f2814b354468e4119822fc",
+      "phase": "train",
+      "step": 1,
+      "instance_id": "0",
+      "repetition_id": 0,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/4f788bc853ce84f015ded53062493be73143051a33e7fa7c4ebadfd3bb1c60f3.zip",
+      "archive_etag": "\"64bcfc7083bae8a8bc4977642e129e5b\"",
+      "archive_modified_ms": 1792024379738,
+      "record_payload_sha256": "79f8f171ebacb94096c11c3a31be50fafdd38df424407060606e1a38931ce846",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/groups/64ec8dea7817412a9de9cc8e72b21c55.pkl",
+      "current_group_etag": "\"3132de853732b37221858ee50a4a4005\"",
+      "current_group_sha256": "d6c4b5448a574868c631cba5a88d79b00917fadaf6695a7ac6d8d62b06e50a1b",
+      "current_group_modified_ms": 1792072113420,
+      "older_candidates_considered": 3,
+      "all_serialized_fields_equal": true,
+      "durable_current_group_bytes": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/qualification-observations/native1200-audit/reused-groups/d6c4b5448a574868c631cba5a88d79b00917fadaf6695a7ac6d8d62b06e50a1b.pkl",
+        "bytes": 1834076,
+        "sha256": "d6c4b5448a574868c631cba5a88d79b00917fadaf6695a7ac6d8d62b06e50a1b",
+        "full_readback_verified": true
+      }
+    },
+    {
+      "record_id": "33546bc9e5f56fd1a7b859555c4b1582bbf47ddda099484e60adf6402b858741",
+      "phase": "train",
+      "step": 4,
+      "instance_id": "30",
+      "repetition_id": 3,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000004/d29dc829e63178e6a6bf14d40861502c5a4b0f296868f2b1444fa39c249b3f29.zip",
+      "archive_etag": "\"7110b37de71380b8bb3fd90c06d184ea\"",
+      "archive_modified_ms": 1792008859704,
+      "record_payload_sha256": "9805eb67c9934614d37bc0fbd617f5ccc2b12f0491320f0f4055c690103761db",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/groups/b3a7582aa7c04c759e578c973959ecf7.pkl",
+      "current_group_etag": "\"b444f7dfbca81a311dfebc5af5f17082\"",
+      "current_group_sha256": "2d2e8a2383eb8e5b7448e43a44407aa23b4d4f121d4a8a2f1d6110e056ed3c53",
+      "current_group_modified_ms": 1792072162493,
+      "older_candidates_considered": 3,
+      "all_serialized_fields_equal": true,
+      "durable_current_group_bytes": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/qualification-observations/native1200-audit/reused-groups/2d2e8a2383eb8e5b7448e43a44407aa23b4d4f121d4a8a2f1d6110e056ed3c53.pkl",
+        "bytes": 1386729,
+        "sha256": "2d2e8a2383eb8e5b7448e43a44407aa23b4d4f121d4a8a2f1d6110e056ed3c53",
+        "full_readback_verified": true
+      }
+    }
+  ],
+  "physical_budget_checks": [
+    {
+      "step": 1,
+      "new_records": 30,
+      "declared_duplicate_records": 2,
+      "verified_existing_records": 2,
+      "physical_responses": 32
+    },
+    {
+      "step": 4,
+      "new_records": 31,
+      "declared_duplicate_records": 1,
+      "verified_existing_records": 1,
+      "physical_responses": 32
+    }
+  ],
+  "all_verified": true
+}

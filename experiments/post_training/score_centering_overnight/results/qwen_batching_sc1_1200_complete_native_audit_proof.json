@@ -1,0 +1,85 @@
+{
+  "scope": "Complete native1200 and final eight-rank checkpoint/control gates for Qwen batching SC seed1. Three older response records admitted only after unique complete serialized-field equality to actual current rollout groups; original group bytes durably preserved and fullSHA read back. One native AgentTimeoutError placeholder at training709 retains its full native error record and zero treatment;222131 available original responses still require full frozen original-grader replay. No numerical tolerance, grading deadline or scientific recipe changed.",
+  "runs": [
+    {
+      "run_id": "sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "ecf26e090201759a3f93fa7fb3a53fffbbfcc11766df01f4a5b8cd649c56f1f7",
+      "controller_attempt": 9,
+      "controller_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/0",
+          "attempt_id": "9",
+          "attempt_uid": "1d1cfc469148bb04",
+          "state": "4",
+          "exit_code": "0",
+          "started_at_ms": "1792071213874",
+          "finished_at_ms": "1792112207621",
+          "node_name": "g5303b8",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/1",
+          "attempt_id": "9",
+          "attempt_uid": "8da6fdbbb75edd99",
+          "state": "4",
+          "exit_code": "0",
+          "started_at_ms": "1792071213874",
+          "finished_at_ms": "1792112207621",
+          "node_name": "g530bbc",
+          "terminal_reason": ""
+        }
+      ],
+      "native_audit_report": "sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce.json.gz",
+      "native_audit_report_sha256": "4685d6c974d73fbda9bdfd39d9cb161b39f2b18e6a02fce0043c1f4edc2d2daa",
+      "completed_updates": 1200,
+      "physical_records": 222132,
+      "available_original_responses": 222131,
+      "native_failures_without_original_response": 1,
+      "native_failure_summary": [
+        {
+          "record_id": "143e4c41115694c40b7f5b765ca5bc1eb906fc703e972f23a86e07dcbc182f3f",
+          "phase": "train",
+          "step": 709,
+          "instance_id": "5669",
+          "repetition_id": 1,
+          "kind": "AgentTimeoutError",
+          "record_payload_sha256": "d4d3aa0c0be9eb9c920663a2179a77de3ec6281a232e40d9052c334441f97758"
+        }
+      ],
+      "verified_reused_records": 3,
+      "verified_reused_records_report": "batching_sc_s1_verified_reused_native_records.json",
+      "verified_reused_records_report_sha256": "85a4f32894790340af33f07b9463afdf96d817be6d1f0080c9e1b566f4ff5a2e",
+      "evaluation_points": 61,
+      "evaluation_membership_sha256": "1a4924ffa53747f29ff9dd0d1ecd046cd214a66adcac4f46570a4e0efa1bb6df",
+      "final_checkpoint_control_report": "qwen_batching_sc1_1200_final_checkpoint_controls.json.gz",
+      "native_audit_passed": true,
+      "final_checkpoint_controls_passed": true,
+      "original_response_replay_passed": false,
+      "retained_observation_evidence": {
+        "native_errors": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/qualification-observations/native1200-audit/original-native-error-records.json.gz",
+          "bytes": 2114,
+          "sha256": "6e11c8e730c81711235db6afa4426993e4594597572f9eb4308f1db2873445e8",
+          "full_readback_verified": true
+        },
+        "complete_cache_manifest": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/qualification-observations/native1200-audit/complete-native-cache-manifest.json",
+          "bytes": 10378489,
+          "sha256": "966a0abe6b24d84a4c680df2dde7d555586c0ac536863f109a73cf8f022e8773",
+          "full_readback_verified": true
+        },
+        "initial_native_error_audit_guard": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce/qualification-observations/native1200-audit/initial-native-error-audit-guard.log",
+          "bytes": 744,
+          "sha256": "dc3dc839dc5a819b75c4ba6fc966250fb40d217683dc6bcf1734e76bf6f50510",
+          "full_readback_verified": true
+        }
+      }
+    }
+  ],
+  "total_physical_records": 222132,
+  "available_original_responses": 222131,
+  "native_failures_without_original_response": 1,
+  "original_response_replays_pending": 1
+}
