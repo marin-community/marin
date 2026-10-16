@@ -28,7 +28,7 @@ from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config, tokenize
 from marin.processing.tokenize.tokenize import TokenizedCache
-from rigging.filesystem import marin_prefix
+from rigging.filesystem.cluster_config import marin_prefix
 
 from experiments.datakit.testbed.mixture import read_bucket_weights
 from experiments.datakit.testbed.settings import TESTBED_SEQ_LEN, TESTBED_TOKENIZER

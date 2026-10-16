@@ -1,0 +1,19 @@
+schema_version: 1
+code: ml-bool-flag-arg
+lane: interfaces
+title: Boolean flag selecting between behaviors
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Boolean arguments accumulate; they don't extend cleanly to a
+  third state and they hide intent at the call site (`foo(True, False, True)`).
+  An enum scales to N states and reads clearly.
+
+  **When allowed:** Genuine two-state toggles where the meaning is obvious from
+  the name and a third state is implausible (e.g. `strict=True` on a parser).
+
+  **Bad example:**
+  ```python
+  def dedupe(rows: list[Row], exact: bool = False) -> list[Row]:
+      # second mode lands → second bool. enum DedupMode = {NONE, EXACT, FUZZY} is the right shape.
+      ...
+  ```

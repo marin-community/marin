@@ -89,14 +89,17 @@ document.addEventListener('DOMContentLoaded',function(){render(DATA.sources);doc
 </script>"""
 
 
-def _single(run: dict) -> str:
+def render_run(run: dict, *, summary_html: str = "") -> str:
+    """Render source rates and match evidence, with an optional HTML summary."""
     td = sum(s["docs"] for s in run["sources"])
     tf = sum(s["flagged"] for s in run["sources"])
     rate = 100 * tf / td if td else 0
+    target = f"target {run['target_tokens_b']}B · " if "target_tokens_b" in run else ""
+    exclusions = f" · excl {', '.join(run['exclude']) or '—'}" if "exclude" in run else ""
     head = (
         f"<header><h1>decon · {run['label']} "
-        f"<span class=sub>target {run['target_tokens_b']}B · {len(run['sources'])} sources · "
-        f"{tf:,}/{td:,} flagged = {rate:.4f}% · excl {', '.join(run['exclude']) or '—'}</span></h1>"
+        f"<span class=sub>{target}{len(run['sources'])} sources · "
+        f"{tf:,}/{td:,} flagged = {rate:.4f}%{exclusions}</span></h1>"
         f"<div style='margin-top:8px'><input id=flt placeholder='filter source…'></div></header>"
     )
     table = (
@@ -106,7 +109,7 @@ def _single(run: dict) -> str:
         "<th>top eval families</th></tr></thead><tbody id=tb></tbody></table>"
     )
     data = json.dumps(run).replace("</", "<\\/")  # script-safe embed
-    return f"<!doctype html><meta charset=utf-8><title>decon {run['label']}</title><style>{_CSS}{head}<main>{table}</main><script>const DATA={data};</script>{_JS}"
+    return f"<!doctype html><meta charset=utf-8><title>decon {run['label']}</title><style>{_CSS}{head}<main>{summary_html}{table}</main><script>const DATA={data};</script>{_JS}"
 
 
 def _compare(run: dict, base: dict) -> str:
@@ -158,7 +161,7 @@ def main() -> None:
         with open(args.vs) as f:
             html = _compare(run, json.load(f))
     else:
-        html = _single(run)
+        html = render_run(run)
     with open(args.out, "w") as f:
         f.write(html)
     print(f"wrote {args.out} ({len(html):,} bytes)")

@@ -7,8 +7,8 @@
 # Build context must be the marin repo root:
 #   docker build -f lib/finelog/deploy/Dockerfile -t finelog:dev .
 #
-# The server is unauthenticated by design — restrict at the network layer
-# (k8s NetworkPolicy, GCP firewall). Do NOT expose it to the public internet.
+# The server's authenticated-ingress policy is default-deny. Keep Kubernetes
+# NetworkPolicy and GCP firewall restrictions as defense in depth.
 
 # ── Stage: dashboard ─────────────────────────────────────────────────
 # Build the Vue SPA. Output is consumed by the runtime stage at
@@ -30,8 +30,7 @@ RUN npm run build
 
 
 # ── Stage: rustbuild ─────────────────────────────────────────────────
-# Compile the release `finelog-server` binary from finelog's own Rust
-# workspace at lib/finelog/rust (no top-level rust/ tree). `connectrpc-build`
+# The Rust workspace lives at lib/finelog/rust (there is no top-level rust/ tree). `connectrpc-build`
 # fetches a vendored protoc from the crate registry at build time, so no
 # system protoc is needed.
 FROM rust:1-bookworm AS rustbuild
@@ -67,8 +66,10 @@ ENV FINELOG_SOURCE_COMMIT=${SOURCE_COMMIT} \
     FINELOG_SOURCE_DIRTY=${SOURCE_DIRTY}
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/rust/target \
-    mold -run cargo build --profile ${CARGO_PROFILE} -p finelog --bin finelog-server \
-    && cp target/${CARGO_PROFILE}/finelog-server /finelog-server
+    mold -run cargo build --profile ${CARGO_PROFILE} -p finelog \
+      --bin finelog-server --bin finelog-migrate \
+    && cp target/${CARGO_PROFILE}/finelog-server /finelog-server \
+    && cp target/${CARGO_PROFILE}/finelog-migrate /finelog-migrate
 
 
 # ── Stage: runtime ───────────────────────────────────────────────────
@@ -91,6 +92,7 @@ WORKDIR /app
 # The server binary + the pre-built dashboard SPA. The Rust server reads the
 # SPA from /app/dashboard/dist (see spa.rs); the binary is on PATH.
 COPY --from=rustbuild /finelog-server /usr/local/bin/finelog-server
+COPY --from=rustbuild /finelog-migrate /usr/local/bin/finelog-migrate
 COPY --from=dashboard /build/dashboard/dist ./dashboard/dist
 
 # Local segment cache / durable store. Declared as a volume so k8s/Docker mount
@@ -103,7 +105,7 @@ RUN groupadd --system --gid 1000 finelog \
 
 VOLUME ["/var/cache/finelog"]
 
-# The k8s manifest sets FINELOG_PORT + FINELOG_REMOTE_DIR but NOT
+# The Kubernetes Deployment sets FINELOG_PORT + FINELOG_REMOTE_DIR but NOT
 # FINELOG_LOG_DIR; the Python launcher defaulted port=10001 and
 # log-dir=/var/cache/finelog in its CLI. The Rust clap CLI defaults port 8080
 # and has NO log-dir default — an unset log-dir runs the store in-memory and

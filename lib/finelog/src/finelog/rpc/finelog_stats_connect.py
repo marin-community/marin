@@ -35,6 +35,18 @@ class StatsService(Protocol):
     async def get_table_schema(self, request: finelog__stats__pb2.GetTableSchemaRequest, ctx: RequestContext) -> finelog__stats__pb2.GetTableSchemaResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def get_table_status(self, request: finelog__stats__pb2.GetTableStatusRequest, ctx: RequestContext) -> finelog__stats__pb2.GetTableStatusResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def abort_table_migration(self, request: finelog__stats__pb2.AbortTableMigrationRequest, ctx: RequestContext) -> finelog__stats__pb2.AbortTableMigrationResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def report_relay_status(self, request: finelog__stats__pb2.ReportRelayStatusRequest, ctx: RequestContext) -> finelog__stats__pb2.ReportRelayStatusResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def list_relay_status(self, request: finelog__stats__pb2.ListRelayStatusRequest, ctx: RequestContext) -> finelog__stats__pb2.ListRelayStatusResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
 
 class StatsServiceASGIApplication(ConnectASGIApplication[StatsService]):
     def __init__(self, service: StatsService | AsyncGenerator[StatsService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None) -> None:
@@ -100,6 +112,46 @@ class StatsServiceASGIApplication(ConnectASGIApplication[StatsService]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.get_table_schema,
+                ),
+                "/finelog.stats.StatsService/GetTableStatus": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetTableStatus",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.GetTableStatusRequest,
+                        output=finelog__stats__pb2.GetTableStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_table_status,
+                ),
+                "/finelog.stats.StatsService/AbortTableMigration": Endpoint.unary(
+                    method=MethodInfo(
+                        name="AbortTableMigration",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.AbortTableMigrationRequest,
+                        output=finelog__stats__pb2.AbortTableMigrationResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.abort_table_migration,
+                ),
+                "/finelog.stats.StatsService/ReportRelayStatus": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ReportRelayStatus",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.ReportRelayStatusRequest,
+                        output=finelog__stats__pb2.ReportRelayStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.report_relay_status,
+                ),
+                "/finelog.stats.StatsService/ListRelayStatus": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ListRelayStatus",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.ListRelayStatusRequest,
+                        output=finelog__stats__pb2.ListRelayStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.list_relay_status,
                 ),
             },
             interceptors=interceptors,
@@ -234,6 +286,86 @@ class StatsServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def get_table_status(
+        self,
+        request: finelog__stats__pb2.GetTableStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.GetTableStatusResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetTableStatus",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.GetTableStatusRequest,
+                output=finelog__stats__pb2.GetTableStatusResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def abort_table_migration(
+        self,
+        request: finelog__stats__pb2.AbortTableMigrationRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.AbortTableMigrationResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="AbortTableMigration",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.AbortTableMigrationRequest,
+                output=finelog__stats__pb2.AbortTableMigrationResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def report_relay_status(
+        self,
+        request: finelog__stats__pb2.ReportRelayStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.ReportRelayStatusResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ReportRelayStatus",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.ReportRelayStatusRequest,
+                output=finelog__stats__pb2.ReportRelayStatusResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def list_relay_status(
+        self,
+        request: finelog__stats__pb2.ListRelayStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.ListRelayStatusResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListRelayStatus",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.ListRelayStatusRequest,
+                output=finelog__stats__pb2.ListRelayStatusResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 class StatsServiceSync(Protocol):
     def register_table(self, request: finelog__stats__pb2.RegisterTableRequest, ctx: RequestContext) -> finelog__stats__pb2.RegisterTableResponse:
@@ -247,6 +379,14 @@ class StatsServiceSync(Protocol):
     def list_namespaces(self, request: finelog__stats__pb2.ListNamespacesRequest, ctx: RequestContext) -> finelog__stats__pb2.ListNamespacesResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_table_schema(self, request: finelog__stats__pb2.GetTableSchemaRequest, ctx: RequestContext) -> finelog__stats__pb2.GetTableSchemaResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_table_status(self, request: finelog__stats__pb2.GetTableStatusRequest, ctx: RequestContext) -> finelog__stats__pb2.GetTableStatusResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def abort_table_migration(self, request: finelog__stats__pb2.AbortTableMigrationRequest, ctx: RequestContext) -> finelog__stats__pb2.AbortTableMigrationResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def report_relay_status(self, request: finelog__stats__pb2.ReportRelayStatusRequest, ctx: RequestContext) -> finelog__stats__pb2.ReportRelayStatusResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def list_relay_status(self, request: finelog__stats__pb2.ListRelayStatusRequest, ctx: RequestContext) -> finelog__stats__pb2.ListRelayStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -313,6 +453,46 @@ class StatsServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.get_table_schema,
+                ),
+                "/finelog.stats.StatsService/GetTableStatus": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetTableStatus",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.GetTableStatusRequest,
+                        output=finelog__stats__pb2.GetTableStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_table_status,
+                ),
+                "/finelog.stats.StatsService/AbortTableMigration": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="AbortTableMigration",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.AbortTableMigrationRequest,
+                        output=finelog__stats__pb2.AbortTableMigrationResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.abort_table_migration,
+                ),
+                "/finelog.stats.StatsService/ReportRelayStatus": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ReportRelayStatus",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.ReportRelayStatusRequest,
+                        output=finelog__stats__pb2.ReportRelayStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.report_relay_status,
+                ),
+                "/finelog.stats.StatsService/ListRelayStatus": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ListRelayStatus",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.ListRelayStatusRequest,
+                        output=finelog__stats__pb2.ListRelayStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.list_relay_status,
                 ),
             },
             interceptors=interceptors,
@@ -441,6 +621,86 @@ class StatsServiceClientSync(ConnectClientSync):
                 service_name="finelog.stats.StatsService",
                 input=finelog__stats__pb2.GetTableSchemaRequest,
                 output=finelog__stats__pb2.GetTableSchemaResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_table_status(
+        self,
+        request: finelog__stats__pb2.GetTableStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.GetTableStatusResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetTableStatus",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.GetTableStatusRequest,
+                output=finelog__stats__pb2.GetTableStatusResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def abort_table_migration(
+        self,
+        request: finelog__stats__pb2.AbortTableMigrationRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.AbortTableMigrationResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="AbortTableMigration",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.AbortTableMigrationRequest,
+                output=finelog__stats__pb2.AbortTableMigrationResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def report_relay_status(
+        self,
+        request: finelog__stats__pb2.ReportRelayStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.ReportRelayStatusResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ReportRelayStatus",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.ReportRelayStatusRequest,
+                output=finelog__stats__pb2.ReportRelayStatusResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def list_relay_status(
+        self,
+        request: finelog__stats__pb2.ListRelayStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.ListRelayStatusResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListRelayStatus",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.ListRelayStatusRequest,
+                output=finelog__stats__pb2.ListRelayStatusResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

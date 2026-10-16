@@ -6,6 +6,7 @@ import functools
 import logging
 import os
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -15,6 +16,7 @@ import jax.numpy as jnp
 import jmp
 import levanter.callbacks as callbacks
 import levanter.tracker
+import numpy as np
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
@@ -31,6 +33,11 @@ from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_b
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
+from levanter.grug.grug_moe import (
+    MOE_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
+    MOE_VALID_ASSIGNMENTS_METRIC,
+)
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -40,6 +47,7 @@ from levanter.recovery.types import AblationSpec, RunOutcome
 from levanter.schedule import BatchSchedule
 from levanter.tracker.telemetry import capture_stall_diagnostics
 from levanter.trainer import TrainerConfig
+from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
@@ -56,6 +64,8 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 logger = logging.getLogger(__name__)
 
 HERO_FSDP_RUNTIME_ENV = {
+    "LD_PRELOAD": "libjemalloc.so.2",
+    "MALLOC_CONF": "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2",
     "JAX_ENABLE_PGLE": "1",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
     # NVLink SHARP. Below the sweep's resolution alone; carried by the combined configuration.
@@ -106,8 +116,8 @@ class GrugTrainerConfig:
     offload_opt_state: bool = False
     save_checkpoints: bool = False
 
-    # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
-    # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
+    # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of using
+    # the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
     # Defaults reproduce the historical layout: no expert parallelism and full replication
     # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
     # replicated per slice and sharded only over the intra-slice `data` axis. For a model
@@ -149,7 +159,7 @@ class GrugRunConfig:
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
-    # via the iris.hooks.multigpu_main supervisor instead of one process per node.
+    # via the iris.jax.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
     run_mode: GrugRunMode = GrugRunMode.DEFAULT
 
@@ -188,7 +198,7 @@ def build_train_loader(
     mesh: Mesh,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
@@ -218,7 +228,7 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     eval_axis_mapping = {"batch": BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
@@ -373,18 +383,30 @@ def initial_state(
 
 def _drop_metrics(
     dropped_assignments: jax.Array,
+    skipped_padding_assignments: jax.Array,
+    valid_assignments: jax.Array,
     *,
     batch_size: int,
     sequence_length: int,
     top_k: int,
     num_layers: int,
 ) -> dict[str, int | float]:
-    # Global assignment totals can exceed int32; float32 would also round large drop counts.
-    dropped_assignments_host = int(dropped_assignments)
-    total_assignments = batch_size * sequence_length * top_k * num_layers
+    # Per-layer int32 counts are summed on the host so large global totals cannot overflow.
+    def _sum_int64(per_layer: jax.Array) -> int:
+        return int(np.asarray(per_layer).astype(np.int64).sum())
+
+    dropped_assignments_host = _sum_int64(dropped_assignments)
+    skipped_padding_assignments_host = _sum_int64(skipped_padding_assignments)
+    valid_assignments_host = _sum_int64(valid_assignments)
+    total_positions = batch_size * sequence_length * top_k * num_layers
+    if valid_assignments_host + skipped_padding_assignments_host != total_positions:
+        raise ValueError("valid plus skipped assignments must equal the padded batch size")
     return {
-        "moe/dropped_assignments": dropped_assignments_host,
-        "moe/drop_fraction": dropped_assignments_host / total_assignments,
+        MOE_DROPPED_ASSIGNMENTS_METRIC: dropped_assignments_host,
+        "moe/drop_fraction": dropped_assignments_host / max(valid_assignments_host, 1),
+        MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC: skipped_padding_assignments_host,
+        "moe/skipped_padding_fraction": skipped_padding_assignments_host / total_positions,
+        MOE_VALID_ASSIGNMENTS_METRIC: valid_assignments_host,
     }
 
 
@@ -513,7 +535,19 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
     )
-    with set_mesh(mesh):
+    # Armed before the state is built or restored, so its startup deadline covers a stall in
+    # initialization, checkpoint restore, cache construction or compilation. The step and process
+    # deadlines only arm once a step reports progress.
+    progress_watchdog = trainer.progress_watchdog.create(
+        process_index=jax.process_index(),
+        diagnostic=capture_stall_diagnostics,
+    )
+
+    checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
+    dashboard = (
+        TrainingDashboard(config, checkpointer.request_checkpoint, run_id) if checkpointer is not None else nullcontext()
+    )
+    with set_mesh(mesh), dashboard:
         batch_schedule = trainer.batch_schedule
 
         train_dataset = build_train_dataset(
@@ -541,7 +575,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
@@ -583,10 +616,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             model_getter=lambda s: s.params,
             eval_model_getter=lambda s: s.ema_params if s.ema_params is not None else s.params,
             opt_state_getter=lambda s: s.opt_state,
-        )
-        progress_watchdog = trainer.progress_watchdog.create(
-            process_index=jax.process_index(),
-            diagnostic=capture_stall_diagnostics,
         )
         if progress_watchdog is not None:
             state_callbacks.add_hook(progress_watchdog, every=1)
@@ -667,9 +696,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
                             step=step,
                         )
-                    if "moe/dropped_assignments" in metrics:
+                    if MOE_DROPPED_ASSIGNMENTS_METRIC in metrics:
                         drop_metrics = _drop_metrics(
-                            metrics["moe/dropped_assignments"],
+                            metrics[MOE_DROPPED_ASSIGNMENTS_METRIC],
+                            metrics[MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC],
+                            metrics[MOE_VALID_ASSIGNMENTS_METRIC],
                             batch_size=batch.tokens.shape[0],
                             sequence_length=batch.tokens.shape[1],
                             top_k=config.model.num_experts_per_token,

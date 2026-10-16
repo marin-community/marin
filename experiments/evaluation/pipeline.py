@@ -6,7 +6,7 @@
 :func:`eval_step` wraps one launcher run (model x eval selection) as an :class:`ArtifactStep`, so
 evals compose into ``StepRunner`` pipelines and can be triggered programmatically -- e.g. right
 after a training pipeline exports a checkpoint, or fanned out over a model sweep. The step runs the
-same orchestration as the CLI (serve the model once, run evalchemy against the served URL, write
+same orchestration as the CLI (share inference across evaluations, write
 ``record.json`` + results + per-question parquet) to the shared eval output root. The step's artifact
 path holds its cache record and typed launch result: an identical (model, evals, limit, version)
 config is a cache hit.
@@ -22,19 +22,21 @@ The demo pipeline below runs the smoke suite for one small model.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
 
-from iris.client import iris_ctx
+from iris.client.client import iris_ctx
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import default_platform
 from marin.evaluation.model_config import ModelConfig
-from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.evaluation.records import read_record, record_path
+from marin.execution.artifact import Artifact, is_mutable_version
+from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.step_runner import StepRunner
 
 from experiments.evaluation.evals import resolve_eval_keys
 from experiments.evaluation.launch import (
+    DEFAULT_EVAL_CONCURRENCY,
     EVALUATION_CONTROLLER_CLUSTER,
     LaunchSpec,
     launch_group,
@@ -54,6 +56,7 @@ class EvalStepConfig:
     model: ModelConfig
     evals: str
     limit: int | None
+    max_concurrent: int
     artifact_path: str
     accelerator: str | None
     submission_cluster: str
@@ -61,33 +64,24 @@ class EvalStepConfig:
     version: str
 
 
+@dataclass(frozen=True)
+class EvalStepFingerprint:
+    """Identity summary for a model and its declared producer artifacts."""
+
+    model: ModelConfig
+    dependencies: tuple[str, ...]
+    evals: str
+    limit: int | None
+    version: str
+
+
 class EvaluationResult(Artifact):
-    """Submitted evaluation group and its durable run-record locations."""
+    """Submitted evaluation group and its durable records and rollout archives."""
 
     group_id: str
     records_prefix: str
     run_ids: tuple[str, ...]
-
-
-class EvaluationModelSource(Protocol):
-    """A static or produced HF model consumable by the shared evaluation runner."""
-
-    def deps(self) -> tuple[ArtifactStep, ...]: ...
-
-    def resolve(self, ctx: StepContext) -> ModelConfig: ...
-
-
-@dataclass(frozen=True)
-class CatalogEvaluationModel:
-    """A model selected from the checked-in evaluation catalog."""
-
-    name: str
-
-    def deps(self) -> tuple[ArtifactStep, ...]:
-        return ()
-
-    def resolve(self, _ctx: StepContext) -> ModelConfig:
-        return models()[self.name]
+    results_paths: tuple[str, ...]
 
 
 def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
@@ -100,42 +94,63 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
         platform=default_platform(config.model),
         accelerator=config.accelerator,
         limit=config.limit,
+        max_concurrent=config.max_concurrent,
         records_prefix=None,
         submission_cluster=config.submission_cluster,
         federated_cluster=config.federated_cluster,
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
         version=config.version,
+        cache_key=None if is_mutable_version(config.version) else config.artifact_path,
     )
     submitted = launch_group(prepare_evaluation_batch(spec), iris_ctx().client)
     submitted.job.wait(timeout=float("inf"))
+    run_ids = tuple(evaluation.run_id for evaluation in submitted.evaluations)
     return EvaluationResult(
         path=config.artifact_path,
         group_id=submitted.group_id,
         records_prefix=submitted.records_prefix,
-        run_ids=tuple(evaluation.run_id for evaluation in submitted.evaluations),
+        run_ids=run_ids,
+        results_paths=tuple(
+            read_record(record_path(submitted.records_prefix, run_id)).results_path for run_id in run_ids
+        ),
     )
 
 
 def eval_step(
-    model: EvaluationModelSource,
+    model: ModelConfig,
     evals: str,
     *,
     version: str,
+    deps: tuple[ArtifactStep, ...] = (),
+    resolve_model: Callable[[StepContext], ModelConfig] | None = None,
     limit: int | None = None,
+    max_concurrent: int = DEFAULT_EVAL_CONCURRENCY,
     accelerator: str | None = None,
     submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
     federated_cluster: str | None = None,
 ) -> ArtifactStep[EvaluationResult]:
-    """Evaluate a static or upstream-produced model with Evalchemy and Harbor."""
+    """Evaluate a model with Evalchemy and Harbor.
 
-    deps = model.deps()
+    Experiments declare producer dependencies and resolve their paths in ``resolve_model``.
+    Checked-in models use ``model`` directly without a producer step.
+    ``max_concurrent`` caps concurrent evaluators sharing inference.
+    """
 
-    def build_config(ctx: StepContext) -> EvalStepConfig:
-        resolved_model = model.resolve(ctx)
+    def build_config(ctx: StepContext) -> EvalStepConfig | EvalStepFingerprint:
+        resolved_model = resolve_model(ctx) if resolve_model is not None else model
+        if ctx.is_fingerprint:
+            return EvalStepFingerprint(
+                model=resolved_model,
+                dependencies=tuple(artifact_identity(dep) for dep in deps),
+                evals=evals,
+                limit=limit,
+                version=version,
+            )
         return EvalStepConfig(
             model=resolved_model,
             evals=evals,
             limit=limit,
+            max_concurrent=max_concurrent,
             artifact_path=ctx.output_path,
             accelerator=ctx.runtime_arg(_ACCELERATOR_RUNTIME_ARG),
             submission_cluster=ctx.runtime_arg(_SUBMISSION_CLUSTER_RUNTIME_ARG),
@@ -143,9 +158,8 @@ def eval_step(
             version=version,
         )
 
-    model_name = model.resolve(StepContext.for_fingerprint(deps=deps)).name
     return ArtifactStep(
-        name=f"evals/{model_name}/{evals}",
+        name=f"evals/{model.name}/{evals}",
         version=version,
         artifact_type=EvaluationResult,
         run=run_eval_pipeline_step,
@@ -160,7 +174,7 @@ def eval_step(
 
 
 def main() -> None:
-    step = eval_step(CatalogEvaluationModel("qwen3-1.7b"), "smoke", version="2026.07.19")
+    step = eval_step(models()["qwen3-1.7b"], "smoke", version="2026.07.19")
     StepRunner().run([step.lower()])
 
 

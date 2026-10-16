@@ -296,3 +296,27 @@ def zeropower_via_newtonschulz5(X, steps: int = 5, eps: float = 1e-7, coefficien
         X = X.T
 
     return X
+
+
+_NORM_FLOOR = 1e-10
+
+
+def norm_preserving_update(param, update, learning_rate: jax.Array | float):
+    """Return an Optax update that preserves matrix parameter norms.
+
+    Rank-2 parameters use one Frobenius norm. Higher-rank parameters are treated
+    as a stack along axis 0, preserving each stacked matrix's norm independently.
+    """
+    if param is None:
+        return None
+    if param.ndim == 2:
+        param_norm = jnp.linalg.norm(param)
+        new_param = param - learning_rate * update * param_norm / jnp.maximum(jnp.linalg.norm(update), _NORM_FLOOR)
+        return new_param / jnp.linalg.norm(new_param) * param_norm - param
+
+    axes = tuple(range(1, param.ndim))
+    param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
+    update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
+    new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, _NORM_FLOOR)
+    new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
+    return new_param / jnp.maximum(new_param_norm, _NORM_FLOOR) * param_norm - param

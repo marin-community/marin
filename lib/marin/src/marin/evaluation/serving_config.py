@@ -4,15 +4,20 @@
 """Lower evaluation model policy into remote-inference configuration."""
 
 import json
+import logging
+import math
 from collections.abc import Mapping
-from pathlib import Path
+from dataclasses import replace
+from functools import cache
+from pathlib import Path, PurePosixPath
 
 from fray.types import ResourceConfig, create_environment
-from huggingface_hub import hf_hub_download
+from huggingface_hub import HfApi, hf_hub_download
 from iris.cluster.setup_scripts import default_setup_script
-from rigging.filesystem import StoragePath
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath
 
-from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
 from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args
 from marin.inference.config import (
     BrokerConfig,
@@ -25,15 +30,37 @@ from marin.inference.config import (
     VllmSource,
 )
 
+logger = logging.getLogger(__name__)
+
 ENDPOINT_READY_TIMEOUT_SECONDS = 2400
 EVAL_SERVE_MAX_NUM_BATCHED_TOKENS = 512
 DEFAULT_SERVE_CPU = 8.0
 _HF_CONFIG_FILENAME = "config.json"
 _MAX_POSITION_EMBEDDINGS_KEY = "max_position_embeddings"
 _QWEN_NEXT_MODEL_MARKERS = ("qwen3.5", "qwen3-next")
-DEFAULT_SERVE_MEMORY = "64g"
 DEFAULT_SERVE_DISK = "100g"
 _QUIET_VLLM_ARGS = ("--uvicorn-log-level", "warning")
+_VLLM_BATCH_INVARIANT_ENV = "VLLM_BATCH_INVARIANT"
+_VLLM_FLASHINFER_SAMPLER_ENV = "VLLM_USE_FLASHINFER_SAMPLER"
+_SPECULATIVE_METRIC_FAMILIES = frozenset(
+    {
+        "vllm:spec_decode_num_accepted_tokens",
+        "vllm:spec_decode_num_draft_tokens",
+        "vllm:spec_decode_num_drafts",
+    }
+)
+
+# vLLM loads a checkpoint through host memory: the weight files land in the page cache and the
+# loader stages shard buffers on the way to device memory. Both are charged to the serve child's
+# cgroup, so its host-memory request has to cover the checkpoint plus per-rank runtime.
+_WEIGHT_FILE_SUFFIXES = (".safetensors", ".bin")
+_BYTES_PER_GIB = 1024**3
+# Loader buffers and not-yet-reclaimed page cache on top of the checkpoint's own bytes.
+_CHECKPOINT_MEMORY_FACTOR = 1.5
+# CUDA context, torch runtime, and compile workers for one model-parallel rank on the host.
+_HOST_MEMORY_PER_RANK_GB = 12
+# Small models are dominated by the runtime rather than the weights; do not request less than this.
+_MIN_SERVE_MEMORY_GB = 32
 
 
 def _auto_serve_overrides_from_config(
@@ -94,6 +121,76 @@ def auto_serve_overrides(
     return _auto_serve_overrides_from_config(model, config, max_model_len, existing_extra_args)
 
 
+def resolved_serve_config(model: ModelConfig) -> ServeConfig:
+    """Resolve checkpoint-derived vLLM settings and retain them for serving."""
+    serve = model.serve
+    if serve.backend is not ServeBackend.VLLM or not serve.auto_overrides:
+        return serve
+    rendered_args = serve_config_vllm_args(serve)
+    resolved_args, max_model_len = auto_serve_overrides(
+        model.location, serve.max_model_len, rendered_args, revision=model.revision
+    )
+    extra_args = (*serve.vllm_extra_args, *resolved_args[len(rendered_args) :])
+    return replace(serve, max_model_len=max_model_len, vllm_extra_args=extra_args, auto_overrides=False)
+
+
+def _is_weight_file(name: str) -> bool:
+    """Whether a checkpoint entry, named relative to its root, is a weight file the server loads.
+
+    Only top-level entries count. A Hugging Face repo often ships a second copy of the same weights
+    in a subdirectory (``original/`` on the Llama repos) that vLLM never reads; counting it would
+    roughly double the measured size of the checkpoint.
+    """
+    return "/" not in name and name.endswith(_WEIGHT_FILE_SUFFIXES)
+
+
+@cache
+def _checkpoint_file_sizes(location: str, revision: str | None) -> dict[str, int]:
+    """Byte size of every file at ``location``, keyed by name relative to the checkpoint root.
+
+    ``location`` is an object-store export directory, a local directory, or a Hugging Face repo id,
+    matching :func:`auto_serve_overrides`. Reads metadata only: a directory listing or the Hub's
+    file-metadata API, never the weights themselves. The two directory listings are shallow; the Hub
+    reports a repo's whole tree, so its names can carry a subdirectory prefix.
+    """
+    if "://" in location:
+        fs, path = filesystem_for(location)
+        return {PurePosixPath(entry["name"]).name: entry.get("size") or 0 for entry in fs.ls(path, detail=True)}
+    directory = Path(location)
+    if directory.is_dir():
+        return {child.name: child.stat().st_size for child in directory.iterdir() if child.is_file()}
+    info = HfApi().model_info(location, revision=revision, files_metadata=True)
+    return {sibling.rfilename: sibling.size or 0 for sibling in info.siblings or ()}
+
+
+def _serve_host_memory(files: Mapping[str, int], ranks: int) -> str:
+    """Host memory an inference worker needs to load the checkpoint described by ``files``.
+
+    The weights count once per host, not once per rank: page cache is charged to the cgroup once no
+    matter how many ranks map the same shards.
+    """
+    weight_bytes = sum(size for name, size in files.items() if _is_weight_file(name))
+    if not weight_bytes:
+        raise ValueError(
+            f"no {' or '.join(_WEIGHT_FILE_SUFFIXES)} weight files among {sorted(files)}, so the serve child's "
+            "host memory cannot be sized from the checkpoint; set resource_hint.memory for this model"
+        )
+    weight_gb = weight_bytes / _BYTES_PER_GIB
+    required_gb = _CHECKPOINT_MEMORY_FACTOR * weight_gb + _HOST_MEMORY_PER_RANK_GB * ranks
+    return f"{max(_MIN_SERVE_MEMORY_GB, math.ceil(required_gb))}g"
+
+
+def _serve_memory(model: ModelConfig, accelerator: AcceleratorChoice) -> str:
+    """The inference worker's host-memory request, from the model's own hint or its checkpoint."""
+    if model.resource_hint.memory is not None:
+        return model.resource_hint.memory
+    # A TPU slice serves one host process for the whole slice; a GPU slice runs one rank per device.
+    ranks = accelerator.gpu_count if accelerator.platform is Platform.GPU else 1
+    memory = _serve_host_memory(_checkpoint_file_sizes(model.location, model.revision), ranks)
+    logger.info("Sized %s serve host memory at %s from its checkpoint (%d ranks)", model.name, memory, ranks)
+    return memory
+
+
 def _vllm_engine_config(
     serve: ServeConfig,
     platform: Platform,
@@ -113,7 +210,23 @@ def _vllm_engine_config(
         ),
         max_num_seqs=serve.max_num_seqs,
         extra_args=(*extra_args, *_QUIET_VLLM_ARGS),
+        extra_metric_families=_SPECULATIVE_METRIC_FAMILIES if serve.speculative is not None else frozenset(),
+        speculative=serve.speculative,
     )
+
+
+def _vllm_environment_variables(serve: ServeConfig, platform: Platform) -> dict[str, str]:
+    """Validate and render catalog-owned vLLM process settings."""
+    has_process_setting = serve.vllm_batch_invariant is not None or serve.vllm_use_flashinfer_sampler is not None
+    if has_process_setting and (serve.backend is not ServeBackend.VLLM or platform is not Platform.GPU):
+        raise ValueError("vLLM process settings require the vLLM backend on GPU")
+
+    environment: dict[str, str] = {}
+    if serve.vllm_batch_invariant is not None:
+        environment[_VLLM_BATCH_INVARIANT_ENV] = str(int(serve.vllm_batch_invariant))
+    if serve.vllm_use_flashinfer_sampler is not None:
+        environment[_VLLM_FLASHINFER_SAMPLER_ENV] = str(int(serve.vllm_use_flashinfer_sampler))
+    return environment
 
 
 def inference_config_for_model(
@@ -128,20 +241,17 @@ def inference_config_for_model(
     broker: BrokerConfig | None = None,
 ) -> RemoteInferenceConfig:
     """Lower one model and selected accelerator into remote inference configuration."""
-    serve = model.serve
+    serve = resolved_serve_config(model)
+    if serve.speculative is not None and accelerator.platform is not Platform.GPU:
+        raise ValueError("speculative serving requires the GPU vLLM backend")
+    geometry = serving_geometry(serve, accelerator)
+    vllm_environment_variables = _vllm_environment_variables(serve, accelerator.platform)
     extra_args = serve_config_vllm_args(serve)
     max_model_len = serve.max_model_len
-    if serve.backend is ServeBackend.VLLM and serve.auto_overrides:
-        extra_args, max_model_len = auto_serve_overrides(
-            model.location,
-            max_model_len,
-            extra_args,
-            revision=model.revision,
-        )
 
     hint = model.resource_hint
     cpu = hint.cpu or DEFAULT_SERVE_CPU
-    memory = hint.memory or DEFAULT_SERVE_MEMORY
+    memory = _serve_memory(model, accelerator)
     disk = hint.disk or DEFAULT_SERVE_DISK
     regions = [accelerator.region] if accelerator.region else None
 
@@ -149,6 +259,7 @@ def inference_config_for_model(
         resources = ResourceConfig.with_gpu(
             accelerator.gpu_type or "H100",
             count=accelerator.gpu_count,
+            replicas=geometry.task_count if geometry is not None else 1,
             cpu=cpu,
             ram=memory,
             disk=disk,
@@ -160,7 +271,7 @@ def inference_config_for_model(
             )
             environment = create_environment(
                 setup_scripts=[default_setup_script(packages=["marin-core"])],
-                env_vars=dict(env_vars),
+                env_vars={**env_vars, **vllm_environment_variables},
             )
         else:
             engine = LevanterEngineConfig()
@@ -188,12 +299,14 @@ def inference_config_for_model(
             revision=model.revision,
             api_model=api_model,
             tokenizer=model.tokenizer or model.location,
+            tokenizer_revision=model.effective_tokenizer_revision,
             max_model_len=max_model_len,
             tensor_parallel_size=serve.tensor_parallel_size,
             chat_template_content=serve.chat_template,
         ),
         engine=engine,
         iris=IrisConfig(
+            serving_geometry=geometry,
             worker_resources=resources,
             worker_environment=environment,
             endpoint_ready_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,

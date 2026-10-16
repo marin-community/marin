@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RL Data Atlas</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="assessment.css"><script src="common.js" defer></script><script src="app.js" defer></script>
+</head>
+<body>
+<main>
+  <header class="atlas-header"><h1>RL Data Atlas</h1><div><a href="archive.html">Historical reviews</a><button id="export" class="secondary">Export view</button></div></header>
+  <nav class="atlas-tabs" aria-label="Atlas views"><a href="curriculum.html#view=sources">By source</a><a href="curriculum.html#view=map">By curriculum</a></nav>
+  <section class="metrics" aria-label="Catalog totals">
+    <div><span class="metric-label">SOURCES</span><strong id="source-count">—</strong><small id="assessment-count">Loading assessments</small></div>
+    <div><span class="metric-label">GRADED SAMPLE ITEMS</span><strong id="sample-count">—</strong><small>Admitted tasks and excluded diagnostics</small></div>
+    <div><span class="metric-label">CATALOG SNAPSHOT</span><strong id="snapshot-date">—</strong><small id="snapshot-id">Loading</small></div>
+  </section>
+  <p class="sync-banner" id="message" role="status" aria-live="polite">Loading the catalog…</p>
+  <section class="catalog">
+    <div class="catalog-top"><h2>Sources</h2><label class="search"><input id="search" type="search" placeholder="Search sources, families, tags…" aria-label="Search sources"></label></div>
+    <div class="filters">
+      <label>Catalog<select id="origin"><option value="all">All catalogs</option></select></label>
+      <label>Sampled grade<select id="quality"><option value="all">All grades</option><option value="good">Good</option><option value="some_issues">Some issues</option><option value="bad">Bad</option><option value="unknown">Unknown</option><option value="unassessed">Unassessed</option></select></label>
+      <label>Curation<select id="curation"><option value="all">All outcomes</option><option value="sampled">Sampled</option><option value="completed">Completed</option><option value="incomplete">Incomplete</option><option value="gated">Gated</option><option value="inventory">Inventory only</option></select></label>
+      <label>Type<select id="type"><option value="all">All types</option><option>RLVR</option><option>Alignment</option><option>Agentic</option></select></label>
+      <button id="reset" class="text-button">Reset</button>
+    </div>
+    <div class="table-scroller" tabindex="0" aria-label="Curation source inventory"><table><thead><tr id="headers"></tr></thead><tbody id="rows"></tbody></table><p id="empty" class="empty" hidden>No matching sources.</p></div>
+    <footer class="table-footer"><span id="visible-count"></span><span>Click a source to inspect coverage and evidence.</span></footer>
+  </section>
+  <section class="notes">
+    <div><p><b>Grades are sampled model opinions.</b> The label summarizes admitted tasks only. Read the counts and evidence. Missing required evidence or an empty admitted sample gives Unknown. Excluded rows are separate diagnostics.</p></div>
+    <div><p><b>Controls are executed measurements.</b> Grading preserves curation admission and control outcomes. Input populations can overlap. Sources without conversion pipelines remain visible as inventory entries.</p></div>
+  </section>
+</main>
+<dialog id="details"><div class="drawer-header"><p class="eyebrow">SOURCE DETAILS</p><button id="close-details" class="close" aria-label="Close source details">×</button></div><h2 id="detail-name"></h2><p id="detail-notes"></p><div id="detail-fields"></div><div id="detail-links" class="detail-links"></div></dialog>
+</body></html>

@@ -1,6 +1,6 @@
 ---
 name: update-docs
-description: "Update documentation, runbooks, and reusable task guidance when implementation work or experiments change behavior or operational practice."
+description: Update durable docs when explicitly requested or when current work changes behavior, exposes stale instructions, establishes an operational pattern, or yields reusable research guidance.
 ---
 
 # Skill: Update Docs
@@ -27,7 +27,8 @@ unfocused.
 - Describe current behavior, not aspiration.
 - Include exact commands and paths for operational procedures.
 - Remove or correct stale instructions rather than adding caveats around them.
-- Keep broad docs concise; put detailed run notes in logbooks or issue comments.
+- Keep broad docs concise; put detailed run notes in the existing issue, W&B
+  report, or durable session channel.
 
 ## Done Criteria
 

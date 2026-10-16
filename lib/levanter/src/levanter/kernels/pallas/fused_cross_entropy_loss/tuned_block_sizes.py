@@ -9,7 +9,7 @@ import warnings
 import jax
 import jax.numpy as jnp
 
-from .config import BlockSizes
+from .config import BlockSizes, max_weight_tile_bytes_for_device
 
 
 DEFAULT_DEVICE_KEY = "default"
@@ -678,6 +678,39 @@ def _sanitize_for_pallas(
     )
 
 
+def _clamp_to_weight_tile_budget(
+    block_sizes: BlockSizes,
+    *,
+    device_kind: Optional[str],
+    w_dtype: Optional[jnp.dtype],
+    dtype_name: Optional[str],
+) -> BlockSizes:
+    """Shrink the weight tile until the device's shared-memory budget admits it.
+
+    An inferred default over the budget can never trace, so the autotune result is never
+    cached and every call repeats the sweep (#8853). Halving keeps the sizes powers of two."""
+    if device_kind is None:
+        return block_sizes
+    budget = max_weight_tile_bytes_for_device(device_kind)
+    if budget is None:
+        return block_sizes
+    tile_dtype = w_dtype if w_dtype is not None else dtype_name
+    if tile_dtype is None:
+        return block_sizes
+    itemsize = jnp.dtype(tile_dtype).itemsize
+    h_block = block_sizes.h_block_size
+    v_block = block_sizes.v_block_size
+    while v_block > 16 and h_block * v_block * itemsize > budget:
+        v_block //= 2
+    while h_block > 16 and h_block * v_block * itemsize > budget:
+        h_block //= 2
+    return BlockSizes(
+        b_block_size=block_sizes.b_block_size,
+        h_block_size=h_block,
+        v_block_size=v_block,
+    )
+
+
 def infer_block_sizes(
     b: int,
     h: int,
@@ -749,7 +782,12 @@ def infer_block_sizes_with_tuned_match(
                 ):
                     return entry, True
 
-    default_entry = BlockSizes.get_default()
+    default_entry = _clamp_to_weight_tile_budget(
+        BlockSizes.get_default(),
+        device_kind=normalized_device_kind,
+        w_dtype=w_dtype,
+        dtype_name=dtype_name,
+    )
     if _is_valid_for_pallas_shape(
         default_entry,
         b=b,

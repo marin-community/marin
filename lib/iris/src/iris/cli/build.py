@@ -10,6 +10,7 @@ import click
 from rigging.provenance import Provenance
 
 from iris.cluster.provenance import provenance_to_env
+from iris.version import REVISION_DATE_ENV, iris_tree_date
 
 GHCR_DEFAULT_ORG = "marin-community"
 DEFAULT_CARGO_PROFILE = "fast"
@@ -263,6 +264,9 @@ def build_image(
     cmd = ["docker", "buildx", "build", "--platform", platform]
     cmd.extend(["--target", image_type])
     cmd.extend(["--build-arg", f"CARGO_PROFILE={cargo_profile}"])
+    # The image carries no `.git`, so the date the controller reports for itself
+    # has to be resolved here, against the tree being built.
+    cmd.extend(["--build-arg", f"{REVISION_DATE_ENV}={iris_tree_date(iris_root)}"])
     for key, value in provenance_to_env(provenance).items():
         cmd.extend(["--build-arg", f"{key}={value}"])
     for t in all_tags:

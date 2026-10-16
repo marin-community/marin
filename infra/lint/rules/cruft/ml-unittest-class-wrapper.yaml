@@ -1,0 +1,20 @@
+schema_version: 1
+code: ml-unittest-class-wrapper
+lane: cruft
+title: '`class TestFoo(unittest.TestCase)` adding nothing'
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Prefer top-level `def test_*` with pytest fixtures. A
+  `TestCase` subclass that just groups tests by topic adds setup ceremony
+  without buying anything.
+
+  **When allowed:** Where you genuinely need `setUp/tearDown` semantics that
+  fixtures can't express (rare).
+
+  **Bad example:**
+  ```python
+  class TestNormalize(unittest.TestCase):
+      def test_lower(self):
+          self.assertEqual(normalize("Hi"), "hi")
+      # delete the class; top-level def test_lower with a fixture.
+  ```

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import equinox as eqx
@@ -13,8 +14,8 @@ import optax
 import pytest
 
 import levanter.tracker as tracker_mod
-from levanter.callbacks import eval_loss_loop
-from levanter.callbacks._metrics import compute_instant_throughput, log_step_info
+from levanter.callbacks import StepInfo, eval_loss_loop
+from levanter.callbacks._metrics import compute_instant_throughput, log_performance_stats, log_step_info
 from levanter.metrics import (
     Metric,
     ReductionType,
@@ -194,6 +195,18 @@ def test_compute_instant_throughput_zero_duration_is_empty():
     assert t.mfu is None
 
 
+def test_context_switch_flops_baseline_preserves_history_and_current_rates(monkeypatch):
+    # 100 old updates cost 32 GFLOPs each. The new shape costs 40 GFLOPs/update.
+    logged = {}
+    monkeypatch.setattr(tracker_mod, "log", lambda metrics, **kwargs: logged.update(metrics))
+    monkeypatch.setattr(tracker_mod, "log_summary", lambda metrics: None)
+    callback = log_performance_stats(16, 2, 20e9, flops_offset=100 * (32e9 - 40e9))
+    callback(StepInfo(SimpleNamespace(step=125), loss=1.0, step_duration=2.0))
+    assert logged["throughput/total_gflops"] == 3200 + 25 * 40
+    # The offset corrects the cumulative total only, not the current rate.
+    assert logged["throughput/gflops_per_second"] == 20
+
+
 class SimpleModel(eqx.Module):
     weight: hax.NamedArray
 
@@ -328,6 +341,40 @@ def test_trainer_train_step(loss_fn, per_device_parallelism, expected_metrics):
             for key, expected_val in expected_metrics.items():
                 assert key in logged_metrics
                 assert jnp.allclose(logged_metrics[key], expected_val)
+
+
+def test_trainer_microbatching_preserves_parameter_axes_that_match_batch_size():
+    """Parameters whose leading size matches a batch must not be microbatched."""
+    Batch = hax.Axis("batch", size=4 * max(1, jax.device_count()))
+    Feature = hax.Axis("feature", size=Batch.size)
+
+    class PerExampleWeights(eqx.Module):
+        value: jax.Array
+
+    def loss_fn(model, batch, *, key):
+        del key
+        return jnp.mean(batch.array @ model.value)
+
+    config = TrainerConfig(
+        tracker=NoopConfig(),
+        seed=42,
+        num_train_steps=1,
+        train_batch_size=Batch.size,
+        per_device_parallelism=2,
+        id="parameter-axis-regression",
+    )
+    trainer = Trainer(config, optax.sgd(1.0), loss_fn, add_default_hooks=False)
+    model = PerExampleWeights(jnp.ones((Feature.size, Feature.size)))
+    batch = hax.named(
+        jnp.arange(Batch.size * Feature.size, dtype=jnp.float32).reshape(Batch.size, Feature.size), (Batch, Feature)
+    )
+
+    with trainer:
+        state = trainer.initial_state(jax.random.PRNGKey(0), model=model)
+        result = trainer.train_step(state, batch)
+
+    expected_gradient = batch.array.sum(axis=0)[:, None] / (Batch.size * Feature.size)
+    assert jnp.allclose(result.state.model.value, 1 - expected_gradient)
 
 
 def test_microbatching_metric_aggregation():

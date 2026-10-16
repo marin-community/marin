@@ -20,10 +20,10 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.client.endpoint_client import EndpointClient, EndpointLeaseRenewer, renew_interval
 from iris.cluster.config import AuthConfig
 from iris.cluster.controller.auth import MAX_ENDPOINT_TOKEN_TTL_SECONDS, create_controller_auth
-from iris.cluster.controller.endpoint_service import (
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.endpoints import (
     ENDPOINT_LEASE,
     MIN_ENDPOINT_LEASE,
-    EndpointServiceImpl,
     ProxyRegistryReset,
 )
 from iris.cluster.controller.projections.endpoints import EndpointRow
@@ -32,13 +32,12 @@ from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, JobName, TaskAttempt
 from iris.rpc import controller_pb2, job_pb2
+from iris.testing.controller import make_job_request, query_task, submit_job
 from iris.time_proto import duration_to_proto
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from rigging.token_authority import generate_ed25519_keypair
 from sqlalchemy import update as sa_update
-
-from .conftest import make_job_request, query_task, submit_job
 
 
 def _service(state, *, lease: Duration = ENDPOINT_LEASE) -> EndpointServiceImpl:
@@ -144,7 +143,7 @@ def test_sweep_expired_deletes_only_expired(state):
 
     result = prune_old_data(
         state._db,
-        [],
+        state._health,
         job_retention=Duration.from_hours(1),
         worker_retention=Duration.from_hours(1),
         slice_retention=Duration.from_hours(1),

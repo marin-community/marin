@@ -3,13 +3,18 @@
 
 """Normalize pre-staged Nemotron Code v1 file contents.
 
+The exact resolver, pinned 2025-05-18 Software Heritage graph configuration,
+``sha1_git`` mapping, and S3 content downloader are preserved at commit
+``c774272e5561e1fe2f8c7d92ecef60b333d95307``:
+https://github.com/marin-community/build-nt-code/blob/c774272e5561e1fe2f8c7d92ecef60b333d95307/pipeline/README.md
+
 The raw parquet shards are consumed from ``{MARIN_PREFIX}/raw/nemotron-code-v1-content``,
 so each cluster reads them from its own bucket and they must be copied in before a run. The
 canonical copy lives on Cloudflare R2 at ``s3://marin-na/users/held/nemotron-code-v1-content``
 (514 shards, 585 GB, free egress) — copy from there when staging to a new cluster.
 """
 
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.datakit.normalize import DedupMode, normalize_step
 from marin.execution.step_spec import StepSpec

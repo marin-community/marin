@@ -47,6 +47,7 @@ from marin.execution.build_context import BuildContext, VersionCodex, build_cont
 from marin.execution.lazy import ArtifactStep, lower, run
 
 BuildResult = ArtifactStep | Mapping[str, ArtifactStep] | list[ArtifactStep] | tuple[ArtifactStep, ...]
+BuildRunner = Callable[[list[ArtifactStep], int], None]
 
 
 def _version_callback(ctx: click.Context, param: click.Parameter, value: str) -> str:
@@ -88,7 +89,7 @@ def _as_handles(result: BuildResult) -> list[ArtifactStep]:
     )
 
 
-def _graph_handles(handles: list[ArtifactStep]) -> list[ArtifactStep]:
+def graph_handles(handles: list[ArtifactStep]) -> list[ArtifactStep]:
     """Every handle reachable from ``handles`` (deps included), deduped by identity, deps first."""
     seen: set[int] = set()
     order: list[ArtifactStep] = []
@@ -115,21 +116,17 @@ def _print_plan(handles: list[ArtifactStep]) -> None:
     for handle in handles:
         click.echo(lower(handle))
     click.echo("\nResolved versions:")
-    for handle in _graph_handles(handles):
+    for handle in graph_handles(handles):
         flag = "  (mutable — rebuilds every run)" if is_mutable_version(handle.version) else ""
         click.echo(f"  {handle.name}@{handle.version}{flag}")
 
 
-def build_options(fn: Callable[..., BuildResult]) -> Callable[..., None]:
-    """Add the shared version/run options to a command that returns the experiment's handle(s).
+def _run_locally(handles: list[ArtifactStep], max_concurrent: int) -> None:
+    run(*handles, max_concurrent=max_concurrent)
 
-    ``fn`` returns one :class:`~marin.execution.lazy.ArtifactStep`, a list/tuple of them, or a
-    name→handle mapping; it is called inside a :class:`~marin.execution.build_context.BuildContext`
-    built from ``--version`` and ``--override``. Without ``--run`` the lowered plan is printed;
-    with it the handles are built. An ``--override`` naming an artifact that never deferred (a typo,
-    or one that hardcodes its version) is rejected, so a silently-ignored override cannot slip a run
-    under the wrong version.
-    """
+
+def build_options_with_runner(fn: Callable[..., BuildResult], runner: BuildRunner) -> Callable[..., None]:
+    """Add shared build options and delegate ``--run`` to a domain-specific runner."""
 
     @click.option(
         "--version",
@@ -166,9 +163,23 @@ def build_options(fn: Callable[..., BuildResult]) -> Callable[..., None]:
         if not do_run:
             _print_plan(handles)
             return
-        run(*handles, max_concurrent=max_concurrent)
+        runner(handles, max_concurrent)
 
     return wrapper
+
+
+def build_options(fn: Callable[..., BuildResult]) -> Callable[..., None]:
+    """Add the shared version/run options to a command that returns the experiment's handle(s).
+
+    ``fn`` returns one :class:`~marin.execution.lazy.ArtifactStep`, a list/tuple of them, or a
+    name→handle mapping; it is called inside a :class:`~marin.execution.build_context.BuildContext`
+    built from ``--version`` and ``--override``. Without ``--run`` the lowered plan is printed;
+    with it the handles are built. An ``--override`` naming an artifact that never deferred (a typo,
+    or one that hardcodes its version) is rejected, so a silently-ignored override cannot slip a run
+    under the wrong version.
+    """
+
+    return build_options_with_runner(fn, _run_locally)
 
 
 def experiment_main(build: Callable[[], BuildResult]) -> Callable[..., None]:

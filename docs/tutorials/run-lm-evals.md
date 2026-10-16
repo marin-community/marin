@@ -1,9 +1,8 @@
 # Running Evaluations with Marin
 
 The shared evaluation launcher runs Evalchemy and Harbor evaluations against a registered model or a
-file-backed model configuration. It starts one OpenAI-compatible model server, runs every selected
-evaluation against that endpoint, writes one durable record per evaluation, and tears the server
-down.
+file-backed model configuration. Selected evaluations share one OpenAI-compatible model server
+and each writes a durable record. The server stops when the group finishes.
 
 Use the launcher for routine post-hoc evaluations. Use the composable APIs later in this page when
 an evaluation must be part of a Marin pipeline or consume an `ArtifactStep[LevanterCheckpoint]`.
@@ -170,12 +169,12 @@ uv run python -m experiments.evaluation.cli launch \
 `agentic` runs seven full Harbor datasets and can consume substantial Daytona and inference
 capacity. Use `tb2-lite`, `swebench-lite`, `aime-smoke`, or `--limit N` for validation runs.
 
-Run one Grug/OpenCode trial with the model and agent policy registered for that benchmark:
+Run one OT-TBLite trial with the registered Grug model and OpenCode agent policy:
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
   --model grug-agentic-s3-step1903 \
-  --evals grug-opencode-id \
+  --evals ot-tblite \
   --limit 1
 ```
 
@@ -187,9 +186,9 @@ persistence use the selected GCS or S3 records store after
 ### Object-store model loading
 
 CUDA vLLM serves `s3://` checkpoints with RunAI model streamer 0.16.1. The launcher gives the
-streamer's low-speed check 10 seconds and sends its warning and error logs to the Iris job log. The
-Grug H100x8 entry also enables distributed loading: each data-parallel rank reads its assigned
-weights and broadcasts them locally instead of all eight ranks reading the full 124.9 GiB export.
+streamer's low-speed check 10 seconds and sends its warning and error logs to the Iris job log.
+GPU object-store loads default to distributed RunAI reads: ranks divide the reads and share the
+data. Explicit `--load-format` or `--model-loader-extra-config` arguments override this default.
 
 The following variables may prefix an evaluation command and are forwarded to the remote inference
 child:
@@ -210,7 +209,7 @@ For example, retry a model-load failure with half the default reader concurrency
 RUNAI_STREAMER_CONCURRENCY=4 \
 uv run python -m experiments.evaluation.cli launch \
   --model grug-agentic-s3-step1903 \
-  --evals grug-opencode-id \
+  --evals ot-tblite \
   --limit 1
 ```
 
@@ -233,7 +232,7 @@ when RunAI reports a transient read failure.
 The `code` suite is registered but is not runnable with the current pinned evaluation image because
 its HumanEvalPlus and MBPPPlus dependencies are absent. Individual evaluation keys are defined in
 `experiments/evaluation/evals.py`. Useful Harbor keys outside `agentic` include `tb2-lite`,
-`swebench-lite`, `swebench-full`, `aime-smoke`, `aime-harbor`, and `grug-opencode-id`.
+`swebench-lite`, `swebench-full`, `aime-smoke`, `aime-harbor`, and `ot-tblite`.
 
 ### Choose a model
 
@@ -245,7 +244,7 @@ its HumanEvalPlus and MBPPPlus dependencies are absent. Individual evaluation ke
 | `llama-3.1-8b-base` | Base, TPU | `nlp` |
 | `llama3.1-8b-instruct` | Instruct, TPU | `core`, `nlp`, or `chat` |
 | `qwen3-32b` | Instruct, CoreWeave H100x2 | `tb2-lite`, `tb2`, or `agentic` |
-| `grug-agentic-s3-step1903` | Instruct export, CoreWeave H100x8 | `grug-opencode-id` |
+| `grug-agentic-s3-step1903` | Instruct export, CoreWeave H100x8 | `ot-tblite` |
 
 The complete catalog is the union of `experiments/evaluation/models.py` and YAML files under
 `experiments/evaluation/serve/models/`. The
@@ -260,6 +259,8 @@ documents how to register a Hugging Face model or object-store checkpoint.
   for multiple files.
 - `--harbor-config path.yaml` adds one Harbor policy. Repeat the option for multiple files.
 - `--limit N` overrides the configured instance cap for every selected evaluation.
+- `--max-concurrent N` caps simultaneous evaluators (default 1). All share one candidate and,
+  when configured, one judge. Server-wide inference metrics are omitted when this exceeds 1.
 - `--no-wait` returns after Iris submission. Without it, the command waits for terminal records and
   prints their metrics.
 - `--platform tpu|gpu` overrides the model's default platform when the model resource hint supports
@@ -272,9 +273,10 @@ documents how to register a Hugging Face model or object-store checkpoint.
 - `--version` and `--description` attach run metadata.
 - `--records-prefix` changes the result store.
 
-Each invocation serves the model once and evaluates the selected keys in order. An evaluation
-failure gets its own terminal record and does not skip later evaluations. An inference failure
-records the current and remaining evaluations as infrastructure failures.
+Each selected evaluation runs as its own step against shared inference. An evaluation failure gets
+a record for that eval; other steps continue. A server startup failure marks every pending eval as
+an infrastructure failure. On restart, completed steps are skipped. A fully completed group starts
+no servers.
 
 ### Harbor credentials
 
@@ -289,12 +291,18 @@ endpoint details.
 TPU-routed runs default to `gs://marin-eval-metadata/evals`. CoreWeave GPU runs default to
 `s3://marin-us-east-02a/marin/evals`. `--dry-run` prints the effective prefix.
 
-Every selected evaluation writes `{records_prefix}/{run_id}/record.json` plus its mechanism-specific
-results and normalized sample parquet. Evalchemy records include the normalized launch configuration;
-Harbor records include the dataset, agent, environment, task limit, and source-policy
-digest. Harbor also persists trial directories and trajectories in the same GCS or S3 results tree.
-A Harbor trial with `exception_info` marks the evaluation failed after its artifacts are saved; a
-verifier-scored zero without an exception remains a completed evaluation with a zero score.
+Every selected evaluation writes `{records_prefix}/{run_id}/record.json` and a FineStore archive
+under its results directory. Evalchemy writes its aggregate JSON and per-task JSONL as FineStore
+source artifacts and writes normalized samples for every extraction filter. Marin derives one
+evaluator-neutral `rollouts_v1` conversation per `(task, doc_id, trial_id)` attempt from those samples,
+deduplicated across extraction filters. Harbor preserves its job metadata, trial results, and
+trajectories while writing normalized agentic samples and steps; Marin derives its `rollouts_v1` rows
+from `steps`. The evaluator's raw artifacts remain in FineStore. Harbor's job tree remains the
+checkpoint used for resume and inspection. Evalchemy records include the
+normalized launch configuration; Harbor records include the dataset, agent, environment, task limit,
+and source-policy digest. A Harbor infrastructure exception remains ungraded and counts against the
+completion gate after its artifacts are saved; a verifier-scored zero remains a completed evaluation
+with a zero score.
 
 [Evaldash](https://evaldash.oa.dev) indexes records from both default stores. The record is the
 source of truth for model, evaluation identity, status, metrics, hardware, provenance, and Iris job
@@ -306,11 +314,12 @@ paths.
 selection in a lazy artifact. Save the pipeline as `eval_pipeline.py`:
 
 ```python
+from experiments.evaluation.models import models
 from experiments.evaluation.pipeline import eval_step
 from marin.execution.step_runner import StepRunner
 
 step = eval_step(
-    "qwen3-1.7b",
+    models()["qwen3-1.7b"],
     "smoke",
     version="2026.07.27",
     limit=32,
@@ -446,8 +455,8 @@ print(report_artifact.task_metrics)  # {task: {metric: value}}
 print(report_artifact.averages)      # suite-level rollups
 ```
 
-Each individual result is an `EvalchemyResult`; `task_metrics()` reads the per-task scores from the
-evalchemy output tree.
+Each individual result is a `FineStoreEvalchemyResult`; `task_metrics()` reads the per-task scores
+from Evalchemy's aggregate source artifacts in FineStore.
 
 ### Run the repository example scripts
 
@@ -504,7 +513,8 @@ Other GPU-served models (DeepSeek-V2-Lite, Qwen3-30B-A3B, …) need no extra fla
 
 - `config`: the `EvalchemyRunConfig`, including tasks, generation settings, concurrency, and limits.
 - `serve`: the model-server behavior (`vllm` or `levanter` and its server options).
-- `resource_hint`: optional CPU, memory, and disk overrides for the inference worker.
+- `resource_hint`: optional CPU, memory, and disk overrides for the inference worker. Host memory
+  defaults to a size derived from the checkpoint's weight files.
 - `accelerator`: the exact TPU or GPU slice used for inference.
 - `tokenizer`: HF tokenizer id the eval client loads; defaults to the served checkpoint. Set it to a
   base-model HF id when serving a `gs://` path the Evalchemy client cannot load a tokenizer from.

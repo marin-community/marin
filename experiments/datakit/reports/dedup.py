@@ -1,73 +1,48 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage report for the cross-source fuzzy dedup step.
+"""Stage report for fuzzy-duplicate cluster verification.
 
-Headline numbers come from the artifact's aggregated counters. The per-source
-table and the cluster-size histogram come from a bounded sample of each
-source's dup-marker parquet, which is sparse: only non-singleton cluster
-members get a row, and sources with zero non-singletons have empty shards.
+Headline numbers and the per-source table come from the artifact's aggregated counters.
 """
 
-from collections import Counter
-
+from marin.processing.classification.deduplication.cluster_verify import (
+    COUNTER_PREFIX as CLUSTER_VERIFY_COUNTER_PREFIX,
+)
+from marin.processing.classification.deduplication.cluster_verify import (
+    ClusterVerifiedFuzzyDupsAttrData,
+)
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 
-from experiments.datakit.reports.common import StageReport, render_template, sample_rows, write_report
-
-SAMPLE_LIMIT = 1000
-COUNTER_PREFIX = "dedup/fuzzy/document"
+from experiments.datakit.reports.common import StageReport, render_template, write_report
 
 
-def _source_label(source_key: str) -> str:
-    return "/".join(source_key.rstrip("/").split("/")[-3:])
-
-
-def dedup_report(output_path: str, dedup: FuzzyDupsAttrData) -> StageReport:
-    """Render the fuzzy-dedup stage report and return its path plus headline stats."""
-    cluster_members = int(dedup.counters.get(f"{COUNTER_PREFIX}/cluster_members", 0))
-    clusters = int(dedup.counters.get(f"{COUNTER_PREFIX}/canonicals", 0))
-    singletons_skipped = int(dedup.counters.get(f"{COUNTER_PREFIX}/singletons_skipped", 0))
-    duplicates_to_drop = cluster_members - clusters
-    total_docs = cluster_members + singletons_skipped
-
-    # dup_cluster_id is global across sources, so pooling the per-source
-    # samples yields cross-source cluster sizes (within the sample).
-    sampled_cluster_sizes: Counter[str] = Counter()
-    per_source = []
-    for source_key, entry in dedup.sources.items():
-        rows = sample_rows(entry.attr_dir, ["id", "dup_cluster_id"], SAMPLE_LIMIT)
-        source_clusters = {r["dup_cluster_id"] for r in rows}
-        sampled_cluster_sizes.update(r["dup_cluster_id"] for r in rows)
-        per_source.append(
-            {
-                "label": _source_label(source_key),
-                "source_key": source_key,
-                "sampled_members": len(rows),
-                "sampled_clusters": len(source_clusters),
-            }
-        )
-
+def cluster_dedup_report(
+    output_path: str,
+    candidates: FuzzyDupsAttrData,
+    verified: ClusterVerifiedFuzzyDupsAttrData,
+) -> StageReport:
+    """Report measured cluster-verification counts and its recorded rule."""
+    prefix = CLUSTER_VERIFY_COUNTER_PREFIX
+    members = int(verified.counters[f"{prefix}/documents"])
+    removed = int(verified.counters[f"{prefix}/markers"])
     stats = {
-        "cluster_members": cluster_members,
-        "clusters": clusters,
-        "duplicates_to_drop": duplicates_to_drop,
-        "singletons_skipped": singletons_skipped,
-        "dup_rate": duplicates_to_drop / total_docs if total_docs else 0.0,
-        "n_sources": len(dedup.sources),
+        "cluster_members": members,
+        "verified_duplicates": removed,
+        "retained_members": members - removed,
+        "n_sources": len(verified.sources),
+        "mid_cluster_flushes": int(verified.counters.get(f"{prefix}/mid_cluster_flushes", 0)),
+        "truncated_documents": int(verified.counters.get(f"{prefix}/truncated_documents", 0)),
     }
     data = {
-        "params": dedup.params.model_dump(),
+        "params": candidates.params.model_dump(mode="json"),
+        "rule": verified.rule.model_dump(mode="json"),
+        "limits": verified.limits.model_dump(mode="json"),
         "stats": stats,
-        "sources": per_source,
-        "cluster_size_hist": [
-            {"size": size, "clusters": count} for size, count in sorted(Counter(sampled_cluster_sizes.values()).items())
+        "sources": [
+            {"source": key, "removed": int(verified.counters.get(f"{prefix}/source/{entry.source_tag}/markers", 0))}
+            for key, entry in sorted(verified.sources.items())
         ],
-        "sample_limit": SAMPLE_LIMIT,
-        "sampling": (
-            f"headline numbers from dedup counters (exact); per-source table + cluster-size histogram "
-            f"from the first {SAMPLE_LIMIT} non-singleton rows per source (file order)"
-        ),
     }
-    page = render_template("dedup.html", title="Datakit dedup", data=data)
+    page = render_template("cluster_dedup.html", title="Datakit cluster verification", data=data)
     return StageReport(html_path=write_report(output_path, page), stats=stats)

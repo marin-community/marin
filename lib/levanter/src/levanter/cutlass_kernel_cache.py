@@ -28,7 +28,8 @@ import pathlib
 from typing import Any, Callable
 
 import jax
-from rigging.cache import PersistentKvCache, combined_content_hash, directory_content_hash, workspace_lock_hash
+from finestore.cache import PersistentKvCache
+from rigging.cache import combined_content_hash, directory_content_hash, workspace_lock_hash
 
 logger = logging.getLogger(__name__)
 
@@ -102,12 +103,13 @@ def cutlass_call(launcher: Any, **kwargs: Any) -> Any:
 
 
 def cutlass_kernel_cache() -> PersistentKvCache:
-    """The standard cache for compiled CuTeDSL kernel object code, one object per key.
+    """The standard cache for compiled CuTeDSL kernel object code, addressed by key.
 
     Memory over region-local temp object storage, assembled by
-    :meth:`PersistentKvCache.for_prefix`. An unreachable store degrades to a compile.
+    :meth:`PersistentKvCache.for_prefix`. Every process reads the shared cache, while
+    only global process 0 publishes misses. An unreachable store degrades to a compile.
     """
-    return PersistentKvCache.for_prefix(_KERNEL_CACHE_PREFIX)
+    return PersistentKvCache.for_prefix(_KERNEL_CACHE_PREFIX, is_writer=lambda: jax.process_index() == 0)
 
 
 def install(cache: PersistentKvCache) -> None:
@@ -202,3 +204,18 @@ def _kernel_cache_revision() -> str:
 def _device_architecture() -> str:
     device = jax.local_devices()[0]
     return f"{device.platform}-{getattr(device, 'compute_capability', device.device_kind)}"
+
+
+def gpu_compute_capability() -> int:
+    """Return the CUDA compute capability as an integer such as 90 or 100."""
+    for device in jax.local_devices(backend="gpu"):
+        compute_capability = getattr(device, "compute_capability", None)
+        if callable(compute_capability):
+            compute_capability = compute_capability()
+        if isinstance(compute_capability, tuple) and len(compute_capability) >= 2:
+            return int(compute_capability[0]) * 10 + int(compute_capability[1])
+        if isinstance(compute_capability, str):
+            major, _, minor = compute_capability.partition(".")
+            if major.isdigit() and minor.isdigit():
+                return int(major) * 10 + int(minor)
+    raise RuntimeError("Could not determine CUDA compute capability.")

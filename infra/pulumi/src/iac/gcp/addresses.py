@@ -13,15 +13,13 @@ import pulumi
 import pulumi_gcp as gcp
 
 from iac.config import GcpAddressSpec
+from iac.imports import NO_IMPORTS, ImportRegistrar
 
 
 @dataclass(frozen=True)
 class GcpStaticAddressesArgs:
     project: str
     addresses: list[GcpAddressSpec]
-    # Adoption mode: stamp import_=<address id> on each resource so `pulumi preview` shows the
-    # real adoption diff instead of planning creates. Set via the `marin-iac:import` flag.
-    adopt: bool = False
 
 
 def _import_id(project: str, address: GcpAddressSpec) -> str:
@@ -33,7 +31,7 @@ class GcpStaticAddresses(pulumi.ComponentResource):
     """Create one EXTERNAL google_compute_address per `args.addresses`.
 
     Each pins `address` to a fixed IP, so Pulumi owns the reservation and keeps that exact IP;
-    in adopt mode each is imported from its live reservation (a no-op when the IPs match).
+    Program-first adoption uses each resource's registered provider ID.
     """
 
     def __init__(
@@ -42,11 +40,12 @@ class GcpStaticAddresses(pulumi.ComponentResource):
         args: GcpStaticAddressesArgs,
         *,
         gcp_provider: pulumi.ProviderResource,
+        imports: ImportRegistrar = NO_IMPORTS,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__("marin:gcp:GcpStaticAddresses", name, None, opts)
         for address in args.addresses:
-            gcp.compute.Address(
+            resource = gcp.compute.Address(
                 f"address-{address.name}",
                 name=address.name,
                 project=args.project,
@@ -57,10 +56,10 @@ class GcpStaticAddresses(pulumi.ComponentResource):
                 opts=pulumi.ResourceOptions(
                     parent=self,
                     provider=gcp_provider,
-                    import_=_import_id(args.project, address) if args.adopt else None,
                     # These IPs are baked into every CoreWeave federation allowlist; a stray
                     # `pulumi destroy`/rename must never release the reservation.
                     retain_on_delete=True,
                 ),
             )
+            imports.register(resource, parent=self, provider_id=_import_id(args.project, address))
         self.register_outputs({})
