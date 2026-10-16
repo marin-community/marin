@@ -318,7 +318,7 @@ def test_inference_endpoint_wait_distinguishes_queued_and_placed_tasks(
         return []
 
     monkeypatch.setattr(iris_module.Deadline, "from_seconds", FixedDeadline)
-    monkeypatch.setattr(iris_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(iris_module, "time", SimpleNamespace(sleep=lambda _seconds: None))
     monkeypatch.setattr(
         iris_module,
         "iris_ctx",
@@ -340,9 +340,11 @@ def test_inference_endpoint_wait_distinguishes_queued_and_placed_tasks(
 
     if placed:
         with pytest.raises(TimeoutError):
-            iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=0)
+            iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=0, placement_timeout_seconds=3600)
     else:
-        assert iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=0) == (
+        assert iris_module._wait_for_endpoint(
+            job, "/serve/inference", timeout_seconds=0, placement_timeout_seconds=3600
+        ) == (
             "https://inference.example",
             {},
         )

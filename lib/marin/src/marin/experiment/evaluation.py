@@ -31,7 +31,7 @@ from marin.evaluation.evalchemy.runner import (
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.lm_eval import LM_EVAL_UV_PACKAGES, LmEvalResults, LmEvalRun, run_lm_eval
 from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
-from marin.evaluation.runner import run_evaluation
+from marin.evaluation.runner import EndpointRoute, run_evaluation
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import result_type_name
@@ -109,6 +109,7 @@ def run_served_evalchemy(config: EvalchemyEvalConfig) -> FineStoreEvalchemyResul
             session,
             output_dir,
             evaluation_env,
+            endpoint_route=EndpointRoute.DIRECT,
         )
         jobs = {f"serve-{index}" if index else "serve": str(job.job_id) for index, job in enumerate(session.jobs)}
         jobs |= outcome.jobs

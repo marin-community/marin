@@ -28,7 +28,7 @@ from marin.evaluation.harbor.runner import (
 )
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind, ModelConfigRef, RunStatus
-from marin.evaluation.runner import EvaluationError, InferenceUnavailable, run_evaluation
+from marin.evaluation.runner import EndpointRoute, EvaluationError, InferenceUnavailable, run_evaluation
 from marin.external_dependencies import HARBOR
 from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
@@ -412,7 +412,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
 
     monkeypatch.setattr(runner, "run_harbor_driver", run_driver)
 
-    outcome = run_evaluation(executor, session, output_dir, {})
+    outcome = run_evaluation(executor, session, output_dir, {}, endpoint_route=EndpointRoute.CAPABILITY)
 
     assert session.recovery_waits == 1
     assert driver_starts == 2

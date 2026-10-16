@@ -188,6 +188,13 @@ class EvalExecutor(Protocol):
     ) -> EvaluationOutcome: ...
 
 
+class EndpointRoute(StrEnum):
+    """DIRECT resolves the worker address; CAPABILITY preserves the session endpoint."""
+
+    DIRECT = "direct"
+    CAPABILITY = "capability"
+
+
 @dataclass(frozen=True)
 class EvaluationIdentity:
     run_id: str
@@ -388,6 +395,7 @@ def run_evaluation(
     output_dir: str,
     env_vars: Mapping[str, str],
     *,
+    endpoint_route: EndpointRoute,
     judge: RemoteInferenceSession | None = None,
 ) -> EvaluationOutcome:
     """Retry evaluator attempts in the same output directory after inference outages."""
@@ -396,8 +404,9 @@ def run_evaluation(
 
     def attempt(attempt_number: int) -> EvaluationOutcome:
         before = tuple(inference.preemption_count() for inference in sessions)
+        execution_session = _local_endpoint_session(session) if endpoint_route is EndpointRoute.DIRECT else session
         # Only the adapter may authorize retry, after its child has stopped.
-        outcome = executor(session, output_dir, env_vars, judge=judge)
+        outcome = executor(execution_session, output_dir, env_vars, judge=judge)
         transport_failures = any(
             entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for entry in outcome.coverage.values()
         )
@@ -465,6 +474,7 @@ def _run_one_evaluation(
             evaluation.identity.output_dir,
             evaluation_env,
             judge=judge,
+            endpoint_route=EndpointRoute.CAPABILITY,
         )
         metrics = outcome.metrics
         coverage = outcome.coverage

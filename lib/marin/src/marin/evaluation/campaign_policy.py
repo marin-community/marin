@@ -17,7 +17,7 @@ from marin.evaluation.harbor.agent_context import reconciled_model_info, served_
 from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import EvalchemyRef, EvalRef, ModelRef
 
-OCTOBER_15_VERSION = "eval-policy-2026-10-15-verified"
+OCTOBER_16_VERSION = "eval-policy-2026-10-16-verified"
 MAX_SERVED_CONTEXT = 131072
 
 
@@ -49,9 +49,9 @@ class CampaignProfile(BaseModel):
 
 
 CAMPAIGN = CampaignProfile.model_validate_json(
-    Path(__file__).with_name("policies").joinpath("october_15.json").read_text()
+    Path(__file__).with_name("policies").joinpath("october_16.json").read_text()
 )
-CAMPAIGNS = {OCTOBER_15_VERSION: CAMPAIGN}
+CAMPAIGNS = {OCTOBER_16_VERSION: CAMPAIGN}
 
 
 def campaign_policy_violations(model: ModelRef, evaluation: EvalRef, profile: CampaignProfile) -> tuple[str, ...]:

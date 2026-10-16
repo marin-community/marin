@@ -85,7 +85,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [[ "$version" = eval-policy-2026-10-15-verified ]]; then
+if [[ "$version" = eval-policy-2026-10-16-verified ]]; then
   read -r CAMPAIGN_SHA_HARBOR CAMPAIGN_SHA_EVALCHEMY HARBOR_RUNTIME_PROJECT < <(
     uv run --project "$MARIN_DIR" python -c '
 import sys
@@ -177,6 +177,7 @@ PY
     --model-config "$STAGED_MODEL_CONFIG"
     --federated_cluster "$FEDERATED_CLUSTER"
     --priority "$PRIORITY"
+    --max-concurrent 2
   )
   if [ -n "$version" ]; then
     base_arguments+=(--version "$version")

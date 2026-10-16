@@ -891,7 +891,12 @@ def test_evaluation_resumes_one_archive_and_rejects_saved_transport_failures(
         assert controller.ready
         if entrypoint == "served":
             assert _env_vars["JUDGE_API_KEY"] == "test-judge-key"
-        assert _model.endpoint.base_url == session.model.endpoint.base_url
+        expected_url = (
+            f"http://10.0.0.{controller.preemptions + 1}:8000/v1"
+            if entrypoint == "served"
+            else session.model.endpoint.base_url
+        )
+        assert _model.endpoint.base_url == expected_url
         if failure_mode == "existing" or (failure_mode == "cached" and controller.preemptions):
             # Native resume restores the saved failure without making another model request.
             return "/eval/child"
@@ -2605,7 +2610,7 @@ def test_launch_accepts_registry_ifeval_and_repeated_harbor_configs(tmp_path, mo
 def test_launch_reuses_compatible_harbor_results_path(tmp_path, monkeypatch):
     _install_fake_harbor_preflight(monkeypatch)
     policy = _write_harbor_config(tmp_path / "aime-policy.yaml")
-    output_dir = f"memory://{tmp_path.name}/existing-harbor-results"
+    output_dir = f"file://{tmp_path / 'existing-harbor-results'}"
     spec = LaunchSpec(
         model=models()["qwen3-8b"],
         evals=(),
