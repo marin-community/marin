@@ -4,12 +4,17 @@
 from __future__ import annotations
 
 import dataclasses
+from contextlib import nullcontext
 from pathlib import Path
+from unittest.mock import MagicMock
 
+import click
 import pytest
+from click.testing import CliRunner
+from iris.client.client import IrisClient
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
-from marin.rl.cli import _coordinator_request
+from marin.rl.cli import _coordinator_request, rl_build_options
 from marin.rl.skyrl import IrisSkyRLExecution
 from rigging.timing import Duration
 
@@ -85,6 +90,30 @@ def test_coordinator_forwards_only_declared_secrets_and_requires_them():
     assert "test-key" not in repr(execution)
     with pytest.raises(KeyError, match="JUDGE_KEY"):
         _coordinator_request(*args, {})
+
+
+def test_rl_launch_forwards_dedicated_daytona_credential(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = MagicMock(spec=IrisClient)
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **_kwargs: nullcontext(client))
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+    monkeypatch.setenv("DAYTONA_RL_API_KEY", "test-rl-key")
+    monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "test-eval-key")
+    monkeypatch.setenv("DAYTONA_API_KEY", "test-other-key")
+    monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
+
+    @click.command()
+    @rl_build_options
+    def main() -> ArtifactStep[Artifact]:
+        return _step(_execution())
+
+    result = CliRunner().invoke(main, ["--version", "2026.10.07", "--run"])
+
+    assert result.exit_code == 0, result.output
+    environment = client.submit.call_args.kwargs["environment"]
+    assert environment.env_vars["DAYTONA_RL_API_KEY"] == "test-rl-key"
+    assert environment.env_vars["DAYTONA_EVAL_API_KEY"] == "test-eval-key"
+    assert environment.env_vars["DAYTONA_API_KEY"] == "test-other-key"
+    assert "UNRELATED_SECRET" not in environment.env_vars
 
 
 def test_execution_requires_a_complete_federated_route() -> None:

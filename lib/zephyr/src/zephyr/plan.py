@@ -13,6 +13,7 @@ import heapq
 import logging
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from itertools import groupby, islice
@@ -46,8 +47,10 @@ from zephyr.dataset import (
 )
 from zephyr.expr import Expr, referenced_columns
 from zephyr.input_file import InputFileSpec
+from zephyr.reader import Reader
 from zephyr.readers import compute_parquet_splits, load_file, load_file_batch
 from zephyr.shuffle import ScatterReader
+from zephyr.worker_context import InputProgress, _worker_ctx_var
 from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
 
 logger = logging.getLogger(__name__)
@@ -185,9 +188,27 @@ def _filter_gen(stream: Iterator, predicate: Callable) -> Iterator:
             yield item
 
 
+def _read_input[T](reader: Reader[T], counter: str | None) -> Iterator[T]:
+    """Count declared input records and publish best-effort task progress."""
+    progress = InputProgress(completed=0, total=reader.total_rows)
+    ctx = _worker_ctx_var.get()
+    if ctx is not None:
+        ctx.set_input_progress(progress)
+    with closing(reader):
+        for item in reader:
+            progress.total = reader.total_rows
+            rows = reader.rows_per_item(item)
+            if counter is not None:
+                counters.pipeline.update_counter(counter, rows)
+            yield item
+            progress.completed += rows
+        progress.total = reader.total_rows
+
+
 def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
     for item in stream:
-        yield from fn(item)
+        result = fn(item)
+        yield from _read_input(result, counters.RECORDS_IN) if isinstance(result, Reader) else result
 
 
 def _reduce_gen(
@@ -196,7 +217,7 @@ def _reduce_gen(
     reducer_fn: Callable,
     external_sort_dir: str,
 ) -> Iterator:
-    merged = shard.merge_sorted_chunks(external_sort_dir)
+    merged = _read_input(shard.merge_sorted_chunks(external_sort_dir), counter=None)
     for key, grouped in groupby(merged, key=key_fn):
         result = reducer_fn(key, grouped)
         if isinstance(result, Iterator):
@@ -213,7 +234,10 @@ def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
 def _load_file_gen(stream: Iterator, loader: Callable, *, include_file_paths: bool, file_path_column: str) -> Iterator:
     for spec in stream:
         try:
-            yield from loader(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
+            yield from _read_input(
+                loader(spec, include_file_paths=include_file_paths, file_path_column=file_path_column),
+                counters.RECORDS_IN,
+            )
         except Exception as e:
             e.add_note(f"While loading from {spec}")
             raise

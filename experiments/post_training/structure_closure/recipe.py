@@ -10,8 +10,10 @@ from marin.rl.skyrl import SkyRLRolePlan
 
 ROLE_PLAN = SkyRLRolePlan(
     colocate_all=False,
+    colocate_policy_ref=True,
     policy_num_nodes=4,
     policy_num_gpus_per_node=8,
+    reference_num_nodes=4,
     num_inference_engines=1,
     inference_engine_tensor_parallel_size=1,
     inference_engine_pipeline_parallel_size=1,

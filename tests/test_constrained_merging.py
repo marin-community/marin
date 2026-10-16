@@ -31,12 +31,12 @@ def test_export_preserves_base_layout_and_audits_only_selected_rows(tmp_path, ba
     base = tmp_path / "base"
     output = tmp_path / "out"
     support = (TensorSupport("experts", (1, 3)),) if edit else ()
-    audit = export_constrained(reader, str(output), support, 0.25, lambda name, row, value: value + 2)
+    audit = export_constrained(reader, str(output), support, 0.25, 0.25, lambda name, row, value: value + 2)
     source = CheckpointSource(str(output), "merged")
     with pytest.raises(ValueError, match="Incomplete merged checkpoint"):
         CheckpointReader(source)
     audit_path = tmp_path / "audit.json"
-    finalize_constrained_export(audit, str(audit_path), 0.25)
+    finalize_constrained_export(audit, str(audit_path))
     actual = CheckpointReader(source).tensor("experts")
     expected = weights["experts"].clone()
     if edit:
@@ -59,7 +59,12 @@ def test_over_budget_support_produces_no_partial_export(tmp_path, base_checkpoin
     output = tmp_path / "out"
     with pytest.raises(ValueError, match="Support exceeds"):
         export_constrained(
-            reader, str(output), (TensorSupport("experts", (0, 1, 2)),), 0.25, lambda name, row, value: value * 2
+            reader,
+            str(output),
+            (TensorSupport("experts", (0, 1, 2)),),
+            0.25,
+            0.25,
+            lambda name, row, value: value * 2,
         )
     assert not output.exists()
 
@@ -72,21 +77,23 @@ def test_failed_transform_leaves_checkpoint_unreadable(tmp_path, base_checkpoint
         raise RuntimeError("Transform failed")
 
     with pytest.raises(RuntimeError):
-        export_constrained(reader, str(output), (TensorSupport("experts", (1, 3)),), 0.25, transform)
+        export_constrained(reader, str(output), (TensorSupport("experts", (1, 3)),), 0.25, 0.25, transform)
     with pytest.raises(ValueError, match="Incomplete merged checkpoint"):
         CheckpointReader(CheckpointSource(str(output), "failed"))
 
 
-def test_rejected_change_cap_leaves_checkpoint_unreadable(tmp_path, base_checkpoint):
+def test_export_rejects_stored_changes_above_change_cap(tmp_path, base_checkpoint):
     reader, _ = base_checkpoint
     output = tmp_path / "out"
-    audit = export_constrained(
-        reader, str(output), (TensorSupport("experts", (1, 3)),), 0.25, lambda name, row, value: value + 2
-    )
-    audit_path = tmp_path / "audit.json"
-    with pytest.raises(ValueError, match="experiment cap"):
-        finalize_constrained_export(audit, str(audit_path), 0.1)
-    assert not audit_path.exists()
+    with pytest.raises(ValueError, match="Stored checkpoint exceeds scalar budget"):
+        export_constrained(
+            reader,
+            str(output),
+            (TensorSupport("experts", (0, 1, 2)),),
+            0.75,
+            0.25,
+            lambda name, row, value: value + 2,
+        )
     with pytest.raises(ValueError, match="Incomplete merged checkpoint"):
         CheckpointReader(CheckpointSource(str(output), "rejected"))
 
@@ -96,7 +103,12 @@ def test_failed_audit_write_leaves_checkpoint_unreadable(tmp_path, base_checkpoi
     reader, _ = base_checkpoint
     output = tmp_path / "out"
     audit = export_constrained(
-        reader, str(output), (TensorSupport("experts", (1, 3)),), 0.25, lambda name, row, value: value + 2
+        reader,
+        str(output),
+        (TensorSupport("experts", (1, 3)),),
+        0.25,
+        0.25,
+        lambda name, row, value: value + 2,
     )
     audit_path = tmp_path / "audit.json"
     original_pipe = LocalFileSystem.pipe_file
@@ -110,9 +122,39 @@ def test_failed_audit_write_leaves_checkpoint_unreadable(tmp_path, base_checkpoi
 
     monkeypatch.setattr(LocalFileSystem, "pipe_file", pipe_file)
     with pytest.raises(OSError if failure == "raise" else ValueError):
-        finalize_constrained_export(audit, str(audit_path), 0.25)
+        finalize_constrained_export(audit, str(audit_path))
     with pytest.raises(ValueError, match="Incomplete merged checkpoint"):
         CheckpointReader(CheckpointSource(str(output), "unaudited"))
+
+
+def test_export_allows_support_larger_than_changed_weight_cap(tmp_path):
+    base = tmp_path / "base"
+    base.mkdir()
+    weights = torch.ones(4, 4)
+    safetensors.torch.save_file({"weight": weights}, base / "weights.safetensors")
+    (base / "model.safetensors.index.json").write_text(json.dumps({"weight_map": {"weight": "weights.safetensors"}}))
+    reader = CheckpointReader(CheckpointSource(str(base), "pinned"))
+
+    def edit_one_row(name, row, value):
+        return value * 2 if row == 0 else value
+
+    output = tmp_path / "out"
+    audit = export_constrained(
+        reader,
+        str(output),
+        (TensorSupport("weight", (0, 1, 2)),),
+        0.75,
+        0.25,
+        edit_one_row,
+    )
+    audit_path = tmp_path / "audit.json"
+    finalize_constrained_export(audit, str(audit_path))
+    actual = CheckpointReader(CheckpointSource(str(output), "merged")).tensor("weight")
+    expected = weights.clone()
+    expected[0] *= 2
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    assert audit["supported_elements"] == 12
+    assert audit["changed_elements"] == 4
 
 
 @pytest.mark.parametrize("keep", [0.75, 0.9, 1.0])

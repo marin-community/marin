@@ -3,11 +3,11 @@
 
 """Typed structured output through a JSON-schema ``response_format``, with a repair loop.
 
-``complete_structured`` sends the request with ``response_format(output_type)``, the pydantic
-model's JSON schema, and validates the reply with the pydantic model and its validators. The chat
-template renders nothing from ``response_format``, so the loop appends
+``complete_structured`` sends the request with ``response_format(output_type)``, the JSON schema
+of the pydantic output type, and validates the reply against that type, running its validators
+too. The chat template renders nothing from ``response_format``, so the loop appends
 ``schema_instruction(output_type)`` as the final user turn of every request it sends. The grammar
-enforces the reply's shape, and the appended turn tells the model what each field holds.
+enforces the reply's shape, and the appended turn tells the language model what each field holds.
 
 When the output limit cuts a reply off (``FinishReason.LENGTH``), the call fails at once with the
 completions so far. For any other invalid reply the loop sends up to ``max_repairs`` repair requests,

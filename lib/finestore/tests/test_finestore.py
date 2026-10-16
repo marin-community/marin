@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -39,10 +41,11 @@ from finestore.store import (
     TransactionTooLarge,
 )
 from fsspec.core import OpenFile
+from fsspec.implementations.local import LocalFileSystem
 from fsspec.implementations.memory import MemoryFileSystem
 from rigging import timing
 from rigging.filesystem import factory
-from rigging.filesystem.conditional_object import ConditionalWriteError
+from rigging.filesystem.conditional_object import ConditionalWriteError, LocalConditionalObject
 from rigging.filesystem.storage_path import StoragePath
 
 
@@ -557,10 +560,10 @@ def test_compaction_replaces_sources_logically_and_retains_objects(tmp_path):
             table.append({"task": "arc", "doc_id": str(i)})
             store.flush()  # three separate level-0 shards
 
-    before = ReadView(root).list_shards("samples")
-    assert len(before) == 3
+        before = ReadView(root).list_shards("samples")
+        assert len(before) == 3
 
-    assert compact_table(root, "samples").written == 3
+        assert compact_table(root, "samples").written == 3
 
     after = ReadView(root).list_shards("samples")
     assert len(after) == 1
@@ -579,12 +582,12 @@ def test_manifest_binds_flush_and_compaction_shard_bytes(tmp_path):
         table.append({"doc_id": "2"})
         store.flush()
 
-    level_zero = ReadView(root).list_shards("samples")[0]
-    level_zero_bytes = StoragePath(level_zero.path).read_bytes()
-    assert level_zero.size_bytes == len(level_zero_bytes)
-    assert level_zero.content_sha256 == hashlib.sha256(level_zero_bytes).hexdigest()
+        level_zero = ReadView(root).list_shards("samples")[0]
+        level_zero_bytes = StoragePath(level_zero.path).read_bytes()
+        assert level_zero.size_bytes == len(level_zero_bytes)
+        assert level_zero.content_sha256 == hashlib.sha256(level_zero_bytes).hexdigest()
 
-    compact_table(root, "samples")
+        compact_table(root, "samples")
     compacted = ReadView(root).list_shards("samples")[0]
     compacted_bytes = StoragePath(compacted.path).read_bytes()
     assert compacted.size_bytes == len(compacted_bytes)
@@ -600,8 +603,8 @@ def test_read_view_remains_valid_after_compaction(tmp_path):
         table.extend([{"task": "arc", "doc_id": str(i)} for i in range(2, 4)])
         store.flush()
 
-    pinned = ReadView(root)
-    compact_table(root, "samples")
+        pinned = ReadView(root)
+        compact_table(root, "samples")
     assert {s.generation for s in pinned.list_shards("samples")} == {0}
     assert {s.generation for s in ReadView(root).list_shards("samples")} == {1}
     assert {row["doc_id"] for row in _rows(pinned, "samples")} == {"0", "1", "2", "3"}
@@ -1109,6 +1112,204 @@ def test_maintenance_compacts_after_shard_threshold(tmp_path):
         assert shards[0].generation == 1
 
 
+def test_close_compacts_small_blob_archive_and_preserves_pinned_view(tmp_path):
+    root = str(tmp_path / "run")
+    expected = {str(index): bytes([index]) * 4096 for index in range(22)}
+    with DataStore.open(root, flush_interval=3600) as store:
+        for start in range(0, 22, 2):
+            with store.transaction() as transaction:
+                for index in range(start, start + 2):
+                    transaction.write_object(str(index), expected[str(index)])
+        pinned = store.read_view()
+        assert len(pinned.list_shards(BlobTables.DESCRIPTORS)) == 11
+        store.write_object("tail", b"final buffered value")
+
+    final = ReadView(root)
+    assert len(final.list_shards(BlobTables.DESCRIPTORS)) == 1
+    assert final.read_blobs([*expected, "tail"]) == {**expected, "tail": b"final buffered value"}
+    assert pinned.read_blobs([*expected, "tail"]) == expected
+    assert all(StoragePath(shard.path).exists() for shard in pinned.list_shards(BlobTables.DESCRIPTORS))
+
+    store.close()
+    with DataStore.open(root, flush_interval=3600) as reader:
+        assert reader.read_view().read_blobs(list(expected)) == expected
+    assert ReadView(root).token == final.token
+
+
+def test_concurrent_close_preserves_other_writers_and_newer_values(tmp_path, monkeypatch):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="seed", flush_interval=3600) as seed:
+        for name in ("seed-a", "seed-b"):
+            seed.write_object(name, name.encode())
+            seed.flush()
+    seed_shards = ReadView(root).list_shards(BlobTables.DESCRIPTORS)
+
+    with (
+        DataStore.open(root, writer_id="first", flush_interval=3600) as first,
+        DataStore.open(root, writer_id="second", flush_interval=3600) as second,
+    ):
+        for store, payload in ((first, b"older"), (second, b"newer")):
+            store.write_object("shared", payload)
+            store.flush()
+            store.write_object(store.writer_id, payload)
+            store.flush()
+        second.table("unrelated", primary_key=("id",)).append({"id": "retained"})
+        second.flush()
+        pinned = ReadView(root)
+        barrier = threading.Barrier(2)
+        seen = set()
+        seen_lock = threading.Lock()
+        real_write = LocalConditionalObject.write
+
+        def synchronized_write(head, data, *, expected_version):
+            if head.path == FineStoreLayout(root).head_path:
+                with seen_lock:
+                    thread = threading.get_ident()
+                    wait = thread not in seen
+                    seen.add(thread)
+                if wait:
+                    # Both replacements start from the same HEAD, forcing one real CAS rebase.
+                    barrier.wait(timeout=5)
+            return real_write(head, data, expected_version=expected_version)
+
+        monkeypatch.setattr(LocalConditionalObject, "write", synchronized_write)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(store.close) for store in (first, second)]
+            for future in futures:
+                future.result(timeout=10)
+
+    final = ReadView(root)
+    shards = final.list_shards(BlobTables.DESCRIPTORS)
+    assert len(shards) == 3
+    assert set(shard.path for shard in seed_shards).issubset(shard.path for shard in shards)
+    expected = {"seed-a": b"seed-a", "seed-b": b"seed-b", "first": b"older", "second": b"newer", "shared": b"newer"}
+    assert final.read_blobs(list(expected)) == expected
+    assert pinned.read_blobs(list(expected)) == expected
+    assert final.scan("unrelated", columns=["id"]).to_pylist() == [{"id": "retained"}]
+
+
+def test_close_does_not_shadow_newer_foreign_level_zero_value(tmp_path):
+    root = str(tmp_path / "run")
+    with (
+        DataStore.open(root, writer_id="first", flush_interval=3600) as first,
+        DataStore.open(root, writer_id="second", flush_interval=3600) as second,
+    ):
+        first.write_object("shared", b"older")
+        first.flush()
+        first.write_object("first-only", b"retained")
+        first.flush()
+        second.write_object("shared", b"newer")
+        second.flush()
+        first.close()
+        view = ReadView(root)
+        assert {shard.generation for shard in view.list_shards(BlobTables.DESCRIPTORS)} == {0, 1}
+        assert view.read_blobs(["shared", "first-only"]) == {"shared": b"newer", "first-only": b"retained"}
+
+
+@pytest.mark.parametrize("budget", ["bytes", "rows"])
+def test_close_budget_skips_large_group_and_continues_with_smaller_table(tmp_path, monkeypatch, budget):
+    root = str(tmp_path / "run")
+    payload = random.Random(0).randbytes(4096)
+    with DataStore.open(root, flush_interval=3600) as store:
+        for name, batch_rows in (("c", 1), ("b", 2), ("a", 1)):
+            table = store.table(name, primary_key=("id",))
+            for batch in range(2):
+                table.extend(
+                    {"id": batch * batch_rows + index, "value": payload if name == "b" else b"small"}
+                    for index in range(batch_rows)
+                )
+                store.flush()
+        before = ReadView(root)
+        if budget == "bytes":
+            limit = sum(shard.size_bytes for name in ("a", "c") for shard in before.list_shards(name))
+            monkeypatch.setattr(store_module, "_CLOSE_COMPACTION_MAX_INPUT_BYTES", limit)
+        else:
+            monkeypatch.setattr(store_module, "_CLOSE_COMPACTION_MAX_INPUT_ROWS", 4)
+
+    final = ReadView(root)
+    for name in ("a", "c"):
+        assert len(final.list_shards(name)) == 1
+        assert final.scan(name, columns=["id", "value"]).to_pylist() == [
+            {"id": index, "value": b"small"} for index in range(2)
+        ]
+    assert final.list_shards("b") == before.list_shards("b")
+    assert final.scan("b", columns=["id", "value"]).to_pylist() == [
+        {"id": index, "value": payload} for index in range(4)
+    ]
+
+
+def test_close_compaction_failure_leaves_flushed_data_readable(tmp_path, monkeypatch):
+    root = str(tmp_path / "run")
+    store = DataStore.open(root, flush_interval=3600)
+    real_open = LocalFileSystem.open
+
+    def fail_compaction_write(filesystem, path, mode="rb", *args, **kwargs):
+        if "/w=compactor/" in str(path) and "w" in mode:
+            raise OSError("injected compaction storage failure")
+        return real_open(filesystem, path, mode, *args, **kwargs)
+
+    with pytest.raises(OSError, match="injected compaction storage failure"), store:
+        store.write_object("first", b"committed")
+        store.flush()
+        store.write_object("last", b"buffered")
+        monkeypatch.setattr(LocalFileSystem, "open", fail_compaction_write)
+    view = ReadView(root)
+    assert view.read_blobs(["first", "last"]) == {"first": b"committed", "last": b"buffered"}
+    assert len(view.list_shards(BlobTables.DESCRIPTORS)) == 2
+
+
+def test_close_prioritizes_descriptors_over_chunked_payloads(tmp_path, monkeypatch):
+    root = str(tmp_path / "run")
+    monkeypatch.setattr(store_module, "INLINE_BLOB_BYTES", 64)
+    monkeypatch.setattr(store_module, "OBJECT_PART_BYTES", 64)
+    payload = random.Random(0).randbytes(128)
+    with DataStore.open(root, flush_interval=3600) as store:
+        for name in ("first", "last"):
+            store.write_object(name, payload)
+            store.flush()
+        before = ReadView(root)
+        # Either group fits, but both together exceed the close budget.
+        limit = max(
+            sum(shard.size_bytes for shard in before.list_shards(table))
+            for table in (BlobTables.DESCRIPTORS, BlobTables.PARTS)
+        )
+        monkeypatch.setattr(store_module, "_CLOSE_COMPACTION_MAX_INPUT_BYTES", limit)
+    final = ReadView(root)
+    assert len(final.list_shards(BlobTables.DESCRIPTORS)) == 1
+    assert final.list_shards(BlobTables.PARTS) == before.list_shards(BlobTables.PARTS)
+    assert final.read_blobs(["first", "last"]) == {"first": payload, "last": payload}
+
+
+@pytest.mark.parametrize("failures", [1, 100], ids=["recovers", "exhausted"])
+def test_close_retries_transient_storage_and_propagates_exhaustion(tmp_path, monkeypatch, failures):
+    root = str(tmp_path / "run")
+    slowdown = ClientError({"Error": {"Code": "SlowDown", "Message": "reduce request rate"}}, "PutObject")
+    real_open = LocalFileSystem.open
+    attempts = 0
+
+    def flaky_compaction_write(filesystem, path, mode="rb", *args, **kwargs):
+        nonlocal attempts
+        if "/w=compactor/" in str(path) and "w" in mode:
+            attempts += 1
+            if attempts <= failures:
+                raise slowdown
+        return real_open(filesystem, path, mode, *args, **kwargs)
+
+    with DataStore.open(root, flush_interval=3600) as store:
+        store.write_object("first", b"committed")
+        store.flush()
+        store.write_object("last", b"buffered")
+        monkeypatch.setattr(LocalFileSystem, "open", flaky_compaction_write)
+        if failures == 1:
+            store.close()
+        else:
+            with pytest.raises(ClientError):
+                store.close()
+    view = ReadView(root)
+    assert view.read_blobs(["first", "last"]) == {"first": b"committed", "last": b"buffered"}
+    assert len(view.list_shards(BlobTables.DESCRIPTORS)) == (1 if failures == 1 else 2)
+
+
 def test_maintenance_compaction_levels_are_terminal(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1", flush_interval=3600, compaction_levels=(2, 1, 1)) as store:
@@ -1165,13 +1366,6 @@ def test_background_maintenance_recovers_from_transient_s3_failure(tmp_path, mon
 
 def test_compaction_losing_an_input_race_is_a_benign_noop(tmp_path):
     root = str(tmp_path / "run")
-    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
-        table = store.table("samples", primary_key=("doc_id",))
-        table.append({"doc_id": "1"})
-        store.flush()
-        table.append({"doc_id": "2"})
-        store.flush()
-
     real = CommitCoordinator(FineStoreLayout(root))
 
     class LosingCoordinator:
@@ -1181,8 +1375,14 @@ def test_compaction_losing_an_input_race_is_a_benign_noop(tmp_path):
         def commit(self, _delta, *, base=None):
             raise CommitConflict("inputs changed")
 
-    assert compact_table(root, "samples", coordinator=LosingCoordinator()).written == 0
-    assert len(ReadView(root).list_shards("samples")) == 2
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        table = store.table("samples", primary_key=("doc_id",))
+        table.append({"doc_id": "1"})
+        store.flush()
+        table.append({"doc_id": "2"})
+        store.flush()
+        assert compact_table(root, "samples", coordinator=LosingCoordinator()).written == 0
+        assert len(ReadView(root).list_shards("samples")) == 2
 
 
 def test_manifest_migration_publishes_existing_shards_through_head(tmp_path):

@@ -1,7 +1,14 @@
 # EvalDash
 
 A benchmark panel and browsable run log over every Marin eval run, served by the Marina kernel at
-`/evaldash/`.
+`/evaldash/` on `marina.oa.dev`. The legacy `evaldash.oa.dev` hostname routes to
+the same Marina service.
+
+Cloud Run has a `marina` web service and a separate `marina-evaldash` job.
+The job is the scheduled ingestion worker; it scans evaluation records and
+updates the serving catalog. It serves no web traffic. Both use the Marina
+base image, while the released EvalDash package supplies the UI, API and
+ingestion module.
 
 Eval runs write one canonical JSON record per run under `gs://marin-eval-metadata/evals` for GCP or
 `s3://marin-us-east-02a/marin/evals` for CoreWeave. The run directory also holds the evaluator's
@@ -14,7 +21,10 @@ materialization reads and writes at most 128 run IDs per batch within the prefix
 Object checks finish before that transaction begins; parsed records from those checks remain in
 memory until commit.
 Historical records may omit `model.config.tokenizer_revision`; the record reader treats an omitted
-value as `None`. Current writers include the field.
+value as `None`. Current writers include the field. For runs with a per-eval StepSpec, EvalDash also
+reads `{run_id}/.executor_status`. A score is eligible only after that step reaches `SUCCESS`; runs
+without a step status retain the record's historical behavior. Run lists show the step state when it
+is still running or has failed, and run detail shows both the evaluator result and the step state.
 
 The default scan also includes the former flat `gs://marin-eval-metadata/runs` and
 `s3://marin-us-east-02a/marin/eval-metadata/runs` roots because older CLI checkouts still write there.
@@ -23,9 +33,11 @@ Canonical `evals` roots have precedence when the same migrated `run_id` exists i
 Record discovery runs every 10 minutes using a delimiter-based directory listing and checks only
 `*/record.json`. It does not recursively enumerate results, samples, trajectories, or other evaluator
 payloads. New record bodies are read with up to 16 concurrent requests. Known objects carry a GCS
-generation, S3 ETag, or local content hash in the PostgreSQL source inventory; their first recheck is
-spread across the first day, then each is HEADed once per 24 hours and reread only when its version
-changes. A missing object must be absent on two successful checks before its source is removed. A
+generation, S3 ETag, or local content hash plus the StepSpec state in the PostgreSQL source inventory.
+Running or failed steps, and recent runs still waiting for a status file, are checked on each scan.
+Completed steps and older records are checked once per 24 hours after their first recheck is spread
+across the first day. The record body is reread only when its version or step state changes. A missing
+object must be absent on two successful checks before its source is removed. A
 failed prefix listing leaves that prefix's last committed rows untouched, and an invalid rewrite keeps
 the last valid record while surfacing the error on the Debug page. Failures in a serving instance's
 generation check or the scheduled reconciliation pass remain visible there until a later check or
@@ -36,7 +48,7 @@ transaction. The lowest configured prefix priority wins duplicate run IDs, so a 
 record promotes its legacy copy without rereading it. The transaction advances
 `eval_catalog_state.generation`. Each serving instance checks that generation at most once every 10
 seconds and swaps its in-memory aggregate views only after a newer generation commits. A failed check
-serves the last good snapshot and retries after the same interval. `marina migrate` applies the
+serves the last good snapshot and retries after the same interval. `marina release infra/marina/apps/evaldash --base-version CURRENT_VERSION` applies the
 pending numbered migrations from `migrations/` under a
 PostgreSQL advisory lock and rejects a database whose migration ledger is newer than the running
 binary; mounting the app only verifies the schema, and never writes. The initial migration adopts the
@@ -248,9 +260,9 @@ tests/                  unit tests; journeys/ walks the app in a browser
 
 ## Develop
 
-Serve synthetic fixture records locally without a database or cloud credentials. Isolate
-EvalDash from other Marina apps, which may require a database. Live job and log panels show
-"unreachable".
+Serve synthetic fixture records locally without cloud credentials. The preview uses a
+disposable Postgres package registry, while EvalDash reads the local fixture records.
+Docker is required. Live job and log panels show "unreachable".
 
 Run from the repository root:
 
@@ -258,37 +270,50 @@ Run from the repository root:
 cd infra/marina
 uv run marina build --only evaldash
 preview_records=$(mktemp -d /tmp/evaldash-records.XXXXXX)
-preview_apps=$(mktemp -d /tmp/evaldash-apps.XXXXXX)
-ln -s "$PWD/apps/evaldash" "$preview_apps/evaldash"
 uv run python -m apps.evaldash.fixtures "$preview_records"
 EVALDASH_STORE=local RECORDS_PREFIXES="$preview_records" \
-  uv run marina dev --apps-dir "$preview_apps"
+  uv run marina release apps/evaldash --local
 # -> http://127.0.0.1:8080/evaldash/
 ```
 
 Click `Rescan` to load the records. Fixture cohorts predate verified policies; select
 `Newest per benchmark (all cohorts)*` to view them. To inspect real
 runs, point `RECORDS_PREFIXES` at a local copy of their run directories. Keep dev storage
-local to avoid production writes. After frontend edits, rerun `marina build --only evaldash`
-and reload the browser; this command does not hot-reload the frontend.
+local to avoid production writes. After edits, stop the preview with Ctrl-C and
+rerun the `release --local` command to build and install the new package.
 
-For a Postgres-backed preview, generate fixtures as above, then run from `infra/marina`:
-
-```bash
-export MARINA_DATABASE_URL=postgresql+pg8000://postgres:marina@127.0.0.1:5432/marina
-uv run marina migrate --only evaldash
-EVALDASH_STORE=postgres RECORDS_PREFIXES="$preview_records" \
-  uv run marina dev --apps-dir "$preview_apps"
-```
+The browser journeys below exercise the Postgres serving catalog. Their fixtures
+install the schema and ingest local records before opening the browser. A plain
+Postgres `release --local` starts with an empty catalog; it does not start an
+ingestion worker, and `Rescan` returns 503 without a configured job.
 
 ## Test
 
 ```bash
 cd infra/marina
 uv run pytest apps/evaldash                          # unit tests; starts a throwaway pgvector container
-MARINA_DATABASE_URL=... uv run marina journey evaldash   # the browser walk, screenshots under journeys-out/
+uv run marina journey evaldash                          # disposable DB; screenshots under journeys-out/
 ```
 
 The image needs more than the kernel: `marin.evaluation`'s four record and statistics modules, the
 generated `iris.rpc`/`finelog.rpc` packages, and `lib/finestore`. `infra/marina/Dockerfile` copies
 them and `Dockerfile.dockerignore` allows them into the build context.
+
+## Release
+
+EvalDash's frontend, backend and ingestion module are one Postgres package:
+
+```bash
+uv run marina release-status infra/marina/apps/evaldash --json
+uv run marina release infra/marina/apps/evaldash --base-version CURRENT_VERSION
+```
+
+Release from clean current main by default. The release transaction applies application
+migrations before selecting the package. `/evaldash/`, the `evaldash` schema and
+`EVALDASH_INGEST_JOB` stay stable. The scheduled base-image runner snapshots and
+executes the package's `ingest` module; running jobs keep their selected code.
+Marina deployment and restart do not publish EvalDash or run its migrations.
+
+Pass `--allow-dirty` to explicitly release branch or uncommitted source
+without verified Git provenance; `release-status` then reports `unrecorded` from a clean checkout.
+Use `--local` to preview in a disposable stack.

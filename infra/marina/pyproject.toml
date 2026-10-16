@@ -22,6 +22,7 @@ dependencies = [
     # sample review, and the Connect clients plus GCE lookup its live job/log panels use.
     "marin-core",
     "marin-finestore",
+    "marin-taskcompendium",
     "marin-iris",
     "marin-finelog",
     "pyarrow>=17",

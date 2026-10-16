@@ -19,7 +19,7 @@ config:
   marin-loom:pruneDeployment: "true"
   marin-loom:settings:
     auth.github_organizations: "Open-Athena:188075292"
-    browser.allowed_origins: https://marina.oa.dev
+    browser.allowed_origins: https://marina.oa.dev,https://applets.marina.oa.dev
     github.profile: github
     github.trigger_allowed_user_ids: "306337490"
     slack.effort: agent-default

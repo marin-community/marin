@@ -76,8 +76,10 @@ def build_configured_run(config_path: Path) -> ArtifactStep:
 
     role_plan = SkyRLRolePlan(
         colocate_all=placement["colocate_all"],
+        colocate_policy_ref=placement["colocate_policy_ref"],
         policy_num_nodes=placement["policy_num_nodes"],
         policy_num_gpus_per_node=placement["policy_num_gpus_per_node"],
+        reference_num_nodes=placement["ref_num_nodes"],
         num_inference_engines=generator["num_inference_engines"],
         inference_engine_tensor_parallel_size=generator["inference_engine_tensor_parallel_size"],
         inference_engine_pipeline_parallel_size=generator["inference_engine_pipeline_parallel_size"],
