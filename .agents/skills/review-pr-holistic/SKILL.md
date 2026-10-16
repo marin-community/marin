@@ -306,7 +306,8 @@ Keep the stale-head and small-delta gates from Load the context.
 
 After editing the overview on a re-review, you may create **one new top-level
 PR comment** for new or materially changed actionable findings, including
-follow-up lint findings. This is a separate comment from the overview. Use
+lint findings whose conclusion the whole-change view changes. This is a
+separate comment from the overview. Use
 `gh pr comment <PR> --body-file <file>` and this format:
 
 ```markdown
