@@ -1,0 +1,147 @@
+{
+  "job_id": "/romain/sc-qwen-direct-checkpoint-restore5-noise005-sc-s0-rno-a0-01a126ce",
+  "source": "2fcf6f1d2f4daaeaed14e0a5b3e64a53852be9b1",
+  "source_preparation_commit": "6e22cca0df862b95d0fc918efaf1da32615c2196",
+  "configuration": "experiments/post_training/score_centering_overnight/qwen_direct_checkpoint_restore_preflight_v1/restore5-detach.yaml",
+  "configuration_sha256": "285810a545011c70e92f93a16e51922df76c418d5a9b160e601b1375b9954759",
+  "native_submission_confirmed": true,
+  "native_controller_task_confirmation_pending": false,
+  "geometry": {
+    "cluster": "cw-rno2a",
+    "priority": "batch",
+    "nodes": 2,
+    "h100_per_node": 8,
+    "total_h100": 16,
+    "learner_nodes": 1,
+    "inference_nodes": 1,
+    "PP": 1,
+    "EP": 1,
+    "TP": 1,
+    "CP": 1,
+    "SP": 1
+  },
+  "expected_new_completed_updates": [
+    6,
+    7
+  ],
+  "restore_from_checkpoint": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-periodic3-restore2-noise005-sc-s0-rno-a0-01a126ce/checkpoints/global_step_5",
+  "resource_board_ids": [
+    1144,
+    1145
+  ],
+  "submission_preflight": {
+    "source": "2fcf6f1d2f4daaeaed14e0a5b3e64a53852be9b1",
+    "published_preparation_commit": "6e22cca0df862b95d0fc918efaf1da32615c2196",
+    "job_id": "/romain/sc-qwen-direct-checkpoint-restore5-noise005-sc-s0-rno-a0-01a126ce",
+    "checked_at_utc": "2026-10-16T13:07:23.699242+00:00",
+    "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T130424",
+    "absent_on_both_clusters": true,
+    "interactive_nodes_including_queued": 4,
+    "empty_output_root": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-direct-checkpoint-restore5-noise005-sc-s0-rno-a0-01a126ce",
+    "retained_preparation_full_file_readbacks_rechecked": true,
+    "input_checkpoints_head_lengths_etags_unchanged": true,
+    "input_tensor_payload_bytes_downloaded": false
+  },
+  "retained_submission_preflight": [
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/submission-preflight/direct-restore-qwen-submission-preflight.json",
+      "bytes": 857,
+      "sha256": "8dcb63662e2399025f868819e4ecfc1ffd7a451de8739c813e161633af5e9cc0",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/submission-preflight/direct_checkpoint_restore_candidate_preparation.json",
+      "bytes": 9396,
+      "sha256": "a4ab7fe64cfc57728674363f6e77aab5065faa29149aa93ce92d3c76a726bcb2",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/submission-preflight/submit-direct-restore-qwen-preflight.py",
+      "bytes": 8903,
+      "sha256": "e470095bd785e1fa61a7cf7a33cd7b0b6b32bcec5bfa7c7eb6db4c230de81927",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/submission-preflight/resume-current-attempts.csv",
+      "bytes": 67390,
+      "sha256": "e906f5b8ac3d2bdd0d59e40f40f57c19531a66e79848a7a4cd2fc6c5e737ac22",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/submission-preflight/resume-job-specs-current.csv",
+      "bytes": 28759,
+      "sha256": "204ef160c40e13510a64c247a36be50d3c73bf87a6b1cd98e7d61abe15649583",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/submission-preflight/resume-rno-current-attempts.csv",
+      "bytes": 112804,
+      "sha256": "35131d9d85ef52d1650576fe850b6f68ad3300be69bcf02815b21bad9039842b",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/submission-preflight/resume-rno-job-specs-current.csv",
+      "bytes": 19133,
+      "sha256": "88ab349902a396bf3da254312124f352b5285fd7b2acc6667f912e94a51fd082",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/submission-preflight/sha256-manifest.json",
+      "bytes": 578,
+      "sha256": "426c1c1ca091a38356ebea5288e43153c717d649d72a58b8e134ae1458e9017b",
+      "full_byte_readback_verified": true
+    }
+  ],
+  "native_submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/direct-restore-qwen-native-submission.log",
+  "native_submission_log_sha256": "f6b3e7da86862b0a29c94c885570c263b664832227a06a7e408394cd6d3072bd",
+  "scientific_source_qualified": false,
+  "five_node_snowball_recovery_qualified": false,
+  "scope": "Bounded two-node engineering DirectS3 restore preflight only; no scientific replicate or source promotion. Full two-new-update/native8rank/sampler/loader/RNG/source/model/data controls plus all new available-verdict original-grader replays remain required, followed by three new-head five-node Snowball phases.",
+  "native_controller_confirmation": [
+    {
+      "job_id": "/romain/sc-qwen-direct-checkpoint-restore5-noise005-sc-s0-rno-a0-01a126ce",
+      "job_state": "1",
+      "num_tasks": "2",
+      "priority_band": "3",
+      "bundle_id": "24e2d16f75f990327fe55a10ba5b994982a0544f270bef71e634df2990b6c536",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_cpu_millicores": "32000",
+      "res_memory_bytes": "274877906944",
+      "res_disk_bytes": "536870912000",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-qwen-direct-checkpoint-restore5-noise005-sc-s0-rno-a0-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "814821fdd8051084",
+      "task_state": "9",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "job_id": "/romain/sc-qwen-direct-checkpoint-restore5-noise005-sc-s0-rno-a0-01a126ce",
+      "job_state": "1",
+      "num_tasks": "2",
+      "priority_band": "3",
+      "bundle_id": "24e2d16f75f990327fe55a10ba5b994982a0544f270bef71e634df2990b6c536",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_cpu_millicores": "32000",
+      "res_memory_bytes": "274877906944",
+      "res_disk_bytes": "536870912000",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-qwen-direct-checkpoint-restore5-noise005-sc-s0-rno-a0-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "056b23c1334c9446",
+      "task_state": "9",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    }
+  ],
+  "native_controller_confirmation_file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/direct-restore-qwen-native-controller-confirmation.csv",
+  "native_controller_confirmation_sha256": "72063eba149f3eeacd71c842488dcee1a6f695b8e89ee9c7af2f974763e06f39",
+  "confirmed_at_utc": "2026-10-16T13:07:36.919318+00:00"
+}

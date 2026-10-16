@@ -1,0 +1,56 @@
+{
+  "scope": "Bounded actual two-node Qwen DirectS3 restore5-to7 qualification. Native full-response membership and grade coverage are complete; learner tensor checks cover the reported retained rows/tokens. No Snowball qualification or OOM root-cause conclusion follows.",
+  "source": "2fcf6f1d2f4daaeaed14e0a5b3e64a53852be9b1",
+  "run_id": "sc-qwen-direct-checkpoint-restore5-noise005-sc-s0-rno-a0-01a126ce",
+  "all_preflight_gates_passed": true,
+  "native_task_exit_codes": [
+    0,
+    0
+  ],
+  "new_completed_updates": [
+    6,
+    7
+  ],
+  "gradient_norms": [
+    0.28287550806999207,
+    0.1855766922235489
+  ],
+  "learner_tensor_coverage": [
+    {
+      "step": 6,
+      "retained_rows": 2,
+      "active_tokens": 309
+    },
+    {
+      "step": 7,
+      "retained_rows": 2,
+      "active_tokens": 130
+    }
+  ],
+  "native_physical_training_responses": 1024,
+  "original_grade_replays": 1024,
+  "unavailable_native_verdicts": 0,
+  "grade_discrepancies": 0,
+  "restored_learner_completed_updates": 5,
+  "restored_sampler_completed_updates": 3,
+  "final_learner_completed_updates": 7,
+  "final_sampler_completed_updates": 6,
+  "checkpoint_rank_shards": 8,
+  "all_distinct_prompt_groups_in_lineage": 448,
+  "allocated_h100_hours": 3.5668266666666666,
+  "evidence_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/qualification/manifest.json",
+    "bytes": 112467,
+    "sha256": "d3957bd362309d5971c3225c0217ccef10590c0e30a5baf2a0101ca9e3b2b6c0",
+    "full_byte_readback_verified": true
+  },
+  "small_evidence_files": 105,
+  "small_evidence_bytes": 2318252,
+  "native_response_capture_files_full_byte_readback": 134,
+  "native_response_capture_bytes_full_byte_readback": 7120008,
+  "detailed_native_audit": "results/direct_checkpoint_restore_candidate_qwen_native_audit.json.gz",
+  "five_node_snowball_recovery_qualified": false,
+  "scientific_source_promoted": false,
+  "earlier_snowball_oom_cause_established": false,
+  "next_required_gate": "Three separately gated source2fcf five-node Snowball phases: save5, restore5-to7 and restore7-to9, with full native and all-available original-grader replays."
+}
