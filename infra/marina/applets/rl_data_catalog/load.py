@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Load the published S3 curation catalog into Atlas."""
+"""Load a published curation catalog into Atlas."""
 
 import json
 import time
