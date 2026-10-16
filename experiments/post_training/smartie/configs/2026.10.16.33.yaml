@@ -1,4 +1,3 @@
-# Pooled-evaluation smoke: submit only after runtime PR #1007 merges green.
 # 32 prompts x16 responses/update; two updates; full original validation panel.
 # Same task content, objective, context, model, and GPU geometry.
 # Versioned data migration adds session.max_total_tokens=null for the new engine.
