@@ -1,0 +1,540 @@
+{
+  "fresh_baseline_proof": "snowball_checkpoint_memory_fresh2_complete_observations.json",
+  "failed_restore_proof": "snowball_checkpoint_memory_diagnostic_physical3_optimizer_backload_oom.json",
+  "source": "26cc99a426737309a60a490ce219138f8cae4818",
+  "fresh_capture_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce/native-memory-observations/physical0-complete-20261016T075303/observation-manifest.json",
+    "bytes": 1602258,
+    "sha256": "ae67466f407e4e6ba8b2eee5dc3434ef3f5c0acfdc1e8aa1b43a94d79ff0ce8d",
+    "full_readback_verified": true
+  },
+  "failed_restore_manifest_sha256": "e1229790a16266d9ded9eae9bb9ad4fc0a9759a24db85e15ecb19edbb751c99f",
+  "comparison": "First restored optimizer backload entry versus second fresh optimizer backload entry, paired by learner rank. Both have initialized AdamW state. Different step numbers are explicit; this localizes excess live allocation before backload but does not identify tensor owners or a root cause.",
+  "learner_ranks": 32,
+  "restored_minus_fresh_allocated_gib": {
+    "min": 4.03242301940918,
+    "median": 7.52458643913269,
+    "max": 10.16224479675293
+  },
+  "ranks": [
+    {
+      "rank": 0,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10082421760,
+        "reserved_bytes": 10443816960,
+        "device_free_bytes": 56399953920,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 19895500800,
+        "reserved_bytes": 21109932032,
+        "device_free_bytes": 45855473664,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 9813079040
+    },
+    {
+      "rank": 1,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10086221312,
+        "reserved_bytes": 10439622656,
+        "device_free_bytes": 56234213376,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 19640311296,
+        "reserved_bytes": 20682113024,
+        "device_free_bytes": 46117617664,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 9554089984
+    },
+    {
+      "rank": 2,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10108530688,
+        "reserved_bytes": 10714349568,
+        "device_free_bytes": 56026595328,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 21020157952,
+        "reserved_bytes": 22219325440,
+        "device_free_bytes": 44645416960,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 10911627264
+    },
+    {
+      "rank": 3,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10270639616,
+        "reserved_bytes": 10840178688,
+        "device_free_bytes": 55833722880,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 14644877824,
+        "reserved_bytes": 15344861184,
+        "device_free_bytes": 51454803968,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 4374238208
+    },
+    {
+      "rank": 4,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10272450048,
+        "reserved_bytes": 11041505280,
+        "device_free_bytes": 55699505152,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 16551739392,
+        "reserved_bytes": 17477664768,
+        "device_free_bytes": 49387077632,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 6279289344
+    },
+    {
+      "rank": 5,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10086540288,
+        "reserved_bytes": 10458497024,
+        "device_free_bytes": 56215404544,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 19891080704,
+        "reserved_bytes": 21017657344,
+        "device_free_bytes": 45779976192,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 9804540416
+    },
+    {
+      "rank": 6,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10116580864,
+        "reserved_bytes": 10640949248,
+        "device_free_bytes": 56099995648,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 17137825280,
+        "reserved_bytes": 18096324608,
+        "device_free_bytes": 48768417792,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 7021244416
+    },
+    {
+      "rank": 7,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10262543872,
+        "reserved_bytes": 10756292608,
+        "device_free_bytes": 56420925440,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 15700058624,
+        "reserved_bytes": 16550723584,
+        "device_free_bytes": 50752258048,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 5437514752
+    },
+    {
+      "rank": 8,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10084329472,
+        "reserved_bytes": 10489954304,
+        "device_free_bytes": 55672242176,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 18450844160,
+        "reserved_bytes": 19723714560,
+        "device_free_bytes": 46564311040,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 8366514688
+    },
+    {
+      "rank": 9,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10129254400,
+        "reserved_bytes": 10760486912,
+        "device_free_bytes": 55334469632,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 19522834432,
+        "reserved_bytes": 20791164928,
+        "device_free_bytes": 45427589120,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 9393580032
+    },
+    {
+      "rank": 10,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10263842304,
+        "reserved_bytes": 10955522048,
+        "device_free_bytes": 55106011136,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 20322226688,
+        "reserved_bytes": 21764243456,
+        "device_free_bytes": 44423118848,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 10058384384
+    },
+    {
+      "rank": 11,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10214746112,
+        "reserved_bytes": 11012145152,
+        "device_free_bytes": 55082942464,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 18438999040,
+        "reserved_bytes": 19587399680,
+        "device_free_bytes": 46631354368,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 8224252928
+    },
+    {
+      "rank": 12,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10250402816,
+        "reserved_bytes": 10737418240,
+        "device_free_bytes": 55324114944,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 16487956992,
+        "reserved_bytes": 17217617920,
+        "device_free_bytes": 48969744384,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 6237554176
+    },
+    {
+      "rank": 13,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10172164096,
+        "reserved_bytes": 10907287552,
+        "device_free_bytes": 55187734528,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 20597387776,
+        "reserved_bytes": 21908946944,
+        "device_free_bytes": 44309872640,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 10425223680
+    },
+    {
+      "rank": 14,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10265832448,
+        "reserved_bytes": 10898898944,
+        "device_free_bytes": 55162634240,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 15755868672,
+        "reserved_bytes": 16838033408,
+        "device_free_bytes": 49349263360,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 5490036224
+    },
+    {
+      "rank": 15,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10252483584,
+        "reserved_bytes": 11043602432,
+        "device_free_bytes": 55554801664,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 20347666944,
+        "reserved_bytes": 21623734272,
+        "device_free_bytes": 45098336256,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 10095183360
+    },
+    {
+      "rank": 16,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10085380096,
+        "reserved_bytes": 10452205568,
+        "device_free_bytes": 56370528256,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 20897618944,
+        "reserved_bytes": 22160605184,
+        "device_free_bytes": 44781666304,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 10812238848
+    },
+    {
+      "rank": 17,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10088318464,
+        "reserved_bytes": 10468982784,
+        "device_free_bytes": 56032886784,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 20054382080,
+        "reserved_bytes": 21147680768,
+        "device_free_bytes": 45473792000,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 9966063616
+    },
+    {
+      "rank": 18,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10107447808,
+        "reserved_bytes": 10678697984,
+        "device_free_bytes": 56043372544,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 14915069440,
+        "reserved_bytes": 15512633344,
+        "device_free_bytes": 51326877696,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 4807621632
+    },
+    {
+      "rank": 19,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10292912128,
+        "reserved_bytes": 10731126784,
+        "device_free_bytes": 55770742784,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 14622693376,
+        "reserved_bytes": 15294529536,
+        "device_free_bytes": 51326877696,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 4329781248
+    },
+    {
+      "rank": 20,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10296305664,
+        "reserved_bytes": 10903093248,
+        "device_free_bytes": 55818911744,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 18777053184,
+        "reserved_bytes": 19744686080,
+        "device_free_bytes": 47094824960,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 8480747520
+    },
+    {
+      "rank": 21,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10088262656,
+        "reserved_bytes": 10382999552,
+        "device_free_bytes": 56118804480,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 16401153536,
+        "reserved_bytes": 17169383424,
+        "device_free_bytes": 49452023808,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 6312890880
+    },
+    {
+      "rank": 22,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10120667648,
+        "reserved_bytes": 10649337856,
+        "device_free_bytes": 56072667136,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 20324411392,
+        "reserved_bytes": 21615345664,
+        "device_free_bytes": 45224230912,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 10203743744
+    },
+    {
+      "rank": 23,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10290695680,
+        "reserved_bytes": 10829692928,
+        "device_free_bytes": 56175427584,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 18081657344,
+        "reserved_bytes": 19035848704,
+        "device_free_bytes": 48088940544,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 7790961664
+    },
+    {
+      "rank": 24,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10086154240,
+        "reserved_bytes": 10487857152,
+        "device_free_bytes": 56726978560,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 17356139520,
+        "reserved_bytes": 18587058176,
+        "device_free_bytes": 48747380736,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 7269985280
+    },
+    {
+      "rank": 25,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10139789312,
+        "reserved_bytes": 10651435008,
+        "device_free_bytes": 56714461184,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 15759498752,
+        "reserved_bytes": 16840130560,
+        "device_free_bytes": 50645303296,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 5619709440
+    },
+    {
+      "rank": 26,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10284379136,
+        "reserved_bytes": 10940841984,
+        "device_free_bytes": 56173264896,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 17002006528,
+        "reserved_bytes": 18402508800,
+        "device_free_bytes": 48831266816,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 6717627392
+    },
+    {
+      "rank": 27,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10230783488,
+        "reserved_bytes": 10794041344,
+        "device_free_bytes": 56573886464,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 14586142720,
+        "reserved_bytes": 15414067200,
+        "device_free_bytes": 52071301120,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 4355359232
+    },
+    {
+      "rank": 28,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10269926912,
+        "reserved_bytes": 10716446720,
+        "device_free_bytes": 56397791232,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 15301316096,
+        "reserved_bytes": 16129196032,
+        "device_free_bytes": 51104579584,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 5031389184
+    },
+    {
+      "rank": 29,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10177104384,
+        "reserved_bytes": 10726932480,
+        "device_free_bytes": 56640995328,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 19820546048,
+        "reserved_bytes": 20860370944,
+        "device_free_bytes": 46624997376,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 9643441664
+    },
+    {
+      "rank": 30,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10285243392,
+        "reserved_bytes": 10867441664,
+        "device_free_bytes": 56246730752,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 18219916800,
+        "reserved_bytes": 19031654400,
+        "device_free_bytes": 48202121216,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 7934673408
+    },
+    {
+      "rank": 31,
+      "fresh_second_backload_entry": {
+        "allocated_bytes": 10275075584,
+        "reserved_bytes": 10808721408,
+        "device_free_bytes": 57062522880,
+        "device_total_bytes": 85019590656
+      },
+      "restored_first_backload_entry": {
+        "allocated_bytes": 20712086016,
+        "reserved_bytes": 21787312128,
+        "device_free_bytes": 46201438208,
+        "device_total_bytes": 85019590656
+      },
+      "restored_minus_fresh_allocated_bytes": 10437010432
+    }
+  ],
+  "tensor_owner_or_root_cause_established": false,
+  "retained_comparison": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce/native-memory-observations/physical0-complete-20261016T075303/fresh-versus-restored-prebackload-memory.json",
+    "bytes": 17687,
+    "sha256": "54cf31ba07060cfa94c9d8a6937a05243bf94bc9523518b67cc047d9f86a2e53",
+    "full_readback_verified": true
+  }
+}

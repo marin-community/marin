@@ -76,7 +76,7 @@
     ],
     "native_submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce-native-submit.log",
     "native_submission_log_sha256": "4b5827818b70e8ab39839c767aaacd47d7d4669d157030cc71b396885a678a97",
-    "status": "Controller confirms5BATCH H100node tasks;actual allocation state retained per task. No completed diagnostic/calibration or sourcequalification claimed.",
+    "status": "Fresh two-update memory baseline complete: all5 native tasks exit0; all32 learner ranks complete both optimizer backloads and two finite applied updates. Full640 observations and32worker files durably retained. No repair, scientific endpoint, or source/resume qualification.",
     "controller_confirmation": [
       {
         "job_id": "/romain/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce",
@@ -166,5 +166,17 @@
     ],
     "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/fresh-memory-and-rno-stale130-controller-confirmation.csv",
     "controller_snapshot_sha256": "61de14012816abc8e92b42c9b7c1f64528828687d4c8863711c17ae43e8f7c65"
+  },
+  "current_engineering_observation": {
+    "proof": "snowball_checkpoint_memory_fresh2_complete_observations.json",
+    "observed_at": "2026-10-16T07:53:03.785740+00:00",
+    "controller_attempt": 0,
+    "state": "Fresh two-update memory baseline complete: all5 native tasks exit0; all32 learner ranks complete both optimizer backloads and two finite applied updates. Full640 observations and32worker files durably retained. No repair, scientific endpoint, or source/resume qualification."
+  },
+  "initial_engineering_observation": {
+    "proof": "snowball_checkpoint_memory_fresh2_initial_observations.json",
+    "observed_at": "2026-10-16T07:07:23.333862+00:00",
+    "controller_attempt": 0,
+    "state": "All five BATCH nodes allocated; first128 captured offload observations cover all32 learner ranks. No new applied update, repair, scientific endpoint or source/resume qualification is established."
   }
 }

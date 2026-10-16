@@ -3017,8 +3017,8 @@
       "configuration_sha256": "a2e577fd518004ff02bac243318b2fc7eba926d9441d78e2cda3e69464267964",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "d24510ca2f16049f37f1cdc9bd34a3389f26807d7a82f9765340753b77478088",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
@@ -3039,7 +3039,24 @@
       "priority_band": 3,
       "bundle_id": "c0bbb6d52b46e0c23a7d28e6cf054dcfa05446f23cba14e26f41f053415554b0",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "h100_nodes": 5,
+      "h100_per_node": 8,
+      "source": "57b0c60bb0a92f7fc22f258b05fff125ac1a9ff0",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_checkpoint_tensor_ownership_v1/restore5-detach.yaml",
+      "configuration_sha256": "f0a6d465c7e1cdd69e4d6b7184909a80a817132696f5eed87e51ba9389148315",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "eae73e04efea3c3c63fff9712ac04bf0834274986d1302da095658df757c7f9f",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-16T05:09:10.689556+00:00"
+  "observed_at": "2026-10-16T08:25:09.986704+00:00"
 }

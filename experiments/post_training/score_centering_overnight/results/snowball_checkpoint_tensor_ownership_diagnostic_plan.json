@@ -1,0 +1,200 @@
+{
+  "scope": "Bounded live-tensor ownership diagnostic for failed Snowball restore5 optimizer-backload OOM. Observation-only source57b0 from frozen26; unchanged model/data/loss/optimizer/geometry/capture/noise0.05/period3/resume5/horizon7 and requested end outputs. Not a repaired source or a scientific/source/resume qualification.",
+  "run_id": "sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce",
+  "job_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce",
+  "source": "57b0c60bb0a92f7fc22f258b05fff125ac1a9ff0",
+  "predecessor_configuration": "experiments/post_training/score_centering_overnight/snowball_checkpoint_memory_diagnostic_v1/restore5-detach.yaml",
+  "configuration": "experiments/post_training/score_centering_overnight/snowball_checkpoint_tensor_ownership_v1/restore5-detach.yaml",
+  "configuration_sha256": "f0a6d465c7e1cdd69e4d6b7184909a80a817132696f5eed87e51ba9389148315",
+  "prepare_configuration": "experiments/post_training/score_centering_overnight/snowball_checkpoint_tensor_ownership_v1/restore5-prepare.yaml",
+  "native_preparation_passed": true,
+  "native_submission_confirmed": true,
+  "changes": [
+    "run.id",
+    "runtime.launcher_commit",
+    "iris.job_name",
+    "ray.rendezvous_dir",
+    "ray.log_dir",
+    "artifacts.checkpoint_root",
+    "artifacts.export_root",
+    "artifacts.attempts_root",
+    "artifacts.resolved_config_uri",
+    "artifacts.terminal_manifest_uri",
+    "skyrl.trainer.rollout_buffer.object_store_root",
+    "skyrl.trainer.policy.megatron_config.torch_profiler_config.save_path"
+  ],
+  "actual_nonpath_changes": [
+    "runtime.launcher_commit"
+  ],
+  "byte_identical_science_and_grader_files": {
+    "skyrl-train/skyrl_train/inference_engines/vllm/fixed_sampler_noise.py": "2e86d08aa514608890b342f43df85322a2f599461c6c152bc26be46f3c7c0bca",
+    "skyrl-train/skyrl_train/objective/score_centering.py": "bdfa50f95408da1e229eed83a15cac9bba3f8782516381ddf56d2877b6708871",
+    "skyrl-train/skyrl_train/rollouts/context.py": "22635bf4890631b2e837fa3f8b7ff7ca0ab1d247fc66dfd3e0b5ccbbf8e7aed3",
+    "skyrl-train/skyrl_train/distributed/megatron/megatron_strategy.py": "35a3570d48dd9796414f956861fd08e2c5530281f11963234b6a9cd78c07890f",
+    "skyrl-gym/skyrl_gym/envs/aime/utils.py": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+    "skyrl-gym/skyrl_gym/envs/gsm8k/utils.py": "16680a223ba876ff0a51184db6863b1527c84ba87fc3cf19f92a376652394115",
+    "skyrl-gym/skyrl_gym/envs/reasoning_gym/scoring.py": "8b9f61cf4ad560dff639e8c6425a838f04d94c4eb175b547efa0d20d1c884d3c",
+    "skyrl-gym/skyrl_gym/envs/nemotron_ultra/answer_extraction.py": "1d48e25122f452147e795eb6e8e21eea217654756ece9e918fe0a8ece2ab108e",
+    "uv.lock": "c9ff3b70074681e62f2683acd7b4b9487c9dc222d6065f61198c6e5e5d9ae891"
+  },
+  "local_validation": {
+    "base_source": "26cc99a426737309a60a490ce219138f8cae4818",
+    "purpose": "Observation-only live tensor-owner census; no repair/source qualification",
+    "unchanged_files": [
+      {
+        "path": "uv.lock",
+        "sha256": "c9ff3b70074681e62f2683acd7b4b9487c9dc222d6065f61198c6e5e5d9ae891"
+      },
+      {
+        "path": "skyrl-train/skyrl_train/trainer.py",
+        "sha256": "5badb3b1668072af0581d203c8b25394a83ed4025394430fe5c84d3efa645fe4"
+      },
+      {
+        "path": "skyrl-train/skyrl_train/distributed/megatron/megatron_strategy.py",
+        "sha256": "35a3570d48dd9796414f956861fd08e2c5530281f11963234b6a9cd78c07890f"
+      },
+      {
+        "path": "skyrl-train/skyrl_train/distributed/megatron/megatron_utils.py",
+        "sha256": "52b18e6b3cf98ddf44f74abddde49b70fd47bd871cec7f48659c6f762b412dd0"
+      }
+    ],
+    "existing_cpu_tests": {
+      "passed": 18,
+      "seconds": 5.56,
+      "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/tensor-ownership-existing-cpu-tests.log"
+    },
+    "real_cpu_tensor_probe": {
+      "shared_3072_float32_storage_counted_once": true,
+      "two_known_aliases_12288_bytes": true,
+      "unattributed_12345_float32_tensor_49380_bytes_found": true,
+      "tensor_values_preserved": true
+    },
+    "lint_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/tensor-ownership-diagnostic-precommit.log"
+  },
+  "known_limitation": "Python Tensor/Parameter storage census leaves allocations without Python tensor objects unattributed. No explicit garbage collection or tensor value copies; census and logging may perturb timing. Full native numerical/resume qualification remains gated.",
+  "native_preparation_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-tensor-ownership-diagnostic-native-prepare.log",
+  "native_preparation_log_sha256": "1c492ff6a5dd4e10631c7f8d943f40c141022c70bfc8a4bfd8d531af0df4e3a0",
+  "empty_output_roots": [
+    "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce",
+    "s3://marin-us-east-02a/tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce"
+  ],
+  "resource_board_ids": [
+    1123,
+    1124
+  ],
+  "resource_board_announced": true,
+  "before_submit_controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T081439",
+  "native_submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-tensor-ownership-diagnostic-native-submit.log",
+  "native_submission_log_sha256": "0559f3f69abc2c32e39ca655c0e229ec2ed832828158f48e4a19d269cf01eeaf",
+  "status": "Controller confirms all5BATCH H100node-tasks queued, physical0, no assigned node/start or completed GPU diagnostic. Native bundle/source57b0 and frozen configuration recorded. Root cause/repair/source-resume qualification remain unestablished.",
+  "controller_confirmation": [
+    {
+      "job_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce",
+      "job_state": "3",
+      "num_tasks": "5",
+      "priority_band": "3",
+      "bundle_id": "eae73e04efea3c3c63fff9712ac04bf0834274986d1302da095658df757c7f9f",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_cpu_millicores": "32000",
+      "res_memory_bytes": "1932735283200",
+      "res_disk_bytes": "536870912000",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "2ad8112c4c15b96b",
+      "task_state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "job_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce",
+      "job_state": "3",
+      "num_tasks": "5",
+      "priority_band": "3",
+      "bundle_id": "eae73e04efea3c3c63fff9712ac04bf0834274986d1302da095658df757c7f9f",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_cpu_millicores": "32000",
+      "res_memory_bytes": "1932735283200",
+      "res_disk_bytes": "536870912000",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "2a5b2fa78ded1b6a",
+      "task_state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "job_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce",
+      "job_state": "3",
+      "num_tasks": "5",
+      "priority_band": "3",
+      "bundle_id": "eae73e04efea3c3c63fff9712ac04bf0834274986d1302da095658df757c7f9f",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_cpu_millicores": "32000",
+      "res_memory_bytes": "1932735283200",
+      "res_disk_bytes": "536870912000",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/2",
+      "attempt_id": "0",
+      "attempt_uid": "286a1a3175f6c8d2",
+      "task_state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "job_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce",
+      "job_state": "3",
+      "num_tasks": "5",
+      "priority_band": "3",
+      "bundle_id": "eae73e04efea3c3c63fff9712ac04bf0834274986d1302da095658df757c7f9f",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_cpu_millicores": "32000",
+      "res_memory_bytes": "1932735283200",
+      "res_disk_bytes": "536870912000",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/3",
+      "attempt_id": "0",
+      "attempt_uid": "215f1369fd741806",
+      "task_state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "job_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce",
+      "job_state": "3",
+      "num_tasks": "5",
+      "priority_band": "3",
+      "bundle_id": "eae73e04efea3c3c63fff9712ac04bf0834274986d1302da095658df757c7f9f",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_cpu_millicores": "32000",
+      "res_memory_bytes": "1932735283200",
+      "res_disk_bytes": "536870912000",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/4",
+      "attempt_id": "0",
+      "attempt_uid": "0b1fa516806aec10",
+      "task_state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    }
+  ],
+  "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/cpu-owners-memory-and-stale-controller-20261016T081718.csv",
+  "controller_snapshot_sha256": "58a723fb018d94739f5f10e14bbbf6d8e036cff1943462db68a8b815e244a3ab",
+  "native_bundle": "eae73e04efea3c3c63fff9712ac04bf0834274986d1302da095658df757c7f9f"
+}
