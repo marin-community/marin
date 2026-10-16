@@ -216,7 +216,7 @@ def write_local_artifacts(output_dir: Path, results: list[tuple[str, dict]], met
         "",
         "## Scores",
         "",
-        "| Model | Prior | Corrected | Delta | Gains | Regressions |",
+        "| Model | Prior | Corrected | Delta | False negatives corrected | False positives corrected |",
         "| --- | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in summary:
