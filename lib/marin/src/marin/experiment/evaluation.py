@@ -106,7 +106,7 @@ def run_served_evalchemy(config: EvalchemyEvalConfig) -> ServedEvalchemyRun:
     )
     with remote_inference(inference) as session:
         outcome = run_evalchemy(
-            session.model,
+            session,
             config.run,
             output_dir,
             env_vars=runtime_env,
