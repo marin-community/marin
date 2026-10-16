@@ -15,13 +15,14 @@ from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, closing
 from dataclasses import dataclass, replace
-from typing import BinaryIO, ClassVar, Protocol
+from typing import BinaryIO, ClassVar, Protocol, TypeVar, cast
 
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as pds
 import pyarrow.parquet as pq
 import rigging.filesystem.factory as factory
+from fsspec.spec import AbstractFileSystem
 from pyarrow.fs import FSSpecHandler, PyFileSystem
 from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
@@ -77,11 +78,22 @@ _BLOB_PAYLOAD_SECONDS = telemetry.histogram("finestore_blob_payload_seconds", un
 _BLOB_SELECTED_SHARDS = telemetry.histogram("finestore_blob_selected_shards", unit="{shard}")
 
 
-class _BlobReadHandler(FSSpecHandler):
+class _NoReadAheadHandler(FSSpecHandler):
     def open_input_file(self, path: str) -> pa.PythonFile:
         # Arrow's pre_buffer=False does not disable fsspec's independent 50 MiB
         # read-ahead, which can fetch unrelated inline blobs after a small read.
         return pa.PythonFile(self.fs.open(path, mode="rb", cache_type="none"), mode="r")
+
+
+class _BoundedReadAheadHandler(FSSpecHandler):
+    def __init__(self, fs: AbstractFileSystem, block_size: int) -> None:
+        super().__init__(fs)
+        self._block_size = block_size
+
+    def open_input_file(self, path: str) -> pa.PythonFile:
+        return pa.PythonFile(
+            self.fs.open(path, mode="rb", cache_type="readahead", block_size=self._block_size), mode="r"
+        )
 
 
 @dataclass(frozen=True)
@@ -95,6 +107,7 @@ class _ScanProfile:
 _TABLE_SCAN_PROFILE = _ScanProfile(batch_rows=16_384, batch_readahead=16, fragment_readahead=4)
 _BLOB_DESCRIPTOR_SCAN_PROFILE = _ScanProfile(batch_rows=64, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
 _BLOB_PART_SCAN_PROFILE = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
+_ArrowRows = TypeVar("_ArrowRows", pa.Table, pa.RecordBatch)
 
 
 @dataclass(frozen=True)
@@ -106,14 +119,6 @@ class VersionedRow:
     sequence: int
     generation: int
     row: dict
-
-
-@dataclass(frozen=True)
-class MergedRow:
-    """The winning row for one key and the number of older rows it replaced."""
-
-    row: dict
-    superseded: int
 
 
 class BlobCorruptionError(ValueError):
@@ -299,6 +304,68 @@ def _matches_filter(row: dict, where: list[tuple[str, str, object]]) -> bool:
     return True
 
 
+def iter_shard_batches(
+    shard: _ReadableShard,
+    unified: pa.Schema,
+    pa_fs: PyFileSystem,
+    columns: list[str] | None = None,
+    where: list[tuple[str, str, object]] | None = None,
+    scan_profile: _ScanProfile = _TABLE_SCAN_PROFILE,
+) -> Generator[pa.RecordBatch, None, None]:
+    """Yield shard batches with resolved commit and generation coordinates."""
+    dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
+    with dataset.scanner(
+        columns=columns,
+        filter=_build_filter(where),
+        use_threads=False,
+        batch_size=scan_profile.batch_rows,
+        batch_readahead=scan_profile.batch_readahead,
+        fragment_readahead=scan_profile.fragment_readahead,
+        fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
+    ).to_reader() as batches:
+        for batch in batches:
+            yield _resolved_version_columns(batch, shard.commit_sequence, shard.generation)
+
+
+def iter_shard_row_groups(
+    shard: _ReadableShard,
+    unified: pa.Schema,
+    pa_fs: PyFileSystem,
+) -> Generator[pa.Table, None, None]:
+    """Yield one resolved Arrow table per Parquet row group."""
+    dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
+    fragment = next(dataset.get_fragments())
+    assert isinstance(fragment, pds.ParquetFileFragment)
+    fragment.ensure_complete_metadata()
+    assert fragment.metadata is not None
+    for index in range(fragment.metadata.num_row_groups):
+        row_group = fragment.subset(row_group_ids=[index])
+        group = row_group.scanner(
+            schema=unified,
+            use_threads=False,
+            batch_readahead=1,
+            fragment_readahead=1,
+            fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=False),
+        ).to_table()
+        if group.num_rows:
+            yield _resolved_version_columns(group, shard.commit_sequence, shard.generation)
+
+
+def _resolved_version_columns(rows: _ArrowRows, commit_sequence: int, generation: int) -> _ArrowRows:
+    """Fill missing version coordinates without changing the Arrow row container type."""
+    result: pa.Table | pa.RecordBatch = rows
+    for name, value, data_type in (
+        (SystemColumns.GENERATION, generation, pa.int32()),
+        (SystemColumns.COMMIT, commit_sequence, pa.int64()),
+    ):
+        index = result.schema.get_field_index(name)
+        if index < 0:
+            result = result.append_column(name, pa.array([value] * result.num_rows, type=data_type))
+        elif result.column(index).null_count:
+            result = result.set_column(index, name, pc.fill_null(result.column(index), value))
+    return cast(_ArrowRows, result)
+
+
 def iter_shard_rows(
     shard: _ReadableShard,
     unified: pa.Schema,
@@ -309,47 +376,44 @@ def iter_shard_rows(
     scan_profile: _ScanProfile = _TABLE_SCAN_PROFILE,
 ) -> Generator[VersionedRow, None, None]:
     """Yield rows from one shard in primary-key order with version coordinates."""
-    dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
-    with ExitStack() as stack:
+    with closing(iter_shard_batches(shard, unified, pa_fs, columns, where, scan_profile)) as batches:
         if shard.primary_key_sorted:
-            batches = stack.enter_context(
-                dataset.scanner(
-                    columns=columns,
-                    filter=_build_filter(where),
-                    use_threads=False,
-                    batch_size=scan_profile.batch_rows,
-                    batch_readahead=scan_profile.batch_readahead,
-                    fragment_readahead=scan_profile.fragment_readahead,
-                    fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
-                ).to_reader()
-            )
+            ordered_batches = batches
         else:
-            source = dataset.to_table(columns=columns, filter=_build_filter(where))
-            sort_columns = [(name, "ascending") for name in primary_key if name in source.column_names]
-            batches = source.sort_by(sort_columns).to_batches(max_chunksize=scan_profile.batch_rows)
-        for batch in batches:
+            buffered = list(batches)
+            if not buffered:
+                return
+            sort_columns = [(name, "ascending") for name in primary_key if name in buffered[0].schema.names]
+            ordered_batches = (
+                pa.Table.from_batches(buffered).sort_by(sort_columns).to_batches(max_chunksize=scan_profile.batch_rows)
+            )
+        for batch in ordered_batches:
             for row in batch.to_pylist():
-                commit_sequence = row.get(SystemColumns.COMMIT)
-                if commit_sequence is None:
-                    commit_sequence = shard.commit_sequence
-                row[SystemColumns.COMMIT] = commit_sequence
                 key = tuple((row.get(name) is None, row.get(name)) for name in primary_key)
+                generation = row.pop(SystemColumns.GENERATION)
                 yield VersionedRow(
                     key=key,
-                    commit_sequence=commit_sequence,
+                    commit_sequence=row[SystemColumns.COMMIT],
                     sequence=row.get(SystemColumns.SEQUENCE) or 0,
-                    generation=shard.generation,
+                    generation=generation,
                     row=row,
                 )
 
 
-def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[MergedRow]:
+def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[dict]:
     """Merge sorted shard streams and retain the newest row for each key."""
     merged = heapq.merge(*streams, key=lambda item: item.key)
     for _key, group in itertools.groupby(merged, key=lambda item: item.key):
-        items = list(group)
-        winner = max(items, key=lambda item: (item.commit_sequence, item.sequence, item.generation))
-        yield MergedRow(row=winner.row, superseded=len(items) - 1)
+        winner: VersionedRow | None = None
+        for item in group:
+            if winner is None or (item.commit_sequence, item.sequence, item.generation) > (
+                winner.commit_sequence,
+                winner.sequence,
+                winner.generation,
+            ):
+                winner = item
+        assert winner is not None
+        yield winner.row
 
 
 def _read_plan(
@@ -376,6 +440,7 @@ def _read_plan(
             | {
                 SystemColumns.SEQUENCE,
                 SystemColumns.COMMIT,
+                SystemColumns.GENERATION,
             }
         )
         read_columns = [name for name in schema.names if name in needed]
@@ -412,21 +477,7 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None, *, scan_profile: 
                 fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
                 use_threads=False,
             ).to_table()
-        part = part.append_column(
-            SystemColumns.GENERATION,
-            pa.array([generation] * part.num_rows, pa.int32()),
-        )
-        commit_values = pa.array([commit_sequence] * part.num_rows, pa.int64())
-        if SystemColumns.COMMIT in part.column_names:
-            commit_index = part.schema.get_field_index(SystemColumns.COMMIT)
-            part = part.set_column(
-                commit_index,
-                SystemColumns.COMMIT,
-                pc.coalesce(part[SystemColumns.COMMIT], commit_values),
-            )
-        else:
-            part = part.append_column(SystemColumns.COMMIT, commit_values)
-        parts.append(part)
+        parts.append(_resolved_version_columns(part, commit_sequence, generation))
 
     combined = parts[0] if len(parts) == 1 else pa.concat_tables(parts, promote_options="permissive")
     if all(name in combined.column_names for name in plan.primary_key):
@@ -488,7 +539,7 @@ class _ReadOperations:
         if not shards:
             return None
         fs, _ = factory.url_to_fs(self.root)
-        handler = _BlobReadHandler(fs) if table in (BlobTables.DESCRIPTORS, BlobTables.PARTS) else FSSpecHandler(fs)
+        handler = _NoReadAheadHandler(fs) if table in (BlobTables.DESCRIPTORS, BlobTables.PARTS) else FSSpecHandler(fs)
         return _read_plan(PyFileSystem(handler), shards, self.primary_key(table), columns, where)
 
     def scan(
@@ -547,8 +598,7 @@ class _ReadOperations:
                 )
                 for shard in plan.shards
             ]
-            for merged in merge_deduplicated_rows(streams):
-                row = merged.row
+            for row in merge_deduplicated_rows(streams):
                 if not _matches_filter(row, plan.post_dedup_where):
                     continue
                 if columns is not None:
@@ -629,7 +679,7 @@ class _ReadOperations:
             if diagnostics is not None:
                 diagnostics.selected_shards += len(shards)
             fs, _ = factory.url_to_fs(self.root)
-            filesystem = PyFileSystem(_BlobReadHandler(fs))
+            filesystem = PyFileSystem(_NoReadAheadHandler(fs))
             primary_key = self.primary_key(BlobTables.DESCRIPTORS)
             # Read footers and matching rows together, with bounded concurrent decoding.
             # Version resolution still spans every shard in the committed snapshot.
