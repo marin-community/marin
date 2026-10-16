@@ -7,6 +7,8 @@ export type SampleOutcome = 'passed' | 'failed' | 'ungraded' | 'errored'
 // The correctness filters a sample list offers. 'ungraded' is a real bucket, not a synonym for wrong.
 export type SampleFilter = 'all' | 'correct' | 'incorrect' | 'ungraded'
 
+const GSM8K_FINAL_ANSWER_MARKER = '#### '
+
 /** The filters to show for a task: 'ungraded' only appears once the task reports unscored samples. */
 export function sampleFilters(ungradedCount: number | null | undefined): SampleFilter[] {
   const base: SampleFilter[] = ['all', 'correct', 'incorrect']
@@ -56,10 +58,10 @@ function truncate(text: string, n = 48): string {
 /** The GSM8K answer selected by Evalchemy from a worked reference, when the marker is present. */
 export function gsm8kGradedReference(row: SampleRow): string | null {
   if (!/^gsm8k(?:$|[-_])/.test(row.task) || !row.target_text) return null
-  const marker = row.target_text.lastIndexOf('#### ')
+  const marker = row.target_text.lastIndexOf(GSM8K_FINAL_ANSWER_MARKER)
   if (marker < 0) return null
 
-  const reference = row.target_text.slice(marker + '#### '.length)
+  const reference = row.target_text.slice(marker + GSM8K_FINAL_ANSWER_MARKER.length)
   const answer = reference.slice(reference.lastIndexOf('=') + 1).trim()
   if (!answer) return null
   // Evalchemy's numeric normalization removes spaces and dollar signs, then commas in unsigned integers.
