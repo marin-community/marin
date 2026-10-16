@@ -23,12 +23,13 @@ import urllib.request
 from importlib.util import find_spec
 from pathlib import Path
 
-from marin.evaluation.lm_eval_samples import evalchemy_result_committed
+from finestore.reader import ReadView
 
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
 # Historical result-tree readers still use these names for pre-FineStore artifacts.
 EVALCHEMY_RESULTS_PREFIX = "results_"
 EVALCHEMY_RESULTS_SUFFIX = ".json"
+_EVALCHEMY_RESULTS_TABLE = "evalchemy_results"
 _REQUEST_TIMEOUT = 1800
 _TRANSPORT_RETRY_BUDGET = 1800
 _TRANSPORT_ATTEMPT_TIMEOUT = _REQUEST_TIMEOUT
@@ -232,7 +233,13 @@ def build_command(config: dict, task: dict, python: str, max_length: int | None)
 
 def completed_result(root: str, source_prefix: str) -> bool:
     """Whether Evalchemy committed a successful aggregate result to FineStore."""
-    return evalchemy_result_committed(root, source_prefix)
+    table = ReadView(root).scan(_EVALCHEMY_RESULTS_TABLE)
+    if table is None:
+        return False
+    return any(
+        row.get("source_prefix") == source_prefix and row.get("scored") is True
+        for row in table.to_pylist(maps_as_pydicts="strict")
+    )
 
 
 def main() -> None:

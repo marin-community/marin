@@ -28,6 +28,7 @@ from finestore.layout import OnConflict
 from finestore.reader import ReadView
 from finestore.store import DataStore
 from fsspec.core import url_to_fs
+from marin.evaluation.evalchemy.client import completed_result
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.lm_eval_samples import (
     evalchemy_result_committed,
@@ -206,6 +207,7 @@ def test_native_summary_reads_direct_evalchemy_result_table(tmp_path):
 
     summary = summarize_native_eval_samples(root, tasks=(EvalTaskConfig("gsm8k", 0),))
 
+    assert completed_result(root, "gsm8k_0shot")
     assert evalchemy_result_committed(root, "gsm8k_0shot")
     assert summary.samples == 1
     assert summary.coverage == {
