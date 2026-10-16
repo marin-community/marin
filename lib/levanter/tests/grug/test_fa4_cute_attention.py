@@ -374,6 +374,59 @@ def test_context_sharded_segment_ids_preserve_global_bounds():
     run_on_cpu_devices(_CONTEXT_METADATA_SCRIPT, device_count=8)
 
 
+_BALANCED_QUERY_BLOCKS_SCRIPT = """
+    from types import SimpleNamespace
+
+    import jax
+    import jax.numpy as jnp
+    import numpy as np
+    from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+    import levanter.grug.attention._fa4_cute as fa4_cute
+
+    def fake_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config, q_offset):
+        # Each output row reports the position the kernel was told it holds, then the query, bound and
+        # validity it was given, so a row that lands at another position or loses its metadata shows up.
+        positions = (q_offset[0] + jnp.arange(q.shape[1])).astype(q.dtype)
+        out = jnp.zeros_like(q).at[..., 0].set(positions[None, :, None]).at[..., 1].set(q[..., 0])
+        out = out.at[..., 2].set(lower_bounds[:, :, None].astype(q.dtype))
+        return out.at[..., 3].set(valid[:, :, None].astype(q.dtype))
+
+    fa4_cute.fa4_cute_attention_forward = fake_forward
+    # 36 positions leave an odd number of queries on each of four shards.
+    for seq_len in (36, 40):
+        position = np.arange(seq_len)
+        q = jnp.zeros((1, seq_len, 2, 8), jnp.float32).at[..., 0].set(jnp.asarray(position, jnp.float32)[None, :, None])
+        kv = jnp.zeros((1, seq_len, 1, 8), jnp.float32)
+        lower_bounds = jnp.asarray(1000 + position, jnp.int32)[None, :]
+        valid = jnp.asarray(position % 3 != 0)[None, :]
+        for mesh_shape, sequence_axes in (((8, 1), "context"), ((4, 2), "context"), ((2, 4), "context"),
+                                          ((2, 4), ("data", "context")), ((2, 4), ("context", "data"))):
+            shards = mesh_shape[1] if sequence_axes == "context" else 8
+            if seq_len % shards:
+                continue
+            mesh = Mesh(np.asarray(jax.devices()).reshape(mesh_shape), ("data", "context"),
+                        axis_types=(AxisType.Explicit,) * 2)
+            with jax.set_mesh(mesh):
+                out = jax.jit(lambda q, kv, lower_bounds, valid: fa4_cute._fa4_cute_attention_forward_sharded(
+                    q, kv, kv, lower_bounds, valid, sm_scale=1.0, kernel_config=SimpleNamespace(sm90_backward=None),
+                ))(jax.device_put(q, NamedSharding(mesh, P(None, sequence_axes))),
+                   jax.device_put(kv, NamedSharding(mesh, P())), lower_bounds, valid)
+            out = np.asarray(out)[0, :, 0]
+            case = f"seq_len={seq_len} on {mesh_shape} over {sequence_axes}"
+            np.testing.assert_array_equal(out[:, 0], position, err_msg=f"kernel positions, {case}")
+            np.testing.assert_array_equal(out[:, 1], position, err_msg=f"queries, {case}")
+            np.testing.assert_array_equal(out[:, 2], 1000 + position, err_msg=f"bounds, {case}")
+            np.testing.assert_array_equal(out[:, 3], position % 3 != 0, err_msg=f"validity, {case}")
+"""
+
+
+def test_context_sharded_query_blocks_keep_their_sequence_positions():
+    # The sharded wrapper moves half of each shard's queries to balance causal work; every query and its
+    # bounds must still reach the kernel with its own position and come back to its own row.
+    run_on_cpu_devices(_BALANCED_QUERY_BLOCKS_SCRIPT, device_count=8)
+
+
 @pytest.mark.parametrize(
     ("arch", "q_heads", "head_dim", "dtype"),
     [
