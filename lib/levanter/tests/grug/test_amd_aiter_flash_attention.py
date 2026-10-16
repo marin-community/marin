@@ -12,10 +12,11 @@ pytest.importorskip("jax_aiter.mha")
 if jax.default_backend() != "gpu" or jax.devices()[0].compute_capability != "gfx950":
     pytest.skip("JAX-AITER ships gfx950 kernels only", allow_module_level=True)
 
-# (batch, seq_len, query heads, kv heads, head_dim) and mask. The snowball cases are its long and short layers.
+# (batch, seq_len, query heads, kv heads, head_dim) and mask. The small window is narrow enough that an off-by-one
+# window fails the tolerance; the snowball cases are its long and short layers.
 CASES = {
     "small_causal": ((2, 512, 8, 2, 128), AttentionMask.causal()),
-    "small_window": ((2, 512, 8, 2, 128), AttentionMask.causal(sliding_window=200)),
+    "small_window": ((2, 512, 8, 2, 128), AttentionMask.causal(sliding_window=16)),
     "snowball_causal": ((2, 4096, 20, 5, 128), AttentionMask.causal()),
     "snowball_window": ((2, 4096, 20, 5, 128), AttentionMask.causal(sliding_window=2048)),
 }
