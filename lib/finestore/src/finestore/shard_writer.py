@@ -3,8 +3,8 @@
 
 """Shard write primitive: stream Arrow batches to one immutable, atomically-published Parquet object.
 
-:class:`ShardWriter` is the single write path shared by a store flush (buffered rows) and a
-compaction merge (a k-way-merged stream). Callers group fixed-schema rows toward
+:class:`ShardWriter` is the single write path shared by a store flush and compaction.
+Callers group fixed-schema rows toward
 :data:`ROW_GROUP_ROWS` and :data:`ROW_GROUP_TARGET_BYTES`, isolating a row that exceeds either
 target. Chunked objects bound each binary value separately.
 Blob parts occupy separate row groups so a reader can decode them incrementally.
@@ -138,8 +138,7 @@ class ShardWriter:
 
     def write_table(self, table: pa.Table) -> None:
         """Append ``table``, split into row groups of at most :data:`ROW_GROUP_ROWS` rows; its schema
-        must match the writer's. A caller streaming a merge passes one bounded batch per call, so this
-        usually writes a single group."""
+        must match the writer's."""
         self._writer.write_table(table, row_group_size=ROW_GROUP_ROWS)
 
     def close(self) -> ShardWriteResult:

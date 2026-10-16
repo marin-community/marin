@@ -247,20 +247,6 @@ class _ReadableShard(Protocol):
     def primary_key_sorted(self) -> bool: ...
 
 
-class _VersionCoordinates(Protocol):
-    @property
-    def key(self) -> tuple: ...
-
-    @property
-    def commit_sequence(self) -> int: ...
-
-    @property
-    def sequence(self) -> int: ...
-
-    @property
-    def generation(self) -> int: ...
-
-
 @dataclass(frozen=True)
 class _ReadPlan:
     shards: tuple[_ReadableShard, ...]
@@ -353,6 +339,17 @@ def iter_shard_batches(
                     SystemColumns.COMMIT,
                     pc.fill_null(batch.column(commit_index), shard.commit_sequence),
                 )
+            generation_index = batch.schema.get_field_index(SystemColumns.GENERATION)
+            if generation_index < 0:
+                batch = batch.append_column(
+                    SystemColumns.GENERATION, pa.array([shard.generation] * batch.num_rows, type=pa.int32())
+                )
+            elif batch.column(generation_index).null_count:
+                batch = batch.set_column(
+                    generation_index,
+                    SystemColumns.GENERATION,
+                    pc.fill_null(batch.column(generation_index), shard.generation),
+                )
             yield batch
 
 
@@ -370,20 +367,21 @@ def iter_shard_rows(
         for batch in batches:
             for row in batch.to_pylist():
                 key = tuple((row.get(name) is None, row.get(name)) for name in primary_key)
+                generation = row.pop(SystemColumns.GENERATION)
                 yield VersionedRow(
                     key=key,
                     commit_sequence=row[SystemColumns.COMMIT],
                     sequence=row.get(SystemColumns.SEQUENCE) or 0,
-                    generation=shard.generation,
+                    generation=generation,
                     row=row,
                 )
 
 
-def merge_versioned_rows[RowT: _VersionCoordinates](streams: list[Iterator[RowT]]) -> Iterator[tuple[RowT, int]]:
-    """Yield the latest row and superseded count for each key in sorted streams."""
+def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[MergedRow]:
+    """Merge sorted shard streams and retain the newest row for each key."""
     merged = heapq.merge(*streams, key=lambda item: item.key)
     for _key, group in itertools.groupby(merged, key=lambda item: item.key):
-        winner: RowT | None = None
+        winner: VersionedRow | None = None
         count = 0
         for item in group:
             count += 1
@@ -394,13 +392,7 @@ def merge_versioned_rows[RowT: _VersionCoordinates](streams: list[Iterator[RowT]
             ):
                 winner = item
         assert winner is not None
-        yield winner, count - 1
-
-
-def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[MergedRow]:
-    """Merge sorted shard streams and retain the newest row for each key."""
-    for winner, superseded in merge_versioned_rows(streams):
-        yield MergedRow(row=winner.row, superseded=superseded)
+        yield MergedRow(row=winner.row, superseded=count - 1)
 
 
 def _read_plan(
@@ -427,6 +419,7 @@ def _read_plan(
             | {
                 SystemColumns.SEQUENCE,
                 SystemColumns.COMMIT,
+                SystemColumns.GENERATION,
             }
         )
         read_columns = [name for name in schema.names if name in needed]
@@ -463,10 +456,16 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None, *, scan_profile: 
                 fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
                 use_threads=False,
             ).to_table()
-        part = part.append_column(
-            SystemColumns.GENERATION,
-            pa.array([generation] * part.num_rows, pa.int32()),
-        )
+        generation_values = pa.array([generation] * part.num_rows, pa.int32())
+        if SystemColumns.GENERATION in part.column_names:
+            generation_index = part.schema.get_field_index(SystemColumns.GENERATION)
+            part = part.set_column(
+                generation_index,
+                SystemColumns.GENERATION,
+                pc.coalesce(part[SystemColumns.GENERATION], generation_values),
+            )
+        else:
+            part = part.append_column(SystemColumns.GENERATION, generation_values)
         commit_values = pa.array([commit_sequence] * part.num_rows, pa.int64())
         if SystemColumns.COMMIT in part.column_names:
             commit_index = part.schema.get_field_index(SystemColumns.COMMIT)

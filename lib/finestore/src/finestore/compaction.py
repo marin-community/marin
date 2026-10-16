@@ -7,11 +7,11 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Generator, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
-from itertools import chain
+from itertools import zip_longest
 from typing import Protocol
 
 import pyarrow as pa
@@ -25,7 +25,7 @@ from rigging.timing import retry_with_backoff
 from finestore import shard_writer
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
 from finestore.layout import BlobTables, CommitToken, FineStoreLayout, Shard, SystemColumns
-from finestore.reader import ReadView, _NoReadAheadHandler, _ScanProfile, iter_shard_batches, merge_versioned_rows
+from finestore.reader import ReadView, _NoReadAheadHandler, _ScanProfile, iter_shard_batches
 from finestore.shard_writer import ShardWriter
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,7 @@ _CLOSE_COMPACTION_MAX_ATTEMPTS = 3
 _COMPACTION_INPUT_BYTES = 64 * 1024 * 1024
 _COMPACTION_SHARD_BATCH_BYTES = 4 * 1024 * 1024
 _COMPACTION_MAX_BATCH_ROWS = 4096
+_COMPACTION_BUFFER_ROW_GROUPS = 4
 
 
 class CompactionCoordinator(Protocol):
@@ -51,14 +52,10 @@ class CompactionResult:
     superseded: int = 0
 
 
-@dataclass(frozen=True)
-class _ArrowRow:
-    key: tuple
-    commit_sequence: int
-    sequence: int
-    generation: int
-    batch: pa.RecordBatch
-    index: int
+@dataclass
+class _BufferedChunk:
+    table: pa.Table
+    retained: list[bool]
 
 
 def _scan_batch_rows(metadata: pq.FileMetaData, shard_count: int) -> int:
@@ -75,57 +72,72 @@ def _scan_batch_rows(metadata: pq.FileMetaData, shard_count: int) -> int:
     return max(1, min(_COMPACTION_MAX_BATCH_ROWS, budget // max(1, bytes_per_row)))
 
 
-def _iter_compaction_rows(
-    shard: Shard, schema: pa.Schema, primary_key: tuple[str, ...], filesystem: PyFileSystem, batch_rows: int
-) -> Generator[_ArrowRow, None, None]:
-    """Yield sorted Arrow row references with their key and version coordinates."""
-    profile = _ScanProfile(batch_rows=batch_rows, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
-    with closing(iter_shard_batches(shard, schema, primary_key, filesystem, scan_profile=profile)) as batches:
-        for batch in batches:
-            if not batch.num_rows:
-                continue
-            keys = [batch.column(batch.schema.get_field_index(name)) for name in primary_key]
-            commits = batch.column(batch.schema.get_field_index(SystemColumns.COMMIT))
-            sequences = batch.column(batch.schema.get_field_index(SystemColumns.SEQUENCE))
-            for index in range(batch.num_rows):
-                key = tuple((value is None, value) for value in (column[index].as_py() for column in keys))
-                yield _ArrowRow(
-                    key=key,
-                    commit_sequence=commits[index].as_py(),
-                    sequence=sequences[index].as_py() or 0,
-                    generation=shard.generation,
-                    batch=batch,
-                    index=index,
-                )
+def _sorted_buffer(chunks: list[_BufferedChunk], sort_keys: list[tuple[str, str]]) -> pa.Table:
+    tables = [
+        chunk.table if all(chunk.retained) else chunk.table.filter(pa.array(chunk.retained))
+        for chunk in chunks
+        if any(chunk.retained)
+    ]
+    return pa.concat_tables(tables, promote_options="none").sort_by(sort_keys)
 
 
 def _compaction_groups(
-    rows: Iterator[tuple[_ArrowRow, int]], schema: pa.Schema, table: str
+    batches: Iterator[pa.RecordBatch], schema: pa.Schema, primary_key: tuple[str, ...]
 ) -> Iterator[tuple[pa.Table, int]]:
-    """Yield bounded output row groups with each group's superseded-row count."""
-    batches: list[pa.RecordBatch] = []
-    batch_offsets: dict[int, int] = {}
-    indices: list[int] = []
-    bytes_used = 0
-    source_rows = 0
-    superseded = 0
-    row_limit = shard_writer.table_row_limit(table)
-    for row, dropped in rows:
-        row_bytes = row.batch.slice(row.index, 1).nbytes
-        if indices and (len(indices) >= row_limit or bytes_used + row_bytes > shard_writer.ROW_GROUP_TARGET_BYTES):
-            yield pa.Table.from_batches(batches, schema=schema).take(pa.array(indices, type=pa.int64())), superseded
-            batches, batch_offsets, indices = [], {}, []
-            bytes_used = source_rows = superseded = 0
-        batch_id = id(row.batch)
-        if batch_id not in batch_offsets:
-            batch_offsets[batch_id] = source_rows
-            batches.append(row.batch)
-            source_rows += row.batch.num_rows
-        indices.append(batch_offsets[batch_id] + row.index)
-        bytes_used += row_bytes
-        superseded += dropped
-    if indices:
-        yield pa.Table.from_batches(batches, schema=schema).take(pa.array(indices, type=pa.int64())), superseded
+    """Keep the newest version seen per key in each bounded Arrow buffer.
+
+    A key may recur in a later buffer; read paths resolve those versions.
+    """
+    chunks: list[_BufferedChunk] = []
+    keys_seen: dict[tuple, tuple[tuple[int, int, int], int, int]] = {}
+    bytes_used = rows_used = superseded = 0
+    sort_keys = [(key, "ascending") for key in primary_key]
+    buffer_target = _COMPACTION_BUFFER_ROW_GROUPS * shard_writer.ROW_GROUP_TARGET_BYTES
+    row_target = _COMPACTION_BUFFER_ROW_GROUPS * shard_writer.ROW_GROUP_ROWS
+    for batch in batches:
+        if chunks and (bytes_used + batch.nbytes > buffer_target or rows_used + batch.num_rows > row_target):
+            yield _sorted_buffer(chunks, sort_keys), superseded
+            chunks = []
+            keys_seen = {}
+            bytes_used = rows_used = superseded = 0
+
+        key_columns = [batch.column(batch.schema.get_field_index(name)) for name in primary_key]
+        commits = batch.column(batch.schema.get_field_index(SystemColumns.COMMIT))
+        sequences = batch.column(batch.schema.get_field_index(SystemColumns.SEQUENCE))
+        generations = batch.column(batch.schema.get_field_index(SystemColumns.GENERATION))
+        candidates: dict[tuple, tuple[tuple[int, int, int], int]] = {}
+        for index in range(batch.num_rows):
+            key = tuple(column[index].as_py() for column in key_columns)
+            version = (commits[index].as_py(), sequences[index].as_py() or 0, generations[index].as_py())
+            candidate = candidates.get(key)
+            if candidate is not None:
+                if version > candidate[0]:
+                    candidates[key] = (version, index)
+                continue
+            previous = keys_seen.get(key)
+            if previous is None or version > previous[0]:
+                candidates[key] = (version, index)
+
+        superseded += batch.num_rows - len(candidates)
+        if not candidates:
+            continue
+        for key in candidates:
+            previous = keys_seen.get(key)
+            if previous is not None:
+                chunks[previous[1]].retained[previous[2]] = False
+                superseded += 1
+
+        selected = sorted(((index, key, version) for key, (version, index) in candidates.items()))
+        source = pa.Table.from_batches([batch], schema=schema)
+        chunk = source if len(selected) == batch.num_rows else source.take(pa.array([item[0] for item in selected]))
+        chunk_index = len(chunks)
+        chunks.append(_BufferedChunk(chunk, [True] * chunk.num_rows))
+        for position, (_index, key, version) in enumerate(selected):
+            keys_seen[key] = (version, chunk_index, position)
+        bytes_used += chunk.nbytes
+        rows_used += chunk.num_rows
+    if chunks:
+        yield _sorted_buffer(chunks, sort_keys), superseded
 
 
 def compact_table(
@@ -223,53 +235,66 @@ def _compact_shards(
     unified = pa.unify_schemas([item.schema.to_arrow_schema() for item in metadata], promote_options="permissive")
     if SystemColumns.COMMIT not in unified.names:
         unified = unified.append(pa.field(SystemColumns.COMMIT, pa.int64()))
+    if SystemColumns.GENERATION not in unified.names:
+        unified = unified.append(pa.field(SystemColumns.GENERATION, pa.int32()))
 
-    output_path = layout.shard_path(table, _COMPACTOR, next_generation, 0, uuid.uuid4().hex[:8])
     written = 0
     superseded = 0
-    min_seq: int | None = None
-    max_seq: int | None = None
+    outputs: list[Shard] = []
+    profile = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
     with ExitStack() as stack:
+        inputs = sorted(
+            zip(shards, metadata, strict=True),
+            key=lambda item: (item[0].commit_sequence, item[0].generation),
+            reverse=True,
+        )
         streams = [
             stack.enter_context(
-                closing(_iter_compaction_rows(shard, unified, primary_key, pa_fs, _scan_batch_rows(item, len(shards))))
+                closing(
+                    iter_shard_batches(
+                        shard,
+                        unified,
+                        primary_key,
+                        pa_fs,
+                        scan_profile=replace(profile, batch_rows=_scan_batch_rows(item, len(shards))),
+                    )
+                )
             )
-            for shard, item in zip(shards, metadata, strict=True)
+            for shard, item in inputs
         ]
-        merged_rows = merge_versioned_rows(streams)
-        first = next(merged_rows, None)
-        if first is None:
-            raise ValueError(f"FineStore table {table!r} has {len(shards)} non-empty shard descriptors but no rows")
-        with ShardWriter(output_path, unified) as writer:
-            for batch, dropped in _compaction_groups(chain((first,), merged_rows), unified, table):
-                writer.write_table(batch)
-                sequences = pc.fill_null(batch[SystemColumns.SEQUENCE], 0)
-                group_min = pc.min(sequences).as_py()
-                group_max = pc.max(sequences).as_py()
-                min_seq = group_min if min_seq is None else min(min_seq, group_min)
-                max_seq = group_max if max_seq is None else max(max_seq, group_max)
-                written += batch.num_rows
-                superseded += dropped
+        # Interleave sorted shard scans so versions of nearby keys can meet in one buffer.
+        batches = (batch for group in zip_longest(*streams) for batch in group if batch is not None)
+        for batch, dropped in _compaction_groups(batches, unified, primary_key):
+            output_path = layout.shard_path(table, _COMPACTOR, next_generation, 0, uuid.uuid4().hex[:8])
+            with ShardWriter(output_path, unified) as writer:
+                rows = (batch.slice(index, 1) for index in range(batch.num_rows))
+                for row_group in shard_writer.table_row_groups(table, rows):
+                    writer.write_table(row_group)
+            sequences = pc.fill_null(batch[SystemColumns.SEQUENCE], 0)
+            outputs.append(
+                Shard(
+                    path=output_path,
+                    writer=_COMPACTOR,
+                    generation=next_generation,
+                    rows=batch.num_rows,
+                    min_seq=pc.min(sequences).as_py(),
+                    max_seq=pc.max(sequences).as_py(),
+                    size_bytes=writer.result.size_bytes,
+                    content_sha256=writer.result.content_sha256,
+                    primary_key_sorted=True,
+                )
+            )
+            written += batch.num_rows
+            superseded += dropped
 
-    assert min_seq is not None and max_seq is not None
-    shard_result = writer.result
-    output = Shard(
-        path=output_path,
-        writer=_COMPACTOR,
-        generation=next_generation,
-        rows=written,
-        min_seq=min_seq,
-        max_seq=max_seq,
-        size_bytes=shard_result.size_bytes,
-        content_sha256=shard_result.content_sha256,
-        primary_key_sorted=True,
-    )
+    if not outputs:
+        raise ValueError(f"FineStore table {table!r} has {len(shards)} non-empty shard descriptors but no rows")
     try:
         coordinator.commit(
             CommitDelta(
                 replacements={
                     table: TableReplacement(
-                        input_paths=frozenset(shard.path for shard in shards), output_shards=(output,)
+                        input_paths=frozenset(shard.path for shard in shards), output_shards=tuple(outputs)
                     )
                 }
             ),
@@ -284,12 +309,13 @@ def _compact_shards(
         )
         return CompactionResult(written=0)
     logger.info(
-        "FineStore compacted %s table=%s input_generations=%s input_shards=%d output_shards=1 "
+        "FineStore compacted %s table=%s input_generations=%s input_shards=%d output_shards=%d "
         "output_generation=%d rows=%d superseded=%d",
         root,
         table,
         sorted({shard.generation for shard in shards}),
         len(shards),
+        len(outputs),
         next_generation,
         written,
         superseded,
