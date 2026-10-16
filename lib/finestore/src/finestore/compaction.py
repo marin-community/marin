@@ -52,12 +52,6 @@ class CompactionResult:
     superseded: int = 0
 
 
-@dataclass
-class _BufferedChunk:
-    table: pa.Table
-    retained: list[bool]
-
-
 def _scan_batch_rows(metadata: pq.FileMetaData, shard_count: int) -> int:
     """Estimate a scan batch from the largest Parquet row-group average."""
     bytes_per_row = max(
@@ -72,13 +66,10 @@ def _scan_batch_rows(metadata: pq.FileMetaData, shard_count: int) -> int:
     return max(1, min(_COMPACTION_MAX_BATCH_ROWS, budget // max(1, bytes_per_row)))
 
 
-def _sorted_buffer(chunks: list[_BufferedChunk], sort_keys: list[tuple[str, str]]) -> pa.Table:
-    tables = [
-        chunk.table if all(chunk.retained) else chunk.table.filter(pa.array(chunk.retained))
-        for chunk in chunks
-        if any(chunk.retained)
-    ]
-    return pa.concat_tables(tables, promote_options="none").sort_by(sort_keys)
+def _sorted_buffer(
+    pending: dict[tuple, tuple[tuple[int, int, int], pa.Table]], sort_keys: list[tuple[str, str]]
+) -> pa.Table:
+    return pa.concat_tables([row for _, row in pending.values()], promote_options="none").sort_by(sort_keys)
 
 
 def _compaction_groups(
@@ -88,56 +79,37 @@ def _compaction_groups(
 
     A key may recur in a later buffer; read paths resolve those versions.
     """
-    chunks: list[_BufferedChunk] = []
-    keys_seen: dict[tuple, tuple[tuple[int, int, int], int, int]] = {}
-    bytes_used = rows_used = superseded = 0
+    pending: dict[tuple, tuple[tuple[int, int, int], pa.Table]] = {}
+    pending_bytes = superseded = 0
     sort_keys = [(key, "ascending") for key in primary_key]
     buffer_target = _COMPACTION_BUFFER_ROW_GROUPS * shard_writer.ROW_GROUP_TARGET_BYTES
     row_target = _COMPACTION_BUFFER_ROW_GROUPS * shard_writer.ROW_GROUP_ROWS
     for batch in batches:
-        if chunks and (bytes_used + batch.nbytes > buffer_target or rows_used + batch.num_rows > row_target):
-            yield _sorted_buffer(chunks, sort_keys), superseded
-            chunks = []
-            keys_seen = {}
-            bytes_used = rows_used = superseded = 0
-
+        if pending and (pending_bytes + batch.nbytes > buffer_target or len(pending) + batch.num_rows > row_target):
+            yield _sorted_buffer(pending, sort_keys), superseded
+            pending = {}
+            pending_bytes = superseded = 0
+        table = pa.Table.from_batches([batch], schema=schema)
         key_columns = [batch.column(batch.schema.get_field_index(name)) for name in primary_key]
         commits = batch.column(batch.schema.get_field_index(SystemColumns.COMMIT))
         sequences = batch.column(batch.schema.get_field_index(SystemColumns.SEQUENCE))
         generations = batch.column(batch.schema.get_field_index(SystemColumns.GENERATION))
-        candidates: dict[tuple, tuple[tuple[int, int, int], int]] = {}
         for index in range(batch.num_rows):
             key = tuple(column[index].as_py() for column in key_columns)
             version = (commits[index].as_py(), sequences[index].as_py() or 0, generations[index].as_py())
-            candidate = candidates.get(key)
-            if candidate is not None:
-                if version > candidate[0]:
-                    candidates[key] = (version, index)
-                continue
-            previous = keys_seen.get(key)
-            if previous is None or version > previous[0]:
-                candidates[key] = (version, index)
-
-        superseded += batch.num_rows - len(candidates)
-        if not candidates:
-            continue
-        for key in candidates:
-            previous = keys_seen.get(key)
-            if previous is not None:
-                chunks[previous[1]].retained[previous[2]] = False
+            previous = pending.get(key)
+            if previous is not None and version <= previous[0]:
                 superseded += 1
-
-        selected = sorted(((index, key, version) for key, (version, index) in candidates.items()))
-        source = pa.Table.from_batches([batch], schema=schema)
-        chunk = source if len(selected) == batch.num_rows else source.take(pa.array([item[0] for item in selected]))
-        chunk_index = len(chunks)
-        chunks.append(_BufferedChunk(chunk, [True] * chunk.num_rows))
-        for position, (_index, key, version) in enumerate(selected):
-            keys_seen[key] = (version, chunk_index, position)
-        bytes_used += chunk.nbytes
-        rows_used += chunk.num_rows
-    if chunks:
-        yield _sorted_buffer(chunks, sort_keys), superseded
+                continue
+            # Copy the winner so the pending-byte count tracks retained Arrow data.
+            row = table.take(pa.array([index], type=pa.int64()))
+            if previous is not None:
+                pending_bytes -= previous[1].nbytes
+                superseded += 1
+            pending[key] = (version, row)
+            pending_bytes += row.nbytes
+    if pending:
+        yield _sorted_buffer(pending, sort_keys), superseded
 
 
 def compact_table(
