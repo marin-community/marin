@@ -1,0 +1,33 @@
+{
+  "job_id": "/romain/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce",
+  "scope": "Correct interpretation of a derived preparation-field label only. The immutable original plan, submitted native timeout3600, payload, configuration and job remain unchanged.",
+  "original_plan_field": "queue_and_run_timeout_seconds",
+  "original_field_value": 3600,
+  "original_submitted_plan_sha256": "dbd4b80a23ab23a3e882d03c6b6b28abd6c5ca67c6d65e3981e70abb780e0de3",
+  "native_timeout_request_seconds": 3600,
+  "native_resource_confirmation_recorded_at_utc": "2026-10-16T12:21:20.480491+00:00",
+  "later_native_queue_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T140327",
+  "queue_observed_at_utc": "2026-10-16T14:03:27+00:00",
+  "elapsed_since_resource_confirmation_seconds": 6126.519509,
+  "native_task_row": {
+    "task_id": "/romain/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce/0",
+    "attempt_id": "0",
+    "attempt_uid": "a3cceb24d4680d24",
+    "state": "2",
+    "exit_code": "",
+    "started_at_ms": "",
+    "finished_at_ms": "",
+    "node_name": "",
+    "terminal_reason": ""
+  },
+  "actual_allocated_h100_hours_at_snapshot": 0,
+  "observation": "The same physical0 UID remains unallocated more than3600seconds after native resource confirmation. The original field name does not establish a3600second wall-clock bound that includes time in this queue. No queue-expiry or automatic-cancellation guarantee is inferred; native execution-timeout behavior has not been exercised.",
+  "scientific_or_runtime_configuration_changed": false,
+  "retained_evidence_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce/queue-timeout-observation-20261016T140327/manifest.json",
+    "bytes": 2199,
+    "sha256": "d208effe37cb45db7f7c59d5de119891011a42f7edb27460dd7867fe2612a1b2",
+    "full_byte_readback_verified": true,
+    "files": 5
+  }
+}

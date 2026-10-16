@@ -1,0 +1,38 @@
+{
+  "run_id": "sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "configuration_sha256": "48abb4e5e0a9da6d3c166e449bf74717b8e34299b21e21232293548922ef0f8d",
+  "completed_updates": 1200,
+  "native_audit_passed": true,
+  "physical_records": {
+    "eval": 183732,
+    "train": 38400
+  },
+  "native_failures": {
+    "train": 0,
+    "eval": 0
+  },
+  "native_failure_contract_passed": true,
+  "zero_native_error_acceptance_gate": false,
+  "verified_reused_records": [],
+  "native_cache": {
+    "objects": 12307,
+    "bytes": 3408348482,
+    "workers": 2,
+    "conditional_get_etag_length_sha_checked": true
+  },
+  "full_checkpoint_controls": "qwen_batching_sc2_a4_1200_final_checkpoint_controls.json.gz",
+  "detailed_native_audit": "sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce.json.gz",
+  "original_grader_replay_passed": false,
+  "original_grader_replay_plan": "cpu_replay_qwen_batching1200_sc2_plan.json",
+  "evidence_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce/full-native-audit/manifest.json",
+    "bytes": 4721,
+    "etag": "\"eeaddf1b198ab4dcef29f21fbd827d48\"",
+    "sha256": "fa6b4f05c9f7ccd21f59614b8d8fcaa44a0273a7af0e17ad9699e88c45eee4e8",
+    "full_byte_readback_verified": true
+  },
+  "retained_proof_files": 7,
+  "retained_proof_bytes": 10223361,
+  "scope": "Complete native membership, all1200 finite applied updates, serving/head/TIS/SC and formal native failure-mask checks pass. Every available original response still requires separate original-grader replay. No quality threshold or extra zero-native-error gate; scientific source and all frozen recipes unchanged."
+}

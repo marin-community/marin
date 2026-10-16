@@ -3000,11 +3000,13 @@
       "configuration_sha256": "48abb4e5e0a9da6d3c166e449bf74717b8e34299b21e21232293548922ef0f8d",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "d5a69aa6f8369460c83be6b493bd61485815bb6fdb2fee21dd490002079ecb7e",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce.json.gz",
+      "scientific_completed_updates": 1200
     },
     {
       "job_id": "/romain/sc-snowball-memory-fresh2-noise005-sc-s0-a0-01a126ce",
@@ -3347,5 +3349,5 @@
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-16T13:50:46.110266+00:00"
+  "observed_at": "2026-10-16T14:38:20.432465+00:00"
 }

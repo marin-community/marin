@@ -1210,7 +1210,41 @@
       "native_failure_placeholders": 2
     }
   ],
-  "active_allocations": [],
+  "active_allocations": [
+    {
+      "job_id": "/romain/score-grader-qwen-batching-sc-s2-a0-01a126ce",
+      "cluster": "cw-rno2a",
+      "controller_row": {
+        "job_id": "/romain/score-grader-qwen-batching-sc-s2-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "a638586910f90cb0997d7749781a1c1cf32fee3a4bc66eb74041a58ac0197d00",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-batching-sc-s2-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "a512c8544c9b2f01",
+        "task_state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792161386275",
+        "finished_at_ms": "",
+        "node_name": "g1cb6c2",
+        "terminal_reason": ""
+      },
+      "requested_cpu": 32,
+      "requested_memory": "64GB",
+      "requested_disk": "50GB",
+      "allocated_h100_hours": 0,
+      "terminal_cost_pending": true,
+      "role": "Full original-grader replay of completed native1200 Qwen batching SC seed2",
+      "output_prefix": "marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-batching-sc-s2-a0-01a126ce",
+      "replaces_local_manager_pid": null
+    }
+  ],
   "total_terminal_allocated_cpu_hours": 1367.3662883333334,
   "total_allocated_h100_hours": 0
 }

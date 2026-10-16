@@ -1,0 +1,82 @@
+{
+  "scope": "Native two-task process completion and final serialized checkpoint counters only. Full1200 native response/membership/serving audit and all-available original-grader replay remain pending; this is not a passed scientific comparison gate.",
+  "run_id": "sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v3/batching-sc-s2.yaml",
+  "configuration_sha256": "48abb4e5e0a9da6d3c166e449bf74717b8e34299b21e21232293548922ef0f8d",
+  "controller_attempt": 0,
+  "controller_rows": [
+    {
+      "job_id": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce",
+      "job_state": "4",
+      "num_tasks": "2",
+      "priority_band": "3",
+      "bundle_id": "d5a69aa6f8369460c83be6b493bd61485815bb6fdb2fee21dd490002079ecb7e",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "70cddcc460d337aa",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1792122778057",
+      "finished_at_ms": "1792159832663",
+      "node_name": "g1c67f2",
+      "terminal_reason": ""
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce",
+      "job_state": "4",
+      "num_tasks": "2",
+      "priority_band": "3",
+      "bundle_id": "d5a69aa6f8369460c83be6b493bd61485815bb6fdb2fee21dd490002079ecb7e",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "f1a9dfaecbd45c83",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1792122743304",
+      "finished_at_ms": "1792159837891",
+      "node_name": "g779de0",
+      "terminal_reason": ""
+    }
+  ],
+  "allocated_h100_hours": 164.77598444444442,
+  "final_checkpoint_completed_updates": 1200,
+  "final_checkpoint_control_proof": "results/qwen_batching_sc2_a4_1200_final_checkpoint_controls.json.gz",
+  "final_optimizer_scheduler_steps": 1200,
+  "final_loader_position": 9600,
+  "final_checkpoint_rank_shards": 8,
+  "final_metric_evidence": {
+    "train": {
+      "file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-batching1200-sc2-a4-native-terminal-evidence/train-00001200.json",
+      "source_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce/exports/training_metrics/train-00001200.json",
+      "etag": "\"06924d5c12d0758274ed1e145ee39485\"",
+      "sha256": "72c5bdd4110e21d86560aa57c0e756ef6ad1b00593ce938812db10c0ce815e2f",
+      "bytes": 16171
+    },
+    "eval": {
+      "file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-batching1200-sc2-a4-native-terminal-evidence/eval-00001200.json",
+      "source_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce/exports/training_metrics/eval-00001200.json",
+      "etag": "\"1a9bb3769f3b1b3193edde8a0a1c5368\"",
+      "sha256": "39324a18bf526ff6bfa76718923feff11d6adf350ecd0dec8658e3d7e45d7d86",
+      "bytes": 3970
+    }
+  },
+  "final_training_gradient_norm": 1.410481333732605,
+  "final_training_applied_steps": 1,
+  "full_native_audit_passed": false,
+  "full_original_grade_replay_passed": false,
+  "native_validation_board_id": 1150,
+  "planned_zero_gpu_cpu_replay_board_id": 1151,
+  "controller_cost_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T142020",
+  "evidence_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce/completion-pending-response-audit/manifest.json",
+    "bytes": 6281,
+    "sha256": "e8067bab21f010a3f768438a2f20d830f84012c9691edbafd37aad849ea41c4b",
+    "full_byte_readback_verified": true,
+    "files": 16
+  }
+}
