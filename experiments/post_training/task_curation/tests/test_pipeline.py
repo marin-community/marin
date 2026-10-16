@@ -586,7 +586,6 @@ def test_harbor_hub_download_reuses_cache_and_separates_release_pins(tmp_path, m
         (output / "release.json").write_text(json.dumps({"release": release}))
         return None
 
-    # Replace the isolated SDK process, not the artifact executor or its caching.
     monkeypatch.setattr(pipeline_module.subprocess, "run", exporter)
     source = HarborHubSource("fixture/tasks", "sha256:" + "a" * 64)
     runtime = CampaignRuntime()

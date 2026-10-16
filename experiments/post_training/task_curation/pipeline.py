@@ -30,13 +30,16 @@ from marin.datakit.download.huggingface import (
     plan_download,
     stream_file_to_fsspec,
 )
+from marin.evaluation.harbor.driver_config import (
+    HARBOR_RUNTIME_PROJECT,
+    harbor_runtime_command,
+)
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.external_dependencies import HARBOR
 from marin.inference.openai_batch import OpenAIBatchClient
 from marin.inference.openai_chat import OpenAIChatClient
-from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.image import RegistryImage
 from shellbox.machine import (
@@ -678,25 +681,16 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
                 source.prepare(task.destination_path, campaign.context)
         return
     if isinstance(source, HarborHubSource):
-        root = find_project_root(HARBOR_EXPORTER)
-        if root is None:
-            raise RuntimeError("Harbor acquisition requires a Marin workspace")
         subprocess.run(
-            [
-                "uv",
-                "run",
-                "--isolated",
-                "--project",
-                str(root / "config/external" / HARBOR.config_name),
-                "--frozen",
-                "python",
-                str(HARBOR_EXPORTER),
+            harbor_runtime_command(
+                HARBOR_RUNTIME_PROJECT,
+                HARBOR_EXPORTER,
                 "--release",
                 f"{source.name}@{source.revision}",
                 "--output",
                 request.output_path,
                 "--all",
-            ],
+            ),
             check=True,
         )
         return
