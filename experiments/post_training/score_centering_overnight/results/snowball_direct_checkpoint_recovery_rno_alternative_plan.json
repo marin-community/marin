@@ -1,0 +1,200 @@
+{
+  "scope": "Prepared provider-only RNO alternative for three sequential five-node source2fc engineering phases. All RNO phases remain unsubmitted. Exact owned East save5 predecessor remains untouched unless fresh native proof shows allfive tasks never allocated; retire and confirm terminal before RNO save5 submission. Both restore phases require complete preceding gates. No scientific-source adoption or horizon change.",
+  "source": "2fcf6f1d2f4daaeaed14e0a5b3e64a53852be9b1",
+  "status": "Allthree source2fc RNO native phase preparations pass. AllRNO phases remainunsubmitted; originalEastsave5 remainsuntouched until publishedinputs and freshneverallocated/retire/absence/cap/emptyroots guards pass.",
+  "resource_board_ids": [
+    1179,
+    1180
+  ],
+  "geometry": {
+    "cluster": "cw-rno2a",
+    "priority": "batch",
+    "nodes": 5,
+    "learner_nodes": 4,
+    "inference_nodes": 1,
+    "h100_per_node": 8,
+    "total_h100": 40,
+    "PP": 2,
+    "EP": 8,
+    "TP": 1,
+    "CP": 1,
+    "SP": 1
+  },
+  "placement_reason": "Actual sequential18:39 both-cluster snapshot shows Eastsave5 allfive nativephysical0 tasks queued/no allocation after13:48submission, while five RNO Snowball5node mains are allocated. Capacity isunreserved; transferonlyif exactEastrequest stillneverallocated after publication.",
+  "prerequisite": "results/direct_checkpoint_restore_candidate_qwen_qualification.json",
+  "recipe": "Preserve each actual source173 phase recipe: fixed initial-model Gaussian noise.05, seed0, sampler refresh3, checkpoints every3 plus each endpoint, native optimizer/constant scheduler, TIS2 plus score centering with naturalK128, all512 physical responses per update, expert-block weight sync and FlashAttention profiles on ranks0/16. Skip evaluation on restored prefixes.",
+  "phases": [
+    {
+      "phase": "save5",
+      "job_id": "/romain/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-rno-a1-01a126ce",
+      "source": "2fcf6f1d2f4daaeaed14e0a5b3e64a53852be9b1",
+      "reference_configuration": "experiments/post_training/score_centering_overnight/snowball_direct_checkpoint_recovery_qualification_v1/save5-detach.yaml",
+      "reference_sha256": "7364f8b5d765c7ea570eecc12c60eaabffe6628832dfcdea77b30824fd12a5e4",
+      "configurations": [
+        {
+          "path": "experiments/post_training/score_centering_overnight/snowball_direct_checkpoint_recovery_rno_v1/save5-prepare.yaml",
+          "sha256": "4ce75447fc58566a3e4762e705137bafa392c0615ca02b377cd78463fee70880"
+        },
+        {
+          "path": "experiments/post_training/score_centering_overnight/snowball_direct_checkpoint_recovery_rno_v1/save5-detach.yaml",
+          "sha256": "ef0761351b3dc91dc09ed68481ea7adbf6c200b17234733f2f61b4d948d26512"
+        }
+      ],
+      "new_completed_updates": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "restore_from_checkpoint": null,
+      "checkpoint_root": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-rno-a1-01a126ce/checkpoints",
+      "final_checkpoint": 5,
+      "final_sampler_completed_updates": 3,
+      "clean_evaluation_points": [
+        0,
+        5
+      ],
+      "expected_training_physical_responses": 2560,
+      "expected_evaluation_physical_responses": 9592,
+      "submitted": false,
+      "submission_gate": "New-source Qwen preflight must pass all native, state, serving and all-available original-grader replay gates.",
+      "provider_only_nonidentity_changed_fields": [
+        "iris.cluster",
+        "iris.cluster_config"
+      ],
+      "native_preparation": {
+        "passed": true,
+        "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/direct-snowball-rno-save5-native-prepare.log",
+        "sha256": "21ffafb7b52bfe5020c385e431f1bbffc676c4eeca02d804870fa76f6b63bea7"
+      }
+    },
+    {
+      "phase": "restore5",
+      "job_id": "/romain/sc-snowball-direct-checkpoint-restore5-noise005-sc-s0-rno-a1-01a126ce",
+      "source": "2fcf6f1d2f4daaeaed14e0a5b3e64a53852be9b1",
+      "reference_configuration": "experiments/post_training/score_centering_overnight/snowball_direct_checkpoint_recovery_qualification_v1/restore5-detach.yaml",
+      "reference_sha256": "40b7a349a0ed70a7b458ad9ae0db93e62d5b2cd37d7c74ccb0df8dad79dff1ea",
+      "configurations": [
+        {
+          "path": "experiments/post_training/score_centering_overnight/snowball_direct_checkpoint_recovery_rno_v1/restore5-prepare.yaml",
+          "sha256": "032dd27d29d8a25996a302dda770869eada85280a21aae88dbd6401ac6277241"
+        },
+        {
+          "path": "experiments/post_training/score_centering_overnight/snowball_direct_checkpoint_recovery_rno_v1/restore5-detach.yaml",
+          "sha256": "112a97eab1402ef3f00db3eb06e0a14ba5a5bc2e87125e30712178b0c7e97c9b"
+        }
+      ],
+      "new_completed_updates": [
+        6,
+        7
+      ],
+      "restore_from_checkpoint": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-rno-a1-01a126ce/checkpoints/global_step_5",
+      "checkpoint_root": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-direct-checkpoint-restore5-noise005-sc-s0-rno-a1-01a126ce/checkpoints",
+      "final_checkpoint": 7,
+      "final_sampler_completed_updates": 6,
+      "clean_evaluation_points": [
+        7
+      ],
+      "expected_training_physical_responses": 1024,
+      "expected_evaluation_physical_responses": 4796,
+      "submitted": false,
+      "submission_gate": "The preceding new-source Snowball phase must pass all native, state, serving, FlashAttention and all-available original-grader replay gates.",
+      "provider_only_nonidentity_changed_fields": [
+        "iris.cluster",
+        "iris.cluster_config"
+      ],
+      "native_preparation": {
+        "passed": true,
+        "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/direct-snowball-rno-restore5-native-prepare.log",
+        "sha256": "446a7f138569c084c75cbe48eda45b532fd3a5f0cbdebfb9e8b872e5b4fa4ec7"
+      }
+    },
+    {
+      "phase": "restore7",
+      "job_id": "/romain/sc-snowball-direct-checkpoint-restore7-noise005-sc-s0-rno-a1-01a126ce",
+      "source": "2fcf6f1d2f4daaeaed14e0a5b3e64a53852be9b1",
+      "reference_configuration": "experiments/post_training/score_centering_overnight/snowball_direct_checkpoint_recovery_qualification_v1/restore7-detach.yaml",
+      "reference_sha256": "0b00cbc41438b683658c5f83da76d880a5c2255c630d1b5afe0c4e110209373c",
+      "configurations": [
+        {
+          "path": "experiments/post_training/score_centering_overnight/snowball_direct_checkpoint_recovery_rno_v1/restore7-prepare.yaml",
+          "sha256": "21dc22252dec9499cf6db67aefc9c776c9169b287590a24c9e0877e46b10596f"
+        },
+        {
+          "path": "experiments/post_training/score_centering_overnight/snowball_direct_checkpoint_recovery_rno_v1/restore7-detach.yaml",
+          "sha256": "084d841865e8708c70f7dd387a1b40bf3075a4ba597a7ffb1aa6cff66e590023"
+        }
+      ],
+      "new_completed_updates": [
+        8,
+        9
+      ],
+      "restore_from_checkpoint": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-direct-checkpoint-restore5-noise005-sc-s0-rno-a1-01a126ce/checkpoints/global_step_7",
+      "checkpoint_root": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-direct-checkpoint-restore7-noise005-sc-s0-rno-a1-01a126ce/checkpoints",
+      "final_checkpoint": 9,
+      "final_sampler_completed_updates": 9,
+      "clean_evaluation_points": [
+        9
+      ],
+      "expected_training_physical_responses": 1024,
+      "expected_evaluation_physical_responses": 4796,
+      "submitted": false,
+      "submission_gate": "The preceding new-source Snowball phase must pass all native, state, serving, FlashAttention and all-available original-grader replay gates.",
+      "provider_only_nonidentity_changed_fields": [
+        "iris.cluster",
+        "iris.cluster_config"
+      ],
+      "native_preparation": {
+        "passed": true,
+        "log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/direct-snowball-rno-restore7-native-prepare.log",
+        "sha256": "63c9eb8140453aebe2aacfb69c80115b9eb436c162479d579fd68ef70d4ec5f1"
+      }
+    }
+  ],
+  "required_evidence": [
+    "Each phase has exact native source/model/data/lock/config identities and actual five-task BATCH allocation costs, including failures or preemptions.",
+    "All declared new steps are finite and applied; native archive membership covers all512 physical responses per step and all1199x4 held-out responses at each declared clean evaluation.",
+    "Sampled learner tensors establish aligned nonuniform naturalK128/chosen-q/old-current rescoring, TIS2 and score-centering algebra; report retained row/token coverage separately from complete physical membership.",
+    "Native checkpoint endpoints5/7/9 include all32rank shards, optimizer/scheduler counters, RNG and rollout-loader/client state. Restore learner5 with sampler3, then learner7 with sampler6, retaining all referenced anchors.",
+    "Real FlashAttention execution on both pipeline stages and unchanged model-derived fixed noise with correct global expert identities across actual trained-sampler synchronizations.",
+    "Replay every available original verifier verdict against unchanged immutable source rows and grader/deadline. Retain unavailable native failure records under the existing mask/zero-reward/baseline-exclusion contract. Missing text for an available verdict or a serving error fails the gate. No zero-error or quality floor."
+  ],
+  "limits": [
+    "Qwen success does not qualify the Snowball topology or establish the earlier optimizer-backload OOM cause.",
+    "This candidate does not include the separate parser-only repair or the tensor-ownership observer.",
+    "Scientific source0212 and existing1200/130 comparisons remain unchanged. Fresh per-phase roots do not establish same-job automatic retry safety.",
+    "Only the first phase may submit initially. Each continuation is separately gated by the completed preceding phase."
+  ],
+  "existing_yaml_files_unchanged": 437,
+  "native_preparation_passed": true,
+  "prerequisite_passed": true,
+  "prerequisite_evidence_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/qualification/manifest.json",
+    "bytes": 112467,
+    "sha256": "d3957bd362309d5971c3225c0217ccef10590c0e30a5baf2a0101ca9e3b2b6c0",
+    "full_byte_readback_verified": true
+  },
+  "predecessor_plan": "snowball_direct_checkpoint_recovery_qualification_plan.json",
+  "predecessor_job": "/romain/sc-snowball-direct-checkpoint-save5-noise005-sc-s0-east-a0-01a126ce",
+  "predecessor_board_ids": [
+    1147,
+    1148
+  ],
+  "predecessor_retired": false,
+  "provider_alternative": true,
+  "actual_nonidentity_changes": [
+    "iris.cluster",
+    "iris.cluster_config"
+  ],
+  "predecessor_published_preparation_commit": "d087c62997eab63ab0677a9e30d33a94d3d740c1",
+  "retained_preparation_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-rno-alternative-20261016/9213a226a3ad6c5176febd8a63b6fb77eea99ce43c1730a26cd79c055a5899f6/manifest.json",
+    "sha256": "53c2dd5e9865bb3883189395e334e3f71444f7dec04a3759581da76b2294c4e0",
+    "bytes": 10189,
+    "files": 16,
+    "file_bytes": 155458,
+    "full_byte_readback_verified": true
+  },
+  "retained_preparation_scope": "Immutable prepared/unsubmitted RNO snapshot; current plan may later add exact predecessor retirement and native first-phase submission. No native qualification result inferred."
+}

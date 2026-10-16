@@ -1,0 +1,53 @@
+{
+  "run_id": "sc-snowball-stale-calibration-stale64-tis-s0-rno-a5-01a126ce",
+  "job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-rno-a5-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "configuration": "experiments/post_training/score_centering_overnight/snowball_stale_calibration_fresh_output_v1/detach.yaml",
+  "configuration_sha256": "9c34211ca68de64b8ac9b89c1daf25f8353903e957b76afb008adbbf2d6f8fa3",
+  "prepare_configuration": "experiments/post_training/score_centering_overnight/snowball_stale_calibration_fresh_output_v1/prepare.yaml",
+  "prepare_configuration_sha256": "1810d8caa49ea54d501ba469e45fd03f7e74eeff399e338284705e829e7c127b",
+  "predecessor_job": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce",
+  "predecessor_configuration": "experiments/post_training/score_centering_overnight/snowball_stale_calibration_rno_v1/stale64-tis-s0.yaml",
+  "predecessor_configuration_sha256": "58143f3b1dfa3ad352150bdb8e627a9b0002c814a813b006bd73e6d8c6c12d29",
+  "actual_decoded_changed_fields": [
+    "run.id",
+    "iris.job_name",
+    "ray.rendezvous_dir",
+    "ray.log_dir",
+    "artifacts.checkpoint_root",
+    "artifacts.export_root",
+    "artifacts.attempts_root",
+    "artifacts.resolved_config_uri",
+    "artifacts.terminal_manifest_uri",
+    "skyrl.trainer.rollout_buffer.object_store_root",
+    "skyrl.trainer.policy.megatron_config.torch_profiler_config.save_path"
+  ],
+  "actual_nonidentity_changed_fields": [],
+  "seed": 0,
+  "sampler_refresh_period": 65,
+  "planned_updates": 130,
+  "resume_mode": "none",
+  "resource_board_ids": [
+    1175,
+    1176
+  ],
+  "existing_first_two_update_admission": "snowball_stale130_rno_first_two_update_admission.json",
+  "native_preparation_passed": true,
+  "native_submission_confirmed": false,
+  "full130_qualification_passed": false,
+  "stale1200_mains_admitted": false,
+  "reason": "Failed previousphysical1 retention INITIALIZE600s deadline before new metrics/ZIPs. Read-only same-source native-function devbox replay times out after600.166s on7339existingZIP/175093047B with no persistedledger. New empty run/output prefix completes the same operation/deadline, supporting fresh identity while preserving all source/model/data/optimizer/cadence/recipe/horizon/deadlines. Exact original stalled RNO syscall/owner remains unproven; no scientific selection or recovery qualification.",
+  "status": "Native source0212 full130 launch preparation passes; unsubmitted pending publication and fresh native/cap/absence/empty-root guards. No full130 result or stale1200 admission.",
+  "native_preparation_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/stale130-fresh-output-native-prepare.log",
+  "native_preparation_log_sha256": "d29c0cb771c3e0fcb3c437f16e415add831d3b9a591af5f8779bd8054b739642",
+  "initialization_diagnostic": "snowball_stale130_retention_initialization_diagnostic.json",
+  "empty_prefix_native_function_preflight_passed": true,
+  "retained_preparation_and_diagnostic_proof": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/stale130-fresh-output-retry-20261016/d6bd3e0a4f737b79683a82c911af20960ab973aa1ecee211c362a3d4d83f2a57/manifest.json",
+    "sha256": "cf6ea0b3a4a590cf1e54b26932c5b29a1052ef6027090507ed36cb38a60a8f05",
+    "bytes": 13511,
+    "files": 22,
+    "file_bytes": 3158345,
+    "full_byte_readback_verified": true
+  }
+}

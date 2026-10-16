@@ -1,0 +1,112 @@
+{
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "failed_job": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce",
+  "failed_physical_attempt": 1,
+  "native_failure_evidence": "new_terminal_allocations_20261016T182103.json.gz",
+  "source_file_sha256": {
+    "skyrl-train/skyrl_train/trajectory_runners/trajectory_retention.py": "5dfb2ee5777b08c29690455104059ac3bcfa7f04066820c8ed4f505bff30e262",
+    "skyrl-train/skyrl_train/trajectory_runners/trajectory_retention_publisher.py": "6c57c243299e6e53dae5b1ea22de96c0b4a6443e0b8f67ea47082fe55a81682b",
+    "skyrl-train/skyrl_train/trajectory_runners/trajectory_retention_config.py": "597477c9126bb0f17aa7d4823360ca6bb0d6bcef67645907cfe9f2e0da6b4d0e"
+  },
+  "existing_prefix": {
+    "objects": 7339,
+    "archives": 7339,
+    "bytes": 175093047,
+    "persisted_ledger_exists": false,
+    "inventory_sha256": "76b0102bbe511e6042d77e33d667bf209ec45c0c7c71546454eb41891043fc81"
+  },
+  "bounded_boto_observation": {
+    "selected_archives": 16,
+    "sample_read_seconds": 1.3784900745376945,
+    "list_seconds": 1.7843918688595295
+  },
+  "original_prefix_native_function_replay": {
+    "scope": "Read-only same source0212 native retention INITIALIZE operation and original600second deadline, single publisher process on devbox against original7339 ZIP/175093047B failed stale130 prefix. Different execution environment from failed RNO task; this is not replay of the actual stalled syscall and does not prove that operation's owner/cause. No source/config/deadline/scientific recipe change and no grading or GPU.",
+    "observed_at_utc": "2026-10-16T18:45:45.407245+00:00",
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "source_file_sha256": {
+      "skyrl-train/skyrl_train/trajectory_runners/trajectory_retention.py": "5dfb2ee5777b08c29690455104059ac3bcfa7f04066820c8ed4f505bff30e262",
+      "skyrl-train/skyrl_train/trajectory_runners/trajectory_retention_publisher.py": "6c57c243299e6e53dae5b1ea22de96c0b4a6443e0b8f67ea47082fe55a81682b",
+      "skyrl-train/skyrl_train/trajectory_runners/trajectory_retention_config.py": "597477c9126bb0f17aa7d4823360ca6bb0d6bcef67645907cfe9f2e0da6b4d0e"
+    },
+    "output_path": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories",
+    "retention_configuration": {
+      "enabled": true,
+      "phases": [
+        "train",
+        "eval"
+      ],
+      "sample_fraction": 1.0,
+      "sample_count_per_step": 0,
+      "max_bytes_per_step": null,
+      "max_bytes_per_run": null,
+      "required": true,
+      "reuse_publication_process": true,
+      "append_only": true,
+      "publish_timeout_seconds": 600.0,
+      "shutdown_timeout_seconds": 120.0,
+      "publication_retries": 2,
+      "output_path": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce/attempts/trajectories",
+      "run_id": "sc-snowball-stale-calibration-stale64-tis-s0-rno-a4-01a126ce"
+    },
+    "elapsed_seconds": 600.1661357558332,
+    "result": {
+      "request_id": "initialize",
+      "error": "storage operation exceeded 600 seconds",
+      "timed_out": true,
+      "record_count": 0,
+      "ledger_top_level_keys": [],
+      "ledger_records": null,
+      "ledger_archives": null
+    },
+    "board_id": 1177
+  },
+  "new_empty_prefix_native_function_check": {
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "scope": "Same declared retention policy/native source function and original600s process deadline, read-only empty new run/output prefix on devbox. Metadata labels reconstructed from submitted launch identity; this different-environment observation does not replay the original stalled RNO syscall or qualify a GPU trial. No S3 write, grader or GPU.",
+    "observed_at_utc": "2026-10-16T18:46:44.320494+00:00",
+    "output_path": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a5-01a126ce/attempts/trajectories",
+    "retention_configuration": {
+      "enabled": true,
+      "phases": [
+        "train",
+        "eval"
+      ],
+      "sample_fraction": 1.0,
+      "sample_count_per_step": 0,
+      "max_bytes_per_step": null,
+      "max_bytes_per_run": null,
+      "required": true,
+      "reuse_publication_process": true,
+      "append_only": true,
+      "publish_timeout_seconds": 600.0,
+      "shutdown_timeout_seconds": 120.0,
+      "publication_retries": 2,
+      "output_path": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-rno-a5-01a126ce/attempts/trajectories",
+      "run_id": "sc-snowball-stale-calibration-stale64-tis-s0-rno-a5-01a126ce"
+    },
+    "elapsed_seconds": 3.4803941012360156,
+    "error": null,
+    "timed_out": false,
+    "ledger_records": 0,
+    "ledger_archives": 0,
+    "empty_before_and_after": true
+  },
+  "interpretation": "Native source0212 initialization reads the persisted ledger, lists files and serially reads every unknown archive; append-only publication does not persist the growing ledger. The same function and600s deadline on devbox times out on the old7339-ZIP prefix, while a new empty prefix completes. This supports removing prior output history as an initialization input. It does not identify the original RNO stalled storage call or prove network/CPU ownership. Current observations are different-client/environment and not GPU qualification.",
+  "local_preflight_corrections": [
+    "First local diagnostic omitted native run_id and was rejected before archive reads. Preserve error/result and executedsource.",
+    "Second diagnostic returned BadRequest before complete reconciliation because devbox lacked native CW-to-AWS environment projection.",
+    "A later native-IO existence preflight still rejected path-style access before announcing work; supply process-local FSSPEC_S3 virtual addressing before imports. Successful run3 uses the original source files and600s deadline. No shared credential/configuration is changed."
+  ],
+  "scientific_recipe_change": false,
+  "gpu_hours": 0,
+  "grading_calls": 0,
+  "retained_preparation_and_diagnostic_proof": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/stale130-fresh-output-retry-20261016/d6bd3e0a4f737b79683a82c911af20960ab973aa1ecee211c362a3d4d83f2a57/manifest.json",
+    "sha256": "cf6ea0b3a4a590cf1e54b26932c5b29a1052ef6027090507ed36cb38a60a8f05",
+    "bytes": 13511,
+    "files": 22,
+    "file_bytes": 3158345,
+    "full_byte_readback_verified": true
+  }
+}
