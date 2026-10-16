@@ -26,9 +26,13 @@ DETERMINISTIC_BACKWARD = False
 
 
 def _window_size(mask: AttentionMask) -> tuple[int, int]:
-    """FlashAttention's (left, right) window: ``sliding_window=W`` keeps keys ``q - (W - 1) <= k <= q``."""
+    """FlashAttention's (left, right) window: ``sliding_window=W`` keeps keys ``q - (W - 1) <= k <= q``.
+
+    Without a window this is ``(-1, -1)``, not ``(-1, 0)``: ``causal=True`` already bounds keys on the right, and
+    JAX-AITER treats any right bound >= 0 as a sliding window, which rules out AITER's assembly backward.
+    """
     if mask.sliding_window is None:
-        return (-1, 0)
+        return (-1, -1)
     if mask.sliding_window <= 0:
         raise ValueError(f"sliding_window must be positive, got {mask.sliding_window}")
     return (mask.sliding_window - 1, 0)
