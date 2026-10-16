@@ -42,6 +42,13 @@ only that table. If writing or publication fails, claimed store buffers are rest
 for retry. Immutable files written before a failed publication are harmless orphans
 and can be collected later.
 
+A flush uploads each new shard, writes a manifest, and publishes it with one
+compare-and-swap of `HEAD`. A writer that loses the compare-and-swap rebases its change
+onto the new `HEAD` and retries with backoff. Every writer to a root shares its `HEAD`,
+so commits to one root are serialized; writers that need more aggregate commit
+throughput should write to separate roots. A flush raises `CommitConflict` only after
+losing the compare-and-swap for an hour.
+
 ## Reads
 
 ```python
@@ -69,6 +76,10 @@ compatible Parquet schemas across active shards and keeps the row from the lates
 user commit for each primary key before applying filters on non-key columns. Compaction
 preserves each row's original commit sequence, so reorganizing files never makes an
 older value outrank a concurrent write.
+
+Each shard records the range of primary keys it holds when the key columns are
+strings and integers. A lookup with `==` on a prefix of the primary key, or `in` on its
+first column, skips shards whose range excludes the value.
 
 ## Named objects and caches
 
@@ -145,17 +156,24 @@ pass performs at most three compactions per table. `store.maintain()` exposes th
 operation for deterministic callers. `compact_table(root, table)` compacts all active shards
 for explicit materialization and sealing.
 
-`close()` also merges each registered table's remaining level-zero shards owned by
-that writer when there are at least two. It visits blob descriptors first, then other
-tables in name order, within an
-aggregate budget of 64 MiB stored input and 16,384 input rows, skipping groups that
-exceed the remaining budget. This consolidates small completed writes below the
-maintenance threshold without repeatedly rewriting earlier compacted data or merging
-other writers' inputs. Concurrent writers must use distinct writer IDs (the default
-IDs are unique). The pass retries classified transient storage failures with exponential
-backoff for up to three attempts per snapshot or merge before propagating them. Retries
-can repeat reads and writes of the selected inputs. The pass adds close latency after
-flushing; its input budget is not a wall-time or decoded-memory bound.
+One writer per archive compacts at a time. Maintenance holds a lease, the
+`_maintenance` object under the root, while it compacts; a writer that cannot take the
+lease flushes and leaves compaction to the holder. A holder that stops without releasing
+the lease loses it once the lease goes stale. Each new holder publishes a higher
+`maintainer_epoch` in the manifest, and a compaction prepared under an older epoch is
+rejected rather than rebased, so a stalled maintainer cannot overwrite its successor's
+work. `seal()` compacts even while another writer holds the lease; the epoch check still
+protects it. Lease, commit, conflict, and compaction events are exported as
+`finestore_*` telemetry counters.
+
+`close()` also runs a best-effort level-zero merge after its final flush. A closing
+writer that holds the maintenance lease, or can take it, merges the level-zero shards of
+each registered table from every writer within a bounded input budget; otherwise it
+leaves them to the current maintainer. A wave of closing writers therefore elects one
+merger instead of racing replacement commits. Concurrent writers must use distinct
+writer IDs (the default IDs are unique). Transient storage failures are retried a
+bounded number of times before propagating. The merge adds close latency; its budget
+bounds stored input, not wall time or decoded memory.
 
 `PersistentKvCache.close()` performs this pass during explicit shutdown. Its process-exit
 handler only requests maintenance shutdown after the bounded cache-write drain, so
@@ -193,6 +211,7 @@ archive retention or reader leases; it is outside the current API.
 {root}/
     _archive.json                         format marker changed only by migrations
     HEAD                                  conditional commit pointer
+    _maintenance                          compaction lease, present while held
     manifests/{commit_id}.json            immutable complete snapshots
     schemas/{content_hash}.json            immutable table contracts
     data/{table}/w={writer}/g={level}/... immutable Parquet shards
@@ -200,9 +219,10 @@ archive retention or reader leases; it is outside the current API.
 
 Only `HEAD` is mutable. The `HEAD` document names a manifest, commit id, and logical
 sequence. A manifest names every active shard, its writer and compaction generation,
-row and sequence bounds, byte size, SHA-256 digest, each table's metadata object, and
-optional seal state. Writers compute shard integrity metadata while streaming Parquet,
-so it does not require another object-store read.
+row, sequence, and primary-key bounds, byte size, SHA-256 digest, each table's metadata
+object, the current maintainer epoch, and optional seal state. Writers compute shard
+integrity metadata while streaming Parquet, so it does not require another object-store
+read.
 
 Manifest models preserve unknown optional JSON fields when an older writer rebases a
 commit. A manifest can also name `required_features`; readers reject features they do
@@ -227,7 +247,11 @@ an equivalent compare-and-swap primitive.
 - A cache writer may stop at either point. The named value is absent or fully committed;
   a partial transaction is never visible.
 - A compare-and-swap loss reloads `HEAD` and rebases disjoint additions. A compaction
-  rebases only while all of its exact inputs remain active.
+  rebases only while all of its exact inputs remain active and the maintainer epoch it
+  was prepared under is still current.
+- A maintainer that stops without releasing its lease blocks compaction by other
+  writers, including close-time merges, until the lease goes stale. Flushes never wait
+  on it.
 - Opening a sealed archive for writing publishes a commit that clears its seal.
   `store.seal()` flushes, compacts, and records seal metadata in a final manifest.
 

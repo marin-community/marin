@@ -16,21 +16,24 @@ from typing import Protocol
 
 import pyarrow as pa
 import pyarrow.compute as pc
-import pyarrow.parquet as pq
 import rigging.filesystem.factory as factory
 from pyarrow.fs import PyFileSystem
+from rigging import telemetry
 from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.timing import retry_with_backoff
 
 from finestore import shard_writer
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
-from finestore.layout import BlobTables, CommitToken, FineStoreLayout, Shard, SystemColumns
-from finestore.reader import ReadView, _BoundedReadAheadHandler, iter_shard_row_groups
+from finestore.layout import BlobTables, CommitToken, FineStoreLayout, KeyRange, Shard, SystemColumns
+from finestore.reader import ReadView, _BoundedReadAheadHandler, iter_shard_row_groups, shard_schema
 from finestore.shard_writer import ShardWriter
 
 logger = logging.getLogger(__name__)
 
 _COMPACTOR = "compactor"
+_COMPACTIONS = telemetry.counter("finestore_compactions", unit="{compaction}")
+_COMPACTIONS_ABANDONED = telemetry.counter("finestore_compactions_abandoned", unit="{compaction}")
+_COMPACTION_INPUT_BYTES = telemetry.counter("finestore_compaction_input_bytes", unit="By")
 _CLOSE_COMPACTION_MAX_ATTEMPTS = 3
 _COMPACTION_FILE_READ_AHEAD_BYTES = 1024 * 1024
 COMPACTION_TARGET_BYTES = 400 * 1024 * 1024
@@ -38,6 +41,8 @@ COMPACTION_TARGET_BYTES = 400 * 1024 * 1024
 
 class CompactionCoordinator(Protocol):
     def snapshot(self) -> ArchiveSnapshot: ...
+
+    def last_snapshot(self) -> ArchiveSnapshot: ...
 
     def commit(self, delta: CommitDelta, *, base: ArchiveSnapshot | None = None) -> CommitToken: ...
 
@@ -120,17 +125,16 @@ def compact_table(
     return _compact_shards(root, table, shards, snapshot=snapshot, coordinator=commits, target_bytes=target_bytes)
 
 
-def compact_writer_tables(
+def compact_level_zero_tables(
     root: str,
     tables: Sequence[str],
     *,
-    writer_id: str,
     max_input_bytes: int,
     max_input_rows: int,
     target_bytes: int,
     coordinator: CompactionCoordinator,
 ) -> None:
-    """Merge a writer's residual level-zero groups within an aggregate input budget."""
+    """Merge each table's level-zero shards, from every writer, within an aggregate input budget."""
     for table in sorted(tables, key=lambda name: (name != BlobTables.DESCRIPTORS, name)):
         snapshot = retry_with_backoff(
             coordinator.snapshot,
@@ -138,11 +142,7 @@ def compact_writer_tables(
             max_attempts=_CLOSE_COMPACTION_MAX_ATTEMPTS,
             operation=f"FineStore close snapshot at {root}",
         )
-        shards = tuple(
-            shard
-            for shard in ReadView(root, snapshot).list_shards(table)
-            if shard.generation == 0 and shard.writer == writer_id
-        )
+        shards = tuple(shard for shard in ReadView(root, snapshot).list_shards(table) if shard.generation == 0)
         if len(shards) < 2:
             continue
         input_bytes = sum(shard.size_bytes for shard in shards)
@@ -186,6 +186,8 @@ def _compact_shards(
     next_generation = max(shard.generation for shard in shards) + 1
     input_rows = sum(shard.rows for shard in shards)
     input_bytes = sum(shard.size_bytes for shard in shards)
+    _COMPACTIONS.add()
+    _COMPACTION_INPUT_BYTES.add(input_bytes)
     logger.info(
         "FineStore compacting %s table=%s input_generations=%s input_shards=%d input_rows=%d "
         "input_bytes=%d output_generation=%d",
@@ -200,9 +202,7 @@ def _compact_shards(
 
     fs, _ = factory.url_to_fs(root)
     pa_fs = PyFileSystem(_BoundedReadAheadHandler(fs, _COMPACTION_FILE_READ_AHEAD_BYTES))
-    unified = pa.unify_schemas(
-        [pq.read_schema(shard.path, filesystem=pa_fs) for shard in shards], promote_options="permissive"
-    )
+    unified = pa.unify_schemas([shard_schema(shard.path, pa_fs) for shard in shards], promote_options="permissive")
     if SystemColumns.COMMIT not in unified.names:
         unified = unified.append(pa.field(SystemColumns.COMMIT, pa.int64()))
     if SystemColumns.GENERATION not in unified.names:
@@ -227,6 +227,9 @@ def _compact_shards(
                 for row_group in shard_writer.table_row_groups(table, rows):
                     writer.write_table(row_group)
             sequences = pc.fill_null(batch[SystemColumns.SEQUENCE], 0)
+            # The batch is sorted by primary key, so its first and last rows bound every key.
+            edge_rows = batch.select(list(primary_key)).take([0, batch.num_rows - 1]).to_pylist()
+            bounds = KeyRange.of(tuple(row[column] for column in primary_key) for row in edge_rows)
             outputs.append(
                 Shard(
                     path=output_path,
@@ -238,6 +241,8 @@ def _compact_shards(
                     size_bytes=writer.result.size_bytes,
                     content_sha256=writer.result.content_sha256,
                     primary_key_sorted=True,
+                    min_key=None if bounds is None else bounds.lowest,
+                    max_key=None if bounds is None else bounds.highest,
                 )
             )
             written += batch.num_rows
@@ -252,11 +257,13 @@ def _compact_shards(
                     table: TableReplacement(
                         input_paths=frozenset(shard.path for shard in shards), output_shards=tuple(outputs)
                     )
-                }
+                },
+                expected_epoch=snapshot.manifest.maintainer_epoch,
             ),
             base=snapshot,
         )
     except CommitConflict:
+        _COMPACTIONS_ABANDONED.add()
         logger.info(
             "FineStore abandoned compaction for %s table=%s input_shards=%d because its inputs changed",
             root,
