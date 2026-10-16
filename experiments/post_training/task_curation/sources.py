@@ -7,6 +7,7 @@ from experiments.post_training.task_curation.datasets import unconverted
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
+from experiments.post_training.task_curation.datasets.skill2env import tasks as skill2env
 from experiments.post_training.task_curation.datasets.skyrl import code as skyrl_code
 from experiments.post_training.task_curation.datasets.skyrl import ifeval as skyrl_ifeval
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
@@ -49,6 +50,7 @@ def all_sources() -> dict[str, RlDataSource]:
         *arc.sources(),
         *reasoning_gym.sources(),
         *nemotron_ultra.sources(),
+        *skill2env.sources(),
         *unconverted.sources(),
     ]
     identifiers = [source.info.id for source in sources]
