@@ -702,6 +702,7 @@ def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(
     # A row exceeds the scaled row-group budget, just like large evaluation documents.
     # Doubling groups per shard must not double decoded payload memory. Children
     # isolate Arrow's allocator from fixture construction and other pytest tests.
+    row_bytes = 4 * 1024 * 1024
     probe = textwrap.dedent(
         """
         import gc
@@ -719,7 +720,7 @@ def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(
         from finestore.store import DataStore
 
         root = sys.argv[1]
-        row_bytes = 4 * 1024 * 1024
+        row_bytes = int(sys.argv[3])
         shard_writer.ROW_GROUP_TARGET_BYTES = row_bytes // 2
         with DataStore.open(root, flush_interval=3600, max_buffer_bytes=2**40,
                             compaction_levels=(1000,)) as store:
@@ -755,7 +756,7 @@ def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(
     measurements = []
     for rows_per_shard in (32, 64):
         completed = subprocess.run(
-            [sys.executable, "-c", probe, str(tmp_path / f"run-{rows_per_shard}"), str(rows_per_shard)],
+            [sys.executable, "-c", probe, str(tmp_path / f"run-{rows_per_shard}"), str(rows_per_shard), str(row_bytes)],
             check=True,
             capture_output=True,
             text=True,
@@ -768,14 +769,14 @@ def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(
             {
                 "id": index,
                 "revision": 3,
-                "sha256": hashlib.sha256((f"3:{index}:" + "x" * (4 * 1024 * 1024)).encode()).hexdigest(),
+                "sha256": hashlib.sha256((f"3:{index}:" + "x" * row_bytes).encode()).hexdigest(),
             }
             for index in range(rows_per_shard)
         ]
         measurements.append(result["peak_arrow_bytes"])
     # Allow one additional decoded value per input cursor at pipeline boundaries,
     # independent of the additional 512 MiB of input payloads in the larger case.
-    assert measurements[1] <= measurements[0] + 4 * 4 * 1024 * 1024, measurements
+    assert measurements[1] <= measurements[0] + 4 * row_bytes, measurements
 
 
 def test_typed_on_disk_metadata(tmp_path):
