@@ -22,7 +22,8 @@ Outputs under ``--output``: Harbor's job folder, ``requests.jsonl`` (the canonic
       -e DAYTONA_API_KEY "$(gcloud secrets versions access latest --secret DAYTONA_EVAL_API_KEY \
           --project hai-gcp-models)" \
       -- uv run python experiments/post_training/sft_shootout/harbor_glm.py \
-      --agent terminus-2 --tasks <folder of task folders> --name <name> \
+      --agent terminus-2 --family tmax --package-revision <source@revision> \
+      --tasks <folder of task folders> --name <name> \
       --output s3://marin-us-east-02a/marin/experiments/sft-shootout/generation/<name>
 """
 
@@ -224,6 +225,8 @@ def main() -> None:
         "--budget-fraction", type=float, default=0.75, help="Relay context-budget trigger, as a fraction of the window."
     )
     parser.add_argument("--glm-relay-job", default=DEFAULT_GLM_RELAY_JOB)
+    parser.add_argument("--family", choices=["tmax", "swesmith"], required=True)
+    parser.add_argument("--package-revision", required=True, help="Source and revision of the task packages, for provenance.")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -256,7 +259,28 @@ def main() -> None:
 
     job_dir = work / "jobs" / args.name
     job_dir.mkdir(parents=True, exist_ok=True)
-    (job_dir / "driver_config.json").write_text(json.dumps({"args": vars(args), "harbor": config}, indent=2))
+    provenance = {
+        "args": vars(args),
+        "harbor": config,
+        "teacher": {
+            "model": GLM_MODEL,
+            "relay_job": args.glm_relay_job,
+            "tokenizer": f"{GLM_TOKENIZER}@{GLM_TOKENIZER_REVISION}",
+            # Clients send only model and max_tokens (see requests.jsonl), so the service defaults apply;
+            # GLM 5.3's chat template then renders "Reasoning Effort: Max".
+            "effective_settings": "service defaults; template reasoning effort Max",
+        },
+        "relay": None
+        if not args.relay
+        else {
+            "student": f"{STUDENT_CONFIG}@{STUDENT_REVISION}",
+            "budget_fraction": args.budget_fraction,
+            "budget_tokens": int(AGENTS[args.agent]["kwargs"]["model_info"]["max_input_tokens"] * args.budget_fraction),
+            "budget_counted_with": "student tokenizer",
+            "triggers": ["format_error: one teacher repair turn", "context_budget: teacher to the end", "completion_claim: student reply withheld, teacher to the end"],
+        },
+    }
+    (job_dir / "driver_config.json").write_text(json.dumps(provenance, indent=2))
     if capability is not None:
         scrub(job_dir, capability)
     StoragePath(args.output).upload_from(str(job_dir), recursive=True)
