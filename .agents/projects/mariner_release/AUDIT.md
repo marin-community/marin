@@ -19,7 +19,7 @@ uv run python -m experiments.domain_phase_mix.release.verify_paper_numbers --bui
   --sections "<paper folder>/sections" --fail-on-untraced --allow-registered-skips
 ```
 
-- Build: 35 tables, MANIFEST.json `commit` 4e3510e05c, built 2026-10-16T01:34Z, 0 consistency problems.
+- Build: 35 tables, MANIFEST.json `commit` 9174ae5453, built 2026-10-16T06:11Z, 0 consistency problems.
 - Paper: `sections/` of the paper folder on Google Drive. The tables are in `results.tex` (modified 2026-10-12 20:13,
   SHA-256 prefix e2a47c370e100b1e), `surrogate.tex` (2026-10-13 02:17, 81cc91596e2a38ea), `appendix.tex` (2026-10-15
   14:15, a6b17d4f7fffadd1) and `appendix_analysis.tex` (2026-10-14 01:25, 61aeead7375b3d31), local times.
@@ -192,3 +192,7 @@ its 134 Llama 200M runs (268 cells, null before), and the seven Uncheatable comp
 `components_available` of 17 of those runs, which the registry records without Uncheatable values (153 cells). No
 registry query reads those cells; the audit again reports `0 differences, 0 untraced cells, 88 registered skips` on the
 same paper files and exits 0.
+
+The build at 9174ae5453 holds the same 35 table files as the build at 4e3510e05c, byte for byte; only the manifest's
+notes changed. `verify_wandb_ids.py` finds all 3,165 distinct ids in `marin-community/marin`, and the audit again
+reports `0 differences, 0 untraced cells, 88 registered skips`.
