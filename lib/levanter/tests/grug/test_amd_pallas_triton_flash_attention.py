@@ -8,7 +8,7 @@ import pytest
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 
-from levanter.grug.attention import AttentionMask, reference_attention
+from levanter.grug.attention import AttentionMask, fa4_cute_segment_bounds, reference_attention
 from levanter.grug.attention._amd_pallas_triton_flash import TritonFlashBlockSizes, pallas_triton_flash_attention
 from levanter.testing.cpu_devices import run_on_cpu_devices
 
@@ -219,3 +219,30 @@ _SHARDED_SCRIPT = """
 
 def test_flash_attention_batch_and_head_sharded_packed_matches_reference():
     run_on_cpu_devices(_SHARDED_SCRIPT, device_count=4)
+
+
+@pytest.mark.parametrize("window", [None, 40])
+def test_flash_attention_reads_precomputed_fa4_bounds(window):
+    # moe_hero_ep and moe_hero_fsdp precompute these bounds outside their layer scan and pass a full causal mask
+    # alongside them, so the bounds alone must carry the segments and the window. Both runs use the same kernel on
+    # the same per-query bounds, so they agree to rounding; the segment-ID path is checked against the reference above.
+    q, k, v = _qkv(jnp.float32)
+    segment_ids = MASKS["window_segments"].segment_ids
+    segment_mask = AttentionMask(is_causal=True, sliding_window=window, segment_ids=segment_ids)
+    lower, valid = fa4_cute_segment_bounds(segment_mask, batch_size=2, seq_len=SEQ_LEN, sliding_window=window)
+    bounds_mask = AttentionMask(is_causal=True, segment_ids=segment_ids).with_fa4_bounds(lower, valid)
+    # Padding queries attend only to themselves under precomputed bounds, so give their rows no cotangent: then
+    # neither their outputs nor their gradients reach the comparison.
+    valid_rows = (segment_ids[0] >= 0)[:, :, None, None]
+    cotangent = jnp.where(valid_rows, jax.random.normal(jax.random.key(1), q.shape, jnp.float32), 0.0)
+
+    def loss(mask, q, k, v):
+        return jnp.sum(_flash(q, k, v, mask) * cotangent)
+
+    expected = jnp.where(valid_rows, _flash(q, k, v, segment_mask), 0.0)
+    actual = jnp.where(valid_rows, _flash(q, k, v, bounds_mask), 0.0)
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), atol=1e-6, rtol=1e-6)
+    expected_grads = jax.grad(lambda *a: loss(segment_mask, *a), argnums=(0, 1, 2))(q, k, v)
+    actual_grads = jax.grad(lambda *a: loss(bounds_mask, *a), argnums=(0, 1, 2))(q, k, v)
+    for name, want, got in zip("qkv", expected_grads, actual_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(got), np.asarray(want), atol=1e-6, rtol=1e-6, err_msg=f"d{name}")
