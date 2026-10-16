@@ -412,3 +412,51 @@ trials:
     sconv_sites: attn,shared_in
   commit: 33aa1753a8
   note: seed 1 stopped at step 2758 without a final eval
+- variant: conv(e) at layer 0 gates only
+  rung: d512
+  protocol: equal_steps
+  batch: X0218
+  date: '2026-10-16'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184629121
+  baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  steps: 2760
+  delta:
+  - -0.0027
+  - -0.0052
+  loss:
+  - 3.0242
+  - 3.0263
+  wandb:
+  - belay-X0218-embL0-s0
+  - belay-X0218-embL0-s1
+  settings:
+    attn_res_streams: '2'
+    attn_res_stream_kernels: '4'
+    attn_res_stream_mixer: 'false'
+    attn_res_stream_sources: embed
+    attn_res_stream_gates: 0a,0m
+  commit: fb1caabf39
+- variant: conv(e) at layer 0 gates + layer 3 MLP gate
+  rung: d512
+  protocol: equal_steps
+  batch: X0218
+  date: '2026-10-16'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184629121
+  baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  steps: 2760
+  delta:
+  - 0.0016
+  - -0.0018
+  loss:
+  - 3.0285
+  - 3.0297
+  wandb:
+  - belay-X0218-embL0L3m-s0
+  - belay-X0218-embL0L3m-s1
+  settings:
+    attn_res_streams: '2'
+    attn_res_stream_kernels: '4'
+    attn_res_stream_mixer: 'false'
+    attn_res_stream_sources: embed
+    attn_res_stream_gates: 0a,0m,3m
+  commit: fb1caabf39
