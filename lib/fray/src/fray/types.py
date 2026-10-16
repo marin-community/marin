@@ -717,6 +717,7 @@ class JobRequest:
         priority: Forwarded to the underlying backend if supported. 0 leaves
             the backend to use its default priority.
         timeout: Backend-enforced execution deadline, if supported.
+        ports: Named task ports to allocate on Iris.
     """
 
     name: str
@@ -730,6 +731,7 @@ class JobRequest:
     max_task_failures: int = 0
     priority: int = 0
     timeout: Duration | None = None
+    ports: tuple[str, ...] = ()
 
     def __post_init__(self):
         if " " in self.name:

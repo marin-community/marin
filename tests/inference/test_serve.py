@@ -743,7 +743,7 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
             events.append("registered")
         yield
 
-    context = SimpleNamespace(registry=SimpleNamespace(registered=registered))
+    context = SimpleNamespace(registry=SimpleNamespace(registered=registered), get_port=lambda _name: 0)
     monkeypatch.setattr(iris_vllm, "iris_ctx", lambda: context)
     monkeypatch.setattr("marin.inference.iris.iris_ctx", lambda: context)
 

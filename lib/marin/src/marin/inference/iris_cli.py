@@ -74,7 +74,7 @@ from marin.inference.config import (
     VllmSource,
     load_vllm_metric_family_additions,
 )
-from marin.inference.iris import IrisServiceConfig, run_iris_service
+from marin.inference.iris import BACKEND_PORT_NAME, DASHBOARD_PORT_NAME, IrisServiceConfig, run_iris_service
 
 # The GPU serve worker only runs the dashboard/registry glue plus a `vllm serve`
 # subprocess; CUDA vLLM is provisioned in an isolated uv-tool env (not the workspace
@@ -606,7 +606,7 @@ def main(
                 name=job_name,
                 resources=convert_resources(submission_resources),
                 environment=environment,
-                ports=["http"],
+                ports=[DASHBOARD_PORT_NAME, BACKEND_PORT_NAME] if not brokered else [DASHBOARD_PORT_NAME],
                 constraints=constraints or None,
                 max_retries_failure=0,
                 max_retries_preemption=max_retries_preemption,
