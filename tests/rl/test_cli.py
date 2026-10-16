@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import dataclasses
+import subprocess
+import sys
 from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -111,3 +113,19 @@ def test_execution_requires_a_complete_federated_route() -> None:
             _execution(),
             parent_cluster_config=None,
         )
+
+
+def test_rl_cli_import_keeps_training_dependencies_unloaded() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import marin.rl.cli; "
+            "heavy = {'levanter', 'transformers', 'torch', 'wandb'}; "
+            "loaded = heavy.intersection(name.split('.')[0] for name in sys.modules); "
+            "assert not loaded, sorted(loaded)",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
