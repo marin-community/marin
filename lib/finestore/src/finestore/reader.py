@@ -40,7 +40,7 @@ from finestore.layout import (
     TableMetadata,
     parse_uri,
 )
-from finestore.merge import merge_sorted_runs, newest_indices
+from finestore.merge import merge_sorted_runs, newest_indices, sorted_by_key
 
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
 MAX_DESCRIPTOR_READS = 4
@@ -486,17 +486,12 @@ def _sorted_shard_run(
     plan: _ReadPlan,
     scan_profile: _ScanProfile,
 ) -> Generator[pa.Table, None, None]:
-    """Yield one shard's matching rows in primary-key order; an unsorted shard is sorted in memory."""
+    """Yield one shard's matching rows in primary-key order, a batch at a time when the shard is sorted."""
     with closing(
         iter_shard_batches(shard, plan.schema, plan.filesystem, plan.columns, plan.pushdown_where, scan_profile)
     ) as batches:
-        if shard.primary_key_sorted:
-            for batch in batches:
-                yield pa.Table.from_batches([batch])
-            return
-        buffered = list(batches)
-    if buffered:
-        yield pa.Table.from_batches(buffered).sort_by([(name, "ascending") for name in plan.primary_key])
+        tables = (pa.Table.from_batches([batch]) for batch in batches)
+        yield from tables if shard.primary_key_sorted else sorted_by_key(tables, plan.primary_key)
 
 
 def _read_plan(

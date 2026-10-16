@@ -24,7 +24,7 @@ from rigging.timing import retry_with_backoff
 from finestore import shard_writer
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
 from finestore.layout import BlobTables, CommitToken, FineStoreLayout, KeyRange, Shard, SystemColumns
-from finestore.merge import merge_sorted_runs
+from finestore.merge import merge_sorted_runs, sorted_by_key
 from finestore.reader import ReadView, _BoundedReadAheadHandler, iter_shard_row_groups, shard_schema
 from finestore.shard_writer import ShardWriter
 
@@ -58,17 +58,9 @@ class CompactionResult:
 def _sorted_run(
     shard: Shard, unified: pa.Schema, pa_fs: PyFileSystem, primary_key: tuple[str, ...]
 ) -> Generator[pa.Table, None, None]:
-    """Yield one shard's rows in primary-key order, a row group at a time when the shard is sorted.
-
-    An unsorted shard is sorted in memory, so its decoded size bounds the memory it needs.
-    """
+    """Yield one shard's rows in primary-key order, a row group at a time when the shard is sorted."""
     with closing(iter_shard_row_groups(shard, unified, pa_fs)) as groups:
-        if shard.primary_key_sorted:
-            yield from groups
-            return
-        rows = list(groups)
-    if rows:
-        yield pa.concat_tables(rows).sort_by([(name, "ascending") for name in primary_key])
+        yield from groups if shard.primary_key_sorted else sorted_by_key(groups, primary_key)
 
 
 def _key(rows: pa.Table, index: int, primary_key: tuple[str, ...]) -> tuple:

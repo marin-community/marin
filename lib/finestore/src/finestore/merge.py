@@ -41,6 +41,13 @@ def newest_rows(rows: pa.Table, primary_key: Sequence[str]) -> pa.Table:
     return rows.take(newest_indices(rows, primary_key))
 
 
+def sorted_by_key(tables: Iterable[pa.Table], primary_key: Sequence[str]) -> Iterator[pa.Table]:
+    """Gather ``tables`` into one run in merge key order; memory holds all of their rows."""
+    rows = list(tables)
+    if rows:
+        yield pa.concat_tables(rows).sort_by([(name, "ascending") for name in primary_key], null_placement="at_end")
+
+
 def _starts_key(keys: pa.Table) -> pa.Array:
     """Mark each row of key-sorted ``keys`` whose key differs from the previous row's."""
     count = keys.num_rows
@@ -94,12 +101,7 @@ def merge_sorted_runs(runs: Sequence[Iterable[pa.Table]], primary_key: Sequence[
     Each run yields tables whose rows ascend by primary key within and across tables. A run
     can hold several versions of a key, including across consecutive tables. Every yielded
     table's keys are strictly greater than the previous table's, so no key appears twice in
-    the output.
-
-    The merge pulls the next table only from the runs whose last key is the smallest, the
-    frontier. Rows below the frontier are final because every run's remaining rows are at
-    or above its own last key. Rows at or above it carry to the next round, already reduced
-    to one row per key, so memory holds about one table per run.
+    the output. Memory holds about one table per run.
     """
     cursors = [_RunCursor(iter(run), primary_key) for run in runs]
     pending = cursors
@@ -114,6 +116,9 @@ def merge_sorted_runs(runs: Sequence[Iterable[pa.Table]], primary_key: Sequence[
             if merged is not None and merged.num_rows:
                 yield merged
             return
+        # Every run's remaining rows are at or above its own last key, so rows below the smallest
+        # last key are final. Rows at or above it carry over, already one row per key, and only
+        # the runs at that frontier are read next.
         frontier = min(cursor.last_key for cursor in active)
         pending = [cursor for cursor in active if cursor.last_key == frontier]
         if merged is None:
