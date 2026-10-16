@@ -15,14 +15,16 @@ June ladder at 3e18, has objective `none` and, as in `validation_3e18`, its cons
 Seeds come from the launch records that `validation_3e18` reads, wherever they hold the run: each validation-launch
 run's from the directory that holds it (`run_names.seeds_from_uri`), and the UniMax-8 run's from the UniMax-8 repeats'
 record. The Llama 200M runs' come from their W&B configs (LLAMA_200M_RUNS), and so does the data seed of each run in
-WANDB_PULL. They must agree with the registry's seeds, which it records for 42 of the 116 validation-launch runs. Every
-other run keeps the registry's seeds, which are null for the other Llama 160M runs and for some frozen Qwen3 runs.
+WANDB_PULLS. They must agree with each other and with the registry's seeds, which it records for 42 of the 116
+validation-launch runs. Every other run keeps the registry's seeds, which are null for the other Llama 160M runs and for
+some frozen Qwen3 runs.
 
 Aggregates follow `tables.add_aggregates`: recomputed from a run's components where it has them all, else the
 registry's recorded aggregate where that used the fixed rule. Every run whose recorded Uncheatable aggregate uses other
 weights (the Llama panels' legacy weights, or the BPB-schema-2 pooled value of the 14 path-midpoint and RegMix-reference
 runs) has its Uncheatable components: the registry's, or for one archived Llama 160M run, which the registry scores by
-its pooled aggregate only, those of its W&B run summary (WANDB_PULL).
+its pooled aggregate only, those of its W&B run summary (WANDB_PULLS). The registry records no Uncheatable values for 17
+Llama 200M runs; their components also come from their W&B run summaries, and their aggregate from those components.
 """
 
 from pathlib import Path
@@ -64,9 +66,12 @@ FIXED_RULE_PANEL = "delphi_3e18_39bucket"
 # (two_phase_many/uncheatable_objective.py); the expanded registry copied it unchecked.
 POOLED_SOURCES = ("validation::path_midpoints", "validation::regmix_reference")
 # Uncheatable components and data seeds that the registry lacks, frozen from W&B run summaries and configs
-# (`wandb_pulls`). The pooled aggregate ties each pull to the run's registry record, which holds the same W&B value at
-# full precision.
-WANDB_PULL = paths.REPO / "experiments/domain_phase_mix/release/configs/heldout_wandb_components_20261015.csv"
+# (`wandb_pulls.read`): those of the archived Llama 160M run that the registry scores by its pooled Uncheatable aggregate
+# only, and those of the 17 Llama 200M runs that it records without Uncheatable values.
+WANDB_PULLS = tuple(
+    paths.REPO / "experiments/domain_phase_mix/release/configs" / name
+    for name in ("heldout_wandb_components_20261015.csv", "heldout_llama200m_wandb_components_20261015.csv")
+)
 # The W&B run ids and the seeds of the W&B configs of the 134 Llama 200M runs, which the registry records without them
 # (`wandb_pulls.read_runs`). W&B shortened 20 of the ids by dropping leading characters of the run name.
 LLAMA_200M_RUNS = paths.REPO / "experiments/domain_phase_mix/release/configs/heldout_llama200m_wandb_runs_20261015.csv"
@@ -97,7 +102,7 @@ def required_sources() -> list[Path]:
     launches = [paths.RO / folder / name for folder in VALIDATION_LAUNCHES.values() for name in LAUNCH_FILES]
     frozen = [FROZEN / name for name in FROZEN_FILES]
     expanded = [EXPANDED / name for name in EXPANDED_FILES]
-    return [*frozen, *expanded, *launches, UNIMAX8_WEIGHTS, UNIMAX8_REPEATS, WANDB_PULL, LLAMA_200M_RUNS]
+    return [*frozen, *expanded, *launches, UNIMAX8_WEIGHTS, UNIMAX8_REPEATS, *WANDB_PULLS, LLAMA_200M_RUNS]
 
 
 def _unimax8_mixture() -> str:
@@ -158,6 +163,14 @@ def _validation_run_names() -> pd.Series:
     return _validation_uris().map(run_names.training_run_name_from_uri)
 
 
+def _wandb_pulls() -> pd.DataFrame:
+    """The runs of WANDB_PULLS (`wandb_pulls.read`), indexed by W&B run id."""
+    pulls = pd.concat([wandb_pulls.read(path) for path in WANDB_PULLS])
+    if not pulls.index.is_unique:
+        raise ValueError("a run appears in two W&B pulls")
+    return pulls
+
+
 def _llama_200m_runs() -> pd.DataFrame:
     """LLAMA_200M_RUNS by registry row id, after checking that each W&B run id names its registry run.
 
@@ -177,27 +190,30 @@ def _launch_seeds() -> pd.DataFrame:
     """Data and trainer seed of each run that a launch record or a W&B pull holds, indexed by W&B run id.
 
     A validation run's seeds come from the directory that holds it, as in `validation_3e18`; the UniMax-8 repeats'
-    record gives its three runs' seeds, LLAMA_200M_RUNS the seeds in the Llama 200M runs' W&B configs, and WANDB_PULL
-    the data seed in each pulled run's W&B config.
+    record gives its three runs' seeds, LLAMA_200M_RUNS the seeds in the Llama 200M runs' W&B configs, and WANDB_PULLS
+    the data seed in each pulled run's W&B config. Raises ValueError where two records give one run different seeds.
     """
     uris = _validation_uris()
     names = uris.map(run_names.training_run_name_from_uri)
     validation_seeds = pd.DataFrame([run_names.seeds_from_uri(uri) for uri in uris], index=names, columns=SEEDS)
     repeats = tables.read_csv(paths.require(UNIMAX8_REPEATS)).set_index("run")[SEEDS]
     llama = _llama_200m_runs().set_index("training_wandb_run_id")[SEEDS]
-    pulled = wandb_pulls.read(WANDB_PULL).data_seed.to_frame().assign(trainer_seed=np.nan)
-    seeds = pd.concat([validation_seeds, repeats, llama, pulled])
-    assert seeds.index.is_unique, "a training run appears in two launch records"
+    pulled = _wandb_pulls().data_seed.to_frame().assign(trainer_seed=np.nan)
+    records = pd.concat([validation_seeds, repeats, llama, pulled])
+    seeds = records.groupby(level=0).first()  # each seed's first recorded value
+    if (records.notna() & (records != seeds.reindex(records.index))).any().any():
+        raise ValueError("two records give a held-out run different seeds")
     return seeds
 
 
 def _with_pulled_components(out: pd.DataFrame, runs: pd.DataFrame, run_ids: pd.Series) -> pd.DataFrame:
-    """`out` with the Uncheatable components of the runs in WANDB_PULL, which the registry lacks.
+    """`out` with the Uncheatable components of the runs in WANDB_PULLS, which the registry lacks.
 
-    Raises unless each pulled run is a held-out run without registry components for those tasks whose recorded
-    Uncheatable aggregate is the pulled pooled value.
+    Raises unless each pulled run is a held-out run without registry components for those tasks, and its pull is tied
+    to its registry record: by the pooled aggregate where the registry records one, which is the pulled W&B value at
+    full precision, and otherwise by its W&B run id from LLAMA_200M_RUNS, which names the registry's run.
     """
-    pulls = wandb_pulls.read(WANDB_PULL)
+    pulls = _wandb_pulls()
     pulled = run_ids[run_ids.isin(pulls.index)]
     if sorted(pulled) != sorted(pulls.index):
         raise ValueError(f"pulled runs that are not held-out runs: {sorted(set(pulls.index) - set(pulled))}")
@@ -205,9 +221,13 @@ def _with_pulled_components(out: pd.DataFrame, runs: pd.DataFrame, run_ids: pd.S
     columns = [c for c in pulls.columns if c.startswith("bpb__")]
     if out.loc[pulled.index, columns].notna().any().any():
         raise ValueError(f"pulled runs that already have registry components: {pulled.tolist()}")
-    off = pull.pooled != runs.uncheatable_bpb[pulled.index]
+    recorded = runs.uncheatable_bpb[pulled.index]
+    off = recorded.notna() & (pull.pooled != recorded)
     if off.any():
         raise ValueError(f"pulled pooled aggregates that differ from the registry's: {pulled[off].tolist()}")
+    untied = recorded.isna() & ~pulled.isin(_llama_200m_runs().training_wandb_run_id)
+    if untied.any():
+        raise ValueError(f"pulled runs that neither a registry aggregate nor a pulled run id ties: {pulled[untied]}")
     out = out.copy()
     out.loc[pulled.index, columns] = pull[columns]
     return out

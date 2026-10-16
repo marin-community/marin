@@ -150,12 +150,13 @@ NOTES = {
         "differ).",
         "Ten frozen archive runs, in four exposure groups, are deterministic re-trainings: their aggregates are "
         "bit-identical within each group.",
-        "628 of the 929 runs (455 Qwen3, 117 Llama 200M and 56 Llama 160M runs) have all 58 per-task values.",
+        "645 of the 929 runs (455 Qwen3, 134 Llama 200M and 56 Llama 160M runs) have all 58 per-task values.",
         "One archived Llama 160M run, which the registry scores by its pooled Uncheatable aggregate only, takes its "
         "seven Uncheatable components and its data seed from its W&B run summary and config; it logged no OlmoBaseEval "
         "Easy metrics, so those values are null.",
         "The 134 Llama 200M runs take their W&B run ids and seeds from W&B, read on 2026-10-15, as the registry records "
-        "neither.",
+        "neither. The 17 of them that the registry records without Uncheatable values take their seven Uncheatable "
+        "components from their W&B run summaries.",
         "proposal_objective uses the public objective names: none for the UniMax-8 baseline (epoch cap 8, as in "
         "validation_3e18), uncheatable_and_obe_easy for designs built for both objectives, and other where the "
         "registry's run names name no objective; the Llama panels leave it null.",

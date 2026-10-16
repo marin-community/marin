@@ -137,7 +137,8 @@ def test_aggregates_recompute_the_recorded_values(table):
     # own test checks its pull. OlmoBaseEval Easy is a plain mean in every panel, so it checks each swarm's component
     # join.
     runs = tables.read_csv(SRC / "heldout_runs.csv")
-    pulled = table.observation_id.isin(tables.read_csv(heldout.WANDB_PULL, comment="#").training_wandb_run_id)
+    pulls = pd.concat([tables.read_csv(path, comment="#") for path in heldout.WANDB_PULLS])
+    pulled = table.observation_id.isin(pulls.training_wandb_run_id)
     complete = {
         objective: table[[f"bpb__{t}" for t in weights]].notna().all(axis=1)
         for objective, weights in naming.task_weights().items()
@@ -166,7 +167,7 @@ def test_aggregates_recompute_the_recorded_values(table):
 def test_wandb_pull_completes_the_run_the_registry_scores_by_its_pooled_aggregate(table):
     # One archived Llama 160M run has only its pooled Uncheatable aggregate in the registry. Its seven components and
     # data seed come from its W&B summary and config, frozen in the repository; it logged no OlmoBaseEval Easy metrics.
-    pull = tables.read_csv(heldout.WANDB_PULL, comment="#")
+    pull = tables.read_csv(heldout.WANDB_PULLS[0], comment="#")
     (name,) = pull.training_wandb_run_id.unique()
     values = pull.set_index("metric").value
     run = table.set_index("observation_id").loc[name]
@@ -177,6 +178,26 @@ def test_wandb_pull_completes_the_run_the_registry_scores_by_its_pooled_aggregat
     assert abs(run.bpb__uncheatable - fixed) <= tables.FIXED_RULE_TOLERANCE
     assert run[[f"bpb__{t}" for t in naming.TASKS[7:]] + ["bpb__obe_easy"]].isna().all()
     assert run.data_seed == 245 and pd.isna(run.trainer_seed) and not run.components_available
+
+
+def test_llama_200m_runs_without_registry_uncheatable_values_aggregate_their_pulled_components(table):
+    # The registry records no Uncheatable component or aggregate for 17 Llama 200M runs. Their seven components come
+    # from their W&B summaries, and bpb__uncheatable is the fixed byte-share sum of those components, never the pooled
+    # aggregate that W&B also logged, which weights the corpora otherwise (1.5e-5 to 7.2e-5 BPB apart for these runs).
+    runs = tables.read_csv(SRC / "heldout_runs.csv")
+    without = (runs.panel == "300m_39bucket") & runs.uncheatable_bpb.isna()
+    pull = tables.read_csv(heldout.WANDB_PULLS[1], comment="#").pivot(
+        index="training_wandb_run_id", columns="metric", values="value"
+    )
+    assert without.sum() == 17 and set(table.observation_id[without]) == set(pull.index)
+    rows = table[without].set_index("observation_id").loc[pull.index]
+    weights = naming.task_weights()["uncheatable"]
+    components = pull[[f"eval/uncheatable_eval/{t.removeprefix('uncheatable/')}/bpb" for t in weights]]
+    assert (rows[[f"bpb__{t}" for t in weights]].to_numpy() == components.to_numpy()).all()
+    fixed = components.to_numpy() @ np.array(list(weights.values()))
+    assert np.allclose(rows.bpb__uncheatable, fixed, rtol=0, atol=1e-12)
+    assert (rows.bpb__uncheatable - pull["eval/uncheatable_eval/bpb"]).abs().min() > 1e-6
+    assert rows.components_available.all() and (rows.data_seed == pull.data_seed).all()
 
 
 def test_weights_and_pool_fractions(table):
