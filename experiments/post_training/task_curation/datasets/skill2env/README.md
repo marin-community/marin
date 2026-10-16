@@ -2,11 +2,10 @@
 
 The existing `Harbor Hub:skill2env` catalog entry has a conversion recipe for
 network-disabled tasks with a single `/workspace`, native programmatic tests,
-and a reference solution. Acquisition verifies the release membership and each
-task's content digest through the pinned client in `config/external/harbor`.
-The Hub release ID and the current SDK's membership hash differ for this
-release, so acquisition also checks the separately pinned 7,496-task membership
-hash. It does not edit upstream tasks.
+and a reference solution. Acquisition resolves the pinned release through Harbor
+and verifies each downloaded task's content digest using the pinned client in
+`config/external/harbor`. The resolved task list is retained in the export
+manifest. Acquisition does not edit upstream tasks.
 
 Export a bounded selection for QUICK conversion; Docker and registry access are not required:
 
@@ -14,7 +13,6 @@ Export a bounded selection for QUICK conversion; Docker and registry access are 
 uv run --isolated --project config/external/harbor --frozen python \
   -m experiments.post_training.task_curation.harbor_hub \
   --release skill2env/skill2env@sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c \
-  --membership-sha256 1292dbfd97e6bde83142366afc4f730e61388cc4f66c7e13b65402eb2caabe41 \
   --task skill2env/task_api-design-reviewer_jdkbai64@sha256:acfc393449fdad22ae5a2da63d16d27605c02a983059fac0c5dd49384bf6c260 \
   --output /tmp/skill2env-input
 ```

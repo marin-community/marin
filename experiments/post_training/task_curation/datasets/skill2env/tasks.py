@@ -42,9 +42,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             ),
             config=CurationRecipe(
                 name="skill2env",
-                source=HarborHubSource(
-                    name, revision, membership_sha256="1292dbfd97e6bde83142366afc4f730e61388cc4f66c7e13b65402eb2caabe41"
-                ),
+                source=HarborHubSource(name, revision),
                 version="5",
                 convert=convert_task,
                 intended_use=IntendedUse.TRAIN,
