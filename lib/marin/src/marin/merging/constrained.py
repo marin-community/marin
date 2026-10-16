@@ -53,13 +53,14 @@ def changed_elements(left: torch.Tensor, right: torch.Tensor) -> int:
     return int((a != b).any(dim=1).sum().item())
 
 
-def finalize_constrained_export(audit: dict, audit_url: str, change_cap: float) -> None:
+def finalize_constrained_export(audit: dict, audit_url: str) -> None:
     """Publish and verify the external audit before making the checkpoint readable."""
     validate_audit_location(audit_url, audit["output"])
-    if not 0 <= change_cap <= 0.25:
-        raise ValueError("Changed-weight cap must be within [0, 0.25]")
+    change_cap = audit["change_cap"]
+    if not 0 <= change_cap <= 1:
+        raise ValueError("Changed-weight cap must be within [0, 1]")
     if audit["changed_elements"] > math.floor(change_cap * audit["total_elements"]):
-        raise ValueError("Actual changed elements exceed the experiment cap")
+        raise ValueError("Stored audit exceeds scalar budget")
     fs, path = filesystem_for(audit_url)
     if fs.exists(path):
         raise FileExistsError(audit_url)
@@ -79,7 +80,8 @@ def export_constrained(
     base: CheckpointReader,
     output: str,
     support: tuple[TensorSupport, ...],
-    cap: float,
+    support_cap: float,
+    change_cap: float,
     transform: Callable[[str, int | None, torch.Tensor], torch.Tensor],
 ) -> dict:
     """Export bounded edits and independently read back every object before returning an audit.
@@ -87,9 +89,15 @@ def export_constrained(
     The caller must pass the returned audit to ``finalize_constrained_export``.
     The checkpoint remains unreadable until that external audit is saved and
     verified. A failed export retains its incomplete marker.
+
+    ``support_cap`` bounds the scalars that the transform may inspect or edit.
+    ``change_cap`` independently bounds stored scalars that differ from Base.
+    This permits wider support when selected donor values equal Base.
     """
-    if not 0 <= cap <= 0.25:
-        raise ValueError("Changed-weight cap must be within [0, 0.25]")
+    if not 0 <= support_cap <= 1:
+        raise ValueError("Support cap must be within [0, 1]")
+    if not 0 <= change_cap <= 1:
+        raise ValueError("Changed-weight cap must be within [0, 1]")
     selections = {item.name: item.rows for item in support}
     if len(selections) != len(support) or not selections.keys() <= base.weight_map.keys():
         raise ValueError("Support contains duplicate or unknown tensors")
@@ -118,7 +126,7 @@ def export_constrained(
                 if not shape or len(rows) != len(set(rows)) or any(r < 0 or r >= shape[0] for r in rows):
                     raise ValueError(f"Invalid support rows: {name}")
                 selected += len(rows) * math.prod(shape[1:])
-    if selected > math.floor(cap * total):
+    if selected > math.floor(support_cap * total):
         raise ValueError(f"Support exceeds scalar budget: {selected}/{total}")
     fs, path = filesystem_for(output)
     if fs.exists(path) and fs.ls(path):
@@ -190,7 +198,7 @@ def export_constrained(
         files[relative] = {"sha256": hashlib.sha256(stored).hexdigest(), "bytes": len(stored), "changed": changed}
     if set(base.weight_map.values()) - files.keys() or INDEX_NAME not in files:
         raise ValueError("Missing checkpoint objects")
-    if changes > math.floor(cap * total):
+    if changes > math.floor(change_cap * total):
         raise ValueError("Stored checkpoint exceeds scalar budget")
     actual_files = {StoragePath.parse(p).relative_to(StoragePath.parse(path)) for p in fs.find(path)}
     actual_files.discard(INCOMPLETE_NAME)
@@ -204,7 +212,8 @@ def export_constrained(
         "supported_elements": selected,
         "changed_elements": changes,
         "changed_percent": 100 * changes / total,
-        "cap": cap,
+        "support_cap": support_cap,
+        "change_cap": change_cap,
         "files": files,
         "passed": True,
     }

@@ -113,9 +113,16 @@ def main() -> None:
     if audit_fs.exists(audit_path):
         raise FileExistsError(recipe["audit"])
     start = time.monotonic()
-    audit = export_constrained(base, recipe["output"], support, recipe["support_cap"], transform)
+    audit = export_constrained(
+        base,
+        recipe["output"],
+        support,
+        recipe["support_cap"],
+        recipe["change_cap"],
+        transform,
+    )
     audit.update(recipe=recipe, calibration_artifact_hashes=provenance, elapsed_seconds=time.monotonic() - start)
-    finalize_constrained_export(audit, recipe["audit"], recipe["change_cap"])
+    finalize_constrained_export(audit, recipe["audit"])
 
 
 if __name__ == "__main__":

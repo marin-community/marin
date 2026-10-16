@@ -42,6 +42,13 @@ only that table. If writing or publication fails, claimed store buffers are rest
 for retry. Immutable files written before a failed publication are harmless orphans
 and can be collected later.
 
+A flush uploads each new shard, writes a manifest, and publishes it with one
+compare-and-swap of `HEAD`. A writer that loses the compare-and-swap rebases its change
+onto the new `HEAD` and retries with backoff. Every writer to a root shares its `HEAD`,
+so commits to one root are serialized; writers that need more aggregate commit
+throughput should write to separate roots. A flush raises `CommitConflict` only after
+losing the compare-and-swap for an hour.
+
 ## Reads
 
 ```python
@@ -56,11 +63,23 @@ token = view.token
 A view pins one manifest. Commits and compactions that happen afterward do not change
 its results. Create a new view to observe a newer token.
 
+Each view caches the immutable byte ranges requested by Parquet, including footers
+and selected row-group columns, across all shard handles. The cache shares a
+64 MiB budget across tables and evicts the least recently used ranges when full.
+It reads only the requested ranges, regardless of table or shard size. Reads larger
+than the budget bypass the cache. `ReadView(root, cache_bytes=...)` sets the budget;
+zero disables it. Cached bytes remain compressed, and blob readers retain their
+row-batch limits.
+
 `scan` supports column projection and `==`, `!=`, and `in` filters. FineStore unifies
 compatible Parquet schemas across active shards and keeps the row from the latest
 user commit for each primary key before applying filters on non-key columns. Compaction
 preserves each row's original commit sequence, so reorganizing files never makes an
 older value outrank a concurrent write.
+
+Each shard records the range of primary keys it holds when the key columns are
+strings and integers. A lookup with `==` on a prefix of the primary key, or `in` on its
+first column, skips shards whose range excludes the value.
 
 ## Named objects and caches
 
@@ -137,9 +156,48 @@ pass performs at most three compactions per table. `store.maintain()` exposes th
 operation for deterministic callers. `compact_table(root, table)` compacts all active shards
 for explicit materialization and sealing.
 
-Compaction pins a manifest, streams an ordered merge of its exact input shards, writes
-one shard at the next level, and replaces those paths through the same `HEAD` compare
-and swap. If another compactor removes an input first, the losing output remains
+One writer per archive compacts at a time. Maintenance holds a lease, the
+`_maintenance` object under the root, while it compacts; a writer that cannot take the
+lease flushes and leaves compaction to the holder. A holder that stops without releasing
+the lease loses it once the lease goes stale. Each new holder publishes a higher
+`maintainer_epoch` in the manifest, and a compaction prepared under an older epoch is
+rejected rather than rebased, so a stalled maintainer cannot overwrite its successor's
+work. `seal()` compacts even while another writer holds the lease; the epoch check still
+protects it. Lease, commit, conflict, and compaction events are exported as
+`finestore_*` telemetry counters.
+
+`close()` also runs a best-effort level-zero merge after its final flush. A closing
+writer that holds the maintenance lease, or can take it, merges the level-zero shards of
+each registered table from every writer within a bounded input budget; otherwise it
+leaves them to the current maintainer. A wave of closing writers therefore elects one
+merger instead of racing replacement commits. Concurrent writers must use distinct
+writer IDs (the default IDs are unique). Transient storage failures are retried a
+bounded number of times before propagating. The merge adds close latency; its budget
+bounds stored input, not wall time or decoded memory.
+
+`PersistentKvCache.close()` performs this pass during explicit shutdown. Its process-exit
+handler only requests maintenance shutdown after the bounded cache-write drain, so
+compaction or another flush cannot block interpreter exit.
+
+Close-time compaction does not repair archives left by terminated writers or guarantee
+one shard across repeated writer sessions. Ordinary leveled maintenance still handles
+larger groups; explicit compaction remains available across all active shards.
+
+Compaction pins a manifest and scans one Parquet row group at a time from each input
+shard. It takes the next group by its first primary key, then adds that group's rows
+to the output buffer. The ordering is approximate for unsorted input shards. A 1 MiB
+fsspec file buffer limits speculative byte reads; Parquet pre-buffering is disabled.
+A required column read or decoded row group can be larger than the file buffer.
+Compaction retains the newest version seen per key in a buffer with a 400 MiB
+default target, configurable as `compaction_target_bytes` on `DataStore` or
+`target_bytes` on `compact_table`. It concatenates and sorts the retained Arrow
+tables when the next row group would exceed that target. Each buffer becomes a
+sorted output shard at the next level. A single input row group or row can exceed
+the target. The shard writer splits output row groups by its own row and byte
+limits. Duplicate keys in different output shards remain valid; readers
+resolve them, and the seal records only duplicates removed during that compaction.
+The manifest replaces the input paths with the output shards through the same `HEAD`
+compare and swap. If another compactor removes an input first, the losing output remains
 unreferenced and the operation is a benign no-op. If another writer adds a shard,
 the replacement can rebase while preserving the new shard.
 
@@ -153,6 +211,7 @@ archive retention or reader leases; it is outside the current API.
 {root}/
     _archive.json                         format marker changed only by migrations
     HEAD                                  conditional commit pointer
+    _maintenance                          compaction lease, present while held
     manifests/{commit_id}.json            immutable complete snapshots
     schemas/{content_hash}.json            immutable table contracts
     data/{table}/w={writer}/g={level}/... immutable Parquet shards
@@ -160,9 +219,10 @@ archive retention or reader leases; it is outside the current API.
 
 Only `HEAD` is mutable. The `HEAD` document names a manifest, commit id, and logical
 sequence. A manifest names every active shard, its writer and compaction generation,
-row and sequence bounds, byte size, SHA-256 digest, each table's metadata object, and
-optional seal state. Writers compute shard integrity metadata while streaming Parquet,
-so it does not require another object-store read.
+row, sequence, and primary-key bounds, byte size, SHA-256 digest, each table's metadata
+object, the current maintainer epoch, and optional seal state. Writers compute shard
+integrity metadata while streaming Parquet, so it does not require another object-store
+read.
 
 Manifest models preserve unknown optional JSON fields when an older writer rebases a
 commit. A manifest can also name `required_features`; readers reject features they do
@@ -187,7 +247,11 @@ an equivalent compare-and-swap primitive.
 - A cache writer may stop at either point. The named value is absent or fully committed;
   a partial transaction is never visible.
 - A compare-and-swap loss reloads `HEAD` and rebases disjoint additions. A compaction
-  rebases only while all of its exact inputs remain active.
+  rebases only while all of its exact inputs remain active and the maintainer epoch it
+  was prepared under is still current.
+- A maintainer that stops without releasing its lease blocks compaction by other
+  writers, including close-time merges, until the lease goes stale. Flushes never wait
+  on it.
 - Opening a sealed archive for writing publishes a commit that clears its seal.
   `store.seal()` flushes, compacts, and records seal metadata in a final manifest.
 

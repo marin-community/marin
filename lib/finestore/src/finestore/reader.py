@@ -5,33 +5,36 @@
 
 from __future__ import annotations
 
+import functools
 import heapq
 import io
 import itertools
 import threading
 import time
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, closing
 from dataclasses import dataclass, replace
-from typing import BinaryIO, ClassVar, Protocol
+from typing import BinaryIO, ClassVar, Protocol, TypeVar, cast
 
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as pds
 import pyarrow.parquet as pq
 import rigging.filesystem.factory as factory
-from pyarrow.fs import FSSpecHandler, PyFileSystem
+from fsspec.spec import AbstractBufferedFile, AbstractFileSystem
+from pyarrow.fs import FileInfo, FileType, FSSpecHandler, PyFileSystem
 from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
 
-from finestore.commit import ArchiveSnapshot, read_snapshot, validate_archive
+from finestore.commit import ArchiveSnapshot, read_snapshot
 from finestore.layout import (
     BlobColumns,
     BlobTables,
     CommitToken,
     FineStoreLayout,
+    KeyRange,
     SealMarker,
     Shard,
     SystemColumns,
@@ -41,6 +44,7 @@ from finestore.layout import (
 
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
 MAX_DESCRIPTOR_READS = 4
+_READ_CACHE_BYTES = 64 * 1024 * 1024
 
 
 @dataclass
@@ -77,11 +81,96 @@ _BLOB_PAYLOAD_SECONDS = telemetry.histogram("finestore_blob_payload_seconds", un
 _BLOB_SELECTED_SHARDS = telemetry.histogram("finestore_blob_selected_shards", unit="{shard}")
 
 
-class _BlobReadHandler(FSSpecHandler):
+class _ShardHandler(FSSpecHandler):
+    """Open manifest shards without the existence check Arrow's handler issues first.
+
+    Every shard in a snapshot is immutable and already published, so the HEAD request
+    Arrow would send before each open is wasted on object storage.
+    """
+
+    def open_input_file(self, path: str) -> pa.PythonFile:
+        return pa.PythonFile(self.fs.open(path, mode="rb"), mode="r")
+
+
+class _NoReadAheadHandler(FSSpecHandler):
     def open_input_file(self, path: str) -> pa.PythonFile:
         # Arrow's pre_buffer=False does not disable fsspec's independent 50 MiB
         # read-ahead, which can fetch unrelated inline blobs after a small read.
         return pa.PythonFile(self.fs.open(path, mode="rb", cache_type="none"), mode="r")
+
+
+class _BoundedReadAheadHandler(FSSpecHandler):
+    def __init__(self, fs: AbstractFileSystem, block_size: int) -> None:
+        super().__init__(fs)
+        self._block_size = block_size
+
+    def open_input_file(self, path: str) -> pa.PythonFile:
+        return pa.PythonFile(
+            self.fs.open(path, mode="rb", cache_type="readahead", block_size=self._block_size), mode="r"
+        )
+
+
+class _ReadRangeCache:
+    """A byte-bounded LRU shared by all shard handles in one snapshot."""
+
+    def __init__(self, filesystem: AbstractFileSystem, shards: Sequence[Shard], capacity: int) -> None:
+        self._filesystem = filesystem
+        self._capacity = capacity
+        self._bytes = 0
+        self._ranges: dict[str, dict[tuple[int, int], bytes]] = {shard.path: {} for shard in shards}
+        self._entries: OrderedDict[tuple[str, int, int], bytes] = OrderedDict()
+        self._file_locks = {path: threading.Lock() for path in self._ranges}
+        self._lock = threading.Lock()
+
+    def read(self, path: str, start: int, end: int) -> bytes:
+        # Serialize misses for the same file while allowing different shards to load concurrently.
+        with self._file_locks[path]:
+            with self._lock:
+                for (cached_start, cached_end), data in self._ranges[path].items():
+                    if cached_start <= start and end <= cached_end:
+                        self._entries.move_to_end((path, cached_start, cached_end))
+                        return data[start - cached_start : end - cached_start]
+            data = cast(bytes, self._filesystem.cat_file(path, start=start, end=end))
+            if len(data) != end - start:
+                raise ValueError(f"shard {path!r}: read {len(data)} of {end - start} bytes at {start}")
+            # Oversized caller reads remain transient and do not evict the working set.
+            if len(data) > self._capacity:
+                return data
+            with self._lock:
+                while self._bytes + len(data) > self._capacity:
+                    (old_path, old_start, old_end), old = self._entries.popitem(last=False)
+                    del self._ranges[old_path][old_start, old_end]
+                    self._bytes -= len(old)
+                self._entries[path, start, end] = data
+                self._ranges[path][start, end] = data
+                self._bytes += len(data)
+            return data
+
+
+class _CachedReadFile(AbstractBufferedFile):
+    def __init__(self, filesystem: AbstractFileSystem, path: str, size: int, cache: _ReadRangeCache) -> None:
+        super().__init__(filesystem, path, mode="rb", size=size, cache_type="none")
+        self._range_cache = cache
+
+    def _fetch_range(self, start: int, end: int) -> bytes:
+        return self._range_cache.read(self.path, start, min(end, self.size))
+
+
+class _CachedReadHandler(FSSpecHandler):
+    def __init__(self, filesystem: AbstractFileSystem, shards: Sequence[Shard], capacity: int) -> None:
+        super().__init__(filesystem)
+        self._sizes = {shard.path: shard.size_bytes for shard in shards}
+        self._cache = _ReadRangeCache(filesystem, shards, capacity)
+
+    def get_file_info(self, paths: list[str]) -> list[FileInfo]:
+        # The pinned manifest already identifies these immutable files and their sizes.
+        return [FileInfo(path, FileType.File, size=self._sizes[path]) for path in paths]
+
+    def open_input_file(self, path: str) -> pa.PythonFile:
+        return pa.PythonFile(_CachedReadFile(self.fs, path, self._sizes[path], self._cache), mode="r")
+
+    def open_input_stream(self, path: str) -> pa.PythonFile:
+        return self.open_input_file(path)
 
 
 @dataclass(frozen=True)
@@ -95,6 +184,7 @@ class _ScanProfile:
 _TABLE_SCAN_PROFILE = _ScanProfile(batch_rows=16_384, batch_readahead=16, fragment_readahead=4)
 _BLOB_DESCRIPTOR_SCAN_PROFILE = _ScanProfile(batch_rows=64, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
 _BLOB_PART_SCAN_PROFILE = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
+_ArrowRows = TypeVar("_ArrowRows", pa.Table, pa.RecordBatch)
 
 
 @dataclass(frozen=True)
@@ -106,14 +196,6 @@ class VersionedRow:
     sequence: int
     generation: int
     row: dict
-
-
-@dataclass(frozen=True)
-class MergedRow:
-    """The winning row for one key and the number of older rows it replaced."""
-
-    row: dict
-    superseded: int
 
 
 class BlobCorruptionError(ValueError):
@@ -246,57 +328,176 @@ class _ReadableShard(Protocol):
     @property
     def primary_key_sorted(self) -> bool: ...
 
+    @property
+    def key_range(self) -> KeyRange | None: ...
+
+
+_SCHEMA_CACHE_SIZE = 8192
+
+
+# Shard paths are unique and their contents immutable, so one process-wide cache keyed by path
+# alone serves every view and compaction without invalidation; the size bound only limits memory.
+# A miss reads the footer through the caller's filesystem so its range cache and transfer
+# metering apply.
+_schema_cache: OrderedDict[str, pa.Schema] = OrderedDict()
+_schema_cache_lock = threading.Lock()
+
+
+def shard_schema(path: str, filesystem: PyFileSystem) -> pa.Schema:
+    """Return the Arrow schema of an immutable shard, served from the process cache when present."""
+    with _schema_cache_lock:
+        cached = _schema_cache.get(path)
+        if cached is not None:
+            _schema_cache.move_to_end(path)
+            return cached
+    schema = pq.read_schema(path, filesystem=filesystem)
+    with _schema_cache_lock:
+        _schema_cache[path] = schema
+        while len(_schema_cache) > _SCHEMA_CACHE_SIZE:
+            _schema_cache.popitem(last=False)
+    return schema
+
+
+@dataclass(frozen=True)
+class FilterClause:
+    """One ``where`` clause, ``column <operator> value``, with ``==``, ``!=``, or ``in``."""
+
+    column: str
+    operator: str
+    value: object
+
+    @classmethod
+    def parse(cls, clause: tuple[str, str, object]) -> FilterClause:
+        column, operator, value = clause
+        if operator not in _SUPPORTED_OPS:
+            raise ValueError(f"unsupported filter op {operator!r}; expected one of {sorted(_SUPPORTED_OPS)}")
+        return cls(column, operator, value)
+
+    def expression(self) -> pds.Expression:
+        field = pds.field(self.column)
+        if self.operator == "in":
+            return field.isin(self.value)
+        return field == self.value if self.operator == "==" else field != self.value
+
+    def matches(self, row: Mapping[str, object]) -> bool:
+        candidate = row.get(self.column)
+        if candidate is None:
+            return False
+        if self.operator == "in":
+            return candidate in cast(Iterable[object], self.value)
+        return (candidate == self.value) == (self.operator == "==")
+
+
+def shard_may_contain(shard: _ReadableShard, primary_key: tuple[str, ...], clauses: Sequence[FilterClause]) -> bool:
+    """Whether ``clauses`` can match a row inside the shard's recorded primary-key range.
+
+    Equality clauses on a prefix of the primary key are compared as a tuple against the
+    range, and a membership clause on the first key column is checked value by value. An
+    unbounded shard always matches.
+    """
+    key_range = shard.key_range
+    if key_range is None:
+        return True
+    equalities = {clause.column: clause.value for clause in clauses if clause.operator == "=="}
+    prefix = tuple(equalities[column] for column in itertools.takewhile(equalities.__contains__, primary_key))
+    if prefix:
+        return key_range.may_contain_prefix(prefix)
+    for clause in clauses:
+        if clause.column == primary_key[0] and clause.operator == "in":
+            return key_range.may_contain_first(cast(Iterable[object], clause.value))
+    return True
+
 
 @dataclass(frozen=True)
 class _ReadPlan:
     shards: tuple[_ReadableShard, ...]
     primary_key: tuple[str, ...]
-    pushdown_where: list[tuple[str, str, object]]
-    post_dedup_where: list[tuple[str, str, object]]
+    pushdown_where: list[FilterClause]
+    post_dedup_where: list[FilterClause]
     filesystem: PyFileSystem
     schema: pa.Schema
     columns: list[str] | None
 
 
-def _build_filter(where: list[tuple[str, str, object]] | None) -> pds.Expression | None:
-    if not where:
+def _build_filter(clauses: Sequence[FilterClause] | None) -> pds.Expression | None:
+    if not clauses:
         return None
-    expr: pds.Expression | None = None
-    for column, operator, value in where:
-        if operator not in _SUPPORTED_OPS:
-            raise ValueError(f"unsupported filter op {operator!r}; expected one of {sorted(_SUPPORTED_OPS)}")
-        field = pds.field(column)
-        clause = field.isin(value) if operator == "in" else (field == value if operator == "==" else field != value)
-        expr = clause if expr is None else expr & clause
-    return expr
+    return functools.reduce(lambda expr, clause: expr & clause.expression(), clauses[1:], clauses[0].expression())
 
 
 def _partition_filter(
     where: list[tuple[str, str, object]] | None, primary_key: tuple[str, ...]
-) -> tuple[list[tuple[str, str, object]], list[tuple[str, str, object]]]:
+) -> tuple[list[FilterClause], list[FilterClause]]:
+    """Split ``where`` into clauses pushed down to shard scans and clauses applied after deduplication."""
     primary_key_columns = set(primary_key)
     pushdown = []
     after_deduplication = []
-    for clause in where or []:
-        if clause[1] not in _SUPPORTED_OPS:
-            raise ValueError(f"unsupported filter op {clause[1]!r}; expected one of {sorted(_SUPPORTED_OPS)}")
-        target = pushdown if clause[0] in primary_key_columns else after_deduplication
+    for clause in map(FilterClause.parse, where or []):
+        target = pushdown if clause.column in primary_key_columns else after_deduplication
         target.append(clause)
     return pushdown, after_deduplication
 
 
-def _matches_filter(row: dict, where: list[tuple[str, str, object]]) -> bool:
-    for column, operator, value in where:
-        candidate = row.get(column)
-        if candidate is None:
-            return False
-        if operator == "==" and candidate != value:
-            return False
-        if operator == "!=" and candidate == value:
-            return False
-        if operator == "in" and candidate not in value:
-            return False
-    return True
+def iter_shard_batches(
+    shard: _ReadableShard,
+    unified: pa.Schema,
+    pa_fs: PyFileSystem,
+    columns: list[str] | None = None,
+    where: Sequence[FilterClause] | None = None,
+    scan_profile: _ScanProfile = _TABLE_SCAN_PROFILE,
+) -> Generator[pa.RecordBatch, None, None]:
+    """Yield shard batches with resolved commit and generation coordinates."""
+    dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
+    with dataset.scanner(
+        columns=columns,
+        filter=_build_filter(where),
+        use_threads=False,
+        batch_size=scan_profile.batch_rows,
+        batch_readahead=scan_profile.batch_readahead,
+        fragment_readahead=scan_profile.fragment_readahead,
+        fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
+    ).to_reader() as batches:
+        for batch in batches:
+            yield _resolved_version_columns(batch, shard.commit_sequence, shard.generation)
+
+
+def iter_shard_row_groups(
+    shard: _ReadableShard,
+    unified: pa.Schema,
+    pa_fs: PyFileSystem,
+) -> Generator[pa.Table, None, None]:
+    """Yield one resolved Arrow table per Parquet row group."""
+    dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
+    fragment = next(dataset.get_fragments())
+    assert isinstance(fragment, pds.ParquetFileFragment)
+    fragment.ensure_complete_metadata()
+    assert fragment.metadata is not None
+    for index in range(fragment.metadata.num_row_groups):
+        row_group = fragment.subset(row_group_ids=[index])
+        group = row_group.scanner(
+            schema=unified,
+            use_threads=False,
+            batch_readahead=1,
+            fragment_readahead=1,
+            fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=False),
+        ).to_table()
+        if group.num_rows:
+            yield _resolved_version_columns(group, shard.commit_sequence, shard.generation)
+
+
+def _resolved_version_columns(rows: _ArrowRows, commit_sequence: int, generation: int) -> _ArrowRows:
+    """Fill missing version coordinates without changing the Arrow row container type."""
+    result: pa.Table | pa.RecordBatch = rows
+    for name, value, data_type in (
+        (SystemColumns.GENERATION, generation, pa.int32()),
+        (SystemColumns.COMMIT, commit_sequence, pa.int64()),
+    ):
+        index = result.schema.get_field_index(name)
+        if index < 0:
+            result = result.append_column(name, pa.array([value] * result.num_rows, type=data_type))
+        elif result.column(index).null_count:
+            result = result.set_column(index, name, pc.fill_null(result.column(index), value))
+    return cast(_ArrowRows, result)
 
 
 def iter_shard_rows(
@@ -305,51 +506,48 @@ def iter_shard_rows(
     primary_key: tuple[str, ...],
     pa_fs: PyFileSystem,
     columns: list[str] | None = None,
-    where: list[tuple[str, str, object]] | None = None,
+    where: Sequence[FilterClause] | None = None,
     scan_profile: _ScanProfile = _TABLE_SCAN_PROFILE,
 ) -> Generator[VersionedRow, None, None]:
     """Yield rows from one shard in primary-key order with version coordinates."""
-    dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
-    with ExitStack() as stack:
+    with closing(iter_shard_batches(shard, unified, pa_fs, columns, where, scan_profile)) as batches:
         if shard.primary_key_sorted:
-            batches = stack.enter_context(
-                dataset.scanner(
-                    columns=columns,
-                    filter=_build_filter(where),
-                    use_threads=False,
-                    batch_size=scan_profile.batch_rows,
-                    batch_readahead=scan_profile.batch_readahead,
-                    fragment_readahead=scan_profile.fragment_readahead,
-                    fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
-                ).to_reader()
-            )
+            ordered_batches = batches
         else:
-            source = dataset.to_table(columns=columns, filter=_build_filter(where))
-            sort_columns = [(name, "ascending") for name in primary_key if name in source.column_names]
-            batches = source.sort_by(sort_columns).to_batches(max_chunksize=scan_profile.batch_rows)
-        for batch in batches:
+            buffered = list(batches)
+            if not buffered:
+                return
+            sort_columns = [(name, "ascending") for name in primary_key if name in buffered[0].schema.names]
+            ordered_batches = (
+                pa.Table.from_batches(buffered).sort_by(sort_columns).to_batches(max_chunksize=scan_profile.batch_rows)
+            )
+        for batch in ordered_batches:
             for row in batch.to_pylist():
-                commit_sequence = row.get(SystemColumns.COMMIT)
-                if commit_sequence is None:
-                    commit_sequence = shard.commit_sequence
-                row[SystemColumns.COMMIT] = commit_sequence
                 key = tuple((row.get(name) is None, row.get(name)) for name in primary_key)
+                generation = row.pop(SystemColumns.GENERATION)
                 yield VersionedRow(
                     key=key,
-                    commit_sequence=commit_sequence,
+                    commit_sequence=row[SystemColumns.COMMIT],
                     sequence=row.get(SystemColumns.SEQUENCE) or 0,
-                    generation=shard.generation,
+                    generation=generation,
                     row=row,
                 )
 
 
-def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[MergedRow]:
+def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[dict]:
     """Merge sorted shard streams and retain the newest row for each key."""
     merged = heapq.merge(*streams, key=lambda item: item.key)
     for _key, group in itertools.groupby(merged, key=lambda item: item.key):
-        items = list(group)
-        winner = max(items, key=lambda item: (item.commit_sequence, item.sequence, item.generation))
-        yield MergedRow(row=winner.row, superseded=len(items) - 1)
+        winner: VersionedRow | None = None
+        for item in group:
+            if winner is None or (item.commit_sequence, item.sequence, item.generation) > (
+                winner.commit_sequence,
+                winner.sequence,
+                winner.generation,
+            ):
+                winner = item
+        assert winner is not None
+        yield winner.row
 
 
 def _read_plan(
@@ -362,13 +560,17 @@ def _read_plan(
     if not shards:
         return None
     pushdown_where, post_dedup_where = _partition_filter(where, primary_key)
+    if pushdown_where:
+        shards = tuple(shard for shard in shards if shard_may_contain(shard, primary_key, pushdown_where))
+        if not shards:
+            return None
     schema = pa.unify_schemas(
-        [pq.read_schema(shard.path, filesystem=filesystem) for shard in shards],
+        [shard_schema(shard.path, filesystem) for shard in shards],
         promote_options="permissive",
     )
     read_columns = None
     if columns is not None:
-        filter_columns = {name for name, _operator, _value in post_dedup_where}
+        filter_columns = {clause.column for clause in post_dedup_where}
         needed = (
             set(columns)
             | set(primary_key)
@@ -376,6 +578,7 @@ def _read_plan(
             | {
                 SystemColumns.SEQUENCE,
                 SystemColumns.COMMIT,
+                SystemColumns.GENERATION,
             }
         )
         read_columns = [name for name in schema.names if name in needed]
@@ -412,21 +615,7 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None, *, scan_profile: 
                 fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
                 use_threads=False,
             ).to_table()
-        part = part.append_column(
-            SystemColumns.GENERATION,
-            pa.array([generation] * part.num_rows, pa.int32()),
-        )
-        commit_values = pa.array([commit_sequence] * part.num_rows, pa.int64())
-        if SystemColumns.COMMIT in part.column_names:
-            commit_index = part.schema.get_field_index(SystemColumns.COMMIT)
-            part = part.set_column(
-                commit_index,
-                SystemColumns.COMMIT,
-                pc.coalesce(part[SystemColumns.COMMIT], commit_values),
-            )
-        else:
-            part = part.append_column(SystemColumns.COMMIT, commit_values)
-        parts.append(part)
+        parts.append(_resolved_version_columns(part, commit_sequence, generation))
 
     combined = parts[0] if len(parts) == 1 else pa.concat_tables(parts, promote_options="permissive")
     if all(name in combined.column_names for name in plan.primary_key):
@@ -478,6 +667,11 @@ class _ReadOperations:
     def list_shards(self, table: str) -> Sequence[_ReadableShard]:
         raise NotImplementedError
 
+    def _filesystem(self, table: str) -> PyFileSystem:
+        fs, _ = factory.url_to_fs(self.root)
+        handler = _NoReadAheadHandler(fs) if table in (BlobTables.DESCRIPTORS, BlobTables.PARTS) else _ShardHandler(fs)
+        return PyFileSystem(handler)
+
     def _read_plan(
         self,
         table: str,
@@ -487,9 +681,7 @@ class _ReadOperations:
         shards = tuple(self.list_shards(table))
         if not shards:
             return None
-        fs, _ = factory.url_to_fs(self.root)
-        handler = _BlobReadHandler(fs) if table in (BlobTables.DESCRIPTORS, BlobTables.PARTS) else FSSpecHandler(fs)
-        return _read_plan(PyFileSystem(handler), shards, self.primary_key(table), columns, where)
+        return _read_plan(self._filesystem(table), shards, self.primary_key(table), columns, where)
 
     def scan(
         self,
@@ -547,9 +739,8 @@ class _ReadOperations:
                 )
                 for shard in plan.shards
             ]
-            for merged in merge_deduplicated_rows(streams):
-                row = merged.row
-                if not _matches_filter(row, plan.post_dedup_where):
+            for row in merge_deduplicated_rows(streams):
+                if not all(clause.matches(row) for clause in plan.post_dedup_where):
                     continue
                 if columns is not None:
                     row = {name: row[name] for name in columns if name in row}
@@ -623,16 +814,22 @@ class _ReadOperations:
         if diagnostics is not None:
             diagnostics.descriptor_lookups += 1
         try:
-            shards = tuple(self.list_shards(BlobTables.DESCRIPTORS))
+            if not self.list_shards(BlobTables.DESCRIPTORS):
+                return None
+            primary_key = self.primary_key(BlobTables.DESCRIPTORS)
+            membership = [FilterClause(BlobColumns.NAME, "in", list(names))]
+            shards = tuple(
+                shard
+                for shard in self.list_shards(BlobTables.DESCRIPTORS)
+                if shard_may_contain(shard, primary_key, membership)
+            )
             if not shards:
                 return None
             if diagnostics is not None:
                 diagnostics.selected_shards += len(shards)
-            fs, _ = factory.url_to_fs(self.root)
-            filesystem = PyFileSystem(_BlobReadHandler(fs))
-            primary_key = self.primary_key(BlobTables.DESCRIPTORS)
+            filesystem = self._filesystem(BlobTables.DESCRIPTORS)
             # Read footers and matching rows together, with bounded concurrent decoding.
-            # Version resolution still spans every shard in the committed snapshot.
+            # Version resolution spans every shard whose key bounds can hold a requested name.
             with ThreadPoolExecutor(max_workers=min(MAX_DESCRIPTOR_READS, len(shards))) as executor:
                 parts = list(
                     executor.map(lambda shard: _blob_shard_descriptors(filesystem, primary_key, names, shard), shards)
@@ -681,17 +878,29 @@ class _ReadOperations:
 class ReadView(_ReadOperations):
     """A read-only archive view pinned to one commit token."""
 
-    def __init__(self, root: str, snapshot: ArchiveSnapshot | None = None) -> None:
+    def __init__(
+        self, root: str, snapshot: ArchiveSnapshot | None = None, *, cache_bytes: int = _READ_CACHE_BYTES
+    ) -> None:
         super().__init__()
+        if cache_bytes < 0:
+            raise ValueError("cache_bytes must be nonnegative")
         self.root = root
         self._layout = FineStoreLayout(self.root)
-        # The marker only distinguishes a v1 archive from an empty root: v1 archives have no
-        # HEAD, and read_snapshot validates the format version HEAD carries. A missing marker
-        # is expected under a lifecycle rule that expires write-once objects, and the next
-        # writer open recreates it.
-        validate_archive(self._layout)
         self._snapshot = snapshot or read_snapshot(self._layout)
         self._meta_cache: dict[str, TableMetadata] = {}
+        self._read_filesystem: PyFileSystem | None = None
+        self._cache_bytes = cache_bytes
+        self._filesystem_lock = threading.Lock()
+
+    def _filesystem(self, table: str) -> PyFileSystem:
+        if not self._cache_bytes:
+            return super()._filesystem(table)
+        with self._filesystem_lock:
+            if self._read_filesystem is None:
+                fs, _ = factory.url_to_fs(self.root)
+                shards = [shard for state in self._snapshot.manifest.tables.values() for shard in state.shards]
+                self._read_filesystem = PyFileSystem(_CachedReadHandler(fs, shards, self._cache_bytes))
+            return self._read_filesystem
 
     @property
     def token(self) -> CommitToken | None:

@@ -28,10 +28,8 @@ from marin.evaluation.evalchemy.runtime import (
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
 from marin.evaluation.lm_eval_samples import rebuild_lm_eval_samples, summarize_native_eval_samples
-from marin.evaluation.metric_selection import REPEAT_MEAN_SUFFIX, declared_metric
 from marin.evaluation.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
-    BenchmarkMetadataRef,
     EvalTaskRef,
     RunStatus,
     TaskCoverage,
@@ -126,31 +124,13 @@ class EvalchemyRunConfig:
 
 @dataclass(frozen=True)
 class EvalchemyOutcome:
-    """A completed FineStore archive, child job identity, coverage, and recovered partial-task metrics."""
+    """Validated evaluator metrics, sample coverage, and child job identity."""
 
     jobs: dict[str, str]
-    result: FineStoreEvalchemyResult
+    metrics: dict[str, dict[str, float]]
     coverage: dict[str, TaskCoverage]
-    recovered_metrics: dict[str, dict[str, float]]
     canonical_metrics: dict[str, dict[str, float]]
     tasks: tuple[EvalTaskRef, ...]
-
-
-def _apply_recovered_metrics(
-    metrics: dict[str, dict[str, float]], recovered_metrics: Mapping[str, dict[str, float]]
-) -> None:
-    """Replace affected leaf metrics and drop lm-eval group aggregates built from failed rows."""
-    group_children = {aggregate: {task for task in metrics if task.startswith(f"{aggregate}_")} for aggregate in metrics}
-    for task, recovered in recovered_metrics.items():
-        if recovered:
-            metrics[task] = recovered
-        else:
-            metrics.pop(task, None)
-    for aggregate, children in group_children.items():
-        if children & recovered_metrics.keys():
-            # The aggregate came from the original lm-eval result, which includes failed requests.
-            # Recovered leaves contain successful samples for the measurement adapter to roll up.
-            metrics.pop(aggregate, None)
 
 
 def _coverage_with_aggregate_counts(
@@ -184,40 +164,6 @@ def _coverage_with_aggregate_counts(
             n_unanswered=entry.n_unanswered,
         )
     return reconciled
-
-
-def _apply_recovered_canonical_metrics(
-    canonical_metrics: dict[str, dict[str, float]],
-    recovered_metrics: Mapping[str, dict[str, float]],
-    tasks: tuple[EvalTaskRef, ...],
-) -> None:
-    """Project recovered source metrics through the evaluator-recorded vocabulary."""
-    benchmarks: dict[str, BenchmarkMetadataRef] = {}
-    by_directory: dict[str, list[BenchmarkMetadataRef]] = {}
-    for task in tasks:
-        if task.benchmark is None:
-            continue
-        directory = eval_task_directory(task.name, task.num_fewshot, task.task_alias)
-        benchmarks[f"{directory}/{task.benchmark.task}"] = task.benchmark
-        by_directory.setdefault(directory, []).append(task.benchmark)
-    for task_key, recovered in recovered_metrics.items():
-        benchmark = benchmarks.get(task_key)
-        if benchmark is None and len(by_directory.get(task_key, ())) == 1:
-            benchmark = by_directory[task_key][0]
-        if benchmark is None:
-            canonical_metrics.pop(task_key, None)
-            continue
-        normalized: dict[str, float] = {}
-        for metric in benchmark.metrics:
-            picked = declared_metric(recovered, metric.source_name)
-            if picked is None and metric.source_name.endswith(REPEAT_MEAN_SUFFIX):
-                picked = declared_metric(recovered, metric.source_name.removesuffix(REPEAT_MEAN_SUFFIX))
-            if picked is not None:
-                normalized[metric.name] = picked[1]
-        if normalized:
-            canonical_metrics[task_key] = normalized
-        else:
-            canonical_metrics.pop(task_key, None)
 
 
 def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir: str) -> str:
@@ -350,7 +296,7 @@ def run_evalchemy(
     eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
     try:
         result = FineStoreEvalchemyResult(path=output_dir)
-        result.task_metrics()
+        metrics = result.task_metrics()
         summary = summarize_native_eval_samples(
             output_dir,
             tasks=config.tasks,
@@ -372,6 +318,34 @@ def run_evalchemy(
             jobs={_EVAL_JOB_ROLE: eval_job},
             log_tails={},
         ) from exc
+    coverage = _coverage_with_aggregate_counts(summary.coverage, metrics)
+    inconsistent_tasks = sorted(
+        task
+        for task, entry in coverage.items()
+        if entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR) and summary.scored_counts.get(task) != entry.n_scored
+    )
+    if inconsistent_tasks:
+        raise EvaluationError(
+            f"Evalchemy must aggregate the scored samples after infrastructure failures: {inconsistent_tasks}",
+            status=RunStatus.INFRA_FAILED,
+            jobs={_EVAL_JOB_ROLE: eval_job},
+            coverage=coverage,
+        )
+    if not metrics:
+        infrastructure_failures = sum(entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for entry in coverage.values())
+        if not infrastructure_failures:
+            raise EvaluationError(
+                f"eval finished but no task metrics were readable under {output_dir!r}",
+                status=RunStatus.ARTIFACT_FAILED,
+                jobs={_EVAL_JOB_ROLE: eval_job},
+                coverage=coverage,
+            )
+        raise EvaluationError(
+            f"eval finished with no successful inference responses under {output_dir!r}",
+            status=RunStatus.INFRA_FAILED,
+            jobs={_EVAL_JOB_ROLE: eval_job},
+            coverage=coverage,
+        )
     logger.info(
         "Evalchemy run %s wrote %d sample(s) to the finestore archive under %s, covering %d task(s)",
         config.name,
@@ -381,9 +355,8 @@ def run_evalchemy(
     )
     return EvalchemyOutcome(
         jobs={_EVAL_JOB_ROLE: eval_job},
-        result=result,
-        coverage=summary.coverage,
-        recovered_metrics=summary.recovered_metrics,
+        metrics=metrics,
+        coverage=coverage,
         canonical_metrics=summary.canonical_metrics,
         tasks=summary.tasks,
     )
@@ -413,32 +386,10 @@ class EvalchemyExecutor:
                 jobs=exc.jobs,
                 log_tails=exc.log_tails,
             ) from exc
-        metrics = outcome.result.task_metrics()
-        _apply_recovered_metrics(metrics, outcome.recovered_metrics)
-        coverage = _coverage_with_aggregate_counts(outcome.coverage, metrics)
-        canonical_metrics = dict(outcome.canonical_metrics)
-        _apply_recovered_canonical_metrics(canonical_metrics, outcome.recovered_metrics, outcome.tasks)
-        if not metrics:
-            infrastructure_failures = sum(
-                entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for entry in coverage.values()
-            )
-            if not infrastructure_failures:
-                raise EvaluationError(
-                    f"eval finished but no task metrics were readable under {output_dir!r}",
-                    status=RunStatus.ARTIFACT_FAILED,
-                    jobs=outcome.jobs,
-                    coverage=coverage,
-                )
-            raise EvaluationError(
-                f"eval finished with no successful inference responses under {output_dir!r}",
-                status=RunStatus.INFRA_FAILED,
-                jobs=outcome.jobs,
-                coverage=coverage,
-            )
         return EvaluationOutcome(
-            metrics=metrics,
-            canonical_metrics=canonical_metrics,
+            metrics=outcome.metrics,
+            canonical_metrics=outcome.canonical_metrics,
             tasks=outcome.tasks,
             jobs=outcome.jobs,
-            coverage=coverage,
+            coverage=outcome.coverage,
         )
