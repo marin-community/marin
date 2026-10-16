@@ -52,6 +52,41 @@ def loaded_release(connection: Connection, release_id: str) -> dict[str, Any]:
     return dict(row)
 
 
+def source_coverage(connection: Connection) -> dict[str, dict[str, Any]]:
+    """Read source sizes and leading subjects from the selected compact release."""
+    rows = connection.execute(
+        text(
+            """
+        SELECT s.source_id, (s.alignment->>'task_count')::bigint AS example_count,
+            s.alignment->>'intended_use' AS intended_use,
+            area.subject_id, area.node_id, area.name, area.instances
+        FROM curriculum_sources s JOIN curriculum_current c USING (load_id)
+        LEFT JOIN LATERAL (
+            SELECT n.subject_id, n.node_id, n.name, statistics.instances
+            FROM curriculum_statistics statistics JOIN curriculum_nodes n
+                USING (load_id, subject_id, node_id)
+            WHERE statistics.load_id=s.load_id AND statistics.source_id=s.source_id
+                AND statistics.metric='placement' AND n.kind='subject' AND statistics.instances>0
+            ORDER BY statistics.instances DESC, n.subject_id LIMIT 1
+        ) area ON TRUE
+        WHERE c.name='latest' AND s.alignment IS NOT NULL
+        """
+        )
+    ).mappings()
+    return {
+        row["source_id"]: {
+            "example_count": row["example_count"],
+            "intended_use": row["intended_use"],
+            "top_area": (
+                {key: row[key] for key in ("subject_id", "node_id", "name", "instances")}
+                if row["subject_id"] is not None
+                else None
+            ),
+        }
+        for row in rows
+    }
+
+
 SOURCES_SQL = """
 WITH selected_sources AS (
     SELECT s.*
