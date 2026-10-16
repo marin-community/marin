@@ -1,0 +1,171 @@
+{
+  "run_id": "sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce",
+  "source": "d6d6628f4cbf7a8bbf38b6803cc5a5b59dba12d9",
+  "terminal_physical_attempt": 1,
+  "terminal_kind": "priority_preempted",
+  "allocation_rows": [
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/0",
+      "attempt_id": "1",
+      "attempt_uid": "9ce0a6e91fa558c2",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792149468199",
+      "finished_at_ms": "1792152911517",
+      "node_name": "g538126",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/1",
+      "attempt_id": "1",
+      "attempt_uid": "9d40a554c1f46833",
+      "state": "10",
+      "exit_code": "137",
+      "started_at_ms": "1792149494952",
+      "finished_at_ms": "1792152911517",
+      "node_name": "g543ab2",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 3276721e-f521-49b8-adb6-aff051d015b5, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+    },
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/2",
+      "attempt_id": "1",
+      "attempt_uid": "cafd948bfdfc1b3b",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792149494952",
+      "finished_at_ms": "1792152911517",
+      "node_name": "g5b3bc4",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/3",
+      "attempt_id": "1",
+      "attempt_uid": "cc34dcaf530b20ce",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792149494952",
+      "finished_at_ms": "1792152911517",
+      "node_name": "g5b3dfe",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/4",
+      "attempt_id": "1",
+      "attempt_uid": "2830c7f101761282",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792149494952",
+      "finished_at_ms": "1792152911517",
+      "node_name": "g5ba762",
+      "terminal_reason": ""
+    }
+  ],
+  "allocated_h100_hours": 38.02128444444445,
+  "retained_partial_metrics": [
+    {
+      "trainer_global_step": 1,
+      "gradient_norm": 0.2482501119375229,
+      "optimizer_steps_applied": 1,
+      "optimizer_steps_skipped": 0,
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/preserved-controller-attempt1-through-20261016T121816/exports/training_metrics/train-00000001.json",
+      "source_last_modified_ms": 1792152273249,
+      "bytes": 19838,
+      "sha256": "86cd367f91aaff24671054bcf4eebc67720c8d4d312620adc8876cd5945c82ba",
+      "full_byte_readback_verified": true
+    },
+    {
+      "trainer_global_step": 2,
+      "gradient_norm": 0.16163474321365356,
+      "optimizer_steps_applied": 1,
+      "optimizer_steps_skipped": 0,
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/preserved-controller-attempt1-through-20261016T121816/exports/training_metrics/train-00000002.json",
+      "source_last_modified_ms": 1792152583249,
+      "bytes": 19874,
+      "sha256": "1cf5c7b5b6ee4880c436413a9d8c8bf672089f2f096fb1e4f805b13bbea44f0d",
+      "full_byte_readback_verified": true
+    },
+    {
+      "trainer_global_step": 3,
+      "gradient_norm": 0.22779333591461182,
+      "optimizer_steps_applied": 1,
+      "optimizer_steps_skipped": 0,
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/preserved-controller-attempt1-through-20261016T121816/exports/training_metrics/train-00000003.json",
+      "source_last_modified_ms": 1792152819604,
+      "bytes": 19949,
+      "sha256": "006c862f966b10ed36896401dfea438f04582de1088f274bc0eb9184dd709cdc",
+      "full_byte_readback_verified": true
+    }
+  ],
+  "partial_metric_checks_scope": "These three metric files record finite gradient norms and one applied optimizer step with zero skipped steps each. Complete physical response membership, token probability/noise/FlashAttention/checkpoint controls and all available original-response replays are not established by this partial check.",
+  "surviving_export_objects": 9,
+  "native_archive_inventory_entries": 420,
+  "controller_log_event_captures": 10,
+  "retained_controller_and_exports_record": "results/new_terminal_allocations_20261016T121816.json.gz",
+  "native_replacement_observation": {
+    "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T122319",
+    "physical_attempt": 2,
+    "rows": [
+      {
+        "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/0",
+        "attempt_id": "2",
+        "attempt_uid": "ee1cbe3d2529bfd9",
+        "state": "2",
+        "exit_code": "",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      },
+      {
+        "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/1",
+        "attempt_id": "2",
+        "attempt_uid": "d1d8df095f880499",
+        "state": "2",
+        "exit_code": "",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      },
+      {
+        "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/2",
+        "attempt_id": "2",
+        "attempt_uid": "4edaa689fdc05643",
+        "state": "2",
+        "exit_code": "",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      },
+      {
+        "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/3",
+        "attempt_id": "2",
+        "attempt_uid": "f6ea3be31d54d3ee",
+        "state": "2",
+        "exit_code": "",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      },
+      {
+        "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/4",
+        "attempt_id": "2",
+        "attempt_uid": "4d1f0b0fa6d8bf08",
+        "state": "2",
+        "exit_code": "",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      }
+    ],
+    "observation_time_utc": "2026-10-16 12:23 UTC"
+  },
+  "full_five_update_qualification_passed": false,
+  "full_original_response_replay_passed": false,
+  "noisy_tis_seed1_scientific_retry_admitted": false,
+  "checkpoint_recovery_qualified": false,
+  "remaining_gate": "All five native updates, complete clean evaluations at0/5, all32 checkpoint controls, runtime model/data/probability/noise/FlashAttention checks and complete original-grader replays of all new available-verdict responses. Physical preemptions and their partial outputs/costs remain separate."
+}

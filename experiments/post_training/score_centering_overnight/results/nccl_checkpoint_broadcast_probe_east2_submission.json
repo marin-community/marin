@@ -1,0 +1,170 @@
+{
+  "job_id": "/romain/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce",
+  "source": "57b0c60bb0a92f7fc22f258b05fff125ac1a9ff0",
+  "payload_sha256": "d1fefb7e33df9bd327a1c000628e76a399609986720c2c3bd8011533f0a05fde",
+  "plan_sha256": "dbd4b80a23ab23a3e882d03c6b6b28abd6c5ca67c6d65e3981e70abb780e0de3",
+  "resources": {
+    "cpu": 32,
+    "memory": "256GB",
+    "disk": "200GB",
+    "gpu": {
+      "variant": "H100",
+      "count": 2
+    },
+    "tasks": 1,
+    "priority": "batch"
+  },
+  "native_submission_confirmed": true,
+  "controller_resource_confirmation_pending": false,
+  "retained_preparation": [
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce/plan/nccl-checkpoint-broadcast-probe-east2-submission-plan.json",
+      "bytes": 15580,
+      "sha256": "dbd4b80a23ab23a3e882d03c6b6b28abd6c5ca67c6d65e3981e70abb780e0de3",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce/plan/nccl-checkpoint-broadcast-memory-probe-east2.py",
+      "bytes": 5455,
+      "sha256": "d1fefb7e33df9bd327a1c000628e76a399609986720c2c3bd8011533f0a05fde",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce/plan/submit-nccl-checkpoint-broadcast-probe-east2.py",
+      "bytes": 5004,
+      "sha256": "6e48ae4cf5648049cead1954604ff93c3436f9bc250ab023d1310b68870d56d8",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce/plan/prepare-nccl-checkpoint-broadcast-probe-east2.py",
+      "bytes": 5354,
+      "sha256": "0e974acc834330fead32570487c9e2986f07e3c45af7e68140a4990d011f4e76",
+      "full_byte_readback_verified": true
+    }
+  ],
+  "scientific_qualification_established": false,
+  "controller_task_and_resources": [
+    {
+      "job_id": "/romain/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce",
+      "job_state": "3",
+      "num_tasks": "1",
+      "priority_band": "3",
+      "bundle_id": "edb7afd04966bf3edf3ef30562dd35125b147eddf113de6b3f7f08ea71fdb095",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_cpu_millicores": "32000",
+      "res_memory_bytes": "274877906944",
+      "res_disk_bytes": "214748364800",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 2}}",
+      "task_id": "/romain/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "a3cceb24d4680d24",
+      "task_state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    }
+  ],
+  "published_plan_commit": "8b4977f63ef08917aba4ed7b66f4eeec1afa8bfc",
+  "physically_requested_h100s": 2,
+  "nccl_ranks": 2,
+  "original_rno_fresh_retirement_guard": [
+    {
+      "job_id": "/romain/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce",
+      "job_state": "3",
+      "num_tasks": "1",
+      "priority_band": "3",
+      "bundle_id": "edb7afd04966bf3edf3ef30562dd35125b147eddf113de6b3f7f08ea71fdb095",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_cpu_millicores": "32000",
+      "res_memory_bytes": "274877906944",
+      "res_disk_bytes": "214748364800",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+      "task_id": "/romain/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "8417262e2803b3ea",
+      "task_state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    }
+  ],
+  "original_rno_retirement": {
+    "job_id": "/romain/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce",
+    "controller_terminal_rows": [
+      {
+        "job_id": "/romain/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce",
+        "job_state": "6",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "edb7afd04966bf3edf3ef30562dd35125b147eddf113de6b3f7f08ea71fdb095",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "274877906944",
+        "res_disk_bytes": "214748364800",
+        "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}",
+        "task_id": "/romain/sc-core-runtime-nccl-broadcast-probe-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "8417262e2803b3ea",
+        "task_state": "6",
+        "exit_code": "",
+        "started_at_ms": "",
+        "finished_at_ms": "1792153277152",
+        "node_name": "",
+        "terminal_reason": ""
+      }
+    ],
+    "allocated_h100_hours": 0.0,
+    "retired_after_replacement_resource_confirmation": true,
+    "fresh_unallocated_guard_before_cancellation": true
+  },
+  "confirmation_recorded_at_utc": "2026-10-16T12:21:20.480491+00:00",
+  "scope": "Provider/allocation replacement of a still-unallocated engineering-only communication probe. One BATCH task requests two H100s for the same two-rank experiment on source57 and exact Torch cf30153. The original eight-H100 RNO task was freshly unallocated and then retired after replacement task/resource confirmation, with zero allocated cost. No model, optimizer, scientific replicate, memory-root-cause result or checkpoint-recovery qualification is established.",
+  "retained_native_evidence_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce/native-evidence/manifest.json",
+    "bytes": 12200,
+    "sha256": "480e68ab2a9cae8e8c5df2914ae9db21476ff11467bac19d840a5a2a0749f11a",
+    "full_byte_readback_verified": true
+  },
+  "retained_native_evidence_files": 22,
+  "retained_native_evidence_bytes": 262739,
+  "all_native_evidence_full_byte_readback_verified": true,
+  "latest_queue_observation": {
+    "task_observation_time_utc": "2026-10-16 12:28 UTC",
+    "task_rows": [
+      {
+        "task_id": "/romain/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "a3cceb24d4680d24",
+        "state": "2",
+        "exit_code": "",
+        "started_at_ms": "",
+        "finished_at_ms": "",
+        "node_name": "",
+        "terminal_reason": ""
+      }
+    ],
+    "provider_observation_time_utc": "2026-10-16 12:33 UTC",
+    "provider_pod_status": {
+      "pod_name": "iris-romain-sc-core-runtime-nccl-br-b24a36e4-0-a3cceb24d4680d24",
+      "task_id": "romain.sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce.0",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload pod-iris-romain-sc-core-runtime-nccl-br-b24a36e4-0-a3cceb24d4680d24-d44a0: queue=cw-use02a-lq; QuotaReserved (Pending): couldn't assign flavors to pod set main: insufficient unused quota for nvidia.com/gpu in flavor cw-tas, 2 more needed, insufficient unused quota for rdma/ib in flavor cw-tas, 2 more needed",
+      "last_transition": {
+        "epoch_ms": "1792153214000"
+      },
+      "node_name": ""
+    },
+    "retained_manifest": {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce/queue-observation-20261016T123348/manifest.json",
+      "bytes": 1770,
+      "sha256": "f5e2d1c66ae8675661ffb7681cedc75d9f0307342d37deba65026a1c1c22aafb",
+      "full_byte_readback_verified": true
+    },
+    "scope": "Unallocated queue state only; no probe result or source failure."
+  }
+}
