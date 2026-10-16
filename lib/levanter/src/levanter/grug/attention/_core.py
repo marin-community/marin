@@ -33,6 +33,7 @@ GrugAttentionImplementation = Literal[
     "gpu_fa4_cute",
     "gpu_fa4_cute_sm100",  # Native forward, one-block backward; opt-in SM100 D128 GQA.
     "gpu_pallas_triton_flash",  # Pallas-Triton flash kernel with block skipping; for AMD (ROCm) GPUs.
+    "gpu_aiter_flash",  # AMD AITER flash attention via the optional jax_aiter package; gfx950 only.
 ]
 
 
@@ -458,6 +459,12 @@ def attention(
         if not isinstance(mask, AttentionMask):
             raise NotImplementedError("gpu_pallas_triton_flash needs an AttentionMask, not a dense mask or None.")
         return pallas_triton_flash_attention(q, k, v, mask)
+    if implementation == "gpu_aiter_flash":
+        from levanter.grug.attention._amd_aiter_flash import aiter_flash_attention  # noqa: PLC0415
+
+        if not isinstance(mask, AttentionMask):
+            raise NotImplementedError("gpu_aiter_flash needs an AttentionMask, not a dense mask or None.")
+        return aiter_flash_attention(q, k, v, mask)
     if implementation == "tpu_splash":
         if isinstance(mask, jax.Array):
             raise NotImplementedError("Dense masks are not supported for splash attention.")
