@@ -586,8 +586,9 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_sequence_sharded_que
     pytest.importorskip("cutlass")
     pytest.importorskip("cutlass.cute")
     pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
-    # Multiple query tiles exercise offset bounds in both forward and backward kernels.
-    seq_len = 512
+    # Each balanced query block must span multiple query tiles at CP4 to exercise offset bounds in both
+    # forward and backward kernels.
+    seq_len = 2048
     if sequence_axes == ("context",):
         mesh = compact_grug_mesh(replica_axis_size=1, context_axis_size=context_size)
         batch_axes = ("replica_dcn", "data", "expert")
@@ -610,7 +611,9 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_sequence_sharded_que
     q = jax.random.normal(q_key, (batch, seq_len, q_heads, head_dim), dtype=jnp.bfloat16)
     k = jax.random.normal(k_key, (batch, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
     v = jax.random.normal(v_key, (batch, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
-    segment_ids = jnp.broadcast_to(jnp.array([[11] * 213 + [12] * 291 + [-1] * 8], dtype=jnp.int32), (batch, seq_len))
+    segment_ids = jnp.broadcast_to(
+        jnp.array([[11] * 213 + [12] * (seq_len - 221) + [-1] * 8], dtype=jnp.int32), (batch, seq_len)
+    )
     mask = AttentionMask.causal(sliding_window=129 if mask_kind != "causal" else None)
     if mask_kind == "packed":
         mask = mask.with_segment_ids(segment_ids)
