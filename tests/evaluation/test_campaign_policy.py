@@ -13,12 +13,16 @@ from marin.evaluation.campaign_policy import (
 )
 from marin.evaluation.eval_policy import policy_violations, runtime_violations
 from marin.evaluation.evalchemy.config import load_evalchemy_config
+from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.harbor import driver_config
+from marin.evaluation.hardware import Platform
 from marin.evaluation.model_config import load_model_config
 from marin.evaluation.records import EvalRef, EvalTaskRef, HarborRef, ModelConfigRef, ModelRef
+from marin.evaluation.runner import LaunchProvenance
 from marin.external_dependencies import EVALCHEMY
 
 from experiments.evaluation.evals import EvalchemyDefinition
+from experiments.evaluation.launch import LaunchSpec, build_evaluation_batch
 
 CAMPAIGN_ROOT = Path(__file__).resolve().parents[2] / "experiments/evaluation/campaigns/eval-campaign-09-25"
 CAMPAIGN = CAMPAIGNS[OCTOBER_16_VERSION]
@@ -153,6 +157,39 @@ def test_campaign_rejects_runtime_and_source_drift():
     assert runtime_violations(OCTOBER_16_VERSION, evaluation, "evalchemy@" + "0" * 40)
     changed = evaluation.model_copy(update={"source_digest": "sha256:" + "0" * 64})
     assert policy_violations(OCTOBER_16_VERSION, model, changed)
+
+
+def test_campaign_uses_benchmark_runtime_pin_without_changing_other_evaluators(monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    model = load_model_config(CAMPAIGN_ROOT / "model-configs/Qwen-Qwen3.6-35B-A3B.yaml")
+    spec = LaunchSpec(
+        model=model,
+        evals=(),
+        evalchemy_definitions=tuple(
+            EvalchemyDefinition(name, CAMPAIGN_ROOT / f"evalchemy-configs/{name}.yaml")
+            for name in ("humanevalplus", "mbppplus")
+        ),
+        harbor_definitions=(),
+        platform=Platform.GPU,
+        accelerator=None,
+        limit=None,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=0,
+        version=OCTOBER_16_VERSION,
+    )
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="test", launch_host="test"), "test")
+    runtimes = {}
+    for evaluation in batch.evaluations:
+        assert isinstance(evaluation.executor, EvalchemyExecutor)
+        runtime = evaluation.executor.config.runtime.requirement
+        assert evaluation.identity.eval_runtime == runtime
+        assert runtime_violations(OCTOBER_16_VERSION, evaluation.identity.eval_ref, runtime) == ()
+        runtimes[evaluation.identity.eval_ref.name] = runtime
+    assert CAMPAIGN.runtimes["evalchemy:humanevalplus"] in runtimes["humanevalplus"]
+    assert CAMPAIGN.runtimes["evalchemy"] in runtimes["mbppplus"]
+    assert runtime_violations(OCTOBER_16_VERSION, batch.evaluations[0].identity.eval_ref, runtimes["mbppplus"])
 
 
 @pytest.mark.parametrize("mechanism", ["evalchemy", "harbor"])

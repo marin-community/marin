@@ -92,8 +92,11 @@ import sys
 from marin.evaluation.campaign_policy import CAMPAIGNS
 from marin.evaluation.harbor.driver_config import harbor_runtime_project
 CAMPAIGN = CAMPAIGNS[sys.argv[1]]
-print(CAMPAIGN.runtimes["harbor"], CAMPAIGN.runtimes["evalchemy"], harbor_runtime_project(CAMPAIGN.runtimes["harbor"]))
-' "$version"
+evalchemy_pin = CAMPAIGN.runtimes["evalchemy"]
+if len(sys.argv) == 3:
+    evalchemy_pin = CAMPAIGN.runtimes.get(f"evalchemy:{sys.argv[2]}", evalchemy_pin)
+print(CAMPAIGN.runtimes["harbor"], evalchemy_pin, harbor_runtime_project(CAMPAIGN.runtimes["harbor"]))
+' "$version" "${selected_evalchemy_names[@]}"
   )
   export CAMPAIGN_SHA_HARBOR CAMPAIGN_SHA_EVALCHEMY HARBOR_RUNTIME_PROJECT
 fi

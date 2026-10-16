@@ -260,13 +260,13 @@ def policy_violations(version: str | None, model: ModelRef, evaluation: EvalRef)
 
 
 def runtime_violations(version: str | None, evaluation: EvalRef, runtime: str) -> tuple[str, ...]:
-    """Require approved evaluator pins, including the October 5 disk-full recovery."""
+    """Require the benchmark-specific or shared evaluator pin approved by its policy."""
     if version not in POLICIES:
         return ()
     commits = RUNTIME_COMMITS.get(version)
     if commits is None:
         return (f"missing evaluator pins for {version}",)
-    commit = commits.get(evaluation.mechanism)
+    commit = commits.get(f"{evaluation.mechanism}:{evaluation.name}", commits.get(evaluation.mechanism))
     if commit is None:
         return (f"missing {evaluation.mechanism} evaluator pin for {version}",)
     if commit not in runtime:

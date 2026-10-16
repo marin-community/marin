@@ -2,7 +2,8 @@
   "schema_version": 1,
   "runtimes": {
     "harbor": "79ea96fb37928223137bf52a82d7feee247a2af9",
-    "evalchemy": "c2548fe6d556bdec26be0be0e7e09cf423c325a1"
+    "evalchemy": "c2548fe6d556bdec26be0be0e7e09cf423c325a1",
+    "evalchemy:humanevalplus": "a595ac68bbad95b72f4c09503d2acf7261042f19"
   },
   "native32k_locations": [
     "inclusionAI/Ling-lite-1.5",

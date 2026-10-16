@@ -193,12 +193,14 @@ def _resolve_definitions(
     harbor_commit = runtime_commits.get("harbor")
     harbor_project = HARBOR_RUNTIME_PROJECT if harbor_commit is None else harbor_runtime_project(harbor_commit)
     validated_configs = iter(preflight_harbor_configs(requests, runtime_project=harbor_project))
-    evalchemy_commit = runtime_commits.get("evalchemy", EVALCHEMY.commit)
-    evalchemy_dependency = replace(EVALCHEMY, commit=evalchemy_commit)
 
     resolved: list[tuple[str, _ResolvedDefinition]] = []
     for name, definition in definitions:
         if isinstance(definition, EvalchemyDefinition):
+            evalchemy_commit = runtime_commits.get(
+                f"evalchemy:{name}", runtime_commits.get("evalchemy", EVALCHEMY.commit)
+            )
+            evalchemy_dependency = replace(EVALCHEMY, commit=evalchemy_commit)
             source = next(evalchemy_sources)
             config = definition.config_for(source, model, limit, evalchemy_dependency)
             if seed is not None:
