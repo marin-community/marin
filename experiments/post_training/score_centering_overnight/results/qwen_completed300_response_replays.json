@@ -1,10 +1,10 @@
 {
   "scope": "Complete original-grader replay gates for selected native300-update Qwen mains. Other native audits remain valid but their full original-response replays are pending. This is not an independent verifier.",
   "planned_arms": 18,
-  "completed_arms": 12,
-  "physical_records": 2999808,
-  "actual_original_grade_replays": 2999789,
-  "native_failures_without_original_response": 19,
+  "completed_arms": 13,
+  "physical_records": 3249792,
+  "actual_original_grade_replays": 3249768,
+  "native_failures_without_original_response": 24,
   "grade_discrepancies": 0,
   "runs": [
     {
@@ -410,6 +410,81 @@
       "record_payloads_sha256": "ebdf065a89df74cbd7ab135974e5858a9c22cff8d487a36640457ce74d244617",
       "report": "sc-qwen-transfer-advantages-tis-s2-main-rno-a1-01a126ce-regrading.json.gz",
       "report_sha256": "f51b94bb15bcc1d209b55a980ea89fa88f9b3c7b004edabd1e018b17e2ecb62a"
+    },
+    {
+      "run_id": "sc-qwen-transfer-curriculum-tis-s1-main-interactive-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "completed_updates": 300,
+      "physical_records": 249984,
+      "actual_original_grade_replays": 249979,
+      "native_failures_not_regraded": [
+        {
+          "mismatch": false,
+          "native_error": true,
+          "native_quality": null,
+          "phase": "train",
+          "quality": 0.0,
+          "reason": "Native execution failure; attempted response may be removed and replaced by a masked placeholder.",
+          "record_id": "6412cdae638b91008f67d0b000d1ceddc3d6b3e08dae243fa65f1c4bf49869ec",
+          "replayed": false,
+          "source_row": 9566,
+          "step": 89
+        },
+        {
+          "mismatch": false,
+          "native_error": true,
+          "native_quality": null,
+          "phase": "train",
+          "quality": 0.0,
+          "reason": "Native execution failure; attempted response may be removed and replaced by a masked placeholder.",
+          "record_id": "18028b2db1927d5d5b4e0bf0d4c454ae1875646f8835cd43426ceaac56275ada",
+          "replayed": false,
+          "source_row": 9566,
+          "step": 89
+        },
+        {
+          "mismatch": false,
+          "native_error": true,
+          "native_quality": null,
+          "phase": "train",
+          "quality": 0.0,
+          "reason": "Native execution failure; attempted response may be removed and replaced by a masked placeholder.",
+          "record_id": "527e7dd3ab548bc8964c9e768bfa3eb30ccb0c5b47d823ada50e71a3155cb1ab",
+          "replayed": false,
+          "source_row": 5440,
+          "step": 136
+        },
+        {
+          "mismatch": false,
+          "native_error": true,
+          "native_quality": null,
+          "phase": "train",
+          "quality": 0.0,
+          "reason": "Native execution failure; attempted response may be removed and replaced by a masked placeholder.",
+          "record_id": "6009245504b45735ed7271c5d6f660d0735073f5bbadec9ad2a1cd2c24033c97",
+          "replayed": false,
+          "source_row": 5440,
+          "step": 136
+        },
+        {
+          "mismatch": false,
+          "native_error": true,
+          "native_quality": null,
+          "phase": "train",
+          "quality": 0.0,
+          "reason": "Native execution failure; attempted response may be removed and replaced by a masked placeholder.",
+          "record_id": "45f3a6e86dbccf290afda6965e63c54de6353923e6fb02aa05876bcfa9260388",
+          "replayed": false,
+          "source_row": 6590,
+          "step": 207
+        }
+      ],
+      "grade_discrepancies": 0,
+      "evaluation_points_crosschecked": 16,
+      "all_replayed_evaluations_match_native": true,
+      "record_payloads_sha256": "0fdb8c9d235ed2d4194b174983418899fc1b1819f63d4250edf11946076ffb04",
+      "report": "sc-qwen-transfer-curriculum-tis-s1-main-interactive-a1-01a126ce-regrading.json.gz",
+      "report_sha256": "e4dd9b1aa49bc9b0a3091d866c6b78ab7086da84a8abd7f0193a8348b2e180c5"
     }
   ]
 }

@@ -1,0 +1,246 @@
+{
+  "scope": "Complete native1200 and final checkpoint/control gates for three Qwen batching TIS seeds. Twelve older response records admitted only after unique complete serialized-field equality to actual current rollout groups; original group bytes durably preserved and fullSHA read back. Four native rollout-timeout placeholders retain their full original error records and zero treatment; available original responses remain subject to full frozen original-grader replays. No numerical tolerance, grading deadline or scientific recipe changed.",
+  "runs": [
+    {
+      "run_id": "sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "545b0bbffe46c4ab868c411860fca88a467ec9c847823a7058a20285079d8e76",
+      "controller_attempt": 10,
+      "controller_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce/0",
+          "attempt_id": "10",
+          "attempt_uid": "3463cdd5fcd7a150",
+          "state": "4",
+          "exit_code": "0",
+          "started_at_ms": "1792067871914",
+          "finished_at_ms": "1792107060349",
+          "node_name": "g5b3dfe",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce/1",
+          "attempt_id": "10",
+          "attempt_uid": "9e045356b7a1f638",
+          "state": "4",
+          "exit_code": "0",
+          "started_at_ms": "1792067877447",
+          "finished_at_ms": "1792107066818",
+          "node_name": "g779de0",
+          "terminal_reason": ""
+        }
+      ],
+      "native_audit_report": "sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce.json.gz",
+      "native_audit_report_sha256": "76ca5b3fffd6a772e9df1f566d4ee654b9526928a60e5b5871ae183b90140e18",
+      "completed_updates": 1200,
+      "physical_records": 222132,
+      "available_original_responses": 222131,
+      "native_failures_without_original_response": 1,
+      "native_failure_summary": [
+        {
+          "record_id": "867b6458a102bdaeabf0b7c435101ef515af0b581dec680995c2fad1987c3873",
+          "phase": "train",
+          "step": 485,
+          "instance_id": "3877",
+          "repetition_id": 3,
+          "kind": "AgentTimeoutError",
+          "record_payload_sha256": "f3f43268a6882b408cc2ed9f3c34e781f43f2a157d350420371d25868093bcd5"
+        }
+      ],
+      "verified_reused_records": 5,
+      "verified_reused_records_report": "batching_tis_s0_verified_reused_native_records.json",
+      "verified_reused_records_report_sha256": "d755a90852e90a4fa7554dd83217d859254f6f933e498beff2d5a8310c1f47f8",
+      "evaluation_points": 61,
+      "evaluation_membership_sha256": "1a4924ffa53747f29ff9dd0d1ecd046cd214a66adcac4f46570a4e0efa1bb6df",
+      "final_checkpoint_control_report": "qwen_batching_tis1200_final_checkpoint_controls.json.gz",
+      "native_audit_passed": true,
+      "final_checkpoint_controls_passed": true,
+      "original_response_replay_passed": false,
+      "retained_observation_evidence": {
+        "native_errors": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce/qualification-observations/native1200-audit/original-native-error-records.json.gz",
+          "bytes": 2061,
+          "sha256": "a33282dc2978a0c07e946e467e1f9499c3a3c3b9458b15d11ec8a7fc024f172a",
+          "full_readback_verified": true
+        },
+        "complete_cache_manifest": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce/qualification-observations/native1200-audit/complete-native-cache-manifest.json",
+          "bytes": 10607225,
+          "sha256": "bacfe93cb9285d64019a342d85c7ee70e2e39f488ed028a19817fe7f2e0c93d5",
+          "full_readback_verified": true
+        },
+        "initial_count_audit_failure": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce/qualification-observations/native1200-audit/initial-count-audit-failure.log",
+          "bytes": 792,
+          "sha256": "a6311ee59450b25485979af9562f3965912b96fccfc686e8f23c285836357f91",
+          "full_readback_verified": true
+        }
+      }
+    },
+    {
+      "run_id": "sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "0ecd14f75404a2382b9ca05ea5384878f545b568d32b6745e345959491756b02",
+      "controller_attempt": 13,
+      "controller_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce/0",
+          "attempt_id": "13",
+          "attempt_uid": "a08fa387ad4fd510",
+          "state": "4",
+          "exit_code": "0",
+          "started_at_ms": "1792071671962",
+          "finished_at_ms": "1792108786522",
+          "node_name": "gb95a00",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce/1",
+          "attempt_id": "13",
+          "attempt_uid": "3d783bbc6e6fa2d2",
+          "state": "4",
+          "exit_code": "0",
+          "started_at_ms": "1792071676966",
+          "finished_at_ms": "1792108798594",
+          "node_name": "gb95a50",
+          "terminal_reason": ""
+        }
+      ],
+      "native_audit_report": "sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce.json.gz",
+      "native_audit_report_sha256": "6e71f707abca3edafa0a5dfb460e940f32ada427d6dc66d7e879ede817b81c1b",
+      "completed_updates": 1200,
+      "physical_records": 222132,
+      "available_original_responses": 222130,
+      "native_failures_without_original_response": 2,
+      "native_failure_summary": [
+        {
+          "record_id": "53363148871d35a2a0f2864bf455d40c505b7e2da8bad744d9b636b85922b973",
+          "phase": "train",
+          "step": 1085,
+          "instance_id": "8677",
+          "repetition_id": 2,
+          "kind": "AgentTimeoutError",
+          "record_payload_sha256": "22be5915c6f57a32319f201b5013ec830ef0e43e389205e9cbe608e9558b9b63"
+        },
+        {
+          "record_id": "0f88e53bf42f1f2c84041aa3fdfb4e0868c48d86c50b47c3d00b9e2ce3060f34",
+          "phase": "train",
+          "step": 357,
+          "instance_id": "2848",
+          "repetition_id": 3,
+          "kind": "AgentTimeoutError",
+          "record_payload_sha256": "77b51d53b45a7d970af37d27046b088568d1f8258ed7f92ee21d4dfe7b1c0981"
+        }
+      ],
+      "verified_reused_records": 5,
+      "verified_reused_records_report": "batching_tis_s1_verified_reused_native_records.json",
+      "verified_reused_records_report_sha256": "d207c8625eca2bf060327f941e9ee0a446057868b4fe3d07ec4f7eb055f6c44a",
+      "evaluation_points": 61,
+      "evaluation_membership_sha256": "1a4924ffa53747f29ff9dd0d1ecd046cd214a66adcac4f46570a4e0efa1bb6df",
+      "final_checkpoint_control_report": "qwen_batching_tis1200_final_checkpoint_controls.json.gz",
+      "native_audit_passed": true,
+      "final_checkpoint_controls_passed": true,
+      "original_response_replay_passed": false,
+      "retained_observation_evidence": {
+        "native_errors": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce/qualification-observations/native1200-audit/original-native-error-records.json.gz",
+          "bytes": 2684,
+          "sha256": "aa6750bfb82ab7a0bc9f92024aae0f55aa371490096753a965ca31dae4e9a1fe",
+          "full_readback_verified": true
+        },
+        "complete_cache_manifest": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce/qualification-observations/native1200-audit/complete-native-cache-manifest.json",
+          "bytes": 10007303,
+          "sha256": "33d380e48c18e85cbcc68c830eb1b36f41cabc3b867382b0c0f1c6db490100c3",
+          "full_readback_verified": true
+        },
+        "initial_count_audit_failure": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce/qualification-observations/native1200-audit/initial-count-audit-failure.log",
+          "bytes": 792,
+          "sha256": "a6311ee59450b25485979af9562f3965912b96fccfc686e8f23c285836357f91",
+          "full_readback_verified": true
+        }
+      }
+    },
+    {
+      "run_id": "sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "b0b17c8bdd2fed083c1ab41c8f2fe270a747cac316164cb48ff310283b1cd189",
+      "controller_attempt": 14,
+      "controller_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce/0",
+          "attempt_id": "14",
+          "attempt_uid": "901b73870fdcdae7",
+          "state": "4",
+          "exit_code": "0",
+          "started_at_ms": "1792071240131",
+          "finished_at_ms": "1792108592772",
+          "node_name": "gb95eb0",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce/1",
+          "attempt_id": "14",
+          "attempt_uid": "b5148e40376c5f62",
+          "state": "4",
+          "exit_code": "0",
+          "started_at_ms": "1792071224387",
+          "finished_at_ms": "1792108592772",
+          "node_name": "gb95f50",
+          "terminal_reason": ""
+        }
+      ],
+      "native_audit_report": "sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce.json.gz",
+      "native_audit_report_sha256": "6222aaefc560a0d8094649da25ab9a081b76fda8e3609b25eab4128410a16d29",
+      "completed_updates": 1200,
+      "physical_records": 222132,
+      "available_original_responses": 222131,
+      "native_failures_without_original_response": 1,
+      "native_failure_summary": [
+        {
+          "record_id": "cdde090f95ae0250cb7196617d5d2848f2024172aba0c203853efe345b338178",
+          "phase": "train",
+          "step": 385,
+          "instance_id": "3072",
+          "repetition_id": 3,
+          "kind": "AgentTimeoutError",
+          "record_payload_sha256": "2029757e8c1a044a92fe40f0bb64edd4300731eca763145aee0247aaf9ea7433"
+        }
+      ],
+      "verified_reused_records": 2,
+      "verified_reused_records_report": "batching_tis_s2_verified_reused_native_records.json",
+      "verified_reused_records_report_sha256": "ea0ef3d5cc372099242e7facb4113451c7891ab37cd6a5b8acf5e9fb13fa9891",
+      "evaluation_points": 61,
+      "evaluation_membership_sha256": "1a4924ffa53747f29ff9dd0d1ecd046cd214a66adcac4f46570a4e0efa1bb6df",
+      "final_checkpoint_control_report": "qwen_batching_tis1200_final_checkpoint_controls.json.gz",
+      "native_audit_passed": true,
+      "final_checkpoint_controls_passed": true,
+      "original_response_replay_passed": false,
+      "retained_observation_evidence": {
+        "native_errors": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce/qualification-observations/native1200-audit/original-native-error-records.json.gz",
+          "bytes": 2120,
+          "sha256": "9734e240a21535ca9b45d7e764c98803ce997501d4b37a8b08ab5601c2ddb9ef",
+          "full_readback_verified": true
+        },
+        "complete_cache_manifest": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce/qualification-observations/native1200-audit/complete-native-cache-manifest.json",
+          "bytes": 10363878,
+          "sha256": "89f89258ae050f73b717615117bd4ec8d29d066ac30b85d9bdab36935831a62b",
+          "full_readback_verified": true
+        },
+        "initial_count_audit_failure": {
+          "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce/qualification-observations/native1200-audit/initial-count-audit-failure.log",
+          "bytes": 792,
+          "sha256": "a6311ee59450b25485979af9562f3965912b96fccfc686e8f23c285836357f91",
+          "full_readback_verified": true
+        }
+      }
+    }
+  ],
+  "total_physical_records": 666396,
+  "available_original_responses": 666392,
+  "native_failures_without_original_response": 4,
+  "original_response_replays_pending": 3
+}

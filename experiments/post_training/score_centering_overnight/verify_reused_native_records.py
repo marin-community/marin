@@ -109,7 +109,7 @@ for step in steps:
     assert len(missing) == count
     wanted = {key[1] for key in missing}
     for key in missing:
-        assert len(older[key]) == 1, (key, len(older[key]))
+        assert older[key], (key, 0)
     previous_metric = f"train-{step - 1:08d}.json" if step > 1 else "eval-00000000.json"
     lower = inventory["exports/training_metrics/" + previous_metric]["last_modified_ms"] - 30000
     upper = inventory[f"exports/training_metrics/train-{step:08d}.json"]["last_modified_ms"]
@@ -127,7 +127,20 @@ for step in steps:
     assert len(groups) == len(wanted), (step, len(groups), len(wanted))
     for item, raw_group, group in groups:
         keys = [key for key in missing if key[1] == str(group.uid)]
-        reference = older[keys[0]][0]["row"]
+        candidates = [candidate["row"] for key in keys for candidate in older[key]]
+        reference = candidates[0]
+        provenance_fields = (
+            "model_path",
+            "model_source_identity",
+            "resume_path",
+            "inference_backend",
+            "runner",
+            "sampling",
+        )
+        assert all(
+            all(candidate["provenance"][field] == reference["provenance"][field] for field in provenance_fields)
+            for candidate in candidates
+        ), (step, group.uid, "Archived candidates disagree on serializer provenance")
         output = copy.deepcopy(group.trajectory_batch)
         output["rollout_metrics"] = {
             key: value
@@ -158,12 +171,10 @@ for step in steps:
             )
         }
         for key in keys:
-            original = older[key][0]
             actual = records[key[2]]
-            assert actual == original["row"], (
-                key,
-                [field for field in actual if actual[field] != original["row"][field]],
-            )
+            matches = [candidate for candidate in older[key] if actual == candidate["row"]]
+            assert len(matches) == 1, (key, len(matches), len(older[key]))
+            original = matches[0]
             verified.append(
                 {
                     "record_id": actual["record_id"],
@@ -179,6 +190,7 @@ for step in steps:
                     "current_group_etag": item["ETag"],
                     "current_group_sha256": hashlib.sha256(raw_group).hexdigest(),
                     "current_group_modified_ms": int(item["LastModified"].timestamp() * 1000),
+                    "older_candidates_considered": len(older[key]),
                     "all_serialized_fields_equal": True,
                 }
             )

@@ -1,0 +1,71 @@
+{
+  "run_id": "sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "archive_after_ms": 1792071224387,
+  "scope": "Existing original record IDs only, re-derived with the frozen native serializer from actual selected-attempt rollout groups; every serialized field equals the older archived record. No synthetic record IDs or inferred response content.",
+  "verified_reused_records": [
+    {
+      "record_id": "22c89e5065aa950879e825d1f01d506671f2c8b0dbb1fe47e7ba6b7b432f09e2",
+      "phase": "train",
+      "step": 1,
+      "instance_id": "6",
+      "repetition_id": 2,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/994f8eaf33e6755b5b5686e1c82057b40e6586f8fb1cd0379270ca24fc3b74cb.zip",
+      "archive_etag": "\"165b66598992270be62caf7f181166c8\"",
+      "archive_modified_ms": 1792023977853,
+      "record_payload_sha256": "0517d81ce71d0bbd4bbfe942994c675d5e9d61604897369ae2a07e2087abaf85",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce/groups/e9183d5839414287b6cdce1f8e845922.pkl",
+      "current_group_etag": "\"233b1a91e0c7df32e35a0719b799b0d7\"",
+      "current_group_sha256": "59bd92df1e461dfe8ffd2e54e634d2699be27b5efd4252c0618a88899e0d7e39",
+      "current_group_modified_ms": 1792072135180,
+      "older_candidates_considered": 5,
+      "all_serialized_fields_equal": true,
+      "durable_current_group_bytes": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce/qualification-observations/native1200-audit/reused-groups/59bd92df1e461dfe8ffd2e54e634d2699be27b5efd4252c0618a88899e0d7e39.pkl",
+        "bytes": 1666843,
+        "sha256": "59bd92df1e461dfe8ffd2e54e634d2699be27b5efd4252c0618a88899e0d7e39",
+        "full_readback_verified": true
+      }
+    },
+    {
+      "record_id": "161c40888c07e6327915c239aadc000dce024b3307f530b88d96722e9910631d",
+      "phase": "train",
+      "step": 8,
+      "instance_id": "57",
+      "repetition_id": 2,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000008/68e74db80e752e39c2f1c9aea5d6f32279c44eefb292ce2cf1a9db602c0052ab.zip",
+      "archive_etag": "\"7dac9946f4ab7078a73335bd0ffbd539\"",
+      "archive_modified_ms": 1792031799365,
+      "record_payload_sha256": "4b0aa0c15299188b163fc25a97a54916808f59765b82ac6d851a71d56919d096",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce/groups/d03ba2d0b8e847b6b312387bd063ff26.pkl",
+      "current_group_etag": "\"2330db2b6cea5649ce863812d7ea105e\"",
+      "current_group_sha256": "4dd8a16fdee5e95dd8c4a783cdc8cadd0d4ba99a3a930cb3f7228a9379bc329d",
+      "current_group_modified_ms": 1792072246963,
+      "older_candidates_considered": 5,
+      "all_serialized_fields_equal": true,
+      "durable_current_group_bytes": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce/qualification-observations/native1200-audit/reused-groups/4dd8a16fdee5e95dd8c4a783cdc8cadd0d4ba99a3a930cb3f7228a9379bc329d.pkl",
+        "bytes": 987105,
+        "sha256": "4dd8a16fdee5e95dd8c4a783cdc8cadd0d4ba99a3a930cb3f7228a9379bc329d",
+        "full_readback_verified": true
+      }
+    }
+  ],
+  "physical_budget_checks": [
+    {
+      "step": 1,
+      "new_records": 31,
+      "declared_duplicate_records": 1,
+      "verified_existing_records": 1,
+      "physical_responses": 32
+    },
+    {
+      "step": 8,
+      "new_records": 31,
+      "declared_duplicate_records": 1,
+      "verified_existing_records": 1,
+      "physical_responses": 32
+    }
+  ],
+  "all_verified": true
+}

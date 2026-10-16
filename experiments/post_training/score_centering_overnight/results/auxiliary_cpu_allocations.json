@@ -668,15 +668,13 @@
       "physical_records": 38552,
       "actual_original_grade_calls": 38552,
       "native_failure_placeholders": 0
-    }
-  ],
-  "active_allocations": [
+    },
     {
       "job_id": "/romain/score-grader-qwen-curriculum-tis-s1-a1-01a126ce",
       "cluster": "cw-rno2a",
-      "controller_row": {
+      "task_attempt": {
         "job_id": "/romain/score-grader-qwen-curriculum-tis-s1-a1-01a126ce",
-        "job_state": "3",
+        "job_state": "4",
         "num_tasks": "1",
         "priority_band": "3",
         "bundle_id": "0122c5f06f75d8c9c90647e0c290f2ca388b7ecdc682bab9bb436002a6c8962c",
@@ -688,22 +686,27 @@
         "task_id": "/romain/score-grader-qwen-curriculum-tis-s1-a1-01a126ce/0",
         "attempt_id": "0",
         "attempt_uid": "6387987111bee87e",
-        "task_state": "3",
-        "exit_code": "",
+        "task_state": "4",
+        "exit_code": "0",
         "started_at_ms": "1792106232168",
-        "finished_at_ms": "",
+        "finished_at_ms": "1792112767512",
         "node_name": "gb95f20",
         "terminal_reason": ""
       },
       "requested_cpu": 32,
       "requested_memory": "64GB",
       "requested_disk": "50GB",
+      "controller_accelerator_spec": {},
+      "allocated_cpu_hours": 58.091946666666665,
       "allocated_h100_hours": 0,
-      "terminal_cost_pending": true,
-      "role": "Full native300 Qwen curriculum TISseed1 original-grader replay after worker failure",
-      "output_prefix": "marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-curriculum-tis-s1-a1-01a126ce",
-      "replaces_failed_cpu_job": "/romain/score-grader-qwen-curriculum-tis-s1-a0-01a126ce"
-    },
+      "role": "Completed full native300 Qwen original-grader replay",
+      "full_response_replay_passed": true,
+      "physical_records": 249984,
+      "actual_original_grade_calls": 249979,
+      "native_failure_placeholders": 5
+    }
+  ],
+  "active_allocations": [
     {
       "job_id": "/romain/score-grader-qwen-optimizer-sc-s1-a0-01a126ce",
       "cluster": "cw-rno2a",
@@ -736,8 +739,74 @@
       "role": "Full original-grader replay of recovered local main300 cohort",
       "output_prefix": "marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-optimizer-sc-s1-a0-01a126ce",
       "replaces_local_manager_pid": null
+    },
+    {
+      "job_id": "/romain/score-grader-qwen-optimizer-sc-s2-a0-01a126ce",
+      "cluster": "cw-rno2a",
+      "controller_row": {
+        "job_id": "/romain/score-grader-qwen-optimizer-sc-s2-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "c3baff9079e487fbeab153853fa4eb084cf9bd8cf58a479dc1ddf567178dc9bf",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-optimizer-sc-s2-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "0f9b68efa5464107",
+        "task_state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792113614542",
+        "finished_at_ms": "",
+        "node_name": "gb95f20",
+        "terminal_reason": ""
+      },
+      "requested_cpu": 32,
+      "requested_memory": "64GB",
+      "requested_disk": "50GB",
+      "allocated_h100_hours": 0,
+      "terminal_cost_pending": true,
+      "role": "Full original-grader replay of recovered local main300 cohort",
+      "output_prefix": "marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-optimizer-sc-s2-a0-01a126ce",
+      "replaces_local_manager_pid": null
+    },
+    {
+      "job_id": "/romain/score-grader-qwen-pilot-advantages-tis-s0-a0-01a126ce",
+      "cluster": "cw-rno2a",
+      "controller_row": {
+        "job_id": "/romain/score-grader-qwen-pilot-advantages-tis-s0-a0-01a126ce",
+        "job_state": "3",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "95fd5a495d47523692e80e874042504613e471bb16aad57aa7a90d4eb225d028",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-pilot-advantages-tis-s0-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "bda15eadd2369727",
+        "task_state": "3",
+        "exit_code": "",
+        "started_at_ms": "1792113614542",
+        "finished_at_ms": "",
+        "node_name": "g1cc6b2",
+        "terminal_reason": ""
+      },
+      "requested_cpu": 32,
+      "requested_memory": "64GB",
+      "requested_disk": "50GB",
+      "allocated_h100_hours": 0,
+      "terminal_cost_pending": true,
+      "role": "Full original-grader replay of recovered local pilot40 cohort",
+      "output_prefix": "marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-pilot-advantages-tis-s0-a0-01a126ce",
+      "replaces_local_manager_pid": null
     }
   ],
-  "total_terminal_allocated_cpu_hours": 781.815595,
+  "total_terminal_allocated_cpu_hours": 839.9075416666667,
   "total_allocated_h100_hours": 0
 }
