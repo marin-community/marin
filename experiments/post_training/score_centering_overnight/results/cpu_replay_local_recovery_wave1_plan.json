@@ -141,7 +141,34 @@
         "node_name": "g1cc6b2",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+      "status": "Controllerexit0;complete native40 pilot original-grade/evaluation count+quality gates passed.",
+      "full_response_replay_passed": true,
+      "terminal_controller": {
+        "job_id": "/romain/score-grader-qwen-pilot-advantages-sc-s0-a0-01a126ce",
+        "job_state": "4",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "7a3dba283d7be19075ea8094008c11865f57c8ed7c1d24435ff3b15115e7059f",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-pilot-advantages-sc-s0-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "7278ebf941a31313",
+        "task_state": "4",
+        "exit_code": "0",
+        "started_at_ms": "1792107967782",
+        "finished_at_ms": "1792109016927",
+        "node_name": "g1cc6b2",
+        "terminal_reason": ""
+      },
+      "allocated_cpu_hours": 9.325733333333334,
+      "physical_records": 38552,
+      "actual_original_grade_calls": 38552,
+      "native_failure_placeholders": 0,
+      "completed_report": "sc-qwen-transfer-advantages-sc-s0-pilot-a4-01a126ce-regrading.json.gz"
     }
   ],
   "total_requested_cpu": 64,
@@ -150,9 +177,11 @@
   "maximum_archive_io_workers": 4,
   "native_bundle_validation_passed": true,
   "local_manager_loss_evidence": "qwen_local_replay_manager_loss_20261015.json",
-  "status": "Both recovered local cohorts controller-running32CPU/64GiB/50GiB BATCH each,64hostCPU/zeroGPU total. OptimizerSCseed1 native300 requires249984records;advantagesSCseed0 native40pilot requires38552. Same qualified source0212/original data/graders/lock/packages/runner/deadlines. All native bundle/spec inputs durably retained/fullSHA read back. Full original-grade and native count/quality gates pending. Prior local2partial discrepancies remain unresolved; new qualified runner durably retains each discrepancy as found. Further waves follow bounded archive download gates.",
+  "status": "The advantages SC seed0 pilot passed all 38,552 original grades and all three native evaluation count and quality checks. The optimizer SC seed1 full300 replay remains controller-running; its latest retained progress reports 114,688 records and zero differences. The two differences from the lost local manager remain historical unresolved observations until the complete replacement replay finishes. All archive downloads are complete; no further training was submitted.",
   "resource_board_ids": [
     1082,
     1083
-  ]
+  ],
+  "archive_downloads_complete": true,
+  "archive_downloads_evidence": "cpu-wave-status-20261016T0001-local-recovery-wave1.json"
 }

@@ -2546,8 +2546,8 @@
       "configuration_sha256": "545b0bbffe46c4ab868c411860fca88a467ec9c847823a7058a20285079d8e76",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "99f2dff5b9e1210604a44fce202ce785adbc6cbc02593082cb2286d193149ab6",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
@@ -2563,8 +2563,8 @@
       "configuration_sha256": "0ecd14f75404a2382b9ca05ea5384878f545b568d32b6745e345959491756b02",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "9da91873a1df15af792b551f6a16ce8459f7cdcb26eea200a5c0b19ccac7e30b",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
@@ -2580,8 +2580,8 @@
       "configuration_sha256": "b0b17c8bdd2fed083c1ab41c8f2fe270a747cac316164cb48ff310283b1cd189",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "3f8f3991b425a649120fd9b19fb9e32e18c5ebfe255628bdf124f1690bd12626",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
@@ -2963,7 +2963,24 @@
       "priority_band": 3,
       "bundle_id": "0ba88c27a8b02a10f6609896d2e1d75827619fa7ff6390b4ba6b810b0f3c4b4b",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "h100_nodes": 5,
+      "h100_per_node": 8,
+      "source": "26cc99a426737309a60a490ce219138f8cae4818",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_checkpoint_memory_diagnostic_v1/restore5-detach.yaml",
+      "configuration_sha256": "4c5abd9fdc53bec0e77dc7dc069b7880ef30f0084a552042a23c6bf297fb474d",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-checkpoint-memory-restore5-noise005-sc-s0-a0-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "475c0520c5412658a35f4acd4e77fcc26ad7080f4c526100ac7af23b439b837b",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-15T23:30:51.999347+00:00"
+  "observed_at": "2026-10-16T00:53:46.535373+00:00"
 }

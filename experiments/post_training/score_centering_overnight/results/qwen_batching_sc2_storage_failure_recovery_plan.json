@@ -13,7 +13,7 @@
   "prepare_configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_terminal_recovery_v2/batching-sc-s2-prepare.yaml",
   "all_scientific_fields_unchanged": true,
   "actual_changes": "Fresh run-owned ID and output/archive/group/Ray namespaces only; same frozen source,seed2,model,data,noise,loss,optimizer,batching,capture and1200-update horizon.",
-  "status": "Latest recorded native progress was physical7 with0published updates at its23:06 observation;full1200 endpoint remains pending. Earlier physical2 retained219interrupted updates. Exact export/nativearchive/controller snapshots through6 are retained;bulk raw2/3/4 is now complete and raw5/6 is copying. All source/recipe/grader/checkpoint-cadence fields remain unchanged.",
+  "status": "Latest recorded native progress was physical7 at23:06;full1200 endpoint remains pending. Earlier physical2 retained219interrupted updates. All export/nativearchive/controller snapshots and bulk raw for replacement physical0..6 are now complete. Source/recipe/grader/checkpoint-cadence fields remain unchanged.",
   "submission_confirmed": true,
   "old_retention_ledger": {
     "present": false
@@ -130,8 +130,8 @@
   "current_progress_observation": "2026-10-15T23:05:56.307537+00:00",
   "additional_terminal_preemption_h100_hours": 40.557317777777776,
   "latest_preemption_controller_evidence": "new_terminal_allocations_20261015T2301.json.gz",
-  "latest_preemption_raw_retention_complete": false,
-  "latest_preemption_raw_report": null,
+  "latest_preemption_raw_retention_complete": true,
+  "latest_preemption_raw_report": "new_terminal_runtime_20261015T2301.json.gz",
   "replacement_terminal_preemption_h100_hours": 43.06866888888889,
   "surviving_interrupted_partial": {
     "controller_attempt": 2,
@@ -141,7 +141,5 @@
     "scope": "Exact interrupted allocation only; not a final1200 endpoint.",
     "bulk_raw_retention_evidence": "new_terminal_runtime_20261015T2229.json.gz"
   },
-  "pending_raw_retention_batches": [
-    "new_terminal_runtime_20261015T2301.json.gz"
-  ]
+  "pending_raw_retention_batches": []
 }
