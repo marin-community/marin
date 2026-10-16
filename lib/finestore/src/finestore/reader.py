@@ -15,7 +15,7 @@ from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, closing
 from dataclasses import dataclass, replace
-from typing import BinaryIO, ClassVar, Protocol
+from typing import BinaryIO, ClassVar, Protocol, TypeVar, cast
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -107,6 +107,7 @@ class _ScanProfile:
 _TABLE_SCAN_PROFILE = _ScanProfile(batch_rows=16_384, batch_readahead=16, fragment_readahead=4)
 _BLOB_DESCRIPTOR_SCAN_PROFILE = _ScanProfile(batch_rows=64, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
 _BLOB_PART_SCAN_PROFILE = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
+_ArrowRows = TypeVar("_ArrowRows", pa.Table, pa.RecordBatch)
 
 
 @dataclass(frozen=True)
@@ -363,29 +364,22 @@ def _resolved_shard_batches(
     shard: _ReadableShard, batches: Iterable[pa.RecordBatch]
 ) -> Generator[pa.RecordBatch, None, None]:
     for batch in batches:
-        commit_index = batch.schema.get_field_index(SystemColumns.COMMIT)
-        if commit_index < 0:
-            batch = batch.append_column(
-                SystemColumns.COMMIT, pa.array([shard.commit_sequence] * batch.num_rows, type=pa.int64())
-            )
-        elif batch.column(commit_index).null_count:
-            batch = batch.set_column(
-                commit_index,
-                SystemColumns.COMMIT,
-                pc.fill_null(batch.column(commit_index), shard.commit_sequence),
-            )
-        generation_index = batch.schema.get_field_index(SystemColumns.GENERATION)
-        if generation_index < 0:
-            batch = batch.append_column(
-                SystemColumns.GENERATION, pa.array([shard.generation] * batch.num_rows, type=pa.int32())
-            )
-        elif batch.column(generation_index).null_count:
-            batch = batch.set_column(
-                generation_index,
-                SystemColumns.GENERATION,
-                pc.fill_null(batch.column(generation_index), shard.generation),
-            )
-        yield batch
+        yield _resolved_version_columns(batch, shard.commit_sequence, shard.generation)
+
+
+def _resolved_version_columns(rows: _ArrowRows, commit_sequence: int, generation: int) -> _ArrowRows:
+    """Fill missing version coordinates without changing the Arrow row container type."""
+    result: pa.Table | pa.RecordBatch = rows
+    for name, value, data_type in (
+        (SystemColumns.GENERATION, generation, pa.int32()),
+        (SystemColumns.COMMIT, commit_sequence, pa.int64()),
+    ):
+        index = result.schema.get_field_index(name)
+        if index < 0:
+            result = result.append_column(name, pa.array([value] * result.num_rows, type=data_type))
+        elif result.column(index).null_count:
+            result = result.set_column(index, name, pc.fill_null(result.column(index), value))
+    return cast(_ArrowRows, result)
 
 
 def iter_shard_rows(
@@ -501,27 +495,7 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None, *, scan_profile: 
                 fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
                 use_threads=False,
             ).to_table()
-        generation_values = pa.array([generation] * part.num_rows, pa.int32())
-        if SystemColumns.GENERATION in part.column_names:
-            generation_index = part.schema.get_field_index(SystemColumns.GENERATION)
-            part = part.set_column(
-                generation_index,
-                SystemColumns.GENERATION,
-                pc.coalesce(part[SystemColumns.GENERATION], generation_values),
-            )
-        else:
-            part = part.append_column(SystemColumns.GENERATION, generation_values)
-        commit_values = pa.array([commit_sequence] * part.num_rows, pa.int64())
-        if SystemColumns.COMMIT in part.column_names:
-            commit_index = part.schema.get_field_index(SystemColumns.COMMIT)
-            part = part.set_column(
-                commit_index,
-                SystemColumns.COMMIT,
-                pc.coalesce(part[SystemColumns.COMMIT], commit_values),
-            )
-        else:
-            part = part.append_column(SystemColumns.COMMIT, commit_values)
-        parts.append(part)
+        parts.append(_resolved_version_columns(part, commit_sequence, generation))
 
     combined = parts[0] if len(parts) == 1 else pa.concat_tables(parts, promote_options="permissive")
     if all(name in combined.column_names for name in plan.primary_key):

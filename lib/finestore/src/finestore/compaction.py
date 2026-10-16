@@ -60,9 +60,9 @@ def _sorted_buffer(
 def _compaction_groups(
     batches: Iterator[pa.RecordBatch], schema: pa.Schema, primary_key: tuple[str, ...]
 ) -> Iterator[tuple[pa.Table, int]]:
-    """Keep the newest version seen per key in each bounded Arrow buffer.
+    """Yield sorted rows and the count of superseded rows for each accumulator flush.
 
-    A key may recur in a later buffer; read paths resolve those versions.
+    A key may recur in a later output shard; read paths resolve those versions.
     """
     pending: dict[tuple, tuple[tuple[int, int, int], pa.Table]] = {}
     pending_bytes = superseded = 0

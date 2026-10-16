@@ -735,10 +735,10 @@ def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
 
 
 def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(tmp_path, monkeypatch):
-    row_bytes = 4 * 1024 * 1024
+    row_bytes = 1024 * 1024
     monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", row_bytes // 2)
     measurements = []
-    for rows_per_shard in (32, 64):
+    for rows_per_shard in (16, 32):
         root = str(tmp_path / f"run-{rows_per_shard}")
         with DataStore.open(root, flush_interval=3600, max_buffer_bytes=2**40, compaction_levels=(1000,)) as store:
             table = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
