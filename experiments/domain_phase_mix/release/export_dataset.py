@@ -197,7 +197,8 @@ NOTES = {
 }
 RELEASE_NOTES = [
     "observation_id is a training run's W&B run id in the public project marin-community/marin, whose logs are at "
-    "wandb.ai/marin-community/marin/runs/<observation_id>. One training run has one id in every table that holds it, "
+    "wandb.ai/marin-community/marin/runs/<observation_id>. Where a run's W&B logging stopped before training ended, "
+    "the tables hold the final evaluation the run saved. One training run has one id in every table that holds it, "
     "and run_sets lists its memberships, so pool tables by observation_id.",
     "mixture_id hashes a row's weights rounded to 1e-9; exposure_id hashes its weights, pool fractions and the "
     "partition revision.",
