@@ -779,6 +779,89 @@ def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(
     assert measurements[1] <= measurements[0] + 4 * row_bytes, measurements
 
 
+def test_compaction_does_not_prefetch_all_compressed_row_groups(tmp_path):
+    row_bytes = 1024 * 1024
+    input_shards = 4
+    probe = textwrap.dedent(
+        """
+        import base64
+        import hashlib
+        import json
+        import random
+        import resource
+        import sys
+
+        from finestore import shard_writer
+        from finestore.compaction import compact_table
+        from finestore.layout import OnConflict
+        from finestore.reader import ReadView
+        from finestore.store import DataStore
+
+        root, mode = sys.argv[1:3]
+        rows_per_shard, row_bytes, input_shards = map(int, sys.argv[3:6])
+        shard_writer.ROW_GROUP_TARGET_BYTES = row_bytes // 2
+        if mode == 'prepare':
+            # Close compacts writer shards itself. Flush the fixture and stop
+            # maintenance, then let this child exit with four readable inputs.
+            store = DataStore.open(root, flush_interval=3600, max_buffer_bytes=2**40,
+                                   compaction_levels=(1000,))
+            table = store.table('samples', primary_key=('id',), on_conflict=OnConflict.SUPERSEDE)
+            expected = []
+            for revision in range(input_shards):
+                for index in range(rows_per_shard):
+                    raw = random.Random(1729 + revision * 1000 + index).randbytes(row_bytes * 3 // 4)
+                    doc = base64.b64encode(raw).decode()
+                    table.append({'id': index, 'revision': revision, 'doc': doc})
+                    if revision == input_shards - 1:
+                        expected.append({'id': index, 'revision': revision,
+                                         'sha256': hashlib.sha256(doc.encode()).hexdigest()})
+                store.flush()
+            store.request_stop()
+            print(json.dumps(expected))
+            sys.exit(0)
+
+        assert len(ReadView(root).list_shards('samples')) == input_shards
+        result = compact_table(root, 'samples')
+        # This fresh child has never materialized the fixture or output table.
+        # Arrow's memory pool does not account for its compressed-file cache.
+        peak_rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == 'darwin' else 1024)
+        rows = ReadView(root).scan('samples').to_pylist()
+        actual = [{'id': row['id'], 'revision': row['revision'],
+                   'sha256': hashlib.sha256(row['doc'].encode()).hexdigest()} for row in rows]
+        print(json.dumps({'peak_rss_bytes': peak_rss_bytes,
+                          'written': result.written, 'superseded': result.superseded,
+                          'rows': sorted(actual, key=lambda row: row['id'])}))
+    """
+    )
+    measurements = []
+    for rows_per_shard in (32, 64):
+        arguments = [str(tmp_path / f"run-{rows_per_shard}"), str(rows_per_shard), str(row_bytes), str(input_shards)]
+        prepared = subprocess.run(
+            [sys.executable, "-c", probe, arguments[0], "prepare", *arguments[1:]],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=50,
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", probe, arguments[0], "compact", *arguments[1:]],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=50,
+        )
+        result = json.loads(completed.stdout)
+        assert result["written"] == rows_per_shard
+        assert result["superseded"] == (input_shards - 1) * rows_per_shard
+        assert result["rows"] == json.loads(prepared.stdout)
+        measurements.append(result["peak_rss_bytes"])
+    # Budget compressed, Arrow, Python and writer copies per input cursor,
+    # plus equal allocator/pipeline slack. Doubling file bytes must fit this
+    # fixed allowance; prefetching all extra compressed groups needs ~96 MiB.
+    rss_growth_budget = input_shards * row_bytes * (4 + 4)
+    assert measurements[1] <= measurements[0] + rss_growth_budget, measurements
+
+
 def test_typed_on_disk_metadata(tmp_path):
     # The three on-disk contracts are typed pydantic objects with clear owners: the store stamps the
     # archive-wide metadata at open, the per-table metadata at registration, and the seal marker at
