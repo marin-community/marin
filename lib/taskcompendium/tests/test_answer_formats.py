@@ -70,7 +70,7 @@ def specification() -> TaskSpec:
         (JsonAnswer(), '{"answer":"12"}', Outcome.GRADED, 1.0),
         (JsonAnswer(), '{"answer":"13"}', Outcome.GRADED, 0.0),
         (JsonAnswer(), '{"answer":"12"', Outcome.SUBMISSION_FAILURE, 0.0),
-        (JsonAnswer(), '{"answer":12}', Outcome.SUBMISSION_FAILURE, 0.0),
+        (JsonAnswer(), '{"answer":[12]}', Outcome.SUBMISSION_FAILURE, 0.0),
     ],
 )
 def test_answer_formats_distinguish_wrong_and_malformed_submissions(
@@ -100,6 +100,40 @@ def test_boxed_format_grades_the_last_balanced_box_or_the_whole_message(specific
     )
     result = grade_answer(task, _attempt(task, _reply(response)))
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
+
+
+# A whole-reply fence around a numeric answer, the shape some models emit under JsonAnswer.
+FENCED_NUMBER_REPLY = '```json\n{"answer": 42}\n```'
+EXPECT_42 = NumericSpec("42", tolerance_abs=0.0, tolerance_rel=0.0)
+
+
+@pytest.mark.parametrize(
+    "answer_type,spec,response,status,reward",
+    [
+        (AnswerType.NUMBER, EXPECT_42, FENCED_NUMBER_REPLY, Outcome.GRADED, 1.0),
+        (AnswerType.NUMBER, EXPECT_42, '{"answer": 42}', Outcome.GRADED, 1.0),
+        (AnswerType.NUMBER, EXPECT_42, '{"answer": 41.5}', Outcome.GRADED, 0.0),
+        (AnswerType.NUMBER, EXPECT_42, '```json\n{"answer": "42"}\n```', Outcome.GRADED, 1.0),
+        (AnswerType.TEXT, ExactSpec(expected=("12",)), '```json\n{"answer": "12"}\n```', Outcome.GRADED, 1.0),
+        (
+            AnswerType.NUMBER,
+            NumericSpec("1", tolerance_abs=0.0, tolerance_rel=0.0),
+            '{"answer": true}',
+            Outcome.SUBMISSION_FAILURE,
+            0.0,
+        ),
+        (AnswerType.TEXT, ExactSpec(expected=("42",)), FENCED_NUMBER_REPLY, Outcome.SUBMISSION_FAILURE, 0.0),
+        (AnswerType.NUMBER, EXPECT_42, f"The answer is below.\n{FENCED_NUMBER_REPLY}", Outcome.SUBMISSION_FAILURE, 0.0),
+    ],
+)
+def test_json_answer_accepts_enclosing_fence_and_number_for_numeric_task(
+    specification, answer_type, spec, response, status, reward
+):
+    task = _revised(
+        specification, answer_type=answer_type, answer_format=JsonAnswer(), grader=verifyit_package(spec).grader
+    )
+    result = grade_answer(task, _attempt(task, _reply(response)))
+    assert (result.status, result.reward) == (status, reward)
 
 
 def test_plain_text_rejects_tool_call_evidence(specification):
@@ -181,6 +215,24 @@ def test_json_value_rejects_ambiguous_and_nonfinite_submissions(specification, c
     )
     result = grade_answer(task, _attempt(task, _reply(content)))
     assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+
+
+@pytest.mark.parametrize(
+    "content,status,reward",
+    [
+        ('```json\n{"value": 16, "nested": [true, null]}\n```', Outcome.GRADED, 1.0),
+        ('Here it is:\n```json\n{"value": 16, "nested": [true, null]}\n```', Outcome.SUBMISSION_FAILURE, 0.0),
+    ],
+)
+def test_json_value_unwraps_only_a_fence_enclosing_the_reply(specification, content, status, reward):
+    task = _revised(
+        specification,
+        answer_type=AnswerType.JSON,
+        answer_format=JsonValueAnswer(),
+        grader=verifyit_package(StructuredExactSpec(expected={"value": 16, "nested": [True, None]})).grader,
+    )
+    result = grade_answer(task, _attempt(task, _reply(content)))
+    assert (result.status, result.reward) == (status, reward)
 
 
 def test_incompatible_answer_format_and_grader_cannot_form_chat_request(specification):

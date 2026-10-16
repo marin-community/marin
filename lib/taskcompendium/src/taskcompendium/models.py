@@ -28,7 +28,7 @@ from shellbox.machine import PackageSpec, UnsupportedMachineSpec
 from verifyit.candidate import candidate_spec
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
-from verifyit.modes.extract import extract_boxed
+from verifyit.modes.extract import extract_boxed, unwrap_fence
 from verifyit.spec import (
     DEFAULT_OUTPUT,
     DEFAULT_WORKSPACE,
@@ -724,8 +724,8 @@ class BaseAnswerFormat(BaseModel, ABC):
         return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
 
     @abstractmethod
-    def extract(self, attempt: GradingAttempt) -> Submission:
-        """Read the agent's submission without access to expected values."""
+    def extract(self, attempt: GradingAttempt, answer_type: AnswerType) -> Submission:
+        """Read the agent's submission for the task's answer type without access to expected values."""
 
 
 class PlainText(BaseAnswerFormat):
@@ -734,7 +734,7 @@ class PlainText(BaseAnswerFormat):
     kind: Literal["plain_text"] = "plain_text"
     submission_types = (TextSubmission,)
 
-    def extract(self, attempt: GradingAttempt) -> TextSubmission:
+    def extract(self, attempt: GradingAttempt, answer_type: AnswerType) -> TextSubmission:
         return TextSubmission(_text_answer(attempt.conversation.events[-1]))
 
 
@@ -744,7 +744,7 @@ class Boxed(BaseAnswerFormat):
     kind: Literal["boxed"] = "boxed"
     submission_types = (TextSubmission,)
 
-    def extract(self, attempt: GradingAttempt) -> TextSubmission:
+    def extract(self, attempt: GradingAttempt, answer_type: AnswerType) -> TextSubmission:
         text = _text_answer(attempt.conversation.events[-1])
         boxed = extract_boxed(text)
         return TextSubmission(text if boxed is None else boxed)
@@ -754,25 +754,43 @@ ANSWER_CALL_NAME = "submit_answer"
 ANSWER_FIELD = "answer"
 
 
+def _unwrap_enclosing_fence(content: str) -> str:
+    """The body of a Markdown code fence that encloses the whole reply, else the reply itself."""
+    text = content.strip()
+    if text.startswith("```") and text.endswith("```"):
+        return unwrap_fence(text)
+    return text
+
+
 class JsonAnswer(BaseAnswerFormat):
-    """The string ``answer`` field of a JSON object in the final assistant message."""
+    """The ``answer`` field of a JSON object in the final assistant message.
+
+    A Markdown code fence enclosing the whole message is unwrapped first. The answer is a nonempty
+    string; a number task also accepts a JSON number, extracted as its string form.
+    """
 
     kind: Literal["json_answer"] = "json_answer"
     submission_types = (TextSubmission,)
 
-    def extract(self, attempt: GradingAttempt) -> TextSubmission:
+    def extract(self, attempt: GradingAttempt, answer_type: AnswerType) -> TextSubmission:
         try:
-            value = decode_json_value(_text_answer(attempt.conversation.events[-1]))
+            value = decode_json_value(_unwrap_enclosing_fence(_text_answer(attempt.conversation.events[-1])))
         except ValueError as error:
             raise SubmissionFailure("JSON submission is malformed") from error
         answer = value.get(ANSWER_FIELD) if isinstance(value, dict) else None
+        # decode_json_value rejects nonfinite numbers, so any number here is finite.
+        if answer_type == AnswerType.NUMBER and isinstance(answer, int | float) and not isinstance(answer, bool):
+            return TextSubmission(str(answer))
         if not isinstance(answer, str) or not answer.strip():
             raise SubmissionFailure("JSON submission requires a nonempty string answer")
         return TextSubmission(answer)
 
 
 class JsonValueAnswer(BaseAnswerFormat):
-    """The complete final assistant message parsed as one JSON value."""
+    """The complete final assistant message parsed as one JSON value.
+
+    A Markdown code fence enclosing the whole message is unwrapped first.
+    """
 
     kind: Literal["json_value"] = "json_value"
     submission_types = (JsonSubmission,)
@@ -780,9 +798,11 @@ class JsonValueAnswer(BaseAnswerFormat):
     def supports(self, answer_type: AnswerType) -> bool:
         return answer_type == AnswerType.JSON
 
-    def extract(self, attempt: GradingAttempt) -> JsonSubmission:
+    def extract(self, attempt: GradingAttempt, answer_type: AnswerType) -> JsonSubmission:
         try:
-            return JsonSubmission(decode_json_value(_text_answer(attempt.conversation.events[-1])))
+            return JsonSubmission(
+                decode_json_value(_unwrap_enclosing_fence(_text_answer(attempt.conversation.events[-1])))
+            )
         except ValueError as error:
             raise SubmissionFailure("JSON value submission is malformed") from error
 
@@ -793,7 +813,7 @@ class AnswerCall(BaseAnswerFormat):
     kind: Literal["answer_call"] = "answer_call"
     submission_types = (TextSubmission,)
 
-    def extract(self, attempt: GradingAttempt) -> TextSubmission:
+    def extract(self, attempt: GradingAttempt, answer_type: AnswerType) -> TextSubmission:
         response = attempt.conversation.events[-1]
         if (
             not isinstance(response, AssistantToolCalls)
@@ -842,7 +862,7 @@ class FinalAction(BaseAnswerFormat):
                 call.object_arguments()
         return response
 
-    def extract(self, attempt: GradingAttempt) -> ActionSubmission:
+    def extract(self, attempt: GradingAttempt, answer_type: AnswerType) -> ActionSubmission:
         return ActionSubmission(self.validate_final_message(attempt.conversation.events[-1]))
 
 
