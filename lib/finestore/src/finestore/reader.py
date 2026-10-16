@@ -323,7 +323,8 @@ def iter_shard_batches(
         fragment_readahead=scan_profile.fragment_readahead,
         fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
     ).to_reader() as batches:
-        yield from _resolved_shard_batches(shard, batches)
+        for batch in batches:
+            yield _resolved_version_columns(batch, shard.commit_sequence, shard.generation)
 
 
 def iter_shard_row_groups(
@@ -348,13 +349,6 @@ def iter_shard_row_groups(
         ).to_table()
         if group.num_rows:
             yield _resolved_version_columns(group, shard.commit_sequence, shard.generation)
-
-
-def _resolved_shard_batches(
-    shard: _ReadableShard, batches: Iterable[pa.RecordBatch]
-) -> Generator[pa.RecordBatch, None, None]:
-    for batch in batches:
-        yield _resolved_version_columns(batch, shard.commit_sequence, shard.generation)
 
 
 def _resolved_version_columns(rows: _ArrowRows, commit_sequence: int, generation: int) -> _ArrowRows:
