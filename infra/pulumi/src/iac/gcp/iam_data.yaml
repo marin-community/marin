@@ -1456,6 +1456,12 @@ secrets:
   - role: roles/secretmanager.secretAccessor
     members:
     - serviceAccount:iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
+- secret: iris-principal-directory
+  grants:
+  - role: roles/secretmanager.secretAccessor
+    members:
+    - serviceAccount:iris-controller@hai-gcp-models.iam.gserviceaccount.com
+    - serviceAccount:iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
 - secret: iris-marin-dev-signing-key
   grants:
   - role: roles/secretmanager.secretAccessor
