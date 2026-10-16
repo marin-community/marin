@@ -8,7 +8,7 @@ import pyarrow.parquet as pq
 from marin.rl.nemotron_pivot import VALIDATION_FILENAME
 from marin.rl.pass_rates import PASS_RATES_FILENAME
 
-from experiments.post_training.pivotrl.mixed_rlvr import ROUTE_COLUMN, domain_weights, mix_routes
+from experiments.post_training.pivotrl.mixed_rlvr import ROUTE_COLUMN, Route, domain_weights, mix_routes
 from experiments.post_training.pivotrl.selection import TRAIN_FILENAME
 
 RLVR_MESSAGE = pa.struct([("role", pa.large_string()), ("content", pa.large_string())])
@@ -68,6 +68,6 @@ def test_arms_tag_rows_by_route_rlvr_first_and_random_turns_drop_unscored_rows(t
 
 
 def test_pivot_share_splits_evenly_between_swe_and_terminal_and_fills_the_batch():
-    assert domain_weights(0.2) == {"rlvr": 410, "swe": 51, "terminal": 51}
-    assert domain_weights(0.1) == {"rlvr": 461, "swe": 26, "terminal": 25}
-    assert domain_weights(0.0) == {"rlvr": 512}
+    assert domain_weights(0.2) == {Route.RLVR: 410, Route.SWE: 51, Route.TERMINAL: 51}
+    assert domain_weights(0.1) == {Route.RLVR: 461, Route.SWE: 26, Route.TERMINAL: 25}
+    assert domain_weights(0.0) == {Route.RLVR: 512}

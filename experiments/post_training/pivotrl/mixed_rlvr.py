@@ -17,6 +17,7 @@ version so they are reused: ``uv run python -m experiments.post_training.pivotrl
 
 import json
 from dataclasses import dataclass
+from enum import StrEnum
 
 import click
 import pyarrow as pa
@@ -40,6 +41,15 @@ from experiments.post_training.pivotrl.selection import TRAIN_FILENAME, count_co
 
 ROUTE_COLUMN = "teacher_route"
 """The column MarinSkyRL's domain-weighted sampling reads each row's pool from."""
+
+
+class Route(StrEnum):
+    """A pool of rows; ``data.sampling.domain_weights`` is keyed by these names."""
+
+    RLVR = "rlvr"
+    SWE = "swe"
+    TERMINAL = "terminal"
+
 
 RLVR1 = hf_download(
     "raw/open-athena-nemotron-rl-ultra-rlvr1-cleaned-v3-2026-09-30",
@@ -86,7 +96,7 @@ def mix_routes(*, train: dict[str, dict[str, str]], validation: dict[str, dict[s
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
-def domain_weights(pivot_share: float, *, batch_size: int = 512) -> dict[str, int]:
+def domain_weights(pivot_share: float, *, batch_size: int = 512) -> dict[Route, int]:
     """Prompts per route in every batch: ``pivot_share`` of it split evenly between SWE and Terminal.
 
     The two benchmarks weigh equally in #10214's decision rules, so the split ignores pool sizes.
@@ -94,17 +104,17 @@ def domain_weights(pivot_share: float, *, batch_size: int = 512) -> dict[str, in
     if not 0 <= pivot_share < 1:
         raise ValueError("pivot_share must be in [0, 1)")
     pivots = round(pivot_share * batch_size)
-    weights = {"rlvr": batch_size - pivots, "swe": (pivots + 1) // 2, "terminal": pivots // 2}
+    weights = {Route.RLVR: batch_size - pivots, Route.SWE: (pivots + 1) // 2, Route.TERMINAL: pivots // 2}
     return {route: count for route, count in weights.items() if count}
 
 
 def arm_datasets() -> dict[str, ArtifactStep[Artifact]]:
     """One dataset per kind of arm: ``rlvr1``, ``selected`` pivots and ``random`` candidate turns."""
-    runs = {"swe" if run.candidates == SWE_CANDIDATES else "terminal": run for run in GRUG_K16_LAMBDA_065_RUNS}
+    runs = {Route.SWE if run.candidates == SWE_CANDIDATES else Route.TERMINAL: run for run in GRUG_K16_LAMBDA_065_RUNS}
     steps = {route: pivot_steps(run) for route, run in runs.items()}
-    rlvr = {"rlvr": {"path": RLVR1, "filename": "data/train.parquet"}}
+    rlvr = {Route.RLVR: {"path": RLVR1, "filename": "data/train.parquet"}}
     validation = {
-        "rlvr": {"path": RLVR1, "filename": "data/validation.parquet"},
+        Route.RLVR: {"path": RLVR1, "filename": "data/validation.parquet"},
         **{
             route: {"path": candidate_step(run.candidates), "filename": VALIDATION_FILENAME}
             for route, run in runs.items()
@@ -149,7 +159,8 @@ ARMS = {
 @build_options
 def main() -> dict[str, ArtifactStep[Artifact]]:
     for name, arm in ARMS.items():
-        click.echo(f"{name}: {arm.dataset}, domain_weights={domain_weights(arm.pivot_share)}")
+        weights = {str(route): count for route, count in domain_weights(arm.pivot_share).items()}
+        click.echo(f"{name}: {arm.dataset}, domain_weights={weights}")
     return arm_datasets()
 
 
