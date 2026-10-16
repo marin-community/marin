@@ -540,6 +540,10 @@ async def _grade_staged(
                     machine_spec,
                     host_environment,
                 )
+                # The grading machine starts in the grader's workspace unless its environment names a
+                # directory; the spec's own workdir is the task machine's, or empty for an image machine.
+                if grading.environment.working_directory is None:
+                    prepared = replace(prepared, workdir=grading.workspace)
                 if attempt.stop_reason is not None:
                     prepared = replace(prepared, env={**prepared.env, "TASKCOMPENDIUM_STOP_REASON": attempt.stop_reason})
                 machine = await factory.create(prepared)
