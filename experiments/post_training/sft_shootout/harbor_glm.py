@@ -1,37 +1,33 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run Harbor task folders with GLM 5.3 from the internal bulk service as the agent's model.
+"""Run Harbor task folders with GLM 5.3 (the internal bulk service) as the model, optionally as the
+teacher in a relay with Snowball v0 as the student.
 
-The GLM relay is reachable only inside its cluster and needs a bearer token, while installed
-agents (mini-swe-agent) call the model from inside the Daytona sandbox. This driver therefore
-runs a small proxy next to Harbor that:
+The GLM relay is reachable only inside its cluster and needs a bearer token, while mini-swe-agent
+calls the model from inside the Daytona sandbox. The driver therefore runs ``glm_proxy`` next to
+Harbor, registers it as an Iris link endpoint, and gives the agents its capability URL. Harbor runs
+from the campaign-pinned isolated project ``config/external/harbor`` with agent settings copied
+from the campaign policies, through the ``harbor_agents/trial_agents.py`` subclasses that tag every
+request with a trial id. With ``--relay`` the driver also serves v0 with the policy's serving config
+(an 8xH100 vLLM job in this cluster) and the proxy routes per ``relay.py``.
 
-- forwards ``/v1/*`` to the relay, adding ``GLM_BULK_TOKEN`` so the token never enters a sandbox;
-- logs every request's sampling settings exactly as sent, with usage, latency and the full reply
-  (reasoning included), to ``requests.jsonl`` (the record of effective generation settings per client);
-- serves vLLM's ``/tokenize`` (``count`` and ``max_model_len``) with GLM 5.3's own tokenizer,
-  because the relay's router does not, and Harbor's Mini-SWE context limiter requires it.
-
-The proxy is registered as an Iris link endpoint and reached through a capability URL. Harbor runs
-from the campaign-pinned isolated project ``config/external/harbor``. Results and the request log
-are uploaded to ``--output``.
-
-Submit to the relay's cluster (cw-us-east-02a):
+Outputs under ``--output``: Harbor's job folder, ``requests.jsonl`` (the canonical trace), and
+``driver_config.json``. Submit to the GLM relay's cluster (cw-us-east-02a):
 
     uv run iris --cluster=marin job run --target-cluster cw-us-east-02a --enable-extra-resources \
-      --cpu 4 --memory 16GB --disk 64GB --job-name glm-harbor-<name> \
+      --cpu 8 --memory 32GB --disk 64GB --job-name glm-harbor-<name> \
       -e GLM_BULK_TOKEN "$(gcloud secrets versions access latest --secret GLM_BULK_TOKEN \
           --project hai-gcp-models)" \
       -e DAYTONA_API_KEY "$(gcloud secrets versions access latest --secret DAYTONA_EVAL_API_KEY \
           --project hai-gcp-models)" \
       -- uv run python experiments/post_training/sft_shootout/harbor_glm.py \
-      --agent terminus-2 --tasks experiments/post_training/sft_shootout/dryrun_tasks/tmax \
+      --agent terminus-2 --tasks <folder of task folders> --name <name> \
       --output s3://marin-us-east-02a/marin/experiments/sft-shootout/generation/<name>
 """
 
 import argparse
-import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -40,34 +36,45 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
-import httpx
 import uvicorn
 import yaml
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import EndpointAccess
+from iris.rpc import job_pb2
+from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
+from marin.evaluation.model_config import load_model_config
+from marin.evaluation.serving_config import inference_config_for_model, resolved_serve_config
 from marin.inference.dashboard_server import bind_serving_socket
+from marin.inference.iris import remote_inference
 from rigging.connect import capability_path
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
-from starlette.routing import Route
-from transformers import AutoTokenizer
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
+from experiments.post_training.sft_shootout.glm_proxy import Backend, RelayPolicy, RequestLog, build_proxy, load_tokenizer
+from experiments.post_training.sft_shootout.relay import Author
 
 logger = logging.getLogger(__name__)
 
 GLM_TOKENIZER = "zai-org/GLM-5.3"
 GLM_TOKENIZER_REVISION = "ba32f8c19c8738e2c57c71798c601d477a7bf844"
+CLUSTER = "cw-us-east-02a"
 CAPABILITY_ORIGIN = "https://iris-cw-us-east-02a.oa.dev"
 HARBOR_PROJECT = "config/external/harbor"
-SERVED_MODEL = f"hosted_vllm/{GLM_MODEL}"
-UNLOGGED_REQUEST_KEYS = frozenset({"messages", "tools", "prompt"})
+AGENTS_PATH = Path(__file__).parent / "harbor_agents"
+# v0: the policy's serving config for Snowball v0, at the revision pinned for the sweep (4eeb756b has
+# the same weights as the config's 271c4b3c; the later commit only corrects the model card).
+STUDENT_CONFIG = Path(
+    "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/model-configs/"
+    "open-athena-Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12.yaml"
+)
+STUDENT_REVISION = "4eeb756b404db25bc04e4daf49dfb9817bceb741"
 
 # Retry list and timeouts copied from the eval campaign policies
 # (experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/harbor-configs).
@@ -90,129 +97,28 @@ RETRY = {
     "min_wait_sec": 1.0,
     "max_wait_sec": 60.0,
 }
+COST = {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
 AGENTS = {
+    # Runs each task's solution/solve.sh with no model; used for task and visibility probes.
     "oracle": {"name": "oracle"},
     # tb2-recovery.yaml: Terminus-2, 65,536 input / 16,384 output tokens.
     "terminus-2": {
-        "name": "terminus-2",
+        "import_path": "trial_agents:TrialTerminus2",
         "override_setup_timeout_sec": 360,
         "override_timeout_sec": 1800,
-        "kwargs": {"model_info": {"max_input_tokens": 65536, "max_output_tokens": 16384}},
+        "kwargs": {
+            "model_info": {"max_input_tokens": 65536, "max_output_tokens": 16384, **COST},
+            "llm_call_kwargs": {"max_tokens": 16384},
+        },
     },
     # swebench-verified.yaml: mini-swe-agent 2.1.0, 32,768-token total context.
     "mini-swe-agent": {
-        "name": "mini-swe-agent",
+        "import_path": "trial_agents:TrialMiniSweAgent",
         "override_setup_timeout_sec": 360,
         "override_timeout_sec": 1800,
-        "kwargs": {"version": "2.1.0", "model_info": {"max_input_tokens": 32768, "max_output_tokens": 16384}},
+        "kwargs": {"version": "2.1.0", "model_info": {"max_input_tokens": 32768, "max_output_tokens": 16384, **COST}},
     },
 }
-
-
-class RequestLog:
-    """Append-only JSONL log shared by the proxy's request handlers."""
-
-    def __init__(self, path: Path):
-        self._file = path.open("a")
-        self._lock = threading.Lock()
-
-    def write(self, record: dict) -> None:
-        with self._lock:
-            self._file.write(json.dumps(record) + "\n")
-            self._file.flush()
-
-
-def template_message(message: dict) -> dict:
-    """Parse tool-call arguments from JSON strings to dicts, as vLLM does before rendering."""
-    calls = message.get("tool_calls")
-    if not calls:
-        return message
-    parsed = []
-    for call in calls:
-        function = call.get("function", {})
-        arguments = function.get("arguments")
-        if isinstance(arguments, str):
-            try:
-                function = {**function, "arguments": json.loads(arguments)}
-            except json.JSONDecodeError:
-                pass
-        parsed.append({**call, "function": function})
-    return {**message, "tool_calls": parsed}
-
-
-def build_proxy(upstream: str, token: str, max_model_len: int, log: RequestLog) -> Starlette:
-    tokenizer = AutoTokenizer.from_pretrained(GLM_TOKENIZER, revision=GLM_TOKENIZER_REVISION)
-    client = httpx.AsyncClient(timeout=httpx.Timeout(1800, connect=30))
-    auth = {"Authorization": f"Bearer {token}"}
-
-    def count(body: dict) -> list[int]:
-        rendered = tokenizer.apply_chat_template(
-            [template_message(m) for m in body["messages"]],
-            tools=body.get("tools") or None,
-            add_generation_prompt=body.get("add_generation_prompt", True),
-            tokenize=False,
-            **(body.get("chat_template_kwargs") or {}),
-        )
-        return tokenizer.encode(rendered, add_special_tokens=False)
-
-    async def tokenize(request: Request) -> Response:
-        body = await request.json()
-        tokens = await asyncio.to_thread(count, body)
-        return JSONResponse({"count": len(tokens), "max_model_len": max_model_len, "tokens": tokens})
-
-    async def forward(request: Request) -> Response:
-        path = request.url.path
-        raw = await request.body()
-        headers = {"Content-Type": request.headers.get("content-type", "application/json"), **auth}
-        if request.method == "GET":
-            response = await client.get(f"{upstream}{path.removeprefix('/v1')}", headers=auth)
-            return Response(response.content, response.status_code, media_type=response.headers.get("content-type"))
-        body = json.loads(raw) if raw else {}
-        record = {
-            "ts": time.time(),
-            "path": path,
-            "agent": request.headers.get("user-agent", ""),
-            "settings": {k: v for k, v in body.items() if k not in UNLOGGED_REQUEST_KEYS},
-            "n_messages": len(body.get("messages", [])),
-            "n_tools": len(body.get("tools") or []),
-        }
-        started = time.monotonic()
-        if body.get("stream"):
-            upstream_request = client.build_request("POST", f"{upstream}{path.removeprefix('/v1')}", content=raw, headers=headers)
-            upstream_response = await client.send(upstream_request, stream=True)
-
-            async def relay():
-                try:
-                    async for chunk in upstream_response.aiter_raw():
-                        yield chunk
-                finally:
-                    await upstream_response.aclose()
-                    log.write({**record, "status": upstream_response.status_code, "latency_s": time.monotonic() - started})
-
-            return StreamingResponse(relay(), upstream_response.status_code, media_type="text/event-stream")
-        response = await client.post(f"{upstream}{path.removeprefix('/v1')}", content=raw, headers=headers)
-        record.update(status=response.status_code, latency_s=time.monotonic() - started)
-        record["glm_headers"] = {k: v for k, v in response.headers.items() if k.startswith("x-glm")}
-        if response.status_code == 200:
-            payload = response.json()
-            record["usage"] = payload.get("usage")
-            record["finish_reasons"] = [c.get("finish_reason") for c in payload.get("choices", [])]
-            # The full reply, reasoning included: Mini-SWE's trajectory drops the service's `reasoning` field.
-            record["response_messages"] = [c.get("message") for c in payload.get("choices", [])]
-            record["response_id"] = payload.get("id")
-            if "messages" in body:
-                record["local_prompt_tokens"] = len(await asyncio.to_thread(count, body))
-        else:
-            record["error"] = response.text[:2000]
-        log.write(record)
-        return Response(response.content, response.status_code, media_type=response.headers.get("content-type"))
-
-    return Starlette(
-        routes=[
-            Route("/tokenize", tokenize, methods=["POST"]),
-            Route("/v1/{rest:path}", forward, methods=["GET", "POST"]),
-        ]
-    )
 
 
 def serve(app: Starlette, host: str) -> int:
@@ -228,8 +134,40 @@ def serve(app: Starlette, host: str) -> int:
     return sock.getsockname()[1]
 
 
-def scrub(root: Path, capability: str) -> None:
-    """Replace the capability URL (a bearer credential for the proxy) in every uploaded text file."""
+@contextlib.contextmanager
+def capability_endpoint(app: Starlette, name: str) -> Iterator[str]:
+    """Serve ``app`` as an Iris link endpoint and yield its capability URL (a bearer credential)."""
+    host = get_job_info().advertise_host
+    port = serve(app, host)
+    endpoint_name = f"/glm-harbor/{name}-{uuid.uuid4().hex[:8]}"
+    ctx = iris_ctx()
+    with ctx.registry.registered(endpoint_name, f"http://{host}:{port}", {}, access=EndpointAccess.ENDPOINT_ACCESS_LINK):
+        minted = ctx.client.mint_endpoint_token(endpoint_name, ttl=Duration.from_hours(24))
+        yield (minted.capability_url or f"{CAPABILITY_ORIGIN}{capability_path(endpoint_name, minted.token)}").rstrip("/")
+
+
+@contextlib.contextmanager
+def served_student() -> Iterator[Backend]:
+    """Serve v0 exactly as the eval policy does (8xH100 vLLM in this cluster) for the run's lifetime."""
+    model = replace(load_model_config(STUDENT_CONFIG), revision=STUDENT_REVISION)
+    accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster=CLUSTER)
+    accelerator = replace(accelerator, geometry=serving_geometry(resolved_serve_config(model), accelerator))
+    config = inference_config_for_model(model, accelerator, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT)
+    with remote_inference(config) as session:
+        session.wait_until_ready()
+        endpoint = session.model.endpoint
+        logger.info("v0 is serving %s at %s", endpoint.model, endpoint.base_url)
+        yield Backend(
+            author=Author.STUDENT,
+            base_url=endpoint.base_url.rstrip("/"),
+            model=endpoint.model,
+            tokenizer=load_tokenizer(model.tokenizer or model.location, STUDENT_REVISION),
+            headers={},
+        )
+
+
+def scrub(root: Path, secret: str) -> None:
+    """Replace ``secret`` in every text file under ``root``."""
     for path in root.rglob("*"):
         if not path.is_file():
             continue
@@ -237,24 +175,15 @@ def scrub(root: Path, capability: str) -> None:
             text = path.read_text()
         except UnicodeDecodeError:
             continue
-        if capability in text:
-            path.write_text(text.replace(capability, "<capability-url>"))
+        if secret in text:
+            path.write_text(text.replace(secret, "<capability-url>"))
 
 
 def job_config(args: argparse.Namespace, api_base: str | None, jobs_dir: Path) -> dict:
     agent = json.loads(json.dumps(AGENTS[args.agent]))
-    if api_base is None:
-        return job_dict(args, agent, jobs_dir)
-    agent["model_name"] = SERVED_MODEL
-    agent["kwargs"]["api_base"] = api_base
-    agent["kwargs"]["model_info"]["max_input_tokens"] = args.context_window or agent["kwargs"]["model_info"]["max_input_tokens"]
-    agent["kwargs"]["model_info"].update(input_cost_per_token=0.0, output_cost_per_token=0.0)
-    if args.agent == "terminus-2":
-        agent["kwargs"]["llm_call_kwargs"] = {"max_tokens": agent["kwargs"]["model_info"]["max_output_tokens"]}
-    return job_dict(args, agent, jobs_dir)
-
-
-def job_dict(args: argparse.Namespace, agent: dict, jobs_dir: Path) -> dict:
+    if api_base is not None:
+        agent["model_name"] = f"hosted_vllm/{GLM_MODEL}"
+        agent["kwargs"]["api_base"] = api_base
     dataset: dict = {"path": str(Path(args.tasks).resolve())}
     if args.task_names:
         dataset["task_names"] = args.task_names
@@ -271,16 +200,14 @@ def job_dict(args: argparse.Namespace, agent: dict, jobs_dir: Path) -> dict:
     }
 
 
-def run_harbor(args: argparse.Namespace, config: dict, work: Path) -> subprocess.CompletedProcess:
+def run_harbor(args: argparse.Namespace, config: dict, work: Path) -> int:
     config_path = work / "job.yaml"
     config_path.write_text(yaml.safe_dump(config))
     logger.info("Harbor job %s: agent=%s tasks=%s attempts=%d", args.name, args.agent, args.tasks, args.n_attempts)
     env = {k: v for k, v in os.environ.items() if k != GLM_BULK_TOKEN_ENV}
-    return subprocess.run(
-        ["uv", "run", "--isolated", "--project", HARBOR_PROJECT, "--frozen", "harbor", "run", "-c", str(config_path), "-q"],
-        env=env,
-        check=False,
-    )
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(AGENTS_PATH.resolve()), env.get("PYTHONPATH")]))
+    command = ["uv", "run", "--isolated", "--project", HARBOR_PROJECT, "--frozen", "harbor", "run", "-c", str(config_path), "-q"]
+    return subprocess.run(command, env=env, check=False).returncode
 
 
 def main() -> None:
@@ -289,14 +216,16 @@ def main() -> None:
     parser.add_argument("--tasks", required=True, help="Local folder of Harbor task folders, or a remote prefix.")
     parser.add_argument("--task-names", nargs="*", help="Restrict to these task folder names.")
     parser.add_argument("--output", required=True, help="Remote prefix for the job folder and request log.")
-    parser.add_argument("--name", default=None)
+    parser.add_argument("--name", required=True)
     parser.add_argument("--n-attempts", type=int, default=1)
     parser.add_argument("--n-concurrent", type=int, default=4)
-    parser.add_argument("--context-window", type=int, default=None, help="Override the policy's max_input_tokens.")
-    parser.add_argument("--relay-job", default=DEFAULT_GLM_RELAY_JOB)
+    parser.add_argument("--relay", action="store_true", help="Serve v0 as the student; GLM takes over on triggers.")
+    parser.add_argument(
+        "--budget-fraction", type=float, default=0.75, help="Relay context-budget trigger, as a fraction of the window."
+    )
+    parser.add_argument("--glm-relay-job", default=DEFAULT_GLM_RELAY_JOB)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    args.name = args.name or f"{args.agent}-{uuid.uuid4().hex[:6]}"
 
     work = Path(tempfile.mkdtemp(prefix="glm-harbor-"))
     if StoragePath(args.tasks).is_remote:
@@ -304,37 +233,38 @@ def main() -> None:
         StoragePath(args.tasks).download_to(str(local_tasks), recursive=True)
         args.tasks = str(local_tasks)
 
-    if args.agent == "oracle":
-        # Runs each task's solution/solve.sh; no model, so no proxy. Used for task and visibility probes.
-        config = job_config(args, None, work / "jobs")
-        result = run_harbor(args, config, work)
-        capability = None
-    else:
-        upstream = resolve_glm_base_url(args.relay_job)
-        log = RequestLog(work / "requests.jsonl")
-        max_model_len = AGENTS[args.agent]["kwargs"]["model_info"]["max_input_tokens"]
-        app = build_proxy(upstream, os.environ[GLM_BULK_TOKEN_ENV], args.context_window or max_model_len, log)
-        host = get_job_info().advertise_host
-        port = serve(app, host)
-        endpoint_name = f"/glm-harbor/{args.name}-{uuid.uuid4().hex[:8]}"
-        ctx = iris_ctx()
-        with ctx.registry.registered(endpoint_name, f"http://{host}:{port}", {}, access=EndpointAccess.ENDPOINT_ACCESS_LINK):
-            minted = ctx.client.mint_endpoint_token(endpoint_name, ttl=Duration.from_hours(24))
-            capability = minted.capability_url or f"{CAPABILITY_ORIGIN}{capability_path(endpoint_name, minted.token)}"
-            config = job_config(args, f"{capability.rstrip('/')}/v1", work / "jobs")
-            result = run_harbor(args, config, work)
+    capability = None
+    with contextlib.ExitStack() as stack:
+        if args.agent == "oracle":
+            config = job_config(args, None, work / "jobs")
+        else:
+            window = AGENTS[args.agent]["kwargs"]["model_info"]["max_input_tokens"]
+            teacher = Backend(
+                author=Author.TEACHER,
+                base_url=resolve_glm_base_url(args.glm_relay_job),
+                model=GLM_MODEL,
+                tokenizer=load_tokenizer(GLM_TOKENIZER, GLM_TOKENIZER_REVISION),
+                headers={"Authorization": f"Bearer {os.environ[GLM_BULK_TOKEN_ENV]}"},
+            )
+            relay = None
+            if args.relay:
+                relay = RelayPolicy(student=stack.enter_context(served_student()), budget_tokens=int(window * args.budget_fraction))
+            app = build_proxy(teacher, window, RequestLog(work / "requests.jsonl"), relay)
+            capability = stack.enter_context(capability_endpoint(app, args.name))
+            config = job_config(args, f"{capability}/v1", work / "jobs")
+        returncode = run_harbor(args, config, work)
 
     job_dir = work / "jobs" / args.name
     job_dir.mkdir(parents=True, exist_ok=True)
-    (job_dir / "driver_config.json").write_text(json.dumps(config, indent=2))
+    (job_dir / "driver_config.json").write_text(json.dumps({"args": vars(args), "harbor": config}, indent=2))
     if capability is not None:
-        scrub(job_dir, capability.rstrip("/"))
+        scrub(job_dir, capability)
     StoragePath(args.output).upload_from(str(job_dir), recursive=True)
     if (work / "requests.jsonl").exists():
         StoragePath(f"{args.output.rstrip('/')}/requests.jsonl").upload_from(str(work / "requests.jsonl"))
-    logger.info("Uploaded results to %s (harbor exit %d)", args.output, result.returncode)
-    if result.returncode != 0:
-        raise SystemExit(result.returncode)
+    logger.info("Uploaded results to %s (harbor exit %d)", args.output, returncode)
+    if returncode != 0:
+        raise SystemExit(returncode)
 
 
 if __name__ == "__main__":

@@ -70,8 +70,9 @@ def main() -> None:
     if not log.exists():
         return
     records = [json.loads(line) for line in log.read_text().splitlines()]
-    chats = [r for r in records if r["path"].endswith("chat/completions")]
-    print(f"\n== requests.jsonl: {len(records)} records, {len(chats)} chat completions")
+    chats = records
+    print(f"\n== requests.jsonl: {len(records)} records, trials {len({r.get('trial') for r in records})}")
+    print(f"  authors/triggers: {sorted({(r.get('author'), r.get('trigger')) for r in records})}")
     for key in sorted({k for r in chats for k in r["settings"]}):
         print(f"  setting {key}: {sorted({json.dumps(r['settings'].get(key)) for r in chats})}")
     usage = [r["usage"] for r in chats if r.get("usage")]
@@ -81,7 +82,11 @@ def main() -> None:
             print(f"  {field}: sum {sum(values)} median {statistics.median(values)} max {max(values)}")
         reasoning = [(u.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0 for u in usage]
         print(f"  reasoning_tokens: sum {sum(reasoning)}")
-    mismatch = [(r["usage"]["prompt_tokens"], r["local_prompt_tokens"]) for r in chats if r.get("usage") and "local_prompt_tokens" in r]
+    mismatch = [
+        (r["usage"]["prompt_tokens"], r["prompt_tokens_local"][r["author"]])
+        for r in chats
+        if r.get("usage") and r.get("prompt_tokens_local", {}).get(r.get("author"))
+    ]
     print(f"  prompt-count mismatches (service, local): {[m for m in mismatch if m[0] != m[1]][:20]}")
     print(f"  latency_s sum {sum(r['latency_s'] for r in chats):.1f}")
     print(f"  statuses: {sorted({r['status'] for r in records})}; errors: {[r.get('error') for r in records if r.get('error')][:5]}")
