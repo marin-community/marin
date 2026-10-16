@@ -720,7 +720,7 @@
       },
       "identity": {
         "dataset": "hf://open-athena/sotopia-hard-harbor",
-        "version": "65be6de928ab289e43a2730182b5b75cf2f75d41",
+        "version": "539ee305186e0231be4e6c0b30a2a5629284dc28",
         "agent": "harbor.agents.installed.sotopia:SotopiaAgent",
         "env": "daytona"
       }
