@@ -19,7 +19,7 @@ from rigging.filesystem.storage_path import prefix_join
 
 LOGGER = logging.getLogger(__name__)
 SCORER = import_module("eval.chat_benchmarks.NUPA-Loose.scorer")
-EVALCHEMY_COMMIT = "abe104f405e7e964f9f5a27f96e622744d4ca076"
+EVALCHEMY_COMMIT = "2baaab1b9c0c9c8caffcd8f6df45355539aef436"
 BENCHMARK = "NUPA"
 BENCHMARK_SIZE = 5_000
 SCORE_CELL = re.compile(r"^([01](?:\.\d+)?)\s+\((s3://[^)]+)\)$")
@@ -38,6 +38,10 @@ def write_json(uri: str, payload: dict) -> None:
         raise FileExistsError(uri)
     with filesystem.open(key, "wb") as destination:
         destination.write((json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode())
+
+
+def read_json(uri: str) -> dict:
+    return json.loads(read_bytes(uri))
 
 
 def tracker_cells(tracker: str) -> list[dict]:
@@ -64,8 +68,27 @@ def result_uri(output_prefix: str, model: str) -> str:
     return prefix_join(output_prefix, f"results/nupa/{model.replace('/', '--')}.json")
 
 
+def replay_input(cell: dict) -> tuple[str, dict[int, dict] | None]:
+    """Resolve a tracker cell to raw samples and its current per-trial grades."""
+    source = cell["source"]
+    if not source.endswith(".json"):
+        return source, None
+
+    prior = read_json(source)
+    if prior["model"] != cell["model"] or prior["benchmark"] != BENCHMARK:
+        raise ValueError(f"{cell['model']}: replay source identity does not match tracker")
+    trials = {int(trial["doc_id"]): trial for trial in prior["trials"]}
+    if set(trials) != set(range(BENCHMARK_SIZE)):
+        raise ValueError(f"{cell['model']}: replay source has incomplete NUPA document IDs")
+    prior_score = sum(bool(trial["corrected_correct"]) for trial in trials.values()) / BENCHMARK_SIZE
+    if abs(prior_score - cell["tracker_score"]) > 0.000500001:
+        raise ValueError(f"{cell['model']}: replay trial mean {prior_score} differs from tracker score")
+    return prior.get("raw_source", prior["source"]), trials
+
+
 def regrade(cell: dict) -> dict:
-    table = ReadView(cell["source"]).scan("samples", columns=SAMPLE_COLUMNS)
+    raw_source, prior_trials = replay_input(cell)
+    table = ReadView(raw_source).scan("samples", columns=SAMPLE_COLUMNS)
     if table is None or table.num_rows != BENCHMARK_SIZE:
         raise ValueError(f"{cell['model']}: expected {BENCHMARK_SIZE} stored trials")
     rows = table.to_pylist(maps_as_pydicts="strict")
@@ -73,7 +96,17 @@ def regrade(cell: dict) -> dict:
     if [int(row["doc_id"]) for row in rows] != list(range(BENCHMARK_SIZE)):
         raise ValueError(f"{cell['model']}: incomplete NUPA document IDs")
 
-    prior_score = sum(float(row["metrics"]["exact_match"]) for row in rows) / BENCHMARK_SIZE
+    prior_score = (
+        sum(
+            (
+                bool(prior_trials[int(row["doc_id"])]["corrected_correct"])
+                if prior_trials is not None
+                else float(row["metrics"]["exact_match"])
+            )
+            for row in rows
+        )
+        / BENCHMARK_SIZE
+    )
     if abs(prior_score - cell["tracker_score"]) > 0.000500001:
         raise ValueError(f"{cell['model']}: stored trial mean {prior_score} differs from tracker score")
 
@@ -98,7 +131,10 @@ def regrade(cell: dict) -> dict:
         }
         for metric, value in corrected.items():
             metric_totals[metric] += value
-        prior_correct = bool(row["metrics"]["exact_match"])
+        prior_trial = prior_trials[int(row["doc_id"])] if prior_trials is not None else None
+        prior_correct = (
+            bool(prior_trial["corrected_correct"]) if prior_trial is not None else bool(row["metrics"]["exact_match"])
+        )
         corrected_correct = bool(scored.exact_match)
         changed_trials += prior_correct != corrected_correct
         trials.append(
@@ -106,8 +142,8 @@ def regrade(cell: dict) -> dict:
                 "doc_id": int(row["doc_id"]),
                 "answer_format": doc["answer_format"],
                 "reference_answer": doc["answer"],
-                "prior_extracted": row["extracted"],
-                "corrected_extracted": SCORER.extract_answer(row["output"], doc["answer_format"]),
+                "prior_extracted": prior_trial["corrected_extracted"] if prior_trial is not None else row["extracted"],
+                "corrected_extracted": scored.extracted_answer,
                 "prior_correct": prior_correct,
                 "corrected_correct": corrected_correct,
             }
@@ -118,6 +154,7 @@ def regrade(cell: dict) -> dict:
         "model": cell["model"],
         "benchmark": BENCHMARK,
         "source": cell["source"],
+        "raw_source": raw_source,
         "tracker_score": cell["tracker_score"],
         "prior_trial_mean": prior_score,
         "corrected_score": aggregates["exact_match"],
