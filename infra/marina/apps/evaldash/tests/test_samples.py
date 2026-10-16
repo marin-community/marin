@@ -192,6 +192,7 @@ def test_artifact_fetch_rejects_parent_traversal(tmp_path) -> None:
     sotopia_artifact = fetch_artifact(str(results), "sotopia-summary://../secret")
     assert sotopia_artifact.available is False
     assert sotopia_artifact.text is None
+    assert fetch_artifact(str(results), "sotopia-summary://..").available is False
 
 
 def test_artifact_fetch_missing_object_degrades(tmp_path) -> None:
@@ -445,19 +446,13 @@ def test_sotopia_summary_from_harbor_trial_is_available_to_sample_viewer(tmp_pat
         "combo_id": "combo-1",
         "context_budget": {"max_input_tokens": 32768, "max_prompt_tokens": 1200, "rejected_requests": 0},
     }
-    summary_path = (
-        results
-        / "harbor_jobs"
-        / "harbor_hf___open-athena_sotopia-hard-ha_c928c249d99a"
-        / trial_id
-        / "attempts"
-        / "001"
-        / "agent"
-        / "sotopia-summary.json"
-    )
+    trial_dir = results / "harbor_jobs" / "harbor_hf___open-athena_sotopia-hard-ha_c928c249d99a" / trial_id
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "result.json").write_text(json.dumps({"trial_relpath": f"{trial_id}/attempts/001"}))
+    summary_path = trial_dir / "attempts" / "001" / "agent" / "sotopia-summary.json"
     summary_path.parent.mkdir(parents=True)
     summary_path.write_text(json.dumps(summary))
-    first_attempt = summary_path.parent.parent.parent / "000" / "agent" / "sotopia-summary.json"
+    first_attempt = trial_dir / "attempts" / "000" / "agent" / "sotopia-summary.json"
     first_attempt.parent.mkdir(parents=True)
     first_attempt.write_text(json.dumps({**summary, "reasoning": "Superseded attempt"}))
 
@@ -471,3 +466,19 @@ def test_sotopia_summary_from_harbor_trial_is_available_to_sample_viewer(tmp_pat
     assert artifact.available
     assert artifact.media_type == "application/json"
     assert json.loads(artifact.text) == summary
+
+
+def test_sotopia_summary_does_not_use_superseded_attempt(tmp_path) -> None:
+    results = tmp_path / "results"
+    trial_id = "sotopia-trial"
+    trial_dir = results / "harbor_jobs" / "harbor_sotopia-hard_example" / trial_id
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "result.json").write_text(json.dumps({"trial_relpath": f"{trial_id}/attempts/001"}))
+    old_summary = trial_dir / "attempts" / "000" / "agent" / "sotopia-summary.json"
+    old_summary.parent.mkdir(parents=True)
+    old_summary.write_text(json.dumps({"transcript": [[{"sender": "Alice", "message": "Old attempt"}]]}))
+
+    artifact = fetch_artifact(str(results), f"sotopia-summary://{trial_id}")
+
+    assert artifact.available is False
+    assert artifact.text is None

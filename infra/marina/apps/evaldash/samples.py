@@ -17,6 +17,7 @@ run browses correctly whether or not it has been migrated.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -56,7 +57,7 @@ MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 _ARCHIVE_URI_PREFIX = "finestore://"
 _SOTOPIA_SUMMARY_URI_PREFIX = "sotopia-summary://"
 _SOTOPIA_TASK = "sotopia-hard-harbor"
-_SOTOPIA_TRIAL_ID = re.compile(r"[A-Za-z0-9._-]+")
+_SOTOPIA_TRIAL_ID = re.compile(r"(?!\.\.?$)[A-Za-z0-9._-]+")
 
 
 class SampleTask(BaseModel):
@@ -518,13 +519,17 @@ def _resolve_archive_artifact(results_path: str, uri: str, max_bytes: int) -> Ar
 
 
 def _sotopia_summary_path(results_path: str, trial_id: str) -> StoragePath | None:
-    """Find the latest retained summary, or None if absent or found in multiple jobs."""
-    jobs = (StoragePath(results_path) / "harbor_jobs" / "harbor_*").glob()
-    matches_by_job = [(job / trial_id / "attempts/*/agent/sotopia-summary.json").glob() for job in jobs]
-    matches_by_job = [matches for matches in matches_by_job if matches]
-    if len(matches_by_job) != 1:
+    """Find Harbor's selected summary, or None without one unambiguous trial result."""
+    results = (StoragePath(results_path) / "harbor_jobs" / "harbor_*" / trial_id / "result.json").glob()
+    if len(results) != 1:
         return None
-    return sorted(matches_by_job[0], key=str)[-1]
+    selected = json.loads(results[0].read_text()).get("trial_relpath")
+    if not isinstance(selected, str):
+        return None
+    parts = selected.split("/")
+    if len(parts) != 3 or parts[:2] != [trial_id, "attempts"] or not re.fullmatch(r"[0-9]{3,}", parts[2]):
+        return None
+    return results[0].parent.parent / selected / "agent/sotopia-summary.json"
 
 
 def fetch_artifact(results_path: str | None, uri: str, *, max_bytes: int = MAX_ARTIFACT_BYTES) -> ArtifactResponse:
@@ -560,7 +565,7 @@ def fetch_artifact(results_path: str | None, uri: str, *, max_bytes: int = MAX_A
             logger.info("SOTOPIA summary lookup failed for %s: %s", uri, exc)
             return _unavailable_artifact(uri, f"{type(exc).__name__}: {exc}"[:400])
         if path is None:
-            return _unavailable_artifact(uri, "SOTOPIA summary is not present in one Harbor job")
+            return _unavailable_artifact(uri, "SOTOPIA trial has no selected summary path")
         response = fetch_artifact(results_path, str(path), max_bytes=max_bytes).model_copy(update={"uri": uri})
         if response.available:
             _artifact_cache.put(cache_key, response)

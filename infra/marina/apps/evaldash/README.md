@@ -212,9 +212,10 @@ or oversized object rather than a 500. Reads are cached briefly, as sample table
 
 For SOTOPIA-hard Harbor samples without an archived ATIF trajectory, the sample reader returns a
 `summary_uri` with a `sotopia-summary://<trial>` reference from the archived trial ID. The artifact
-endpoint resolves it under `harbor_jobs/<job>/<trial>/attempts/<attempt>/agent/sotopia-summary.json`
-in the same results path, selecting the latest retained attempt in one matching job. The viewer
-renders the ordered conversation, evaluator reasoning, dimension scores, and context-budget data.
+endpoint reads `harbor_jobs/<job>/<trial>/result.json` and resolves its selected `trial_relpath`
+under the same results path. It displays `agent/sotopia-summary.json` only from that attempt. The
+viewer renders the ordered conversation, evaluator reasoning, dimension scores, and context-budget
+data.
 If no summary is available, the endpoint reports that status. This fallback does not change the
 archived sample or its reward.
 
