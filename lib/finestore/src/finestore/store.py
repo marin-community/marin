@@ -32,7 +32,7 @@ from finestore.commit import (
     initialize_archive,
     write_schema,
 )
-from finestore.compaction import COMPACTION_TARGET_BYTES, CompactionResult, compact_table, compact_writer_tables
+from finestore.compaction import COMPACTION_TARGET_BYTES, CompactionResult, compact_level_zero_tables, compact_table
 from finestore.layout import (
     CHUNKED_BLOBS_FEATURE,
     RESERVED_COLUMNS,
@@ -470,26 +470,43 @@ class DataStore:
             )
 
     def close(self) -> None:
-        """Flush pending writes and compact bounded groups of this writer's level-zero shards."""
+        """Flush pending writes and, as the maintainer, merge bounded groups of level-zero shards.
+
+        The merge is best effort. A closer that holds the maintenance lease, or can take a free
+        or stale one, folds every writer's level-zero shards within the close budget; a closer
+        that finds another writer maintaining the archive leaves its shards to that writer.
+        """
         if self._closed:
             return
         self._closed = True
         self.request_stop()
         self._thread.join()
         self.flush()
-        self._release_maintenance()
-        # Merging only this writer's shards needs no lease: other closers touch disjoint
-        # inputs, and a maintainer that consumed them first makes the merge a benign no-op.
-        with self._commit_lock:
-            compact_writer_tables(
-                self.root,
-                list(self._tables),
-                writer_id=self.writer_id,
-                max_input_bytes=_CLOSE_COMPACTION_MAX_INPUT_BYTES,
-                max_input_rows=_CLOSE_COMPACTION_MAX_INPUT_ROWS,
-                target_bytes=self._compaction_target_bytes,
-                coordinator=self._commits,
-            )
+        with self._maintenance_lock:
+            try:
+                if not self._has_level_zero_groups():
+                    return
+                if not self._acquire_maintenance():
+                    logger.info(
+                        "FineStore writer %s left level-zero shards in %s to the maintainer", self.writer_id, self.root
+                    )
+                    return
+                with lease_refresh(self._lease), self._commit_lock:
+                    compact_level_zero_tables(
+                        self.root,
+                        list(self._tables),
+                        max_input_bytes=_CLOSE_COMPACTION_MAX_INPUT_BYTES,
+                        max_input_rows=_CLOSE_COMPACTION_MAX_INPUT_ROWS,
+                        target_bytes=self._compaction_target_bytes,
+                        coordinator=self._commits,
+                    )
+            finally:
+                self._release_maintenance()
+
+    def _has_level_zero_groups(self) -> bool:
+        """Whether some registered table holds at least two level-zero shards, from any writer."""
+        view = ReadView(self.root, self._commits.last_snapshot())
+        return any(sum(1 for shard in view.list_shards(name) if shard.generation == 0) >= 2 for name in self._tables)
 
     def request_stop(self) -> None:
         """Request maintenance shutdown without waiting or performing storage I/O.

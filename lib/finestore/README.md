@@ -172,20 +172,18 @@ A writer from a FineStore build without the lease compacts as before, without ta
 it; its commits rebase normally and carry the epoch forward unchanged. Lease acquisitions and losses, commits, conflicts, and started and
 abandoned compactions are exported as `finestore_*` telemetry counters.
 
-`close()` also merges each registered table's remaining level-zero shards owned by
-that writer when there are at least two. It visits blob descriptors first, then other
-tables in name order, within an
-aggregate budget of 64 MiB stored input and 16,384 input rows, skipping groups that
-exceed the remaining budget. This consolidates small completed writes below the
-maintenance threshold without repeatedly rewriting earlier compacted data or merging
-other writers' inputs. The merge does not take the maintenance lease. Two closers
-select disjoint inputs because each takes only its own writer's shards; the maintainer's
-level-zero pass can take the same shards, and whichever replacement commits second finds
-an input missing and is abandoned. Concurrent writers must use distinct writer IDs (the
-default IDs are unique). The pass retries classified transient storage failures with exponential
-backoff for up to three attempts per snapshot or merge before propagating them. Retries
-can repeat reads and writes of the selected inputs. The pass adds close latency after
-flushing; its input budget is not a wall-time or decoded-memory bound.
+`close()` also runs a best-effort level-zero merge. After its final flush, a closing
+writer that holds the maintenance lease, or can take a free or stale one, merges each
+registered table's level-zero shards from every writer when there are at least two. It
+visits blob descriptors first, then other tables in name order, within an aggregate
+budget of 64 MiB stored input and 16,384 input rows, skipping groups that exceed the
+remaining budget. A closing writer that finds another writer maintaining the archive
+leaves its shards to that writer, so a wave of closing writers elects one merger instead
+of racing replacement commits. Concurrent writers must use distinct writer IDs (the
+default IDs are unique). The pass retries classified transient storage failures with
+exponential backoff for up to three attempts per snapshot or merge before propagating
+them. Retries can repeat reads and writes of the selected inputs. The pass adds close
+latency after flushing; its input budget is not a wall-time or decoded-memory bound.
 
 `PersistentKvCache.close()` performs this pass during explicit shutdown. Its process-exit
 handler only requests maintenance shutdown after the bounded cache-write drain, so
@@ -261,7 +259,7 @@ an equivalent compare-and-swap primitive.
   rebases only while all of its exact inputs remain active and the maintainer epoch it
   was prepared under is still current.
 - A maintainer that stops without releasing its lease blocks compaction by other
-  writers for at most 90 seconds. Flushes and close-time merges never wait on it.
+  writers, including close-time merges, for at most 90 seconds. Flushes never wait on it.
 - Opening a sealed archive for writing publishes a commit that clears its seal.
   `store.seal()` flushes, compacts, and records seal metadata in a final manifest.
 

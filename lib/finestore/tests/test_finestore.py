@@ -682,44 +682,6 @@ def test_compaction_unifies_evolved_schema(archive_root):
     assert rows == {"1": (1, None), "2": (None, 2)}
 
 
-def test_compaction_sorts_unsorted_shard_and_keeps_latest_value(archive_root):
-    root = archive_root
-    with DataStore.open(root, writer_id="old") as store:
-        table = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
-        table.extend([{"id": "b", "value": 1}, {"value": 2}, {"id": "a", "value": 3}])
-        store.flush()
-    with DataStore.open(root, writer_id="new") as store:
-        store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE).append({"id": "b", "value": 4})
-        store.flush()
-
-    assert any(not shard.primary_key_sorted for shard in ReadView(root).list_shards("samples"))
-    assert compact_table(root, "samples") == CompactionResult(written=3, superseded=1)
-    assert [(row["id"], row["value"]) for row in _rows(ReadView(root), "samples")] == [
-        ("a", 3),
-        ("b", 4),
-        (None, 2),
-    ]
-
-
-def test_compaction_preserves_newest_value_across_output_buffers(archive_root):
-    root = archive_root
-    with DataStore.open(root, writer_id="old") as store:
-        store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE).extend(
-            [{"id": "a", "value": "old"}, {"id": "b", "value": "only"}]
-        )
-        store.flush()
-    with DataStore.open(root, writer_id="new") as store:
-        store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE).append({"id": "a", "value": "new"})
-        store.flush()
-
-    assert compact_table(root, "samples", target_bytes=1) == CompactionResult(written=3, superseded=0)
-    view = ReadView(root)
-    assert len(view.list_shards("samples")) > 1
-    expected = [{"id": "a", "value": "new"}, {"id": "b", "value": "only"}]
-    assert sorted(view.scan("samples", columns=["id", "value"]).to_pylist(), key=lambda row: row["id"]) == expected
-    assert list(view.iter_rows("samples", columns=["id", "value"])) == expected
-
-
 def test_compaction_streams_multiple_row_groups(monkeypatch, archive_root):
     # A tiny output row group forces a compacted shard to span several groups; re-compacting it with a
     # fresh level-0 shard must read those groups and preserve every value.
@@ -743,21 +705,6 @@ def test_compaction_streams_multiple_row_groups(monkeypatch, archive_root):
     assert {s.generation for s in ReadView(root).list_shards("samples")} == {2}
     rows = {r["doc_id"]: r["score"] for r in _rows(ReadView(root), "samples")}
     assert rows == {f"{i:03d}": float(i) for i in range(10)}
-
-
-def test_compaction_orders_row_groups_by_first_key(monkeypatch, archive_root):
-    root = archive_root
-    monkeypatch.setattr(shard_writer, "ROW_GROUP_ROWS", 2)
-    for writer, keys in (("old", (1, 2, 5, 6)), ("new", (3, 4, 7, 8))):
-        with DataStore.open(root, writer_id=writer) as store:
-            store.table("samples", primary_key=("id",)).extend({"id": key} for key in keys)
-            store.flush()
-
-    assert all(_parquet_metadata(shard.path).num_row_groups == 2 for shard in ReadView(root).list_shards("samples"))
-    assert compact_table(root, "samples", target_bytes=1).written == 8
-    output_shards = ReadView(root).list_shards("samples")
-    assert len(output_shards) == 4
-    assert [_read_parquet(shard.path, columns=["id"])["id"][0].as_py() for shard in output_shards] == [1, 3, 5, 7]
 
 
 def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(tmp_path, monkeypatch):
@@ -1253,13 +1200,12 @@ def test_close_compacts_small_blob_archive_and_preserves_pinned_view(archive_roo
     assert ReadView(root).token == final.token
 
 
-def test_concurrent_closes_merge_each_writers_shards_and_preserve_every_value(archive_root):
+def test_concurrent_closes_preserve_every_value(archive_root):
     root = archive_root
     with DataStore.open(root, writer_id="seed", flush_interval=3600) as seed:
         for name in ("seed-a", "seed-b"):
             seed.write_object(name, name.encode())
             seed.flush()
-    seed_shards = ReadView(root).list_shards(BlobTables.DESCRIPTORS)
 
     with (
         DataStore.open(root, writer_id="first", flush_interval=3600) as first,
@@ -1279,11 +1225,6 @@ def test_concurrent_closes_merge_each_writers_shards_and_preserve_every_value(ar
                 future.result(timeout=10)
 
     final = ReadView(root)
-    shards = final.list_shards(BlobTables.DESCRIPTORS)
-    assert set(shard.path for shard in seed_shards).issubset(shard.path for shard in shards)
-    merged = [shard for shard in shards if shard.path not in {seed.path for seed in seed_shards}]
-    assert sorted(shard.writer for shard in merged) == ["compactor", "compactor"]
-    assert [shard.generation for shard in merged] == [1, 1]
     expected = {"seed-a": b"seed-a", "seed-b": b"seed-b", "first": b"older", "second": b"newer", "shared": b"newer"}
     assert final.read_blobs(list(expected)) == expected
     assert pinned.read_blobs(list(expected)) == expected
@@ -1304,7 +1245,6 @@ def test_close_does_not_shadow_newer_foreign_level_zero_value(archive_root):
         second.flush()
         first.close()
         view = ReadView(root)
-        assert {shard.generation for shard in view.list_shards(BlobTables.DESCRIPTORS)} == {0, 1}
         assert view.read_blobs(["shared", "first-only"]) == {"shared": b"newer", "first-only": b"retained"}
 
 

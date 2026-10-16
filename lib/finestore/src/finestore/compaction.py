@@ -125,29 +125,24 @@ def compact_table(
     return _compact_shards(root, table, shards, snapshot=snapshot, coordinator=commits, target_bytes=target_bytes)
 
 
-def compact_writer_tables(
+def compact_level_zero_tables(
     root: str,
     tables: Sequence[str],
     *,
-    writer_id: str,
     max_input_bytes: int,
     max_input_rows: int,
     target_bytes: int,
     coordinator: CompactionCoordinator,
 ) -> None:
-    """Merge a writer's residual level-zero groups within an aggregate input budget."""
+    """Merge each table's level-zero shards, from every writer, within an aggregate input budget."""
     for table in sorted(tables, key=lambda name: (name != BlobTables.DESCRIPTORS, name)):
         snapshot = retry_with_backoff(
-            coordinator.last_snapshot,
+            coordinator.snapshot,
             retryable=is_transient_s3_error,
             max_attempts=_CLOSE_COMPACTION_MAX_ATTEMPTS,
             operation=f"FineStore close snapshot at {root}",
         )
-        shards = tuple(
-            shard
-            for shard in ReadView(root, snapshot).list_shards(table)
-            if shard.generation == 0 and shard.writer == writer_id
-        )
+        shards = tuple(shard for shard in ReadView(root, snapshot).list_shards(table) if shard.generation == 0)
         if len(shards) < 2:
             continue
         input_bytes = sum(shard.size_bytes for shard in shards)
