@@ -9,10 +9,10 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from taskcompendium.grading_result import GradeResult
-from taskcompendium.models import ANSWER_CALL_NAME, CONVERSATION_ANSWERS, AnswerCall, SessionGrader
 
 from rolloutengine.contracts import ModelTurn, Prompt, RolloutContractError, RolloutData, Transition
 from rolloutengine.harness import Episode, Harness, HarnessContext
+from rolloutengine.shell import task_prompt
 from rolloutengine.spec import RolloutSpec
 
 
@@ -33,19 +33,13 @@ class RolloutEnded(Exception):
 
 
 def _check_task_tools(spec: RolloutSpec) -> None:
-    """Reject the tools that a task declares, because the bridge does not give them to the agent.
+    """Reject the tools that a task's own prompt advertises, because the bridge does not give them to the agent.
 
-    A shell binding is exempt: the agent uses its own shell. The answer tool counts only where the shell
-    harness would advertise it.
+    A shell binding is exempt: the agent uses its own shell.
     """
     task = spec.task
-    tools = [tool.name for tool in (*task.final_tools, *task.interaction_tools) if tool.name not in task.tool_bindings]
-    if (
-        isinstance(task.answer_format, AnswerCall)
-        and task.answer_type in CONVERSATION_ANSWERS
-        and not isinstance(task.grader, SessionGrader)
-    ):
-        tools.append(ANSWER_CALL_NAME)
+    advertised = task_prompt(task, None, ()).options.get("tools", ())
+    tools = [tool["function"]["name"] for tool in advertised if tool["function"]["name"] not in task.tool_bindings]
     tools.extend(requirement.action_interface for requirement in task.environment_requirements.tool_providers.values())
     if tools:
         raise NotImplementedError(f"The agent harness does not give these task tools to the agent: {tools}")

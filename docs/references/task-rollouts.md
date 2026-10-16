@@ -105,7 +105,7 @@ A harness runs the model side of a task: the prompt, the tools, and the response
   context can be the `open` function itself.
 - `grade(episode, record)` grades the attempt of a task whose grader is `SessionGrader`. An unbound episode
   method gives the grader the episode's own state, for example `Harness(MathEpisode, grade=MathEpisode.grade)`.
-  `check` rejects a `SessionGrader` spec when the harness has no `grade`.
+  `RolloutEngine.check` rejects a `SessionGrader` spec when the harness has no `grade`.
 
 The engine grades every other task with the task's grader (see [Grading](#grading)).
 
@@ -472,7 +472,7 @@ prompt to the model transport. The returned turn must report the same prompt tok
 `ModelTurn.prompt_token_ids` contains the exact prompt sent to inference. `response_token_ids` contains the sampled response.
 Optional log probabilities align with response tokens.
 A continuation prompt preserves the full served prefix, including earlier response tokens.
-The engine rejects changed prefixes, empty response evidence, and misaligned log probabilities or token credit.
+The engine rejects changed prefixes, empty response evidence, and misaligned log probabilities.
 
 `RolloutData` contains the conversation, token IDs, loss mask, optional log probabilities, grade, per-step records, and run outputs.
 `prompt_token_ids` contains the initial prompt. `response_token_ids` contains subsequent model responses and intervening observation tokens.
@@ -498,7 +498,7 @@ It does not add an oversized observation to retained response evidence.
 `TraceMode.MESSAGES` lets a model behind a chat endpoint drive a rollout for evaluation, task validation, or data collection.
 Chat endpoints re-tokenize the conversation for every request, so the exact-token contract cannot hold there:
 on GLM-5.3 behind the Orion router, 2 of 7 recorded 7-turn ShellSim rollouts failed it on a single non-canonical sampled token.
-The engine sends empty `prefix_token_ids` and skips the prefix, token-evidence, log-probability, and token-credit checks.
+The engine sends empty `prefix_token_ids` and skips the prefix, token-evidence, and log-probability checks.
 It still checks token replay: a chat endpoint cannot serve `Prompt.token_ids` or `Transition.token_ids`,
 so a `MESSAGES` rollout whose harness pins prompt tokens raises `RolloutContractError`
 unless the model reports serving exactly those tokens.
