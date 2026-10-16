@@ -1,0 +1,149 @@
+{
+  "source": "2fcf6f1d2f4daaeaed14e0a5b3e64a53852be9b1",
+  "parent": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+  "source_branch": "experiments/score-centering-direct-restore-01a126ce",
+  "source_repository": "https://github.com/marin-community/MarinSkyRL",
+  "scope": "Candidate with ten passing affected CPU tests only. One two-node Qwen engineering restore of known source173 checkpoint5 exercises the changed DirectS3 loader before a new three-phase five-node Snowball qualification. It is not a new scientific replicate or a completed recovery qualification.",
+  "status": "Native preparation passed; all GPU work unsubmitted.",
+  "job_id": "/romain/sc-qwen-direct-checkpoint-restore5-noise005-sc-s0-rno-a0-01a126ce",
+  "configuration": "experiments/post_training/score_centering_overnight/qwen_direct_checkpoint_restore_preflight_v1/restore5-detach.yaml",
+  "configuration_sha256": "285810a545011c70e92f93a16e51922df76c418d5a9b160e601b1375b9954759",
+  "prepare_configuration": "experiments/post_training/score_centering_overnight/qwen_direct_checkpoint_restore_preflight_v1/restore5-prepare.yaml",
+  "prepare_configuration_sha256": "e9c21c19dd49fe4a7de20c62cfa80c279ff860be3901ec29ad1640c05ac601e3",
+  "reference_configuration": "experiments/post_training/score_centering_overnight/qwen_checkpoint_periodic_recovery_v1/restore5-detach.yaml",
+  "reference_configuration_sha256": "28b68f20a55b49e6967a2473a883dec3e386ef5b550f68ed98150af08bd86ddf",
+  "actual_decoded_changed_fields": [
+    "artifacts.attempts_root",
+    "artifacts.checkpoint_root",
+    "artifacts.export_root",
+    "artifacts.resolved_config_uri",
+    "artifacts.terminal_manifest_uri",
+    "iris.job_name",
+    "ray.log_dir",
+    "ray.rendezvous_dir",
+    "run.id",
+    "runtime.launcher_commit",
+    "skyrl.trainer.rollout_buffer.object_store_root"
+  ],
+  "native_gpu_submitted": false,
+  "native_preparation_passed": true,
+  "geometry": {
+    "cluster": "cw-rno2a",
+    "priority": "batch",
+    "nodes": 2,
+    "h100_per_node": 8,
+    "total_h100": 16,
+    "learner_nodes": 1,
+    "inference_nodes": 1,
+    "PP": 1,
+    "EP": 1,
+    "TP": 1,
+    "CP": 1,
+    "SP": 1
+  },
+  "restore_from_checkpoint": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-checkpoint-periodic3-restore2-noise005-sc-s0-rno-a0-01a126ce/checkpoints/global_step_5",
+  "checkpoint_input_qualification": "results/qwen_periodic_checkpoint_recovery_qualification_complete.json",
+  "checkpoint_input_source": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+  "checkpoint_input_sampler_completed_updates": 3,
+  "expected_new_updates": [
+    6,
+    7
+  ],
+  "expected_training_physical_responses": 1024,
+  "expected_clean_evaluation_responses": 0,
+  "final_checkpoint": 7,
+  "expected_final_sampler_completed_updates": 6,
+  "required_evidence": [
+    "Actual source2fcf native launch/model/dependency setup, source/model/data/optimizer/loader/RNG identities and checkpoint5 restoration with sampler3.",
+    "Only new completed updates6/7; both finite with applied optimizer steps, all512 physical responses each, correct generating versions/ages and retained naturalK128/chosen-q/TIS2/score-centering evidence.",
+    "Actual trained sampler6 with unchanged model-derived fixed Gaussian noise; native checkpoint7 all8 rank shards and optimizer/scheduler/loader/RNG/client controls.",
+    "Complete original-grader replay of every available native verifier verdict among all1024 new physical responses. Count unavailable native failures separately and preserve their original error, empty trainable spans, zero outcome/shaped reward and matching failure/mask/baseline-exclusion counters. Missing full text for an available verdict or a serving error fails the gate. Retain every actual allocated cost; no zero-native-error or quality floor is added."
+  ],
+  "source_preservation": {
+    "base": "173f626e668ba9284e7a9a42354c1505cab22ad1",
+    "changed_paths": [
+      "skyrl-train/skyrl_train/distributed/megatron/megatron_strategy.py"
+    ],
+    "diff_stat": "1 file,3 insertions,6 deletions",
+    "shared_source_files": {
+      "uv.lock": {
+        "bytes": 773842,
+        "sha256": "c9ff3b70074681e62f2683acd7b4b9487c9dc222d6065f61198c6e5e5d9ae891",
+        "bytes_identical_to_parent": true
+      },
+      "skyrl-train/skyrl_train/trainer.py": {
+        "bytes": 173600,
+        "sha256": "5badb3b1668072af0581d203c8b25394a83ed4025394430fe5c84d3efa645fe4",
+        "bytes_identical_to_parent": true
+      },
+      "skyrl-train/skyrl_train/workers/megatron/megatron_worker.py": {
+        "bytes": 48656,
+        "sha256": "caa1ba816ec3f6f14581eca2fd911842f6451b29ca378eb2c0f97fa3a8d338d8",
+        "bytes_identical_to_parent": true
+      },
+      "skyrl-train/skyrl_train/objective/score_centering.py": {
+        "bytes": 7660,
+        "sha256": "bdfa50f95408da1e229eed83a15cac9bba3f8782516381ddf56d2877b6708871",
+        "bytes_identical_to_parent": true
+      },
+      "skyrl-train/skyrl_train/inference_engines/vllm/fixed_sampler_noise.py": {
+        "bytes": 4008,
+        "sha256": "2e86d08aa514608890b342f43df85322a2f599461c6c152bc26be46f3c7c0bca",
+        "bytes_identical_to_parent": true
+      },
+      "skyrl-train/skyrl_train/inference_engines/vllm/vllm_engine.py": {
+        "bytes": 113710,
+        "sha256": "c8b1266977b58b95147c78ad4948ea119c874392abfbca1a2951046379fc8219",
+        "bytes_identical_to_parent": true
+      },
+      "skyrl-gym/skyrl_gym/envs/aime/verifier.py": {
+        "bytes": 3780,
+        "sha256": "b62fe6174f4ddcdf398a73d4b56ff61ced95e34a841e7d2c062cd24fd10938c3",
+        "bytes_identical_to_parent": true
+      },
+      "skyrl-gym/skyrl_gym/envs/aime/utils.py": {
+        "bytes": 19284,
+        "sha256": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+        "bytes_identical_to_parent": true
+      },
+      "skyrl-train/skyrl_train/distributed/megatron/direct_checkpoint.py": {
+        "bytes": 4775,
+        "sha256": "cc59858f48c9f61be07ff21ad5ea251f0c686a1d0d3fa2cfa630d3057e14bf4c",
+        "bytes_identical_to_parent": true
+      }
+    },
+    "cpu_tests_passed": 10,
+    "cpu_tests_elapsed_seconds": 4.39,
+    "native_gpu_qualification_passed": false,
+    "checkpoint_recovery_qualified": false,
+    "communication_probe_result_available": false,
+    "scope": "WIP candidate only. Remove FullyParallelLoadStrategyWrapper around the existing DirectS3 load strategy. Preserve source173 checkpoint format/state/evaluation controls and all scientific files. Full source-specific three-phase five-node GPU qualification and all new available-response original-grader replays remain required; no root-cause claim.",
+    "source": "2fcf6f1d2f4daaeaed14e0a5b3e64a53852be9b1"
+  },
+  "scientific_source_policy": "All existing live scientific jobs retain source0212 and their declared horizons. The candidate changes only restore dispatch from parent173, contains no tensor observer and no parser-only backport, and does not qualify parser source d6d6628f. Passing this Qwen preflight still requires three declared new-head five-node Snowball phases save5,restore5-to7,restore7-to9 with full native and available-response original-grader replays before any scientific source adoption.",
+  "mechanism_policy": "The separate source57 two-rank NCCL probe remains independent candidate-mechanism evidence. Preparing or testing this direct-loader alternative does not establish the Snowball tensor owner or OOM cause.",
+  "native_preparation_command": [
+    "/home/romain/work/marin-community/MarinSkyRL/score-centering-direct-restore-01a126ce/.venv/bin/python",
+    "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/launch_skyrl.py",
+    "--config",
+    "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_direct_checkpoint_restore_preflight_v1/restore5-prepare.yaml"
+  ],
+  "output_root": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-direct-checkpoint-restore5-noise005-sc-s0-rno-a0-01a126ce",
+  "native_preparation_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/direct-checkpoint-qwen-native-prepare.log",
+  "native_preparation_log_sha256": "7b8239bb3f4dd822930252b6af10c18fce2d69494a59ca6dce82f6dfec24328f",
+  "resource_board_ids": [
+    1144,
+    1145
+  ],
+  "checkpoint_input_inventory": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/direct-restore-input-checkpoint-inventory.json",
+  "checkpoint_input_inventory_sha256": "4035f5e5a3ff08a5a50af2de508e730d0c5b1a92d3a5983bbfbb8d5bfe4d5581",
+  "retained_preparation_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/direct-restore-candidate-2fcf-01a126ce/preparation/manifest.json",
+    "bytes": 9352,
+    "sha256": "20c13de7d5a10c3ac7f64e488654f473c0ab328b4c97f0a21e8540f74f7dfa05",
+    "full_byte_readback_verified": true
+  },
+  "retained_preparation_files": 17,
+  "retained_preparation_bytes": 428918,
+  "cpu_test_scope": "Ten existing CPU record-reader and metadata tests, including an Adam checkpoint round trip and subsequent update parity. They do not execute the changed Megatron restore dispatch or establish NCCL/CUDA/topology correctness."
+}
