@@ -33,6 +33,7 @@ from marin.evaluation.metric_selection import (
     REPEAT_STDERR_SUFFIX,
     base_metric,
     declared_metric,
+    sample_metric_kind,
 )
 from marin.evaluation.records import EvalRunRecord, EvalTaskRef, MetricKind
 from marin.evaluation.records import TaskCoverage as RecordTaskCoverage
@@ -131,7 +132,7 @@ def _canonical_task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], boo
                 metric=benchmark.primary_metric,
                 stderr=metrics.get(f"{benchmark.primary_metric}_stderr"),
                 n_scored=None,
-                kind=benchmark.metric_kind,
+                kind=sample_metric_kind(benchmark.task, benchmark.metric_kind),
                 declared=True,
                 protocol_metric=benchmark.primary_metric,
             ),

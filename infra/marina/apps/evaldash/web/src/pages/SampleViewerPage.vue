@@ -27,7 +27,7 @@ function queryTask(): string {
 }
 function queryFilter(): SampleFilter {
   const f = route.query.filter
-  return f === 'correct' || f === 'incorrect' || f === 'ungraded' ? f : 'all'
+  return f === 'correct' || f === 'incorrect' || f === 'scored' || f === 'ungraded' ? f : 'all'
 }
 function queryIndex(): number {
   const i = Number(route.query.i)
@@ -57,6 +57,7 @@ const {
   total,
   counts,
   primaryMetric,
+  metricKind,
   extractionFilters,
   resolvedExtractionFilter,
   loading,
@@ -65,7 +66,7 @@ const {
   ensure,
 } = useSamplePager(props.runId, task, filter, extractionFilter)
 
-const FILTERS = computed(() => sampleFilters(counts.value?.ungraded))
+const FILTERS = computed(() => sampleFilters(metricKind.value, counts.value?.ungraded))
 
 // A task scored under one filter needs no control; only offer the selector when there is a choice.
 const showExtractionFilters = computed(() => extractionFilters.value.length > 1)
@@ -82,6 +83,11 @@ const selectedExtractionFilter = computed<string | null>({
 // the server's ranked default rather than showing an empty page.
 watch(task, () => {
   extractionFilter.value = null
+  filter.value = 'all'
+})
+
+watch(metricKind, (kind) => {
+  if (kind && !sampleFilters(kind, counts.value?.ungraded).includes(filter.value)) filter.value = 'all'
 })
 
 watch([task, filter, extractionFilter], () => {

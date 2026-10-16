@@ -12,6 +12,7 @@ from finestore.eval import (
     Choice,
     EvalSample,
     EvaluationStore,
+    Grading,
     SampleKind,
     sample_to_archive_row,
     write_sample_parquet,
@@ -19,6 +20,7 @@ from finestore.eval import (
 from fsspec.core import url_to_fs
 from marin.evaluation.harbor.trajectory import archive_trajectory
 from marin.evaluation.lm_eval_samples import export_lm_eval_samples, sample_from_lm_eval
+from marin.evaluation.records import MetricKind
 
 
 def test_sample_reader_returns_typed_filtered_page(tmp_path) -> None:
@@ -48,7 +50,7 @@ def test_sample_reader_returns_typed_filtered_page(tmp_path) -> None:
     write_sample_parquet(fs, f"{root}/samples_arc_20260719.parquet", samples)
 
     tasks = list_sample_tasks(str(tmp_path))
-    page = fetch_samples(str(tmp_path), "arc", offset=0, limit=1, correct="incorrect")
+    page = fetch_samples(str(tmp_path), "arc", offset=0, limit=1, outcome_filter="incorrect")
 
     assert tasks.model_dump(mode="json") == {
         "available": True,
@@ -56,7 +58,7 @@ def test_sample_reader_returns_typed_filtered_page(tmp_path) -> None:
         "tasks": [{"task": "arc", "files": 1}],
     }
     assert page.primary_metric == "acc_norm,none"
-    assert page.counts.model_dump() == {"all": 2, "correct": 1, "incorrect": 1, "ungraded": 0}
+    assert page.counts.model_dump() == {"all": 2, "correct": 1, "incorrect": 1, "scored": 2, "ungraded": 0}
     assert page.total == 1
     assert page.offset == 0
     assert page.limit == 1
@@ -74,9 +76,24 @@ def test_sample_reader_uses_the_declared_primary_metric(tmp_path) -> None:
     )
     write_sample_parquet(fs, f"{root}/samples_drop_20260719.parquet", [sample])
 
-    page = fetch_samples(str(tmp_path), "drop", offset=0, limit=1, correct="all", primary_metric_name="f1")
+    page = fetch_samples(
+        str(tmp_path),
+        "drop",
+        offset=0,
+        limit=1,
+        outcome_filter="all",
+        primary_metric_name="f1",
+        primary_metric_kind=MetricKind.CONTINUOUS,
+    )
 
     assert page.primary_metric == "f1,none"
+    assert page.metric_kind is MetricKind.CONTINUOUS
+    assert page.counts.scored == 1
+    assert page.counts.incorrect == 0
+    assert page.rows[0].correct is None
+    assert page.rows[0].grading is not None
+    assert page.rows[0].grading.score == 0.5
+    assert page.rows[0].grading.passed is None
 
 
 def test_grading_is_derived_and_round_trips(tmp_path) -> None:
@@ -93,7 +110,7 @@ def test_grading_is_derived_and_round_trips(tmp_path) -> None:
     )
     write_sample_parquet(fs, f"{root}/samples_gsm8k_20260723.parquet", [sample])
 
-    page = fetch_samples(str(tmp_path), "gsm8k", offset=0, limit=1, correct="all")
+    page = fetch_samples(str(tmp_path), "gsm8k", offset=0, limit=1, outcome_filter="all")
 
     (row,) = page.rows
     assert row.grading is not None
@@ -143,10 +160,10 @@ def test_mrcr_sample_scores_survive_export_and_repair_existing_rows(tmp_path) ->
     write_sample_parquet(fs, f"{root}/samples_mrcr_20260927.parquet", [old_row, perfect])
 
     page = fetch_samples(
-        str(tmp_path), "mrcr", offset=0, limit=10, correct="incorrect", primary_metric_name="mrcr_accuracy"
+        str(tmp_path), "mrcr", offset=0, limit=10, outcome_filter="incorrect", primary_metric_name="mrcr_accuracy"
     )
     assert page.primary_metric == "accuracy"
-    assert page.counts.model_dump() == {"all": 2, "correct": 1, "incorrect": 1, "ungraded": 0}
+    assert page.counts.model_dump() == {"all": 2, "correct": 1, "incorrect": 1, "scored": 2, "ungraded": 0}
     assert [row.doc_id for row in page.rows] == ["0"]
     assert page.rows[0].grading is not None
     assert page.rows[0].grading.score == 0.25
@@ -171,10 +188,12 @@ def test_repeated_sample_scores_recover_grades_and_filters(tmp_path, metric) -> 
         store.add_sample(EvalSample(task="gpqa-diamond", doc_id="1", kind=SampleKind.GENERATION))
         store.seal()
 
-    page = fetch_samples(root, "gpqa-diamond", offset=0, limit=10, correct="all", primary_metric_name="accuracy_avg")
+    page = fetch_samples(
+        root, "gpqa-diamond", offset=0, limit=10, outcome_filter="all", primary_metric_name="accuracy_avg"
+    )
 
     assert page.primary_metric == metric
-    assert page.counts.model_dump() == {"all": 4, "correct": 2, "incorrect": 1, "ungraded": 1}
+    assert page.counts.model_dump() == {"all": 4, "correct": 2, "incorrect": 1, "scored": 3, "ungraded": 1}
     for row in page.rows:
         if row.doc_id == "1":
             assert row.correct is None
@@ -189,10 +208,86 @@ def test_repeated_sample_scores_recover_grades_and_filters(tmp_path, metric) -> 
 
     for outcome, expected in (("correct", [True, True]), ("incorrect", [False]), ("ungraded", [None])):
         filtered = fetch_samples(
-            root, "gpqa-diamond", offset=0, limit=10, correct=outcome, primary_metric_name="accuracy_avg"
+            root, "gpqa-diamond", offset=0, limit=10, outcome_filter=outcome, primary_metric_name="accuracy_avg"
         )
         assert filtered.total == len(expected)
         assert [row.correct for row in filtered.rows] == expected
+
+
+def test_truthfulqa_mc2_archive_scores_are_not_failures(tmp_path) -> None:
+    root = str(tmp_path / "results")
+    choices = [Choice(label=label, text=label, loglikelihood=-index - 1.0) for index, label in enumerate("ABCDEFGHIJK")]
+    labels = [1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+    stored = EvalSample(
+        task="truthfulqa_mc2_0shot",
+        doc_id="595",
+        kind=SampleKind.MULTIPLE_CHOICE,
+        choices=choices,
+        model_choice=0,
+        target_choice=0,
+        metrics={"acc": 0.9587571468391809},
+        grading=Grading(method="lm-eval:acc", metric="acc", score=0.9587571468391809, passed=False),
+        correct=False,
+        doc=json.dumps({"mc2_targets": {"labels": labels}}),
+    )
+    ungraded = stored.model_copy(
+        update={
+            "doc_id": "596",
+            "metrics": {},
+            "grading": Grading(method="lm-eval:other", metric="other", score=1.0, passed=True),
+        }
+    )
+    with EvaluationStore.open(root, writer_id="evalchemy") as store:
+        store.add_sample(stored)
+        store.add_sample(ungraded)
+        store.seal()
+
+    page = fetch_samples(
+        root,
+        stored.task,
+        offset=0,
+        limit=10,
+        outcome_filter="all",
+        primary_metric_name="acc",
+        primary_metric_kind=MetricKind.BINARY,
+    )
+
+    assert page.metric_kind is MetricKind.CONTINUOUS
+    assert page.counts.model_dump() == {"all": 2, "correct": 0, "incorrect": 0, "scored": 1, "ungraded": 1}
+    scored, missing = page.rows
+    assert scored.metrics == {"acc": 0.9587571468391809}
+    assert scored.correct is None
+    assert scored.grading is not None
+    assert scored.grading.score == 0.9587571468391809
+    assert scored.grading.passed is None
+    assert scored.target_choice is None
+    assert json.loads(scored.doc)["mc2_targets"]["labels"] == labels
+    assert missing.correct is None
+    assert missing.grading is None
+    assert fetch_samples(root, stored.task, offset=0, limit=10, outcome_filter="scored").total == 1
+    assert fetch_samples(root, stored.task, offset=0, limit=10, outcome_filter="incorrect").total == 0
+
+
+def test_legacy_lm_eval_export_respects_continuous_metric_kind() -> None:
+    sample = sample_from_lm_eval(
+        "truthfulqa_mc2_0shot",
+        {
+            "doc_id": 595,
+            "doc": {"mc2_targets": {"labels": [1, 1, 0]}},
+            "arguments": [["question", answer] for answer in ("A", "B", "C")],
+            "resps": [[[-1.0, False]], [[-2.0, False]], [[-3.0, False]]],
+            "target": 0,
+            "acc": 0.9587571468391809,
+        },
+        "acc",
+        MetricKind.BINARY,
+    )
+
+    assert sample.grading is not None
+    assert sample.grading.score == 0.9587571468391809
+    assert sample.grading.passed is None
+    assert sample.correct is None
+    assert sample.target_choice is None
 
 
 def test_artifact_fetch_returns_run_local_object(tmp_path) -> None:
@@ -318,13 +413,15 @@ def test_evaldash_reads_the_archive(tmp_path):
     assert tasks.available
     assert [task.task for task in tasks.tasks] == ["arc"]
 
-    page = fetch_samples(root, "arc", offset=0, limit=10, correct="all")
+    page = fetch_samples(root, "arc", offset=0, limit=10, outcome_filter="all")
     assert page.available
-    assert page.counts == page.counts.model_copy(update={"all": 2, "correct": 1, "incorrect": 1, "ungraded": 0})
+    assert page.counts == page.counts.model_copy(
+        update={"all": 2, "correct": 1, "incorrect": 1, "scored": 2, "ungraded": 0}
+    )
     assert {row.doc_id for row in page.rows} == {"1", "2"}
     assert page.primary_metric == "acc"
 
-    incorrect = fetch_samples(root, "arc", offset=0, limit=10, correct="incorrect")
+    incorrect = fetch_samples(root, "arc", offset=0, limit=10, outcome_filter="incorrect")
     assert [row.doc_id for row in incorrect.rows] == ["2"]
 
 
@@ -338,7 +435,7 @@ def test_ungraded_sample_reads_back_with_empty_metrics(tmp_path):
     store.seal()
     store.close()
 
-    page = fetch_samples(root, "gsm8k", offset=0, limit=10, correct="all")
+    page = fetch_samples(root, "gsm8k", offset=0, limit=10, outcome_filter="all")
     assert page.available
     assert page.counts.ungraded == 1
     assert page.primary_metric is None
@@ -359,14 +456,16 @@ def test_evaldash_serves_one_extraction_filter_at_a_time(tmp_path):
     )
     export_lm_eval_samples(str(results))
 
-    page = fetch_samples(str(results), "gsm8k", offset=0, limit=10, correct="all")
+    page = fetch_samples(str(results), "gsm8k", offset=0, limit=10, outcome_filter="all")
     assert page.extraction_filters == ("flexible-extract", "strict-match")
     # FILTER_PRIORITY ranks flexible-extract first, matching the headline metric's filter.
     assert page.extraction_filter == "flexible-extract"
     assert page.counts.all == 1
     assert page.rows[0].correct is True
 
-    strict = fetch_samples(str(results), "gsm8k", offset=0, limit=10, correct="all", extraction_filter="strict-match")
+    strict = fetch_samples(
+        str(results), "gsm8k", offset=0, limit=10, outcome_filter="all", extraction_filter="strict-match"
+    )
     assert strict.extraction_filter == "strict-match"
     assert strict.counts.all == 1
     assert strict.rows[0].correct is False
@@ -416,9 +515,11 @@ def test_evaldash_reads_an_unsealed_v1_finestore_archive(tmp_path):
     assert tasks.available
     assert [(task.task, task.files) for task in tasks.tasks] == [("arc", 2)]
 
-    page = fetch_samples(str(results), "arc", offset=0, limit=10, correct="all")
+    page = fetch_samples(str(results), "arc", offset=0, limit=10, outcome_filter="all")
     assert page.available
-    assert page.counts == page.counts.model_copy(update={"all": 2, "correct": 1, "incorrect": 1, "ungraded": 0})
+    assert page.counts == page.counts.model_copy(
+        update={"all": 2, "correct": 1, "incorrect": 1, "scored": 2, "ungraded": 0}
+    )
     assert {sample.doc_id: sample.correct for sample in page.rows} == {"1": True, "2": False}
 
     artifact = fetch_artifact(str(results), "finestore://blobs/trajectory.json")

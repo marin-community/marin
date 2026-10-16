@@ -311,6 +311,11 @@ EvalDash maps these names and recovers missing per-response grades
 from stored scores. Responses without a score remain ungraded. The sample browser counts each
 attempt, so 198 questions with three repeats produce 594 sample rows.
 
+TruthfulQA MC2's `acc` sums the model's normalized probabilities for every choice labeled correct.
+EvalDash reads that stored score and the choice labels from older archives, ignoring their binary
+pass/fail values. The sample display shows the score and correct choices. This interpretation leaves
+the stored aggregate score unchanged.
+
 ## Use the shared launcher in a pipeline
 
 `experiments.evaluation.pipeline.eval_step` wraps the same registered model and evaluation

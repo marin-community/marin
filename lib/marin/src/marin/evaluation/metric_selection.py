@@ -5,6 +5,8 @@
 
 from collections.abc import Iterable, Mapping
 
+from marin.evaluation.records import MetricKind
+
 # Headline metric for a task, matched after stripping lm-eval's ``,<filter>`` suffix.
 # ``acc_norm`` outranks ``acc`` where both exist; ``accuracy`` covers Evalchemy's chat-native tasks.
 PRIMARY_METRIC_PRIORITY = ("exact_match", "accuracy", "acc_norm", "acc", "pass@1")
@@ -23,6 +25,18 @@ FILTER_PRIORITY = ("flexible-extract",)
 # MRCR reports ``mrcr_accuracy`` for the run and ``accuracy`` for each example.
 MRCR_RUN_METRIC = "mrcr_accuracy"
 MRCR_SAMPLE_METRIC = "accuracy"
+TRUTHFULQA_MC2_TASK = "truthfulqa_mc2"
+
+
+def is_truthfulqa_mc2_task(task: str) -> bool:
+    return task == TRUTHFULQA_MC2_TASK or task.startswith(f"{TRUTHFULQA_MC2_TASK}_")
+
+
+def sample_metric_kind(task: str, declared: MetricKind | None) -> MetricKind | None:
+    """Use the MC2 probability-mass contract even for records that declare its acc binary."""
+    if is_truthfulqa_mc2_task(task):
+        return MetricKind.CONTINUOUS
+    return declared
 
 
 def primary_filter(filters: Iterable[str]) -> str | None:
