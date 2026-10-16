@@ -71,6 +71,7 @@ def catalog_database(database_url: str) -> Iterator[Engine]:
 @pytest.fixture
 def catalog_query(catalog_database: Engine) -> Query:
     def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
+        validate_query(sql)
         with catalog_database.begin() as connection:
             result = connection.execute(text(sql), parameters)
             return {
@@ -357,20 +358,12 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
 
 @pytest.mark.parametrize("unavailable_status", ["insufficient_context", "skipped"])
 def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
-    catalog_database, tmp_path, monkeypatch, unavailable_status
+    catalog_database, catalog_query, tmp_path, monkeypatch, unavailable_status
 ):
     monkeypatch.setattr("infra.marina.applets.rl_data_catalog.load.MAX_BATCH_BYTES", 2500)
     monkeypatch.setattr("infra.marina.applets.rl_data_catalog.load_curriculum.DELETE_BATCH_SIZE", 1)
     engine = catalog_database
-
-    def query(sql, parameters):
-        validate_query(sql)
-        with engine.begin() as connection:
-            result = connection.execute(text(sql), parameters)
-            return {
-                "rows": [dict(row) for row in result.mappings()] if result.returns_rows else [],
-                "row_count": result.rowcount,
-            }
+    query = catalog_query
 
     path = curriculum_release(tmp_path, unavailable_status)
     coverage_path = tmp_path / "coverage.json"
@@ -461,18 +454,14 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
         assert client.get("/sources").json()["sources"][0]["coverage"] == source["coverage"]
 
 
-def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(catalog_database, tmp_path: Path) -> None:
+def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(
+    catalog_database, catalog_query, tmp_path: Path
+) -> None:
     engine = catalog_database
     root = str(tmp_path / "catalog")
     publish_sample(root, "first")
 
-    def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
-        with engine.begin() as connection:
-            result = connection.execute(text(sql), parameters)
-            return {
-                "rows": [dict(row) for row in result.mappings()] if result.returns_rows else [],
-                "row_count": result.rowcount,
-            }
+    query = catalog_query
 
     loaded = load_catalog(CurationCatalog(root), query)
     assert loaded["counts"] == {"sources": 1, "assessments": 1, "populations": 2, "items": 3, "packets": 3}
