@@ -103,16 +103,23 @@ class _HashingSink:
 class ShardWriter:
     """Streams record batches to one immutable Parquet shard, one row group per ``write_table`` call.
 
-    Open it on the final object path; it writes to a temp sibling and renames into place on
-    :meth:`close` (or context-manager exit). Every appended table must share the writer's schema.
+    Open it on the final object path. Local shards are written to a temp sibling and renamed
+    into place on :meth:`close` (or context-manager exit); object-store shards are uploaded
+    directly. Every appended table must share the writer's schema.
     """
 
     def __init__(self, path: str, schema: pa.Schema) -> None:
         self._schema = schema
-        StoragePath(path).parent.mkdirs()
+        target = StoragePath(path)
         self._stack = contextlib.ExitStack()
-        temp_path = self._stack.enter_context(atomic_rename(path))
-        handle = self._stack.enter_context(StoragePath(temp_path).open("wb"))
+        if target.is_remote:
+            # An object-store PUT is atomic and the shard is unreferenced until its commit
+            # lands, so writing the final key directly saves the copy and delete of a rename.
+            write_path = path
+        else:
+            target.parent.mkdirs()
+            write_path = self._stack.enter_context(atomic_rename(path))
+        handle = self._stack.enter_context(StoragePath(write_path).open("wb"))
         self._sink = _HashingSink(handle)
         self._writer = self._stack.enter_context(
             pq.ParquetWriter(
