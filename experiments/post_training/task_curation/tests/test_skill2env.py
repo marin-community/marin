@@ -106,7 +106,7 @@ def test_prepared_selections_keep_distinct_stable_task_ids(tmp_path):
         root = tmp_path / str(index)
         (root / "tasks").mkdir(parents=True)
         for row in selection:
-            digest = row.data["task_ref"].split("@sha256:")[1]
+            digest = hashlib.sha256(row.data["task_ref"].encode()).hexdigest()
             (root / "tasks" / f"{digest}.jsonl").write_text(json.dumps(row.data) + "\n")
         tasks = {}
         for shard in conversion_shards(str(root), recipe.source):
