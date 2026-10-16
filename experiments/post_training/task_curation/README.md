@@ -133,6 +133,15 @@ Sources without pipelines remain inventory entries with a skip reason.
 Publication archives selected evidence in the data's storage region. Atlas data
 updates use the [explicit loader](../../../docs/references/rl-data-atlas.md#updating-atlas).
 
+For a production FULL campaign, add
+`--publish-catalog s3://marin-us-east-02a/marin/rl-data/catalog/production`.
+This requires assessment and forbids `--cache-dir`. The report and source artifacts
+stay in their versioned directories; the shared catalog retains run history and
+accumulates assessments. Omit the option for local previews and SAMPLE campaigns.
+Unselected production sources retain their declarations and grades. Older attempts
+are ignored per source, and removing a declaration does not retire its published entry.
+After publication, run the Atlas loader to refresh Postgres; no inference is repeated.
+
 ### Spiral rollout
 
 Start with AIME24 and SVAMP and a small SAMPLE panel in the local cache above.
