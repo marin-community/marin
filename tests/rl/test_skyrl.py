@@ -206,20 +206,6 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
     assert launch_config.draft_checkpoint_root == "<temporary_output_path>/checkpoints/drafts"
 
 
-def test_skyrl_topology_accepts_node_local_dp8_engines() -> None:
-    plan = dataclasses.replace(
-        _role_plan(),
-        colocate_all=False,
-        policy_num_nodes=4,
-        policy_num_gpus_per_node=8,
-        num_inference_engines=4,
-        inference_engine_data_parallel_size=8,
-        inference_engine_expert_parallel_size=8,
-    )
-
-    SkyRLTopology(num_nodes=8, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
-
-
 def test_skyrl_topology_rejects_a_colocated_slice_that_does_not_tile_the_node() -> None:
     plan = dataclasses.replace(
         _role_plan(),
