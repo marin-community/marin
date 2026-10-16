@@ -18,6 +18,7 @@ config:
   marin-loom:dotenvSecretVersion: "4"
   marin-loom:pruneDeployment: "true"
   marin-loom:settings:
+    acp.codex_cmd: CODEX_PATH=/home/app/.local/bin/codex exec codex-acp
     auth.github_organizations: "Open-Athena:188075292"
     browser.allowed_origins: https://marina.oa.dev
     github.profile: github
