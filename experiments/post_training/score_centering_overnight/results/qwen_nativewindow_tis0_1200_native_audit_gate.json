@@ -1,0 +1,38 @@
+{
+  "run_id": "sc-qwen-transfer-native-window-tis-s0-main-interactive-rno-a4-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "configuration_sha256": "2fa5d2ed77887cb18995ea7ab2a0f97e5fd8b4129eff9d88b71d8b69bcaecc71",
+  "completed_updates": 1200,
+  "native_audit_passed": true,
+  "physical_records": {
+    "train": 38400,
+    "eval": 184464
+  },
+  "native_failures": {
+    "train": 0,
+    "eval": 0
+  },
+  "native_failure_contract_passed": true,
+  "zero_native_error_acceptance_gate": false,
+  "verified_reused_records": [],
+  "native_cache": {
+    "objects": 12307,
+    "bytes": 20712653356,
+    "workers": 2,
+    "conditional_get_etag_length_sha_checked": true
+  },
+  "full_checkpoint_controls": "qwen_nativewindow_tis0_1200_final_checkpoint_controls.json.gz",
+  "detailed_native_audit": "sc-qwen-transfer-native-window-tis-s0-main-interactive-rno-a4-01a126ce.json.gz",
+  "original_grader_replay_passed": false,
+  "original_grader_replay_plan": "cpu_replay_qwen_nativewindow1200_tis0_plan.json",
+  "evidence_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-tis-s0-main-interactive-rno-a4-01a126ce/full-native-audit/manifest.json",
+    "bytes": 10930,
+    "etag": "\"6f2cea68406e5a2c7feded4dd62e9418\"",
+    "sha256": "a0bd22aefc47e794b6a088e19e026569aa91006274f0b88cda541d56ceba0cd9",
+    "full_byte_readback_verified": true
+  },
+  "retained_proof_files": 16,
+  "retained_proof_bytes": 10860735,
+  "scope": "Complete native membership, all1200 finite applied updates, serving/head/TIS/SC and formal native failure-mask checks pass. Every available original response still requires separate original-grader replay. Window8192/response4096 and full756 held-out members,61evaluation points. Full membership/capture checks and sampled learner probability algebra have separate coverage in the detailed audit. No quality threshold or extra zero-native-error gate; scientific source and all frozen recipes unchanged."
+}

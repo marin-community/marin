@@ -41,7 +41,10 @@
   "planned_updates": 1200,
   "all_native_tasks_exit_zero": true,
   "allocated_h100_hours_this_physical_attempt": 583.3972955555555,
-  "native_full_run_audit_passed": false,
+  "native_full_run_audit_passed": true,
   "original_grader_replay_passed": false,
-  "scope": "Process/controller completion only. Full1200 finite updates, response/capture/membership, actual final checkpoint controls and every available original grade remain required. This successful physical0 interval excludes earlier retired/recovery allocations, which stay in complete campaign ledger and same-recipe mapping. No endpoint quality or effect inference from exit0."
+  "scope": "Both native node tasks complete successfully. Subsequent full1200 finite-update, physical-response membership/capture, native failure-mask and actual all8rank final checkpoint-control audits pass. Original-grader replay remains pending on a separate32CPU zeroGPU task; no endpoint quality comparison established. This successful physical0 interval excludes earlier retired/recovery allocations, retained in complete campaign ledger and same-recipe mapping.",
+  "native_audit_gate": "qwen_nativewindow_tis0_1200_native_audit_gate.json",
+  "checkpoint_controls": "qwen_nativewindow_tis0_1200_final_checkpoint_controls.json.gz",
+  "original_grader_replay_plan": "cpu_replay_qwen_nativewindow1200_tis0_plan.json"
 }

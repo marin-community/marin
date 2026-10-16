@@ -1,0 +1,67 @@
+{
+  "job_id": "/romain/score-grader-qwen-native-window-tis-s0-a0-01a126ce",
+  "run_id": "sc-qwen-transfer-native-window-tis-s0-main-interactive-rno-a4-01a126ce",
+  "runtime_source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "analysis_source": "213f2fed2a2954c50c973c742bfff998f9a2edef",
+  "native_submission_confirmed": true,
+  "actual_controller_resources_confirmed": true,
+  "native_controller_row": {
+    "job_id": "/romain/score-grader-qwen-native-window-tis-s0-a0-01a126ce",
+    "job_state": "3",
+    "num_tasks": "1",
+    "priority_band": "3",
+    "bundle_id": "f87eabc34c60fd3e5d89a36954ffdcc1f4ca43fb334288f60f213da441b71477",
+    "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+    "res_cpu_millicores": "32000",
+    "res_memory_bytes": "68719476736",
+    "res_disk_bytes": "53687091200",
+    "res_device_json": "{}",
+    "task_id": "/romain/score-grader-qwen-native-window-tis-s0-a0-01a126ce/0",
+    "attempt_id": "0",
+    "attempt_uid": "cc1242cb841f9a6a",
+    "task_state": "3",
+    "exit_code": "",
+    "started_at_ms": "1792178371234",
+    "finished_at_ms": "",
+    "node_name": "gb95c40",
+    "terminal_reason": ""
+  },
+  "expected_physical_records": 222864,
+  "selected_archives": 9661,
+  "native_archive_bytes": 943598625,
+  "all_archive_sha256_etag_length_match_independent_native_cache": true,
+  "bundle_sha256": "f87eabc34c60fd3e5d89a36954ffdcc1f4ca43fb334288f60f213da441b71477",
+  "input_spec_sha256": "cf061f2169e2cae74a73eb607a84735c8931cd03f34ad733b8e99555e13c1f1d",
+  "resource_board_ids": [
+    1184,
+    1185
+  ],
+  "allocated_h100_hours": 0,
+  "original_grader_replay_passed": false,
+  "retained_proof_files": 19,
+  "retained_proof_bytes": 883539,
+  "retained_input_objects": {
+    "bundle": {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/nativewindow-tis0-original-replay-submission-20261016/f87eabc34c60fd3e5d89a36954ffdcc1f4ca43fb334288f60f213da441b71477/score-grader-qwen-native-window-tis-s0-a0-01a126ce-bundle.zip",
+      "bytes": 8293783,
+      "sha256": "f87eabc34c60fd3e5d89a36954ffdcc1f4ca43fb334288f60f213da441b71477",
+      "etag": "\"3653051b5539df113d7484d299947138\"",
+      "full_byte_readback_verified": true
+    },
+    "spec": {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/nativewindow-tis0-original-replay-submission-20261016/cf061f2169e2cae74a73eb607a84735c8931cd03f34ad733b8e99555e13c1f1d/score-grader-qwen-native-window-tis-s0-a0-01a126ce-spec.json",
+      "bytes": 157780,
+      "sha256": "cf061f2169e2cae74a73eb607a84735c8931cd03f34ad733b8e99555e13c1f1d",
+      "etag": "\"793cc61e85fa3c3f6be6ad753241a8ea\"",
+      "full_byte_readback_verified": true
+    }
+  },
+  "evidence_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/nativewindow-tis0-original-replay-submission-20261016/0e40a1f6a9a7589f54b85da7cbe77ca04d72defde98d5f658583036cb15e42d6/manifest.json",
+    "bytes": 14100,
+    "sha256": "0e40a1f6a9a7589f54b85da7cbe77ca04d72defde98d5f658583036cb15e42d6",
+    "etag": "\"8200020be64bd8ba61f862993c2f4b20\"",
+    "full_byte_readback_verified": true
+  },
+  "scope": "Actual zeroGPU CPU replay submitted after full native1200 and actual final checkpoint/control gates. All physical responses and every available original score remain required; unchanged native failure policy and no new zero-error or quality acceptance gate. Original graders, data, lock, packages, runner, ten-second per-call deadline and43200s job timeout frozen. No scientific endpoint comparison yet."
+}
