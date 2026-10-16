@@ -1,0 +1,459 @@
+{
+  "controller_snapshot_start_tag_utc": "2026-10-16T09:56:02Z",
+  "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/controller-snapshots/20261016T095602",
+  "sequential_calls_not_an_atomic_two_cluster_snapshot": true,
+  "queued_campaign_five_node_jobs": 4,
+  "queued_task_rows": [
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "2ad8112c4c15b96b",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "2a5b2fa78ded1b6a",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/2",
+      "attempt_id": "0",
+      "attempt_uid": "286a1a3175f6c8d2",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/3",
+      "attempt_id": "0",
+      "attempt_uid": "215f1369fd741806",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0-01a126ce/4",
+      "attempt_id": "0",
+      "attempt_uid": "0b1fa516806aec10",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "248b2c4223adbae6",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "f6282b200189e9dd",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce/2",
+      "attempt_id": "0",
+      "attempt_uid": "9b440a71fe3191e1",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce/3",
+      "attempt_id": "0",
+      "attempt_uid": "b34f8c2cbc914e7a",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126ce/4",
+      "attempt_id": "0",
+      "attempt_uid": "12ce69e0dc2a9971",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "90981b8f066db90e",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "b23c0b607f2d40b2",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/2",
+      "attempt_id": "0",
+      "attempt_uid": "2087af992029b13e",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/3",
+      "attempt_id": "0",
+      "attempt_uid": "107fc64b471dc698",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/4",
+      "attempt_id": "0",
+      "attempt_uid": "89330ffb95c91e08",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "a18478b26337c660",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "63f78fe0bfc6754a",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/2",
+      "attempt_id": "0",
+      "attempt_uid": "177a6366ab460d7f",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/3",
+      "attempt_id": "0",
+      "attempt_uid": "21e28ba0d4b69ff0",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-incumbent-main-s0-rno-a3-01a126ce/4",
+      "attempt_id": "0",
+      "attempt_uid": "7a5613e9f84770cc",
+      "state": "2",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "",
+      "node_name": "",
+      "terminal_reason": ""
+    }
+  ],
+  "interactive_nodes_including_queued": 4,
+  "terminal_attempts": 852,
+  "terminal_h100_hours": 12096.655277777772,
+  "new_terminal_attempts": 5,
+  "new_terminal_allocated_h100_hours": 0,
+  "new_runtime_retention_required_for_unallocated_retirement": false,
+  "provider_pending_statuses": [
+    {
+      "pod_name": "iris-romain-sc-snowball-checkpoint-198fe82c-0-215f1369fd741806",
+      "task_id": "romain.sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-dff74920eed9a3a5-0: queue=cw-rno2a-lq; QuotaReserved (Pending): couldn't assign flavors to pod set 7b098820: insufficient unused quota for nvidia.com/gpu in flavor cw-tas, 24 more needed, insufficient unused quota for rdma/ib in flavor cw-tas, 24 more needed",
+      "last_transition": {
+        "epoch_ms": "1792138582000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-checkpoint-573152e5-0-286a1a3175f6c8d2",
+      "task_id": "romain.sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-dff74920eed9a3a5-0: queue=cw-rno2a-lq; QuotaReserved (Pending): couldn't assign flavors to pod set 7b098820: insufficient unused quota for nvidia.com/gpu in flavor cw-tas, 24 more needed, insufficient unused quota for rdma/ib in flavor cw-tas, 24 more needed",
+      "last_transition": {
+        "epoch_ms": "1792138582000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-checkpoint-667b4586-0-2a5b2fa78ded1b6a",
+      "task_id": "romain.sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-dff74920eed9a3a5-0: queue=cw-rno2a-lq; QuotaReserved (Pending): couldn't assign flavors to pod set 7b098820: insufficient unused quota for nvidia.com/gpu in flavor cw-tas, 24 more needed, insufficient unused quota for rdma/ib in flavor cw-tas, 24 more needed",
+      "last_transition": {
+        "epoch_ms": "1792138582000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-checkpoint-741969ac-0-0b1fa516806aec10",
+      "task_id": "romain.sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-dff74920eed9a3a5-0: queue=cw-rno2a-lq; QuotaReserved (Pending): couldn't assign flavors to pod set 7b098820: insufficient unused quota for nvidia.com/gpu in flavor cw-tas, 24 more needed, insufficient unused quota for rdma/ib in flavor cw-tas, 24 more needed",
+      "last_transition": {
+        "epoch_ms": "1792138582000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-checkpoint-7fcee3a3-0-2ad8112c4c15b96b",
+      "task_id": "romain.sc-snowball-checkpoint-owners-restore5-noise005-sc-s0-a0",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-dff74920eed9a3a5-0: queue=cw-rno2a-lq; QuotaReserved (Pending): couldn't assign flavors to pod set 7b098820: insufficient unused quota for nvidia.com/gpu in flavor cw-tas, 24 more needed, insufficient unused quota for rdma/ib in flavor cw-tas, 24 more needed",
+      "last_transition": {
+        "epoch_ms": "1792138582000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-incumbent-m-43598979-0-7a5613e9f84770cc",
+      "task_id": "romain.sc-snowball-incumbent-main-s0-rno-a3-01a126ce.4",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-38557b6c826bf4dd-0: queue=cw-rno2a-lq; waiting for Kueue admission",
+      "last_transition": {
+        "epoch_ms": "1792144469000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-incumbent-m-b459ef36-0-63f78fe0bfc6754a",
+      "task_id": "romain.sc-snowball-incumbent-main-s0-rno-a3-01a126ce.1",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-38557b6c826bf4dd-0: queue=cw-rno2a-lq; waiting for Kueue admission",
+      "last_transition": {
+        "epoch_ms": "1792144469000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-incumbent-m-e6d17ccc-0-a18478b26337c660",
+      "task_id": "romain.sc-snowball-incumbent-main-s0-rno-a3-01a126ce.0",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-38557b6c826bf4dd-0: queue=cw-rno2a-lq; waiting for Kueue admission",
+      "last_transition": {
+        "epoch_ms": "1792144469000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-incumbent-m-f00388e7-0-21e28ba0d4b69ff0",
+      "task_id": "romain.sc-snowball-incumbent-main-s0-rno-a3-01a126ce.3",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-38557b6c826bf4dd-0: queue=cw-rno2a-lq; waiting for Kueue admission",
+      "last_transition": {
+        "epoch_ms": "1792144469000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-incumbent-m-f3d2323c-0-177a6366ab460d7f",
+      "task_id": "romain.sc-snowball-incumbent-main-s0-rno-a3-01a126ce.2",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-38557b6c826bf4dd-0: queue=cw-rno2a-lq; waiting for Kueue admission",
+      "last_transition": {
+        "epoch_ms": "1792144469000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-parser-qual-1c7c2be7-0-107fc64b471dc698",
+      "task_id": "romain.sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce.3",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-e294c9ecb9a3cd45-0: queue=cw-rno2a-lq; waiting for Kueue admission",
+      "last_transition": {
+        "epoch_ms": "1792144343000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-parser-qual-45e0724c-0-2087af992029b13e",
+      "task_id": "romain.sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce.2",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-e294c9ecb9a3cd45-0: queue=cw-rno2a-lq; waiting for Kueue admission",
+      "last_transition": {
+        "epoch_ms": "1792144343000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-parser-qual-9b492f58-0-89330ffb95c91e08",
+      "task_id": "romain.sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce.4",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-e294c9ecb9a3cd45-0: queue=cw-rno2a-lq; waiting for Kueue admission",
+      "last_transition": {
+        "epoch_ms": "1792144343000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-parser-qual-9bb97fd0-0-b23c0b607f2d40b2",
+      "task_id": "romain.sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce.1",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-e294c9ecb9a3cd45-0: queue=cw-rno2a-lq; waiting for Kueue admission",
+      "last_transition": {
+        "epoch_ms": "1792144343000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-parser-qual-dfcc47be-0-90981b8f066db90e",
+      "task_id": "romain.sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce.0",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-e294c9ecb9a3cd45-0: queue=cw-rno2a-lq; waiting for Kueue admission",
+      "last_transition": {
+        "epoch_ms": "1792144343000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-stale-calib-0ae50b34-0-9b440a71fe3191e1",
+      "task_id": "romain.sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-10abb1b3e2be75a5-0: queue=cw-rno2a-lq; waiting for Kueue admission",
+      "last_transition": {
+        "epoch_ms": "1792141138000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-stale-calib-303a2adb-0-f6282b200189e9dd",
+      "task_id": "romain.sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-10abb1b3e2be75a5-0: queue=cw-rno2a-lq; waiting for Kueue admission",
+      "last_transition": {
+        "epoch_ms": "1792141138000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-stale-calib-36103f5f-0-b34f8c2cbc914e7a",
+      "task_id": "romain.sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-10abb1b3e2be75a5-0: queue=cw-rno2a-lq; waiting for Kueue admission",
+      "last_transition": {
+        "epoch_ms": "1792141138000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-stale-calib-7f08bd32-0-248b2c4223adbae6",
+      "task_id": "romain.sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-10abb1b3e2be75a5-0: queue=cw-rno2a-lq; waiting for Kueue admission",
+      "last_transition": {
+        "epoch_ms": "1792141138000"
+      },
+      "node_name": ""
+    },
+    {
+      "pod_name": "iris-romain-sc-snowball-stale-calib-9bc149dd-0-12ce69e0dc2a9971",
+      "task_id": "romain.sc-snowball-stale-calibration-fresh-tis-s0-rno-a4-01a126",
+      "phase": "Pending",
+      "reason": "SchedulingGated",
+      "message": "Scheduling is blocked due to non-empty scheduling gates; Kueue workload iris-pg-10abb1b3e2be75a5-0: queue=cw-rno2a-lq; waiting for Kueue admission",
+      "last_transition": {
+        "epoch_ms": "1792141138000"
+      },
+      "node_name": ""
+    }
+  ],
+  "provider_capacity_source_local": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/rno-kubernetes-capacity-after-parser-and-ordinary-20261016.json",
+  "provider_capacity_source_sha256": "7ca09f68873df3fe1bb391b12e22331a2745da99e370123f591dc38d4672709e",
+  "capacity_interpretation": "Owner diagnostic reports insufficient unused nvidia.com/gpu and rdma/ib quota, 24 more needed. Other three gangs await Kueue admission. No RAM bottleneck or tensor-owner/root-cause conclusion is established."
+}

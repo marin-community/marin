@@ -2605,8 +2605,8 @@
       "configuration_sha256": "7776d7eed7336ba5abc855670dcc6b489141f0c9a6b167bd8c13a89a8bb63699",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-a2-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 6,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "071290e5f563621c55a866fe862f74335fe261c2a9c24eb9ce49f2f75489630a",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
@@ -3073,7 +3073,41 @@
       "priority_band": 3,
       "bundle_id": "bbf7f6225d48d39a45984386e269bbe26f9e2d584c246822a9d49eefa577a89a",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "h100_nodes": 5,
+      "h100_per_node": 8,
+      "source": "d6d6628f4cbf7a8bbf38b6803cc5a5b59dba12d9",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_parser_only_qualification_v1/detach.yaml",
+      "configuration_sha256": "47761ecbca40c605afe0269b5355c789f214bede34b25e32375d255e7ee3664f",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "bccad083242efad36bf56988be4a6a61f653e8195cfdb7c700575b44cd50c2b1",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-snowball-incumbent-main-s0-rno-a3-01a126ce",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "h100_nodes": 5,
+      "h100_per_node": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/ordinary-s0.yaml",
+      "configuration_sha256": "98747e51abbd50c9e3802ff44b298d0052e55283c08c54d0ffb4771915f265c6",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-main-s0-rno-a3-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "cef00c3c8bac58f14732d6fcd7b0b1cf9f633af161d2a3d629d72a531990bdf5",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-16T09:47:37.361806+00:00"
+  "observed_at": "2026-10-16T09:56:24.130586+00:00"
 }

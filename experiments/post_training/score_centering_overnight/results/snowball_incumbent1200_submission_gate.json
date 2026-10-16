@@ -36,5 +36,18 @@
   "planned_scientific_updates": 1200,
   "geometry": "Four8-H100 learners plus one8-H100 inference node, always BATCH. Native PP2/EP8/TP1/CP1/SP1.",
   "basis": "Exact source0212 ordinary no-head/no-TIS/no-centering path passed five real GPU updates and full native audit. Native asynchronous staleness bound2/full batch and max in flight256. No quality threshold; first actual main native finite-update/no-head gate before other two seeds.",
-  "completion_claim": false
+  "completion_claim": false,
+  "current_provider_replacement": {
+    "run_id": "sc-snowball-incumbent-main-s0-rno-a3-01a126ce",
+    "job_id": "/romain/sc-snowball-incumbent-main-s0-rno-a3-01a126ce",
+    "predecessor_job": "/romain/sc-snowball-incumbent-main-s0-a2-01a126ce",
+    "configuration": "experiments/post_training/score_centering_overnight/snowball_main_rno_provider_v1/ordinary-s0.yaml",
+    "configuration_sha256": "98747e51abbd50c9e3802ff44b298d0052e55283c08c54d0ffb4771915f265c6",
+    "predecessor_retired": true,
+    "cluster": "cw-rno2a",
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "submission_proof": "snowball_main_rno_provider_replacement_submission.json",
+    "first_actual_main_admission_gate_passed": false,
+    "other_two_seeds_submitted": false
+  }
 }
