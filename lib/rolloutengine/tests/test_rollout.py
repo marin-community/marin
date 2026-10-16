@@ -83,7 +83,7 @@ from rolloutengine.contracts import (
     TransitionCompleted,
 )
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness import Harness
+from rolloutengine.harness import Harness, HarnessContext
 from rolloutengine.shell import WORKSPACE_INSTRUCTION, ToolCallResult, ToolContext, shell_harness
 from rolloutengine.spec import TaskRolloutSpec, TraceMode
 from rolloutengine.test_support import (
@@ -2682,6 +2682,66 @@ class DisconnectingModel(ReplayModel):
         if len(self.requests) == 1:
             asyncio.get_running_loop().call_soon(self.handlers[0].cancel)
         return turn
+
+
+class NoEvents:
+    def emit(self, payload):
+        pass
+
+
+def agent_episode(agent):
+    context = HarnessContext(rollout_spec(arithmetic_task(), harness="agent"), None, NoEvents(), "run")
+    return agent_harness(agent).open(context)
+
+
+async def test_closing_an_agent_episode_keeps_a_cancellation_that_it_did_not_cause():
+    agent_task = None
+
+    async def agent(_context, complete):
+        nonlocal agent_task
+        agent_task = asyncio.current_task()
+        await complete(Prompt(({"role": "user", "content": "Return 12."},), {}))
+
+    episode = agent_episode(agent)
+    await episode.prepare()
+    assert agent_task is not None
+    agent_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await agent_task
+    with pytest.raises(asyncio.CancelledError):
+        await episode.close()
+
+
+async def test_a_cancelled_close_propagates_and_lets_the_agent_finish_stopping():
+    # The engine cancels a close at its cleanup deadline, while the agent may still drain its handlers.
+    agent_task = None
+    stopping = asyncio.Event()
+    release = asyncio.Event()
+    drained = False
+
+    async def agent(_context, complete):
+        nonlocal agent_task, drained
+        agent_task = asyncio.current_task()
+        try:
+            await complete(Prompt(({"role": "user", "content": "Return 12."},), {}))
+        except asyncio.CancelledError:
+            stopping.set()
+            await release.wait()
+            drained = True
+            raise
+
+    episode = agent_episode(agent)
+    await episode.prepare()
+    closing = asyncio.create_task(episode.close())
+    await asyncio.wait_for(stopping.wait(), timeout=5)
+    closing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    release.set()
+    assert agent_task is not None
+    with pytest.raises(asyncio.CancelledError):
+        await agent_task
+    assert drained
 
 
 async def test_a_retry_after_a_late_cancellation_receives_the_turn_again():
