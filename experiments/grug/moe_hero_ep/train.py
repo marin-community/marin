@@ -66,6 +66,7 @@ from experiments.grug.checkpointing import (
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
 from experiments.grug.moe_hero_ep.model import (
+    LM_LOSS_METRIC,
     OFFLOAD_CARRY_REMAT_MODE,
     GrugModelConfig,
     RematMode,
@@ -122,8 +123,12 @@ INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # than default it; see `_apply_hero_ep_runtime_defaults`.
 SERIAL_COLLECTIVE_OVERLAP_LIMIT = 1
 RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
-# TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
-# command buffers after the CUDA graph failure is fixed.
+# Capture without COLLECTIVES was validated on an earlier process topology:
+# https://github.com/marin-community/marin/pull/8277
+# The blanket disable was restored with a different topology:
+# https://github.com/marin-community/marin/pull/8289
+# Keep the existing hero default until
+# a matched benchmark and hang soak validate capture on the current ragged/offload recipe.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 _RAGGED_REQUIRED_XLA_FLAG_NAMES = frozenset(flag.partition("=")[0] for flag in RAGGED_REQUIRED_XLA_FLAGS)
 PJRT_DISTRIBUTION = "jax-cuda13-pjrt"
@@ -1295,9 +1300,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     }
                     if router_metrics:
                         levanter.tracker.log(router_metrics, step=step)
-                    if "train/cross_entropy_loss" in metrics:
+                    if LM_LOSS_METRIC in metrics:
                         levanter.tracker.log(
-                            {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
+                            {LM_LOSS_METRIC: metrics[LM_LOSS_METRIC]},
                             step=step,
                         )
                     if MOE_DROPPED_ASSIGNMENTS_METRIC in metrics:

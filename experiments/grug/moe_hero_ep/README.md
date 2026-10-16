@@ -15,19 +15,27 @@ data-parallel rack uses one 64-device expert mesh.
 - Batch: Each rack holds 4,194,304 tokens per update. The d6144 production run uses 2816 global
   sequences across 11 racks at 16K (11264 at 4K). A one-rack diagnostic defaults to 256 sequences.
 - Router: top-8 quantile balancing uses a global histogram with 10,000 bins. It has next-step,
-  stop-gradient expert biases and no auxiliary balancing loss.
+  stop-gradient expert biases and no auxiliary balancing loss. The bf16 compute policy rounds
+  router projection outputs and biases; bias addition, selection, combine weights, and QB statistics
+  then use fp32. Router z-loss is logged only. The training objective includes final-logit z-loss
+  with weight 1e-4; `train/lm_loss` includes it and is not an unregularized cross-entropy metric.
 - MoE backend: `ragged_all_to_all`. One update carries each (peer, local expert) pair, so rows
-  arrive grouped by expert, and local experts run in two chunks that share the 1.15 receiver
-  capacity. The transport reaches XLA's device-initiated (NCCL LSA) kernel, which needs Marin's patched
+  arrive grouped by expert, and local experts run in one chunk at the 1.15 receiver capacity.
+  The transport reaches XLA's device-initiated (NCCL LSA) kernel, which needs Marin's patched
   PJRT build, installed on GB200 through the `gpu` extra (`lib/marin/pyproject.toml`); a run that
   reaches the stock plugin fails at startup.
   The production hero trained on `fixed_pooled_wave_all_to_all` through step 81716 (3.77T of its 18T
   tokens); `hero-ragged_a2a-ep-step81k` continues from that checkpoint on the ragged transport.
-- Optimizer: MuonH, with its state offloaded to pinned host memory.
+- Optimizer: MuonH, with its state offloaded to pinned host memory. Newton–Schulz orthogonalizes
+  each routed expert independently; the hyperball step preserves the combined expert-bank norm
+  per layer. Global `weight_decay` and its masks are unsupported; only `gate_router_weight_decay`
+  controls decay (0.02 in the scaling ladder, annealed to zero).
 - Weights: fp32 on device with bf16 compute. A checkpoint written with a pinned-host fp32 master
   migrates in process on restore: its stored fp32 master is read directly into the run's params
   (the bf16 compute copy goes unread), and the next save writes the new layout. The reverse
   (synthesizing a master) is refused.
+- Rotary embeddings: Preserve the checkpoint's `rope_fused` value. It selects adjacent-pair versus
+  split-half coordinates and changes the model function.
 - Runtime: Each GPU has one JAX process. The recipe uses `cuda_async`, no PGLE, and no GPU
   command buffers. The ragged transport stages each layer's residual carry on pinned host, which
   frees the HBM the latency-hiding scheduler needs to run. Collective overlap stays at 1: the
@@ -252,8 +260,8 @@ Three quantities set what a sweep can fit on one rack:
 
 - Active routed neurons are top-k multiplied by width.
 - Parameters are expert count multiplied by width.
-- The receiver buffer is token assignments multiplied by the receiver capacity factor, split
-  across the transport's two expert chunks.
+- The receiver buffer is token assignments multiplied by the receiver capacity factor. The selected
+  hero uses one expert chunk.
 
 The selected E384 model runs at expert width 3072 and receiver capacity factor 1.15.
 
@@ -421,13 +429,14 @@ group `moe-hero-ep-small-abl` and carry Paloma and uncheatable evaluation at `--
 
 ### Scaling ladder
 
-`launch_scaling_ladder.py` trains one uniform hero recipe at five widths so a narrow rung predicts
-the `d6144` hero (which is the hero itself). Every rung shares the data schedule below on the
+`launch_scaling_ladder.py` trains five widths with shared routing and data choices.
+Every rung shares the data schedule below on the
 Marin tokenizer (simulated against 18.75T for small runs; raw sampling above 1e23 training FLOPs),
 the offloaded MuonH optimizer, the hero mixed precision, 384 experts / top-8, the ragged
-all-to-all transport, the QB histogram estimator at 10k bins, and a dropless held-out eval. Only
-the width and the rack count vary; the rack count, batch, step budget, eval cadence, and
-checkpoint policy all follow `--size`:
+all-to-all transport, the QB histogram estimator at 10k bins, and a dropless held-out eval.
+The d6144 hero uses 16K context, qk_mult 1.48, native SM100 attention, and carry offload; narrower
+rungs use 4K context, qk_mult 1.3, and their smaller-model attention and rematerialization settings.
+Rack count, batch, step budget, eval cadence, and checkpoint policy follow `--size`:
 
 | size | racks | batch | steps | eval | checkpoints |
 |---|---|---|---|---|---|
@@ -443,9 +452,10 @@ batch is 64 × racks (one sequence per device). The step budget is 791 tokens pe
 
 A rung resumes from the newest checkpoint it finds. The permanent checkpoints above go to the
 durable output root, and a rolling temporary checkpoint every hour goes to region-local temp
-storage with the shared 14-day lifecycle TTL. One temporary checkpoint is kept. A hardware fault, a
-host out-of-memory, or a preemption thus costs at most one hour of training. The training job
-retries 1000 times on failure and 100 times on preemption.
+storage with a three-day lifecycle TTL. One temporary checkpoint is kept. Recovery within that
+lifetime normally loses at most the hourly save interval; after a longer stall, recovery may use
+an older permanent checkpoint. The training job retries 1000 times on failure and 100 times on
+preemption.
 
 The [new mixture](../../../docs/reports/hero-mixture-log.md) starts at ~27.7%
 of training, with cooldown weights at ~80% (hero steps 108,000 and 312,192).

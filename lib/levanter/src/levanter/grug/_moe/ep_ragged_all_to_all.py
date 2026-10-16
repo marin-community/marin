@@ -247,8 +247,10 @@ def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], dtype: j
 
     ``dtype`` is the tokens' dtype, which the expert outputs and their cotangents share. The
     expert-side gradient divides ``<h, dh>`` by ``w``, and ``dh`` comes from the row cotangent
-    ``w * dout`` in that dtype. So the gradient is zero at ``w = 0``, and zero or inexact wherever
-    ``|w * dout|`` falls below the dtype's smallest normal number: 2^-126 in bfloat16 and float32,
+    ``w * dout`` in that dtype. Ordinary rounding of that product and the GEMMs changes the
+    gradient even for normal values. Separately, the gradient is
+    zero at ``w = 0``, and zero or inexact wherever ``|w * dout|`` falls below the dtype's
+    smallest normal number: 2^-126 in bfloat16 and float32,
     which only output cotangents near underflow reach, and 2^-14 in float16, which ordinary
     magnitudes reach.
 

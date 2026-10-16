@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import inspect
+from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
@@ -21,8 +23,38 @@ from levanter.grug.attention import (
 )
 from levanter.grug.attention._fa4_cute import _simple_causal_lower_bounds
 from levanter.grug.attention._fa4_cute_config import SM100_GQA_RATIOS, SM100_HEAD_DIM
+from levanter.grug.attention._fa4_cute_kernels import _patch_jax_array_list_tvm_ffi_converter
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.cpu_devices import run_on_cpu_devices
+
+
+def test_cutlass_jax_array_patch_preserves_dataclass_runtime_and_constexpr_arguments():
+    cute = pytest.importorskip("cutlass.cute")
+    pytest.importorskip("cutlass.jax.types")
+    converter = pytest.importorskip("cutlass.cute._tvm_ffi_args_spec_converter")
+    spec = pytest.importorskip("cutlass.base_dsl.tvm_ffi_builder.spec")
+
+    @dataclass
+    class LaunchMetadata:
+        rows: int
+        tile: cute.Constexpr[int]
+
+    def launch(metadata: LaunchMetadata):
+        pass
+
+    _patch_jax_array_list_tvm_ffi_converter()
+    params, _, dataclass_args = converter._tvm_ffi_args_spec_converter(
+        "launch", inspect.signature(launch), [LaunchMetadata(rows=19, tile=16)], {}
+    )
+
+    # The actual upstream conversion recursively passes is_constexpr for each
+    # dataclass field. Runtime rows must stay dynamic while tile stays a literal.
+    runtime_rows, constant_tile = params[0].params
+    assert isinstance(runtime_rows, spec.Var)
+    assert str(runtime_rows.dtype) == "int32"
+    assert isinstance(constant_tile, spec.ConstInt)
+    assert constant_tile.value == 16
+    assert dataclass_args == ["metadata"]
 
 
 class _reset_abstract_mesh:

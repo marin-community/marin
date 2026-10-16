@@ -1,13 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Hero-shape scaling ladder: one recipe, five widths.
+"""Hero-shape scaling ladder at five widths.
 
-Every rung trains the *same* EP hero recipe -- 384 routed experts, top-8, hidden/2-wide experts in a
-hidden/2 latent, ragged all-to-all transport, the Harrier 2026.08.18 two-phase mixture on the
-Marin tokenizer, offloaded MuonH state, the QB histogram estimator, and a dropless held-out eval --
-and differs only in width and the rack count it spans. Behaviour is uniform across the ladder so a
-rung predicts the d6144 hero. ``d6144`` is the hero itself.
+Every rung uses 384 routed experts, top-8, hidden/2-wide experts in a hidden/2 latent, ragged
+all-to-all transport, the Harrier 2026.08.18 three-phase mixture on the Marin tokenizer,
+offloaded MuonH state, the QB histogram estimator, and a dropless held-out eval. ``d6144`` is
+the production hero, with 16K context, qk_mult 1.48, native SM100 attention, and carry offload.
+Narrower rungs use 4K context, qk_mult 1.3, and their smaller-model kernel/rematerialization settings.
 
     size   racks  batch    steps  eval        checkpoints  tokens  active  total   FLOPs
     d768     1     1024    11420  every 5%    final only     48B     61M    1.6B    5.5e19
@@ -260,7 +260,7 @@ def build_ladder_run(
 
     # The narrow rungs are short: eval every 5% of the run and keep only the forced final checkpoint.
     # The d6144 hero is long: eval every 3000 steps and keep a permanent checkpoint every 6000.
-    # `keep_permanent=None` still writes the final checkpoint; restore is not used (see run_grug).
+    # `keep_permanent=None` still writes the final checkpoint; all rungs can restore saved state.
     if size == "d6144":
         steps_per_eval = 3000
         # Permanent checkpoint every 6000 steps, plus a one-off at step 55000 for the post-handoff
