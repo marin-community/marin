@@ -150,6 +150,13 @@ and aggregation. `benchmarks` and `cells` retain every admitted variant under it
 The SPA stores its panel selection locally. The Compare route carries the selected variants in its
 URL, and `/meta` lists siblings omitted from a narrowed panel so the picker can restore them.
 
+The Panel and Models views order models by mean reciprocal rank (MRR) across their admitted results
+on the selected benchmark columns. Each benchmark ranks its completed results by score, breaking score
+ties with the interval lower bound; identical results share a rank. A model's MRR is the mean of
+`1 / rank` over benchmarks it completed. Missing results do not enter its mean, so read the adjacent
+coverage count when comparing models. Models with no admitted result sort last. Use the qualified
+panel aggregate or interval-based head-to-head view for score comparisons.
+
 The evaluator names each task's primary metric, its canonical spelling, and whether its observations
 are binary or continuous. A column's protocol comes from the newest record with evaluator metadata;
 a cell whose metric or kind differs is rejected rather than ranked against unlike numbers. Records
