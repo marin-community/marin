@@ -15,7 +15,14 @@ from typing import TypedDict
 from transformers import PreTrainedTokenizerFast
 from verifyit.tool_call_markup import TOOL_CLOSE, TOOL_OPEN
 
-from experiments.post_training.structure_closure.benchmark import ClosureCase, Family, Split, closure_format, score_case
+from experiments.post_training.structure_closure.benchmark import (
+    CLOSE_REQUIRED,
+    ClosureCase,
+    Family,
+    Split,
+    closure_format,
+    score_case,
+)
 
 
 class ToolPrompt(StrEnum):
@@ -53,7 +60,7 @@ def native_tool_case(case: ClosureCase, tokenizer: PreTrainedTokenizerFast) -> C
     expected = TOOL_OPEN + rendered.rsplit(TOOL_OPEN, 1)[1].split(TOOL_CLOSE, 1)[0] + TOOL_CLOSE
     if json.loads(expected.removeprefix(TOOL_OPEN).removesuffix(TOOL_CLOSE)) != body:
         raise ValueError("Native serialization changed tool content")
-    if case.control == "close_required":
+    if case.control == CLOSE_REQUIRED:
         cut = len(expected) - len(TOOL_CLOSE)
     elif case.control == "opener_retention":
         cut = expected.index("{")
@@ -64,7 +71,7 @@ def native_tool_case(case: ClosureCase, tokenizer: PreTrainedTokenizerFast) -> C
     else:
         raise ValueError(f"Unsupported native tool control: {case.control}")
     instruction = case.instruction
-    if case.control != "close_required":
+    if case.control != CLOSE_REQUIRED:
         lead, reference = instruction.rsplit("\nReference:\n", 1)
         if reference != case.expected:
             raise ValueError("Instruction reference differs from the case reference")
