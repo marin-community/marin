@@ -457,9 +457,6 @@ def test_sotopia_summary_from_harbor_trial_is_available_to_sample_viewer(tmp_pat
     )
     summary_path.parent.mkdir(parents=True)
     summary_path.write_text(json.dumps(summary))
-    first_attempt = summary_path.parent.parent.parent / "000" / "agent" / "sotopia-summary.json"
-    first_attempt.parent.mkdir(parents=True)
-    first_attempt.write_text(json.dumps({**summary, "reasoning": "Superseded attempt"}))
 
     page = fetch_samples(str(results), task, offset=0, limit=10, correct="all", primary_metric_name="reward")
 

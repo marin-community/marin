@@ -1,5 +1,4 @@
 <script setup lang="ts">
-/** Display an agentic sample's ATIF trajectory or retained SOTOPIA episode. */
 import { ref, watch } from 'vue'
 import { apiGet } from '@/composables/useApi'
 import type { ArtifactResponse, SampleRow, Trajectory } from '@/types/api'

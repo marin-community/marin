@@ -1,4 +1,3 @@
-/** Harbor's SOTOPIA summary is a retained episode, not an ATIF trajectory. */
 export interface SotopiaSummary {
   transcript: { sender: string; receiver: string; message: string }[][]
   reasoning: string | null
@@ -20,7 +19,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** Select the SOTOPIA viewer only for a summary with ordered speaker turns. */
 export function isSotopiaSummary(value: unknown): value is SotopiaSummary {
   if (!isRecord(value) || !Array.isArray(value.transcript) || !Array.isArray(value.scores)) return false
   if (!Array.isArray(value.overall_scores) || !Array.isArray(value.agent_ids) || !Array.isArray(value.models)) {
