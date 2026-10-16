@@ -140,9 +140,7 @@ def test_evalchemy_result_namespaces_group_subtasks(tmp_path, monkeypatch):
 
 
 def test_evalchemy_result_reads_the_published_tree_not_the_retry_scratch(tmp_path, monkeypatch):
-    """A retried evaluation copies its temp working directory into the results tree, leaving a second
-    complete scoring of the same items. Reading both keys one benchmark's panel twice, which doubles
-    its item count and averages the benchmark against itself."""
+    """Ignore nested retry scratch results when reading published task metrics."""
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     files = {
         "mmlu_5shot/vllm/results_2026-07-16T00-00-00.json": _MMLU,

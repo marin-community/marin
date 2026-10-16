@@ -37,7 +37,15 @@ from marin.evaluation.records import (
     TaskCoverage,
 )
 from marin.evaluation.rollouts import normalize_rollouts
-from marin.evaluation.runner import EvaluationError, EvaluationOutcome
+from marin.evaluation.runner import (
+    BACKEND_POLL_SECONDS,
+    EvaluationError,
+    EvaluationOutcome,
+    InferenceBackendFinished,
+    InferenceUnavailable,
+    check_inference_backend,
+    inference_attempt_state,
+)
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
 
@@ -279,6 +287,8 @@ def _run_evalchemy_child(
     config: EvalchemyRunConfig,
     output_dir: str,
     env_vars: Mapping[str, str],
+    *,
+    inference_sessions: tuple[RemoteInferenceSession, ...],
 ) -> str:
     judge_env: dict[str, str] = {}
     if config.judge is not None:
@@ -295,6 +305,7 @@ def _run_evalchemy_child(
     child_id = uuid.uuid4().hex[:8]
     uvx_command = shlex.join(_evalchemy_client_command(config.runtime))
     command = f'exec {uvx_command} "$IRIS_WORKDIR/{_EVAL_CLIENT_SCRIPT}"'
+    before = tuple(session.preemption_count() for session in inference_sessions)
     eval_job = client.submit(
         entrypoint=Entrypoint.from_command("bash", "-c", command),
         name=f"eval-{config.name.replace('.', '-')}-{child_id}",
@@ -324,8 +335,21 @@ def _run_evalchemy_child(
         model.endpoint.model,
     )
     try:
-        eval_job.wait(timeout=float("inf"))
+        while True:
+            check_inference_backend(inference_attempt_state(inference_sessions, before))
+            try:
+                eval_job.wait(timeout=BACKEND_POLL_SECONDS)
+                break
+            except TimeoutError:
+                continue
+        check_inference_backend(inference_attempt_state(inference_sessions, before))
+    except (InferenceUnavailable, InferenceBackendFinished):
+        # Cancel this attempt before the runner resumes the same archive.
+        eval_job.cancel()
+        eval_job.wait(timeout=float("inf"), raise_on_failure=False)
+        raise
     except JobFailedError as exc:
+        check_inference_backend(inference_attempt_state(inference_sessions, before))
         raise EvalPipelineError(
             f"Evalchemy job {eval_path} failed: {exc}",
             stage=PipelineStage.EVAL,
@@ -335,19 +359,20 @@ def _run_evalchemy_child(
     return eval_path
 
 
-def run_evalchemy(
+def _run_evalchemy_once(
     model: RunningModel,
     config: EvalchemyRunConfig,
     output_dir: str,
     *,
     env_vars: Mapping[str, str],
+    inference_sessions: tuple[RemoteInferenceSession, ...],
 ) -> EvalchemyOutcome:
-    """Run Evalchemy and validate its results artifacts and normalized samples in FineStore."""
+    """Run one Evalchemy attempt and validate and normalize its FineStore artifacts."""
     if not config.tasks:
         raise ValueError("Evalchemy requires at least one task")
     if "://" not in output_dir:
         raise ValueError(f"Evalchemy output_dir {output_dir!r} is not an object-store path")
-    eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
+    eval_job = _run_evalchemy_child(model, config, output_dir, env_vars, inference_sessions=inference_sessions)
     try:
         result = FineStoreEvalchemyResult(path=output_dir)
         result.task_metrics()
@@ -404,7 +429,13 @@ class EvalchemyExecutor:
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
         try:
-            outcome = run_evalchemy(session.model, self.config, output_dir, env_vars=env_vars)
+            outcome = _run_evalchemy_once(
+                session.model,
+                self.config,
+                output_dir,
+                env_vars=env_vars,
+                inference_sessions=(session,) if judge is None else (session, judge),
+            )
         except EvalPipelineError as exc:
             status = RunStatus.FAILED if exc.stage is PipelineStage.EVAL else RunStatus.ARTIFACT_FAILED
             raise EvaluationError(

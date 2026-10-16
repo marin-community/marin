@@ -112,11 +112,18 @@ class RemoteInferenceSession:
     metrics_url: str | None = None
 
     def check_alive(self) -> None:
-        """Raise when any inference worker has reached a terminal state."""
+        """Raise when any serving job has reached a terminal state."""
         for job in self.jobs:
             status = job.status()
             if JobStatus.finished(status):
                 raise RuntimeError(f"Inference job {job.job_id} finished unexpectedly with status {status}")
+
+    def preemption_count(self) -> int:
+        """Return cumulative worker preemptions, including workers that have recovered."""
+        if not self.jobs:
+            return 0
+        client = iris_ctx().client
+        return sum(client.job_status(JobName.from_string(str(job.job_id))).preemption_count for job in self.jobs)
 
     def backend_state(self) -> InferenceBackendState:
         """Return the aggregate state Iris reports for the serving jobs and their tasks."""
@@ -136,10 +143,12 @@ class RemoteInferenceSession:
             state = InferenceBackendState.RECOVERING
         return state
 
-    def wait_until_ready(self) -> None:
+    def wait_until_ready(self, *, check_dependencies: Callable[[], None] | None = None) -> None:
         """Wait for serving tasks and the routed OpenAI endpoint to become ready."""
         endpoint_deadline: Deadline | None = None
         while True:
+            if check_dependencies is not None:
+                check_dependencies()
             state = self.backend_state()
             if state is InferenceBackendState.FINISHED:
                 raise RuntimeError("Inference backend finished before becoming ready")
@@ -161,8 +170,9 @@ class RemoteInferenceSession:
             )
             endpoint_deadline.raise_if_expired(timeout_message)
             try:
+                address = iris_ctx().client.resolve_endpoint(self.endpoint_name).rstrip("/")
                 response = requests.get(
-                    self.model.endpoint.url("models"),
+                    f"{address}{OPENAI_API_SUFFIX}/models",
                     timeout=max(
                         0.001,
                         min(_ENDPOINT_PROBE_TIMEOUT_SECONDS, endpoint_deadline.remaining_seconds()),
@@ -170,7 +180,7 @@ class RemoteInferenceSession:
                 )
                 if response.status_code == 200:
                     return
-            except requests.RequestException:
+            except (requests.RequestException, ConnectionError):
                 pass
             endpoint_deadline.raise_if_expired(timeout_message)
             time.sleep(_ENDPOINT_READY_POLL_SECONDS)
@@ -248,7 +258,7 @@ def _resolved_engine(
     engine: VllmEngineConfig | LevanterEngineConfig,
     iris: IrisConfig,
 ) -> VllmEngineConfig | LevanterEngineConfig:
-    """Resolve model locators owned by an inference engine inside its worker."""
+    """Resolve the speculative vLLM model URI inside its worker."""
     if not isinstance(engine, VllmEngineConfig) or engine.speculative is None:
         return engine
 
