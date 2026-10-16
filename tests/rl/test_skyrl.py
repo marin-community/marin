@@ -198,12 +198,13 @@ def test_skyrl_spec_rejects_retired_transport_options_before_submission(key: str
         dataclasses.replace(_spec(), config_yaml=yaml.safe_dump(recipe))
 
 
-def test_skyrl_retention_allows_explicit_rollback_depth_up_to_five() -> None:
-    policy = SkyRLRetentionPolicy(resume_checkpoint_count=5)
+def test_skyrl_retention_allows_ten_checkpoint_recovery_window() -> None:
+    # The Smartie continuation failed preflight despite its requested ten-checkpoint window.
+    policy = SkyRLRetentionPolicy(resume_checkpoint_count=10)
 
-    assert policy.resume_checkpoint_count == 5
-    with pytest.raises(ValueError, match="between one and five"):
-        SkyRLRetentionPolicy(resume_checkpoint_count=6)
+    assert policy.resume_checkpoint_count == 10
+    with pytest.raises(ValueError, match="between one and ten"):
+        SkyRLRetentionPolicy(resume_checkpoint_count=11)
 
 
 def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> None:
