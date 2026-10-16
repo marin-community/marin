@@ -76,7 +76,7 @@ def _write_output_shards(
     groups: Iterator[pa.Table],
     target_bytes: int,
 ) -> list[Shard]:
-    """Write key-ordered row groups into shards of at most ``target_bytes`` decoded bytes.
+    """Write key-ordered row groups into shards near ``target_bytes`` decoded bytes.
 
     A shard always takes at least one row group, so a single oversized group still lands.
     """

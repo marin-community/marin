@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Newest-version selection and the sorted-run merge shared by reads and compaction.
+"""Newest-version selection and sorted-run merging.
 
 Rows order by primary key ascending, with nulls after every value and two nulls equal, and
 then by version: a greater ``(_commit, _seq, _gen)`` is newer, and a missing ``_seq``
