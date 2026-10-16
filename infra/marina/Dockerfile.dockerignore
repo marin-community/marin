@@ -28,6 +28,14 @@
 !lib/finelog/pyproject.toml
 !lib/finelog/src
 !lib/finelog/config
+!lib/shellbox/pyproject.toml
+!lib/shellbox/README.md
+!lib/shellbox/src
+!lib/taskcompendium/pyproject.toml
+!lib/taskcompendium/src
+!lib/verifyit/pyproject.toml
+!lib/verifyit/README.md
+!lib/verifyit/src
 !infra/marina/pyproject.toml
 !infra/marina/src
 !infra/marina/runtime.toml
