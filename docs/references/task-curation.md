@@ -220,7 +220,7 @@ The `CurationRecipe` configuration has these fields:
 | Field | Meaning |
 |---|---|
 | `name` | Catalog key and artifact name. |
-| `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)` or `HarborHubSource(name, revision, membership_sha256)`. |
+| `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)` or `HarborHubSource(name, revision)`. |
 | `convert` | `(RawRow, ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection`; it fixes the task's grader. |
 | `version` | Converter revision; bump it when conversion or bundled grader code changes. |
 | `intended_use` | `train` or `eval`. |
@@ -240,18 +240,21 @@ two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, th
 `required_grader_environment(context)` returns the environment or raises.
 
 Harbor Hub sources acquire the complete pinned release through the existing cached
-source-download step. The isolated `config/external/harbor` runtime verifies
-release membership and task content, then writes `tasks/<task-reference-hash>.jsonl` and a
-release manifest. Each filename hashes the full immutable task reference,
-so differently named tasks with identical contents remain separate. The membership checksum is pinned separately because the Hub
-release identifier need not equal the SDK manifest hash. Dataset-level scoring
-files are not supported. Packages with links or more than 8 MiB of exported
-files produce explicit unsupported rows.
+source-download step. The isolated `config/external/harbor` runtime checks that
+Harbor resolves the requested release digest and verifies each task's content
+before writing `tasks/<task-reference-hash>.jsonl` and a release manifest.
+Each filename hashes the full immutable task reference, so differently named
+tasks with identical contents remain separate. The manifest records the resolved
+task list. Dataset-level scoring files are not supported. Packages with links or
+more than 8 MiB of exported files produce explicit unsupported rows.
 
-The download identity includes the release, membership checksum, exporter code,
-and locked runtime. Curation sampling happens after acquisition. Existing
-`--input-root` and `--input-file` overrides bypass acquisition; for a bounded
-local export, run `python -m experiments.post_training.task_curation.harbor_hub --help` in the pinned Harbor environment. Use a fresh output directory per export.
+Release membership is resolved by Harbor using the pinned release digest.
+
+The download identity includes the release, exporter code, and locked runtime.
+Curation sampling happens after acquisition. Existing `--input-root` and
+`--input-file` overrides bypass acquisition; for a bounded local export, run
+`python -m experiments.post_training.task_curation.harbor_hub --help` in the
+pinned Harbor environment. Use a fresh output directory per export.
 
 ## Environments
 

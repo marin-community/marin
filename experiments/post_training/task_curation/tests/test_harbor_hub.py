@@ -21,13 +21,6 @@ def test_export_preserves_distinct_references_with_identical_contents(tmp_path, 
     refs = [f"{task.org}/{task.name}@{task.ref}" for task in task_ids]
     release_digest = "sha256:" + "a" * 64
     release = f"fixture/tasks@{release_digest}"
-    manifest = harbor_hub.DatasetManifest.model_validate(
-        {
-            "dataset": {"name": "fixture/tasks"},
-            "tasks": [{"name": f"fixture/{name}", "digest": f"sha256:{digest}"} for name in ("one", "two")],
-            "files": [],
-        }
-    )
 
     async def metadata(self, requested):
         assert requested == release
@@ -42,11 +35,7 @@ def test_export_preserves_distinct_references_with_identical_contents(tmp_path, 
     identities = []
     for name, selection in (("full", []), ("subset", refs[:1])):
         output = tmp_path / name
-        asyncio.run(
-            harbor_hub.export_release(
-                release, manifest.compute_content_hash(), harbor_hub.StoragePath(str(output)), selection
-            )
-        )
+        asyncio.run(harbor_hub.export_release(release, harbor_hub.StoragePath(str(output)), selection))
         rows = {json.loads(path.read_text())["task_ref"]: path.name for path in (output / "tasks").glob("*.jsonl")}
         assert set(rows) == set(selection or refs)
         assert json.loads((output / "release.json").read_text())["selected"] == sorted(selection or refs)

@@ -588,7 +588,7 @@ def test_harbor_hub_download_reuses_cache_and_separates_release_pins(tmp_path, m
 
     # Replace the isolated SDK process, not the artifact executor or its caching.
     monkeypatch.setattr(pipeline_module.subprocess, "run", exporter)
-    source = HarborHubSource("fixture/tasks", "sha256:" + "a" * 64, "b" * 64)
+    source = HarborHubSource("fixture/tasks", "sha256:" + "a" * 64)
     runtime = CampaignRuntime()
     client = LocalClient()
     try:
@@ -608,7 +608,7 @@ def test_harbor_hub_download_reuses_cache_and_separates_release_pins(tmp_path, m
 
 @pytest.mark.parametrize("mode", [SourceProcessingMode.QUICK, SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
 def test_harbor_hub_input_override_bypasses_acquisition_and_tracks_content(tmp_path, config, mode):
-    source = HarborHubSource("fixture/tasks", "sha256:" + "a" * 64, "b" * 64)
+    source = HarborHubSource("fixture/tasks", "sha256:" + "a" * 64)
     recipe = replace(math500(), source=source, convert=convert_fixture, rubric=None, controls=None, grader=None)
     options = PipelineOptions(mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=replace(config, mode=mode)))
     automatic = source_step(recipe, options)

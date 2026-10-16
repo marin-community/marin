@@ -14,7 +14,6 @@ import stat
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from harbor.models.dataset.manifest import DatasetManifest
 from harbor.models.task.id import PackageTaskId
 from harbor.publisher.packager import Packager
 from harbor.registry.client.package import PackageDatasetClient
@@ -43,9 +42,9 @@ def export_task(root: Path, task_ref: str) -> dict:
     }
 
 
-async def export_release(release: str, membership_sha256: str, output: StoragePath, selected: list[str]) -> None:
-    """Verify release membership and export one hash-verified package at a time."""
-    name, digest = release.rsplit("@", 1)
+async def export_release(release: str, output: StoragePath, selected: list[str]) -> None:
+    """Resolve the pinned release and export one hash-verified package at a time."""
+    _, digest = release.rsplit("@", 1)
     if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
         raise ValueError("Select a release by content digest, not a tag")
     metadata = await PackageDatasetClient().get_dataset_metadata(release)
@@ -59,15 +58,6 @@ async def export_release(release: str, membership_sha256: str, output: StoragePa
         refs[f"{task.org}/{task.name}@{task.ref}"] = task
     if len(refs) != len(tasks):
         raise ValueError("Duplicate task identities in release")
-    manifest = DatasetManifest.model_validate(
-        {
-            "dataset": {"name": name},
-            "tasks": [{"name": ref.rsplit("@", 1)[0], "digest": ref.rsplit("@", 1)[1]} for ref in refs],
-            "files": [{"path": file.path, "digest": f"sha256:{file.content_hash}"} for file in metadata.files],
-        }
-    )
-    if manifest.compute_content_hash() != membership_sha256:
-        raise ValueError("Hub release membership differs from the pinned manifest")
     if metadata.files:
         raise ValueError("Dataset-level scoring files require an explicit adapter")
     unknown = set(selected) - refs.keys()
@@ -92,7 +82,6 @@ async def export_release(release: str, membership_sha256: str, output: StoragePa
             {
                 "release": release,
                 "population_count": len(refs),
-                "membership_sha256": membership_sha256,
                 "selected": selected_refs,
                 "task_refs": sorted(refs),
             },
@@ -107,14 +96,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--release", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--membership-sha256", required=True)
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--task", action="append", default=[], help="Immutable org/task@sha256:... reference")
     selection.add_argument("--all", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    asyncio.run(export_release(args.release, args.membership_sha256, StoragePath(args.output), args.task))
+    asyncio.run(export_release(args.release, StoragePath(args.output), args.task))
 
 
 if __name__ == "__main__":
