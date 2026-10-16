@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 import uuid
 from collections.abc import Generator, Iterator, Sequence
 from contextlib import ExitStack, closing
@@ -15,6 +17,7 @@ from typing import Protocol
 
 import pyarrow as pa
 import pyarrow.compute as pc
+import pyarrow.parquet as pq
 import rigging.filesystem.factory as factory
 from pyarrow.fs import PyFileSystem
 from rigging import telemetry
@@ -55,12 +58,54 @@ class CompactionResult:
     superseded: int = 0
 
 
-def _sorted_run(
-    shard: Shard, unified: pa.Schema, pa_fs: PyFileSystem, primary_key: tuple[str, ...]
-) -> Generator[pa.Table, None, None]:
-    """Yield one shard's rows in primary-key order, a row group at a time when the shard is sorted."""
+def _sorted_run(shard: Shard, unified: pa.Schema, pa_fs: PyFileSystem) -> Generator[pa.Table, None, None]:
+    """Yield a key-sorted shard a row group at a time."""
     with closing(iter_shard_row_groups(shard, unified, pa_fs)) as groups:
-        yield from groups if shard.primary_key_sorted else sorted_by_key(groups, primary_key)
+        yield from groups
+
+
+def _spill_sorted_chunks(
+    shard: Shard,
+    table: str,
+    unified: pa.Schema,
+    pa_fs: PyFileSystem,
+    primary_key: tuple[str, ...],
+    directory: str,
+    chunk_bytes: int,
+) -> list[str]:
+    """Write an unsorted shard as local Parquet runs, each sorted and at most ``chunk_bytes`` decoded.
+
+    Memory holds one chunk at a time, so compacting unsorted shards does not hold them together.
+    """
+    paths: list[str] = []
+
+    def spill(chunk: list[pa.Table]) -> None:
+        path = os.path.join(directory, f"{uuid.uuid4().hex}.parquet")
+        with pq.ParquetWriter(path, unified) as writer:
+            for rows in sorted_by_key(chunk, primary_key):
+                for group in shard_writer.table_row_groups(table, [rows]):
+                    writer.write_table(group)
+        paths.append(path)
+
+    chunk: list[pa.Table] = []
+    held = 0
+    with closing(iter_shard_row_groups(shard, unified, pa_fs)) as groups:
+        for group in groups:
+            if chunk and held + group.nbytes > chunk_bytes:
+                spill(chunk)
+                chunk, held = [], 0
+            chunk.append(group)
+            held += group.nbytes
+    if chunk:
+        spill(chunk)
+    return paths
+
+
+def _local_run(path: str) -> Generator[pa.Table, None, None]:
+    """Yield a spilled run a row group at a time."""
+    with pq.ParquetFile(path) as run:
+        for index in range(run.num_row_groups):
+            yield run.read_row_group(index)
 
 
 def _write_output_shards(
@@ -220,7 +265,16 @@ def _compact_shards(
         unified = unified.append(pa.field(SystemColumns.GENERATION, pa.int32()))
 
     with ExitStack() as stack:
-        runs = [stack.enter_context(closing(_sorted_run(shard, unified, pa_fs, primary_key))) for shard in shards]
+        spill_directory = stack.enter_context(tempfile.TemporaryDirectory(prefix="finestore-compaction-"))
+        runs: list[Iterator[pa.Table]] = []
+        for shard in shards:
+            if shard.primary_key_sorted:
+                runs.append(stack.enter_context(closing(_sorted_run(shard, unified, pa_fs))))
+                continue
+            for path in _spill_sorted_chunks(
+                shard, table, unified, pa_fs, primary_key, spill_directory, chunk_bytes=target_bytes
+            ):
+                runs.append(stack.enter_context(closing(_local_run(path))))
         groups = shard_writer.table_row_groups(table, merge_sorted_runs(runs, primary_key))
         outputs = _write_output_shards(layout, table, next_generation, unified, primary_key, groups, target_bytes)
     written = sum(shard.rows for shard in outputs)

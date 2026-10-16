@@ -185,12 +185,15 @@ larger groups; explicit compaction remains available across all active shards.
 
 Compaction pins a manifest and merges its input shards as sorted runs, reading one
 Parquet row group at a time from each. Flushed and compacted shards are already sorted
-by primary key; an unsorted input, such as a flush with a row missing a key column, is
-sorted in memory first. The merge keeps only the newest version of each key, so the
-output shards of one compaction hold disjoint, ascending key ranges, and the seal
-records the superseded rows it removed. Memory holds about one decoded row group per
-input plus the rows at the merge frontier; Parquet pre-buffering is disabled and a
-small fsspec file buffer limits speculative byte reads. Output shards are cut at about
+by primary key. An unsorted input, such as a flush with a row missing a key column or a
+shard migrated from format 1, is first sorted in chunks of at most
+`compaction_target_bytes` decoded bytes, each written to the local temporary
+directory, and the merge reads those chunks as further runs. The merge keeps only the
+newest version of each key, so the output shards of one compaction hold disjoint,
+ascending key ranges, and the seal records the superseded rows it removed. Memory holds
+about one decoded row group per run plus the rows at the merge frontier, or one chunk
+while an unsorted input is sorted; Parquet pre-buffering is disabled and a small fsspec
+file buffer limits speculative byte reads. Output shards are cut at about
 `compaction_target_bytes` of decoded data, configurable on `DataStore` or as
 `target_bytes` on `compact_table`; one row group always fits, so a single large row
 group or row can exceed it. Reads apply the same newest-version rule: `iter_rows`
