@@ -34,12 +34,11 @@ from experiments.post_training.task_curation.images.build import environment_art
 from experiments.post_training.task_curation.pipeline import (
     CampaignMachines,
     CurationRecipe,
-    HarborSource,
     HfSource,
     environment_requirements,
     process_rows,
 )
-from experiments.post_training.task_curation.source import InputPreparation, RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tests.image_builds import (
     DATA_PATH,
     REPOSITORY,
@@ -71,12 +70,6 @@ def catalog(monkeypatch, tmp_path):
                 for name, pipeline in pipelines.items()
             },
             "numbers": number_source(tmp_path / "not-yet-generated"),
-            "prepared": RlDataSource(
-                info=SourceInfo(id="fixture:prepared", title="prepared", origin="fixture"),
-                config=replace(math500(), name="prepared", source=HarborSource("fixture/tasks", "sha256:" + "a" * 64)),
-                pipeline=process_rows,
-                preparation=InputPreparation.EXPLICIT,
-            ),
         },
     )
     return pipelines
@@ -112,47 +105,6 @@ def test_source_option_selects_catalog_order_without_changing_identity(tmp_path,
     assert "Unknown source: unknown" in unknown.output
 
 
-@pytest.mark.parametrize("mode", ["quick", "sample", "full"])
-def test_prepared_source_requires_inputs_and_hashes_the_supplied_export(tmp_path, catalog, mode):
-    staged = tmp_path / "prepared"
-    (staged / "tasks").mkdir(parents=True)
-    payload = staged / "tasks" / "fixture.jsonl"
-    payload.write_text('{"problem": "Two plus two?", "answer": "4"}\n')
-    args = [
-        "--mode",
-        mode,
-        "--source",
-        "prepared",
-        "--max-workers",
-        "1",
-        "--cache-dir",
-        str(tmp_path / "cache"),
-        "--skip-assessment",
-        "--model-revision",
-        "fixture",
-        "--review-mode",
-        "chat",
-    ]
-    if mode == "quick":
-        args += ["--output-root", str(tmp_path / "output")]
-    runner = CliRunner()
-    missing = runner.invoke(main, args)
-    assert missing.exit_code == 2
-    args += ["--input-root", str(staged)]
-    initial = runner.invoke(main, args)
-    assert initial.exit_code == 0, initial.output
-    initial_sources = json.loads(initial.output)["sources"]
-    payload.write_text('{"problem": "Three plus three?", "answer": "6"}\n')
-    changed = runner.invoke(main, args)
-    assert changed.exit_code == 0, changed.output
-    changed_sources = json.loads(changed.output)["sources"]
-    assert len(initial_sources) == 1
-    if mode != "quick":
-        # QUICK uses a mutable dev output; reviewed modes cache by input content.
-        assert initial_sources[0]["fingerprint"] != changed_sources[0]["fingerprint"]
-    assert initial_sources[0]["dependencies"] == []
-
-
 def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_their_lock(tmp_path, monkeypatch, request):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
     install_fake_build_tools(tmp_path, monkeypatch)
@@ -178,10 +130,18 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     assert spec.env == {"NLTK_DATA": "/srv/nltk_data"}
 
 
-def test_local_only_planning_does_not_require_a_controller(tmp_path, catalog, monkeypatch):
-    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central2/rl-grading")
-    result = CliRunner().invoke(main, arguments(tmp_path))
+@pytest.mark.parametrize("root", [None, "s3://marin-us-east-02a/marin/curation-trial"])
+def test_remote_planning_uses_cw_instead_of_ambient_gcs(tmp_path, catalog, monkeypatch, root):
+    previous = "gs://marin-us-central2/rl-grading"
+    monkeypatch.setenv("MARIN_PREFIX", previous)
+    options = arguments(tmp_path)
+    if root is not None:
+        options += ["--artifact-root", root]
+    result = CliRunner().invoke(main, options)
     assert result.exit_code == 0, result.output
+    plan = json.loads(result.output)
+    assert plan["chunk_storage_prefix"] == f"{root or 's3://marin-us-east-02a/marin'}/.zephyr/rl-data-campaign"
+    assert os.environ["MARIN_PREFIX"] == previous
     assert not (tmp_path / "report.json").exists()
 
 
@@ -260,7 +220,17 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
     input_file.write_text("1\n2\n3\n")
     source = number_source(input_file)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
-    options = ["--mode", mode, "--skip-assessment", "--source", source.name, "--max-workers", "1"]
+    options = [
+        "--mode",
+        mode,
+        "--skip-assessment",
+        "--source",
+        source.name,
+        "--max-workers",
+        "1",
+        "--artifact-root",
+        str(tmp_path / "artifacts"),
+    ]
     if mode == "quick":
         output_root = tmp_path / "output"
         report = output_root / "campaign.json"
@@ -341,6 +311,8 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
         "1",
         "--report-path",
         str(report),
+        "--artifact-root",
+        str(tmp_path / "artifacts"),
     ]
     runner = CliRunner()
     planned = runner.invoke(main, options)

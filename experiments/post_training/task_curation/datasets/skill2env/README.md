@@ -2,18 +2,19 @@
 
 The existing `Harbor Hub:skill2env` catalog entry has a conversion recipe for
 network-disabled tasks with a single `/workspace`, native programmatic tests,
-and a reference solution. Preparation verifies the release membership and each
+and a reference solution. Acquisition verifies the release membership and each
 task's content digest through the pinned client in `config/external/harbor`.
 The Hub release ID and the current SDK's membership hash differ for this
-release, so preparation also checks the separately pinned 7,496-task membership
+release, so acquisition also checks the separately pinned 7,496-task membership
 hash. It does not edit upstream tasks.
 
 Export a bounded selection for QUICK conversion; Docker and registry access are not required:
 
 ```bash
-uv run --project config/external/harbor --frozen python \
-  -m experiments.post_training.task_curation.datasets.skill2env.prepare \
+uv run --isolated --project config/external/harbor --frozen python \
+  -m experiments.post_training.task_curation.harbor_hub \
   --release skill2env/skill2env@sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c \
+  --membership-sha256 1292dbfd97e6bde83142366afc4f730e61388cc4f66c7e13b65402eb2caabe41 \
   --task skill2env/task_api-design-reviewer_jdkbai64@sha256:acfc393449fdad22ae5a2da63d16d27605c02a983059fac0c5dd49384bf6c260 \
   --output /tmp/skill2env-input
 ```
@@ -44,12 +45,11 @@ Building and pinning these images, configuring native resource limits, and
 validating grading in those containers are follow-up work. The converted tasks
 cannot execute in SAMPLE/FULL while their build contexts remain unresolved.
 
-Skill2Env is excluded from default campaigns because it requires prepared input.
-Select it explicitly with `--source skill2env` and supply `--input-root PATH`.
-This existing input option applies to every selected source, so run Skill2Env
-separately from sources that need their normal downloads. Missing input fails
-during planning, before workers start. A selected export is a subset, not
-evidence about all 7,496 tasks.
+Without an input override, the normal source-download step acquires and caches
+all 7,496 packages before curation sampling. Use the bounded export above for
+local inspection. The `--input-root` option applies to every selected source,
+so run this selection separately from sources using their normal downloads.
+A selected export is a subset, not evidence about the entire release.
 
 The grading definition invokes the unchanged `tests/test.sh` in a separate sandbox. Private
 tests and reference solutions are excluded from agent resources. It retains

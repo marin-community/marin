@@ -127,6 +127,7 @@ auth:
     - github-iris@hai-gcp-models.iam.gserviceaccount.com
     - contractor@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
+    - wg0420@princeton.edu
 
 kubernetes_provider:
   namespace: iris

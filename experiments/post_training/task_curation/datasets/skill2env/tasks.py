@@ -1,14 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Skill2Env's pinned native release, with explicit package preparation."""
+"""Skill2Env's pinned native release, with cached Harbor Hub acquisition."""
 
 
 from taskcompendium.pipeline.models import Controls, IntendedUse
 
 from experiments.post_training.task_curation.datasets.skill2env.conversion import RELEASE, convert_task, golden
-from experiments.post_training.task_curation.pipeline import CurationRecipe, HarborSource, process_rows
-from experiments.post_training.task_curation.source import InputPreparation, RlDataSource, SourceInfo
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HarborHubSource, process_rows
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 RUBRIC = """
 Compare the original task instructions with the unchanged programmatic verifier and private reference solution.
@@ -42,7 +42,9 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             ),
             config=CurationRecipe(
                 name="skill2env",
-                source=HarborSource(name, revision),
+                source=HarborHubSource(
+                    name, revision, membership_sha256="1292dbfd97e6bde83142366afc4f730e61388cc4f66c7e13b65402eb2caabe41"
+                ),
                 version="5",
                 convert=convert_task,
                 intended_use=IntendedUse.TRAIN,
@@ -50,6 +52,5 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 controls=Controls(golden=golden, memory_mb=4096),
             ),
             pipeline=process_rows,
-            preparation=InputPreparation.EXPLICIT,
         )
     ]

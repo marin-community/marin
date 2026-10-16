@@ -63,7 +63,7 @@ class TypedBatchValue(Protocol):
 
 
 @dataclass(frozen=True)
-class TypedBatchRecord[T: TypedBatchValue]:
+class TypedBatchRecord[T]:
     task_id: str
     status: ReviewStatus
     value: T | None

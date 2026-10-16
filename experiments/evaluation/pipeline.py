@@ -6,7 +6,7 @@
 :func:`eval_step` wraps one launcher run (model x eval selection) as an :class:`ArtifactStep`, so
 evals compose into ``StepRunner`` pipelines and can be triggered programmatically -- e.g. right
 after a training pipeline exports a checkpoint, or fanned out over a model sweep. The step runs the
-same orchestration as the CLI (serve the model once, run evalchemy against the served URL, write
+same orchestration as the CLI (share inference across evaluations, write
 ``record.json`` + results + per-question parquet) to the shared eval output root. The step's artifact
 path holds its cache record and typed launch result: an identical (model, evals, limit, version)
 config is a cache hit.
@@ -30,12 +30,13 @@ from iris.rpc import job_pb2
 from marin.evaluation.hardware import default_platform
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import read_record, record_path
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import Artifact, is_mutable_version
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.step_runner import StepRunner
 
 from experiments.evaluation.evals import resolve_eval_keys
 from experiments.evaluation.launch import (
+    DEFAULT_EVAL_CONCURRENCY,
     EVALUATION_CONTROLLER_CLUSTER,
     LaunchSpec,
     launch_group,
@@ -55,6 +56,7 @@ class EvalStepConfig:
     model: ModelConfig
     evals: str
     limit: int | None
+    max_concurrent: int
     artifact_path: str
     accelerator: str | None
     submission_cluster: str
@@ -92,11 +94,13 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
         platform=default_platform(config.model),
         accelerator=config.accelerator,
         limit=config.limit,
+        max_concurrent=config.max_concurrent,
         records_prefix=None,
         submission_cluster=config.submission_cluster,
         federated_cluster=config.federated_cluster,
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
         version=config.version,
+        cache_key=None if is_mutable_version(config.version) else config.artifact_path,
     )
     submitted = launch_group(prepare_evaluation_batch(spec), iris_ctx().client)
     submitted.job.wait(timeout=float("inf"))
@@ -120,6 +124,7 @@ def eval_step(
     deps: tuple[ArtifactStep, ...] = (),
     resolve_model: Callable[[StepContext], ModelConfig] | None = None,
     limit: int | None = None,
+    max_concurrent: int = DEFAULT_EVAL_CONCURRENCY,
     accelerator: str | None = None,
     submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
     federated_cluster: str | None = None,
@@ -128,6 +133,7 @@ def eval_step(
 
     Experiments declare producer dependencies and resolve their paths in ``resolve_model``.
     Checked-in models use ``model`` directly without a producer step.
+    ``max_concurrent`` caps concurrent evaluators sharing inference.
     """
 
     def build_config(ctx: StepContext) -> EvalStepConfig | EvalStepFingerprint:
@@ -144,6 +150,7 @@ def eval_step(
             model=resolved_model,
             evals=evals,
             limit=limit,
+            max_concurrent=max_concurrent,
             artifact_path=ctx.output_path,
             accelerator=ctx.runtime_arg(_ACCELERATOR_RUNTIME_ARG),
             submission_cluster=ctx.runtime_arg(_SUBMISSION_CLUSTER_RUNTIME_ARG),
