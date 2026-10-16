@@ -205,5 +205,22 @@
       "sha256": "fdcceb8df5bf04b1da9f72489f45d8ddb77a6bdab28ba206800e33578f91fe8e",
       "full_bytes_read_back_verified": true
     }
-  ]
+  ],
+  "completed_full_remote_recoveries": [
+    {
+      "run_id": "sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce",
+      "actual_original_grade_calls": 249976,
+      "native_failure_placeholders": 8,
+      "completed_report": "sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce-regrading.json.gz",
+      "allocated_cpu_hours": 67.07784
+    },
+    {
+      "run_id": "sc-qwen-transfer-advantages-sc-s0-pilot-a4-01a126ce",
+      "actual_original_grade_calls": 38552,
+      "native_failure_placeholders": 0,
+      "completed_report": "sc-qwen-transfer-advantages-sc-s0-pilot-a4-01a126ce-regrading.json.gz",
+      "allocated_cpu_hours": 9.325733333333334
+    }
+  ],
+  "historical_discrepancy_disposition": "The complete qualified remote optimizerSC1 replay agrees with all249976 available native verdicts. Its eight native execution-failure placeholders remain separate. The old local partial reported two differences without retained record IDs/details,so their cause and per-record relationship to the full replay remain unconfirmed. Both old partial logs and their cost bounds are preserved."
 }

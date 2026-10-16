@@ -70,7 +70,34 @@
         "node_name": "g1cb6c2",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+      "status": "Controller exit0; full physical249984 cohort verified, available original responses graded and native failure placeholders retained separately.",
+      "full_response_replay_passed": true,
+      "terminal_controller": {
+        "job_id": "/romain/score-grader-qwen-optimizer-sc-s1-a0-01a126ce",
+        "job_state": "4",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "1324f2076e172464d2b9036ff9794bd2c4a787b6feec7343ded96c90e2097846",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-optimizer-sc-s1-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "5957e1cfec8be562",
+        "task_state": "4",
+        "exit_code": "0",
+        "started_at_ms": "1792107961761",
+        "finished_at_ms": "1792115508018",
+        "node_name": "g1cb6c2",
+        "terminal_reason": ""
+      },
+      "allocated_cpu_hours": 67.07784,
+      "physical_records": 249984,
+      "actual_original_grade_calls": 249976,
+      "native_failure_placeholders": 8,
+      "completed_report": "sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce-regrading.json.gz"
     },
     {
       "job_id": "/romain/score-grader-qwen-pilot-advantages-sc-s0-a0-01a126ce",
@@ -177,7 +204,7 @@
   "maximum_archive_io_workers": 4,
   "native_bundle_validation_passed": true,
   "local_manager_loss_evidence": "qwen_local_replay_manager_loss_20261015.json",
-  "status": "The advantages SC seed0 pilot passed all 38,552 original grades and all three native evaluation count and quality checks. The optimizer SC seed1 full300 replay remains controller-running; its latest retained progress reports 114,688 records and zero differences. The two differences from the lost local manager remain historical unresolved observations until the complete replacement replay finishes. All archive downloads are complete; no further training was submitted.",
+  "status": "Both first-wave recovered cohorts passed complete original-grader replay gates. Optimizer SC seed1 has249976 actual original grades/249984 physical records/eight native failure placeholders/zero differences;all16 evaluation count/mean checks match. Advantages SC seed0 pilot passed38552 original grades and all3 evaluations. The historical local optimizer partial reported two differences without record details;the complete replacement agrees with every available native verdict,but those historical observations cannot be reconciled per record. Other prepared cohort replays remain required.",
   "resource_board_ids": [
     1082,
     1083
