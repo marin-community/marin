@@ -11,13 +11,11 @@ from collections.abc import Generator, Iterator, Sequence
 from contextlib import ExitStack, closing
 from dataclasses import dataclass
 from functools import partial
-from heapq import merge
-from itertools import chain, groupby
+from itertools import chain
 from typing import Protocol
 
 import pyarrow as pa
 import pyarrow.compute as pc
-import pyarrow.dataset as pds
 import pyarrow.parquet as pq
 import rigging.filesystem.factory as factory
 from pyarrow.fs import PyFileSystem
@@ -27,7 +25,7 @@ from rigging.timing import retry_with_backoff
 from finestore import shard_writer
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
 from finestore.layout import BlobTables, CommitToken, FineStoreLayout, Shard, SystemColumns
-from finestore.reader import ReadView, _NoReadAheadHandler
+from finestore.reader import ReadView, _NoReadAheadHandler, _ScanProfile, iter_shard_batches, merge_versioned_rows
 from finestore.shard_writer import ShardWriter
 
 logger = logging.getLogger(__name__)
@@ -80,34 +78,14 @@ def _scan_batch_rows(metadata: pq.FileMetaData, shard_count: int) -> int:
 def _iter_compaction_rows(
     shard: Shard, schema: pa.Schema, primary_key: tuple[str, ...], filesystem: PyFileSystem, batch_rows: int
 ) -> Generator[_ArrowRow, None, None]:
-    """Keep payloads in Arrow while exposing only merge coordinates to Python."""
-    dataset = pds.dataset([shard.path], filesystem=filesystem, format="parquet", schema=schema)
-    with ExitStack() as stack:
-        if shard.primary_key_sorted:
-            batches = stack.enter_context(
-                dataset.scanner(
-                    use_threads=False,
-                    batch_size=batch_rows,
-                    batch_readahead=1,
-                    fragment_readahead=1,
-                    fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=False),
-                ).to_reader()
-            )
-        else:
-            source = dataset.to_table()
-            batches = source.sort_by([(name, "ascending") for name in primary_key]).to_batches(max_chunksize=batch_rows)
+    """Yield sorted Arrow row references with their key and version coordinates."""
+    profile = _ScanProfile(batch_rows=batch_rows, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
+    with closing(iter_shard_batches(shard, schema, primary_key, filesystem, scan_profile=profile)) as batches:
         for batch in batches:
             if not batch.num_rows:
                 continue
-            commit_index = batch.schema.get_field_index(SystemColumns.COMMIT)
-            if batch.column(commit_index).null_count:
-                batch = batch.set_column(
-                    commit_index,
-                    SystemColumns.COMMIT,
-                    pc.fill_null(batch.column(commit_index), shard.commit_sequence),
-                )
             keys = [batch.column(batch.schema.get_field_index(name)) for name in primary_key]
-            commits = batch.column(commit_index)
+            commits = batch.column(batch.schema.get_field_index(SystemColumns.COMMIT))
             sequences = batch.column(batch.schema.get_field_index(SystemColumns.SEQUENCE))
             for index in range(batch.num_rows):
                 key = tuple((value is None, value) for value in (column[index].as_py() for column in keys))
@@ -121,27 +99,10 @@ def _iter_compaction_rows(
                 )
 
 
-def _merged_arrow_rows(streams: list[Iterator[_ArrowRow]]) -> Iterator[tuple[_ArrowRow, int]]:
-    merged = merge(*streams, key=lambda row: row.key)
-    for _key, group in groupby(merged, key=lambda row: row.key):
-        winner: _ArrowRow | None = None
-        count = 0
-        for row in group:
-            count += 1
-            if winner is None or (row.commit_sequence, row.sequence, row.generation) > (
-                winner.commit_sequence,
-                winner.sequence,
-                winner.generation,
-            ):
-                winner = row
-        assert winner is not None
-        yield winner, count - 1
-
-
 def _compaction_groups(
     rows: Iterator[tuple[_ArrowRow, int]], schema: pa.Schema, table: str
 ) -> Iterator[tuple[pa.Table, int]]:
-    """Gather winning Arrow rows into bounded output row groups."""
+    """Yield bounded output row groups with each group's superseded-row count."""
     batches: list[pa.RecordBatch] = []
     batch_offsets: dict[int, int] = {}
     indices: list[int] = []
@@ -275,7 +236,7 @@ def _compact_shards(
             )
             for shard, item in zip(shards, metadata, strict=True)
         ]
-        merged_rows = _merged_arrow_rows(streams)
+        merged_rows = merge_versioned_rows(streams)
         first = next(merged_rows, None)
         if first is None:
             raise ValueError(f"FineStore table {table!r} has {len(shards)} non-empty shard descriptors but no rows")

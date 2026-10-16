@@ -61,7 +61,6 @@ def row_groups(row_tables: Iterable[pa.Table], *, max_rows: int | None = None) -
 
 
 def table_row_limit(table: str) -> int:
-    """Return the maximum output row-group size for a FineStore table."""
     if table == BlobTables.PARTS:
         return BLOB_PART_ROW_GROUP_ROWS
     if table == BlobTables.DESCRIPTORS:

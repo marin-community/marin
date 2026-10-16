@@ -247,6 +247,20 @@ class _ReadableShard(Protocol):
     def primary_key_sorted(self) -> bool: ...
 
 
+class _VersionCoordinates(Protocol):
+    @property
+    def key(self) -> tuple: ...
+
+    @property
+    def commit_sequence(self) -> int: ...
+
+    @property
+    def sequence(self) -> int: ...
+
+    @property
+    def generation(self) -> int: ...
+
+
 @dataclass(frozen=True)
 class _ReadPlan:
     shards: tuple[_ReadableShard, ...]
@@ -299,7 +313,7 @@ def _matches_filter(row: dict, where: list[tuple[str, str, object]]) -> bool:
     return True
 
 
-def iter_shard_rows(
+def iter_shard_batches(
     shard: _ReadableShard,
     unified: pa.Schema,
     primary_key: tuple[str, ...],
@@ -307,8 +321,8 @@ def iter_shard_rows(
     columns: list[str] | None = None,
     where: list[tuple[str, str, object]] | None = None,
     scan_profile: _ScanProfile = _TABLE_SCAN_PROFILE,
-) -> Generator[VersionedRow, None, None]:
-    """Yield rows from one shard in primary-key order with version coordinates."""
+) -> Generator[pa.RecordBatch, None, None]:
+    """Yield batches in primary-key order with resolved commit sequences."""
     dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
     with ExitStack() as stack:
         if shard.primary_key_sorted:
@@ -328,28 +342,65 @@ def iter_shard_rows(
             sort_columns = [(name, "ascending") for name in primary_key if name in source.column_names]
             batches = source.sort_by(sort_columns).to_batches(max_chunksize=scan_profile.batch_rows)
         for batch in batches:
+            commit_index = batch.schema.get_field_index(SystemColumns.COMMIT)
+            if commit_index < 0:
+                batch = batch.append_column(
+                    SystemColumns.COMMIT, pa.array([shard.commit_sequence] * batch.num_rows, type=pa.int64())
+                )
+            elif batch.column(commit_index).null_count:
+                batch = batch.set_column(
+                    commit_index,
+                    SystemColumns.COMMIT,
+                    pc.fill_null(batch.column(commit_index), shard.commit_sequence),
+                )
+            yield batch
+
+
+def iter_shard_rows(
+    shard: _ReadableShard,
+    unified: pa.Schema,
+    primary_key: tuple[str, ...],
+    pa_fs: PyFileSystem,
+    columns: list[str] | None = None,
+    where: list[tuple[str, str, object]] | None = None,
+    scan_profile: _ScanProfile = _TABLE_SCAN_PROFILE,
+) -> Generator[VersionedRow, None, None]:
+    """Yield rows from one shard in primary-key order with version coordinates."""
+    with closing(iter_shard_batches(shard, unified, primary_key, pa_fs, columns, where, scan_profile)) as batches:
+        for batch in batches:
             for row in batch.to_pylist():
-                commit_sequence = row.get(SystemColumns.COMMIT)
-                if commit_sequence is None:
-                    commit_sequence = shard.commit_sequence
-                row[SystemColumns.COMMIT] = commit_sequence
                 key = tuple((row.get(name) is None, row.get(name)) for name in primary_key)
                 yield VersionedRow(
                     key=key,
-                    commit_sequence=commit_sequence,
+                    commit_sequence=row[SystemColumns.COMMIT],
                     sequence=row.get(SystemColumns.SEQUENCE) or 0,
                     generation=shard.generation,
                     row=row,
                 )
 
 
-def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[MergedRow]:
-    """Merge sorted shard streams and retain the newest row for each key."""
+def merge_versioned_rows[RowT: _VersionCoordinates](streams: list[Iterator[RowT]]) -> Iterator[tuple[RowT, int]]:
+    """Yield the latest row and superseded count for each key in sorted streams."""
     merged = heapq.merge(*streams, key=lambda item: item.key)
     for _key, group in itertools.groupby(merged, key=lambda item: item.key):
-        items = list(group)
-        winner = max(items, key=lambda item: (item.commit_sequence, item.sequence, item.generation))
-        yield MergedRow(row=winner.row, superseded=len(items) - 1)
+        winner: RowT | None = None
+        count = 0
+        for item in group:
+            count += 1
+            if winner is None or (item.commit_sequence, item.sequence, item.generation) > (
+                winner.commit_sequence,
+                winner.sequence,
+                winner.generation,
+            ):
+                winner = item
+        assert winner is not None
+        yield winner, count - 1
+
+
+def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[MergedRow]:
+    """Merge sorted shard streams and retain the newest row for each key."""
+    for winner, superseded in merge_versioned_rows(streams):
+        yield MergedRow(row=winner.row, superseded=superseded)
 
 
 def _read_plan(
