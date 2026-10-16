@@ -1337,7 +1337,35 @@
           "sha256": "4b8901a991cd0dc835816b2cf43cebed9725eb7222ad0699004298c2662a3ed8"
         }
       },
-      "controller_row": {
+      "status": "Controller exit0; full physical222132 cohort verified, available original responses graded and native failure placeholders retained separately.",
+      "full_response_replay_passed": true,
+      "terminal_controller": {
+        "job_id": "/romain/score-grader-qwen-batching-sc-s2-a0-01a126ce",
+        "job_state": "4",
+        "num_tasks": "1",
+        "priority_band": "3",
+        "bundle_id": "a638586910f90cb0997d7749781a1c1cf32fee3a4bc66eb74041a58ac0197d00",
+        "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+        "res_cpu_millicores": "32000",
+        "res_memory_bytes": "68719476736",
+        "res_disk_bytes": "53687091200",
+        "res_device_json": "{}",
+        "task_id": "/romain/score-grader-qwen-batching-sc-s2-a0-01a126ce/0",
+        "attempt_id": "0",
+        "attempt_uid": "a512c8544c9b2f01",
+        "task_state": "4",
+        "exit_code": "0",
+        "started_at_ms": "1792161386275",
+        "finished_at_ms": "1792166610727",
+        "node_name": "g1cb6c2",
+        "terminal_reason": ""
+      },
+      "allocated_cpu_hours": 46.439573333333335,
+      "physical_records": 222132,
+      "actual_original_grade_calls": 222132,
+      "native_failure_placeholders": 0,
+      "completed_report": "sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce-regrading.json.gz",
+      "initial_controller_row": {
         "job_id": "/romain/score-grader-qwen-batching-sc-s2-a0-01a126ce",
         "job_state": "3",
         "num_tasks": "1",
@@ -1358,7 +1386,14 @@
         "node_name": "g1cb6c2",
         "terminal_reason": ""
       },
-      "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU; input package durably retained, full original-grader result pending."
+      "initial_controller_row_scope": "Original native resource confirmation at startup; terminal_controller records the final exit0 allocation.",
+      "complete_native_evidence_manifest": {
+        "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-batching-sc-s2-a0-01a126ce/completed-original-grader-proof/manifest.json",
+        "bytes": 16183,
+        "sha256": "42a1e12d754c56fbad827bf2b112d6d98203552d7a9cb240183101cb28142225",
+        "etag": "\"1a1056b386c7378e58716d540f1f164f\"",
+        "full_byte_readback_verified": true
+      }
     }
   ],
   "total_requested_cpu": 32,
@@ -1366,7 +1401,7 @@
   "total_requested_gpu": 0,
   "maximum_archive_io_workers": 2,
   "first_complete_cpu_replay_proof": "qwen_curriculum300_first_cpu_complete_response_replay.json",
-  "status": "Controller-running32CPU/64GiB/50GiB BATCH,zeroGPU. Full native1200 and final eight-rank checkpoint controls pass. Input bundle/spec durably retained and fullSHA read back; all222132 available original responses require replay, zero unavailable native verdicts observed, zero reused records. Original source/data/graders/lock/packages/runner/ten-second deadlines unchanged. Two IO slots reused from completed1150 native-cache collection; existing raw chain remains2IO, aggregate4 transfer IO. No new GPU work.",
+  "status": "Complete native1200, final checkpoint controls and all222132 available original-response replay gates pass; native CPU physical0 exits0. Zero unavailable native verdicts, zero grade differences, no GPU allocation.",
   "native_bundle_validation_passed": true,
   "packaging_note": "Workspace stays in the owned worktree cache. Initial native validation caught Git ignore filtering of nested frozen lockfiles. Explicit includes now name every unchanged input-SHA path and replay/spec.json; both validation and submission use this same list. No source/grader/lock/package or deadline bytes changed; no job submitted before passing full bundle validation.",
   "resource_board_ids": [

@@ -1,0 +1,56 @@
+{
+  "job_id": "/romain/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce",
+  "source": "57b0c60bb0a92f7fc22f258b05fff125ac1a9ff0",
+  "physical_attempt": 0,
+  "native_controller_row": {
+    "task_id": "/romain/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce/0",
+    "attempt_id": "0",
+    "attempt_uid": "a3cceb24d4680d24",
+    "state": "7",
+    "exit_code": "",
+    "started_at_ms": "",
+    "finished_at_ms": "1792168172650",
+    "node_name": "",
+    "terminal_reason": "PodDeleted: pod was deleted while the attempt was active"
+  },
+  "native_job_state": "worker_failed",
+  "native_reason": "PodDeleted: pod was deleted while the attempt was active",
+  "allocated_h100_hours": 0,
+  "runtime_measurements": 0,
+  "scientific_or_checkpoint_qualification_established": false,
+  "original_submission_plan_sha256": "dbd4b80a23ab23a3e882d03c6b6b28abd6c5ca67c6d65e3981e70abb780e0de3",
+  "original_payload_sha256": "d1fefb7e33df9bd327a1c000628e76a399609986720c2c3bd8011533f0a05fde",
+  "files": [
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce/unallocated-pod-deletion-20261016/f010e53939c4a3fe1efc703552d673495bb77baae3d75e559f3d2c004ba42f3d/nccl-probe-east2-unallocated-terminal-controller-row.json",
+      "bytes": 337,
+      "sha256": "f010e53939c4a3fe1efc703552d673495bb77baae3d75e559f3d2c004ba42f3d",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce/unallocated-pod-deletion-20261016/71f3f941ec118701c88d95bf148a46b3de383fae8093975b57ed0ea529b7d60e/nccl-probe-east2-terminal-job-20261016T1645.log",
+      "bytes": 821,
+      "sha256": "71f3f941ec118701c88d95bf148a46b3de383fae8093975b57ed0ea529b7d60e",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce/unallocated-pod-deletion-20261016/d6c39a83a82fcd174c89495939fbecbde953bafbdb877c7b37019598c107d30d/nccl-probe-east2-terminal-events-20261016T1645.log",
+      "bytes": 610,
+      "sha256": "d6c39a83a82fcd174c89495939fbecbde953bafbdb877c7b37019598c107d30d",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce/unallocated-pod-deletion-20261016/17abe870395efe6d493617076a86963c10116670898ab51bcd819997337004ae/retain-nccl-east2-unallocated-pod-deletion.py",
+      "bytes": 4227,
+      "sha256": "17abe870395efe6d493617076a86963c10116670898ab51bcd819997337004ae",
+      "full_byte_readback_verified": true
+    }
+  ],
+  "scope": "Pod deleted while unallocated. Native task never received a node or start time, so its displayed exit0 is not successful payload execution. No GPU memory measurements or Snowball root cause can be inferred. Original plan/configuration/payload bytes remain unchanged. New communication-only retry has its own preparation and identity.",
+  "retained_report": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce/unallocated-pod-deletion-20261016/terminal-observation.json",
+    "sha256": "55df7c0996d8d09c6ce82af18b1083066ee0da76b41c1c46eb4c25ce0fc00d9f",
+    "bytes": 3229,
+    "full_byte_readback_verified": true
+  }
+}

@@ -1,0 +1,125 @@
+{
+  "job_id": "/romain/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce",
+  "source": "57b0c60bb0a92f7fc22f258b05fff125ac1a9ff0",
+  "payload_sha256": "af5f01280e57bb15a3a7fb9f83bd8dcc5257445322234dd9164146ae92cd5a8a",
+  "plan_sha256": "751a86d83a8e764229abeba58233d5f953d45e2d4dcb9b3bfc082a7ba142258c",
+  "resources": {
+    "cpu": 32,
+    "memory": "256GB",
+    "disk": "200GB",
+    "gpu": {
+      "variant": "H100",
+      "count": 2
+    },
+    "tasks": 1,
+    "priority": "batch"
+  },
+  "native_submission_confirmed": true,
+  "controller_resource_confirmation_pending": false,
+  "retained_preparation": [
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/plan/nccl-checkpoint-broadcast-probe-east2-retry-submission-plan.json",
+      "bytes": 14909,
+      "sha256": "751a86d83a8e764229abeba58233d5f953d45e2d4dcb9b3bfc082a7ba142258c",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/plan/nccl-checkpoint-broadcast-memory-probe-east2-retry.py",
+      "bytes": 5461,
+      "sha256": "af5f01280e57bb15a3a7fb9f83bd8dcc5257445322234dd9164146ae92cd5a8a",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/plan/submit-nccl-checkpoint-broadcast-probe-east2-retry.py",
+      "bytes": 5036,
+      "sha256": "df13b224da9deaf613772d8339ff8e925225835b30f6a33a4527a002fb1e2492",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/plan/prepare-nccl-checkpoint-broadcast-probe-east2-retry.py",
+      "bytes": 5118,
+      "sha256": "61362d450271f064fd9e8fced9a1693c6dbf3845470ae8e9a1a510ff44b55b6c",
+      "full_byte_readback_verified": true
+    }
+  ],
+  "scientific_qualification_established": false,
+  "controller_task_and_resources": [
+    {
+      "job_id": "/romain/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce",
+      "job_state": "4",
+      "num_tasks": "1",
+      "priority_band": "3",
+      "bundle_id": "edb7afd04966bf3edf3ef30562dd35125b147eddf113de6b3f7f08ea71fdb095",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "res_cpu_millicores": "32000",
+      "res_memory_bytes": "274877906944",
+      "res_disk_bytes": "214748364800",
+      "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 2}}",
+      "task_id": "/romain/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "5587b7450978df99",
+      "task_state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1792169273728",
+      "finished_at_ms": "1792169346687",
+      "node_name": "g8247ba",
+      "terminal_reason": ""
+    }
+  ],
+  "confirmation_recorded_at_utc": "2026-10-16T16:49:30.151127+00:00",
+  "physically_requested_h100s": 2,
+  "nccl_ranks": 2,
+  "execution_timeout_seconds": 3600,
+  "timeout_scope": "Native execution timeout; no queue expiry established.",
+  "predecessor": {
+    "predecessor_job": "/romain/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce",
+    "predecessor_controller_row": {
+      "task_id": "/romain/sc-core-runtime-nccl-broadcast-probe-east2-a1-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "a3cceb24d4680d24",
+      "state": "7",
+      "exit_code": "",
+      "started_at_ms": "",
+      "finished_at_ms": "1792168172650",
+      "node_name": "",
+      "terminal_reason": "PodDeleted: pod was deleted while the attempt was active"
+    },
+    "predecessor_plan_sha256": "dbd4b80a23ab23a3e882d03c6b6b28abd6c5ca67c6d65e3981e70abb780e0de3",
+    "predecessor_allocated_h100_hours": 0,
+    "predecessor_runtime_measurements": 0,
+    "reason": "Exact predecessor pod deleted while still unallocated. Native terminal job state worker_failed, not successful execution. Same provider/resources/source/runtime/algorithm; new output identity only. No predecessor cancellation or overlap is needed."
+  },
+  "scope": "Bounded one-node2H100/two-rank communication-only infrastructure retry. Byte-identical payload after normalizing output paths; no model or optimizer load, root-cause attribution or checkpoint-recovery qualification. Every allocated interval is costed. No queue-expiry guarantee is inferred from the3600second execution timeout.",
+  "retained_native_evidence": [
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/native-confirmation/nccl-probe-east2-retry-confirmed-native-resources.csv",
+      "bytes": 686,
+      "sha256": "391f49a51c2c4147074762848d0a73894db0ef8c8b82bae3ee87bc9eee7f8802",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/native-confirmation/nccl-checkpoint-broadcast-probe-east2-retry-submission-receipt.json",
+      "bytes": 2194,
+      "sha256": "9563e6a9f676b3df0d0b9181a88cb860152c480bbc24821bee269804375b2f68",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/native-confirmation/nccl-checkpoint-broadcast-probe-east2-retry-submission.log",
+      "bytes": 3441,
+      "sha256": "d82f934723d2aab7e91d38a3ff0f39b6ec001f84060ad959851aeb424f33c8f6",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/native-confirmation/confirm-nccl-east2-retry-submission.py",
+      "bytes": 4479,
+      "sha256": "431dc5c566e35000b0560c054a5735439dca8d8926139ba167f64783f7af7311",
+      "full_byte_readback_verified": true
+    }
+  ],
+  "retained_report": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/native-confirmation/confirmed-submission.json",
+    "bytes": 6327,
+    "sha256": "a1533f38615460a08e661755712a0aba65a0f75f686fb4bf6ad25421caa5785c",
+    "full_byte_readback_verified": true
+  }
+}

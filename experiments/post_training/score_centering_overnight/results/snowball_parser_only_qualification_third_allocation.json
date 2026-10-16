@@ -1,0 +1,76 @@
+{
+  "job": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce",
+  "controller_attempt": 2,
+  "rows": [
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/0",
+      "attempt_id": "2",
+      "attempt_uid": "ee1cbe3d2529bfd9",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1792165629268",
+      "finished_at_ms": "",
+      "node_name": "g530bbc",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/1",
+      "attempt_id": "2",
+      "attempt_uid": "d1d8df095f880499",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1792165629268",
+      "finished_at_ms": "",
+      "node_name": "g538126",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/2",
+      "attempt_id": "2",
+      "attempt_uid": "4edaa689fdc05643",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1792165624767",
+      "finished_at_ms": "",
+      "node_name": "g543ab2",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/3",
+      "attempt_id": "2",
+      "attempt_uid": "f6ea3be31d54d3ee",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1792165629268",
+      "finished_at_ms": "",
+      "node_name": "g5b3bc4",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce/4",
+      "attempt_id": "2",
+      "attempt_uid": "4d1f0b0fa6d8bf08",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1792165629268",
+      "finished_at_ms": "",
+      "node_name": "g5b3dfe",
+      "terminal_reason": ""
+    }
+  ],
+  "scope": "Native physical2 all five task allocations only, source and recipe frozen. Full native five updates, both pipeline FlashAttention, seed1 fixed-noise/expert identities, all32 checkpoint controls and all-available original grades remain pending. Earlier preemptions remain separate; no recovery qualification or scientific1200 endpoint claimed.",
+  "source": "d6d6628f4cbf7a8bbf38b6803cc5a5b59dba12d9",
+  "configuration": "snowball_parser_only_qualification_v1/detach.yaml",
+  "configuration_sha256": "47761ecbca40c605afe0269b5355c789f214bede34b25e32375d255e7ee3664f",
+  "native_job_spec": {
+    "job_id": "/romain/sc-snowball-parser-qual-noise005-tis-s1-a0-01a126ce",
+    "state": "3",
+    "num_tasks": "5",
+    "priority_band": "3",
+    "bundle_id": "bccad083242efad36bf56988be4a6a61f653e8195cfdb7c700575b44cd50c2b1",
+    "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+    "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 8}}"
+  },
+  "controller_snapshot": "20261016T161037",
+  "full_five_update_qualification_passed": false
+}

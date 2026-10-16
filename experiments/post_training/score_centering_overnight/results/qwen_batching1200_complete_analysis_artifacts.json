@@ -1,0 +1,260 @@
+{
+  "scope": "Complete three-paired-seed1200 Qwen batching comparison. All six native/model/data/recipe/checkpoint and full available-response original-grader gates pass. Six native-window1200 runs and all Snowball1200 comparisons remain incomplete.",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "completed_arms": 6,
+  "paired_training_seeds": [
+    0,
+    1,
+    2
+  ],
+  "replication_unit": "paired training seed",
+  "endpoint_completed_updates": 1200,
+  "evaluation_source_rows": 753,
+  "physical_responses_per_evaluation": 3012,
+  "scheduled_evaluations_per_run": 61,
+  "physical_records": 1332792,
+  "actual_original_grades": 1332787,
+  "native_failure_placeholders": 5,
+  "grade_discrepancies": 0,
+  "pairs": [
+    {
+      "seed": 0,
+      "tis": 0.4903718459495352,
+      "sc": 0.47343957503320055,
+      "difference": -0.016932270916334646
+    },
+    {
+      "seed": 1,
+      "tis": 0.4900398406374502,
+      "sc": 0.4717795484727756,
+      "difference": -0.01826029216467462
+    },
+    {
+      "seed": 2,
+      "tis": 0.41799468791500666,
+      "sc": 0.4747675962815405,
+      "difference": 0.05677290836653387
+    }
+  ],
+  "mean_difference_percentage_points": 0.7193448428508202,
+  "unbounded_paired_t_95_interval_percentage_points": [
+    -9.948090462601494,
+    11.386780148303135
+  ],
+  "interval_note": "Two degrees of freedom. The interval includes zero and is wide; no precise benefit or quality equivalence is established. No equivalence or acceptable-loss margin is declared.",
+  "total_terminal_h100_hours_including_all_recoveries": 1416.5593288888888,
+  "original_replay_crosschecks": [
+    {
+      "run_id": "sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce",
+      "configuration": "qwen_transfer_main_rno_v2/batching-sc-s0.yaml",
+      "configuration_sha256": "3cb5ee3ce35ff1306c66033829377742c1cad8a1437b62f448a77e69b5854809",
+      "native_audit": "sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce.json.gz",
+      "native_audit_sha256": "3bf1be70818265b9e8acb7cf231cb702c319c9663033dce749908fefe490f32b",
+      "original_replay": "sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "7b241447d3aaa288635dbe7e0f062b415af0c0a6f4838ff0d530527cbf527fb5",
+      "actual_original_grades": 222132,
+      "native_failure_placeholders": 0,
+      "all_61_evaluation_counts_and_means_match": true,
+      "all_eight_final_rank_shards_and_serialized_controls_pass": true,
+      "all_recorded_original_and_recovery_costs_match": true,
+      "terminal_h100_hours": 154.2769311111111,
+      "recovery_run_ids": []
+    },
+    {
+      "run_id": "sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce",
+      "configuration": "qwen_transfer_main_rno_v2/batching-sc-s1.yaml",
+      "configuration_sha256": "ecf26e090201759a3f93fa7fb3a53fffbbfcc11766df01f4a5b8cd649c56f1f7",
+      "native_audit": "sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce.json.gz",
+      "native_audit_sha256": "4685d6c974d73fbda9bdfd39d9cb161b39f2b18e6a02fce0043c1f4edc2d2daa",
+      "original_replay": "sc-qwen-transfer-batching-sc-s1-main-rno-a2-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "960ca6492d28684b49dde731affc334c935a5ea467d9b63136d24e7b3e791713",
+      "actual_original_grades": 222131,
+      "native_failure_placeholders": 1,
+      "all_61_evaluation_counts_and_means_match": true,
+      "all_eight_final_rank_shards_and_serialized_controls_pass": true,
+      "all_recorded_original_and_recovery_costs_match": true,
+      "terminal_h100_hours": 231.49547111111113,
+      "recovery_run_ids": []
+    },
+    {
+      "run_id": "sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce",
+      "configuration": "qwen_transfer_terminal_recovery_v3/batching-sc-s2.yaml",
+      "configuration_sha256": "48abb4e5e0a9da6d3c166e449bf74717b8e34299b21e21232293548922ef0f8d",
+      "native_audit": "sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce.json.gz",
+      "native_audit_sha256": "8aa9d03243e56c2b9ead86ef8cc70473153e0c5f9d7ac8cfd241c887a5479f4a",
+      "original_replay": "sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "5437cf8aad2e894bc56dfe2707ad7ecfac06eeae009e2652e384405fe68a5faa",
+      "actual_original_grades": 222132,
+      "native_failure_placeholders": 0,
+      "all_61_evaluation_counts_and_means_match": true,
+      "all_eight_final_rank_shards_and_serialized_controls_pass": true,
+      "all_recorded_original_and_recovery_costs_match": true,
+      "terminal_h100_hours": 382.96115555555554,
+      "recovery_run_ids": [
+        "sc-qwen-transfer-batching-sc-s2-main-rno-a2-01a126ce",
+        "sc-qwen-transfer-batching-sc-s2-main-rno-a3-01a126ce"
+      ]
+    },
+    {
+      "run_id": "sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce",
+      "configuration": "qwen_transfer_main_rno_v2/batching-tis-s0.yaml",
+      "configuration_sha256": "545b0bbffe46c4ab868c411860fca88a467ec9c847823a7058a20285079d8e76",
+      "native_audit": "sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce.json.gz",
+      "native_audit_sha256": "76ca5b3fffd6a772e9df1f566d4ee654b9526928a60e5b5871ae183b90140e18",
+      "original_replay": "sc-qwen-transfer-batching-tis-s0-main-rno-a2-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "a95679a39427cfd8c29221e08083cbbe1f40b57664376173b37d54973347cded",
+      "actual_original_grades": 222131,
+      "native_failure_placeholders": 1,
+      "all_61_evaluation_counts_and_means_match": true,
+      "all_eight_final_rank_shards_and_serialized_controls_pass": true,
+      "all_recorded_original_and_recovery_costs_match": true,
+      "terminal_h100_hours": 224.65092666666663,
+      "recovery_run_ids": []
+    },
+    {
+      "run_id": "sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce",
+      "configuration": "qwen_transfer_main_rno_v2/batching-tis-s1.yaml",
+      "configuration_sha256": "0ecd14f75404a2382b9ca05ea5384878f545b568d32b6745e345959491756b02",
+      "native_audit": "sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce.json.gz",
+      "native_audit_sha256": "6e71f707abca3edafa0a5dfb460e940f32ada427d6dc66d7e879ede817b81c1b",
+      "original_replay": "sc-qwen-transfer-batching-tis-s1-main-rno-a2-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "ed865021d00f72c2699e85b53b7f6af58278bddf504207eab2182442a8e49a5c",
+      "actual_original_grades": 222130,
+      "native_failure_placeholders": 2,
+      "all_61_evaluation_counts_and_means_match": true,
+      "all_eight_final_rank_shards_and_serialized_controls_pass": true,
+      "all_recorded_original_and_recovery_costs_match": true,
+      "terminal_h100_hours": 205.34589555555553,
+      "recovery_run_ids": []
+    },
+    {
+      "run_id": "sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce",
+      "configuration": "qwen_transfer_main_rno_v2/batching-tis-s2.yaml",
+      "configuration_sha256": "b0b17c8bdd2fed083c1ab41c8f2fe270a747cac316164cb48ff310283b1cd189",
+      "native_audit": "sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce.json.gz",
+      "native_audit_sha256": "6222aaefc560a0d8094649da25ab9a081b76fda8e3609b25eab4128410a16d29",
+      "original_replay": "sc-qwen-transfer-batching-tis-s2-main-rno-a2-01a126ce-regrading.json.gz",
+      "original_replay_sha256": "bc5fb73b9ebaa160713d5d0ca8da4e5ef21cfef26101f7dd6319f1ee67dee7cd",
+      "actual_original_grades": 222131,
+      "native_failure_placeholders": 1,
+      "all_61_evaluation_counts_and_means_match": true,
+      "all_eight_final_rank_shards_and_serialized_controls_pass": true,
+      "all_recorded_original_and_recovery_costs_match": true,
+      "terminal_h100_hours": 217.8289488888889,
+      "recovery_run_ids": []
+    }
+  ],
+  "files": [
+    {
+      "name": "curriculum_quality_and_stability.png",
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen-batching1200-complete-original-replays-20261016/2c77ec1a17dde27d0be1bb188052bf9d8f255d7d549a1de7d5aface8d30e61d1/curriculum_quality_and_stability.png",
+      "sha256": "2c77ec1a17dde27d0be1bb188052bf9d8f255d7d549a1de7d5aface8d30e61d1",
+      "bytes": 547362,
+      "full_byte_readback_verified": true
+    },
+    {
+      "name": "curriculum_quality_and_stability.svg",
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen-batching1200-complete-original-replays-20261016/5bc986d0b019c972b8fd08e0bf88bad8f8797b2b0308a6e8faecfdcce65e8ac8/curriculum_quality_and_stability.svg",
+      "sha256": "5bc986d0b019c972b8fd08e0bf88bad8f8797b2b0308a6e8faecfdcce65e8ac8",
+      "bytes": 470412,
+      "full_byte_readback_verified": true
+    },
+    {
+      "name": "paired_curriculum_results.json.gz",
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen-batching1200-complete-original-replays-20261016/84178459bbf831ba8a7950012cd8bbf64ebc1fae6802c91dc1efae286ff2e87f/paired_curriculum_results.json.gz",
+      "sha256": "84178459bbf831ba8a7950012cd8bbf64ebc1fae6802c91dc1efae286ff2e87f",
+      "bytes": 3084846,
+      "full_byte_readback_verified": true
+    },
+    {
+      "name": "qwen_batching1200_paired_endpoint_intervals.png",
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen-batching1200-complete-original-replays-20261016/31059615da6a4df3e293658767dc80da116ef71dc7eca9138e768f4baba87ba0/qwen_batching1200_paired_endpoint_intervals.png",
+      "sha256": "31059615da6a4df3e293658767dc80da116ef71dc7eca9138e768f4baba87ba0",
+      "bytes": 79089,
+      "full_byte_readback_verified": true
+    },
+    {
+      "name": "qwen_batching1200_paired_endpoint_intervals.svg",
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen-batching1200-complete-original-replays-20261016/f4168ac66fb6ec639956ae1652f1b8159352965a21c1aa9ba2c616ff4196dc15/qwen_batching1200_paired_endpoint_intervals.svg",
+      "sha256": "f4168ac66fb6ec639956ae1652f1b8159352965a21c1aa9ba2c616ff4196dc15",
+      "bytes": 54126,
+      "full_byte_readback_verified": true
+    },
+    {
+      "name": "qwen_batching1200_quality_by_exposure.png",
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen-batching1200-complete-original-replays-20261016/26a5a1c289817a6d6136c1e0e650d1ffb3a1cdaaa4463e3ef06dcba4fbf0a930/qwen_batching1200_quality_by_exposure.png",
+      "sha256": "26a5a1c289817a6d6136c1e0e650d1ffb3a1cdaaa4463e3ef06dcba4fbf0a930",
+      "bytes": 420767,
+      "full_byte_readback_verified": true
+    },
+    {
+      "name": "qwen_batching1200_quality_by_exposure.svg",
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen-batching1200-complete-original-replays-20261016/f89af25d27b405a510e88a29116553a2e441de1f0aec0b1aa6ba5d93c46edb18/qwen_batching1200_quality_by_exposure.svg",
+      "sha256": "f89af25d27b405a510e88a29116553a2e441de1f0aec0b1aa6ba5d93c46edb18",
+      "bytes": 147577,
+      "full_byte_readback_verified": true
+    }
+  ],
+  "proof_files": [
+    {
+      "name": "proofs/qwen_batching1200_complete_identity_checkpoint_crosscheck.json",
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen-batching1200-complete-original-replays-20261016/351ced2b394dd6ffe533b771a43e16240afd9f6ad9746955dacd437f464393a2/proofs/qwen_batching1200_complete_identity_checkpoint_crosscheck.json",
+      "sha256": "351ced2b394dd6ffe533b771a43e16240afd9f6ad9746955dacd437f464393a2",
+      "bytes": 75940,
+      "full_byte_readback_verified": true
+    },
+    {
+      "name": "proofs/qwen_batching_sc0_1200_final_checkpoint_controls.json.gz",
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen-batching1200-complete-original-replays-20261016/9004f32a65db5480d74a174ce063fa1658761f46e68c327ed42e551a2bdc5678/proofs/qwen_batching_sc0_1200_final_checkpoint_controls.json.gz",
+      "sha256": "9004f32a65db5480d74a174ce063fa1658761f46e68c327ed42e551a2bdc5678",
+      "bytes": 2356,
+      "full_byte_readback_verified": true
+    },
+    {
+      "name": "proofs/qwen-batching1200-prospective-analysis-selection.json",
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen-batching1200-complete-original-replays-20261016/6bdbc2395b5dd59c16d0d17726446ad1bb10ab0c6a3e77acab4289c66d407b66/proofs/qwen-batching1200-prospective-analysis-selection.json",
+      "sha256": "6bdbc2395b5dd59c16d0d17726446ad1bb10ab0c6a3e77acab4289c66d407b66",
+      "bytes": 7339,
+      "full_byte_readback_verified": true
+    },
+    {
+      "name": "proofs/check-qwen-completed-main-identities.py",
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen-batching1200-complete-original-replays-20261016/65b2fd726ec8a0aa42ab637e7a4e666d063c66e576c17b065e306286f1895494/proofs/check-qwen-completed-main-identities.py",
+      "sha256": "65b2fd726ec8a0aa42ab637e7a4e666d063c66e576c17b065e306286f1895494",
+      "bytes": 6845,
+      "full_byte_readback_verified": true
+    },
+    {
+      "name": "proofs/plot-qwen-batching1200-complete-comparison.py",
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen-batching1200-complete-original-replays-20261016/8ece7ce819b47eb6fc0272a3dcc046a044be08bb5e44799fc9609aa7f4a04c39/proofs/plot-qwen-batching1200-complete-comparison.py",
+      "sha256": "8ece7ce819b47eb6fc0272a3dcc046a044be08bb5e44799fc9609aa7f4a04c39",
+      "bytes": 3602,
+      "full_byte_readback_verified": true
+    },
+    {
+      "name": "proofs/qualify-and-retain-qwen-batching1200-comparison.py",
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen-batching1200-complete-original-replays-20261016/d65c371ce9100c755a301c92308fefd3a519ff8763c6139a1502e7b8cf6c0c3f/proofs/qualify-and-retain-qwen-batching1200-comparison.py",
+      "sha256": "d65c371ce9100c755a301c92308fefd3a519ff8763c6139a1502e7b8cf6c0c3f",
+      "bytes": 11220,
+      "full_byte_readback_verified": true
+    },
+    {
+      "name": "proofs/analyze_curriculum.py",
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen-batching1200-complete-original-replays-20261016/ec458a8f7e2a0c6f51b4a0c77f86acda16a18843cb533bc778abc7af32b2bed4/proofs/analyze_curriculum.py",
+      "sha256": "ec458a8f7e2a0c6f51b4a0c77f86acda16a18843cb533bc778abc7af32b2bed4",
+      "bytes": 12000,
+      "full_byte_readback_verified": true
+    },
+    {
+      "name": "proofs/analyze_skyrl.py",
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/analyses/qwen-batching1200-complete-original-replays-20261016/a610b612ff1004328dc6f805eaec7f7c568ec84864c42eae34804764675f33f0/proofs/analyze_skyrl.py",
+      "sha256": "a610b612ff1004328dc6f805eaec7f7c568ec84864c42eae34804764675f33f0",
+      "bytes": 8257,
+      "full_byte_readback_verified": true
+    }
+  ],
+  "checkpoint_scope": "All eight rank files per run have presence/metadata-reference checks. Actual common optimizer/scheduler1200, RNG and loader9600 controls pass; small control objects/ranges have full SHA/readbacks. Complete rank tensor payloads remain remote.",
+  "exposure_notes": "Completed updates and loss tokens describe the final training path, excluding training discarded by earlier restarts. Elapsed time starts at the first real allocation, including gaps. H100 curves integrate every original/recovery allocation through retained evaluation-metric publication; full terminal costs also include later checkpoint/shutdown work. Operational cost differences include infrastructure interruptions and do not identify an algorithmic compute effect.",
+  "grader_note": "Every available original response matches its stored native verifier verdict under the frozen original grader and unchanged ten-second deadline. These graders are reused original functions, not independent verifiers. Five pre-existing native training placeholders stay in fixed denominators and are separate from actual grader calls.",
+  "historical_validation_caveat": "The old local optimizer SC seed1 partial reported two differences without per-record details before its manager disappeared. Those reports remain unreconciled; completed frozen-input remote replacements have zero differences. This batching result does not identify the cause. See results/qwen_local_replay_manager_loss_20261015.json."
+}

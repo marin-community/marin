@@ -1208,15 +1208,13 @@
       "physical_records": 249984,
       "actual_original_grade_calls": 249982,
       "native_failure_placeholders": 2
-    }
-  ],
-  "active_allocations": [
+    },
     {
       "job_id": "/romain/score-grader-qwen-batching-sc-s2-a0-01a126ce",
       "cluster": "cw-rno2a",
-      "controller_row": {
+      "task_attempt": {
         "job_id": "/romain/score-grader-qwen-batching-sc-s2-a0-01a126ce",
-        "job_state": "3",
+        "job_state": "4",
         "num_tasks": "1",
         "priority_band": "3",
         "bundle_id": "a638586910f90cb0997d7749781a1c1cf32fee3a4bc66eb74041a58ac0197d00",
@@ -1228,23 +1226,27 @@
         "task_id": "/romain/score-grader-qwen-batching-sc-s2-a0-01a126ce/0",
         "attempt_id": "0",
         "attempt_uid": "a512c8544c9b2f01",
-        "task_state": "3",
-        "exit_code": "",
+        "task_state": "4",
+        "exit_code": "0",
         "started_at_ms": "1792161386275",
-        "finished_at_ms": "",
+        "finished_at_ms": "1792166610727",
         "node_name": "g1cb6c2",
         "terminal_reason": ""
       },
       "requested_cpu": 32,
       "requested_memory": "64GB",
       "requested_disk": "50GB",
+      "controller_accelerator_spec": {},
+      "allocated_cpu_hours": 46.439573333333335,
       "allocated_h100_hours": 0,
-      "terminal_cost_pending": true,
-      "role": "Full original-grader replay of completed native1200 Qwen batching SC seed2",
-      "output_prefix": "marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-batching-sc-s2-a0-01a126ce",
-      "replaces_local_manager_pid": null
+      "role": "Completed full native1200 Qwen batching original-grader replay",
+      "full_response_replay_passed": true,
+      "physical_records": 222132,
+      "actual_original_grade_calls": 222132,
+      "native_failure_placeholders": 0
     }
   ],
-  "total_terminal_allocated_cpu_hours": 1367.3662883333334,
+  "active_allocations": [],
+  "total_terminal_allocated_cpu_hours": 1413.8058616666667,
   "total_allocated_h100_hours": 0
 }

@@ -23,7 +23,7 @@
   },
   "full_checkpoint_controls": "qwen_batching_sc2_a4_1200_final_checkpoint_controls.json.gz",
   "detailed_native_audit": "sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce.json.gz",
-  "original_grader_replay_passed": false,
+  "original_grader_replay_passed": true,
   "original_grader_replay_plan": "cpu_replay_qwen_batching1200_sc2_plan.json",
   "evidence_manifest": {
     "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce/full-native-audit/manifest.json",
@@ -34,5 +34,20 @@
   },
   "retained_proof_files": 7,
   "retained_proof_bytes": 10223361,
-  "scope": "Complete native membership, all1200 finite applied updates, serving/head/TIS/SC and formal native failure-mask checks pass. Every available original response still requires separate original-grader replay. No quality threshold or extra zero-native-error gate; scientific source and all frozen recipes unchanged."
+  "scope": "All native1200 membership, finite applied updates, serving/head/TIS/SC, existing formal failure-mask checks and final checkpoint controls pass. The full available-response original-grader replay passes all222132 native verdicts with zero differences and unchanged graders/deadlines. Scientific source and frozen recipes unchanged.",
+  "complete_native_and_original_replay_gates_passed": true,
+  "original_replay_report": "sc-qwen-transfer-batching-sc-s2-main-rno-a4-01a126ce-regrading.json.gz",
+  "original_replay_report_sha256": "5437cf8aad2e894bc56dfe2707ad7ecfac06eeae009e2652e384405fe68a5faa",
+  "original_replay_physical_records": 222132,
+  "actual_original_grade_calls": 222132,
+  "native_unavailable_verdicts": 0,
+  "grade_discrepancies": 0,
+  "complete_cpu_proof": "cpu_replay_complete_score-grader-qwen-batching-sc-s2-a0-01a126ce.json",
+  "complete_original_grader_evidence_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/offline-replays/score-grader-qwen-batching-sc-s2-a0-01a126ce/completed-original-grader-proof/manifest.json",
+    "bytes": 16183,
+    "sha256": "42a1e12d754c56fbad827bf2b112d6d98203552d7a9cb240183101cb28142225",
+    "etag": "\"1a1056b386c7378e58716d540f1f164f\"",
+    "full_byte_readback_verified": true
+  }
 }

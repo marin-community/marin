@@ -1,0 +1,532 @@
+{
+  "scope": "Completed two-GPU two-rank communication-only test of asynchronous checkpoint-broadcast memory retention in the pinned Snowball runtime. Full native/source/version/12-observation integrity checks pass; no magnitude or direction threshold is an admission gate. No policy model or optimizer is loaded. These observations reproduce a mechanism, not the Snowball OOM cause or five-node checkpoint recovery.",
+  "job_id": "/romain/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce",
+  "source": "57b0c60bb0a92f7fc22f258b05fff125ac1a9ff0",
+  "native_controller_task": {
+    "job_id": "/romain/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce",
+    "job_state": "4",
+    "num_tasks": "1",
+    "priority_band": "3",
+    "bundle_id": "edb7afd04966bf3edf3ef30562dd35125b147eddf113de6b3f7f08ea71fdb095",
+    "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+    "res_cpu_millicores": "32000",
+    "res_memory_bytes": "274877906944",
+    "res_disk_bytes": "214748364800",
+    "res_device_json": "{\"gpu\": {\"variant\": \"H100\", \"count\": 2}}",
+    "task_id": "/romain/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/0",
+    "attempt_id": "0",
+    "attempt_uid": "5587b7450978df99",
+    "task_state": "4",
+    "exit_code": "0",
+    "started_at_ms": "1792169273728",
+    "finished_at_ms": "1792169346687",
+    "node_name": "g8247ba",
+    "terminal_reason": ""
+  },
+  "native_process_exited_zero": true,
+  "runtime": {
+    "source": "57b0c60bb0a92f7fc22f258b05fff125ac1a9ff0",
+    "torch": "2.13.0+cu132",
+    "torch_git_version": "cf30153c4c131c8164ee7798e5022d810682e2cb",
+    "nccl": [
+      2,
+      29,
+      7
+    ],
+    "allocated_node_gpus": 2,
+    "policy_model": null,
+    "ranks": 2,
+    "dtype": "bfloat16",
+    "shape": [
+      2560,
+      1280
+    ],
+    "broadcasts": 256,
+    "discarded_receive_tensors_per_rank": 128
+  },
+  "observations": [
+    {
+      "mode": "dropped",
+      "rank": 0,
+      "boundary": "before_transfers",
+      "allocated_bytes": 6553600,
+      "allocated_after_census_bytes": 6553600,
+      "reserved_bytes": 23068672,
+      "ownership": {
+        "unique_python_storage_bytes": 6553600,
+        "owner_storage_bytes": {
+          "reused_source_buffer": 6553600
+        },
+        "owner_storage_counts": {
+          "reused_source_buffer": 1
+        },
+        "known_cpu_tensor_bytes": {},
+        "largest_unattributed_storages": [],
+        "coverage": "Python Tensor/Parameter storage on selected device; allocator allocations without a Python tensor are not attributed. CPU bytes count tensor views and may alias. No tensor values copied and no explicit garbage collection."
+      }
+    },
+    {
+      "mode": "dropped",
+      "rank": 0,
+      "boundary": "after_world_barrier",
+      "allocated_bytes": 845414400,
+      "allocated_after_census_bytes": 845414400,
+      "reserved_bytes": 903872512,
+      "ownership": {
+        "unique_python_storage_bytes": 845414400,
+        "owner_storage_bytes": {
+          "reused_source_buffer": 6553600,
+          "unattributed_python_tensor": 838860800
+        },
+        "owner_storage_counts": {
+          "reused_source_buffer": 1,
+          "unattributed_python_tensor": 128
+        },
+        "known_cpu_tensor_bytes": {},
+        "largest_unattributed_storages": [
+          {
+            "storage_bytes": 6553600,
+            "python_tensor_views": 1,
+            "tensor_examples": [
+              "torch.bfloat16:(2560, 1280)"
+            ],
+            "referrers": []
+          },
+          {
+            "storage_bytes": 6553600,
+            "python_tensor_views": 1,
+            "tensor_examples": [
+              "torch.bfloat16:(2560, 1280)"
+            ],
+            "referrers": []
+          },
+          {
+            "storage_bytes": 6553600,
+            "python_tensor_views": 1,
+            "tensor_examples": [
+              "torch.bfloat16:(2560, 1280)"
+            ],
+            "referrers": []
+          },
+          {
+            "storage_bytes": 6553600,
+            "python_tensor_views": 1,
+            "tensor_examples": [
+              "torch.bfloat16:(2560, 1280)"
+            ],
+            "referrers": []
+          },
+          {
+            "storage_bytes": 6553600,
+            "python_tensor_views": 1,
+            "tensor_examples": [
+              "torch.bfloat16:(2560, 1280)"
+            ],
+            "referrers": []
+          },
+          {
+            "storage_bytes": 6553600,
+            "python_tensor_views": 1,
+            "tensor_examples": [
+              "torch.bfloat16:(2560, 1280)"
+            ],
+            "referrers": []
+          },
+          {
+            "storage_bytes": 6553600,
+            "python_tensor_views": 1,
+            "tensor_examples": [
+              "torch.bfloat16:(2560, 1280)"
+            ],
+            "referrers": []
+          },
+          {
+            "storage_bytes": 6553600,
+            "python_tensor_views": 1,
+            "tensor_examples": [
+              "torch.bfloat16:(2560, 1280)"
+            ],
+            "referrers": []
+          }
+        ],
+        "coverage": "Python Tensor/Parameter storage on selected device; allocator allocations without a Python tensor are not attributed. CPU bytes count tensor views and may alias. No tensor values copied and no explicit garbage collection."
+      }
+    },
+    {
+      "mode": "dropped",
+      "rank": 0,
+      "boundary": "after_exchange_group_barrier",
+      "allocated_bytes": 6553600,
+      "allocated_after_census_bytes": 6553600,
+      "reserved_bytes": 903872512,
+      "ownership": {
+        "unique_python_storage_bytes": 6553600,
+        "owner_storage_bytes": {
+          "reused_source_buffer": 6553600
+        },
+        "owner_storage_counts": {
+          "reused_source_buffer": 1
+        },
+        "known_cpu_tensor_bytes": {},
+        "largest_unattributed_storages": [],
+        "coverage": "Python Tensor/Parameter storage on selected device; allocator allocations without a Python tensor are not attributed. CPU bytes count tensor views and may alias. No tensor values copied and no explicit garbage collection."
+      }
+    },
+    {
+      "mode": "dropped",
+      "rank": 1,
+      "boundary": "before_transfers",
+      "allocated_bytes": 6553600,
+      "allocated_after_census_bytes": 6553600,
+      "reserved_bytes": 23068672,
+      "ownership": {
+        "unique_python_storage_bytes": 6553600,
+        "owner_storage_bytes": {
+          "reused_source_buffer": 6553600
+        },
+        "owner_storage_counts": {
+          "reused_source_buffer": 1
+        },
+        "known_cpu_tensor_bytes": {},
+        "largest_unattributed_storages": [],
+        "coverage": "Python Tensor/Parameter storage on selected device; allocator allocations without a Python tensor are not attributed. CPU bytes count tensor views and may alias. No tensor values copied and no explicit garbage collection."
+      }
+    },
+    {
+      "mode": "dropped",
+      "rank": 1,
+      "boundary": "after_world_barrier",
+      "allocated_bytes": 845414400,
+      "allocated_after_census_bytes": 845414400,
+      "reserved_bytes": 903872512,
+      "ownership": {
+        "unique_python_storage_bytes": 845414400,
+        "owner_storage_bytes": {
+          "reused_source_buffer": 6553600,
+          "unattributed_python_tensor": 838860800
+        },
+        "owner_storage_counts": {
+          "reused_source_buffer": 1,
+          "unattributed_python_tensor": 128
+        },
+        "known_cpu_tensor_bytes": {},
+        "largest_unattributed_storages": [
+          {
+            "storage_bytes": 6553600,
+            "python_tensor_views": 1,
+            "tensor_examples": [
+              "torch.bfloat16:(2560, 1280)"
+            ],
+            "referrers": []
+          },
+          {
+            "storage_bytes": 6553600,
+            "python_tensor_views": 1,
+            "tensor_examples": [
+              "torch.bfloat16:(2560, 1280)"
+            ],
+            "referrers": []
+          },
+          {
+            "storage_bytes": 6553600,
+            "python_tensor_views": 1,
+            "tensor_examples": [
+              "torch.bfloat16:(2560, 1280)"
+            ],
+            "referrers": []
+          },
+          {
+            "storage_bytes": 6553600,
+            "python_tensor_views": 1,
+            "tensor_examples": [
+              "torch.bfloat16:(2560, 1280)"
+            ],
+            "referrers": []
+          },
+          {
+            "storage_bytes": 6553600,
+            "python_tensor_views": 1,
+            "tensor_examples": [
+              "torch.bfloat16:(2560, 1280)"
+            ],
+            "referrers": []
+          },
+          {
+            "storage_bytes": 6553600,
+            "python_tensor_views": 1,
+            "tensor_examples": [
+              "torch.bfloat16:(2560, 1280)"
+            ],
+            "referrers": []
+          },
+          {
+            "storage_bytes": 6553600,
+            "python_tensor_views": 1,
+            "tensor_examples": [
+              "torch.bfloat16:(2560, 1280)"
+            ],
+            "referrers": []
+          },
+          {
+            "storage_bytes": 6553600,
+            "python_tensor_views": 1,
+            "tensor_examples": [
+              "torch.bfloat16:(2560, 1280)"
+            ],
+            "referrers": []
+          }
+        ],
+        "coverage": "Python Tensor/Parameter storage on selected device; allocator allocations without a Python tensor are not attributed. CPU bytes count tensor views and may alias. No tensor values copied and no explicit garbage collection."
+      }
+    },
+    {
+      "mode": "dropped",
+      "rank": 1,
+      "boundary": "after_exchange_group_barrier",
+      "allocated_bytes": 6553600,
+      "allocated_after_census_bytes": 6553600,
+      "reserved_bytes": 903872512,
+      "ownership": {
+        "unique_python_storage_bytes": 6553600,
+        "owner_storage_bytes": {
+          "reused_source_buffer": 6553600
+        },
+        "owner_storage_counts": {
+          "reused_source_buffer": 1
+        },
+        "known_cpu_tensor_bytes": {},
+        "largest_unattributed_storages": [],
+        "coverage": "Python Tensor/Parameter storage on selected device; allocator allocations without a Python tensor are not attributed. CPU bytes count tensor views and may alias. No tensor values copied and no explicit garbage collection."
+      }
+    },
+    {
+      "mode": "waited",
+      "rank": 0,
+      "boundary": "before_transfers",
+      "allocated_bytes": 6553600,
+      "allocated_after_census_bytes": 6553600,
+      "reserved_bytes": 23068672,
+      "ownership": {
+        "unique_python_storage_bytes": 6553600,
+        "owner_storage_bytes": {
+          "reused_source_buffer": 6553600
+        },
+        "owner_storage_counts": {
+          "reused_source_buffer": 1
+        },
+        "known_cpu_tensor_bytes": {},
+        "largest_unattributed_storages": [],
+        "coverage": "Python Tensor/Parameter storage on selected device; allocator allocations without a Python tensor are not attributed. CPU bytes count tensor views and may alias. No tensor values copied and no explicit garbage collection."
+      }
+    },
+    {
+      "mode": "waited",
+      "rank": 0,
+      "boundary": "after_world_barrier",
+      "allocated_bytes": 6553600,
+      "allocated_after_census_bytes": 6553600,
+      "reserved_bytes": 23068672,
+      "ownership": {
+        "unique_python_storage_bytes": 6553600,
+        "owner_storage_bytes": {
+          "reused_source_buffer": 6553600
+        },
+        "owner_storage_counts": {
+          "reused_source_buffer": 1
+        },
+        "known_cpu_tensor_bytes": {},
+        "largest_unattributed_storages": [],
+        "coverage": "Python Tensor/Parameter storage on selected device; allocator allocations without a Python tensor are not attributed. CPU bytes count tensor views and may alias. No tensor values copied and no explicit garbage collection."
+      }
+    },
+    {
+      "mode": "waited",
+      "rank": 0,
+      "boundary": "after_exchange_group_barrier",
+      "allocated_bytes": 6553600,
+      "allocated_after_census_bytes": 6553600,
+      "reserved_bytes": 23068672,
+      "ownership": {
+        "unique_python_storage_bytes": 6553600,
+        "owner_storage_bytes": {
+          "reused_source_buffer": 6553600
+        },
+        "owner_storage_counts": {
+          "reused_source_buffer": 1
+        },
+        "known_cpu_tensor_bytes": {},
+        "largest_unattributed_storages": [],
+        "coverage": "Python Tensor/Parameter storage on selected device; allocator allocations without a Python tensor are not attributed. CPU bytes count tensor views and may alias. No tensor values copied and no explicit garbage collection."
+      }
+    },
+    {
+      "mode": "waited",
+      "rank": 1,
+      "boundary": "before_transfers",
+      "allocated_bytes": 6553600,
+      "allocated_after_census_bytes": 6553600,
+      "reserved_bytes": 23068672,
+      "ownership": {
+        "unique_python_storage_bytes": 6553600,
+        "owner_storage_bytes": {
+          "reused_source_buffer": 6553600
+        },
+        "owner_storage_counts": {
+          "reused_source_buffer": 1
+        },
+        "known_cpu_tensor_bytes": {},
+        "largest_unattributed_storages": [],
+        "coverage": "Python Tensor/Parameter storage on selected device; allocator allocations without a Python tensor are not attributed. CPU bytes count tensor views and may alias. No tensor values copied and no explicit garbage collection."
+      }
+    },
+    {
+      "mode": "waited",
+      "rank": 1,
+      "boundary": "after_world_barrier",
+      "allocated_bytes": 6553600,
+      "allocated_after_census_bytes": 6553600,
+      "reserved_bytes": 23068672,
+      "ownership": {
+        "unique_python_storage_bytes": 6553600,
+        "owner_storage_bytes": {
+          "reused_source_buffer": 6553600
+        },
+        "owner_storage_counts": {
+          "reused_source_buffer": 1
+        },
+        "known_cpu_tensor_bytes": {},
+        "largest_unattributed_storages": [],
+        "coverage": "Python Tensor/Parameter storage on selected device; allocator allocations without a Python tensor are not attributed. CPU bytes count tensor views and may alias. No tensor values copied and no explicit garbage collection."
+      }
+    },
+    {
+      "mode": "waited",
+      "rank": 1,
+      "boundary": "after_exchange_group_barrier",
+      "allocated_bytes": 6553600,
+      "allocated_after_census_bytes": 6553600,
+      "reserved_bytes": 23068672,
+      "ownership": {
+        "unique_python_storage_bytes": 6553600,
+        "owner_storage_bytes": {
+          "reused_source_buffer": 6553600
+        },
+        "owner_storage_counts": {
+          "reused_source_buffer": 1
+        },
+        "known_cpu_tensor_bytes": {},
+        "largest_unattributed_storages": [],
+        "coverage": "Python Tensor/Parameter storage on selected device; allocator allocations without a Python tensor are not attributed. CPU bytes count tensor views and may alias. No tensor values copied and no explicit garbage collection."
+      }
+    }
+  ],
+  "per_rank_contrasts": [
+    {
+      "rank": 0,
+      "dropped_after_world_extra_allocated_bytes": 838860800,
+      "dropped_after_exchange_group_extra_allocated_bytes": 0,
+      "waited_after_world_extra_allocated_bytes": 0,
+      "dropped_minus_waited_after_world_bytes": 838860800,
+      "dropped_after_world_unique_python_storage_bytes": 845414400,
+      "dropped_after_world_unattributed_python_storage_bytes": 838860800,
+      "dropped_after_world_unattributed_python_storage_count": 128
+    },
+    {
+      "rank": 1,
+      "dropped_after_world_extra_allocated_bytes": 838860800,
+      "dropped_after_exchange_group_extra_allocated_bytes": 0,
+      "waited_after_world_extra_allocated_bytes": 0,
+      "dropped_minus_waited_after_world_bytes": 838860800,
+      "dropped_after_world_unique_python_storage_bytes": 845414400,
+      "dropped_after_world_unattributed_python_storage_bytes": 838860800,
+      "dropped_after_world_unattributed_python_storage_count": 128
+    }
+  ],
+  "allocated_h100_hours": 0.04053277777777778,
+  "result_files": [
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/results/dropped/rank-0.json",
+      "bytes": 3981,
+      "sha256": "93b895ce1564561506e7a0d107cf44c41455ef2c4285f03e51d053237e805cc3",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/results/dropped/rank-1.json",
+      "bytes": 3981,
+      "sha256": "66a1512f7e2e77e127ca2e0e423a978a48a2bcd289f191cf6e240fa5c05c9d3c",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/results/runtime.json",
+      "bytes": 383,
+      "sha256": "f3e26bfcc3e19cd99f32a27d8b59d9f5d9442454baa4bb73da0d2c24f6bc68e8",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/results/waited/rank-0.json",
+      "bytes": 2232,
+      "sha256": "6ab0d94f7825a541a9ac376387da833088b2d7f2e8f36a2ead137684914a2167",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/results/waited/rank-1.json",
+      "bytes": 2232,
+      "sha256": "6bc77c9404f7da82d918c50d63b7cf0525a154f2ebc288f27e1b119c6a90e593",
+      "full_byte_readback_verified": true
+    }
+  ],
+  "result_manifest": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/results/manifest.json",
+    "bytes": 2338,
+    "sha256": "2cfd4bd4051fc55b7224734c0eae78bbe663f6514bfa79c725bf18c6904a528a",
+    "independent_full_byte_readback_verified": true
+  },
+  "all_result_file_sha_and_full_byte_readback_verified": true,
+  "native_and_analysis_proofs": [
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/completed-proof/f86324a23d220baf88dca92e179733440fc4a2f95ac408381e391fc0efc2bc95/nccl-east2-retry-complete-native-logs.log",
+      "bytes": 484,
+      "sha256": "f86324a23d220baf88dca92e179733440fc4a2f95ac408381e391fc0efc2bc95",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/completed-proof/34c1f1938461099ddf5339d662ef2b8a62726553204565434bad3de0b1fcdb60/nccl-east2-retry-complete-native-events.log",
+      "bytes": 610,
+      "sha256": "34c1f1938461099ddf5339d662ef2b8a62726553204565434bad3de0b1fcdb60",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/completed-proof/391f49a51c2c4147074762848d0a73894db0ef8c8b82bae3ee87bc9eee7f8802/nccl-probe-east2-retry-confirmed-native-resources.csv",
+      "bytes": 686,
+      "sha256": "391f49a51c2c4147074762848d0a73894db0ef8c8b82bae3ee87bc9eee7f8802",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/completed-proof/489deace736a5e455f71c26ef7a50636c1b39de62fe41d690c51dc07ed8a5d50/nccl-probe-east2-retry-confirmation.log",
+      "bytes": 1307,
+      "sha256": "489deace736a5e455f71c26ef7a50636c1b39de62fe41d690c51dc07ed8a5d50",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/completed-proof/2cfd4bd4051fc55b7224734c0eae78bbe663f6514bfa79c725bf18c6904a528a/manifest.json",
+      "bytes": 2338,
+      "sha256": "2cfd4bd4051fc55b7224734c0eae78bbe663f6514bfa79c725bf18c6904a528a",
+      "full_byte_readback_verified": true
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/completed-proof/be404d1279e317bdabaabe1d8dbbbd05553748caa118c25e21e6c192b23eb855/qualify-and-retain-completed-nccl-east2-probe.py",
+      "bytes": 8041,
+      "sha256": "be404d1279e317bdabaabe1d8dbbbd05553748caa118c25e21e6c192b23eb855",
+      "full_byte_readback_verified": true
+    }
+  ],
+  "interpretation": "In this test both ranks retain128 receive-tensor storages and838860800 extra allocated bytes (800MiB) after dropped async handles and a barrier on the separate world process group. Explicit Work.wait() prevents that extra allocation; a barrier on the original exchange process group releases it. PyTorch reserved-memory caching remains distinct from live allocation. The actual Snowball loader ownership and optimizer-backload OOM still require direct evidence. Candidate2fcf bypasses this broadcast wrapper but is not yet five-node qualified.",
+  "checkpoint_recovery_qualification_established": false,
+  "scientific_comparison_established": false,
+  "retained_report": {
+    "uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/engineering/sc-core-runtime-nccl-broadcast-probe-east2-a2-01a126ce/completed-proof/completed-observation.json",
+    "bytes": 21681,
+    "sha256": "21b7f09c70dcfa4763cdda5e896c0b3807432c0fa3733183198285a5c2218a9f",
+    "full_byte_readback_verified": true
+  }
+}
