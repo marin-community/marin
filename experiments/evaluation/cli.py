@@ -202,7 +202,10 @@ def cli() -> None:
 @click.option(
     "--resume-results-path",
     default=None,
-    help="Existing object-store results path for a single Harbor evaluation.",
+    help=(
+        "Existing object-store results path for a single Harbor evaluation. "
+        "Use only after every earlier driver for that path has ended."
+    ),
 )
 @click.option("--no-wait", is_flag=True, help="Submit and return without waiting for results.")
 @click.option("--dry-run", is_flag=True, help="Print the resolved plan without submitting.")

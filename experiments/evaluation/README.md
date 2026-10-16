@@ -71,7 +71,8 @@ verifiers, and `--judge-accelerator` overrides its slice; the judge must colocat
 while preserving scored agent failures and unknown errors;
 `--resume-results-path` resumes one Harbor evaluation from an object-store result path whose saved
 identity matches the full model and hosted judge configurations, policy, runtime, dataset, and task limit.
-A results root without this model-bound identity is rejected;
+A results root without this model-bound identity is rejected. Wait for the original Iris group and any
+earlier retry to end before resuming: two live Harbor drivers must never share a results root;
 `--federated_cluster` overrides the GPU fleet's target cluster; `--priority` sets the Iris priority
 band for the orchestrator and serve jobs; `--records-prefix` overrides where records land. The
 launcher always submits through the `marin` Iris controller.

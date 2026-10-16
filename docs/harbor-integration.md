@@ -77,6 +77,13 @@ uv run python -m experiments.evaluation.cli launch \
 Harbor policies pass pinned-schema and placeholder effective-job validation before the launcher
 opens an Iris client.
 
+To resume one Harbor evaluation, pass its object-store results root with `--resume-results-path`
+and the original model, policy, runtime, task limit, and hosted judge settings. Marin rejects the
+resume unless the root's saved model-bound identity matches those inputs. Wait for the original
+Iris group and any earlier retry to end first: two live Harbor drivers must never share a results
+root. Add `--retry-unscored-harbor-trials` to retry known unscored trials while preserving scored
+outcomes and unknown errors.
+
 ## Credentials
 
 Daytona-backed definitions in `experiments/evaluation/evals.py` own their credential references.
