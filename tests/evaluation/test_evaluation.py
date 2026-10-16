@@ -28,7 +28,12 @@ from finestore.reader import ReadView
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
 from marin.evaluation.eval_policy import HARBOR_COMMIT, SEPTEMBER_16_VERSION, source_config_digest
-from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig, _coverage_with_aggregate_counts
+from marin.evaluation.evalchemy.runner import (
+    EvalchemyExecutor,
+    EvalchemyRunConfig,
+    _coverage_with_aggregate_counts,
+    run_evalchemy,
+)
 from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
@@ -938,6 +943,38 @@ def test_aggregate_coverage_keeps_the_full_benchmark_extent():
     reconciled = _coverage_with_aggregate_counts(coverage, {"custom": {"total_examples": 10.0}})
 
     assert reconciled["custom"] == TaskCoverage(n_benchmark=100, n_attempted=10, n_scored=10)
+
+
+def test_run_evalchemy_rejects_partial_aggregate_with_inconsistent_scored_count(tmp_path, monkeypatch):
+    output_dir = f"file://{tmp_path / 'partial'}"
+    failed = {**_lm_eval_generation(1, "accuracy", 0.0, ""), "failure_category": "model_transport"}
+    _write_evalchemy_output(
+        output_dir,
+        "mrcr",
+        {"MRCR": {"mrcr_accuracy": 0.4}},
+        {"MRCR": [_lm_eval_generation(0, "accuracy", 0.8, "4"), failed]},
+        scored_counts={"MRCR": 2},
+    )
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
+        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+    )
+    config = EvalchemyRunConfig(
+        name="mrcr",
+        tasks=(EvalTaskConfig(name="MRCR", num_fewshot=0, task_alias="mrcr", generation=True),),
+    )
+
+    with pytest.raises(EvaluationError) as exc_info:
+        run_evalchemy(_remote_session().model, config, output_dir, env_vars={})
+
+    assert exc_info.value.status is RunStatus.INFRA_FAILED
+    assert exc_info.value.jobs == {"eval": "/eval/completed"}
+    assert exc_info.value.coverage["mrcr"] == TaskCoverage(
+        n_benchmark=2,
+        n_attempted=2,
+        n_scored=1,
+        errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
+    )
 
 
 def test_evalchemy_executor_rejects_aggregates_that_include_infrastructure_failures(tmp_path, monkeypatch):

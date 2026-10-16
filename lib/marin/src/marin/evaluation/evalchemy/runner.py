@@ -129,7 +129,6 @@ class EvalchemyOutcome:
     jobs: dict[str, str]
     result: FineStoreEvalchemyResult
     coverage: dict[str, TaskCoverage]
-    scored_counts: dict[str, int]
     canonical_metrics: dict[str, dict[str, float]]
     tasks: tuple[EvalTaskRef, ...]
 
@@ -297,7 +296,7 @@ def run_evalchemy(
     eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
     try:
         result = FineStoreEvalchemyResult(path=output_dir)
-        result.task_metrics()
+        metrics = result.task_metrics()
         summary = summarize_native_eval_samples(
             output_dir,
             tasks=config.tasks,
@@ -319,6 +318,34 @@ def run_evalchemy(
             jobs={_EVAL_JOB_ROLE: eval_job},
             log_tails={},
         ) from exc
+    coverage = _coverage_with_aggregate_counts(summary.coverage, metrics)
+    inconsistent_tasks = sorted(
+        task
+        for task, entry in coverage.items()
+        if entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR) and summary.scored_counts.get(task) != entry.n_scored
+    )
+    if inconsistent_tasks:
+        raise EvaluationError(
+            f"Evalchemy must aggregate the scored samples after infrastructure failures: {inconsistent_tasks}",
+            status=RunStatus.INFRA_FAILED,
+            jobs={_EVAL_JOB_ROLE: eval_job},
+            coverage=coverage,
+        )
+    if not metrics:
+        infrastructure_failures = sum(entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for entry in coverage.values())
+        if not infrastructure_failures:
+            raise EvaluationError(
+                f"eval finished but no task metrics were readable under {output_dir!r}",
+                status=RunStatus.ARTIFACT_FAILED,
+                jobs={_EVAL_JOB_ROLE: eval_job},
+                coverage=coverage,
+            )
+        raise EvaluationError(
+            f"eval finished with no successful inference responses under {output_dir!r}",
+            status=RunStatus.INFRA_FAILED,
+            jobs={_EVAL_JOB_ROLE: eval_job},
+            coverage=coverage,
+        )
     logger.info(
         "Evalchemy run %s wrote %d sample(s) to the finestore archive under %s, covering %d task(s)",
         config.name,
@@ -329,8 +356,7 @@ def run_evalchemy(
     return EvalchemyOutcome(
         jobs={_EVAL_JOB_ROLE: eval_job},
         result=result,
-        coverage=summary.coverage,
-        scored_counts=summary.scored_counts,
+        coverage=coverage,
         canonical_metrics=summary.canonical_metrics,
         tasks=summary.tasks,
     )
@@ -361,37 +387,8 @@ class EvalchemyExecutor:
                 log_tails=exc.log_tails,
             ) from exc
         metrics = outcome.result.task_metrics()
-        coverage = _coverage_with_aggregate_counts(outcome.coverage, metrics)
+        coverage = outcome.coverage
         canonical_metrics = dict(outcome.canonical_metrics)
-        inconsistent_tasks = sorted(
-            task
-            for task, entry in coverage.items()
-            if entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR) and outcome.scored_counts.get(task) != entry.n_scored
-        )
-        if inconsistent_tasks:
-            raise EvaluationError(
-                f"Evalchemy must aggregate the scored samples after infrastructure failures: {inconsistent_tasks}",
-                status=RunStatus.INFRA_FAILED,
-                jobs=outcome.jobs,
-                coverage=coverage,
-            )
-        if not metrics:
-            infrastructure_failures = sum(
-                entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for entry in coverage.values()
-            )
-            if not infrastructure_failures:
-                raise EvaluationError(
-                    f"eval finished but no task metrics were readable under {output_dir!r}",
-                    status=RunStatus.ARTIFACT_FAILED,
-                    jobs=outcome.jobs,
-                    coverage=coverage,
-                )
-            raise EvaluationError(
-                f"eval finished with no successful inference responses under {output_dir!r}",
-                status=RunStatus.INFRA_FAILED,
-                jobs=outcome.jobs,
-                coverage=coverage,
-            )
         return EvaluationOutcome(
             metrics=metrics,
             canonical_metrics=canonical_metrics,
