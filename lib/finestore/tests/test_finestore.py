@@ -672,6 +672,25 @@ def test_compaction_unifies_evolved_schema(tmp_path):
     assert rows == {"1": (1, None), "2": (None, 2)}
 
 
+def test_compaction_sorts_unsorted_shard_and_keeps_latest_value(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="old") as store:
+        table = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
+        table.extend([{"id": "b", "value": 1}, {"value": 2}, {"id": "a", "value": 3}])
+        store.flush()
+    with DataStore.open(root, writer_id="new") as store:
+        store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE).append({"id": "b", "value": 4})
+        store.flush()
+
+    assert any(not shard.primary_key_sorted for shard in ReadView(root).list_shards("samples"))
+    assert compact_table(root, "samples") == CompactionResult(written=3, superseded=1)
+    assert [(row["id"], row["value"]) for row in _rows(ReadView(root), "samples")] == [
+        ("a", 3),
+        ("b", 4),
+        (None, 2),
+    ]
+
+
 def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
     # A tiny output row group forces a compacted shard to span several groups; re-compacting it with a
     # fresh level-0 shard must stream those groups in primary-key order and merge correctly, proving the

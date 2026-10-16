@@ -77,7 +77,7 @@ _BLOB_PAYLOAD_SECONDS = telemetry.histogram("finestore_blob_payload_seconds", un
 _BLOB_SELECTED_SHARDS = telemetry.histogram("finestore_blob_selected_shards", unit="{shard}")
 
 
-class _BlobReadHandler(FSSpecHandler):
+class _NoReadAheadHandler(FSSpecHandler):
     def open_input_file(self, path: str) -> pa.PythonFile:
         # Arrow's pre_buffer=False does not disable fsspec's independent 50 MiB
         # read-ahead, which can fetch unrelated inline blobs after a small read.
@@ -488,7 +488,7 @@ class _ReadOperations:
         if not shards:
             return None
         fs, _ = factory.url_to_fs(self.root)
-        handler = _BlobReadHandler(fs) if table in (BlobTables.DESCRIPTORS, BlobTables.PARTS) else FSSpecHandler(fs)
+        handler = _NoReadAheadHandler(fs) if table in (BlobTables.DESCRIPTORS, BlobTables.PARTS) else FSSpecHandler(fs)
         return _read_plan(PyFileSystem(handler), shards, self.primary_key(table), columns, where)
 
     def scan(
@@ -629,7 +629,7 @@ class _ReadOperations:
             if diagnostics is not None:
                 diagnostics.selected_shards += len(shards)
             fs, _ = factory.url_to_fs(self.root)
-            filesystem = PyFileSystem(_BlobReadHandler(fs))
+            filesystem = PyFileSystem(_NoReadAheadHandler(fs))
             primary_key = self.primary_key(BlobTables.DESCRIPTORS)
             # Read footers and matching rows together, with bounded concurrent decoding.
             # Version resolution still spans every shard in the committed snapshot.

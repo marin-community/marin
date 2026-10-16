@@ -60,15 +60,18 @@ def row_groups(row_tables: Iterable[pa.Table], *, max_rows: int | None = None) -
         yield pa.concat_tables(group)
 
 
+def table_row_limit(table: str) -> int:
+    """Return the maximum output row-group size for a FineStore table."""
+    if table == BlobTables.PARTS:
+        return BLOB_PART_ROW_GROUP_ROWS
+    if table == BlobTables.DESCRIPTORS:
+        return BLOB_DESCRIPTOR_ROW_GROUP_ROWS
+    return ROW_GROUP_ROWS
+
+
 def table_row_groups(table: str, row_tables: Iterable[pa.Table]) -> Iterator[pa.Table]:
     """Apply the row-group policy for ``table`` to retained Arrow rows."""
-    if table == BlobTables.PARTS:
-        max_rows = BLOB_PART_ROW_GROUP_ROWS
-    elif table == BlobTables.DESCRIPTORS:
-        max_rows = BLOB_DESCRIPTOR_ROW_GROUP_ROWS
-    else:
-        max_rows = None
-    yield from row_groups(row_tables, max_rows=max_rows)
+    yield from row_groups(row_tables, max_rows=table_row_limit(table))
 
 
 @dataclass(frozen=True)
