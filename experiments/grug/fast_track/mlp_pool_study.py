@@ -224,6 +224,82 @@ def baseline_forward(model, tokens, labels, segment_ids, capture_layers: tuple[i
 
 
 @eqx.filter_jit
+def plain_forward(model, tokens, labels, segment_ids):
+    return token_losses(model, tokens, labels, segment_ids)
+
+
+def leak_diagnosis(cfg, params, qb, tokens, labels, segs, doc_start, cut: int, mesh) -> dict[str, np.ndarray]:
+    """Per-position ``|loss(perturbed) - loss(original)|`` with tokens from ``cut`` on replaced (labels and segments
+    kept), and a same-input rerun, for the unmodified model and the causal/oracle variants at layer 3, under the train
+    attention kernel and the reference one (bf16), and the reference one in fp32."""
+    rng = np.random.default_rng(3)
+    pert = tokens.copy()
+    pert[:, cut:] = rng.integers(1, cfg.vocab_size, pert[:, cut:].shape)
+    out = {}
+    configs = (
+        ("gpu_fa4_cute", MP_POLICY),
+        ("reference", MP_POLICY),
+        ("reference", "params=float32,compute=float32,output=float32"),
+    )
+    for attn, policy in configs:
+        c = dataclasses.replace(cfg, gpu_attention=attn)
+        with set_mesh(mesh):
+            m = _apply_qb_betas(params, qb)
+            m = _to_dropless_local(_cast_to_compute(jmp.get_policy(policy), m), implementation=DROPLESS_IMPLEMENTATION)
+            m = _with_config(m, c)
+            for name in ("unmodified", *LEAK_VARIANTS):
+                if name == "unmodified":
+
+                    def run(t, m=m):
+                        return np.asarray(plain_forward(m, jnp.asarray(t), jnp.asarray(labels), jnp.asarray(segs)))
+
+                else:
+                    spec = next(v for v in LAYER3_VARIANTS if v[0] == name)
+                    i1, i2 = pool_indices(doc_start, spec[1])
+
+                    def run(t, m=m, i1=i1, i2=i2, spec=spec):
+                        return np.asarray(
+                            pooled_forward(
+                                m,
+                                jnp.asarray(t),
+                                jnp.asarray(labels),
+                                jnp.asarray(segs),
+                                3,
+                                jnp.asarray(i1),
+                                jnp.asarray(i2),
+                                *(jnp.asarray(v, jnp.int32) for v in spec[2:]),
+                            )
+                        )
+
+                runs = [run(t) for t in (tokens, tokens, pert)]
+                key = f"{attn}/{policy.split(',')[1]}/{name}"
+                out[f"rerun/{key}"] = np.abs(runs[1] - runs[0])
+                out[f"perturb/{key}"] = np.abs(runs[2] - runs[0])
+                logger.info(
+                    "leak diag %s: rerun max %.3g mean %.3g; perturbed before cut-1 max %.3g mean %.3g; at cut-1 %.3g",
+                    key,
+                    out[f"rerun/{key}"].max(),
+                    out[f"rerun/{key}"].mean(),
+                    out[f"perturb/{key}"][:, : cut - 1].max(),
+                    out[f"perturb/{key}"][:, : cut - 1].mean(),
+                    out[f"perturb/{key}"][:, cut - 1].max(),
+                )
+    return out
+
+
+def _with_config(model: Transformer, cfg: GrugModelConfig) -> Transformer:
+    """``model`` with every module's static ``cfg`` field replaced by ``cfg`` (the attention kernel choice)."""
+
+    def swap(x):
+        if isinstance(x, eqx.Module) and hasattr(x, "cfg") and isinstance(x.cfg, GrugModelConfig):
+            return dataclasses.replace(x, cfg=cfg)
+        return x
+
+    model = jax.tree_util.tree_map(swap, model, is_leaf=lambda x: isinstance(x, eqx.Module) and hasattr(x, "cfg"))
+    return dataclasses.replace(model, config=cfg) if hasattr(model, "config") else model
+
+
+@eqx.filter_jit
 def pooled_forward(model, tokens, labels, segment_ids, layer: int, i1, i2, routed_on, shared_on, pool_resid):
     _HOOK[0] = Hook(plan=PoolPlan(layer, i1, i2, routed_on, shared_on, pool_resid))
     try:
@@ -314,6 +390,14 @@ CONTRAST_VARIANTS = (
     ("c_pool_self", "pool_self", 1, 1, 0),
     ("d_oracle_noncausal", "oracle", 1, 1, 0),
     *ABLATIONS,
+)
+SHARED_VARIANTS = (
+    ("ref_identity", "identity", 1, 1, 0),
+    ("a_causal_pool_shared_only", "causal_pool", 0, 1, 0),
+    ("b_lag1_shared_only", "lag1", 0, 1, 0),
+    ("c_pool_self_shared_only", "pool_self", 0, 1, 0),
+    ("d_oracle_noncausal_shared_only", "oracle", 0, 1, 0),
+    ("zero_shared", "identity", 0, 2, 0),
 )
 LEAK_VARIANTS = ("ref_identity", "a_causal_pool", "b_lag1", "c_pool_self", "d_oracle_noncausal")
 
@@ -578,6 +662,297 @@ def logit_lens(dirs: np.ndarray, scale: np.ndarray, lm_head: np.ndarray) -> np.n
 
 
 # ---------------------------------------------------------------------------------------------------------------------
+# Shared-expert study (numpy, float32): p = x @ W_up (no bias, no gate), a = relu(p)^2, y = a @ W_down.
+
+SHARED_TOP_NEURONS = 20
+SHARED_TOP_CONTEXTS = 10
+CONTEXT_RADIUS = 3
+MARGIN_BIN_EDGES = (-np.inf, -2.0, -1.0, -0.5, -0.25, 0.0, np.inf)  # p_other / p_on
+P_OTHER_EDGES = (-np.inf, -1.0, -0.5, -0.25, -0.1, 0.0)
+
+
+def _mass_mask_np(a: np.ndarray, frac: float) -> np.ndarray:
+    order = np.argsort(-a, axis=-1)
+    sorted_a = np.take_along_axis(a, order, axis=-1)
+    before = np.cumsum(sorted_a, axis=-1) - sorted_a
+    keep_sorted = (before < frac * sorted_a.sum(-1, keepdims=True)) & (sorted_a > 0)
+    out = np.zeros_like(keep_sorted)
+    np.put_along_axis(out, order, keep_sorted, axis=-1)
+    return out
+
+
+def _quartiles(v: np.ndarray) -> dict:
+    v = v[np.isfinite(v)]
+    if v.size == 0:
+        return {"n": 0}
+    q = np.quantile(v, [0.25, 0.5, 0.75])
+    return {"n": int(v.size), "mean": float(v.mean()), "p25": float(q[0]), "median": float(q[1]), "p75": float(q[2])}
+
+
+def _cos_np(a, b):
+    return (a * b).sum(-1) / (np.linalg.norm(a, axis=-1) * np.linalg.norm(b, axis=-1) + 1e-30)
+
+
+def _rel_np(a, ref):
+    return np.linalg.norm(a - ref, axis=-1) / (np.linalg.norm(ref, axis=-1) + 1e-30)
+
+
+def _set_stats(fbar: np.ndarray, f1: np.ndarray, f2: np.ndarray) -> dict:
+    union, inter = f1 | f2, f1 & f2
+    nbar, nu, ni = fbar.sum(-1), union.sum(-1), inter.sum(-1)
+    hit_u, hit_i = (fbar & union).sum(-1), (fbar & inter).sum(-1)
+    only = f1 ^ f2
+    return {
+        "size_pooled": _quartiles(nbar.astype(np.float32)),
+        "size_union": _quartiles(nu.astype(np.float32)),
+        "size_intersection": _quartiles(ni.astype(np.float32)),
+        "precision_vs_union": _quartiles(np.where(nbar > 0, hit_u / np.maximum(nbar, 1), np.nan)),
+        "recall_of_union": _quartiles(np.where(nu > 0, hit_u / np.maximum(nu, 1), np.nan)),
+        "recall_of_intersection": _quartiles(np.where(ni > 0, hit_i / np.maximum(ni, 1), np.nan)),
+        "only_one_still_in_pooled_frac": float((fbar & only).sum() / max(only.sum(), 1)),
+        "pooled_outside_union_frac": float((fbar & ~union).sum() / max(fbar.sum(), 1)),
+    }
+
+
+def shared_pair_study(p1: np.ndarray, p2: np.ndarray, w_down: np.ndarray, row_norms: np.ndarray) -> dict:
+    """Pairs of shared-expert pre-activations ``p1`` (token t) and ``p2`` (its partner), ``[N, J]``."""
+    pbar = 0.5 * (p1 + p2)  # p is linear: p(xbar) = mean p
+    a1, a2, abar = (np.square(np.maximum(v, 0.0)) for v in (p1, p2, pbar))
+    amean = 0.5 * (a1 + a2)
+    out: dict = {"fire": _set_stats(abar > 0, a1 > 0, a2 > 0)}
+    for name, power in (("mass90_l1", 1), ("mass90_l2", 2)):
+        out[name] = _set_stats(*(_mass_mask_np(v**power, MASS_FRACTION) for v in (abar, a1, a2)))
+    # Neurons firing in exactly one token: survival under pooling against the other token's pre-activation.
+    on1, on2 = p1 > 0, p2 > 0
+    only = on1 ^ on2
+    p_on = np.where(on1, p1, p2)[only]
+    p_off = np.where(on1, p2, p1)[only]
+    survive = (pbar > 0)[only]
+    ratio = p_off / p_on
+    rbins = np.digitize(ratio, MARGIN_BIN_EDGES[1:-1])
+    out["one_sided_survival_by_ratio"] = [
+        {
+            "p_other_over_p_on": [MARGIN_BIN_EDGES[b], MARGIN_BIN_EDGES[b + 1]],
+            "n": int((rbins == b).sum()),
+            "survive_frac": float(survive[rbins == b].mean()) if (rbins == b).any() else None,
+        }
+        for b in range(len(MARGIN_BIN_EDGES) - 1)
+    ]
+    abins = np.digitize(p_off, P_OTHER_EDGES[1:-1])
+    out["one_sided_survival_by_p_other"] = [
+        {
+            "p_other": [P_OTHER_EDGES[b], P_OTHER_EDGES[b + 1]],
+            "n": int((abins == b).sum()),
+            "survive_frac": float(survive[abins == b].mean()) if (abins == b).any() else None,
+            "median_p_on": float(np.median(p_on[abins == b])) if (abins == b).any() else None,
+        }
+        for b in range(len(P_OTHER_EDGES) - 1)
+    ]
+    # Activation gap g = a(xbar) - mean a by sign pattern; output error e = g @ W_down split by pattern.
+    gap = abar - amean
+    both_pos = on1 & on2
+    disagree = only
+    qs = np.quantile(amean[amean > 0], np.linspace(0, 1, 11))
+    mbins = np.digitize(amean, qs[1:-1])
+    out["activation_vs_mean_by_mean_decile"] = [
+        {
+            "mean_a_range": [float(qs[b]), float(qs[b + 1])],
+            "mean_of_mean_a": float(amean[(amean > 0) & (mbins == b)].mean()),
+            "mean_of_pooled_a": float(abar[(amean > 0) & (mbins == b)].mean()),
+            "median_ratio_pooled_over_mean": float(
+                np.median(abar[(amean > 0) & (mbins == b)] / amean[(amean > 0) & (mbins == b)])
+            ),
+            "frac_both_positive": float(both_pos[(amean > 0) & (mbins == b)].mean()),
+        }
+        for b in range(10)
+    ]
+    out["gap_by_pattern"] = {
+        "both_positive": {
+            "share_of_units": float(both_pos.mean()),
+            "max_gap": float(gap[both_pos].max()),
+            **_quartiles(gap[both_pos]),
+        },
+        "disagree": {"share_of_units": float(disagree.mean()), **_quartiles(gap[disagree])},
+        "both_nonpositive_max_abs_gap": float(np.abs(gap[~on1 & ~on2]).max()),
+    }
+    e_same = np.where(both_pos, gap, 0.0) @ w_down
+    e_dis = np.where(disagree, gap, 0.0) @ w_down
+    e = e_same + e_dis
+    e2 = (e * e).sum(-1)
+    abs_mass = np.abs(gap) * row_norms
+    out["output_error_split"] = {
+        "sq_share_same_sign": _quartiles((e_same * e_same).sum(-1) / (e2 + 1e-30)),
+        "sq_share_disagree": _quartiles((e_dis * e_dis).sum(-1) / (e2 + 1e-30)),
+        "pooled_sq_share_same_sign": float((e_same * e_same).sum() / e2.sum()),
+        "pooled_sq_share_disagree": float((e_dis * e_dis).sum() / e2.sum()),
+        "pooled_cross_term_share": float(2 * (e_same * e_dis).sum() / e2.sum()),
+        "abs_gap_x_rownorm_share_disagree": float(abs_mass[disagree].sum() / abs_mass.sum()),
+    }
+    y1, y2, ybar = a1 @ w_down, a2 @ w_down, abar @ w_down
+    ym = 0.5 * (y1 + y2)
+    out["per_pair"] = {
+        "cos_pooled_vs_mean": _cos_np(ybar, ym),
+        "rel_pooled_vs_mean": _rel_np(ybar, ym),
+        "cos_pooled_vs_t": _cos_np(ybar, y1),
+        "rel_pooled_vs_t": _rel_np(ybar, y1),
+        "cos_pooled_vs_partner": _cos_np(ybar, y2),
+        "rel_pooled_vs_partner": _rel_np(ybar, y2),
+        "cos_t_vs_partner": _cos_np(y1, y2),
+    }
+    out["per_neuron_mean_abs_gap"] = np.abs(gap).mean(0)
+    out["per_neuron_mean_gap"] = gap.mean(0)
+    out["per_neuron_disagree_rate"] = disagree.mean(0)
+    return out
+
+
+def _eta2(a: np.ndarray, groups: np.ndarray) -> np.ndarray:
+    """Fraction of each column's variance explained by the group (token id) means."""
+    total = a.var(0) + 1e-30
+    uniq, inv = np.unique(groups, return_inverse=True)
+    sums = np.zeros((len(uniq), a.shape[1]))
+    np.add.at(sums, inv, a)
+    counts = np.bincount(inv).astype(np.float64)[:, None]
+    means = sums / counts
+    between = (counts * (means - a.mean(0)) ** 2).sum(0) / a.shape[0]
+    return between / total
+
+
+def shared_study(
+    x: np.ndarray,
+    tokens: np.ndarray,
+    doc_start: np.ndarray,
+    w_up: np.ndarray,
+    w_down: np.ndarray,
+    lens: np.ndarray,
+    vocab_text: list[str],
+    word_start_ids: np.ndarray,
+    rng: np.random.Generator,
+) -> dict:
+    """The shared-expert pooling study on captured MLP inputs ``x [B, S, D]``; ``lens [J, 5]`` the units' lens."""
+    b, s, _ = x.shape
+    p = (x.reshape(b * s, -1) @ w_up).reshape(b, s, -1)
+    a = np.square(np.maximum(p, 0.0))
+    row_norms = np.linalg.norm(w_down, axis=-1)
+    valid = ~doc_start  # (t-1, t) within a document
+    rows, cols = np.nonzero(valid)
+    prev_cols = cols - 1
+    rand_cols = rng.integers(0, s - 3, cols.shape)
+    rand_cols = np.where(rand_cols >= cols - 1, rand_cols + 3, rand_cols)
+    rand_cols = np.clip(rand_cols, 0, s - 1)
+    pt = p[rows, cols]
+    out = {
+        "adjacent": shared_pair_study(pt, p[rows, prev_cols], w_down, row_norms),
+        "random": shared_pair_study(pt, p[rows, rand_cols], w_down, row_norms),
+    }
+    # Bins of the output metrics.
+    tok_t = tokens[rows, cols]
+    counts = np.bincount(tokens.ravel(), minlength=len(vocab_text))
+    freq = counts[tok_t]
+    cuts = np.quantile(freq, [1 / 3, 2 / 3])
+    fbin = np.digitize(freq, cuts, right=True)
+    ws = word_start_ids[tok_t]
+    bins = {
+        "all": np.ones_like(ws),
+        "word_start": ws,
+        "continuation": ~ws,
+        "freq_low": fbin == 0,
+        "freq_mid": fbin == 1,
+        "freq_high": fbin == 2,
+    }
+    out["freq_cuts"] = [float(c) for c in cuts]
+    out["output_bins"] = {
+        kind: {
+            metric: {name: _quartiles(values[mask]) for name, mask in bins.items()}
+            for metric, values in out[kind]["per_pair"].items()
+        }
+        for kind in ("adjacent", "random")
+    }
+    for kind in ("adjacent", "random"):
+        del out[kind]["per_pair"]
+    # Per-neuron tables.
+    flat_a = a.reshape(b * s, -1)
+    fire_rate = (flat_a > 0).mean(0)
+    mean_act = flat_a.mean(0)
+    flat_tok = tokens.reshape(-1)
+    nxt = np.pad(tokens[:, 1:], ((0, 0), (0, 1)), constant_values=-1).reshape(-1)
+    prv = np.pad(tokens[:, :-1], ((0, 0), (1, 0)), constant_values=-1).reshape(-1)
+    eta_cur = _eta2(flat_a, flat_tok)
+    eta_prev = _eta2(flat_a, prv)
+    top100 = np.argsort(-flat_a, axis=0)[:100]  # [100, J]
+    lens_hit = {}
+    for name, ids in (("current", flat_tok), ("next", nxt), ("previous", prv)):
+        lens_hit[name] = np.mean(np.any(lens[None, :, :] == ids[top100][:, :, None], axis=-1), axis=0)
+    adj = out["adjacent"]
+    neurons = []
+    for j in range(w_up.shape[1]):
+        neurons.append(
+            {
+                "unit": j,
+                "fire_rate": float(fire_rate[j]),
+                "mean_act": float(mean_act[j]),
+                "eta2_current_token": float(eta_cur[j]),
+                "eta2_previous_token": float(eta_prev[j]),
+                "lens_top5": [vocab_text[i] for i in lens[j]],
+                "top100_lens_hits_current": float(lens_hit["current"][j]),
+                "top100_lens_hits_next": float(lens_hit["next"][j]),
+                "top100_lens_hits_previous": float(lens_hit["previous"][j]),
+                "adj_mean_abs_gap": float(adj["per_neuron_mean_abs_gap"][j]),
+                "adj_mean_gap": float(adj["per_neuron_mean_gap"][j]),
+                "adj_rel_abs_gap": float(adj["per_neuron_mean_abs_gap"][j] / (mean_act[j] + 1e-30)),
+                "adj_disagree_rate": float(adj["per_neuron_disagree_rate"][j]),
+                "down_row_norm": float(row_norms[j]),
+            }
+        )
+    for kind in ("adjacent", "random"):
+        for key in ("per_neuron_mean_abs_gap", "per_neuron_mean_gap", "per_neuron_disagree_rate"):
+            del out[kind][key]
+
+    def contexts(j: int) -> list[dict]:
+        items = []
+        for flat in top100[:SHARED_TOP_CONTEXTS, j]:
+            r, c = divmod(int(flat), s)
+            lo, hi = max(0, c - CONTEXT_RADIUS), min(s, c + CONTEXT_RADIUS + 1)
+            items.append(
+                {
+                    "act": float(flat_a[flat, j]),
+                    "left": "".join(vocab_text[i] for i in tokens[r, lo:c]),
+                    "token": vocab_text[tokens[r, c]],
+                    "right": "".join(vocab_text[i] for i in tokens[r, c + 1 : hi]),
+                }
+            )
+        return items
+
+    chosen = {
+        "most_frequent_firing": list(np.argsort(-fire_rate)[:SHARED_TOP_NEURONS]),
+        "highest_mean_activation": list(np.argsort(-mean_act)[:SHARED_TOP_NEURONS]),
+        "largest_pooling_deviation": list(np.argsort(-adj_abs_gap_weighted(neurons, row_norms))[:SHARED_TOP_NEURONS]),
+    }
+    out["neuron_examples"] = {
+        group: [{**neurons[int(j)], "contexts": contexts(int(j))} for j in ids] for group, ids in chosen.items()
+    }
+    out["neurons"] = neurons
+    # Do token-identity units deviate most? Rank correlation of per-neuron deviation with eta2(current token).
+    dev = np.array([n["adj_mean_abs_gap"] * n["down_row_norm"] for n in neurons])
+    out["spearman_deviation_vs_eta2_current"] = float(_spearman(dev, eta_cur))
+    out["spearman_deviation_vs_fire_rate"] = float(_spearman(dev, fire_rate))
+    out["spearman_deviation_vs_mean_act"] = float(_spearman(dev, mean_act))
+    out["spearman_rel_deviation_vs_eta2_current"] = float(
+        _spearman(np.array([n["adj_rel_abs_gap"] for n in neurons]), eta_cur)
+    )
+    return out
+
+
+def adj_abs_gap_weighted(neurons: list[dict], row_norms: np.ndarray) -> np.ndarray:
+    """Each unit's mean |pooled - mean| activation gap times its down-row norm (its output-error contribution)."""
+    return np.array([n["adj_mean_abs_gap"] for n in neurons]) * row_norms
+
+
+def _spearman(a: np.ndarray, b: np.ndarray) -> float:
+    ra, rb = np.argsort(np.argsort(a)), np.argsort(np.argsort(b))
+    return float(np.corrcoef(ra, rb)[0, 1])
+
+
+# ---------------------------------------------------------------------------------------------------------------------
 # Data.
 
 
@@ -655,6 +1030,13 @@ def _write(path: str, data: bytes) -> None:
 @click.option("--output-dir", default=OUTPUT_DIR, show_default=True)
 @click.option("--tag", default="d512_step8821", show_default=True)
 @click.option("--skip-interventions", is_flag=True, help="Only the baseline forward and the per-token statistics.")
+@click.option(
+    "--shared-study",
+    "shared_study_only",
+    is_flag=True,
+    help="Only the shared-expert study (and its shared-only loss variants).",
+)
+@click.option("--leak-diagnose", is_flag=True, help="Only the unmodified model's future-perturbation diagnosis.")
 def main(
     smoke: bool,
     num_sequences: int,
@@ -664,6 +1046,8 @@ def main(
     output_dir: str,
     tag: str,
     skip_interventions: bool,
+    leak_diagnose: bool,
+    shared_study_only: bool,
 ) -> None:
     logging.basicConfig(level=logging.INFO)
     started = time.time()
@@ -710,6 +1094,16 @@ def main(
     logger.info("sample: %s tokens %s", picks, tokens.shape)
     labels = np.pad(tokens[:, 1:], ((0, 0), (0, 1)))
     doc_start = doc_starts_of(segs)
+    if leak_diagnose:
+        rows = slice(0, batch)
+        diag = leak_diagnosis(
+            cfg, params, qb, tokens[rows], labels[rows], segs[rows], doc_start[rows], seq_len // 2 + 1, mesh
+        )
+        buffer = io.BytesIO()
+        np.savez_compressed(buffer, tokens=tokens[rows], segment_ids=segs[rows], **diag)
+        _write(f"{output_dir}/{tag}/leak_diag.npz", buffer.getvalue())
+        logger.info("wrote %s/%s/leak_diag.npz", output_dir, tag)
+        return
 
     def batches():
         for s in range(0, num_sequences, batch):
@@ -769,6 +1163,8 @@ def main(
     # Loss interventions.
     for layer in () if skip_interventions else study_layers:
         variants = LAYER3_VARIANTS if layer == study_layers[0] else CONTRAST_VARIANTS
+        if shared_study_only:
+            variants = SHARED_VARIANTS
         for name, index_variant, routed_on, shared_on, pool_resid in variants:
             i1, i2 = pool_indices(doc_start, index_variant)
             losses = np.zeros(tokens.shape, np.float32)
@@ -804,7 +1200,7 @@ def main(
     # Leakage: perturb tokens from position p on (keeping labels and segments), compare earlier positions' losses.
     rng = np.random.default_rng(1)
     leak_rows = slice(0, batch)
-    for layer in () if skip_interventions else study_layers[:1]:
+    for layer in () if skip_interventions or shared_study_only else study_layers[:1]:
         for cut in (seq_len // 2, seq_len // 2 + 1):
             pert = tokens[leak_rows].copy()
             pert[:, cut:] = rng.integers(1, cfg.vocab_size, pert[:, cut:].shape)
@@ -852,6 +1248,39 @@ def main(
                 norms["gn_up"] = np.asarray(jax.device_get(block.mlp_gated_norm.w_up), np.float32)
             refs[layer] = (ref_mlp_of(block, cfg), norms, float(block.rms_mlp.eps))
     rng = np.random.default_rng(2)
+    if shared_study_only:
+        word_start_ids = np.array([t.startswith((" ", "\n")) for t in vocab_text])
+        shared_results = {
+            "checkpoint": results["checkpoint"],
+            "step": step,
+            "picks": results["picks"],
+            "baseline_mean_loss": results["baseline_mean_loss"],
+            "loss_variants": {
+                k: {kk: vv for kk, vv in v.items() if kk != "delta_per_seq"} for k, v in results["variants"].items()
+            },
+            "layers": {},
+        }
+        for layer in study_layers:
+            ref = refs[layer][0]
+            lens = logit_lens(ref.shared_down, ref.sconv_w0 * final_gain, lm_head)
+            shared_results["layers"][str(layer)] = {
+                "kind": results["config"]["layer_kinds"][layer],
+                **shared_study(
+                    caps[layer]["x"],
+                    tokens,
+                    doc_start,
+                    ref.shared_up,
+                    ref.shared_down,
+                    lens,
+                    vocab_text,
+                    word_start_ids,
+                    rng,
+                ),
+            }
+            logger.info("L%d shared study done (%.0fs)", layer, time.time() - started)
+        _write(f"{output_dir}/{tag}/shared_study.json", json.dumps(shared_results).encode())
+        logger.info("wrote %s/%s/shared_study.json", output_dir, tag)
+        return
     for layer in study_layers:
         ref, norms, norm_eps = refs[layer]
         dirs = unit_directions(ref)
