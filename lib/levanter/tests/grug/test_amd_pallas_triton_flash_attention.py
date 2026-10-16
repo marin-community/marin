@@ -5,11 +5,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
+from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 
 from levanter.grug.attention import AttentionMask, reference_attention
 from levanter.grug.attention._amd_pallas_triton_flash import TritonFlashBlockSizes, pallas_triton_flash_attention
+from levanter.testing.cpu_devices import run_on_cpu_devices
 
 # On a GPU the kernels compile through Triton; elsewhere they run in the Pallas interpreter.
 INTERPRET = jax.default_backend() != "gpu"
@@ -131,3 +132,91 @@ def test_flash_attention_batch_sharded_mesh_keeps_output_and_gradient_sharding()
         grads = jax.eval_shape(jax.grad(loss, argnums=(0, 1, 2)), q, kv, kv)
     assert output.sharding == sharding
     assert [g.sharding for g in grads] == [sharding] * 3
+
+
+def test_flash_attention_on_single_device_grug_mesh_matches_reference():
+    # A one-device Grug mesh keeps its length-1 axes, so every spec names mesh axes that partition nothing.
+    names = ("replica_dcn", "data", "context", "expert", "model")
+    mesh = Mesh(np.asarray(jax.devices()[:1]).reshape((1,) * 5), names, axis_types=(AxisType.Explicit,) * 5)
+    batch_axes = ("replica_dcn", "data", "expert")
+    q, k, v = _qkv(jnp.bfloat16)
+    mask = MASKS["window_segments"]
+    cotangent = jax.random.normal(jax.random.key(1), q.shape, jnp.float32)
+    expected = _reference(q, k, v, mask)
+    expected_grads = jax.grad(lambda *a: jnp.sum(_reference(*a, mask) * cotangent), argnums=(0, 1, 2))(q, k, v)
+
+    with jax.set_mesh(mesh):
+        sharding = NamedSharding(mesh, P(batch_axes, None, "model", None))
+        q, k, v, cotangent = (jax.device_put(x, sharding) for x in (q, k, v, cotangent))
+        ids = jax.device_put(mask.segment_ids[0], NamedSharding(mesh, P(batch_axes, None)))
+        # Separate q and kv arrays, as a batch from the data loader carries them.
+        sharded_mask = AttentionMask.causal(sliding_window=40).with_segment_ids(ids, jnp.copy(ids))
+
+        def loss(q, k, v):
+            return jnp.sum(_flash(q, k, v, sharded_mask).astype(jnp.float32) * cotangent)
+
+        actual = jax.jit(_flash)(q, k, v, sharded_mask)
+        actual_grads = jax.jit(jax.grad(loss, argnums=(0, 1, 2)))(q, k, v)
+
+    assert actual.sharding.spec == sharding.spec
+    tol = TOLERANCE[jnp.bfloat16]
+    np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected), atol=tol, rtol=tol)
+    for name, want, got in zip("qkv", expected_grads, actual_grads, strict=True):
+        want = np.asarray(want, np.float32)
+        got = np.asarray(got, np.float32)
+        scale = max(1.0, float(np.max(np.abs(want))))
+        np.testing.assert_allclose(got / scale, want / scale, atol=tol, rtol=tol, err_msg=f"d{name}")
+
+
+_SHARDED_SCRIPT = """
+    import jax
+    import jax.numpy as jnp
+    import numpy as np
+    from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+    from levanter.grug.attention import AttentionMask, reference_attention
+    from levanter.grug.attention._amd_pallas_triton_flash import TritonFlashBlockSizes, pallas_triton_flash_attention
+
+    blocks = TritonFlashBlockSizes(block_q=32, block_k=16, block_q_dq=32, block_k_dq=16, block_q_dkv=16, block_k_dkv=32)
+    segments = np.concatenate([np.zeros(50), np.ones(60), -np.ones(18)]).astype(np.int32)
+    segments = jnp.asarray(np.stack([segments, np.roll(segments, 20)] * 2))
+    kq, kk, kv, kc = jax.random.split(jax.random.key(0), 4)
+    q = jax.random.normal(kq, (4, 128, 8, 32))
+    k = jax.random.normal(kk, (4, 128, 2, 32))
+    v = jax.random.normal(kv, (4, 128, 2, 32))
+    cotangent = jax.random.normal(kc, q.shape)
+    reference_mask = AttentionMask.causal(sliding_window=40).with_segment_ids(segments)
+
+    def reference_loss(q, k, v):
+        return jnp.sum(reference_attention(q, k, v, reference_mask, logits_dtype=jnp.float32) * cotangent)
+
+    with jax.default_matmul_precision("highest"):
+        expected = reference_attention(q, k, v, reference_mask, logits_dtype=jnp.float32)
+        expected_grads = jax.grad(reference_loss, argnums=(0, 1, 2))(q, k, v)
+
+    def flash(q, k, v, mask):
+        return pallas_triton_flash_attention(q, k, v, mask, block_sizes=blocks, interpret=True)
+
+    def loss(q, k, v, mask, cotangent):
+        return jnp.sum(flash(q, k, v, mask) * cotangent)
+
+    mesh = Mesh(np.asarray(jax.devices()).reshape(2, 2), ("data", "model"), axis_types=(AxisType.Explicit,) * 2)
+    with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
+        sharding = NamedSharding(mesh, P("data", None, "model", None))
+        q, k, v, cotangent = (jax.device_put(x, sharding) for x in (q, k, v, cotangent))
+        ids = jax.device_put(segments, NamedSharding(mesh, P("data", None)))
+        # Separate q and kv arrays, as a batch from the data loader carries them.
+        mask = AttentionMask.causal(sliding_window=40).with_segment_ids(ids, jnp.copy(ids))
+        actual = jax.jit(flash)(q, k, v, mask)
+        grads = jax.jit(jax.grad(loss, argnums=(0, 1, 2)))(q, k, v, mask, cotangent)
+
+    assert actual.sharding.spec == sharding.spec
+    assert all(g.sharding.spec == sharding.spec for g in grads)
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), atol=1e-4, rtol=1e-4)
+    for name, got, want in zip("qkv", grads, expected_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(got), np.asarray(want), atol=1e-4, rtol=1e-4, err_msg=f"d{name}")
+"""
+
+
+def test_flash_attention_batch_and_head_sharded_packed_matches_reference():
+    run_on_cpu_devices(_SHARDED_SCRIPT, device_count=4)
