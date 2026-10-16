@@ -172,23 +172,25 @@ class _AgentEpisode:
 
     async def close(self) -> None:
         self.closed = True
+        agent = self.agent
+        cancelled_here = False
         # Cancel the agent, unless it ended or another task cancels it already. Cancelling the agent also
         # cancels a request that the agent itself waits for.
-        cancel = self.agent is not None and not self.agent.done() and self.agent.cancelling() == 0
-        if cancel:
-            self.agent.cancel()
+        if agent is not None and not agent.done() and agent.cancelling() == 0:
+            agent.cancel()
+            cancelled_here = True
         if self.in_flight is not None and not self.in_flight.done():
             # A caller that the agent does not await, such as an HTTP handler, gets an answer before the
             # engine waits for the agent, so an agent that drains its handlers can stop.
             self.in_flight.set_exception(RolloutEnded("The rollout ended before the model served this request"))
-        if self.agent is None:
+        if agent is None:
             return
         try:
             # A cancellation of this close does not reach the agent, which is already stopping.
-            await asyncio.shield(self.agent)
+            await asyncio.shield(agent)
         except asyncio.CancelledError:
             current = asyncio.current_task()
             # Only the cancellation that this close asked for ends quietly. A cancellation of the agent by
             # another task, or of this close, propagates.
-            if not cancel or (current is not None and current.cancelling()):
+            if not cancelled_here or (current is not None and current.cancelling()):
                 raise
