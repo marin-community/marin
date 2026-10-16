@@ -66,9 +66,9 @@ def catalog_database(database_url: str) -> Iterator[Engine]:
         admin.dispose()
 
 
-def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False) -> None:
+def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False, source_id: str = "math") -> None:
     declaration = SourceDeclaration(
-        id="math",
+        id=source_id,
         name="math",
         display_name="Math",
         origin="native",
@@ -130,7 +130,7 @@ def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False)
         store.flush()
         assessment = Assessment(
             pipeline_key=key,
-            source_id="math",
+            source_id=source_id,
             scope="full",
             model={"model": "glm", "revision": "1", "max_tokens": 4096, "max_attempts": 3, "retry_max_tokens": 8192},
             rubric="Check answerability",
@@ -141,7 +141,7 @@ def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False)
         snapshot = CatalogSnapshot(snapshot_id=snapshot_id, created_at="2026-10-13T00:00:00Z", source_count=1)
         source = SnapshotSource(
             snapshot_id=snapshot_id,
-            id="math",
+            id=source_id,
             declaration=declaration,
             assessment_key=key,
             latest_attempt_key=key,
@@ -361,7 +361,18 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
     coverage_path = tmp_path / "coverage.json"
     assert load_curriculum(str(path), str(coverage_path), query)["counts"]["tasks"] == 4
     assert load_curriculum(str(path), str(coverage_path), query)["changed"] is False
+    catalog_root = str(tmp_path / "catalog")
+    publish_sample(catalog_root, "graded", source_id="a")
+    load_catalog(CurationCatalog(catalog_root), query)
     with TestClient(create_api(cast(AppletServices, CatalogServices(engine)))) as client:
+        source = client.get("/sources").json()["sources"][0]
+        assert source["task_count"] == 3
+        assert source["coverage"] == {
+            "example_count": 300,
+            "intended_use": "train",
+            "top_area": {"subject_id": "D01", "node_id": "subject:D01", "name": "Mathematics", "instances": 200},
+        }
+        assert source["assessment"]["admitted"]["grade"] == "unknown"
         first = client.get("/curriculum").json()
         assert first["totals"] == {
             "denominator": 400,
@@ -436,6 +447,7 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
             connection.execute(text("DROP TABLE curriculum_matches"))
             connection.execute(text("DROP TABLE curriculum_tasks"))
         assert client.get("/curriculum").json()["totals"] == first["totals"]
+        assert client.get("/sources").json()["sources"][0]["coverage"] == source["coverage"]
 
 
 def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(catalog_database, tmp_path: Path) -> None:
@@ -474,6 +486,7 @@ def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(cat
     services = cast(AppletServices, CatalogServices(engine))
     with TestClient(create_api(services)) as client:
         inventory = client.get("/sources").json()
+        assert inventory["sources"][0]["coverage"] is None
         assessment = inventory["sources"][0]["assessment"]
         assert inventory["snapshot_id"] == "first"
         assert assessment["admitted"]["grade"] == "unknown"

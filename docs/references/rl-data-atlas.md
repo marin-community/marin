@@ -63,8 +63,26 @@ text alone does not force Unknown.
 Assessment keys use ordinary artifact dependencies and explicit versions.
 Changing only the rubric or grading model reuses curation. A failed new key has
 no current grade; archived evidence remains available. Inventory-only sources
-carry a skip reason. The source table shows the latest curation outcome; the
+carry a skip reason. Source details show the latest curation outcome; the
 assessment page shows the curation associated with its selected grade.
+
+## Browsing sources
+
+**By source** lists individual sources with their catalog, converted example
+count, training/evaluation use, current sampled quality and the curriculum domain
+with the most mapped examples. Search names, datasets or tags; filter by catalog,
+use or quality; select a column heading to sort. Filters and sorting are included in the URL. CSV export
+includes the filtered rows in the displayed order.
+
+Example counts describe successfully converted tasks before curation admission.
+A dash means no processed examples from that source are in the currently
+published curriculum release.
+**Not assessed** means there is no current sampled assessment; **Unknown** is a
+completed assessment without enough conclusive judgments. Open a source for
+pipeline details and links to its original dataset, assessment and curriculum
+coverage. The leading curriculum domain links directly to that source's coverage
+within the domain. On small screens, the table keeps name, count and quality
+visible; source details contain the remaining fields.
 
 ## Updating Atlas
 
@@ -83,8 +101,8 @@ uv run python infra/marina/applets/rl_data_catalog/load.py \
   --applet-id fb11c931-5861-4878-8bb5-a964d652b45f
 ```
 
-`applet.toml` declares the existing applet's UUID. Releases require the
-applet's publisher or a configured operator. By default, source must be a clean
+`applet.toml` declares the existing applet's UUID. Any authenticated internal
+Marina user can release an update. By default, source must be a clean
 checkout at the current remote main. A Marina image deployment does not publish Atlas. A
 default release records its source commit and subtree hash in the immutable package;
 `release-status` reports whether that tree matches this checkout.
@@ -119,11 +137,13 @@ with Ctrl-C when finished; its database is disposable.
 
 ## Curriculum coverage
 
-Open **Curriculum coverage** from the source inventory. The heatmap starts with
-all curriculum domains and their topics. Open a subject or group to descend through the
-hierarchy, or search names and descriptions across the curriculum. Search returns
-at most 100 areas. Select a cell for its task instances and a task for its public
-instruction preview, embedding text, cosine scores and alternatives.
+**By curriculum** opens a heatmap of all curriculum domains and their topics.
+Choose a domain from the picker or open an area to see its topics and skills.
+Breadcrumbs return to parent areas or all domains. Search names and descriptions
+across the curriculum, and filter counts by source or training/evaluation use.
+The URL preserves the selected area and filters. Select a count to read sampled
+examples, then open an example for its public instruction preview, embedding
+text, cosine similarity to curriculum anchors and alternative matches.
 Long instruction previews record the original character count and truncation.
 
 Displayed cosine scores are similarities; distance is `1 - similarity`.
@@ -132,15 +152,14 @@ capabilities. A task can have a capability match, a subject-only match, no
 match within the cutoff, insufficient context, or a skipped embedding.
 Alternative subject and capability matches remain available in sampled task details.
 
-The **By curriculum** tab shows all curriculum domains and their topics together.
-Open a domain to see its topics and skills on one page, or select **All skills**
-to expand the complete curriculum. Counts shade each area; zeros stay visible
-to expose gaps. The **By source** tab shows individual dataset columns. Source
-family labels and answer-format tags are not curriculum dimensions. Opening
-an area also loads its sampled tasks below the map; **View task examples**
-jumps directly to that list. Empty areas explain when no examples are available.
+Counts shade each area on a logarithmic scale; zeros stay visible to expose gaps.
+Domain counts include tasks that match the subject but fall outside the
+capability cutoff. Topic and skill counts require a capability match. Opening an
+area loads its sampled examples below the map;
+**Read sampled examples** jumps to that list. Empty areas explain when no
+examples are available.
 
-Heatmap cells, column denominators and outcome totals describe every task
+Heatmap counts and outcome totals describe every task
 instance in the exported population. A Zephyr pass computes these counts by
 source and curriculum node, including hierarchy rollups. Postgres sums these
 small statistics for dataset and train/eval filters. Overview requests do
@@ -156,9 +175,9 @@ object storage.
 
 Converted populations contain successfully converted TaskSpecs before admission.
 They retain training/evaluation intent. Selecting a source shows its full
-conversion ledger when available. Sources outside the release remain in the
-inventory; enable **Show sources without processed tasks** to show their striped
-columns.
+conversion ledger in **About counts and matching** when available. Sources
+outside the release remain in the source inventory, where **Not processed**
+filters them for inspection.
 
 Run the embedding graph through `--embed coverage`. The `publication` stage
 counts assignment outcomes by source, reconciles complete converted populations
