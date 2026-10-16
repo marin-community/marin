@@ -22,13 +22,16 @@ from rigging.timing import retry_with_backoff
 
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
 from finestore.layout import BlobTables, CommitToken, FineStoreLayout, Shard, SystemColumns
-from finestore.reader import ReadView, iter_shard_rows, merge_deduplicated_rows
+from finestore.reader import ReadView, _ScanProfile, iter_shard_rows, merge_deduplicated_rows
 from finestore.shard_writer import ShardWriter, table_row_groups
 
 logger = logging.getLogger(__name__)
 
 _COMPACTOR = "compactor"
 _CLOSE_COMPACTION_MAX_ATTEMPTS = 3
+# Each merge input retains a scanner. Row-count batches and prefetch multiply
+# decoded memory across shards when individual rows contain large documents.
+_COMPACTION_SCAN_PROFILE = _ScanProfile(batch_rows=1, batch_readahead=0, fragment_readahead=0, pre_buffer=False)
 
 
 class CompactionCoordinator(Protocol):
@@ -143,7 +146,9 @@ def _compact_shards(
         unified = unified.append(pa.field(SystemColumns.COMMIT, pa.int64()))
 
     superseded = [0]
-    merged_rows = merge_deduplicated_rows([iter_shard_rows(shard, unified, primary_key, pa_fs) for shard in shards])
+    merged_rows = merge_deduplicated_rows(
+        [iter_shard_rows(shard, unified, primary_key, pa_fs, scan_profile=_COMPACTION_SCAN_PROFILE) for shard in shards]
+    )
 
     def survivor_rows() -> Iterator[dict]:
         for merged in merged_rows:

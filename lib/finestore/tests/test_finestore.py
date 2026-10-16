@@ -8,6 +8,9 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+import subprocess
+import sys
+import textwrap
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -693,6 +696,86 @@ def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
     assert {s.generation for s in ReadView(root).list_shards("samples")} == {2}
     rows = {r["doc_id"]: r["score"] for r in _rows(ReadView(root), "samples")}
     assert rows == {f"{i:03d}": float(i) for i in range(10)}
+
+
+def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(tmp_path):
+    # A row exceeds the scaled row-group budget, just like large evaluation documents.
+    # Doubling groups per shard must not double decoded payload memory. Children
+    # isolate Arrow's allocator from fixture construction and other pytest tests.
+    probe = textwrap.dedent(
+        """
+        import gc
+        import hashlib
+        import json
+        import resource
+        import sys
+        from pathlib import Path
+
+        import pyarrow as pa
+        from finestore import shard_writer
+        from finestore.compaction import compact_table
+        from finestore.layout import OnConflict
+        from finestore.reader import ReadView
+        from finestore.store import DataStore
+
+        root = sys.argv[1]
+        row_bytes = 4 * 1024 * 1024
+        shard_writer.ROW_GROUP_TARGET_BYTES = row_bytes // 2
+        with DataStore.open(root, flush_interval=3600, max_buffer_bytes=2**40,
+                            compaction_levels=(1000,)) as store:
+            table = store.table('samples', primary_key=('id',), on_conflict=OnConflict.SUPERSEDE)
+            for revision in range(4):
+                for index in range(int(sys.argv[2])):
+                    table.append({'id': index, 'revision': revision,
+                                  'doc': f'{revision}:{index}:' + 'x' * row_bytes})
+                store.flush()
+            pinned = ReadView(root)
+            assert len(pinned.list_shards('samples')) == 4
+            default_pool = pa.default_memory_pool()
+            pool = pa.proxy_memory_pool(default_pool)
+            pa.set_memory_pool(pool)
+            try:
+                result = compact_table(root, 'samples')
+                peak_arrow_bytes = pool.max_memory()
+                peak_rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+            finally:
+                pa.set_memory_pool(default_pool)
+            gc.collect()
+            view = ReadView(root)
+            rows = view.scan('samples').to_pylist()
+            actual = [{'id': row['id'], 'revision': row['revision'],
+                       'sha256': hashlib.sha256(row['doc'].encode()).hexdigest()} for row in rows]
+            assert all(Path(shard.path).exists()
+                       for shard in pinned.list_shards('samples'))
+            print(json.dumps({'peak_arrow_bytes': peak_arrow_bytes, 'peak_rss_bytes': peak_rss_bytes,
+                              'written': result.written, 'superseded': result.superseded,
+                              'rows': sorted(actual, key=lambda row: row['id'])}))
+    """
+    )
+    measurements = []
+    for rows_per_shard in (32, 64):
+        completed = subprocess.run(
+            [sys.executable, "-c", probe, str(tmp_path / f"run-{rows_per_shard}"), str(rows_per_shard)],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=50,
+        )
+        result = json.loads(completed.stdout)
+        assert result["written"] == rows_per_shard
+        assert result["superseded"] == 3 * rows_per_shard
+        assert result["rows"] == [
+            {
+                "id": index,
+                "revision": 3,
+                "sha256": hashlib.sha256((f"3:{index}:" + "x" * (4 * 1024 * 1024)).encode()).hexdigest(),
+            }
+            for index in range(rows_per_shard)
+        ]
+        measurements.append(result["peak_arrow_bytes"])
+    # Allow one additional decoded value per input cursor at pipeline boundaries,
+    # independent of the additional 512 MiB of input payloads in the larger case.
+    assert measurements[1] <= measurements[0] + 4 * 4 * 1024 * 1024, measurements
 
 
 def test_typed_on_disk_metadata(tmp_path):
