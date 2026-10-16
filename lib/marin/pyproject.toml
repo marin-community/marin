@@ -70,6 +70,7 @@ test = [
     "marin-verifyit[math,reasoning-gym,schema]",
     "marin-taskcompendium[pipeline]",
     "marin-rolloutengine",
+    "marin-shellbox[daytona]",
     "universal-pathlib",
     # for scaling law plotting tests
     "plotly",
