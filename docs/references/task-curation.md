@@ -220,7 +220,7 @@ The `CurationRecipe` configuration has these fields:
 | Field | Meaning |
 |---|---|
 | `name` | Catalog key and artifact name. |
-| `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)`. |
+| `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)` or `HarborHubSource(name, revision, membership_sha256)`. |
 | `convert` | `(RawRow, ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection`; it fixes the task's grader. |
 | `version` | Converter revision; bump it when conversion or bundled grader code changes. |
 | `intended_use` | `train` or `eval`. |
@@ -238,6 +238,19 @@ two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, th
 `EnvironmentRequirements` of the declared `grader` as the pipeline placed it, or
 `None` when the declaration names no `grader`.
 `required_grader_environment(context)` returns the environment or raises.
+
+Harbor Hub sources acquire the complete pinned release through the existing cached
+source-download step. The isolated `config/external/harbor` runtime verifies
+release membership and task content, then writes `tasks/<digest>.jsonl` and a
+release manifest. The membership checksum is pinned separately because the Hub
+release identifier need not equal the SDK manifest hash. Dataset-level scoring
+files are not supported. Packages with links or more than 8 MiB of exported
+files produce explicit unsupported rows.
+
+The download identity includes the release, membership checksum, exporter code,
+and locked runtime. Curation sampling happens after acquisition. Existing
+`--input-root` and `--input-file` overrides bypass acquisition; for a bounded
+local export, run `python -m experiments.post_training.task_curation.harbor_hub --help` in the pinned Harbor environment. Use a fresh output directory per export.
 
 ## Environments
 
