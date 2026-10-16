@@ -99,7 +99,7 @@ async def test_rollout_grades_answer_in_lock_environment(
         resources = ResourceGroups(verifier=package.resources)
     task = arithmetic_task(grader=grader, resources=resources)
     model = ReplayModel([{"role": "assistant", "content": answer}])
-    result = await engine(model, {"local": local_grading_factory}).run(
+    result = await engine(model, {"local": local_grading_factory}).run_task(
         rollout_spec(task, verifier_machine=machine_runtime(startup_timeout=120), verifier_timeout=150)
     )
 
@@ -116,7 +116,7 @@ async def test_wrapped_local_factory_grades_lock_environment(local_grading_facto
     model = ReplayModel([{"role": "assistant", "content": "12"}])
     factory = DelegatingLocalFactory(local_grading_factory)
 
-    result = await engine(model, {"local": factory}).run(
+    result = await engine(model, {"local": factory}).run_task(
         rollout_spec(task, verifier_machine=machine_runtime(startup_timeout=120), verifier_timeout=150)
     )
 

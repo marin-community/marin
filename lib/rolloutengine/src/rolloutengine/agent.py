@@ -10,10 +10,10 @@ from typing import Any, Protocol
 
 from taskcompendium.grading_result import GradeResult
 
-from rolloutengine.contracts import ModelTurn, Prompt, RolloutData, Transition
+from rolloutengine.contracts import ModelTurn, Prompt, Rollout, Transition
 from rolloutengine.harness import Episode, Harness, HarnessContext
 from rolloutengine.shell import task_prompt
-from rolloutengine.spec import RolloutSpec
+from rolloutengine.spec import TaskRolloutSpec
 
 
 class AgentCompletion(Protocol):
@@ -32,7 +32,7 @@ class RolloutEnded(Exception):
     """The rollout ended before the model served this request."""
 
 
-def _check_task_tools(spec: RolloutSpec) -> None:
+def _check_task_tools(spec: TaskRolloutSpec) -> None:
     """Reject the tools that a task's own prompt advertises, because the bridge does not give them to the agent.
 
     A shell binding is exempt: the agent uses its own shell.
@@ -48,8 +48,8 @@ def _check_task_tools(spec: RolloutSpec) -> None:
 def agent_harness(
     run: AgentRun,
     *,
-    check: Callable[[RolloutSpec], None] = _check_task_tools,
-    grade: Callable[[RolloutData], Awaitable[GradeResult]] | None = None,
+    check: Callable[[TaskRolloutSpec], None] = _check_task_tools,
+    grade: Callable[[Rollout], Awaitable[GradeResult]] | None = None,
 ) -> Harness[Episode]:
     """A harness for an agent that owns its prompts and tool loop.
 
@@ -77,7 +77,7 @@ def agent_harness(
     if grade is None:
         return Harness(open_episode, check)
 
-    async def grade_record(_episode: Episode, record: RolloutData) -> GradeResult:
+    async def grade_record(_episode: Episode, record: Rollout) -> GradeResult:
         return await grade(record)
 
     return Harness(open_episode, check, grade_record)

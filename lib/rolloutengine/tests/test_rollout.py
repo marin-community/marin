@@ -85,7 +85,7 @@ from rolloutengine.contracts import (
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness import Harness
 from rolloutengine.shell import WORKSPACE_INSTRUCTION, ToolCallResult, ToolContext, shell_harness
-from rolloutengine.spec import RolloutSpec, TraceMode
+from rolloutengine.spec import TaskRolloutSpec, TraceMode
 from rolloutengine.test_support import (
     SHELL,
     TWELVE,
@@ -193,7 +193,7 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
     )
     runtime = rollout_spec(task, machine=machine_runtime(user="nobody"), verifier_machine=machine_runtime())
     rollout_engine = engine(ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": Factory()})
-    record = await rollout_engine.run(runtime)
+    record = await rollout_engine.run_task(runtime)
     if attack == "source":
         assert (record.grade.status, record.grade.reward, record.grade.failure) == (
             Outcome.INFRA_ERROR,
@@ -291,11 +291,11 @@ async def test_agent_session_uses_isolated_task_grading_and_engine_cleanup(answe
         model,
         {"local": factory},
         harnesses={"agent": agent_harness(lambda context, complete: agent(context.machine, complete))},
-    ).run(rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), harness="agent"))
+    ).run_task(rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), harness="agent"))
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
     assert model.requests[0].messages == ({"role": "user", "content": content},)
-    assert record.response_token_ids == (20,)
-    assert record.loss_mask == (1,)
+    assert record.rollout.response_token_ids == (20,)
+    assert record.rollout.loss_mask == (1,)
     assert released.is_set()
     assert len(factory.machines) == 2
     for machine in factory.machines:
@@ -322,10 +322,10 @@ async def test_agent_session_file_grade_preserves_rejected_nonobject_tool_argume
         model,
         {"local": RecordingShellSimFactory()},
         harnesses={"agent": agent_harness(lambda context, complete: agent(context.machine, complete))},
-    ).run(rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), harness="agent"))
+    ).run_task(rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), harness="agent"))
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
-    assert record.messages[1] == rejected
-    assert record.messages[2]["tool_call_id"] == "rejected"
+    assert record.rollout.messages[1] == rejected
+    assert record.rollout.messages[2]["tool_call_id"] == "rejected"
 
 
 @pytest.mark.parametrize("arguments", ['["invalid"]', '"invalid"', "null", "42"])
@@ -333,12 +333,12 @@ async def test_shell_rejects_nonobject_arguments_and_grades_repaired_file(argume
     rejected = shell_call("unused", call_id="rejected")
     rejected["tool_calls"][0]["function"]["arguments"] = arguments
     model = ReplayModel([rejected, shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done"}])
-    record = await engine(model, {"local": RecordingShellSimFactory()}).run(
+    record = await engine(model, {"local": RecordingShellSimFactory()}).run_task(
         rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
     )
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
-    assert record.messages[1] == rejected
-    assert json.loads(record.messages[2]["content"]) == {"error": "Tool arguments must be a JSON object"}
+    assert record.rollout.messages[1] == rejected
+    assert json.loads(record.rollout.messages[2]["content"]) == {"error": "Tool arguments must be a JSON object"}
 
 
 async def test_declared_outputs_return_in_the_record_and_reach_the_grader():
@@ -354,10 +354,10 @@ async def test_declared_outputs_return_in_the_record_and_reach_the_grader():
             {"role": "assistant", "content": "Done"},
         ]
     )
-    record = await engine(model, {"local": RecordingShellSimFactory()}).run(
+    record = await engine(model, {"local": RecordingShellSimFactory()}).run_task(
         rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
     )
-    assert record.outputs == {"/workspace/out/task.json": b'{"id": 1}\n'}
+    assert record.rollout.outputs == {"/workspace/out/task.json": b'{"id": 1}\n'}
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
 
 
@@ -387,8 +387,8 @@ async def test_session_graded_task_returns_and_grades_declared_outputs():
         ReplayModel([{"role": "assistant", "content": "ready"}]),
         {"local": RecordingShellSimFactory()},
         harnesses={"fixture": Harness(Session, grade=Session.grade)},
-    ).run(rollout_spec(task, machine=machine_runtime(), harness="fixture"))
-    assert record.outputs == {"/workspace/report.txt": b"ready\n"}
+    ).run_task(rollout_spec(task, machine=machine_runtime(), harness="fixture"))
+    assert record.rollout.outputs == {"/workspace/report.txt": b"ready\n"}
     assert record.grade.reward == 1.0
 
 
@@ -433,7 +433,7 @@ async def test_deadline_during_grading_keeps_captured_outputs(deadline):
                     grade=OutputWritingSession.grade,
                 )
             },
-        ).run(rollout_spec(task, machine=machine_runtime(), harness="fixture", **{deadline: 1.0}))
+        ).run_task(rollout_spec(task, machine=machine_runtime(), harness="fixture", **{deadline: 1.0}))
     expected = RolloutOperation.ATTEMPT if deadline == "attempt_timeout" else RolloutOperation.GRADE
     assert caught.value.operation == expected
     assert caught.value.rollout.outputs == {"/workspace/report.txt": b"ready\n"}
@@ -453,7 +453,7 @@ async def test_output_capture_over_the_file_budget_interrupts_grading():
             ReplayModel([{"role": "assistant", "content": "ready"}]),
             {"local": RecordingShellSimFactory()},
             harnesses={"fixture": Harness(session, grade=OutputWritingSession.grade)},
-        ).run(rollout_spec(task, machine=machine_runtime(), harness="fixture"))
+        ).run_task(rollout_spec(task, machine=machine_runtime(), harness="fixture"))
     assert caught.value.operation == RolloutOperation.GRADE
     assert "file or byte budget" in str(caught.value.__cause__)
     assert caught.value.rollout.outputs == {}
@@ -484,12 +484,12 @@ async def test_agent_session_receives_engine_turns_and_controls_next_history(com
     model = ReplayModel([shell_call("echo 12 > answer"), {"role": "assistant", "content": "12"}])
     result = await engine(
         model, harnesses={"agent": agent_harness(lambda _context, complete: agent(complete), grade=grade)}
-    ).run(rollout_spec(arithmetic_task(grader=SessionGrader()), harness="agent"))
+    ).run_task(rollout_spec(arithmetic_task(grader=SessionGrader()), harness="agent"))
 
     assert result.grade.reward == 1.0
     assert [turn.response_token_ids for turn in received] == [(20,), (21,)]
     assert [turn.logprobs for turn in received] == [(-0.5,), (-0.5,)]
-    assert result.loss_mask == ((1,) if compact else (1, 0, 0, 1))
+    assert result.rollout.loss_mask == ((1,) if compact else (1, 0, 0, 1))
     assert model.requests[1].options == ({} if compact else {"tool_choice": "auto"})
     assert model.requests[1].messages == (
         ({"role": "user", "content": "File written. Finish."},)
@@ -523,12 +523,12 @@ async def test_agent_session_replays_exact_tokens_on_later_turns(compact):
         return ModelTurn({"role": "assistant", "content": "12"}, replay, (21,), (-0.5,), "stop")
 
     rollout_engine = RolloutEngine({}, {"agent": agent_harness(lambda _context, complete: agent(complete), grade=grade)})
-    result = await rollout_engine.run(rollout_spec(arithmetic_task(grader=SessionGrader()), harness="agent"), model)
+    result = await rollout_engine.run_task(rollout_spec(arithmetic_task(grader=SessionGrader()), harness="agent"), model)
 
     assert result.grade.reward == 1.0
-    assert result.prompt_token_ids == (replay if compact else (10, 11))
-    assert result.response_token_ids == ((21,) if compact else (20, 90, 91, 21))
-    assert result.loss_mask == ((1,) if compact else (1, 0, 0, 1))
+    assert result.rollout.prompt_token_ids == (replay if compact else (10, 11))
+    assert result.rollout.response_token_ids == ((21,) if compact else (20, 90, 91, 21))
+    assert result.rollout.loss_mask == ((1,) if compact else (1, 0, 0, 1))
 
 
 async def test_agent_session_is_cancelled_when_engine_generation_is_cancelled():
@@ -550,7 +550,7 @@ async def test_agent_session_is_cancelled_when_engine_generation_is_cancelled():
 
     runner = RolloutEngine({}, {"agent": agent_harness(lambda _context, complete: agent(complete), grade=grade)})
     pending = asyncio.create_task(
-        runner.run(rollout_spec(arithmetic_task(grader=SessionGrader()), harness="agent"), model)
+        runner.run_task(rollout_spec(arithmetic_task(grader=SessionGrader()), harness="agent"), model)
     )
     await asyncio.wait_for(model_entered.wait(), timeout=5)
     pending.cancel()
@@ -572,7 +572,7 @@ async def test_agent_session_failure_retains_the_generated_turn():
         harnesses={"agent": agent_harness(lambda _context, complete: agent(complete), grade=grade)},
     )
     with pytest.raises(RolloutInterrupted) as caught:
-        await runner.run(rollout_spec(arithmetic_task(grader=SessionGrader()), harness="agent"))
+        await runner.run_task(rollout_spec(arithmetic_task(grader=SessionGrader()), harness="agent"))
     assert caught.value.operation == RolloutOperation.ADVANCE
     assert isinstance(caught.value.__cause__, RuntimeError)
     assert caught.value.rollout.response_token_ids == (20,)
@@ -594,8 +594,8 @@ async def test_agent_request_open_at_the_turn_limit_fails_when_the_episode_close
 
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": agent_harness(agent)}
-    ).run(rollout_spec(arithmetic_task(), harness="agent", max_turns=1))
-    assert record.stop_reason == "max_turns"
+    ).run_task(rollout_spec(arithmetic_task(), harness="agent", max_turns=1))
+    assert record.rollout.stop_reason == "max_turns"
     await asyncio.wait({handlers[-1]}, timeout=5)
     assert len(handlers) == 2
     assert isinstance(handlers[-1].exception(), RolloutEnded)
@@ -627,13 +627,13 @@ async def test_agent_request_whose_caller_is_cancelled_loses_its_turn():
         assert request.messages == retry.messages
         return ModelTurn({"role": "assistant", "content": "12"}, (30, 31), (40,), (-0.5,), "stop")
 
-    record = await RolloutEngine({}, {"agent": agent_harness(agent)}).run(
+    record = await RolloutEngine({}, {"agent": agent_harness(agent)}).run_task(
         rollout_spec(arithmetic_task(), harness="agent"), model
     )
     assert [turn.message for turn in received] == [{"role": "assistant", "content": "12"}]
     # The dropped turn left the record; the retried request started a new one.
-    assert record.messages == (*retry.messages, {"role": "assistant", "content": "12"})
-    assert (record.prompt_token_ids, record.response_token_ids) == ((30, 31), (40,))
+    assert record.rollout.messages == (*retry.messages, {"role": "assistant", "content": "12"})
+    assert (record.rollout.prompt_token_ids, record.rollout.response_token_ids) == ((30, 31), (40,))
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
 
 
@@ -654,7 +654,7 @@ async def test_session_grader_uses_session_owned_grade():
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "12"}]),
         harnesses={"fixture": Harness(lambda _context: Session(), grade=Session.grade)},
-    ).run(rollout_spec(arithmetic_task(grader=SessionGrader()), harness="fixture"))
+    ).run_task(rollout_spec(arithmetic_task(grader=SessionGrader()), harness="fixture"))
     assert record.grade.reward == 1.0
 
 
@@ -683,14 +683,14 @@ async def test_session_replaces_model_options_after_conversation_reset(next_opti
             pass
 
     model = ReplayModel([{"role": "assistant", "content": "12"}] * 3)
-    result = await engine(model, harnesses={"fixture": Harness(lambda _context: Session())}).run(
+    result = await engine(model, harnesses={"fixture": Harness(lambda _context: Session())}).run_task(
         rollout_spec(arithmetic_task(), harness="fixture")
     )
 
     assert [request.options for request in model.requests] == [initial_options, next_options, next_options]
     assert model.requests[1].messages == revised_messages
     assert result.grade.reward == 1.0
-    assert result.loss_mask == (1, 0, 0, 1)
+    assert result.rollout.loss_mask == (1, 0, 0, 1)
 
 
 @pytest.mark.parametrize("trace", list(TraceMode))
@@ -721,14 +721,14 @@ async def test_session_replays_exact_initial_tokens_and_rejects_transport_change
     if alter_prefix:
         # A chat endpoint cannot serve pinned tokens either, so the replay check holds in every trace mode.
         with pytest.raises(RolloutContractError, match="replay token prefix"):
-            await runner.run(task, model)
+            await runner.run_task(task, model)
         return
-    result = await runner.run(task, model)
-    assert (result.prompt_token_ids, result.response_token_ids) == (prefix, (5, 6))
+    result = await runner.run_task(task, model)
+    assert (result.rollout.prompt_token_ids, result.rollout.response_token_ids) == (prefix, (5, 6))
     if trace == TraceMode.EXACT_TOKENS:
-        assert (result.loss_mask, result.logprobs) == ((1, 1), (-0.1, -0.2))
+        assert (result.rollout.loss_mask, result.rollout.logprobs) == ((1, 1), (-0.1, -0.2))
     else:
-        assert (result.loss_mask, result.logprobs) == ((0, 0), None)
+        assert (result.rollout.loss_mask, result.rollout.logprobs) == ((0, 0), None)
 
 
 @pytest.mark.parametrize("stop_reason", ["stop", "length"])
@@ -742,13 +742,13 @@ async def test_reasoning_only_response_grades_missing_answer_or_existing_files(s
             turn = await replay.complete(request)
             return replace(turn, stop_reason=stop_reason) if turn.message is empty else turn
 
-        return await RolloutEngine({"local": FixtureImageFactory()}, shell_harnesses()).run(
+        return await RolloutEngine({"local": FixtureImageFactory()}, shell_harnesses()).run_task(
             rollout_spec(task, **runtime), complete
         )
 
     missing = await run(arithmetic_task(), [empty])
     assert missing.grade.reward == 0.0
-    assert missing.messages[-1] == empty
+    assert missing.rollout.messages[-1] == empty
     task = file_task(
         b'if [ "$(cat /workspace/answer)" = 12 ] && '
         b'[ "$TASKCOMPENDIUM_STOP_REASON" = "' + stop_reason.encode() + b'" ]; then echo 1; else echo 0; fi'
@@ -770,16 +770,16 @@ async def test_spec_preserves_task_and_produces_private_grade_with_training_toke
     model = ReplayModel([{"role": "assistant", "content": answer}])
     runner = engine(model)
     runner.check(spec)
-    reloaded = RolloutSpec.model_validate_json(spec.model_dump_json())
+    reloaded = TaskRolloutSpec.model_validate_json(spec.model_dump_json())
 
-    result = await runner.run(reloaded)
+    result = await runner.run_task(reloaded)
 
     assert task.model_dump_json() == reloaded.task.model_dump_json() == original
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward)
-    assert result.prompt_token_ids == (10, 11)
-    assert result.response_token_ids == (20,)
-    assert result.loss_mask == (1,)
-    assert result.logprobs == (-0.5,)
+    assert result.rollout.prompt_token_ids == (10, 11)
+    assert result.rollout.response_token_ids == (20,)
+    assert result.rollout.loss_mask == (1,)
+    assert result.rollout.logprobs == (-0.5,)
     assert "12" not in json.dumps(model.requests[0].messages)
 
 
@@ -798,7 +798,7 @@ async def test_unresolved_recipe_rejected_before_fallback_machine_or_model_start
             update={"grader": workspace_grader(argv=("sh", "/tests/grade.sh"), environment=environment)}
         )
     spec = rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
-    reloaded = RolloutSpec.model_validate_json(spec.model_dump_json())
+    reloaded = TaskRolloutSpec.model_validate_json(spec.model_dump_json())
     factory = RecordingShellSimFactory()
     model = ReplayModel([{"role": "assistant", "content": "Done."}])
     runner = engine(model, {"local": factory})
@@ -806,7 +806,7 @@ async def test_unresolved_recipe_rejected_before_fallback_machine_or_model_start
         if entrypoint == "check":
             runner.check(reloaded)
         else:
-            await runner.run(reloaded)
+            await runner.run_task(reloaded)
     assert factory.machines == []
     assert model.requests == []
 
@@ -820,7 +820,7 @@ async def test_native_task_without_dependencies_never_falls_back_to_simulator():
     model = ReplayModel([{"role": "assistant", "content": "Done."}])
     factory = RecordingShellSimFactory()
     with pytest.raises(UnsupportedMachineSpec):
-        await engine(model, {"local": factory}).run(
+        await engine(model, {"local": factory}).run_task(
             rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
         )
     assert model.requests == []
@@ -842,7 +842,7 @@ async def test_json_answer_grades_typed_evidence_and_rejects_duplicate_keys(answ
         grader=verifyit_package(StructuredExactSpec(expected={"value": 12})).grader,
     )
     model = ReplayModel([{"role": "assistant", "content": answer}])
-    record = await engine(model).run(rollout_spec(task))
+    record = await engine(model).run_task(rollout_spec(task))
     assert (record.grade.status, record.grade.reward) == (status, reward)
     assert "12" not in json.dumps(model.requests[0].messages)
 
@@ -856,7 +856,7 @@ async def test_unknown_provider_fails_before_startup(provider):
         harness="missing" if provider == "harness" else SHELL,
     )
     with pytest.raises(ValueError):
-        await engine(ReplayModel([]), {"local": factory}).run(spec)
+        await engine(ReplayModel([]), {"local": factory}).run_task(spec)
     assert factory.machines == []
 
 
@@ -898,7 +898,7 @@ async def test_machine_user_applies_to_custom_sessions_without_replacing_explici
         ReplayModel([{"role": "assistant", "content": "Done."}]),
         {"local": Factory()},
         harnesses={"identity": Harness(Session, grade=Session.grade)},
-    ).run(
+    ).run_task(
         rollout_spec(
             arithmetic_task(environment_requirements=GRADER_ENVIRONMENT, grader=SessionGrader()),
             machine=machine_runtime(user="learner"),
@@ -946,14 +946,14 @@ async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations(
             {"role": "assistant", "content": "Done."},
         ]
     )
-    result = await engine(model, {"local": FixtureImageFactory()}, harnesses=shell_harnesses(shell_tool=binding)).run(
-        rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
-    )
+    result = await engine(
+        model, {"local": FixtureImageFactory()}, harnesses=shell_harnesses(shell_tool=binding)
+    ).run_task(rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime()))
 
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
-    assert result.response_token_ids == (20, 90, 91, 21)
-    assert result.loss_mask == (1, 0, 0, 1)
-    assert result.logprobs == (-0.5, 0.0, 0.0, -0.5)
+    assert result.rollout.response_token_ids == (20, 90, 91, 21)
+    assert result.rollout.loss_mask == (1, 0, 0, 1)
+    assert result.rollout.logprobs == (-0.5, 0.0, 0.0, -0.5)
     assert model.requests[1].messages[-1]["tool_call_id"] == "write"
     assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
     tools = model.requests[0].options["tools"]
@@ -962,7 +962,7 @@ async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations(
     if interface == "task-owned":
         assert tools[0]["function"] == task.interaction_tools[0].model_dump(exclude_none=True)
         assert model.requests[0].messages[0]["content"] == "Use Bash to write 12 to /workspace/answer."
-    response = next(message for message in result.messages if message["role"] == "assistant")
+    response = next(message for message in result.rollout.messages if message["role"] == "assistant")
     assert response["tool_calls"][0]["function"]["name"] == name
 
 
@@ -973,7 +973,7 @@ async def test_shell_binding_collision_rejects_before_machine_or_model_start():
     with pytest.raises(ValueError):
         await engine(
             model, {"local": factory}, harnesses=shell_harnesses(shell_tool=ShellToolConfig(name="terminal"))
-        ).run(rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime()))
+        ).run_task(rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime()))
     assert factory.machines == []
     assert model.requests == []
 
@@ -1053,7 +1053,7 @@ async def test_shell_and_provider_calls_share_one_dispatch_and_a_done_result_end
         {"local": FixtureImageFactory()},
         harnesses=shell_harnesses(tools={"checker:v1": provider}),
         observer=observer,
-    ).run(rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime()))
+    ).run_task(rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime()))
 
     tool_events = [event.payload for event in observer.events if isinstance(event.payload, ToolCallCompleted)]
     assert [(event.call_id, event.name, event.done) for event in tool_events] == [
@@ -1073,8 +1073,8 @@ async def test_shell_and_provider_calls_share_one_dispatch_and_a_done_result_end
     assert (session.context.requirement, session.calls) == (CHECKER, [("check", {"path": "/workspace/answer"})])
     assert session.closed
     assert len(model.requests) == 2
-    assert record.steps[-1].transition.done
-    assert record.steps[-1].transition.observations[0]["content"] == "12\n"
+    assert record.rollout.steps[-1].transition.done
+    assert record.rollout.steps[-1].transition.observations[0]["content"] == "12\n"
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
 
 
@@ -1087,7 +1087,7 @@ async def test_provider_tools_run_on_the_host_without_a_task_machine():
             {"role": "assistant", "content": "12"},
         ]
     )
-    record = await engine(model, harnesses=shell_harnesses(tools={"checker:v1": provider})).run(rollout_spec(task))
+    record = await engine(model, harnesses=shell_harnesses(tools={"checker:v1": provider})).run_task(rollout_spec(task))
 
     assert provider.sessions[0].context.machine is None
     assert json.loads(model.requests[1].messages[-1]["content"]) == {"attempts": 2}
@@ -1101,7 +1101,7 @@ async def test_each_attempt_opens_and_closes_its_own_provider_session():
         model = ReplayModel(
             [tool_message(("lookup", "check", json.dumps({"path": "/state"}))), {"role": "assistant", "content": "12"}]
         )
-        await engine(model, harnesses=shell_harnesses(tools={"checker:v1": provider})).run(rollout_spec(task))
+        await engine(model, harnesses=shell_harnesses(tools={"checker:v1": provider})).run_task(rollout_spec(task))
         # State from the earlier attempt does not leak: each attempt starts from initial_state.
         assert json.loads(model.requests[1].messages[-1]["content"]) == {"attempts": 2}
 
@@ -1120,7 +1120,7 @@ async def test_unregistered_or_colliding_provider_rejects_before_machine_or_mode
     factory = RecordingShellSimFactory()
     model = ReplayModel([])
     with pytest.raises(ValueError):
-        await engine(model, {"local": factory}, harnesses=shell_harnesses(tools={"checker:v1": provider})).run(
+        await engine(model, {"local": factory}, harnesses=shell_harnesses(tools={"checker:v1": provider})).run_task(
             rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
         )
     assert factory.machines == []
@@ -1164,7 +1164,7 @@ async def test_command_timeouts_return_observations_and_allow_the_model_to_finis
         ]
     )
     model = ReplayModel([message, {"role": "assistant", "content": "Done."}])
-    record = await engine(model, {"local": Factory()}, harnesses=shell_harnesses(command_timeout=0.05)).run(
+    record = await engine(model, {"local": Factory()}, harnesses=shell_harnesses(command_timeout=0.05)).run_task(
         rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), tool_turn_timeout=5)
     )
     observations = model.requests[1].messages[-3:]
@@ -1172,10 +1172,10 @@ async def test_command_timeouts_return_observations_and_allow_the_model_to_finis
     assert [json.loads(item["content"])["reason"] for item in observations] == ["timed_out", "timed_out", "exited"]
     assert json.loads(observations[-1]["content"])["exit_code"] == 0
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
-    assert record.failure is None
-    assert record.response_token_ids == (20, 90, 91, 21)
-    assert record.loss_mask == (1, 0, 0, 1)
-    assert record.logprobs == (-0.5, 0.0, 0.0, -0.5)
+    assert record.rollout.failure is None
+    assert record.rollout.response_token_ids == (20, 90, 91, 21)
+    assert record.rollout.loss_mask == (1, 0, 0, 1)
+    assert record.rollout.logprobs == (-0.5, 0.0, 0.0, -0.5)
 
 
 @pytest.mark.parametrize("tool_turn_timeout", [0.05, 0.01])
@@ -1183,7 +1183,7 @@ async def test_tool_turn_cannot_preempt_command_timeout_feedback(tool_turn_timeo
     factory = RecordingShellSimFactory()
     model = ReplayModel([])
     with pytest.raises(ValueError):
-        await engine(model, {"local": factory}, harnesses=shell_harnesses(command_timeout=0.05)).run(
+        await engine(model, {"local": factory}, harnesses=shell_harnesses(command_timeout=0.05)).run_task(
             rollout_spec(
                 file_task(),
                 machine=machine_runtime(),
@@ -1213,7 +1213,9 @@ async def test_answer_call_retains_submission_tool_and_finishes():
         ],
     }
     model = ReplayModel([message])
-    result = await engine(model, {"local": FixtureImageFactory()}).run(rollout_spec(task, machine=machine_runtime()))
+    result = await engine(model, {"local": FixtureImageFactory()}).run_task(
+        rollout_spec(task, machine=machine_runtime())
+    )
     assert result.grade.reward == 1.0
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["submit_answer", "shell"]
 
@@ -1236,7 +1238,7 @@ async def test_native_action_preserves_configured_call_limits(calls, expected):
             for index, call in enumerate(calls)
         ]
     model = ReplayModel([message])
-    record = await engine(model).run(rollout_spec(task))
+    record = await engine(model).run_task(rollout_spec(task))
     assert record.grade.status == expected
     assert model.requests[0].options["tool_choice"] == "required"
     assert model.requests[0].options["parallel_tool_calls"] is False
@@ -1245,7 +1247,7 @@ async def test_native_action_preserves_configured_call_limits(calls, expected):
 async def test_workspace_state_receives_shell_presentation_without_answer_tools():
     task = file_task(answer_type=AnswerType.WORKSPACE_STATE, answer_format=AnswerCall())
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
-    record = await engine(model, {"local": FixtureImageFactory()}).run(
+    record = await engine(model, {"local": FixtureImageFactory()}).run_task(
         rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
     )
     assert record.grade.reward == 1.0
@@ -1269,7 +1271,7 @@ async def test_grader_without_matching_runtime_is_rejected_before_task_startup(g
     factory = RecordingShellSimFactory()
     model = ReplayModel([])
     with pytest.raises(ValueError):
-        await engine(model, {"local": factory}).run(
+        await engine(model, {"local": factory}).run_task(
             rollout_spec(arithmetic_task(grader=grader), machine=machine_runtime(), verifier_machine=verifier_machine)
         )
     assert factory.machines == []
@@ -1280,7 +1282,7 @@ async def test_state_answer_is_rejected_because_the_shellbox_session_cannot_capt
     factory = RecordingShellSimFactory()
     model = ReplayModel([])
     with pytest.raises(NotImplementedError):
-        await engine(model, {"local": factory}).run(
+        await engine(model, {"local": factory}).run_task(
             rollout_spec(
                 file_task(answer_type=AnswerType.STATE), machine=machine_runtime(), verifier_machine=machine_runtime()
             )
@@ -1301,9 +1303,9 @@ async def test_ungraded_task_reports_reason_without_a_verifier_machine():
     )
     factory = RecordingShellSimFactory()
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "12"}])
-    record = await engine(model, {"local": factory}).run(rollout_spec(task, machine=machine_runtime()))
+    record = await engine(model, {"local": factory}).run_task(rollout_spec(task, machine=machine_runtime()))
     assert (record.grade.status, record.grade.reward, record.grade.error) == (Outcome.UNAVAILABLE, None, reason)
-    assert record.loss_mask == (1, 0, 0, 1)
+    assert record.rollout.loss_mask == (1, 0, 0, 1)
     assert len(factory.machines) == 1
     with pytest.raises(RuntimeError):
         await factory.machines[0].run(Command(("true",)))
@@ -1320,7 +1322,7 @@ jq --arg answer "$answer" 'if .[0].content == "What is six plus six?" and
         resources=ResourceGroups(verifier=(inline_resource("grade.sh", script),)),
     )
     factory = RecordingShellSimFactory()
-    record = await engine(ReplayModel([{"role": "assistant", "content": answer}]), {"local": factory}).run(
+    record = await engine(ReplayModel([{"role": "assistant", "content": answer}]), {"local": factory}).run_task(
         rollout_spec(task, verifier_machine=machine_runtime())
     )
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
@@ -1369,7 +1371,7 @@ async def test_private_verifier_receives_binary_artifacts_in_a_fresh_workspace(a
             {"role": "assistant", "content": "Done."},
         ]
     )
-    record = await engine(model, {"local": factory, "simulator": simulator}).run(
+    record = await engine(model, {"local": factory, "simulator": simulator}).run_task(
         rollout_spec(
             task,
             machine=machine_runtime(
@@ -1400,13 +1402,13 @@ async def test_context_limit_keeps_served_evidence_and_grades_only_completed_ope
 
     record = await engine(
         LimitedModel([shell_call("echo 12 > /workspace/answer")]), {"local": FixtureImageFactory()}
-    ).run(rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()))
-    assert record.stop_reason == "length"
+    ).run_task(rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()))
+    assert record.rollout.stop_reason == "length"
     assert (record.grade.status, record.grade.reward) == (
         (Outcome.GRADED, 1.0) if completed_turns else (Outcome.UNAVAILABLE, None)
     )
-    assert record.response_token_ids == ((20,) if completed_turns else ())
-    assert record.loss_mask == ((1,) if completed_turns else ())
+    assert record.rollout.response_token_ids == ((20,) if completed_turns else ())
+    assert record.rollout.loss_mask == ((1,) if completed_turns else ())
 
 
 @pytest.mark.parametrize(
@@ -1445,11 +1447,11 @@ async def test_token_budget_stops_model_requests_and_grades_the_last_response(us
             return replace(await super().complete(request), usage=usage)
 
     model = Model([{"role": "assistant", "content": "12"}] * 3)
-    record = await engine(model, harnesses={"fixture": Harness(lambda _context: Session(), grade=Session.grade)}).run(
-        rollout_spec(arithmetic_task(grader=SessionGrader()), harness="fixture", max_total_tokens=budget)
-    )
+    record = await engine(
+        model, harnesses={"fixture": Harness(lambda _context: Session(), grade=Session.grade)}
+    ).run_task(rollout_spec(arithmetic_task(grader=SessionGrader()), harness="fixture", max_total_tokens=budget))
     assert len(model.requests) == requests
-    assert record.stop_reason == stop_reason
+    assert record.rollout.stop_reason == stop_reason
     assert graded == [("assistant", stop_reason)]
 
 
@@ -1475,9 +1477,9 @@ async def test_token_budget_skips_a_conversation_reset_and_grades_the_last_respo
     observer = RecordingObserver()
     record = await engine(
         model, harnesses={"fixture": Harness(lambda _context: Session(), grade=Session.grade)}, observer=observer
-    ).run(rollout_spec(arithmetic_task(grader=SessionGrader()), harness="fixture", max_total_tokens=9))
+    ).run_task(rollout_spec(arithmetic_task(grader=SessionGrader()), harness="fixture", max_total_tokens=9))
     assert len(model.requests) == 2
-    assert record.stop_reason == "budget_reached"
+    assert record.rollout.stop_reason == "budget_reached"
     assert graded == [("assistant", "budget_reached")]
     # Both transitions report the reset the session returned, including the one the budget skipped.
     transitions = [event.payload for event in observer.events if isinstance(event.payload, TransitionCompleted)]
@@ -1493,13 +1495,13 @@ async def test_token_budget_under_messages_trace_needs_usage_or_token_ids(usage)
             return replace(await super().complete(request), usage=usage)
 
     model = UsageChatModel([{"role": "assistant", "content": "12"}])
-    run = engine(model).run(rollout_spec(arithmetic_task(), trace=TraceMode.MESSAGES, max_total_tokens=100))
+    run = engine(model).run_task(rollout_spec(arithmetic_task(), trace=TraceMode.MESSAGES, max_total_tokens=100))
     if usage is None:
         with pytest.raises(RolloutContractError, match="token budget"):
             await run
         return
     record = await run
-    assert (record.stop_reason, record.grade.reward) == ("stop", 1.0)
+    assert (record.rollout.stop_reason, record.grade.reward) == ("stop", 1.0)
 
 
 @pytest.mark.parametrize("violation", ["prefix", "logprobs", "empty"])
@@ -1517,7 +1519,7 @@ async def test_model_transport_must_preserve_exact_token_evidence(violation):
 
     runner = RolloutEngine({"local": FixtureImageFactory()}, shell_harnesses())
     with pytest.raises(RolloutContractError):
-        await runner.run(
+        await runner.run_task(
             rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()), complete
         )
 
@@ -1541,16 +1543,21 @@ async def test_message_trace_runs_chat_models():
     )
     model = ChatModel(replies)
 
-    record = await engine(model, {"local": FixtureImageFactory()}).run(spec)
+    record = await engine(model, {"local": FixtureImageFactory()}).run_task(spec)
 
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
-    assert record.stop_reason == "stop"
-    assert record.messages[-1] == replies[-1]
+    assert record.rollout.stop_reason == "stop"
+    assert record.rollout.messages[-1] == replies[-1]
     assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
     assert [request.continuation for request in model.requests] == [None, None]
-    assert len(record.steps) == 2
-    assert (record.prompt_token_ids, record.response_token_ids, record.loss_mask, record.logprobs) == ((), (), (), None)
-    assert record.metrics["trace"] == "messages"
+    assert len(record.rollout.steps) == 2
+    assert (
+        record.rollout.prompt_token_ids,
+        record.rollout.response_token_ids,
+        record.rollout.loss_mask,
+        record.rollout.logprobs,
+    ) == ((), (), (), None)
+    assert record.rollout.metrics["trace"] == "messages"
 
 
 @dataclass
@@ -1573,13 +1580,13 @@ async def test_message_trace_keeps_reported_tokens_without_making_them_trainable
         file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), trace=TraceMode.MESSAGES
     )
 
-    record = await engine(RetokenizingChatModel(replies), {"local": FixtureImageFactory()}).run(spec)
+    record = await engine(RetokenizingChatModel(replies), {"local": FixtureImageFactory()}).run_task(spec)
 
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     # The last served sequence minus the first prompt's length: re-tokenization makes it informational only.
-    assert (record.prompt_token_ids, record.response_token_ids) == ((10, 11), (98, 97, 21))
-    assert (record.loss_mask, record.logprobs) == ((0, 0, 0), None)
-    assert record.metrics["trace"] == "messages"
+    assert (record.rollout.prompt_token_ids, record.rollout.response_token_ids) == ((10, 11), (98, 97, 21))
+    assert (record.rollout.loss_mask, record.rollout.logprobs) == ((0, 0, 0), None)
+    assert record.rollout.metrics["trace"] == "messages"
 
 
 async def test_interrupted_message_trace_record_is_marked():
@@ -1589,7 +1596,7 @@ async def test_interrupted_message_trace_record_is_marked():
 
     spec = rollout_spec(arithmetic_task(), trace=TraceMode.MESSAGES)
     with pytest.raises(RolloutInterrupted) as interrupted:
-        await engine(UnavailableModel()).run(spec)
+        await engine(UnavailableModel()).run_task(spec)
 
     assert interrupted.value.operation == RolloutOperation.MODEL
     assert interrupted.value.rollout.metrics["trace"] == "messages"
@@ -1640,7 +1647,7 @@ async def test_reward_file_priority_rejects_fallback_and_agent_scores(script, st
     )
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": FixtureImageFactory()}
-    ).run(rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime()))
+    ).run_task(rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime()))
     assert (record.grade.status, record.grade.reward, record.grade.failure) == (status, reward, failure)
     if reward == 0:
         assert record.grade.passed is False
@@ -1657,11 +1664,11 @@ async def test_one_task_supports_independent_turn_deadlines():
     task = arithmetic_task()
     original = task.model_dump_json()
     runner = engine(Model([{"role": "assistant", "content": "12"}]))
-    limited = asyncio.create_task(runner.run(rollout_spec(task, total_turn_timeout=0.05)))
-    unlimited = asyncio.create_task(runner.run(rollout_spec(task)))
+    limited = asyncio.create_task(runner.run_task(rollout_spec(task, total_turn_timeout=0.05)))
+    unlimited = asyncio.create_task(runner.run_task(rollout_spec(task)))
     try:
         stopped = await asyncio.wait_for(limited, timeout=5)
-        assert (stopped.stop_reason, stopped.grade.status) == ("total_turn_timeout", Outcome.UNAVAILABLE)
+        assert (stopped.rollout.stop_reason, stopped.grade.status) == ("total_turn_timeout", Outcome.UNAVAILABLE)
         assert not unlimited.done()
         release.set()
         record = await asyncio.wait_for(unlimited, timeout=5)
@@ -1727,17 +1734,18 @@ async def test_deadlines_keep_generated_tokens_and_close_sessions(phase, budget)
         engine(
             Model([{"role": "assistant", "content": "12"}]),
             harnesses={"fixture": Harness(lambda _context: Session(), grade=Session.grade)},
-        ).run(rollout_spec(arithmetic_task(grader=SessionGrader()), **limits))
+        ).run_task(rollout_spec(arithmetic_task(grader=SessionGrader()), **limits))
     )
     await asyncio.wait_for(entered.wait(), timeout=5)
     if budget == "total_turn":
-        record = await pending
-        assert record.stop_reason == "total_turn_timeout"
-        assert record.grade.reward == 1.0
+        result = await pending
+        rollout = result.rollout
+        assert rollout.stop_reason == "total_turn_timeout"
+        assert result.grade.reward == 1.0
     else:
         with pytest.raises(RolloutInterrupted) as caught:
             await pending
-        record = caught.value.rollout
+        rollout = caught.value.rollout
         assert caught.value.operation == (
             RolloutOperation.ATTEMPT
             if budget == "attempt"
@@ -1747,10 +1755,10 @@ async def test_deadlines_keep_generated_tokens_and_close_sessions(phase, budget)
         )
         assert isinstance(caught.value.__cause__, TimeoutError)
         if phase == "grade" and budget == "per_phase":
-            assert record.grade.failure == GradingFailure.TIMEOUT
-    assert record.response_token_ids == (20,)
-    assert record.loss_mask == (1,)
-    assert record.logprobs == (-0.5,)
+            assert caught.value.grade.failure == GradingFailure.TIMEOUT
+    assert rollout.response_token_ids == (20,)
+    assert rollout.loss_mask == (1,)
+    assert rollout.logprobs == (-0.5,)
     assert closed.is_set()
 
 
@@ -1785,15 +1793,15 @@ async def test_turn_budget_covers_all_turns_and_excludes_final_grading():
         engine(
             Model([{"role": "assistant", "content": "12"}]),
             harnesses={"fixture": Harness(lambda _context: Session(), grade=Session.grade)},
-        ).run(rollout_spec(arithmetic_task(grader=SessionGrader()), harness="fixture", total_turn_timeout=0.05))
+        ).run_task(rollout_spec(arithmetic_task(grader=SessionGrader()), harness="fixture", total_turn_timeout=0.05))
     )
     await asyncio.wait_for(grading.wait(), timeout=5)
     assert not pending.done()
     release_grade.set()
     record = await pending
     assert record.grade.reward == 1.0
-    assert record.stop_reason == "total_turn_timeout"
-    assert record.messages[-1]["role"] == "assistant"
+    assert record.rollout.stop_reason == "total_turn_timeout"
+    assert record.rollout.messages[-1]["role"] == "assistant"
     assert close.is_set()
 
 
@@ -1820,7 +1828,7 @@ async def test_late_creation_remains_owned_and_closes_after_cancellation(interru
         machine=machine_runtime(startup_timeout=0.05 if interruption == "startup" else None),
         attempt_timeout=0.05 if interruption == "attempt" else None,
     )
-    pending = asyncio.create_task(engine(ReplayModel([]), {"local": Factory()}).run(spec))
+    pending = asyncio.create_task(engine(ReplayModel([]), {"local": Factory()}).run_task(spec))
     try:
         await asyncio.wait_for(entered.wait(), timeout=5)
         if interruption == "cancel":
@@ -1868,7 +1876,7 @@ async def test_cleanup_outside_attempt_is_bounded_despite_repeated_cancellation(
         attempt_timeout=0.01,
     )
     pending = asyncio.create_task(
-        engine(ReplayModel([{"role": "assistant", "content": "12"}]), {"local": Factory()}).run(spec)
+        engine(ReplayModel([{"role": "assistant", "content": "12"}]), {"local": Factory()}).run_task(spec)
     )
     try:
         await asyncio.wait_for(started.wait(), timeout=5)
@@ -1913,14 +1921,14 @@ async def test_startup_failure_cleanup_retains_primary_error_without_private_mes
         resources=ResourceGroups(worker=(inline_resource("input", b"input"),)),
     )
     with pytest.raises(RolloutInterrupted) as caught:
-        await engine(ReplayModel([]), {"local": Factory()}).run(rollout_spec(task, machine=machine_runtime()))
-    record = caught.value.rollout
+        await engine(ReplayModel([]), {"local": Factory()}).run_task(rollout_spec(task, machine=machine_runtime()))
+    rollout, grade = caught.value.rollout, caught.value.grade
     assert caught.value.operation == RolloutOperation.START
     assert isinstance(caught.value.__cause__, ConnectionError)
     assert closed.is_set()
-    assert record.response_token_ids == record.loss_mask == ()
-    assert record.grade.diagnostics["cleanup_errors"] == [{"operation": "machine_close", "exception_type": "OSError"}]
-    assert "private" not in json.dumps(record.grade.diagnostics)
+    assert rollout.response_token_ids == rollout.loss_mask == ()
+    assert grade.diagnostics["cleanup_errors"] == [{"operation": "machine_close", "exception_type": "OSError"}]
+    assert "private" not in json.dumps(grade.diagnostics)
 
 
 async def test_resource_cleanup_retains_failure_cause_after_cancellation(tmp_path):
@@ -1975,7 +1983,7 @@ async def test_external_cancellation_at_attempt_deadline_remains_cancellation(ph
         await engine(
             ReplayModel([{"role": "assistant", "content": "12"}]),
             harnesses={"fixture": Harness(lambda _context: Session(), grade=Session.grade)},
-        ).run(rollout_spec(arithmetic_task(grader=SessionGrader()), harness="fixture", attempt_timeout=0.01))
+        ).run_task(rollout_spec(arithmetic_task(grader=SessionGrader()), harness="fixture", attempt_timeout=0.01))
     assert closed.is_set()
 
 
@@ -2034,7 +2042,7 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
         ReplayModel([{"role": "assistant", "content": "Done."}]),
         {"local": Factory()},
         harnesses={"fixture": Harness(Session, grade=Session.grade)},
-    ).run(rollout_spec(task, machine=machine_runtime(user="learner"), harness="fixture"))
+    ).run_task(rollout_spec(task, machine=machine_runtime(user="learner"), harness="fixture"))
     assert record.grade.reward == 1.0
     assert closed.is_set()
 
@@ -2068,7 +2076,7 @@ async def test_a_failed_setup_command_names_itself_and_keeps_its_output_tail():
         }
     )
     with pytest.raises(RolloutInterrupted) as caught:
-        await engine(ReplayModel([]), {"local": Factory()}).run(rollout_spec(task, machine=machine_runtime()))
+        await engine(ReplayModel([]), {"local": Factory()}).run_task(rollout_spec(task, machine=machine_runtime()))
 
     assert caught.value.operation == RolloutOperation.START
     cause = caught.value.__cause__
@@ -2111,7 +2119,7 @@ async def test_execution_user_preflight_fails_during_start_before_model_inferenc
         }
     )
     with pytest.raises(RolloutInterrupted) as caught:
-        await engine(model, {"local": Factory()}).run(rollout_spec(task, machine=machine_runtime(user="learner")))
+        await engine(model, {"local": Factory()}).run_task(rollout_spec(task, machine=machine_runtime(user="learner")))
     assert caught.value.operation == RolloutOperation.START
     assert isinstance(caught.value.__cause__, cause_type)
     assert model.requests == []
@@ -2181,25 +2189,23 @@ async def test_artifact_archive_failures_fail_grading_and_close_machines(tmp_pat
     spec = rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
     if failure in {"download", "download_and_remove"}:
         with pytest.raises(RolloutInterrupted) as caught:
-            await runner.run(spec)
+            await runner.run_task(spec)
         assert caught.value.operation == RolloutOperation.GRADE
         assert isinstance(caught.value.__cause__, ConnectionError)
-        record = caught.value.rollout
-        assert (record.grade.status, record.grade.reward) == (Outcome.UNAVAILABLE, None)
+        rollout, grade = caught.value.rollout, caught.value.grade
+        assert (grade.status, grade.reward) == (Outcome.UNAVAILABLE, None)
     elif failure == "remove":
-        record = await runner.run(spec)
-        assert (record.grade.status, record.grade.reward, record.grade.failure) == (
-            Outcome.INFRA_ERROR,
-            None,
-            GradingFailure.EXECUTION,
-        )
+        result = await runner.run_task(spec)
+        rollout, grade = result.rollout, result.grade
+        assert (grade.status, grade.reward, grade.failure) == (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)
         # The archive stays on the task machine, so the grader never starts.
         assert len(factory.machines) == 1
     else:
-        record = await runner.run(spec)
-        assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
-    assert record.response_token_ids == (20,)
-    assert "cleanup_errors" not in record.grade.diagnostics
+        result = await runner.run_task(spec)
+        rollout, grade = result.rollout, result.grade
+        assert (grade.status, grade.reward) == (Outcome.GRADED, 1.0)
+    assert rollout.response_token_ids == (20,)
+    assert "cleanup_errors" not in grade.diagnostics
     for machine in factory.machines:
         with pytest.raises(RuntimeError):
             await machine.run(Command(("true",)))
@@ -2299,12 +2305,12 @@ async def test_separate_verifyit_grader_uses_typed_submissions_and_task_resource
         if answer_type == AnswerType.FILE
         else [{"role": "assistant", "content": answer}]
     )
-    record = await engine(model, {"local": Factory()}).run(
+    record = await engine(model, {"local": Factory()}).run_task(
         rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
     )
     assert (record.grade.status, record.grade.reward) == (expected_status, expected_reward)
     if answer_type == AnswerType.NUMBER and status == "scored":
-        candidate_record = await engine(ReplayModel([{"role": "assistant", "content": answer}])).run(
+        candidate_record = await engine(ReplayModel([{"role": "assistant", "content": answer}])).run_task(
             rollout_spec(arithmetic_task())
         )
         assert (record.grade.status, record.grade.reward, record.grade.error) == (
@@ -2315,10 +2321,10 @@ async def test_separate_verifyit_grader_uses_typed_submissions_and_task_resource
     if expected_status == Outcome.INFRA_ERROR:
         assert record.grade.failure == GradingFailure.INVALID_REWARD
     if answer_type == AnswerType.FILE:
-        assert record.loss_mask == (1, 0, 0, 1)
+        assert record.rollout.loss_mask == (1, 0, 0, 1)
         assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
     else:
-        assert record.loss_mask == (1,)
+        assert record.rollout.loss_mask == (1,)
     for machine in factory.machines:
         with pytest.raises(RuntimeError):
             await machine.run(Command(("true",)))
@@ -2333,7 +2339,7 @@ class RecordingObserver:
 
     def payloads(self) -> list[RolloutEventPayload]:
         """The untimed payloads, after checking that every event belongs to one attempt of the arithmetic task."""
-        assert {(event.run_key, event.task_id) for event in self.events} == {(self.events[0].run_key, "arithmetic")}
+        assert {(event.run_id, event.task_id) for event in self.events} == {(self.events[0].run_id, "arithmetic")}
         return [
             (
                 replace(event.payload, duration=0.0)
@@ -2360,19 +2366,19 @@ def shell_turn_payloads(model: ReplayModel) -> list[RolloutEventPayload]:
 async def test_observer_receives_ordered_events_for_a_multi_turn_shell_rollout():
     observer = RecordingObserver()
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
-    record = await engine(model, {"local": FixtureImageFactory()}, observer=observer).run(
-        rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()), run_key="arithmetic/3"
+    record = await engine(model, {"local": FixtureImageFactory()}, observer=observer).run_task(
+        rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()), run_id="arithmetic/3"
     )
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert observer.payloads() == [
         *shell_turn_payloads(model),
-        ModelTurnCompleted(1, record.messages[-1], "stop", 5, 1, None, {}, 0.0),
+        ModelTurnCompleted(1, record.rollout.messages[-1], "stop", 5, 1, None, {}, 0.0),
         TransitionCompleted(1, True, (), None, 0.0),
         Graded(Outcome.GRADED, 1.0, None, None, 0.0),
         AttemptEnded("stop", None, None, 0.0),
     ]
     assert asdict(observer.events[-1]) == {
-        "run_key": "arithmetic/3",
+        "run_id": "arithmetic/3",
         "task_id": "arithmetic",
         "payload": {
             "stop_reason": "stop",
@@ -2395,7 +2401,7 @@ async def test_observer_receives_interrupted_operation_after_grading_completed_t
     observer = RecordingObserver()
     model = FailingModel([shell_call("echo 12 > /workspace/answer")])
     with pytest.raises(RolloutInterrupted) as interrupted:
-        await engine(model, {"local": FixtureImageFactory()}, observer=observer).run(
+        await engine(model, {"local": FixtureImageFactory()}, observer=observer).run_task(
             rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
         )
     assert interrupted.value.operation == RolloutOperation.MODEL
@@ -2406,13 +2412,14 @@ async def test_observer_receives_interrupted_operation_after_grading_completed_t
     ]
 
 
-async def test_attempts_without_a_run_key_keep_their_events_apart():
+async def test_attempts_without_a_run_id_keep_their_events_apart():
     observer = RecordingObserver()
     runner = engine(ReplayModel([{"role": "assistant", "content": "12"}] * 2), observer=observer)
-    for _ in range(2):
-        await runner.run(rollout_spec(arithmetic_task()))
-    keys = [event.run_key for event in observer.events]
-    assert len(set(keys)) == 2
+    results = [await runner.run_task(rollout_spec(arithmetic_task())) for _ in range(2)]
+    run_ids = [event.run_id for event in observer.events]
+    assert len(set(run_ids)) == 2
+    # Each rollout carries the ID of its events, so a caller can match them.
+    assert [result.rollout.run_id for result in results] == list(dict.fromkeys(run_ids))
 
 
 async def test_observer_failure_leaves_the_rollout_unchanged():
@@ -2422,13 +2429,16 @@ async def test_observer_failure_leaves_the_rollout_unchanged():
                 raise RuntimeError("telemetry sink unavailable")
 
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
-    record = await engine(model, {"local": FixtureImageFactory()}, observer=FailingObserver()).run(
+    record = await engine(model, {"local": FixtureImageFactory()}, observer=FailingObserver()).run_task(
         rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
     )
 
-    assert (record.grade.status, record.grade.reward, record.stop_reason) == (Outcome.GRADED, 1.0, "stop")
+    assert (record.grade.status, record.grade.reward, record.rollout.stop_reason) == (Outcome.GRADED, 1.0, "stop")
     # Three events precede the failing first model turn; the six after it are never delivered.
-    assert (record.metrics["observer_error_count"], record.metrics["observer_undelivered_events"]) == (1.0, 6.0)
+    assert (record.rollout.metrics["observer_error_count"], record.rollout.metrics["observer_undelivered_events"]) == (
+        1.0,
+        6.0,
+    )
 
 
 async def test_blocked_observer_does_not_hold_the_rollout():
@@ -2437,12 +2447,12 @@ async def test_blocked_observer_does_not_hold_the_rollout():
             await asyncio.Event().wait()
 
     model = ReplayModel([{"role": "assistant", "content": "12"}])
-    record = await engine(model, observer=BlockedObserver()).run(
+    record = await engine(model, observer=BlockedObserver()).run_task(
         rollout_spec(arithmetic_task(), attempt_timeout=5, cleanup_timeout=0.1)
     )
 
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
-    assert record.metrics["observer_undelivered_events"] > 0
+    assert record.rollout.metrics["observer_undelivered_events"] > 0
 
 
 async def test_harness_independent_checks_reject_a_workspace_task_without_a_machine_for_every_harness():
@@ -2464,7 +2474,7 @@ async def test_harness_independent_checks_reject_a_workspace_task_without_a_mach
     runner = engine(model, {"local": factory}, harnesses={"agent": agent_harness(agent)})
     for harness in (SHELL, "agent"):
         with pytest.raises(ValueError, match="Workspace tasks require a task machine"):
-            await runner.run(rollout_spec(task, verifier_machine=machine_runtime(), harness=harness))
+            await runner.run_task(rollout_spec(task, verifier_machine=machine_runtime(), harness=harness))
     assert factory.machines == []
     assert model.requests == []
 
@@ -2489,8 +2499,8 @@ async def test_steps_keep_the_harness_data_of_each_transition():
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "12"}] * 2),
         harnesses={"fixture": Harness(lambda _context: Session())},
-    ).run(rollout_spec(arithmetic_task(), harness="fixture"))
-    assert [step.transition.data for step in record.steps] == [("reward", 1), ("reward", 2)]
+    ).run_task(rollout_spec(arithmetic_task(), harness="fixture"))
+    assert [step.transition.data for step in record.rollout.steps] == [("reward", 1), ("reward", 2)]
     # The engine grades with the task's grader; the episode only handled the turns.
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
 
@@ -2517,7 +2527,7 @@ async def test_only_a_grading_episode_runs_a_session_graded_task():
     task = arithmetic_task(grader=SessionGrader())
     for harness in (SHELL, "agent", "fixture"):
         with pytest.raises(ValueError, match="does not grade"):
-            await runner.run(rollout_spec(task, harness=harness))
+            await runner.run_task(rollout_spec(task, harness=harness))
     assert model.requests == []
 
 
@@ -2529,7 +2539,7 @@ async def test_agent_harness_answer_call_task_is_rejected_before_the_model_runs(
     model = ReplayModel([{"role": "assistant", "content": "12"}])
     runner = engine(model, harnesses={"agent": agent_harness(agent)})
     with pytest.raises(NotImplementedError):
-        await runner.run(rollout_spec(arithmetic_task(answer_format=AnswerCall()), harness="agent"))
+        await runner.run_task(rollout_spec(arithmetic_task(answer_format=AnswerCall()), harness="agent"))
     assert model.requests == []
 
 
@@ -2543,7 +2553,7 @@ async def test_an_agent_with_two_open_requests_ends_only_its_own_attempt():
 
     model = ReplayModel([{"role": "assistant", "content": "12"}] * 2)
     with pytest.raises(RolloutInterrupted) as interrupted:
-        await engine(model, harnesses={"agent": agent_harness(agent)}).run(
+        await engine(model, harnesses={"agent": agent_harness(agent)}).run_task(
             rollout_spec(arithmetic_task(), harness="agent")
         )
     assert interrupted.value.operation == RolloutOperation.ADVANCE
@@ -2572,7 +2582,7 @@ async def test_a_session_graded_harness_keeps_a_state_answer_without_a_task_mach
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "12"}]),
         harnesses={"state": Harness(Session, grade=Session.grade)},
-    ).run(rollout_spec(task, harness="state"))
+    ).run_task(rollout_spec(task, harness="state"))
 
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
 
@@ -2601,14 +2611,14 @@ async def test_a_retry_after_a_disconnect_receives_the_generated_turn():
             return await super().complete(request)
 
     model = Model([{"role": "assistant", "content": "12"}])
-    record = await engine(model, harnesses={"agent": agent_harness(agent)}).run(
+    record = await engine(model, harnesses={"agent": agent_harness(agent)}).run_task(
         rollout_spec(arithmetic_task(), harness="agent")
     )
 
     assert len(model.requests) == 1
     assert [turn.message for turn in received] == [{"role": "assistant", "content": "12"}]
-    assert (record.response_token_ids, record.loss_mask) == ((20,), (1,))
-    assert TURN_UNDELIVERED not in record.steps[-1].transition.metrics
+    assert (record.rollout.response_token_ids, record.rollout.loss_mask) == ((20,), (1,))
+    assert TURN_UNDELIVERED not in record.rollout.steps[-1].transition.metrics
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
 
 
@@ -2632,9 +2642,9 @@ async def test_a_turn_that_the_agent_never_receives_is_marked():
 
     record = await engine(
         Model([{"role": "assistant", "content": "12"}]), harnesses={"agent": agent_harness(agent)}
-    ).run(rollout_spec(arithmetic_task(), harness="agent"))
+    ).run_task(rollout_spec(arithmetic_task(), harness="agent"))
 
-    assert record.steps[-1].transition.metrics == {TURN_UNDELIVERED: 1.0}
+    assert record.rollout.steps[-1].transition.metrics == {TURN_UNDELIVERED: 1.0}
 
 
 async def test_closing_answers_a_server_request_before_the_agent_drains_its_handlers():
@@ -2654,7 +2664,7 @@ async def test_closing_answers_a_server_request_before_the_agent_drains_its_hand
 
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": agent_harness(agent)}
-    ).run(rollout_spec(arithmetic_task(), harness="agent", max_turns=1, cleanup_timeout=5))
+    ).run_task(rollout_spec(arithmetic_task(), harness="agent", max_turns=1, cleanup_timeout=5))
 
     assert isinstance(handlers[-1].exception(), RolloutEnded)
     assert "cleanup_errors" not in record.grade.diagnostics
@@ -2686,15 +2696,15 @@ async def test_a_retry_after_a_late_cancellation_receives_the_turn_again():
                 return
 
     model = DisconnectingModel([{"role": "assistant", "content": "12"}], handlers)
-    record = await engine(model, harnesses={"agent": agent_harness(agent)}).run(
+    record = await engine(model, harnesses={"agent": agent_harness(agent)}).run_task(
         rollout_spec(arithmetic_task(), harness="agent")
     )
 
     assert handlers[0].cancelled()
     assert handlers[1].result().message == {"role": "assistant", "content": "12"}
     assert len(model.requests) == 1
-    assert TURN_UNDELIVERED not in record.steps[-1].transition.metrics
-    assert (record.response_token_ids, record.grade.reward) == ((20,), 1.0)
+    assert TURN_UNDELIVERED not in record.rollout.steps[-1].transition.metrics
+    assert (record.rollout.response_token_ids, record.grade.reward) == ((20,), 1.0)
 
 
 async def test_a_turn_cancelled_after_it_arrived_is_marked_when_the_agent_exits():
@@ -2707,10 +2717,10 @@ async def test_a_turn_cancelled_after_it_arrived_is_marked_when_the_agent_exits(
     record = await engine(
         DisconnectingModel([{"role": "assistant", "content": "12"}], handlers),
         harnesses={"agent": agent_harness(agent)},
-    ).run(rollout_spec(arithmetic_task(), harness="agent"))
+    ).run_task(rollout_spec(arithmetic_task(), harness="agent"))
 
     assert handlers[0].cancelled()
-    assert record.steps[-1].transition.metrics == {TURN_UNDELIVERED: 1.0}
+    assert record.rollout.steps[-1].transition.metrics == {TURN_UNDELIVERED: 1.0}
 
 
 async def test_an_ungraded_workspace_task_needs_no_task_machine():
@@ -2720,6 +2730,6 @@ async def test_an_ungraded_workspace_task_needs_no_task_machine():
     task = arithmetic_task(answer_type=AnswerType.FILE, grader=NoGrader(reason="No evaluator"))
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "Done."}]), harnesses={"agent": agent_harness(agent)}
-    ).run(rollout_spec(task, harness="agent"))
+    ).run_task(rollout_spec(task, harness="agent"))
 
     assert (record.grade.status, record.grade.error) == (Outcome.UNAVAILABLE, "No evaluator")

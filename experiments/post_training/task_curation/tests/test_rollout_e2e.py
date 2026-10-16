@@ -196,7 +196,7 @@ async def test_quick_parquet_rollout_grades_correct_and_wrong_answers(case, tmp_
             messages = [call, {"role": "assistant", "content": "Done."}]
         model = ReplayModel(messages)
         shell = shell_harness(command_timeout=None, shell_tool=ShellToolConfig(name="terminal", command_parameter="cmd"))
-        result = await engine(model, {"local": machines}, harnesses={SHELL: shell}).run(
+        result = await engine(model, {"local": machines}, harnesses={SHELL: shell}).run_task(
             rollout_spec(
                 task,
                 machine=None if case == "math500" else machine_runtime(),

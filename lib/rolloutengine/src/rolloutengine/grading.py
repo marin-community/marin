@@ -17,11 +17,11 @@ from taskcompendium.runtime.grading import grade_in_sandbox
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _AttemptMachineFactory, _machine_spec
-from rolloutengine.spec import RolloutSpec
+from rolloutengine.spec import TaskRolloutSpec
 
 
 async def _grade_rollout(
-    spec: RolloutSpec,
+    spec: TaskRolloutSpec,
     messages: tuple[dict[str, Any], ...],
     outputs: dict[str, bytes],
     machine: Machine | None,
