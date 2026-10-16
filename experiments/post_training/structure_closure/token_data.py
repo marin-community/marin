@@ -17,12 +17,17 @@ from verifyit.tool_call_markup import TOOL_CLOSE, TOOL_OPEN
 
 from experiments.post_training.structure_closure.benchmark import (
     CLOSE_REQUIRED,
+    CONTINUE_REQUIRED,
+    OPENER_RETENTION,
+    VALUE_CONTINUE_REQUIRED,
     ClosureCase,
     Family,
     Split,
     closure_format,
     score_case,
 )
+
+LOCAL_TOKEN_ROUNDTRIP_PASSED = "local-token-roundtrip-passed"
 
 
 class ToolPrompt(StrEnum):
@@ -62,11 +67,11 @@ def native_tool_case(case: ClosureCase, tokenizer: PreTrainedTokenizerFast) -> C
         raise ValueError("Native serialization changed tool content")
     if case.control == CLOSE_REQUIRED:
         cut = len(expected) - len(TOOL_CLOSE)
-    elif case.control == "opener_retention":
+    elif case.control == OPENER_RETENTION:
         cut = expected.index("{")
-    elif case.control == "continue_required":
+    elif case.control == CONTINUE_REQUIRED:
         cut = expected.index(case.task_id) + max(1, len(case.task_id) // 2)
-    elif case.control == "value_continue_required":
+    elif case.control == VALUE_CONTINUE_REQUIRED:
         cut = expected.index('"task":') + len('"task":')
     else:
         raise ValueError(f"Unsupported native tool control: {case.control}")
@@ -199,7 +204,7 @@ def prepare_tokens(
         "tokenizer_sha256": hashlib.sha256((initializer / "tokenizer.json").read_bytes()).hexdigest(),
         "chat_template_sha256": hashlib.sha256((initializer / "chat_template.jinja").read_bytes()).hexdigest(),
         "builder_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        "status": "failed" if failures else "local-token-roundtrip-passed",
+        "status": "failed" if failures else LOCAL_TOKEN_ROUNDTRIP_PASSED,
     }
     (output / "manifest.json").write_text(json.dumps(report, indent=2) + "\n")
     return report

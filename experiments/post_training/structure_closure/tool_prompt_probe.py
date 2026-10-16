@@ -13,7 +13,11 @@ from transformers import PreTrainedTokenizerFast
 from verifyit.closure_scoring import ClosureFormat, score_closure_region
 from verifyit.tool_call_markup import TOOL_CLOSE, TOOL_OPEN
 
-from experiments.post_training.structure_closure.token_data import TokenizedCaseRecord, write_result_tool
+from experiments.post_training.structure_closure.token_data import (
+    LOCAL_TOKEN_ROUNDTRIP_PASSED,
+    TokenizedCaseRecord,
+    write_result_tool,
+)
 
 
 def paired_tool_probes(record: TokenizedCaseRecord, tokenizer: PreTrainedTokenizerFast) -> list[dict]:
@@ -96,7 +100,7 @@ def main() -> None:
     payload = "".join(json.dumps(record, separators=(",", ":")) + "\n" for record in records).encode()
     (args.output / "validation.jsonl").write_bytes(payload)
     report = {
-        "status": "failed" if failures else "local-token-roundtrip-passed",
+        "status": "failed" if failures else LOCAL_TOKEN_ROUNDTRIP_PASSED,
         "hashes": {"validation": hashlib.sha256(payload).hexdigest()},
         "counts": dict(Counter(f"validation/{record['probe_variant']}" for record in records)),
         "source_sha256": hashlib.sha256(source).hexdigest(),

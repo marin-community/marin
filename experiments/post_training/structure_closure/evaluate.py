@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Evaluate the explicit-closure prompt cohort without allocating a learner."""
+"""Evaluate registered closure cohorts or versioned data without a learner."""
 
 from dataclasses import replace
 

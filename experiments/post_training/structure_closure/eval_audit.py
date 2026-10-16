@@ -22,7 +22,12 @@ from verifyit.closure_scoring import (
 )
 from verifyit.tool_call_markup import ToolCallStatus, tool_call_regions
 
-from experiments.post_training.structure_closure.token_data import TokenizedCaseRecord
+from experiments.post_training.structure_closure.benchmark import (
+    CONTINUE_REQUIRED,
+    ESCAPE_CONTINUE_REQUIRED,
+    VALUE_CONTINUE_REQUIRED,
+)
+from experiments.post_training.structure_closure.token_data import LOCAL_TOKEN_ROUNDTRIP_PASSED, TokenizedCaseRecord
 
 SNOWBALL_TURN_END_MARKERS = ("<|eot_id|>", "<|end_of_text|>")
 
@@ -157,7 +162,7 @@ def audit_evaluation(
                 if not regions or regions[0].start != 0:
                     raise ValueError("Tool cohort does not start with an outside-thinking tool call")
                 tool_protocol_status = regions[0].status
-            if case["control"] in ("continue_required", "escape_continue_required", "value_continue_required"):
+            if case["control"] in (CONTINUE_REQUIRED, ESCAPE_CONTINUE_REQUIRED, VALUE_CONTINUE_REQUIRED):
                 control_outcome = continuation_outcome(
                     case["prefix"] + content, case["expected"], ClosureFormat(case["format"])
                 )
@@ -189,7 +194,7 @@ def main() -> None:
     contents = (args.tokens / "validation.jsonl").read_bytes()
     manifest = json.loads((args.tokens / "manifest.json").read_text())
     digest = hashlib.sha256(contents).hexdigest()
-    if manifest["status"] != "local-token-roundtrip-passed" or digest != manifest["hashes"]["validation"]:
+    if manifest["status"] != LOCAL_TOKEN_ROUNDTRIP_PASSED or digest != manifest["hashes"]["validation"]:
         raise ValueError("Validation cohort differs from the immutable token audit")
     cases = [json.loads(line) for line in contents.splitlines()]
     expected_count = sum(count for key, count in manifest["counts"].items() if key.startswith("validation/"))
