@@ -33,6 +33,7 @@ services:
       CODEX_CLI_VERSION: "0.163.0"
       CLAUDE_ACP_VERSION: "0.81.1"
       CODEX_ACP_VERSION: "1.13.1"
+      WEAVER_CODEX_ACP_CMD: CODEX_PATH=/home/app/.local/bin/codex exec codex-acp
       LOOM_RUNNER: docker
       LOOM_SESSION_IMAGE: ${LOOM_IMAGE:?LOOM_IMAGE is required}
       LOOM_SESSION_HOME_VOLUME: *session-home-volume

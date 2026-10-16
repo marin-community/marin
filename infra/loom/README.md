@@ -218,7 +218,7 @@ instruction and runtime policy are reviewed in this repository.
 The `codex-6-1` interactive profile selects GPT-6.1 Sol with the same instructions,
 repository access, and MCP policy as `default`. Loom reads its model catalogue
 from the installed Codex CLI, pinned by Compose's `CODEX_CLI_VERSION`.
-The `acp.codex_cmd` setting points the adapter at that same CLI through
+Compose's `WEAVER_CODEX_ACP_CMD` points the adapter at that same CLI through
 `CODEX_PATH`, because npm can retain an older nested `@openai/codex` dependency
 even after upgrading the global package. The adapter has its own
 `CODEX_ACP_VERSION` pin, so model additions may require a CLI upgrade without
