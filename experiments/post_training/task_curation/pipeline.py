@@ -3,7 +3,7 @@
 
 """Dataset declarations and the artifact steps that ingest them.
 
-A ``CurationRecipe`` names one pinned source, the converter that turns each row into a
+A ``CurationRecipe`` names one pinned source or built artifact, the converter that turns each row into a
 ``TaskSpec`` with its grader fixed, what its graders' environment must
 provide, an optional review rubric and optional grader controls. ``process_rows`` constructs a graph
 for ``taskcompendium.pipeline.source_processing.run_source_pipeline``. SAMPLE/FULL cache a
@@ -31,7 +31,7 @@ from marin.datakit.download.huggingface import (
 )
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.inference.openai_batch import OpenAIBatchClient
 from marin.inference.openai_chat import OpenAIChatClient
 from rigging.filesystem.storage_path import StoragePath
@@ -165,6 +165,38 @@ class UrlSource:
         return (self.filename,)
 
 
+@dataclass(frozen=True)
+class ArtifactSource:
+    """Files of an artifact this repository builds, such as a prepared candidate set, read as source rows.
+
+    The curation step depends on ``step``; its recipe identity (name, version and config fingerprint)
+    stands in for a pinned revision, so rebuilding the input under another recipe changes the source.
+    """
+
+    step: ArtifactStep[Artifact]
+    files: tuple[str, ...]
+    format: SourceFormat
+    select: RowSelector | None = None
+    decode: RowDecoder | None = None
+    read: FileReader | None = None
+
+    @property
+    def name(self) -> str:
+        return self.step.name
+
+    @property
+    def revision(self) -> str:
+        return artifact_identity(self.step)
+
+    @property
+    def url(self) -> str:
+        return f"{self.step.name}/{self.step.version}"
+
+
+type RecipeSource = HfSource | UrlSource | ArtifactSource
+"""Where a recipe's rows come from: a pinned download or an artifact built here."""
+
+
 def environment_requirements(
     environment: Environment, built: EnvironmentArtifact | None = None
 ) -> EnvironmentRequirements:
@@ -216,7 +248,7 @@ class CurationRecipe:
     """
 
     name: str
-    source: HfSource | UrlSource
+    source: RecipeSource
     convert: Converter
     version: str
     intended_use: IntendedUse
@@ -227,7 +259,7 @@ class CurationRecipe:
     resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
 
     @property
-    def dataset(self) -> HfSource | UrlSource:
+    def dataset(self) -> RecipeSource:
         return self.source
 
     @property
@@ -467,7 +499,17 @@ def review_rubric(pipeline: CurationRecipe) -> ReviewRubric | None:
     return ReviewRubric(id=pipeline.name, version=pipeline.version, criteria=criteria)
 
 
-def source_files(source: HfSource | UrlSource) -> SourceFiles:
+def source_files(source: RecipeSource) -> SourceFiles:
+    if isinstance(source, ArtifactSource):
+        return SourceFiles(
+            source.name,
+            source.revision,
+            source.files,
+            source.format,
+            source.select,
+            source.decode,
+            source.read,
+        )
     if isinstance(source, HfSource):
         return SourceFiles(
             source.repo,
@@ -553,8 +595,10 @@ def _run_curation(
     )
 
 
-def download_identity(source: HfSource | UrlSource) -> dict[str, Any]:
-    """The pinned bytes and shared preparation staged by a source download."""
+def download_identity(source: RecipeSource) -> dict[str, Any]:
+    """The pinned bytes and shared preparation staged by a source download, or the artifact recipe read."""
+    if isinstance(source, ArtifactSource):
+        return {"artifact": source.revision, "files": sorted(source.files)}
     if isinstance(source, HfSource):
         return {
             "repo": source.repo,
@@ -667,10 +711,11 @@ def download_step(source: HfSource | UrlSource, campaign: CampaignRuntime) -> Ar
 def source_downloads(
     pipeline: CurationRecipe, options: PipelineOptions
 ) -> tuple[ArtifactStep[Artifact] | None, dict[str, ArtifactStep[Artifact]]]:
-    """Download pinned inputs unless the invocation supplies their local replacements."""
+    """Return source steps for inputs without local overrides."""
     primary = None
     if options.inputs.root is None and not options.inputs.files:
-        primary = download_step(pipeline.source, options.runtime)
+        source = pipeline.source
+        primary = source.step if isinstance(source, ArtifactSource) else download_step(source, options.runtime)
     return primary, {
         name: download_step(source, options.runtime)
         for name, source in sorted(pipeline.inputs.items())
@@ -691,7 +736,7 @@ def _staged_file_overrides(root: str, hashes: Mapping[str, str]) -> dict[str, So
     return {name: SourceFileOverride(str(StoragePath(root) / name), checksum) for name, checksum in hashes.items()}
 
 
-def _staged_input_identity(path: str, source: HfSource | UrlSource) -> dict[str, Any]:
+def _staged_input_identity(path: str, source: RecipeSource) -> dict[str, Any]:
     files = {}
     for logical in staged_files(path, source_files(source)):
         with (StoragePath(path) / logical).open("rb") as stream:

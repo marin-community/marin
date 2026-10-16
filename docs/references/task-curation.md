@@ -131,7 +131,7 @@ The `CurationRecipe` configuration has these fields:
 | Field | Meaning |
 |---|---|
 | `name` | Catalog key and artifact name. |
-| `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)`. |
+| `source` | `HfSource(repo, revision, files, format, select, decode, read)`, `UrlSource(url, sha256, filename, format, ...)`, or `ArtifactSource(step, files, format, select, decode, read)`, whose curation step depends on an artifact built here and whose recipe identity stands in for a revision. |
 | `convert` | `(RawRow, ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection`; it fixes the task's grader. |
 | `version` | Converter revision; bump it when conversion or bundled grader code changes. |
 | `intended_use` | `train` or `eval`. |

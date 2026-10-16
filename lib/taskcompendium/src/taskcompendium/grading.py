@@ -19,7 +19,9 @@ from verifyit.spec import (
     EmptyOutputPolicy,
     ExactSpec,
     JudgeSpec,
+    NextActionSpec,
     NumericSpec,
+    PivotToolCallSpec,
     PredictedActionSpec,
     Spec,
     StructuredExactSpec,
@@ -45,7 +47,7 @@ from taskcompendium.models import (
     verifyit_spec,
 )
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.submission import native_action_text, require_submission_compatibility
+from taskcompendium.submission import conversation_messages, native_action_text, require_submission_compatibility
 
 
 def grade_result(verifier: Spec, verdict: Reward) -> GradeResult:
@@ -103,11 +105,13 @@ def _candidate(verifier: Spec, submission: Submission) -> Candidate:
             if not isinstance(final, AssistantToolCalls):
                 return ()
             return tuple(CandidateCall(call.name, call.object_arguments()) for call in final.calls)
+        case PivotToolCallSpec() | NextActionSpec(), ActionSubmission(message=final):
+            return conversation_messages((final,))[0]
         case ExactSpec(), JsonSubmission(value=value) | StateSubmission(value=value):
             if not isinstance(value, str):
                 raise SubmissionFailure("Text verifier requires a string JSON value")
             return value
-        case StructuredExactSpec() | PredictedActionSpec(), _:
+        case StructuredExactSpec() | PredictedActionSpec() | PivotToolCallSpec() | NextActionSpec(), _:
             raise TypeError(f"{type(verifier).__name__} cannot grade a {type(submission).__name__}")
         case _, TextSubmission(value=value):
             return value

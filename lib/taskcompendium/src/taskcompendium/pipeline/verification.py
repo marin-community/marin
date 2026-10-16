@@ -7,7 +7,16 @@ import json
 
 from verifyit.grade import negative_candidate, positive_candidate
 from verifyit.modes.extract import extract_boxed
-from verifyit.spec import ExactSpec, JsonSchemaSpec, McqSpec, NumericSpec, PredictedActionSpec
+from verifyit.spec import (
+    ExactSpec,
+    JsonSchemaSpec,
+    McqSpec,
+    NextActionSpec,
+    NumericSpec,
+    PivotToolCallSpec,
+    PredictedActionSpec,
+    TerminusSpec,
+)
 
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
@@ -107,6 +116,10 @@ def verify_task(task: TaskSpec) -> list[CheckResult]:
 
     if isinstance(verifier, PredictedActionSpec):
         return _action_checks(task, verifier)
+    if isinstance(verifier, PivotToolCallSpec | NextActionSpec):
+        return _expert_action_checks(task, verifier)
+    if isinstance(verifier, TerminusSpec):
+        return answer_checks(task, (("empty", "", 0.0), ("reference", verifier.expected_answer, 1.0)))
     if isinstance(verifier, JsonSchemaSpec):
         return [
             *answer_checks(task, (("empty", "", 0.0), ("malformed", MALFORMED_JSON, 0.0))),
@@ -190,3 +203,28 @@ def _action_checks(task: TaskSpec, verifier: PredictedActionSpec) -> list[CheckR
             )
         )
     return results
+
+
+def _expert_action_checks(task: TaskSpec, verifier: PivotToolCallSpec | NextActionSpec) -> list[CheckResult]:
+    """The expert's own action must score 1 and an empty reply 0; a pivot whose empty reply passes is defective."""
+    if isinstance(verifier, PivotToolCallSpec):
+        action = json.loads(verifier.expected_action)
+    else:
+        action = {"type": "function_call", **json.loads(verifier.expected_call)}
+    if action["type"] == "function_call":
+        call = ConversationToolCall(call_id="control", name=action["name"], arguments=json.loads(action["arguments"]))
+        reference: TextMessage | AssistantToolCalls = AssistantToolCalls(calls=(call,))
+    else:
+        # A message pivot accepts any text reply.
+        reference = TextMessage(role="assistant", content="Done.")
+    return [
+        control_result(
+            grade_task(task, GradingAttempt(ConversationTrace(events=(*task.context.events, response)))),
+            name,
+            expected,
+        )
+        for name, response, expected in (
+            ("empty", TextMessage(role="assistant", content=""), 0.0),
+            ("reference", reference, 1.0),
+        )
+    ]

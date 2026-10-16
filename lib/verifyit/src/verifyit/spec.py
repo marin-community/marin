@@ -45,6 +45,9 @@ class Mode(StrEnum):
     GOTEST = "gotest"
     JUDGE = "judge"
     SCRIPT = "script"
+    PIVOT_TOOL_CALL = "pivot-tool-call"
+    TERMINUS = "terminus"
+    NEXT_ACTION = "next-action"
 
 
 class MathType(StrEnum):
@@ -99,6 +102,44 @@ class FunctionCall:
 class PredictedActionSpec:
     expected_calls: tuple[FunctionCall, ...]
     numeric_tolerance: float | None = None
+    output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
+
+
+@dataclass(frozen=True)
+class PivotToolCallSpec:
+    """An expert's next action in NVIDIA's SWE pivot release, compared as NeMo Gym's SWE pivot verifier does.
+
+    ``expected_action`` is the release's ``expected_action`` object as a JSON string: a
+    ``function_call`` with its arguments, or a ``message``. The candidate is the whole assistant message.
+    """
+
+    expected_action: str
+    output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
+
+
+@dataclass(frozen=True)
+class TerminusSpec:
+    """An expert's Terminus-2 JSON reply; the candidate passes at ``threshold`` keystroke similarity (default 0.9)."""
+
+    expected_answer: str
+    threshold: float | None = None
+    output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
+
+
+@dataclass(frozen=True)
+class NextActionSpec:
+    """An expert's OpenHands tool call, compared by functional next action from the turn's directory state.
+
+    ``expected_call`` is ``{"name": ..., "arguments": <JSON string>}`` as a JSON string. Only the
+    rule tier grades; pairs it leaves undecided score 0. The candidate is the whole assistant message.
+    """
+
+    expected_call: str
+    repo_root: str
+    cwd: str
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
 
@@ -345,6 +386,9 @@ Spec = (
     | GotestSpec
     | JudgeSpec
     | ScriptSpec
+    | PivotToolCallSpec
+    | TerminusSpec
+    | NextActionSpec
 )
 
 
@@ -405,7 +449,18 @@ MODE_DESCRIPTORS: dict[Mode, ModeDescriptor] = {
     Mode.GOTEST: ModeDescriptor(GotestSpec, "grade_gotest"),
     Mode.JUDGE: ModeDescriptor(JudgeSpec, "grade_judge"),
     Mode.SCRIPT: ModeDescriptor(ScriptSpec, "grade_script"),
+    Mode.PIVOT_TOOL_CALL: ModeDescriptor(
+        PivotToolCallSpec, "grade_pivot", CandidateEntrypoints("validate_pivot_tool_call", "grade_pivot_tool_call")
+    ),
+    Mode.TERMINUS: ModeDescriptor(
+        TerminusSpec, "grade_pivot", CandidateEntrypoints("validate_terminus", "grade_terminus_candidate")
+    ),
+    Mode.NEXT_ACTION: ModeDescriptor(
+        NextActionSpec, "grade_next_action", CandidateEntrypoints("validate_next_action", "grade_next_action_candidate")
+    ),
 }
+MessageSpec = PivotToolCallSpec | NextActionSpec
+"""Specs whose candidate is the whole OpenAI-style assistant message, tool calls included."""
 MODES: dict[type[Spec], Mode] = {descriptor.spec_type: mode for mode, descriptor in MODE_DESCRIPTORS.items()}
 
 
