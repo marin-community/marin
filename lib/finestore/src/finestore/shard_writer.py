@@ -1,16 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shard write primitive: stream Arrow batches to one immutable, atomically-published Parquet object.
-
-:class:`ShardWriter` is the single write path shared by a store flush and compaction.
-Callers group fixed-schema rows toward
-:data:`ROW_GROUP_ROWS` and :data:`ROW_GROUP_TARGET_BYTES`, isolating a row that exceeds either
-target. Chunked objects bound each binary value separately.
-Blob parts occupy separate row groups so a reader can decode them incrementally.
-The shard is written to a temp sibling key and renamed into place on close, so its manifest commit
-can never expose a half-written object.
-"""
+"""Write immutable Parquet shards with bounded row groups and atomic publication."""
 
 from __future__ import annotations
 
@@ -60,17 +51,15 @@ def row_groups(row_tables: Iterable[pa.Table], *, max_rows: int | None = None) -
         yield pa.concat_tables(group)
 
 
-def table_row_limit(table: str) -> int:
-    if table == BlobTables.PARTS:
-        return BLOB_PART_ROW_GROUP_ROWS
-    if table == BlobTables.DESCRIPTORS:
-        return BLOB_DESCRIPTOR_ROW_GROUP_ROWS
-    return ROW_GROUP_ROWS
-
-
 def table_row_groups(table: str, row_tables: Iterable[pa.Table]) -> Iterator[pa.Table]:
     """Apply the row-group policy for ``table`` to retained Arrow rows."""
-    yield from row_groups(row_tables, max_rows=table_row_limit(table))
+    if table == BlobTables.PARTS:
+        limit = BLOB_PART_ROW_GROUP_ROWS
+    elif table == BlobTables.DESCRIPTORS:
+        limit = BLOB_DESCRIPTOR_ROW_GROUP_ROWS
+    else:
+        limit = ROW_GROUP_ROWS
+    yield from row_groups(row_tables, max_rows=limit)
 
 
 @dataclass(frozen=True)

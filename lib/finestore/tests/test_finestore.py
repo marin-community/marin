@@ -746,7 +746,6 @@ def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(
         import gc
         import hashlib
         import json
-        import resource
         import sys
         from pathlib import Path
 
@@ -776,7 +775,6 @@ def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(
             try:
                 result = compact_table(root, 'samples')
                 peak_arrow_bytes = pool.max_memory()
-                peak_rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
             finally:
                 pa.set_memory_pool(default_pool)
             gc.collect()
@@ -786,7 +784,7 @@ def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(
                        'sha256': hashlib.sha256(row['doc'].encode()).hexdigest()} for row in rows]
             assert all(Path(shard.path).exists()
                        for shard in pinned.list_shards('samples'))
-            print(json.dumps({'peak_arrow_bytes': peak_arrow_bytes, 'peak_rss_bytes': peak_rss_bytes,
+            print(json.dumps({'peak_arrow_bytes': peak_arrow_bytes,
                               'written': result.written, 'superseded': result.superseded,
                               'rows': sorted(actual, key=lambda row: row['id'])}))
     """
