@@ -1,5 +1,4 @@
 <script setup lang="ts">
-/** Render Harbor's retained SOTOPIA episode summary in conversation order. */
 import { computed } from 'vue'
 import type { SotopiaSummary } from '@/utils/sotopia'
 
