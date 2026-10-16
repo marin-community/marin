@@ -18,6 +18,7 @@ version ``2026.10.09``; build at that version so they are reused: ``uv run pytho
 import json
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 import click
 import pyarrow as pa
@@ -64,13 +65,29 @@ RLVR1 = hf_download(
 )
 
 
-def _pool_rows(pool: dict[str, str]) -> pa.Table:
+def _pool_rows(pool: dict[str, Any]) -> pa.Table:
     with (StoragePath(pool["path"]) / pool["filename"]).open("rb") as source:
         table = pq.read_table(source)
     if pool["filename"] == PASS_RATES_FILENAME:
         # Random turns are the candidates the frozen policy was scored on, without their counts.
         table = table.filter(pc.field("exclusion").is_null()).drop_columns(count_columns(table))
+    if "max_output_tokens" in pool:
+        table = _with_output_cap(table, pool["max_output_tokens"])
     return table
+
+
+def _with_output_cap(rows: pa.Table, max_output_tokens: int) -> pa.Table:
+    """Cap each row's reply through its request, which MarinSkyRL's sessions pass to the model per row."""
+    extra = rows.column("extra_info").combine_chunks()
+    ultra = pc.struct_field(extra, "nemotron_ultra")
+    requests = pc.struct_field(ultra, "request_json")
+    capped = [
+        json.dumps({**json.loads(request), "max_output_tokens": max_output_tokens}) for request in requests.to_pylist()
+    ]
+    ultra = _replace_field(ultra, "request_json", pa.array(capped, requests.type))
+    return rows.set_column(
+        rows.column_names.index("extra_info"), "extra_info", _replace_field(extra, "nemotron_ultra", ultra)
+    )
 
 
 def _with_task_session_route(rows: pa.Table) -> pa.Table:
@@ -98,21 +115,22 @@ def _replace_field(struct: pa.StructArray, name: str, values: pa.Array) -> pa.St
     return pa.StructArray.from_arrays(children, names=names, mask=struct.is_null())
 
 
-def _routed(pools: dict[str, dict[str, str]]) -> tuple[pa.Table, dict[str, int]]:
+def _routed(pools: dict[str, dict[str, Any]]) -> tuple[pa.Table, dict[str, int]]:
     tables = {route: _pool_rows(pool) for route, pool in pools.items()}
     rows = _with_task_session_route(pa.concat_tables(tables.values(), promote_options="permissive"))
     routes = pa.array([route for route, table in tables.items() for _ in range(table.num_rows)], pa.string())
     return rows.append_column(ROUTE_COLUMN, routes), {route: table.num_rows for route, table in tables.items()}
 
 
-def mix_routes(*, train: dict[str, dict[str, str]], validation: dict[str, dict[str, str]], output_path: str) -> None:
+def mix_routes(*, train: dict[str, dict[str, Any]], validation: dict[str, dict[str, Any]], output_path: str) -> None:
     """Write ``train.parquet`` and ``validation.parquet``, each its pools' rows tagged by route, plus counts.
 
     Pools are plain dicts so the executor resolves the artifact steps inside them.
 
     Args:
         train: Pools by route, each ``{"path": artifact, "filename": file}``, in row order. A
-            ``pass_rates.parquet`` pool keeps the rows its policy was scored on.
+            ``pass_rates.parquet`` pool keeps the rows its policy was scored on, and a pool with
+            ``max_output_tokens`` caps its rows' replies at that many tokens.
         validation: Validation pools in the same form.
         output_path: Where the two files and ``manifest.json`` go.
     """
@@ -137,6 +155,10 @@ def domain_weights(pivot_share: float, *, batch_size: int = 512) -> dict[Route, 
     return {route: count for route, count in weights.items() if count}
 
 
+def _capped(pool: dict[str, Any], max_output_tokens: int | None) -> dict[str, Any]:
+    return pool if max_output_tokens is None else {**pool, "max_output_tokens": max_output_tokens}
+
+
 def arm_datasets() -> dict[str, ArtifactStep[Artifact]]:
     """One dataset per kind of arm: ``rlvr1``, ``selected`` pivots and ``random`` candidate turns."""
     runs = {Route.SWE if run.candidates == SWE_CANDIDATES else Route.TERMINAL: run for run in GRUG_K16_LAMBDA_065_RUNS}
@@ -149,17 +171,24 @@ def arm_datasets() -> dict[str, ArtifactStep[Artifact]]:
             for route, run in runs.items()
         },
     }
+    # Pivot replies get the cap their pass rates were sampled at.
+    caps = {route: run.sampling.max_tokens for route, run in runs.items()}
+    validation = {route: _capped(pool, caps.get(route)) for route, pool in validation.items()}
     pivots = {
-        "selected": {route: {"path": step["pivots"], "filename": TRAIN_FILENAME} for route, step in steps.items()},
+        "selected": {
+            route: _capped({"path": step["pivots"], "filename": TRAIN_FILENAME}, caps[route])
+            for route, step in steps.items()
+        },
         "random": {
-            route: {"path": step["pass-rates"], "filename": PASS_RATES_FILENAME} for route, step in steps.items()
+            route: _capped({"path": step["pass-rates"], "filename": PASS_RATES_FILENAME}, caps[route])
+            for route, step in steps.items()
         },
     }
     return {
         name: apply(
             user_owned_name(f"pivotrl/mixed-rlvr/{name}"),
             remote(mix_routes, resources=ResourceConfig.with_cpu(cpu=4, ram="64g")),
-            version="2026.10.16",
+            version="2026.10.16.1",
             train={**rlvr, **pools},
             validation=validation,
             output_path=OUT,

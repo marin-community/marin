@@ -16,7 +16,8 @@ PIVOT_MESSAGE = pa.struct([("role", pa.string()), ("content", pa.string()), ("re
 
 
 def _extra_info(count: int, route: str = "skyrl_gym") -> list[dict]:
-    return [{"index": index, "nemotron_ultra": {"agent": "a", "route": route}} for index in range(count)]
+    ultra = {"agent": "a", "route": route, "request_json": json.dumps({"tools": []})}
+    return [{"index": index, "nemotron_ultra": ultra} for index in range(count)]
 
 
 def _write(path, filename: str, table: pa.Table) -> dict[str, str]:
@@ -38,9 +39,10 @@ def _pivots(ids: list[str], **counts: list) -> pa.Table:
 
 
 def test_arms_tag_rows_by_route_rlvr_first_and_random_turns_drop_unscored_rows(tmp_path):
-    # Every row also moves to the task-session route MarinSkyRL grades Nemotron Ultra rows on.
+    # Every row also moves to the task-session route MarinSkyRL grades Nemotron Ultra rows on, and a
+    # capped pool's rows carry their reply cap in their request.
     rlvr = _write(tmp_path / "rlvr", "data/train.parquet", _rlvr(["r0", "r1"]))
-    swe = _write(tmp_path / "swe", TRAIN_FILENAME, _pivots(["s0"]))
+    swe = {**_write(tmp_path / "swe", TRAIN_FILENAME, _pivots(["s0"])), "max_output_tokens": 4096}
     scored = _pivots(
         ["t0", "t1", "t2"],
         passed=[3, 0, 16],
@@ -64,7 +66,10 @@ def test_arms_tag_rows_by_route_rlvr_first_and_random_turns_drop_unscored_rows(t
     assert train.column("id").to_pylist() == ["r0", "r1", "s0", "t0", "t2"]
     assert train.column(ROUTE_COLUMN).to_pylist() == ["rlvr", "rlvr", "swe", "terminal", "terminal"]
     assert set(train.column_names) == {"prompt", "id", "extra_info", ROUTE_COLUMN}
-    assert {row["nemotron_ultra"]["route"] for row in train.column("extra_info").to_pylist()} == {"task_session"}
+    ultra = [row["nemotron_ultra"] for row in train.column("extra_info").to_pylist()]
+    assert {row["route"] for row in ultra} == {"task_session"}
+    caps = [json.loads(row["request_json"]).get("max_output_tokens") for row in ultra]
+    assert caps == [None, None, 4096, None, None]
     messages = train.column("prompt").to_pylist()
     assert messages[0][0]["reasoning_content"] is None and messages[2][0]["reasoning_content"] == "think"
     assert pq.read_table(out / VALIDATION_FILENAME).column(ROUTE_COLUMN).to_pylist() == ["rlvr", "swe"]
