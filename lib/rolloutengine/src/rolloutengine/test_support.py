@@ -36,7 +36,7 @@ class ReplayModel:
     async def complete(self, request: ModelRequest) -> ModelTurn:
         self.requests.append(request)
         index = len(self.requests) - 1
-        prompt = (*request.prefix_token_ids, 90, 91) if request.prefix_token_ids else (10, 11)
+        prompt = (*request.continuation.served_token_ids, 90, 91) if request.continuation is not None else (10, 11)
         return ModelTurn(self.messages[index], prompt, (20 + index,), (-0.5,), "stop")
 
 
