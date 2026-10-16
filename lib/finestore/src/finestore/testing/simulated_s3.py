@@ -30,9 +30,10 @@ from fsspec.implementations.memory import MemoryFile, MemoryFileSystem
 from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes
 
 import finestore.commit
+import finestore.migrations.m0001_manifest as m0001_manifest
 
 DEFAULT_LATENCY = 0.1
-# Keep the original sleep before the context manager patches the stdlib function.
+# Captured before ``simulated_s3`` replaces ``time.sleep`` for the whole process.
 _REAL_SLEEP = time.sleep
 DEFAULT_BLOCK_SIZE = 5 * 1024 * 1024
 MULTIPART_THRESHOLD = 5 * 1024 * 1024
@@ -105,10 +106,9 @@ class RequestLog:
 class _BlockReader(io.RawIOBase):
     """A read-only file that fetches one ``block_size`` range per uncached read."""
 
-    def __init__(self, fs: SimulatedS3, path: str, data: bytes, block_size: int) -> None:
+    def __init__(self, fs: SimulatedS3, data: bytes, block_size: int) -> None:
         super().__init__()
         self._fs = fs
-        self._path = path
         self._data = data
         self._block_size = block_size
         self._pos = 0
@@ -183,10 +183,15 @@ class _UploadFile(MemoryFile):
 class SimulatedS3(MemoryFileSystem):
     """A private in-memory bucket set that charges S3-like latency per request."""
 
+    # Listings and walks reattach the protocol to each entry; keys stay ``s3://`` paths.
+    protocol = "s3"
     cachable = False
 
-    def __init__(self, *, latency: float = DEFAULT_LATENCY, block_size: int = DEFAULT_BLOCK_SIZE) -> None:
-        super().__init__()
+    def __init__(
+        self, *, latency: float = DEFAULT_LATENCY, block_size: int = DEFAULT_BLOCK_SIZE, **storage_options: Any
+    ) -> None:
+        # fsspec passes the process-wide ``s3`` configuration as storage options.
+        super().__init__(**storage_options)
         # fsspec shares one store across every MemoryFileSystem; each simulated bucket set is private.
         self.store: dict[str, Any] = {}  # pyrefly: ignore[bad-override]
         self.pseudo_dirs: list[str] = [""]
@@ -238,7 +243,7 @@ class SimulatedS3(MemoryFileSystem):
                 fetch_block = 1
             else:
                 fetch_block = block_size or self.block_size
-            return io.BufferedReader(_BlockReader(self, path, data, fetch_block))
+            return io.BufferedReader(_BlockReader(self, data, fetch_block))
         if mode in ("wb", "w", "xb", "ab"):
             return _UploadFile(self, path)
         raise ValueError(f"unsupported mode {mode!r}")
@@ -267,8 +272,7 @@ class SimulatedS3(MemoryFileSystem):
 
     def pipe_file(self, path, value, mode="overwrite", **kwargs):
         self.charge(Request.PUT, nbytes=len(value))
-        with self._store_lock:
-            super().pipe_file(path, value, mode=mode, **kwargs)
+        self.put_object(path, value)
 
     def modified(self, path):
         self.charge(Request.HEAD)
@@ -298,7 +302,8 @@ class SimulatedS3(MemoryFileSystem):
         """Compare-and-swap one object, failing like S3 when conditional writes overlap.
 
         S3 rejects a conditional PUT with ``409 ConditionalRequestConflict`` while another
-        conditional PUT on the same key is in flight; both writers then re-read and retry.
+        conditional PUT on the same key is in flight. Here the earlier write completes and
+        the later one fails, so exactly one overlapping writer wins.
         """
         key = self._strip_protocol(path)
         with self._store_lock:
@@ -348,7 +353,8 @@ def simulated_s3(
 
     ``time_scale`` multiplies both the simulated latency and the retry sleeps FineStore
     performs, so a benchmark can run compressed without changing the ratio between
-    round trips and backoff. Report elapsed times divided by ``time_scale``.
+    round trips and backoff. CPU work is not compressed, so elapsed time at a small scale
+    is not a fixed multiple of the elapsed time at full latency.
     """
     fs = SimulatedS3(latency=latency * time_scale, block_size=block_size)
 
@@ -370,6 +376,7 @@ def simulated_s3(
         mock.patch.object(factory, "open_url", open_url),
         mock.patch.object(finestore.commit, "conditional_object", lambda path: SimulatedConditionalObject(path, fs)),
         mock.patch.object(distributed_lock, "conditional_object", lambda path: SimulatedConditionalObject(path, fs)),
+        mock.patch.object(m0001_manifest, "conditional_object", lambda path: SimulatedConditionalObject(path, fs)),
         mock.patch("rigging.timing.time.sleep", scaled_sleep),
     ):
         yield fs

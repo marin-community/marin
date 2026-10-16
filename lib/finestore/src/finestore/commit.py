@@ -30,11 +30,13 @@ from finestore.layout import (
     TableMetadata,
 )
 
-_MAX_COMMIT_ATTEMPTS = 32
 # A lost compare-and-swap means another writer published; re-reading HEAD costs two requests,
 # so the retry delay only needs to spread concurrent writers apart, not wait out an outage.
+# The retry budget is wall time, so many writers can share one HEAD without a flush failing.
 _COMMIT_BACKOFF_INITIAL = 0.05
 _COMMIT_BACKOFF_MAXIMUM = 2.0
+_COMMIT_RETRY_BUDGET = 10 * 60.0
+_MAX_COMMIT_ATTEMPTS = 100_000
 _ROOT_COMMIT_ID = "root"
 
 _COMMITS = telemetry.counter("finestore_commits", unit="{commit}")
@@ -312,6 +314,7 @@ class CommitCoordinator:
                     publish,
                     retryable=lambda exc: isinstance(exc, ConditionalWriteError),
                     max_attempts=_MAX_COMMIT_ATTEMPTS,
+                    max_elapsed=_COMMIT_RETRY_BUDGET,
                     backoff=ExponentialBackoff(
                         initial=_COMMIT_BACKOFF_INITIAL,
                         maximum=_COMMIT_BACKOFF_MAXIMUM,
@@ -322,5 +325,5 @@ class CommitCoordinator:
                 )
             except ConditionalWriteError as exc:
                 raise CommitConflict(
-                    f"HEAD at {self._layout.root} changed {_MAX_COMMIT_ATTEMPTS} consecutive times"
+                    f"HEAD at {self._layout.root} kept changing for {_COMMIT_RETRY_BUDGET:.0f} s"
                 ) from exc

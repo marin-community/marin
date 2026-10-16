@@ -46,7 +46,8 @@ On object storage a flush costs one request per shard, one for the manifest, and
 compare-and-swap. Shards are uploaded directly to their final path. A commit starts
 from the manifest this writer last published, so an uncontended flush reads nothing
 first; a lost compare-and-swap re-reads `HEAD` and the manifest, rebases the delta, and
-retries after a short backoff that starts at 50 ms and stays below two seconds.
+retries after a short backoff that starts at 50 ms and stays below two seconds, for up
+to ten minutes before the flush fails with `CommitConflict`.
 
 ## Reads
 
@@ -157,8 +158,10 @@ seconds and other writers consider stale after 90 seconds. Taking the lease publ
 manifest with the next `maintainer_epoch`; a compaction commit carries the epoch it was
 prepared under and is rejected, instead of rebased, once a later maintainer has
 announced itself. A writer that cannot take the lease flushes and leaves compaction to
-the holder. `seal()` compacts even while another writer holds the lease; the epoch check
-still protects it. Lease acquisitions and losses, commits, conflicts, and started and
+the holder, which refreshes the lease on a heartbeat while its compactions run. `seal()`
+compacts even while another writer holds the lease; the epoch check still protects it.
+A writer from a FineStore build without the lease compacts as before, without taking
+it; its commits rebase normally and carry the epoch forward unchanged. Lease acquisitions and losses, commits, conflicts, and started and
 abandoned compactions are exported as `finestore_*` telemetry counters.
 
 `close()` also merges each registered table's remaining level-zero shards owned by

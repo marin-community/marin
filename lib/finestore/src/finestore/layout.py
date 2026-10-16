@@ -109,6 +109,8 @@ class SealMarker(_FormatModel):
 
 
 KeyBound = tuple[str | int, ...]
+# Key value types with one total order shared by the writer's bounds and the reader's lookups.
+BOUNDED_KEY_TYPES = (str, int)
 
 
 def key_bounds(keys: Iterable[tuple]) -> tuple[KeyBound, KeyBound] | None:
@@ -121,7 +123,7 @@ def key_bounds(keys: Iterable[tuple]) -> tuple[KeyBound, KeyBound] | None:
     smallest: tuple | None = None
     largest: tuple | None = None
     for key in keys:
-        if not all(type(value) in (str, int) for value in key):
+        if not all(type(value) in BOUNDED_KEY_TYPES for value in key):
             return None
         if smallest is None or key < smallest:
             smallest = key

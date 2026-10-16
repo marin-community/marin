@@ -8,9 +8,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from finestore.reader import ReadView
-from finestore.simulated_s3 import Request, SimulatedConditionalObject, simulated_s3
 from finestore.store import DataStore
+from finestore.testing.simulated_s3 import Request, SimulatedConditionalObject, simulated_s3
 from rigging.filesystem.conditional_object import ConditionalWriteError
+from rigging.filesystem.storage_path import StoragePath
 
 ROOT = "s3://finestore-tests/run"
 
@@ -62,6 +63,17 @@ def test_read_view_costs_two_requests(simulated_bucket):
     # HEAD and the manifest it names.
     delta = fs.log.delta(before)
     assert delta.total() <= 2, dict(delta.requests)
+
+
+def test_listing_a_simulated_bucket_returns_reopenable_s3_paths(simulated_bucket):
+    with DataStore.open(ROOT, writer_id="w1", flush_interval=3600) as store:
+        store.table("samples", primary_key=("id",)).append({"id": 1})
+        store.flush()
+    entries = StoragePath(ROOT).ls()
+    assert entries and all(str(entry).startswith(f"{ROOT}/") for entry in entries)
+    assert (
+        StoragePath(f"{ROOT}/HEAD").read_bytes() == next(entry for entry in entries if entry.name == "HEAD").read_bytes()
+    )
 
 
 def test_point_lookup_reads_only_shards_whose_bounds_match(simulated_bucket):

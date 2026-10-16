@@ -29,6 +29,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from finestore.commit import ArchiveSnapshot, read_snapshot
 from finestore.layout import (
+    BOUNDED_KEY_TYPES,
     BlobColumns,
     BlobTables,
     CommitToken,
@@ -270,13 +271,15 @@ class _ReadableShard(Protocol):
     def max_key(self) -> KeyBound | None: ...
 
 
+# Shard paths are unique and their contents immutable, so one process-wide cache serves every
+# view and compaction without invalidation; the size bound only limits memory.
 _SCHEMA_CACHE_SIZE = 8192
 _schema_cache: OrderedDict[str, pa.Schema] = OrderedDict()
 _schema_cache_lock = threading.Lock()
 
 
 def shard_schema(path: str, filesystem: PyFileSystem) -> pa.Schema:
-    """Return the Arrow schema of an immutable shard, reading its footer once per process."""
+    """Return the Arrow schema of an immutable shard, served from the process cache when present."""
     with _schema_cache_lock:
         cached = _schema_cache.get(path)
         if cached is not None:
@@ -291,7 +294,7 @@ def shard_schema(path: str, filesystem: PyFileSystem) -> pa.Schema:
 
 
 def _comparable(value: object, bound: object) -> bool:
-    return type(value) is type(bound) and type(value) in (str, int)
+    return type(value) is type(bound) and type(value) in BOUNDED_KEY_TYPES
 
 
 def shard_may_contain(shard: _ReadableShard, primary_key: tuple[str, ...], where: list[tuple[str, str, object]]) -> bool:
@@ -770,7 +773,7 @@ class _ReadOperations:
             fs, _ = factory.url_to_fs(self.root)
             filesystem = PyFileSystem(_NoReadAheadHandler(fs))
             # Read footers and matching rows together, with bounded concurrent decoding.
-            # Version resolution still spans every shard in the committed snapshot.
+            # Version resolution spans every shard whose key bounds can hold a requested name.
             with ThreadPoolExecutor(max_workers=min(MAX_DESCRIPTOR_READS, len(shards))) as executor:
                 parts = list(
                     executor.map(lambda shard: _blob_shard_descriptors(filesystem, primary_key, names, shard), shards)

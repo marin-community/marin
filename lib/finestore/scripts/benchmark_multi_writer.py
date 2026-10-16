@@ -5,9 +5,11 @@
 
 Each writer thread opens its own ``DataStore`` (distinct writer ID), appends rows, and
 publishes ``--commits`` flushes while the store's maintenance thread runs with the
-given flush interval. The report lists wall time (in unscaled seconds), total
-simulated requests, compare-and-swap conflicts, abandoned compactions, and the final
-shard count and manifest size, so layouts and commit strategies can be compared.
+given flush interval. The report lists elapsed wall time, total simulated requests,
+compare-and-swap conflicts, abandoned compactions, and the final shard count and
+manifest size, so layouts and commit strategies can be compared. ``--time-scale``
+compresses latency and retry sleeps but not CPU work, so elapsed time is comparable
+between runs at one scale and is not a fixed multiple of full-latency time.
 
 Example:
 
@@ -30,8 +32,8 @@ from enum import StrEnum
 
 from finestore.layout import FineStoreLayout
 from finestore.reader import ReadView
-from finestore.simulated_s3 import Request, simulated_s3
 from finestore.store import DataStore
+from finestore.testing.simulated_s3 import DEFAULT_LATENCY, Request, simulated_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 ROWS_PER_COMMIT = 64
@@ -123,7 +125,7 @@ def run(
                 ]
                 for future in futures:
                     future.result()
-            wall = (time.monotonic() - started) / time_scale
+            wall = time.monotonic() - started
             summary = fs.log.snapshot()
             shards = 0
             manifest_bytes = 0
@@ -156,7 +158,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--writers", type=int, nargs="+", default=[1, 4, 16])
     parser.add_argument("--commits", type=int, default=8, help="flushes per writer")
-    parser.add_argument("--latency", type=float, default=0.1, help="simulated round trip in seconds")
+    parser.add_argument("--latency", type=float, default=DEFAULT_LATENCY, help="simulated round trip in seconds")
     parser.add_argument("--time-scale", type=float, default=0.1, help="compress latency and backoff by this factor")
     parser.add_argument("--flush-interval", type=float, default=5.0, help="maintenance interval in unscaled seconds")
     parser.add_argument(
@@ -178,7 +180,7 @@ def main() -> None:
     logging.getLogger(COMPACTION_LOGGER).propagate = False
 
     header = (
-        f"{'writers':>7} {'layout':>16} {'wall_s':>8} {'requests':>9} {'cas':>5} {'conflicts':>9} "
+        f"{'writers':>7} {'layout':>16} {'elapsed_s':>9} {'requests':>9} {'cas':>5} {'conflicts':>9} "
         f"{'compact':>8} {'abandon':>8} {'shards':>7} {'manifest_B':>11} {'lookup_req':>10}"
     )
     print(header)
@@ -193,7 +195,7 @@ def main() -> None:
             maintainers=args.maintainers,
         )
         print(
-            f"{result.writers:>7} {result.layout:>16} {result.wall_seconds:>8.1f} {result.requests:>9} "
+            f"{result.writers:>7} {result.layout:>16} {result.wall_seconds:>9.1f} {result.requests:>9} "
             f"{result.cas_puts:>5} {result.cas_conflicts:>9} {result.compactions_started:>8} "
             f"{result.compactions_abandoned:>8} {result.shards:>7} {result.manifest_bytes:>11} "
             f"{result.point_lookup_requests:>10}"

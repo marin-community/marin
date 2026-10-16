@@ -12,13 +12,14 @@ import threading
 import time
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Protocol
 
 import pyarrow as pa
 from rigging import telemetry
-from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, LeaseLostError, create_lock
+from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, LeaseLostError, create_lock, lease_refresh
 from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.timing import ExponentialBackoff
 
@@ -199,6 +200,9 @@ class DataStore:
         self._lease = create_lock(self._layout.maintenance_lease_path, worker_id=self.writer_id)
         self._lease_epoch: int | None = None
         self._lease_refreshed = 0.0
+        # Serializes maintenance passes from the background thread and from callers, so the
+        # lease is acquired, refreshed, and released by one pass at a time.
+        self._maintenance_lock = threading.RLock()
         snapshot = self._commits.last_snapshot()
         if snapshot.manifest.sealed is not None:
             self._commits.commit(CommitDelta(seal_update=ClearSeal()), base=snapshot)
@@ -416,25 +420,32 @@ class DataStore:
         return True
 
     def _release_maintenance(self) -> None:
-        if self._lease_epoch is None:
-            return
-        self._lease_epoch = None
-        self._lease.release()
+        with self._maintenance_lock:
+            if self._lease_epoch is None:
+                return
+            self._lease_epoch = None
+            self._lease.release()
 
     def maintain(self) -> CommitToken | None:
-        """Flush pending rows and, while holding the maintenance lease, compact each overfull level once."""
+        """Flush pending rows and, while holding the maintenance lease, compact each overfull level once.
+
+        The lease is refreshed on a heartbeat while compactions run, so a pass longer than the
+        lease timeout is not taken over mid-way.
+        """
         token = self.flush()
-        if not self._acquire_maintenance():
-            return token
-        view = ReadView(self.root, self._commits.snapshot())
-        for name in view.table_names():
-            for generation, shard_limit in enumerate(self._compaction_levels):
-                level_shards = [shard for shard in view.list_shards(name) if shard.generation == generation]
-                if len(level_shards) <= shard_limit:
-                    continue
-                self.compact(name, generation=generation)
-                view = ReadView(self.root, self._commits.last_snapshot())
-                token = view.token
+        with self._maintenance_lock:
+            if not self._acquire_maintenance():
+                return token
+            with lease_refresh(self._lease):
+                view = ReadView(self.root, self._commits.snapshot())
+                for name in view.table_names():
+                    for generation, shard_limit in enumerate(self._compaction_levels):
+                        level_shards = [shard for shard in view.list_shards(name) if shard.generation == generation]
+                        if len(level_shards) <= shard_limit:
+                            continue
+                        self.compact(name, generation=generation)
+                        view = ReadView(self.root, self._commits.last_snapshot())
+                        token = view.token
         return token
 
     def seal(self) -> CommitToken:
@@ -444,14 +455,19 @@ class DataStore:
         check still rejects its compactions if that holder is replaced meanwhile.
         """
         self.flush()
-        if not self._acquire_maintenance():
-            logger.info("FineStore sealing %s while another writer holds the maintenance lease", self.root)
-        superseded = {}
-        for name in self.read_view().table_names():
-            result = self.compact(name)
-            if result.superseded:
-                superseded[name] = result.superseded
-        return self._commits.commit(CommitDelta(seal_update=SealMarker(writer=self.writer_id, superseded=superseded)))
+        with self._maintenance_lock:
+            held = self._acquire_maintenance()
+            if not held:
+                logger.info("FineStore sealing %s while another writer holds the maintenance lease", self.root)
+            superseded = {}
+            with lease_refresh(self._lease) if held else nullcontext():
+                for name in self.read_view().table_names():
+                    result = self.compact(name)
+                    if result.superseded:
+                        superseded[name] = result.superseded
+            return self._commits.commit(
+                CommitDelta(seal_update=SealMarker(writer=self.writer_id, superseded=superseded))
+            )
 
     def close(self) -> None:
         """Flush pending writes and compact bounded groups of this writer's level-zero shards."""
@@ -464,25 +480,16 @@ class DataStore:
         self._release_maintenance()
         # Merging only this writer's shards needs no lease: other closers touch disjoint
         # inputs, and a maintainer that consumed them first makes the merge a benign no-op.
-        if self._has_residual_shards():
-            with self._commit_lock:
-                compact_writer_tables(
-                    self.root,
-                    list(self._tables),
-                    writer_id=self.writer_id,
-                    max_input_bytes=_CLOSE_COMPACTION_MAX_INPUT_BYTES,
-                    max_input_rows=_CLOSE_COMPACTION_MAX_INPUT_ROWS,
-                    target_bytes=self._compaction_target_bytes,
-                    coordinator=self._commits,
-                )
-
-    def _has_residual_shards(self) -> bool:
-        """Whether this writer left at least two level-zero shards in some registered table."""
-        view = ReadView(self.root, self._commits.last_snapshot())
-        return any(
-            sum(1 for shard in view.list_shards(name) if shard.generation == 0 and shard.writer == self.writer_id) >= 2
-            for name in self._tables
-        )
+        with self._commit_lock:
+            compact_writer_tables(
+                self.root,
+                list(self._tables),
+                writer_id=self.writer_id,
+                max_input_bytes=_CLOSE_COMPACTION_MAX_INPUT_BYTES,
+                max_input_rows=_CLOSE_COMPACTION_MAX_INPUT_ROWS,
+                target_bytes=self._compaction_target_bytes,
+                coordinator=self._commits,
+            )
 
     def request_stop(self) -> None:
         """Request maintenance shutdown without waiting or performing storage I/O.

@@ -4,7 +4,7 @@
 from collections.abc import Iterator
 
 import pytest
-from finestore.simulated_s3 import simulated_s3
+from finestore.testing.simulated_s3 import simulated_s3
 
 
 @pytest.fixture
