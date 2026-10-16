@@ -176,13 +176,10 @@ class HarborHubSource:
 
     name: str
     revision: str
-    membership_sha256: str
 
     def __post_init__(self) -> None:
         if re.fullmatch(r"sha256:[0-9a-f]{64}", self.revision) is None:
             raise ValueError("Harbor Hub sources require a content digest")
-        if re.fullmatch(r"[0-9a-f]{64}", self.membership_sha256) is None:
-            raise ValueError("Harbor Hub sources require a task-membership SHA-256 digest")
 
     @property
     def url(self) -> str:
@@ -604,7 +601,6 @@ def download_identity(source: HfSource | UrlSource | HarborHubSource) -> dict[st
         return {
             "harbor_hub": source.name,
             "revision": source.revision,
-            "membership_sha256": source.membership_sha256,
             "exporter_sha256": hashlib.sha256(HARBOR_EXPORTER.read_bytes()).hexdigest(),
             "runtime_sha256": {
                 name: hashlib.sha256((HARBOR_PROJECT / name).read_bytes()).hexdigest()
@@ -693,8 +689,6 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
                 str(HARBOR_EXPORTER),
                 "--release",
                 f"{source.name}@{source.revision}",
-                "--membership-sha256",
-                source.membership_sha256,
                 "--output",
                 request.output_path,
                 "--all",
