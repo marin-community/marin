@@ -46,8 +46,8 @@ On object storage a flush costs one request per shard, one for the manifest, and
 compare-and-swap. Shards are uploaded directly to their final path. A commit starts
 from the manifest this writer last published, so an uncontended flush reads nothing
 first; a lost compare-and-swap re-reads `HEAD` and the manifest, rebases the delta, and
-retries after a short backoff that starts at 50 ms and stays below two seconds, for up
-to ten minutes before the flush fails with `CommitConflict`.
+retries after a backoff that starts at half a second and stays below five seconds, for
+up to ten minutes before the flush fails with `CommitConflict`.
 
 ## Reads
 

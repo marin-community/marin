@@ -30,11 +30,12 @@ from finestore.layout import (
     TableMetadata,
 )
 
-# A lost compare-and-swap means another writer published; re-reading HEAD costs two requests,
-# so the retry delay only needs to spread concurrent writers apart, not wait out an outage.
+# A lost compare-and-swap means another writer published, so the retry delay only needs to
+# spread concurrent writers apart, not wait out an outage. Shorter delays raise the request
+# count faster than they lower latency: in the simulator, 50 ms tripled requests at 64 writers.
 # The retry budget is wall time, so many writers can share one HEAD without a flush failing.
-_COMMIT_BACKOFF_INITIAL = 0.05
-_COMMIT_BACKOFF_MAXIMUM = 2.0
+_COMMIT_BACKOFF_INITIAL = 0.5
+_COMMIT_BACKOFF_MAXIMUM = 5.0
 _COMMIT_RETRY_BUDGET = 10 * 60.0
 _MAX_COMMIT_ATTEMPTS = 100_000
 _ROOT_COMMIT_ID = "root"
