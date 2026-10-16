@@ -608,5 +608,15 @@
       "proof": "snowball_checkpoint_memory_diagnostic_physical3_optimizer_backload_oom.json",
       "new_published_training_updates": 0
     }
-  ]
+  ],
+  "physical3_raw_runtime_retention": {
+    "proof": "new_terminal_runtime_20261016T041926.json.gz",
+    "objects": 6189,
+    "bytes": 898586846,
+    "explicit_source_exclusions": 0,
+    "full_manifest_and_selected_source_inventory_readback_verified": true,
+    "native_physical_attempt": 3,
+    "already_recorded_allocated_h100_hours": 32.090902222222226,
+    "new_gpu_allocation_cost": 0
+  }
 }

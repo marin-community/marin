@@ -301,5 +301,15 @@
   "controller_snapshot": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/cpu-memory-and-batching-controller-20261016T041732.csv",
   "controller_snapshot_sha256": "5941fea61030e671be281963cdc75f36ca7adeddf2608bce4a8df83ca1c3653c",
   "memory_root_cause_established": false,
-  "repaired_source_qualified": false
+  "repaired_source_qualified": false,
+  "completed_raw_runtime_retention": {
+    "proof": "new_terminal_runtime_20261016T041926.json.gz",
+    "objects": 6189,
+    "bytes": 898586846,
+    "explicit_source_exclusions": 0,
+    "full_manifest_and_selected_source_inventory_readback_verified": true,
+    "native_physical_attempt": 3,
+    "already_recorded_allocated_h100_hours": 32.090902222222226,
+    "new_gpu_allocation_cost": 0
+  }
 }
