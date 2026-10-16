@@ -22,7 +22,7 @@ from taskcompendium.models import (
     TextMessage,
 )
 
-from rolloutengine.contracts import RolloutData, RolloutInterrupted
+from rolloutengine.contracts import RolloutContractError, RolloutData, RolloutInterrupted
 from rolloutengine.engine import Model, RolloutEngine
 from rolloutengine.spec import RolloutSpec
 
@@ -44,7 +44,8 @@ class ManagedAgent:
     """Run independent attempts with one model, at most ``concurrency`` at a time.
 
     The engine holds the machine factories and the harnesses; each spec selects its harness, and
-    ``model`` serves every attempt. One failed attempt never stops the others.
+    ``model`` serves every attempt. One failed attempt never stops the others, but a
+    ``RolloutContractError`` from a broken transport or harness stops the run.
     """
 
     engine: RolloutEngine
@@ -90,8 +91,11 @@ class ManagedAgent:
             return AttemptOutcome(spec, run_key, await self.engine.run(spec, self.model, run_key=run_key))
         except RolloutInterrupted as error:
             return AttemptOutcome(spec, run_key, error.rollout, error)
+        except RolloutContractError:
+            # A transport or harness that breaks the token contract breaks every attempt, so the run stops.
+            raise
         except Exception as error:
-            # A rejected spec or a broken transport ends this attempt only.
+            # A rejected spec ends this attempt only.
             return AttemptOutcome(spec, run_key, None, error)
 
 

@@ -15,7 +15,14 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Source
 
 from rolloutengine.agent import agent_harness
-from rolloutengine.contracts import ModelRequest, ModelTurn, Prompt, RolloutInterrupted, RolloutOperation
+from rolloutengine.contracts import (
+    ModelRequest,
+    ModelTurn,
+    Prompt,
+    RolloutContractError,
+    RolloutInterrupted,
+    RolloutOperation,
+)
 from rolloutengine.managed import UNGRADED_REASON, ManagedAgent, agent_task
 from rolloutengine.test_support import ReplayModel, arithmetic_task, engine, machine_runtime, rollout_spec, shell_call
 
@@ -189,6 +196,19 @@ async def test_a_failed_model_call_ends_only_its_own_attempt():
     assert broken.error.operation == RolloutOperation.MODEL
     assert broken.rollout is broken.error.rollout
     assert outcomes["arithmetic"].rollout.grade.reward == 1.0
+
+
+async def test_a_token_contract_violation_stops_the_run():
+    class Model:
+        async def complete(self, request):
+            return ModelTurn({"role": "assistant", "content": "12"}, (10, 11), (), None, "stop")
+
+    specs = [rollout_spec(arithmetic_task()), rollout_spec(agent_task("next", "Answer.", source=SOURCE))]
+    outcomes = []
+    with pytest.raises(RolloutContractError):
+        async for outcome in managed(Model(), concurrency=1).run(specs):
+            outcomes.append(outcome)
+    assert outcomes == []
 
 
 async def test_an_agent_harness_runs_under_the_managed_agent():
