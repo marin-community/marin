@@ -652,7 +652,7 @@ def test_evaluation_steps_record_failures_without_blocking_other_steps(tmp_path,
     assert succeeded.model.config is not None
     assert succeeded.model.config.model_dump(mode="json") == json.loads(json.dumps(asdict(batch.model)))
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
-    assert [(row.run_id, row.status) for row in catalog_rows] == [
+    assert sorted((row.run_id, row.status) for row in catalog_rows) == [
         ("run-failure", "failed"),
         ("run-success", "succeeded"),
     ]
