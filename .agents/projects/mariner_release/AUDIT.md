@@ -19,7 +19,7 @@ uv run python -m experiments.domain_phase_mix.release.verify_paper_numbers --bui
   --sections "<paper folder>/sections" --fail-on-untraced --allow-registered-skips
 ```
 
-- Build: 35 tables, MANIFEST.json `commit` 772b1a5be9, built 2026-10-15T23:19Z, 0 consistency problems.
+- Build: 35 tables, MANIFEST.json `commit` 4e3510e05c, built 2026-10-16T01:34Z, 0 consistency problems.
 - Paper: `sections/` of the paper folder on Google Drive. The tables are in `results.tex` (modified 2026-10-12 20:13,
   SHA-256 prefix e2a47c370e100b1e), `surrogate.tex` (2026-10-13 02:17, 81cc91596e2a38ea), `appendix.tex` (2026-10-15
   14:15, a6b17d4f7fffadd1) and `appendix_analysis.tex` (2026-10-14 01:25, 61aeead7375b3d31), local times.
@@ -182,3 +182,13 @@ The build at 772b1a5be9 adds the seven Uncheatable components of the cap sweep's
 from their W&B run summaries, and the registry traces the table's three Uncheatable cells, the audit's last untraced
 numbers. The other 34 tables are byte-identical to the build at fbe103a76f. The audit reports `0 differences, 0
 untraced cells, 88 registered skips` and exits 0 under `--fail-on-untraced --allow-registered-skips`.
+
+The build at 4e3510e05c keys every observation id on the run's W&B run id in the public project
+`marin-community/marin` instead of a salted hash of the run name. A read-only W&B check found all 3,165 distinct ids of
+the build's id columns among the project's run ids, and every `(observation_id, data_seed)` and `(observation_id,
+trainer_seed)` pair of the run tables matched the run's W&B config. Re-keyed through the old run-name map, 34 of the 35
+tables equal the build at 772b1a5be9 value for value. `heldout` differs only where the build gained values: the seeds of
+its 134 Llama 200M runs (268 cells, null before), and the seven Uncheatable components, `bpb__uncheatable` and
+`components_available` of 17 of those runs, which the registry records without Uncheatable values (153 cells). No
+registry query reads those cells; the audit again reports `0 differences, 0 untraced cells, 88 registered skips` on the
+same paper files and exits 0.
