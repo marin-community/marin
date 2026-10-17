@@ -29,10 +29,12 @@ Outputs under ``--output``: Harbor's job folder, ``requests.jsonl`` (the canonic
 
 import argparse
 import contextlib
+import io
 import json
 import logging
 import os
 import subprocess
+import tarfile
 import tempfile
 import threading
 import time
@@ -41,6 +43,7 @@ from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
+import pyarrow.parquet as pq
 import uvicorn
 import yaml
 from iris.client.client import iris_ctx
@@ -67,6 +70,9 @@ GLM_TOKENIZER = "zai-org/GLM-5.3"
 GLM_TOKENIZER_REVISION = "ba32f8c19c8738e2c57c71798c601d477a7bf844"
 CLUSTER = "cw-us-east-02a"
 CAPABILITY_ORIGIN = "https://iris-cw-us-east-02a.oa.dev"
+# The only host a sandbox may reach during the agent run (the proxy's capability URL); see
+# AgentPhaseNetwork in harbor_agents/trial_agents.py.
+AGENT_DOMAIN_ALLOW_LIST = CAPABILITY_ORIGIN.removeprefix("https://")
 HARBOR_PROJECT = "config/external/harbor"
 AGENTS_PATH = Path(__file__).parent / "harbor_agents"
 # v0: the policy's serving config for Snowball v0, at the revision pinned for the sweep (4eeb756b has
@@ -102,6 +108,13 @@ COST = {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
 AGENTS = {
     # Runs each task's solution/solve.sh with no model; used for task and visibility probes.
     "oracle": {"name": "oracle"},
+    # Changes nothing, so an intact task must score 0.
+    "null": {"import_path": "probe_agents:NullAgent"},
+    # A null agent plus reachability checks before, during and after the agent-phase network limit.
+    "network-probe": {
+        "import_path": "probe_agents:NetworkProbe",
+        "kwargs": {"agent_domain_allow_list": AGENT_DOMAIN_ALLOW_LIST},
+    },
     # tb2-recovery.yaml: Terminus-2, 65,536 input / 16,384 output tokens.
     "terminus-2": {
         "import_path": "trial_agents:TrialTerminus2",
@@ -112,14 +125,21 @@ AGENTS = {
             "llm_call_kwargs": {"max_tokens": 16384},
         },
     },
-    # swebench-verified.yaml: mini-swe-agent 2.1.0, 32,768-token total context.
+    # swebench-verified.yaml: mini-swe-agent 2.1.0, 32,768-token total context. The agent runs inside
+    # the sandbox, which reaches only the proxy during the run (no github.com/swesmith mirrors).
     "mini-swe-agent": {
         "import_path": "trial_agents:TrialMiniSweAgent",
         "override_setup_timeout_sec": 360,
         "override_timeout_sec": 1800,
-        "kwargs": {"version": "2.1.0", "model_info": {"max_input_tokens": 32768, "max_output_tokens": 16384, **COST}},
+        "kwargs": {
+            "version": "2.1.0",
+            "model_info": {"max_input_tokens": 32768, "max_output_tokens": 16384, **COST},
+            "agent_domain_allow_list": AGENT_DOMAIN_ALLOW_LIST,
+        },
     },
 }
+
+MODEL_FREE_AGENTS = {"oracle", "null", "network-probe"}
 
 
 def serve(app: Starlette, host: str) -> int:
@@ -165,6 +185,22 @@ def served_student() -> Iterator[Backend]:
             tokenizer=load_tokenizer(model.tokenizer or model.location, STUDENT_REVISION),
             headers={},
         )
+
+
+def extract_packages(parquet: str, names: list[str] | None, dest: Path) -> None:
+    """Unpack pool packages (columns ``path``, ``task_binary``: one gzipped task folder per row) into ``dest``."""
+    with StoragePath(parquet).open("rb") as stream:
+        table = pq.read_table(stream, columns=["path", "task_binary"])
+    wanted = set(names) if names else None
+    found = set()
+    for path, binary in zip(table.column("path").to_pylist(), table.column("task_binary").to_pylist(), strict=True):
+        if wanted is not None and path not in wanted:
+            continue
+        with tarfile.open(fileobj=io.BytesIO(binary), mode="r:gz") as archive:
+            archive.extractall(dest / path, filter="data")
+        found.add(path)
+    if wanted is not None and wanted - found:
+        raise ValueError(f"not in {parquet}: {sorted(wanted - found)}")
 
 
 def scrub(root: Path, secret: str) -> None:
@@ -214,7 +250,9 @@ def run_harbor(args: argparse.Namespace, config: dict, work: Path) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--agent", choices=sorted(AGENTS), required=True)
-    parser.add_argument("--tasks", required=True, help="Local folder of Harbor task folders, or a remote prefix.")
+    parser.add_argument(
+        "--tasks", required=True, help="Folder of Harbor task folders (local or remote), or a pool packages .parquet."
+    )
     parser.add_argument("--task-names", nargs="*", help="Restrict to these task folder names.")
     parser.add_argument("--output", required=True, help="Remote prefix for the job folder and request log.")
     parser.add_argument("--name", required=True)
@@ -230,15 +268,19 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+    args.task_source = args.tasks
     work = Path(tempfile.mkdtemp(prefix="glm-harbor-"))
-    if StoragePath(args.tasks).is_remote:
+    if args.tasks.endswith(".parquet"):
+        extract_packages(args.tasks, args.task_names, work / "tasks")
+        args.tasks = str(work / "tasks")
+    elif StoragePath(args.tasks).is_remote:
         local_tasks = work / "tasks"
         StoragePath(args.tasks).download_to(str(local_tasks), recursive=True)
         args.tasks = str(local_tasks)
 
     capability = None
     with contextlib.ExitStack() as stack:
-        if args.agent == "oracle":
+        if args.agent in MODEL_FREE_AGENTS:
             config = job_config(args, None, work / "jobs")
         else:
             window = AGENTS[args.agent]["kwargs"]["model_info"]["max_input_tokens"]
@@ -269,6 +311,10 @@ def main() -> None:
             # Clients send only model and max_tokens (see requests.jsonl), so the service defaults apply;
             # GLM 5.3's chat template then renders "Reasoning Effort: Max".
             "effective_settings": "service defaults; template reasoning effort Max",
+        },
+        "agent_network": {
+            "agent_phase_domain_allow_list": AGENTS[args.agent].get("kwargs", {}).get("agent_domain_allow_list"),
+            "setup_and_verifier": "task policy (allow_internet)",
         },
         "relay": None
         if not args.relay
