@@ -6,8 +6,10 @@
 # for capability tokens. Each step skips work already finished (--skip-if-done), so a lane can be resubmitted.
 #
 #   plain: k attempts per task                          -> <out>/shard-NN
-#   relay: 2 attempts per task, then 1 more for tasks   -> <out>/shard-NN/round-1, round-2
-#          with fewer than 2 relay episodes (a pass with a GLM turn)
+#   relay: round 1 is 2 attempts per task; each later   -> <out>/shard-NN/round-R
+#          round is 1 attempt for every non-held-out task with fewer than 4 relay episodes (a pass with
+#          a GLM turn) and fewer than 5 runs (relay_followup.py), up to round MAX_ROUND (default 4).
+#          A lane stops before its next round once <out>/STOP exists (the family's relay target is met).
 #
 # Needs GLM_BULK_TOKEN and DAYTONA_API_KEY in the environment.
 #   bash experiments/post_training/sft_shootout/run_lane.sh <plain|relay> <family> <agent> <k> <concurrency> \
@@ -16,6 +18,11 @@ set -u
 mode=$1 family=$2 agent=$3 k=$4 concurrency=$5 tasks=$6 revision=$7 shards=$8 out=$9
 shift 9
 dir=experiments/post_training/sft_shootout
+max_round=${MAX_ROUND:-4}
+
+exists() {  # <remote path>
+  uv run python -c "import sys; from rigging.filesystem.storage_path import StoragePath; sys.exit(not StoragePath('$1').exists())"
+}
 
 generate() {  # <task list> <name> <attempts> <output> [--relay]
   uv run python $dir/harbor_glm.py --agent "$agent" --family "$family" --package-revision "$revision" --tasks "$tasks" \
@@ -33,14 +40,25 @@ for i in "$@"; do
     generate "$shard" "$family-shard-$i" "$k" "$out/shard-$i" && finish "$out/shard-$i" || echo "SHARD_FAILED $i"
     continue
   fi
-  first="$out/shard-$i/round-1" second="$out/shard-$i/round-2"
-  if ! generate "$shard" "$family-relay-$i-r1" 2 "$first" --relay; then echo "SHARD_FAILED $i round-1"; continue; fi
-  finish "$first"
-  remaining=$(uv run python $dir/relay_followup.py --shard "$shard" --rounds "$first" --need 2 \
-    --out "$out/shard-$i/round-2-tasks.json" | tail -1) || { echo "SHARD_FAILED $i followup"; continue; }
-  echo "shard $i: $remaining tasks need round 2"
-  if [ "$remaining" -gt 0 ]; then
-    generate "$out/shard-$i/round-2-tasks.json" "$family-relay-$i-r2" 1 "$second" --relay && finish "$second" \
-      || echo "SHARD_FAILED $i round-2"
-  fi
+  rounds=()
+  for r in $(seq 1 "$max_round"); do
+    round="$out/shard-$i/round-$r"
+    if exists "$round/_SUCCESS"; then  # finished earlier (its task list stays as it was)
+      exists "$round/rebuilt.jsonl" || finish "$round"
+      rounds+=("$round")
+      continue
+    fi
+    if exists "$out/STOP"; then echo "STOP marker: $out/STOP"; break 2; fi
+    if [ "$r" = 1 ]; then
+      generate "$shard" "$family-relay-$i-r1" 2 "$round" --relay || { echo "SHARD_FAILED $i round-1"; break; }
+    else
+      remaining=$(uv run python $dir/relay_followup.py --shard "$shard" --rounds "${rounds[@]}" --need 4 --max-runs 5 \
+        --out "$round-tasks.json" | tail -1) || { echo "SHARD_FAILED $i followup $r"; break; }
+      echo "shard $i: $remaining tasks for round $r"
+      [ "$remaining" -gt 0 ] || break
+      generate "$round-tasks.json" "$family-relay-$i-r$r" 1 "$round" --relay || { echo "SHARD_FAILED $i round-$r"; break; }
+    fi
+    finish "$round"
+    rounds+=("$round")
+  done
 done

@@ -21,6 +21,7 @@ libraries, is the same in every trial. The pool excludes repos found in it.
 
 import hashlib
 import json
+import shlex
 import time
 import uuid
 from pathlib import Path
@@ -37,6 +38,7 @@ READY_TIMEOUT_SEC = 60
 MINI_SWE_CONSTRAINTS = Path(__file__).with_name("mini-swe-agent-2.1.0-constraints.txt")
 MINI_SWE_CONSTRAINTS_SHA256 = hashlib.sha256(MINI_SWE_CONSTRAINTS.read_bytes()).hexdigest()
 MINI_SWE_PYTHON = "3.12"
+ENV_API_BASE_MODEL = Path(__file__).with_name("env_api_base_model.py")
 
 
 def _record(logs_dir: Any, trial_id: str) -> None:
@@ -114,6 +116,7 @@ class PinnedMiniSweInstall(MiniSweAgent):
             for source in (
                 Path(mini_swe_agent.__file__).with_name("mini_swe_model.py"),
                 Path(mini_swe_agent.__file__).parents[2] / "llms" / "vllm_tokenization.py",
+                ENV_API_BASE_MODEL,
             ):
                 await environment.upload_file(source, f"{mini_swe_agent._MODEL_DIRECTORY}/{source.name}")
 
@@ -137,3 +140,19 @@ class TrialMiniSweAgent(AgentPhaseNetwork, PinnedMiniSweInstall):
         super().__init__(*args, **kwargs)
         self.rollout_correlation_id = uuid.uuid4().hex
         _record(self.logs_dir, self.rollout_correlation_id)
+
+    async def exec_as_agent(self, environment: Any, command: str, *args: Any, **kwargs: Any) -> Any:
+        # The run command: drop the API base flag (the capability URL; see env_api_base_model.py) and use the
+        # model class that reads it from the environment. The sandbox env still holds it, so outputs are scrubbed.
+        if "mini-swe-agent --yolo" in command and self._api_base is not None:
+            replacements = {
+                f"-c {shlex.quote(f'model.api_base={self._api_base}')} ": "",
+                "-c model.model_class=mini_swe_model.ContextLimitedModel ": (
+                    f"-c model.model_class={ENV_API_BASE_MODEL.stem}.EnvApiBaseModel "
+                ),
+            }
+            for old, new in replacements.items():
+                if old not in command:
+                    raise RuntimeError(f"mini-swe-agent run command changed; cannot find {old.split('=')[0]!r}")
+                command = command.replace(old, new)
+        return await super().exec_as_agent(environment, command, *args, **kwargs)

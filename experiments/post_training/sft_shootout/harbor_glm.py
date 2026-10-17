@@ -365,6 +365,14 @@ def main() -> None:
             "agent_phase_domain_allow_list": agent.get("kwargs", {}).get("agent_domain_allow_list"),
             "setup_and_verifier": "task policy (allow_internet)",
         },
+        "capability_url": {
+            "in_sandbox": "env only (HOSTED_VLLM_API_BASE, OPENAI_API_BASE)"
+            if args.agent == "mini-swe-agent"
+            else "not in the sandbox (the agent runs outside it)",
+            "note": "the agent's commands can still read the env, so exposure is reduced, not closed; the guarantee "
+            "is the decode-based scrub of every output (scrub_run.py) and the endpoint's lifetime (one per "
+            "shard, unregistered when the shard ends)",
+        },
         # Terminus-2 resends earlier reasoning only with interleaved_thinking; the eval policy leaves it off, so the
         # model never sees its earlier reasoning, at generation or at eval. The rows restore it for every turn.
         "earlier_reasoning_resent": None
