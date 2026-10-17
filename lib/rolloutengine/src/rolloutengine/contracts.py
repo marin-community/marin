@@ -238,7 +238,6 @@ class Transition:
 class RolloutStep:
     turn: ModelTurn
     transition: Transition
-    """What followed the turn: the observations of the next request, or the end of the harness."""
     response_end: int
     """The index of the turn's last response token in the conversation's ``response_token_ids``."""
     messages: tuple[dict[str, Any], ...]
