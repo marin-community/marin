@@ -139,7 +139,8 @@ The recorder applies these rules:
   failed model request, or a turn that breaks the token contract, raises `RolloutEnded` with the error as its
   cause. The harness lets both propagate. For a token-contract violation, the engine then raises
   `RolloutContractError`. A harness that catches a refusal and asks again gets the same refusal, until a turn
-  or attempt deadline stops it.
+  or attempt deadline stops it. After a refusal, `record(data=..., metrics=...)` still adds to the step of the
+  last turn until `run` returns, for example to attach a final reward.
 - The record is final when `run` returns or raises, or when a turn deadline expires. The recorder then cancels
   a model call that is still open, for example in an agent's HTTP handler, and ignores its result. Thus the
   grader and the returned rollout see the same record.
@@ -454,11 +455,13 @@ Final grading receives the conversation through the last response, without its o
 
 `RolloutInterrupted` retains the failed operation, served token evidence, and original exception cause.
 Its `rollout` field contains the retained record. Its `operation` field identifies the failed operation:
-`prepare` when the harness failed before its first model turn, and `advance` after one. `harness_rollout` raises
+`prepare` when the harness failed or returned before its first model turn, and `advance` after one. A limit that
+stops the attempt before its first turn is not a failure. `harness_rollout` raises
 `RolloutInterrupted`. `run_task` raises its subclass `GradedRolloutInterrupted`, whose `grade` field contains the
 grade of the completed turns, or an unavailable grade when the attempt stopped before grading.
 Startup failures retain an empty record.
 A model failure after a completed turn triggers grading of the completed state.
+If that grading fails, the operation stays `model`, and a note on the model error names the grading failure.
 A turn that the harness did not finish handling retains a terminal step with `metrics["advance_incomplete"] = 1.0`
 (`ADVANCE_INCOMPLETE`). Training callers must exclude that step from their training projections.
 `RolloutInterrupted.rollout.failure` names the exception type and the failed operation.
@@ -491,12 +494,14 @@ The engine grades by grader kind:
 | `ScriptGrader` | `grade_in_sandbox` runs the grader command on the verifier machine |
 | `NoGrader` | `GradeResult(Outcome.UNAVAILABLE, None, reason)` |
 
-A judge grades on the host even when its grader declares an environment, so it uses no verifier machine. It
-calls the service of `TaskRolloutSpec.judge_connection`, or else of `VERIFYIT_JUDGE_BASE_URL` with the key in
-`VERIFYIT_JUDGE_API_KEY`. The judge model is `JudgeSpec.model`, or else `VERIFYIT_JUDGE_MODEL`. The judge reads
-only the conversation. `check` rejects a judge task with a verifier machine, a judge task whose answer is not in
-the conversation, such as a file, a judge task with no connection when `VERIFYIT_JUDGE_BASE_URL` is not set, and a
-judge task with no model.
+A judge grades on the host even when its grader declares an environment, so it uses no verifier machine. It calls
+the service of `TaskRolloutSpec.judge_connection`, or else of `VERIFYIT_JUDGE_BASE_URL` with the key in
+`VERIFYIT_JUDGE_API_KEY`. The judge model is `JudgeSpec.model`, or else `VERIFYIT_JUDGE_MODEL`. The judge reads only
+the conversation. Each judge request has `JudgeSpec.request_timeout`, 120 s by default, and for every rubric except
+labels the OpenAI client retries a failed request up to two times. The verifier deadline stops only the engine's
+wait: the judge call continues in its worker thread until it ends. `check` rejects a judge task with a verifier
+machine, a judge task whose answer is not in the conversation, such as a file, a judge task with no connection when
+`VERIFYIT_JUDGE_BASE_URL` is not set, and a judge task with no model.
 
 Group grading belongs to the caller.
 

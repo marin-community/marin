@@ -88,7 +88,7 @@ async def test_rollout_grades_answer_in_lock_environment(
     )
 
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward), result.grade.error
-    assert result.response_token_ids == (20,)
+    assert result.rollout.conversations[-1].response_token_ids == (20,)
     assert "grade.py" not in json.dumps(model.requests[0].messages)
 
 

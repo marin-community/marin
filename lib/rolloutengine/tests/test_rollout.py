@@ -1307,9 +1307,8 @@ async def test_workspace_state_receives_shell_presentation_without_answer_tools(
         (ScriptGrader(argv=("true",), environment=GRADER_ENVIRONMENT), None),
         (verifyit_package(TWELVE).grader, machine_runtime()),
         (NoGrader(reason="No evaluator"), machine_runtime()),
-        (judge_task().grader, machine_runtime()),
     ],
-    ids=["verifyit_environment", "script", "in_process", "none", "judge"],
+    ids=["verifyit_environment", "script", "in_process", "none"],
 )
 async def test_grader_without_matching_runtime_is_rejected_before_task_startup(grader, verifier_machine):
     factory = RecordingShellSimFactory()
@@ -2602,7 +2601,7 @@ async def test_an_agent_with_two_open_requests_ends_only_its_own_attempt():
     assert len(model.requests) == 2
 
 
-async def test_a_request_that_the_agent_cancels_and_leaves_stays_in_the_record_without_a_turn():
+async def test_a_request_that_the_agent_cancels_and_leaves_stays_in_the_record_and_fails_the_attempt():
     generating = asyncio.Event()
 
     async def agent(_context, complete):
@@ -2616,12 +2615,15 @@ async def test_a_request_that_the_agent_cancels_and_leaves_stays_in_the_record_w
         generating.set()
         await asyncio.Future()
 
-    record = await RolloutEngine({}, {"agent": agent_harness(agent)}).run_task(
-        rollout_spec(arithmetic_task(), harness="agent"), model
-    )
-    [conversation] = record.rollout.conversations
+    with pytest.raises(GradedRolloutInterrupted) as caught:
+        await RolloutEngine({}, {"agent": agent_harness(agent)}).run_task(
+            rollout_spec(arithmetic_task(), harness="agent"), model
+        )
+    # The attempt has no model turn, as for a harness that returns before its first request.
+    assert caught.value.operation == RolloutOperation.PREPARE
+    [conversation] = caught.value.rollout.conversations
     assert (conversation.messages, conversation.steps) == (({"role": "user", "content": "Return 12."},), ())
-    assert record.grade.status == Outcome.UNAVAILABLE
+    assert caught.value.grade.status == Outcome.UNAVAILABLE
 
 
 async def test_closing_answers_a_server_request_before_the_agent_drains_its_handlers():
@@ -2903,13 +2905,13 @@ async def test_a_standalone_rollout_checks_the_task_before_the_model_runs():
 
 async def test_a_judge_task_grades_on_the_host_without_a_verifier_machine(judge_server):
     factory = RecordingShellSimFactory()
-    model = ReplayModel([{"role": "assistant", "content": "12"}])
+    model = ReplayModel([{"role": "assistant", "content": "twelve"}])
     connection = JudgeConnection(judge_url(judge_server), "private-test-key")
     record = await engine(model, {"local": factory}).run_task(rollout_spec(judge_task(), judge_connection=connection))
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert factory.machines == []
     [request] = judge_server.requests
-    assert "12" in request["messages"][-1]["content"]
+    assert "Reference: 12\nCandidate: twelve" in request["messages"][-1]["content"]
 
 
 async def test_a_judge_task_without_a_connection_uses_the_environment(judge_server, monkeypatch):
@@ -3457,6 +3459,75 @@ async def test_a_model_failure_in_a_new_conversation_grades_the_earlier_one():
     first, failed = caught.value.rollout.conversations
     assert (len(first.steps), failed.steps) == (1, ())
     assert caught.value.rollout.metrics == {"score": 1.0}
+
+
+class RecordsAfterARefusal:
+    """Records a final reward after the recorder refuses the second request."""
+
+    def __init__(self, second: str):
+        self.second = second
+
+    def check(self, task, limits):
+        pass
+
+    async def run(self, context, recorder):
+        await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+        recorder.record(data="turn", metrics={"score": 0.0})
+        try:
+            if self.second == "start":
+                await recorder.start(Prompt(({"role": "user", "content": "Start again."},), {}))
+            else:
+                await recorder.reply(({"role": "user", "content": "Continue."},))
+        except RolloutEnded:
+            with pytest.raises(RuntimeError, match="no more observations"):
+                recorder.record(observations=({"role": "user", "content": "Late."},))
+            recorder.record(data="final", metrics={"score": 1.0})
+            raise
+
+
+@pytest.mark.parametrize(
+    "second,refusal", [("reply", "limit"), ("reply", "model"), ("start", "model")], ids=["limit", "model", "new"]
+)
+async def test_a_harness_records_a_final_reward_after_the_recorder_refuses_a_request(second, refusal):
+    class FailingModel(ReplayModel):
+        async def complete(self, request):
+            if self.requests:
+                raise ConnectionError("inference server unavailable")
+            return await super().complete(request)
+
+    model = (ReplayModel if refusal == "limit" else FailingModel)([{"role": "assistant", "content": "12"}])
+    spec = rollout_spec(arithmetic_task(), harness="fixture", **({"max_turns": 1} if refusal == "limit" else {}))
+    runner = engine(model, harnesses={"fixture": RecordsAfterARefusal(second)})
+    if refusal == "limit":
+        rollout = (await runner.run_task(spec)).rollout
+    else:
+        with pytest.raises(GradedRolloutInterrupted) as caught:
+            await runner.run_task(spec)
+        assert caught.value.operation == RolloutOperation.MODEL
+        rollout = caught.value.rollout
+    # The reward goes to the step of the last turn, also when that turn is in an earlier conversation.
+    [step] = rollout.conversations[0].steps
+    assert (step.transition.data, step.transition.metrics) == ("final", {"score": 1.0})
+    assert rollout.metrics["score"] == 1.0
+
+
+async def test_a_grading_failure_after_a_model_failure_keeps_the_model_failure():
+    class FailingModel(ReplayModel):
+        async def complete(self, request):
+            if self.requests:
+                raise ConnectionError("inference server unavailable")
+            return await super().complete(request)
+
+    command = f"mkdir -p /workspace/out && cd /workspace/out && touch $(seq {MAX_OUTPUT_FILES + 1})"
+    spec = rollout_spec(
+        report_task(output_paths=("/workspace/out",)), machine=machine_runtime(), verifier_machine=machine_runtime()
+    )
+    with pytest.raises(GradedRolloutInterrupted) as caught:
+        await engine(FailingModel([shell_call(command)]), {"local": RecordingShellSimFactory()}).run_task(spec)
+    assert caught.value.operation == RolloutOperation.MODEL
+    assert isinstance(caught.value.__cause__, ConnectionError)
+    [note] = caught.value.__cause__.__notes__
+    assert "file or byte budget" in note
 
 
 async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one():

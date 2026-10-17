@@ -229,6 +229,12 @@ class _Recorder:
             raise RolloutEnded("The harness ended, or a turn deadline expired")
         if self.model_call is not None:
             raise RuntimeError("A harness records step data only between model requests")
+        if self.stopped or self.model_error is not None:
+            # The refused request ended the last turn's step, but the harness can still add to it until it returns.
+            if observations:
+                raise RuntimeError("A refused request ended the last turn's step, so it takes no more observations")
+            self._add_to_ended_step(data, metrics)
+            return
         if self.conversation is None or self.conversation.pending is None:
             raise RuntimeError("A harness records step data only after a model turn")
         if observations:
@@ -238,6 +244,23 @@ class _Recorder:
             self.step_data = data
         if metrics:
             self.step_metrics.update(metrics)
+
+    def _add_to_ended_step(self, data: object, metrics: Mapping[str, Any] | None) -> None:
+        def added(step: RolloutStep) -> RolloutStep:
+            transition = step.transition
+            data_now = transition.data if data is None else data
+            metrics_now = {**transition.metrics, **(metrics or {})}
+            return replace(step, transition=replace(transition, data=data_now, metrics=metrics_now))
+
+        conversation = self.conversation
+        if conversation is not None and conversation.steps:
+            conversation.steps[-1] = added(conversation.steps[-1])
+        elif self.earlier and self.earlier[-1].steps:
+            # The model failed on the first request of a new conversation, so the last turn is in the earlier one.
+            record = self.earlier[-1]
+            self.earlier[-1] = replace(record, steps=(*record.steps[:-1], added(record.steps[-1])))
+        else:
+            raise RuntimeError("A harness records step data only after a model turn")
 
     async def _enter(self) -> None:
         refusal = self._refusal()
@@ -450,8 +473,9 @@ async def _run_harness(
         recorder.stop_at_turn_deadline()
         return None
     if failure is None or (refused and recorder.stopped):
-        if recorder.conversation is None:
-            return RolloutOperation.PREPARE, RuntimeError("The harness returned before its first model request")
+        # A limit can stop the attempt before the first turn. Without a limit, the harness returned too early.
+        if not recorder.has_response and not recorder.stopped:
+            return RolloutOperation.PREPARE, RuntimeError("The harness returned before its first model turn")
         recorder.finish()
         return None
     return (RolloutOperation.ADVANCE if recorder.turns else RolloutOperation.PREPARE), failure
