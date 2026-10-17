@@ -622,6 +622,13 @@ segment, row, and byte counts. Maintenance lines report resource class, queue
 wait, run time, and the requested follow-up class. Object-backed relays use the
 `RelayIo` class; `SpecMigration` and `QueryServing` have independent limits.
 
+`slow batch stage breakdown` reports `read_ms`, `chunk_encode_ms`, and `push_ms`
+for one turn, with its source cursor range, row count, chunk count, and encoded
+bytes. `push_ms` includes RPC compression, transport, retries, and the hub's
+durable acknowledgement; it is not hub CPU time. Match its cursor range to
+`slow namespace turn completed` for settlement and total duration. A cold-read
+explanation requires a large `read_ms`; total turn time alone cannot establish it.
+
 The forwarding cursor and fully covered object-segment removals share one
 catalog transaction and one HEAD publication. Covered segments stop appearing
 in relay queries immediately after settlement. Their objects remain through the

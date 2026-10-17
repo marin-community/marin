@@ -17,6 +17,7 @@ use crate::server::test_support::{
     client, disk_store, serve, serve_rejecting, serve_schema_conflict, serve_unavailable,
     serve_with_outage, stats_client, RequestStats, TestTransport, PRIV_A, PRIV_UNTRUSTED, PUB_A,
 };
+use crate::store::ipc::decode_one_record_batch;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{Column, Schema};
 use crate::store::store::LOG_NAMESPACE_NAME;
@@ -676,6 +677,44 @@ fn chunk_by_bytes_shrinks_an_estimate_that_encodes_over_budget() {
     assert!(chunks.len() > 1);
     assert!(chunks.iter().all(|(ipc, _)| ipc.len() <= max_bytes));
     assert_eq!(chunks.last().unwrap().1, 1_000);
+}
+
+#[test]
+fn chunk_by_bytes_preserves_uneven_rows_and_isolates_oversized_rows() {
+    let values: Vec<String> = (0..1_000)
+        .map(|row| {
+            let width = if row % 41 == 0 { 20_000 } else { row % 997 };
+            format!("{row}:{}", "x".repeat(width))
+        })
+        .collect();
+    let batch = RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![Field::new(
+            "data",
+            DataType::Utf8,
+            false,
+        )])),
+        vec![Arc::new(StringArray::from(
+            values.iter().map(String::as_str).collect::<Vec<_>>(),
+        ))],
+    )
+    .unwrap();
+    let seqs = Int64Array::from_iter_values(1..=values.len() as i64);
+    let max_bytes = 16 * 1024;
+    let chunks = chunk_by_bytes(&batch, &seqs, max_bytes).unwrap();
+    let mut restored = Vec::new();
+    for (ipc, last_seq) in chunks {
+        let decoded = decode_one_record_batch(&ipc).unwrap();
+        assert!(ipc.len() <= max_bytes || decoded.num_rows() == 1);
+        restored.extend(
+            decoded
+                .column(0)
+                .as_string::<i32>()
+                .iter()
+                .map(|value| value.unwrap().to_owned()),
+        );
+        assert_eq!(last_seq, restored.len() as i64);
+    }
+    assert_eq!(restored, values);
 }
 
 #[test]
