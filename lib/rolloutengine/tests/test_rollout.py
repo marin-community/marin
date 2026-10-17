@@ -11,6 +11,7 @@ from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import httpx
 import pytest
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -57,7 +58,8 @@ from taskcompendium.runtime.output_capture import MAX_OUTPUT_FILES
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import ShellToolConfig
 from verifyit.grade import grade as verifyit_grade
-from verifyit.spec import FunctionCall, PredictedActionSpec, StructuredExactSpec, parse_spec
+from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.spec import FunctionCall, JudgeSpec, PredictedActionSpec, StructuredExactSpec, parse_spec
 
 from rolloutengine.agent_session import AgentTaskSession
 from rolloutengine.cleanup import finish_cleanup
@@ -101,6 +103,172 @@ FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
 GRADER_ENVIRONMENT = EnvironmentRequirements(
     command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=FIXTURE_IMAGE
 )
+
+
+@pytest.mark.parametrize("verdict,reward", [("PASS", 1.0), ("FAIL", 0.0), ("unparseable", None)])
+@pytest.mark.parametrize("native_action", [False, True])
+async def test_remote_judge_grades_on_host_without_creating_verifier_machine(
+    monkeypatch, verdict, reward, native_action
+):
+    requests = []
+
+    def send(_client, request, **_kwargs):
+        requests.append(request)
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "id": "judge-response",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "fixture-judge",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": verdict}, "finish_reason": "stop"}],
+            },
+        )
+
+    monkeypatch.setattr(httpx.Client, "send", send)
+    task = arithmetic_task(
+        grader=verifyit_package(
+            JudgeSpec(
+                rubric="labels",
+                references=("The answer is twelve",),
+                model="fixture-judge",
+                system_prompt="Grade the answer",
+                prompt_template="{reference}\n{candidate}",
+                label_scores={"PASS": 1.0, "FAIL": 0.0},
+            ),
+            environment=GRADER_ENVIRONMENT,
+        ).grader
+    )
+    response = {"role": "assistant", "content": "twelve"}
+    if native_action:
+        task = task.model_copy(
+            update={
+                "answer_type": AnswerType.NATIVE_ACTION,
+                "answer_format": FinalAction(require_call=True, max_calls=1),
+                "final_tools": (FunctionDefinition(name="lookup", parameters={"type": "object"}),),
+            }
+        )
+        response = {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call-1", "type": "function", "function": {"name": "lookup", "arguments": '{"query":"twelve"}'}}
+            ],
+        }
+    model = ReplayModel([response])
+    factory = RecordingShellSimFactory()
+    record = await RolloutEngine(
+        model.complete, {"docker": factory}, judge_connection=JudgeConnection("https://judge.invalid/v1", "judge-secret")
+    ).run(lowered(task, verifier_machine=machine_runtime(backend="docker")))
+    assert record.grade.reward == reward
+    assert record.grade.status == (Outcome.INFRA_ERROR if reward is None else Outcome.GRADED)
+    assert not factory.machines
+    assert requests[0].headers["authorization"] == "Bearer judge-secret"
+    assert "twelve" in requests[0].content.decode()
+    assert "judge-secret" not in task.model_dump_json()
+    assert "judge-secret" not in json.dumps(record.messages)
+
+
+async def test_external_agent_cleanup_preserves_prior_cancellation():
+    agent_task = None
+
+    async def agent(complete):
+        nonlocal agent_task
+        agent_task = asyncio.current_task()
+        await complete(SessionStart(({"role": "user", "content": "Return 12."},), {}))
+
+    async def grade(messages, *, stop_reason, outputs):
+        del messages, stop_reason, outputs
+        raise AssertionError("An interrupted agent must not be graded")
+
+    session = AgentTaskSession(agent, grade)
+    await session.prepare()
+    assert agent_task is not None
+    agent_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await agent_task
+    with pytest.raises(asyncio.CancelledError):
+        await session.close()
+
+
+@pytest.mark.parametrize("delivered_turns", [0, 1])
+async def test_abandoned_agent_response_grades_only_delivered_turns(delivered_turns):
+    pending_request = None
+    received = []
+    abandoned = asyncio.Event()
+    initial = ({"role": "user", "content": "Return 12."},)
+
+    async def agent(complete):
+        nonlocal pending_request
+        messages = initial
+        if delivered_turns:
+            turn = await complete(SessionStart(messages, {}))
+            received.append(turn)
+            messages = (*messages, turn.message)
+        pending_request = asyncio.create_task(complete(SessionStart(messages, {})))
+        try:
+            await pending_request
+        except asyncio.CancelledError:
+            abandoned.set()
+
+    calls = 0
+
+    async def model(request):
+        nonlocal calls
+        calls += 1
+        if calls > delivered_turns:
+            assert pending_request is not None
+            pending_request.cancel()
+            await abandoned.wait()
+        prefix = (10, 11) if calls == 1 else (10, 11, 20)
+        return ModelTurn({"role": "assistant", "content": str(calls)}, prefix, (19 + calls,), (-0.5,), "stop")
+
+    async def grade(messages, *, stop_reason, outputs):
+        assert abandoned.is_set()
+        assert messages == (*initial, *(turn.message for turn in received))
+        assert stop_reason == "response_abandoned"
+        return GradeResult(Outcome.GRADED, 0.5)
+
+    runner = RolloutEngine(model, {}, sessions={"agent": lambda _context: AgentTaskSession(agent, grade)})
+    result = await runner.run(lowered(arithmetic_task(), task_session="agent"))
+    assert result.grade.reward == 0.5
+    assert result.response_token_ids == ((20,) if delivered_turns else ())
+    assert result.loss_mask == ((1,) if delivered_turns else ())
+    assert len(result.steps) == delivered_turns
+
+
+@pytest.mark.parametrize("alter_prefix", [False, True])
+async def test_external_agent_preserves_exact_tokens_after_history_reset(alter_prefix):
+    requests = []
+    prefixes = [(10, 11), (90, 91, 92)]
+
+    async def agent(complete):
+        for index, prefix in enumerate(prefixes):
+            await complete(SessionStart(({"role": "user", "content": f"turn {index}"},), {}, prefix))
+
+    async def model(request):
+        index = len(requests)
+        requests.append(request)
+        served = prefixes[index]
+        if index == 1 and alter_prefix:
+            served = (90, 91, 99)
+        return ModelTurn({"role": "assistant", "content": "done"}, served, (5,), (-0.1,), "stop")
+
+    async def grade(_messages, *, stop_reason, outputs):
+        del stop_reason, outputs
+        return GradeResult(Outcome.GRADED, 1.0)
+
+    runner = RolloutEngine(model, {}, sessions={"agent": lambda _context: AgentTaskSession(agent, grade)})
+    task = lowered(arithmetic_task(), task_session="agent")
+    if alter_prefix:
+        with pytest.raises(RolloutContractError, match="replay token prefix"):
+            await runner.run(task)
+    else:
+        result = await runner.run(task)
+        assert result.prompt_token_ids == prefixes[1]
+        assert result.response_token_ids == (5,)
+        assert result.loss_mask == (1,)
+    assert [request.prompt_token_ids for request in requests] == prefixes
 
 
 @pytest.mark.docker
@@ -1382,6 +1550,36 @@ async def test_context_limit_keeps_served_evidence_and_grades_only_completed_ope
     )
     assert record.response_token_ids == ((20,) if completed_turns else ())
     assert record.loss_mask == ((1,) if completed_turns else ())
+
+
+async def test_context_limit_after_history_reset_preserves_trial_grade():
+    class Session:
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Perform the task."},), {})
+
+        async def advance(self, _turn):
+            return Transition(done=False, reset_conversation=({"role": "user", "content": "Task performed."},))
+
+        async def grade(self, messages, *, stop_reason, outputs):
+            return GradeResult(Outcome.GRADED, 1.0)
+
+        async def close(self):
+            pass
+
+    class LimitedModel(ReplayModel):
+        async def complete(self, request):
+            if self.requests:
+                raise GenerationLimitReached((90, 91))
+            return await super().complete(request)
+
+    record = await engine(
+        LimitedModel([{"role": "assistant", "content": "Done."}]),
+        sessions={"fixture": lambda _context: Session()},
+    ).run(lowered(arithmetic_task(), task_session="fixture"))
+    assert record.stop_reason == "length"
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    # The new conversation has no response tokens; earlier tokens must not be invented in it.
+    assert record.response_token_ids == ()
 
 
 @pytest.mark.parametrize(

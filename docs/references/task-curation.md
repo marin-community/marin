@@ -473,15 +473,18 @@ Sample and full modes run the reviewed procedure below.
    Without a rubric, rows are kept as `unreviewed`.
 4. In full mode, convert and audit every row of an accepted source.
 5. Filter rows into kept, rejected and deferred.
-6. With controls, verify a seeded sample of at most 20 kept rows
-   (`--verification-sample-size`): each task's one control runs once in a fresh
-   machine, rerun up to twice more after an infrastructure error. At a 95% pass
-   fraction, unsampled tasks can skip validation. Otherwise validate every kept
-   task, retaining passes, rejecting failures and deferring unavailable results.
-   Remote-judge controls use the campaign's authenticated judge endpoint outside
-   the network-denied grader sandbox; credentials stay out of task specifications
-   and persisted campaign evidence. This threshold is independent of sampled
-   GLM quality grades.
+6. With controls, verify a seeded sample of at most 20 kept task rows
+   (`--verification-sample-size`). Run the declared control once per task,
+   with up to two retries after an infrastructure error. Sandbox controls use
+   a fresh machine per attempt. If at least 95% of checked tasks pass and no
+   sampled task has an unsupported or infrastructure-error result, unsampled
+   tasks skip validation. Otherwise validate the remaining kept tasks and
+   combine their results with the sample, retaining passes, rejecting failures
+   and deferring unavailable results. This control threshold is separate from
+   the GLM quality gate in step 3. Remote-judge
+   controls use the campaign's authenticated judge endpoint outside the
+   network-denied grader sandbox; credentials stay out of task specifications
+   and persisted campaign evidence.
 7. Admit rows and write the outputs.
 
 For a standalone task batch, call

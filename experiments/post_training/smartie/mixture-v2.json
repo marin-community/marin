@@ -1,0 +1,15 @@
+{
+  "source_routes": {
+    "s3://marin-us-east-02a/marin/data/rl/nemotron_ultra_rlvr1_ultra_sft_step3200_calendar_v2-468e6cf367434265/2026.10.12.1": "calendar",
+    "s3://marin-us-east-02a/marin/data/rl/nemotron_ultra_rlvr1_ultra_sft_step3200_comp_coding-4ca55f99c4916941/2026.10.12.1": "competitive_code",
+    "s3://marin-us-east-02a/marin/data/rl/nemotron_ultra_rlvr1_ultra_sft_step3200_reasoning_gym-13112d2f62b0a8de/2026.10.12.1": "reasoning_gym",
+    "s3://marin-us-east-02a/marin/data/rl/nemotron_ultra_rlvr1_ultra_sft_step3200_stem_mcqa-4191160e2fbcea8a/2026.10.12.1": "stem_mcqa"
+  },
+  "domain_weights": {
+    "calendar": 0.5,
+    "competitive_code": 0.5,
+    "reasoning_gym": 0.5,
+    "stem_mcqa": 0.5,
+    "structural": 1.0
+  }
+}

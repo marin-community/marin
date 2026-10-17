@@ -48,13 +48,46 @@ validation path. The submitter forwards `DAYTONA_API_KEY`, `DAYTONA_RL_API_KEY`,
 are present in its environment. The RL and eval keys let rollout and evaluation
 workloads use separate Daytona credentials.
 
+## Structure-closure evaluation
+
+Use one evaluation entry point for a registered closure cohort, the paired tool-prompt
+probe, or an immutable native dataset URI:
+
+```bash
+uv run python -m experiments.post_training.structure_closure.evaluate \
+  --version 2026.10.16.1 --name evals/closure-validation \
+  --data value-controls-v5 --model base
+```
+
+`--data` accepts `copy-v1`, `explicit-v3`, `varied-v4`, `value-controls-v5`,
+`native-tools-v6`, `near-boundary-v7`, `tool-prompt-probe`, or `URI@version`.
+URI datasets also require `--data-name` with their original artifact name (for
+example, `datasets/structure-closure-parity`). Registered cohorts retain their
+historical names, versions, source URIs, and content-hash configs.
+The [cohort registry](https://github.com/marin-community/marin/blob/main/experiments/datasets/structure_closure.py)
+defines their source artifacts. `--model base` selects
+`open-athena/Grug-67B-A2B-BFCL-Protocol-FTPO`, revision
+`d761ea0a94500c2aa24aa4cd71b5a149d962e5c8`, through the campaign initializer artifact.
+To evaluate an exported checkpoint,
+pass `--model URI@version --manifest-identity sha256:...` using the identity from
+its export manifest. For example, `s3://bucket/checkpoint/policy@2026.10.16.1`
+uses the artifact calendar version `2026.10.16.1`, not a Hugging Face revision.
+`--name` is a user-owned artifact name. The command prints
+and validates the artifact graph; add `--run` to submit it.
+
+Offline closure audits use Verifyit's canonical scorer with the Snowball terminal
+markers supplied explicitly. This matches training's typed JSON comparison,
+including equality of positive and negative floating-point zero.
+
 ## One Hydra launch document
 
 Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no parallel request
 envelope and no internal command-line rendering layer.
 
-The runtime executes tasks through `TaskSession` and sends token requests to model engines.
-Harbor tasks use the Shellbox session. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
+Native rollouts execute tasks through `TaskSession` and send token requests to model engines.
+Lowered Harbor tasks use the Shellbox session. Inline Harbor evaluation invokes its
+configured agent harness through a separate callback in the shared validation task
+pool; these harnesses are not native `TaskSession` implementations.
 See [task rollouts](task-rollouts.md) for task execution and backend limits.
 
 The launcher uses the frozen project in `config/external/MarinSkyRL` in an isolated environment.

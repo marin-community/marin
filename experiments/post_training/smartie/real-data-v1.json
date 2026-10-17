@@ -1,0 +1,42 @@
+{
+  "seed": 42,
+  "sources": [
+    {
+      "root": "s3://marin-us-east-02a/marin/data/rl/nemotron_ultra_rlvr1_ultra_sft_step3200_toolcall_schema-aa3a778a8b651196/2026.10.07.1",
+      "expected_rows": 2877,
+      "validation_rows": 575
+    },
+    {
+      "root": "s3://marin-us-east-02a/marin/data/rl/nemotron_ultra_rlvr1_ultra_sft_step3200_structured_outputs_v2-310075a76a5a18dc/2026.10.07.1",
+      "expected_rows": 2077,
+      "validation_rows": 415
+    },
+    {
+      "root": "s3://marin-us-east-02a/marin/data/rl/nemotron_ultra_rlvr1_ultra_sft_step3200_nvarc_transductive-abdbf6b7810cc7fb/2026.10.07.1",
+      "expected_rows": 2069,
+      "validation_rows": 414
+    }
+  ],
+  "machine": {
+    "backend": "daytona",
+    "network": "allow",
+    "cpus": 2,
+    "memory_mb": 4096,
+    "storage_mb": 10240,
+    "gpus": 0,
+    "user": null,
+    "startup_timeout": 600,
+    "cleanup_timeout": 60
+  },
+  "session": {
+    "task_session": "shellbox",
+    "max_turns": 1,
+    "model_turn_timeout": 300,
+    "command_timeout": 60,
+    "tool_turn_timeout": 90,
+    "total_turn_timeout": 360,
+    "attempt_timeout": 1200,
+    "verifier_timeout": 300,
+    "cleanup_timeout": 60
+  }
+}

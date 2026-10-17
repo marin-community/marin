@@ -16,12 +16,14 @@ from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import SessionGrader
 from taskcompendium.runtime.output_capture import captured_output_files
 from taskcompendium.submission import conversation_messages
+from verifyit.modes.grade_judge import JudgeConnection
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.contracts import (
     BUDGET_STOP_REASON,
     LENGTH_STOP_REASON,
     MAX_TURNS_STOP_REASON,
+    RESPONSE_ABANDONED_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
     AttemptEnded,
     AttemptStarted,
@@ -31,6 +33,7 @@ from rolloutengine.contracts import (
     ModelRequest,
     ModelTurn,
     ModelTurnCompleted,
+    ResponseAbandoned,
     RolloutContractError,
     RolloutData,
     RolloutInterrupted,
@@ -92,12 +95,14 @@ class RolloutEngine:
         factories: Mapping[str, MachineFactory],
         *,
         sessions: Mapping[str, TaskSessionFactory] | None = None,
+        judge_connection: JudgeConnection | None = None,
         observer: RolloutObserver | None = None,
         providers: Mapping[str, ToolProvider] | None = None,
     ):
         self.model = model
         self.factories = factories
         self.sessions = {} if sessions is None else sessions
+        self.judge_connection = judge_connection
         self.observer = observer
         self.providers = {} if providers is None else providers
 
@@ -192,7 +197,15 @@ class RolloutEngine:
             messages: tuple[dict[str, Any], ...], *, stop_reason: str, outputs: dict[str, bytes]
         ) -> GradeResult:
             return await _grade_rollout(
-                lowered, messages, outputs, machine, self.factories, cleanup, resources, stop_reason=stop_reason
+                lowered,
+                messages,
+                outputs,
+                machine,
+                self.factories,
+                cleanup,
+                resources,
+                stop_reason=stop_reason,
+                judge_connection=self.judge_connection,
             )
 
         session_factories: Mapping[str, TaskSessionFactory] = {
@@ -257,7 +270,8 @@ class RolloutEngine:
                             )
                     except GenerationLimitReached as limit:
                         stop_reason = LENGTH_STOP_REASON
-                        if not steps:
+                        # History resets clear segment evidence, not prior agent actions.
+                        if index == 0:
                             return replace(
                                 completed,
                                 prompt_token_ids=trace.generation_limit_prompt(limit.prompt_token_ids),
@@ -286,6 +300,7 @@ class RolloutEngine:
                     )
                     if replay_prompt_token_ids is not None and turn.prompt_token_ids != replay_prompt_token_ids:
                         raise RolloutContractError("Model transport changed the replay token prefix")
+                    replay_prompt_token_ids = None
                     trace.append(turn)
                     events.emit(
                         ModelTurnCompleted(
@@ -308,6 +323,7 @@ class RolloutEngine:
                         tuple(messages),
                     )
                     # Token evidence belongs to the attempt even if a tool operation fails.
+                    delivered = completed
                     completed = RolloutData(
                         task.id,
                         tuple(messages),
@@ -324,6 +340,13 @@ class RolloutEngine:
                     try:
                         async with asyncio.timeout(limits.tool_turn_timeout):
                             transition = await session.advance(turn)
+                    except ResponseAbandoned:
+                        # Grade the work performed before the cancelled request, without
+                        # assigning credit to tokens the agent never received.
+                        completed = delivered
+                        messages = list(delivered.messages)
+                        stop_reason = RESPONSE_ABANDONED_STOP_REASON
+                        break
                     except RolloutContractError:
                         raise
                     except Exception as error:

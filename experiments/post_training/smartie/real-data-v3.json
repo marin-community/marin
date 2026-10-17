@@ -1,0 +1,54 @@
+{
+  "seed": 42,
+  "images": [
+    {
+      "lock_sha256": "4923651607b933b620264e4081f4ebb75f461d7c368a622ecd3838764e01ab29",
+      "data": ["nltk:punkt_tab", "nltk:wordnet"],
+      "image": "ghcr.io/penfever/smartie-grader@sha256:398753f1ef9e163dd4ae503ce328a441b919bbd381b50cba32af2c564e9b0bc8"
+    }
+  ],
+  "sources": [
+    {
+      "root": "s3://marin-us-east-02a/marin/data/rl/nemotron_ultra_rlvr1_ultra_sft_step3200_calendar_v2-468e6cf367434265/2026.10.12.1",
+      "expected_rows": 908,
+      "validation_rows": 167
+    },
+    {
+      "root": "s3://marin-us-east-02a/marin/data/rl/nemotron_ultra_rlvr1_ultra_sft_step3200_comp_coding-4ca55f99c4916941/2026.10.12.1",
+      "expected_rows": 7720,
+      "validation_rows": 167
+    },
+    {
+      "root": "s3://marin-us-east-02a/marin/data/rl/nemotron_ultra_rlvr1_ultra_sft_step3200_reasoning_gym-13112d2f62b0a8de/2026.10.12.1",
+      "expected_rows": 2085,
+      "validation_rows": 167
+    },
+    {
+      "root": "s3://marin-us-east-02a/marin/data/rl/nemotron_ultra_rlvr1_ultra_sft_step3200_stem_mcqa-4191160e2fbcea8a/2026.10.12.1",
+      "expected_rows": 2077,
+      "validation_rows": 166
+    }
+  ],
+  "machine": {
+    "backend": "daytona",
+    "network": "allow",
+    "cpus": 2,
+    "memory_mb": 4096,
+    "storage_mb": 10240,
+    "gpus": 0,
+    "user": null,
+    "startup_timeout": 600,
+    "cleanup_timeout": 60
+  },
+  "session": {
+    "task_session": "shellbox",
+    "max_turns": 1,
+    "model_turn_timeout": 300,
+    "command_timeout": 60,
+    "tool_turn_timeout": 90,
+    "total_turn_timeout": 360,
+    "attempt_timeout": 1200,
+    "verifier_timeout": 300,
+    "cleanup_timeout": 60
+  }
+}

@@ -4,13 +4,23 @@
 """Adapt an agent's model requests to the task-session lifecycle."""
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from taskcompendium.grading_result import GradeResult
 
-from rolloutengine.contracts import ModelTurn, RolloutContractError, SessionStart, TaskGrader, Transition
+from rolloutengine.contracts import (
+    ModelTurn,
+    ResponseAbandoned,
+    RolloutContractError,
+    SessionStart,
+    TaskGrader,
+    Transition,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class AgentCompletion(Protocol):
@@ -88,6 +98,8 @@ class AgentTaskSession:
     async def advance(self, turn: ModelTurn) -> Transition:
         assert self.pending is not None
         previous = self.pending
+        if previous.response.cancelled():
+            raise ResponseAbandoned("The agent no longer awaits this model response")
         previous.response.set_result(turn)
         self.pending = await self._next_request()
         if self.pending is None:
@@ -118,9 +130,13 @@ class AgentTaskSession:
         self.closed = True
         if self.agent is None:
             return
-        if not self.agent.done():
+        cancelled_for_cleanup = not self.agent.done() and self.agent.cancelling() == 0
+        if cancelled_for_cleanup:
             self.agent.cancel()
         try:
-            await self.agent
+            await asyncio.shield(self.agent)
         except asyncio.CancelledError:
-            pass
+            current = asyncio.current_task()
+            if not cancelled_for_cleanup or (current is not None and current.cancelling()):
+                raise
+            logger.debug("Cancelled the external agent during session cleanup")

@@ -11,6 +11,15 @@ authenticate successfully against the wrong account. Do not substitute it for
 the RL key. Resolve the credential through the launcher's supported secret
 indirection and verify that the coordinator and trial workers receive it.
 
+Validation that needs declarative image builds uses the Daytona **eval** account,
+not the RL account. Keep the two credentials separately named and select the
+eval credential only in the validation subprocess. For inline Harbor validation,
+set the callback's `daytona_api_key_env` to the eval credential variable and
+forward it through both the coordinator and task launcher. Do not globally
+replace the RL credential: training containers remain in the RL account.
+`DaytonaValidationError: declarative builds are not allowed` is an account/build
+permission failure, not a model failure or a zero reward.
+
 For launchers that consume only `DAYTONA_API_KEY`, map the RL key immediately
 before invoking the launcher:
 

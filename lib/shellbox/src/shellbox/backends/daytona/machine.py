@@ -6,6 +6,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import re
 import shlex
@@ -13,6 +14,7 @@ import stat
 import tarfile
 import tempfile
 import uuid
+from asyncio import sleep
 from collections.abc import Callable
 from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, replace
@@ -26,6 +28,7 @@ from daytona import (
     CreateSnapshotParams,
     DaytonaConflictError,
     DaytonaNotFoundError,
+    DaytonaRateLimitError,
     Image,
     Resources,
 )
@@ -49,6 +52,7 @@ from shellbox.machine import (
 )
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
+logger = logging.getLogger(__name__)
 CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 RUN_COMMAND = (
     'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; trap \': > "$completed"; rm -f "$pidfile"\' EXIT; "$@"'
@@ -93,6 +97,55 @@ async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSour
         await asyncio.sleep(backoff.next_interval())
         snapshot = await client.snapshot.get(name)
     return name
+
+
+def _rejected_create_request(error: DaytonaRateLimitError) -> bool:
+    if error.status_code != 429:
+        return False
+    # Daytona 0.200.2 has no public request retry hook. Its create() also performs
+    # reads after POST succeeds; only this generated request frame proves the
+    # POST itself was rejected. Unknown SDK paths fail closed, without retrying.
+    nested: BaseException | None = error
+    seen = set()
+    while nested is not None and id(nested) not in seen:
+        seen.add(id(nested))
+        traceback = nested.__traceback__
+        while traceback is not None:
+            frame = traceback.tb_frame
+            if (
+                frame.f_globals.get("__name__") == "daytona_api_client_async.api.sandbox_api"
+                and frame.f_code.co_name == "create_sandbox"
+            ):
+                return True
+            traceback = traceback.tb_next
+        nested = nested.__cause__ or nested.__context__
+    return False
+
+
+async def _create_sandbox(client: AsyncDaytona, params: CreateSandboxFromSnapshotParams, timeout: float) -> AsyncSandbox:
+    """Retry rejected creation requests inside the caller's startup deadline."""
+    backoff = ExponentialBackoff(initial=1, maximum=30, factor=2, jitter=0.5)
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return await client.create(params, timeout=timeout)
+        except DaytonaRateLimitError as error:
+            if not _rejected_create_request(error):
+                raise
+            retry_after = 0
+            for name, value in (error.headers or {}).items():
+                if (
+                    name.lower() == "retry-after-sandbox-create"
+                    and isinstance(value, str)
+                    and value.isascii()
+                    and value.isdecimal()
+                    and len(value) <= 12
+                ):
+                    retry_after = int(value)
+            delay = max(retry_after, backoff.next_interval())
+            logger.warning("Retrying rejected Daytona creation: attempt=%d delay=%.3f", attempt, delay)
+            await sleep(delay)
 
 
 class DaytonaNetworkMode(StrEnum):
@@ -400,7 +453,8 @@ class DaytonaMachineFactory:
             timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
             async with asyncio.timeout(timeout):
                 snapshot = await _snapshot(client, source, resources)
-                sandbox = await client.create(
+                sandbox = await _create_sandbox(
+                    client,
                     CreateSandboxFromSnapshotParams(
                         snapshot=snapshot,
                         os_user="root",
