@@ -109,8 +109,8 @@ It implements the `Harness` protocol from `rolloutengine.harness`:
   harness calls the model only through `recorder`, a `RolloutRecorder`.
 
 A harness does not grade. After `run` returns, the engine grades the rollout with the task's grader (see
-[Grading](#grading)). A harness can calculate a reward as part of its own logic and attach it to a step with
-`record(data=...)`. The engine does not read it.
+[Grading](#grading)). A harness can attach its own reward to a step with `record(data=...)`. The engine does
+not read it.
 
 ### Recorder
 
@@ -120,7 +120,7 @@ turn and token limits:
 - `start(prompt)` starts a new conversation with a `Prompt`: public messages, model options, and optionally
   exact prompt `token_ids`. It returns the model's turn. A later `start` starts another conversation, for
   example after the harness makes its history shorter or changes its tools. The rollout keeps each
-  conversation as a `ConversationRecord`, and the workspace files and the harness's own state stay.
+  conversation as a `ConversationRecord`, and the task machine does not reset.
 - `reply(observations, *, token_ids=None)` sends new messages after the model's last message and returns the
   next turn. `token_ids` pins the exact tokens of the next prompt.
 - `record(*, observations=(), data=None, metrics=None)` adds to the step of the last turn, between model
@@ -128,21 +128,21 @@ turn and token limits:
   recorded observations takes no `reply`.
 - `limits` holds the attempt's `RolloutLimits`, for example to tell the model that one turn is left.
 
-The recorder records the transport's assistant message. A harness can parse that message, but it must not
-change it, because the record holds the same object. One request can be open at a time, and a second one raises
-`RuntimeError`. A request changes the record only when the model answers or fails. Thus a request that is
-cancelled while the model generates changes nothing, and the harness can send it again. If the harness ends
-before its next request, the record keeps the cancelled request without an answer. When a limit ends the attempt, the next `start`
-or `reply` raises `LimitReached` with the stop reason, and the harness lets it propagate. A failed model request,
-or a turn that breaks the token contract, raises `RolloutEnded` with the error as its cause. For a token-contract
-violation, the engine then raises the `RolloutContractError` itself. A harness that catches a refusal and asks again runs until a turn or
-attempt deadline. Each request after the end of the attempt yields before it raises, so a harness that asks
-again in a loop does not stop other attempts.
+The recorder applies these rules:
 
-When `run` returns or raises, or a turn deadline expires, the record is final. The recorder cancels a model call
-that is still open, for example in an agent's HTTP handler, and ignores its result. It records a sent request
-that has no answer, unless the harness recorded final observations after it. Thus the grader and the returned
-rollout see the same record.
+- One request can be open at a time. A second one raises `RuntimeError`.
+- The record holds the assistant message that the model returns. A harness can parse it, but must not change it.
+- A request changes the record only when the model answers or fails. A request that is cancelled while the
+  model generates changes nothing, so the harness can send it again. If the attempt ends first, the record
+  keeps the request without an answer, unless the harness records final observations after it.
+- After a limit ends the attempt, the next `start` or `reply` raises `LimitReached` with the stop reason. A
+  failed model request, or a turn that breaks the token contract, raises `RolloutEnded` with the error as its
+  cause. The harness lets both propagate. For a token-contract violation, the engine then raises
+  `RolloutContractError`. A harness that catches a refusal and asks again gets the same refusal, until a turn
+  or attempt deadline stops it.
+- The record is final when `run` returns or raises, or when a turn deadline expires. The recorder then cancels
+  a model call that is still open, for example in an agent's HTTP handler, and ignores its result. Thus the
+  grader and the returned rollout see the same record.
 
 ### Cleanup
 
@@ -171,25 +171,23 @@ async with task_machine(task, factory, runtime, cleanup_timeout=30) as machine:
 ### Step harness
 
 `step_harness(open_episode, *, check=accept)` from `rolloutengine.harness` runs an `Episode`, a step-style
-session. `open_episode(context)` starts one episode for each attempt, and an episode class whose constructor
-takes the context can be the function itself:
+loop. `open_episode(context)` starts one episode for each attempt. An episode class whose constructor takes the
+context can be `open_episode`:
 
 1. `prepare()` returns the first `Prompt`. The harness calls `start` with it.
-2. `advance(turn)` executes the turn's operations and returns a `Transition`. If the transition is not done,
-   the harness calls `reply` with its observations and token IDs.
+2. `advance(turn)` runs the turn's operations and returns a `Transition`. If the transition is not done, the
+   harness calls `reply` with its observations and token IDs.
 3. `close()` releases the episode's resources in the attempt's cleanup.
 
 A `Transition` has these fields:
 
-- `done` ends the attempt after this turn. The observations of a done transition are recorded but never sent.
-- `observations` extend the conversation for the next request, and `token_ids` can pin that request's exact
-  prompt tokens.
-- `metrics` holds the step's metrics; `Rollout.metrics` starts from the last step's metrics.
-- `data` is the harness's own record of the step, for example the rewards and token credit that a trainer
-  reads. The engine keeps it unchanged in `RolloutStep.transition` and does not interpret it. A consumer that
-  aligns per-token rewards or credit with a turn's response tokens checks their length against
-  `len(step.turn.response_token_ids)`. `RolloutStep.response_end` is the index of the turn's last response token
-  in the conversation's `response_token_ids`.
+- `done` ends the attempt after this turn. The observations of a done transition are recorded but not sent.
+- `observations` are the new messages of the next request, and `token_ids` can pin its exact prompt tokens.
+- `metrics` holds the step's metrics. `Rollout.metrics` starts from the last step's metrics.
+- `data` is the harness's own record of the step, for example the rewards that a trainer reads. The engine
+  keeps it in `RolloutStep.transition` and does not read it. Per-token values must have one entry for each
+  token in `step.turn.response_token_ids`. `RolloutStep.response_end` is the index of the turn's last response
+  token in the conversation's `response_token_ids`.
 
 ### Agent harness
 
@@ -210,44 +208,26 @@ async def run_agent(context, complete):
 engine = RolloutEngine(machine_factories, {"agent": agent_harness(run_agent)})
 ```
 
-Each `complete` call runs the recorder in the caller's own task:
+`complete` obeys these rules:
 
 - A prompt that extends the last prompt with the model's message, under the same options, is a `reply`. Its
-  `token_ids`, if any, pin the next request. Any other prompt calls `start` and begins a new conversation.
-- `complete` can be called from tasks that the agent does not await, such as HTTP handlers. Only one model
-  request can be open at a time: a call that needs the model while another call waits for it raises
-  `RuntimeError`.
+  `token_ids`, if any, pin the next request. Any other prompt starts a new conversation.
+- The agent can call `complete` from other tasks, such as HTTP handlers. One model request can be open at a
+  time: a call that needs the model while another call waits for it raises `RuntimeError`.
 - The last prompt again, for example after the HTTP client lost the response, gets the same turn without a new
   generation. A call that is cancelled while the model generates loses that generation, and a retry generates
-  again. The record does not change, unless the attempt ends before the next model request: then the record
-  keeps the cancelled request without an answer.
-- When the attempt ends, each call waits until the attempt's cleanup, after grading. Thus an agent that waits
-  does not change the task machine during grading. The cleanup then fails the waiting calls with `RolloutEnded`
-  and cancels the agent. Thus a call in the agent's own task, or in a task that the agent awaits directly,
-  without `asyncio.shield`, gets `CancelledError` in place of `RolloutEnded`. An agent that does not stop,
-  or that fails, within `cleanup_timeout` is a cleanup error. The engine keeps an agent that does not stop until
-  it ends, and logs its failure. The cleanup cancels the agent also when it is in its own shutdown. The
-  machines close when the agent stops, or when its `cleanup_timeout` expires first. Thus a shutdown step that
-  must finish before the machines close runs in its own task, and the agent waits for that task through
-  `asyncio.shield`, then again after the cancellation. A step that takes longer than `cleanup_timeout` can
-  still run while the machines close:
-
-  ```python
-  shutdown = asyncio.create_task(close_resource())
-  try:
-      await asyncio.shield(shutdown)
-  except asyncio.CancelledError:
-      await shutdown
-      raise
-  ```
+  again.
+- When the attempt ends, each call waits until the cleanup, after grading. Thus a waiting agent does not change
+  the task machine during grading. The cleanup then cancels the agent, and the waiting calls in tasks that the
+  agent does not await, such as HTTP handlers, raise `RolloutEnded`.
+- When it is cancelled, the agent must release its own subprocesses and network resources and stop within
+  `cleanup_timeout`. An agent that does not stop in that time is a cleanup error, and the machines close.
 - An agent that fails while the attempt runs ends only its own attempt: `run_task` raises
-  `GradedRolloutInterrupted` with the record so far. A failure after the attempt ended, for example during
-  grading, is a cleanup error. Only a token-contract violation raises `RolloutContractError`.
+  `GradedRolloutInterrupted` with the record so far. A failure after the attempt ends, for example during
+  grading, is a cleanup error.
 - The default `check` rejects a task that declares tools other than a shell binding: final tools, the
   `submit_answer` tool of an `AnswerCall` task, other interaction tools, and tool providers. The agent harness
   does not give these tools to the agent. An agent that serves them passes its own `check`.
-- The agent must release its own subprocesses and network resources when it is cancelled; the engine owns
-  the task machine's lifetime.
 
 ### Shell harness
 
@@ -417,15 +397,15 @@ Durations are wall-clock seconds.
 
 The engine's events carry the conversations: `ConversationStarted` the first request of each conversation,
 then for each turn `ModelTurnCompleted` the assistant message and `TransitionCompleted` the observations, so an
-observer can follow the transcript for any harness. The recorder emits these events when it records a request,
-so a request that is cancelled and sent again gives one event, and the events agree with the record.
-`ToolCallCompleted` carries per-call timing and outcome; its observation is the `TransitionCompleted` message with
-the same `tool_call_id`. Event fields reference the attempt's own messages, so delivery copies nothing.
+observer can follow the transcript for any harness. The events agree with the record: a request that is
+cancelled and sent again gives one event. `ToolCallCompleted` carries per-call timing and outcome. Its
+observation is the `TransitionCompleted` message with the same `tool_call_id`. Event fields are the record's
+own messages, so an observer must not change them.
 
-Harnesses emit their own payloads through `HarnessContext.events`, an `EventSink` whose `emit` never blocks; the shell harness emits `ToolCallCompleted`.
-The engine never awaits the observer.
-Each attempt queues its events, up to 1,024, and one task delivers them in order; a full queue drops new events.
-After the attempt releases its machines, the engine delivers the remaining events within `cleanup_timeout`.
+Harnesses emit their own payloads through `HarnessContext.events`, an `EventSink` whose `emit` never blocks.
+The shell harness emits `ToolCallCompleted`.
+Delivery is in order and never blocks the attempt. When 1,024 events of an attempt wait for delivery, the attempt drops new events.
+After the machines close, the engine delivers the remaining events within `cleanup_timeout`.
 An observer exception is logged and ends delivery for that attempt.
 Neither a slow nor a failing observer changes the rollout's record, grade, or deadlines.
 `Rollout.metrics` counts events the observer did not receive: `observer_dropped_events`, `observer_undelivered_events` and `observer_error_count` appear only when nonzero.
@@ -488,10 +468,10 @@ External cancellation remains cancellation.
 Cleanup errors preserve a completed grade or the original execution failure.
 `grade.diagnostics.cleanup_errors` contains cleanup operation names and exception types.
 `metrics.cleanup_error_count` contains their count.
-Repeated cancellation does not extend a cleanup deadline.
-The engine retains unfinished cleanup operations and late machine creation until their resources can close.
-Late cleanup failures appear in logs after the returned record becomes final.
-Thread-backed harnesses retain their pending operations until their cleanup can safely release resources.
+At its deadline, the engine cancels a cleanup action and records a cleanup error.
+An action that does not stop at once ends in the background.
+A machine whose creation finishes after the attempt ended is closed in the background.
+A failure of this background work appears only in the log.
 
 ## Grading
 
@@ -574,12 +554,9 @@ The engine rejects changed prefixes, empty response evidence, and misaligned log
 The loss mask and log probabilities align with `response_token_ids`, which excludes the initial prompt.
 Model tokens have loss mask 1. Observation tokens have mask 0 and log probability 0.
 The caller applies its training and failure policies when it projects the record.
-Each `start` begins a new `ConversationRecord` with a fresh prefix check, for example after an agent compacts
-its conversation or changes its tools, or after a failed proof attempt. The new `Prompt` holds its public
-messages, its model options, and optionally its exact tokens. The workspace files and the harness's state stay.
-The rollout keeps the earlier conversations, and the trainer selects what to train on.
-Final grading receives the last conversation that has a model turn, so a new conversation whose first request
-fails leaves the earlier one to grade.
+Each `start` begins a new `ConversationRecord` with a fresh prefix check. The rollout keeps the earlier
+conversations, and the trainer selects what to train on. Final grading receives the last conversation that
+has a model turn.
 
 `GenerationLimitReached` retains rendered prompt tokens when the model cannot start another response.
 The engine grades completed state with stop reason `length`.
