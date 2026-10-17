@@ -528,7 +528,6 @@ def marin_temp_bucket(
     *,
     source_prefix: str | None = None,
     temp_prefix: str | None = None,
-    use_overrides: bool = True,
 ) -> str:
     """Return a lifecycle-managed temporary path. Never returns ``None``.
 
@@ -564,14 +563,11 @@ def marin_temp_bucket(
             a different region than the job output path.
         temp_prefix: Explicit scratch destination, taking precedence over
             ``MARIN_TEMP_PREFIX`` and backend scratch routing.
-        use_overrides: Honor ``MARIN_TEMP_PREFIX`` and backend scratch routing.
-            Disable only when resolving a legacy data-local path for reads,
-            never for writes.
     """
     cfg = data_config()
     ttl_days = _resolve_ttl_days(ttl_days, cfg.ttl_days)
 
-    override_prefix = temp_prefix or (os.environ.get(_MARIN_TEMP_PREFIX_ENV) if use_overrides else None)
+    override_prefix = temp_prefix or os.environ.get(_MARIN_TEMP_PREFIX_ENV)
     mp = override_prefix or source_prefix or marin_prefix()
 
     # An explicit destination wins over cluster and backend defaults.
@@ -594,7 +590,7 @@ def marin_temp_bucket(
             return _append_path_prefix(path, prefix)
 
     if s3_bucket:
-        if use_overrides and override_prefix is None:
+        if override_prefix is None:
             store = store_configs().get(s3_data_buckets()[s3_bucket].store)
             if store is not None and store.temp_bucket is not None:
                 s3_bucket = store.temp_bucket.name

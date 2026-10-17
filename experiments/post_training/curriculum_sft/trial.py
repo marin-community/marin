@@ -35,12 +35,7 @@ HF_MODEL = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.20"
 HF_REVISION = "9f2ee50f3d4a12c79b0808bb2414ddba2cdf0098"
 CLUSTER = "cw-rno2a"
 # Generated data outlives individual trials; checkpoints and evaluations expire sooner.
-SOURCE_PREFIX = marin_temp_bucket(
-    ttl_days=30,
-    prefix="curriculum-math-20260924",
-    source_prefix="s3://marin-us-east-02a/marin",
-    use_overrides=False,
-)
+SOURCE_PREFIX = "s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math-20260924"
 S3_TRIAL_PREFIX = marin_temp_bucket(
     ttl_days=7,
     prefix="curriculum-math-20260924",
