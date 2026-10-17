@@ -7,13 +7,16 @@ document. Repeated tokens accumulate probability; a learned sink sends its
 mass back to the vocabulary head. Queries include the current observed token.
 
 `copy_paste_nll` accepts native vocabulary NLL and log partition and returns
-unreduced NLL. `fused_copy_paste_nll` computes those inputs using the TPU fused
-CE kernel. Pass batch-sharded arrays with a complete context and vocabulary
+unreduced NLL. At query position t, pass next-token label x[t+1]; copying can
+only read positions at or before t. Pass batch-sharded arrays with a complete context and vocabulary
 inside each shard. Context/vocabulary parallelism is not implemented. The query
 tile must divide sequence length. Apply native loss weights, reductions and
 router auxiliary loss after this function; final padding and document-boundary
 labels must use the native training mask. The functions do not implement
-generation, cache decoding, z-loss or a trainer/launcher.
+generation, cache decoding, z-loss, a vocabulary kernel or a trainer/launcher.
+Supply NLL and log partition from the same vocabulary computation, preserving
+both gradients. Reconstructing log partition as CE plus a separately computed
+target logit requires numerical and gradient parity with that CE backend.
 
 The head uses two hidden-by-hidden matrices plus two hidden vectors, adding
 `2 * hidden_dim**2 + 2 * hidden_dim` parameters. Initialize these separately
@@ -43,7 +46,8 @@ uv run pytest experiments/grug/moe_cplm/test_head.py
 ```
 
 The CPU tests cover FP32 values/gradients, repeated and absent targets, document
-and causal isolation, disabled copy and zero loss weights. TPU fused CE and
-BF16 parity require accelerator checks separately; the historical d512 run's
-checks are recorded in the research issue. No optimizer updates occur in these
-tests.
+and causal isolation, disabled copy and zero loss weights. Optimized vocabulary
+integration and BF16 parity require accelerator checks separately; the pinned
+historical d512 adapter's checks are recorded in the research issue. They do
+not validate an integration with current Marin. No optimizer updates occur in
+these tests.

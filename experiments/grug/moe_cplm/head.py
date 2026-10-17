@@ -10,7 +10,6 @@ one shard with a complete vocabulary and context; shard the batch externally.
 
 import jax
 import jax.numpy as jnp
-from levanter.kernels.pallas.fused_cross_entropy_loss import fused_cross_entropy_loss_and_logsumexp_penalty
 
 
 def copy_log_probabilities(
@@ -109,44 +108,3 @@ def copy_paste_nll(
     return mixture_nll(native_nll, log_partition, copy_logit, sink_logp, target_logp)
 
 
-def fused_copy_paste_nll(
-    hidden: jax.Array,
-    vocabulary_weight: jax.Array,
-    query_weight: jax.Array,
-    key_weight: jax.Array,
-    copy_weight: jax.Array,
-    sink: jax.Array,
-    tokens: jax.Array,
-    labels: jax.Array,
-    segments: jax.Array,
-    *,
-    query_tile: int,
-) -> jax.Array:
-    """Use TPU fused vocabulary CE without materializing vocabulary logits.
-
-    Vocabulary weights have shape (hidden, vocabulary). Reconstruct log Z from
-    CE plus the exact FP32 target-logit expression used by the fused kernel.
-    Both terms retain gradients. Apply loss masks after this unreduced result.
-    """
-    batch, length, dim = hidden.shape
-    flat_hidden = hidden.reshape(-1, dim)
-    flat_labels = labels.reshape(-1)
-    native_nll = fused_cross_entropy_loss_and_logsumexp_penalty(
-        flat_hidden, flat_labels, vocabulary_weight, reduction=None, logsumexp_weight=None, dtype=jnp.float32
-    )
-    target_weight = jnp.take(vocabulary_weight, flat_labels, axis=1).T
-    target_logit = jnp.sum(flat_hidden.astype(jnp.float32) * target_weight.astype(jnp.float32), -1)
-    log_partition = (native_nll + target_logit).reshape(batch, length)
-    return copy_paste_nll(
-        hidden,
-        query_weight,
-        key_weight,
-        copy_weight,
-        sink,
-        tokens,
-        labels,
-        segments,
-        native_nll.reshape(batch, length),
-        log_partition,
-        query_tile=query_tile,
-    )
