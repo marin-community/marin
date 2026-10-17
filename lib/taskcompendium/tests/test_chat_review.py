@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from contextlib import ExitStack
 
 import pytest
 from finestore.cache import PersistentKvCache
@@ -231,15 +232,14 @@ def test_cache_storage_failure_does_not_discard_provider_response(tmp_path, monk
 def test_campaign_cache_compaction_preserves_values_and_consolidates_lookups(tmp_path):
     root = str(tmp_path / "cache")
     expected = {"first": b"response one", "second": b"response two"}
-    for key, value in expected.items():
+    with ExitStack() as stack:
+        for key, value in expected.items():
+            cache = PersistentKvCache.at(root)
+            stack.callback(cache.close)
+            cache.store(key, value)
+        assert len(ReadView(root).list_shards(BlobTables.DESCRIPTORS)) == 2
+        compact_query_cache(root)
+        assert len(ReadView(root).list_shards(BlobTables.DESCRIPTORS)) == 1
         cache = PersistentKvCache.at(root)
-        cache.store(key, value)
-        cache.close()
-    assert len(ReadView(root).list_shards(BlobTables.DESCRIPTORS)) == 2
-    compact_query_cache(root)
-    assert len(ReadView(root).list_shards(BlobTables.DESCRIPTORS)) == 1
-    cache = PersistentKvCache.at(root)
-    try:
+        stack.callback(cache.close)
         assert cache.load_many(list(expected)) == expected
-    finally:
-        cache.close()
