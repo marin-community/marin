@@ -2807,7 +2807,7 @@ async def test_an_agent_that_does_not_stop_is_a_cleanup_error_and_is_kept_until_
                 except asyncio.CancelledError:
                     pass
             ended.set()
-            raise OSError("The agent failed after its cleanup deadline")
+            raise ValueError("The agent failed after its cleanup deadline")
 
     runner = engine(ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": agent_harness(agent)})
     try:
@@ -2823,7 +2823,7 @@ async def test_an_agent_that_does_not_stop_is_a_cleanup_error_and_is_kept_until_
     await asyncio.sleep(0)
     # The cleanup logs the kept agent's failure. Without it, only asyncio would log the task that nobody awaited.
     assert any(
-        record.name == "rolloutengine.cleanup" and record.exc_info and isinstance(record.exc_info[1], OSError)
+        record.name == "rolloutengine.cleanup" and record.exc_info and isinstance(record.exc_info[1], ValueError)
         for record in caplog.records
     )
 
