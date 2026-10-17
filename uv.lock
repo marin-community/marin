@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12, <3.14"
 resolution-markers = [
     "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-10-marin-root-pipeline' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu' and extra == 'group-10-marin-fray-fray-tpu-test' and extra == 'group-10-marin-iris-dev' and extra == 'group-10-marin-iris-test'",
@@ -6226,6 +6226,7 @@ dependencies = [
     { name = "marin-levanter", extra = ["serve"] },
     { name = "marin-rigging", extra = ["prometheus"] },
     { name = "marin-zephyr" },
+    { name = "marinskyrl-recipe" },
     { name = "markdownify" },
     { name = "mcp" },
     { name = "msgspec" },
@@ -6394,6 +6395,7 @@ requires-dist = [
     { name = "marin-levanter", extras = ["serve"], editable = "lib/levanter" },
     { name = "marin-rigging", extras = ["prometheus"], editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
+    { name = "marinskyrl-recipe", git = "https://github.com/marin-community/MarinSkyRL.git?subdirectory=packages%2Fmarinskyrl-recipe&rev=8b07adf11a232709856d0f1300456818ac01765e" },
     { name = "markdownify", specifier = ">=0.14.1" },
     { name = "mcp", specifier = ">=2" },
     { name = "msgspec", specifier = ">=0.18.0" },
@@ -6406,7 +6408,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.0" },
     { name = "plotly" },
     { name = "pyarrow", specifier = ">=23.0.0" },
-    { name = "pydantic", specifier = "<3" },
+    { name = "pydantic", specifier = ">=2.12.2,<3" },
     { name = "regex" },
     { name = "requests", specifier = ">=2.33.0" },
     { name = "resiliparse", specifier = ">=0.17.2", index = "https://marin-community.github.io/chatnoir-resiliparse/simple" },
@@ -7869,6 +7871,14 @@ test = [
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+]
+
+[[package]]
+name = "marinskyrl-recipe"
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?subdirectory=packages%2Fmarinskyrl-recipe&rev=8b07adf11a232709856d0f1300456818ac01765e#8b07adf11a232709856d0f1300456818ac01765e" }
+dependencies = [
+    { name = "pydantic" },
 ]
 
 [[package]]

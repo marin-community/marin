@@ -6,7 +6,6 @@
 from dataclasses import dataclass, replace
 
 import click
-import yaml
 from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
@@ -17,16 +16,26 @@ from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
+    MARIN_RECIPE_POLICY,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    SkyRLHardware,
     SkyRLRetentionPolicy,
     SkyRLRun,
-    SkyRLRuntime,
-    SkyRLRuntimeProfile,
     SkyRLSpec,
-    SkyRLTopology,
     skyrl_step,
+)
+from marinskyrl.recipe_schema import (
+    CheckpointCallback,
+    ContextBudget,
+    Generator,
+    HFModelSaveCallback,
+    InferenceStatsCallback,
+    RecipePatch,
+    SkyRLRecipe,
+    Trainer,
+    TrajectoryRetention,
 )
 from rigging.filesystem.storage_path import prefix_join
 from zephyr.writers import write_parquet_file
@@ -41,9 +50,8 @@ from experiments.post_training.cat_count_canary.launcher import (
     MODELS,
     QWEN_SOURCE,
     SEED,
-    role_plan,
     run_canary,
-    training_config,
+    training_recipe,
 )
 
 BATCH_SIZE = 8
@@ -99,45 +107,44 @@ def write_validation_data(config: ValidationDataConfig) -> None:
 
 
 def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
-    config = training_config(
+    recipe = training_recipe(
         preset="dry",
         lane="sync",
         batch_size=BATCH_SIZE,
         group_size=GROUP_SIZE,
         micro_train_batch_size=MICRO_BATCH_SIZE,
+    ).merge(
+        RecipePatch(
+            context_budget=ContextBudget(request_window_tokens=1024, max_new_tokens_per_turn=128, max_turns=2),
+            trainer=Trainer(
+                max_steps=steps,
+                update_epochs_per_batch=1,
+                step_wise_training=mode == "step",
+                eval_before_train=False,
+                eval_interval=-1,
+                ckpt_interval=steps,
+                hf_save_interval=steps,
+                resume_mode="none",
+                logger="console",
+                project_name="marin-task-session-validation",
+                callbacks=(
+                    CheckpointCallback(type="checkpoint", save_steps=steps),
+                    HFModelSaveCallback(type="hf_model_save", save_steps=steps),
+                    InferenceStatsCallback(
+                        type="inference_stats", log_every_steps=1, log_to_console=True, log_to_tracker=True
+                    ),
+                ),
+            ),
+            generator=Generator(
+                trajectory_retention=TrajectoryRetention(
+                    sample_count_per_step=BATCH_SIZE,
+                    max_bytes_per_step=RETENTION_BYTES_PER_STEP,
+                    max_bytes_per_run=RETENTION_BYTES_PER_RUN,
+                    required=True,
+                )
+            ),
+        )
     )
-    config["context_budget"] = {
-        "request_window_tokens": 1024,
-        "max_new_tokens_per_turn": 128,
-        "max_turns": 2,
-    }
-    trainer = config["trainer"]
-    trainer.update(
-        {
-            "max_steps": steps,
-            "update_epochs_per_batch": 1,
-            "step_wise_training": mode == "step",
-            "eval_before_train": False,
-            "eval_interval": -1,
-            "ckpt_interval": steps,
-            "hf_save_interval": steps,
-            "resume_mode": "none",
-            "logger": "console",
-            "project_name": "marin-task-session-validation",
-        }
-    )
-    # Keep checkpoint and token evidence. Omit evaluation and database registration.
-    trainer["callbacks"] = [
-        {"type": "checkpoint", "save_steps": steps},
-        {"type": "hf_model_save", "save_steps": steps},
-        {"type": "inference_stats", "log_every_steps": 1, "log_to_console": True, "log_to_tracker": True},
-    ]
-    config["generator"]["trajectory_retention"] = {
-        "sample_count_per_step": BATCH_SIZE,
-        "max_bytes_per_step": RETENTION_BYTES_PER_STEP,
-        "max_bytes_per_run": RETENTION_BYTES_PER_RUN,
-        "required": True,
-    }
     rows = BATCH_SIZE * steps
     data_identity = fingerprint_hash(
         canonical_json(
@@ -158,13 +165,15 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
     model = MODELS[DEFAULT_MODEL].step
     download = model.build_config(StepContext.for_fingerprint(model.runtime_args, model.deps))
     adopted_model = ArtifactStep.adopt(model.name, model.version, QWEN_SOURCE, kind=model.artifact_type)
-    recipe_fingerprint = fingerprint_hash(canonical_json({"config": config, "data": data_identity}))
+    retention = SkyRLRetentionPolicy(resume_checkpoint_count=1)
+    identity_document = SkyRLRecipe.combine(base=recipe, authored=recipe, marin=MARIN_RECIPE_POLICY).to_skyrl()
+    identity_document["trainer"].update(seed=SEED, max_ckpts_to_keep=retention.resume_checkpoint_count)
+    recipe_fingerprint = fingerprint_hash(canonical_json({"config": identity_document, "data": data_identity}))
     run = skyrl_step(
         SkyRLSpec(
             name=user_owned_name(f"{RUN_NAME}/{mode}/{recipe_fingerprint}"),
             version=version,
-            config_yaml=yaml.safe_dump(config, sort_keys=False),
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+            recipe=recipe,
             model=ArtifactHfModel(
                 step=adopted_model,
                 relative_path="",
@@ -173,15 +182,8 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
             ),
             train_data=(ArtifactDataSource(data, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(data, relative_path=VALIDATION_FILENAME),),
-            topology=SkyRLTopology(
-                num_nodes=2,
-                gpus_per_node=GPUS_PER_NODE,
-                gpu_variant=GPU_VARIANT,
-                role_plan=role_plan(
-                    batch_size=BATCH_SIZE, group_size=GROUP_SIZE, micro_train_batch_size=MICRO_BATCH_SIZE
-                ),
-            ),
-            retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
+            hardware=SkyRLHardware(gpus_per_node=GPUS_PER_NODE, gpu_variant=GPU_VARIANT),
+            retention=retention,
             seed=SEED,
         ),
         IrisSkyRLExecution(

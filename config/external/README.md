@@ -84,7 +84,7 @@ The external configurations intentionally model only what Marin needs:
   taxonomy advance atomically. Harbor is absent from Marin's workspace lock.
 - `MarinSkyRL` tracks the repository-root `marinskyrl` distribution. The
   external lock resolves its CPU-safe base for the isolated launcher. The
-  launcher synchronizes the selected `fsdp` or `megatron` profile from that
+  launcher synchronizes the `megatron` profile from that
   revision's frozen root lock inside the cluster's standard Iris task image.
   The lock overrides Rigging's source because a pinned Marin Git workspace
   advertises its development version while the launcher needs published Marin
@@ -110,3 +110,7 @@ directory, distribution, and generated constant in `config/update-external.py`,
 then add a `migration.toml` section for it. Consumers should use the generated
 `ExternalDependency.requirement()` rather than reading a lockfile or copying its
 commit.
+
+MarinSkyRL also supplies the `marinskyrl-recipe` Git-subdirectory dependency in
+`lib/marin/pyproject.toml`. Its root-lock commit matches the external lock and generated pin.
+The MarinSkyRL updater refreshes these files together; `--check` compares their local identities.

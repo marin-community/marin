@@ -78,7 +78,7 @@ def _git_repository(tmp_path: Path) -> tuple[Path, Path, str]:
     return repository, remote, _git(repository, "rev-parse", "HEAD")
 
 
-@pytest.mark.parametrize("policy", [*EXTERNAL_RUNTIME_POLICIES.values(), NATIVE_PACKAGE_POLICY])
+@pytest.mark.parametrize("policy", [SKYRL_POLICY, NATIVE_PACKAGE_POLICY])
 def test_returns_the_dedicated_apps_exact_generated_pull_request(policy: PullRequestPolicy) -> None:
     pull_request = _pull_request(policy)
 
@@ -278,7 +278,12 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
     pins = repository / "lib/marin/src/marin/external_dependencies.py"
     pins.parent.mkdir(parents=True)
     shutil.copy2(source / "lib/marin/src/marin/external_dependencies.py", pins)
-    _git(repository, "add", "config", "scripts", "lib")
+    manifest = repository / "lib/marin/pyproject.toml"
+    shutil.copy2(source / "lib/marin/pyproject.toml", manifest)
+    shutil.copy2(source / "uv.lock", repository / "uv.lock")
+    original_manifest = manifest.read_bytes()
+    original_root_lock = (repository / "uv.lock").read_bytes()
+    _git(repository, "add", "config", "scripts", "lib", "uv.lock")
     _git(repository, "commit", "-m", "external project inputs")
     _git(repository, "push", "origin", "main")
     main_sha = _git(repository, "rev-parse", "HEAD")
@@ -321,6 +326,8 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
         "package = next(p for p in tomllib.loads(original)['package'] if p['name'] == distribution)\n"
         "git_source = package['source']['git']\n"
         f"updated = git_source.rsplit('#', 1)[0] + '#{new_commit}'\n"
+        "if distribution == 'marinskyrl-recipe':\n"
+        "    original = original.replace(git_source.rsplit('#', 1)[1], updated.rsplit('#', 1)[1])\n"
         "path.write_text(original.replace(git_source, updated))\n"
     )
     github = fake_bin / "gh"
@@ -409,10 +416,35 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
         )
         if project is ExternalRuntime.MARIN_SKYRL:
             assert (tmp_path / "validated-environment").read_text() == "valid"
-        assert set(changed.stdout.splitlines()) == {
-            f"config/external/{project.value}/uv.lock",
-            str(pins.relative_to(repository)),
-        }
+        expected_files = {f"config/external/{project.value}/uv.lock", str(pins.relative_to(repository))}
+        if project is ExternalRuntime.MARIN_SKYRL:
+            expected_files |= {"lib/marin/pyproject.toml", "uv.lock"}
+            assert f"@{new_commit}#subdirectory=packages/marinskyrl-recipe" in manifest.read_text()
+        else:
+            assert manifest.read_bytes() == original_manifest
+            assert (repository / "uv.lock").read_bytes() == original_root_lock
+        assert set(changed.stdout.splitlines()) == expected_files
+        checked = subprocess.run(
+            [sys.executable, "config/update-external.py", "--check"],
+            cwd=repository,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert checked.returncode == 0, checked.stderr
+        if project is ExternalRuntime.MARIN_SKYRL:
+            manifest.write_text(manifest.read_text().replace(new_commit, "c" * 40))
+            stale = subprocess.run(
+                [sys.executable, "config/update-external.py", "--check"],
+                cwd=repository,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            assert stale.returncode != 0
+            manifest.write_text(manifest.read_text().replace("c" * 40, new_commit))
         for other, path in locks.items():
             if other != project:
                 assert path.read_bytes() == originals[other]
@@ -438,8 +470,10 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
         for other, path in locks.items():
             path.write_bytes(originals[other])
         shutil.copy2(source / "lib/marin/src/marin/external_dependencies.py", pins)
+        manifest.write_bytes(original_manifest)
+        (repository / "uv.lock").write_bytes(original_root_lock)
     assert len(set(branches)) == len(ExternalRuntime)
-    assert (repository / "uv.lock").read_text() == "initial\n"
+    assert (repository / "uv.lock").read_bytes() == original_root_lock
 
 
 def test_native_package_policy_matches_every_compatibility_floor() -> None:

@@ -1058,6 +1058,59 @@ class SelectionResult:
     suite_test_paths: dict[str, list[str]]
 
 
+def recipe_package_only_change(base_ref: str | None, repo_root: Path) -> bool:
+    """Recognize a root lock and Marin requirement change confined to the schema package."""
+    if base_ref is None:
+        return False
+    try:
+        merge_base = subprocess.run(
+            ["git", "merge-base", base_ref, "HEAD"], cwd=repo_root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        def documents(path: str) -> tuple[dict, dict]:
+            before = subprocess.run(
+                ["git", "show", f"{merge_base}:{path}"], cwd=repo_root, capture_output=True, text=True, check=True
+            ).stdout
+            return tomllib.loads(before), tomllib.loads((repo_root / path).read_text())
+
+        before, after = documents("uv.lock")
+        if {key: value for key, value in before.items() if key not in {"package", "revision"}} != {
+            key: value for key, value in after.items() if key not in {"package", "revision"}
+        }:
+            return False
+        recipe = "marinskyrl-recipe"
+
+        def packages(lock: dict) -> list[str]:
+            result = []
+            for entry in lock["package"]:
+                if entry["name"] == recipe:
+                    continue
+                entry = dict(entry)
+                if entry["name"] == "marin-core":
+                    for field in ("dependencies",):
+                        if field in entry:
+                            entry[field] = [item for item in entry[field] if item["name"] != recipe]
+                    if "metadata" in entry:
+                        entry["metadata"] = dict(entry["metadata"])
+                        if "requires-dist" in entry["metadata"]:
+                            entry["metadata"]["requires-dist"] = [
+                                item for item in entry["metadata"]["requires-dist"] if item["name"] != recipe
+                            ]
+                result.append(json.dumps(entry, sort_keys=True))
+            return sorted(result)
+
+        if packages(before) != packages(after) or not any(entry["name"] == recipe for entry in after["package"]):
+            return False
+        manifests = documents("lib/marin/pyproject.toml")
+        for manifest in manifests:
+            manifest["project"]["dependencies"] = [
+                item for item in manifest["project"]["dependencies"] if not item.startswith(f"{recipe} @ ")
+            ]
+        return manifests[0] == manifests[1]
+    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError):
+        return False
+
+
 def _select_changed_tests(
     changed_files: list[str],
     repo_root: Path,
@@ -1066,6 +1119,9 @@ def _select_changed_tests(
     run_all_tests: bool = False,
     base_ref: str | None = None,
 ) -> SelectionResult:
+    if "uv.lock" in changed_files and recipe_package_only_change(base_ref, repo_root):
+        changed_files = [path for path in changed_files if path not in {"uv.lock", "lib/marin/pyproject.toml"}]
+        changed_files.append("config/external/MarinSkyRL/uv.lock")
     classification = classify(changed_files, repo_root, broad_triggers)
     source_build_scopes = set(classification.native_changed)
 

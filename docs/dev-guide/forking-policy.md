@@ -10,13 +10,16 @@ how Marin pins a fork and how the refresh runs.
 
 Forks except XLA are pinned under `config/external/`. Those pins feed
 `config/update-external.py`, which regenerates
-`lib/marin/src/marin/external_dependencies.py`; nothing else imports a fork
-revision directly. XLA uses the workspace wheel pin described below. There
-are four pin kinds:
+`lib/marin/src/marin/external_dependencies.py`. MarinSkyRL's recipe package shares that
+launcher pin through its library requirement. XLA uses the workspace wheel pin below.
+The pin kinds are:
 
 - Isolated uv lock (`evalchemy`, `harbor`, `MarinSkyRL`): the fork is a git
   dependency in `config/external/<fork>/uv.lock`. `uv run
   config/update-external.py <fork>` advances the lock and regenerates the pins.
+- Git-subdirectory library (`marinskyrl-recipe`): `lib/marin/pyproject.toml` requires
+  `packages/marinskyrl-recipe` from the MarinSkyRL repository at the isolated launcher's commit.
+  The MarinSkyRL updater refreshes both locks and the requirement together.
 - Descriptor SHA (`vllm` TPU source, `tpu-inference`): the exact pair lives in
   `config/external/vllm/tpu.toml`. Its vLLM commit comes from the same maintained
   `main` lineage as GPU releases. The stack runs from an isolated `uvx`

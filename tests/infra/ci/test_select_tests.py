@@ -141,6 +141,58 @@ def test_launch_documents_run_for_config_and_bot_changes_without_import_edges(tm
     assert paths == ["tests/rl/test_rl_launch_documents.py"]
 
 
+def test_recipe_only_lock_update_selects_launch_documents_and_rejects_other_changes(tmp_path: Path) -> None:
+    _commit_base_tpu_workspace(tmp_path)
+    repository = "https://github.com/marin-community/MarinSkyRL.git"
+    old = "a" * 40
+    new = "b" * 40
+    requirement = f"marinskyrl-recipe @ git+{repository}@{old}#subdirectory=packages/marinskyrl-recipe"
+    write(tmp_path, "lib/marin/pyproject.toml", f'[project]\ndependencies = ["{requirement}"]\n')
+    lock = (
+        (tmp_path / "uv.lock").read_text()
+        + f"""
+[[package]]
+name = "marinskyrl-recipe"
+version = "0.1.0"
+source = {{ git = "{repository}?subdirectory=packages%2Fmarinskyrl-recipe#{old}" }}
+[[package]]
+name = "marin-core"
+source = {{ editable = "lib/marin" }}
+dependencies = [{{ name = "marinskyrl-recipe" }}]
+[package.metadata]
+requires-dist = [
+{{ name = "marinskyrl-recipe", git = "{repository}?subdirectory=packages%2Fmarinskyrl-recipe&rev={old}" }}
+]
+"""
+    )
+    write(tmp_path, "uv.lock", lock)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "recipe"],
+        cwd=tmp_path,
+        check=True,
+    )
+    base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    write(tmp_path, "uv.lock", lock.replace(old, new))
+    write(tmp_path, "lib/marin/pyproject.toml", f'[project]\ndependencies = ["{requirement.replace(old, new)}"]\n')
+    write(tmp_path, "tests/rl/test_rl_launch_documents.py", "def test_launch_documents():\n    assert True\n")
+    changed = ["uv.lock", "lib/marin/pyproject.toml"]
+    selection = select_changed_tests(changed, tmp_path, base_ref=base)
+    assert leg_paths(selection.matrix, "marin") == ["tests/rl/test_rl_launch_documents.py"]
+    assert selection.suites == []
+    assert len(selection.matrix) == 1
+    manifest = f'[project]\ndependencies = ["{requirement.replace(old, new)}"]\n'
+    for changed_lock, changed_manifest in (
+        (lock.replace(old, new).replace('name = "shared"', 'name = "changed-shared"'), manifest),
+        (lock.replace(old, new), manifest.replace("[project]", '[project]\ndescription = "unrelated change"')),
+    ):
+        write(tmp_path, "uv.lock", changed_lock)
+        write(tmp_path, "lib/marin/pyproject.toml", changed_manifest)
+        broad = select_changed_tests(changed, tmp_path, base_ref=base)
+        assert "shellbox-unit" in broad.suites
+        assert len(broad.matrix) > 1
+
+
 @pytest.mark.parametrize("select_tests", [select_changed_tests, select_local_tests])
 @pytest.mark.parametrize(
     "changed_file",

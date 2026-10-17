@@ -70,7 +70,7 @@ Marin experiment
                          |
                          v
 MarinSkyRL launch host
-  compose skyrl recipe against ppo_base_config once
+  compose skyrl recipe against ppo_base_config
   inject canonical model/data/output values
   validate topology, strategy, entrypoint, TP, and batches
                          |
@@ -92,7 +92,7 @@ protocol because no independently versioned message exchange exists.
 
 Experiments render their final source recipe directly into the `skyrl` mapping. There is no
 `SkyRLSpec.overrides` escape hatch and MarinSkyRL never translates fields into dotted command-line
-arguments. The launch host resolves Hydra defaults once; the resolved document is the input to
+arguments. The launch host resolves Hydra defaults; the resolved document is the input to
 allocation, task bootstrap, training, checkpoint export, and the persisted run manifest.
 
 ```text
@@ -106,53 +106,80 @@ This shape keeps validation mechanical. Adding a launch setting means adding one
 reading it where the behavior lives; it does not require adding matching CLI flags, argv builders, and
 forwarding tests at every process boundary.
 
-## SkyRL role plan
+## Typed recipes
 
-`SkyRLRolePlan` is the source of truth for policy, rollout, and batch geometry. Every parallelism
-field is required:
+`marinskyrl.recipe_schema` contains Schema classes generated from MarinSkyRL's YAML and the immutable,
+sparse Recipe API. Only explicitly authored fields appear in `recipe.to_skyrl()`. Hydra supplies
+runtime defaults on the launch host.
 
-- policy node and per-node GPU counts;
-- inference engine count;
-- tensor, pipeline, data, and expert parallel sizes;
-- train, policy mini-batch, and per-GPU micro-batch sizes;
-- samples per prompt and whether roles are colocated.
+Construct a `SkyRLRecipe` from typed sections and pass it as `SkyRLSpec(recipe=..., hardware=...)`.
+`SkyRLHardware` declares the GPU variant and GPUs per node. The launcher derives physical node
+count and runtime profile from the composed recipe.
 
-Render these values into `config_yaml` from the role plan. Do not maintain parallel literals or
-dotted Hydra overrides for the same values. `SkyRLSpec` compares the rendered YAML to the role plan
-when the experiment constructs the artifact, then writes that recipe into the launch document.
+```python
+from marinskyrl.recipe_schema import Algorithm, ContextBudget, Generator, Placement, SkyRLRecipe, Trainer
+from marin.rl.skyrl import SkyRLHardware
 
-For one inference engine:
-
-```text
-engine slice = tensor parallel * pipeline parallel
-engine ranks = engine slice * data parallel
+recipe = SkyRLRecipe(
+    context_budget=ContextBudget(request_window_tokens=2048, max_new_tokens_per_turn=1024, max_turns=1),
+    trainer=Trainer(
+        placement=Placement(colocate_all=False, colocate_policy_ref=True,
+                            policy_num_nodes=1, policy_num_gpus_per_node=8,
+                            ref_num_nodes=1, ref_num_gpus_per_node=8),
+        train_batch_size=64, policy_mini_batch_size=32, micro_train_batch_size_per_gpu=4,
+        algorithm=Algorithm(use_kl_loss=True),
+    ),
+    generator=Generator(backend="vllm", num_inference_engines=8,
+                        inference_engine_tensor_parallel_size=1,
+                        inference_engine_pipeline_parallel_size=1,
+                        inference_engine_data_parallel_size=1,
+                        inference_engine_expert_parallel_size=1, n_samples_per_prompt=4),
+)
+hardware = SkyRLHardware(gpu_variant="H100", gpus_per_node=8)
 ```
 
-For disaggregated roles, one engine's ranks must fit within one node. For colocated roles, each
-TP-by-PP slice must fit within and divide a policy node; DP replicas occupy separate slices. Expert
-parallel size must divide `tensor parallel * data parallel`; pipeline stages form separate expert
-groups. Total planned GPUs are:
+Marin requires explicit placement, inference geometry, batch sizes, samples per prompt,
+`trainer.algorithm.use_kl_loss` and backend. The adapter contributes strategy="megatron" and
+run_engines_locally=True as a fixed named part. It checks `model_fields_set`
+for these declarations and requires policy GPU width to match the hardware. Read authored policy
+through typed attributes, such as `recipe.trainer.placement.policy_num_nodes`; effective values come
+from the launcher's prepare mode. MarinSkyRL owns resource arithmetic and trainer batch validation.
 
-```text
-policy GPUs = policy nodes * policy GPUs per node
-rollout GPUs = engine count * engine ranks
+Use `SkyRLRecipe.combine(base=BASE, preset=PRESET, policy=POLICY, arm=ARM)` to combine a base with
+independent named contributions. Contributions may override the base. Different values between
+contributions at one leaf, or at a parent and its descendant, raise with both part names.
+Lists are whole values. Use `recipe.merge(PATCH)` for an intentional override, such as optimizer
+or model parallelism tuning. Pass computed checkpoint schedules as another named part so a setting
+that contradicts the schedule raises.
 
-separate roles: policy GPUs + rollout GPUs
-colocated roles: policy GPUs, which must equal rollout GPUs
-```
+`recipe.with_settings(["context_budget.max_turns=4"])` parses values using schema types, merges them
+onto the complete document, and validates it. Scalar settings use typed strings; arrays and mappings
+use JSON. Unknown fields, wrong types and owned fields identify their paths during construction.
+A derived token limit names `context_budget` as its owner. Run seed, retention, model paths and
+other launch-owned values belong in the launch envelope. Harbor and engine kwargs remain intentional
+open mappings with the shared ownership checks.
 
-That total must equal `num_nodes * gpus_per_node`. For example, four 8-GPU policy nodes plus four
-node-sized rollout engines require 64 GPUs. Leaving rollout DP at one describes only 36 GPUs and is
-rejected during graph construction.
+## Package and launcher pin
 
-The preflight also requires positive dimensions, checks batch divisibility, and rejects a runtime
-profile whose installed backend contradicts `trainer.strategy`. The `fully_async` entry point has a
-stricter batch contract: `train_batch_size` must equal `policy_mini_batch_size`.
+Marin-core depends on `marinskyrl-recipe` through the MarinSkyRL Git repository's
+`packages/marinskyrl-recipe` subdirectory. The package ships the author schema and depends only
+on pydantic. Its commit matches `MARIN_SKYRL.commit` and the isolated launcher's frozen lock.
+`config/update-external.py MarinSkyRL` refreshes the requirement, root lock, external lock and
+generated pins together. `--check` verifies those identities locally.
+
+The PyPI build of `marin-core` strips direct URL requirements. Users of that artifact must install
+`marinskyrl-recipe` separately from the same Git commit before importing RL launch modules.
+The locked workspace installs it automatically.
+
+A schema-only root lock update selects the launch-document compatibility test. That test builds
+every supported producer configuration and loads it through production's isolated frozen project.
+Changes to other dependencies retain their ordinary test selection. Before a breaking pin update
+lands, its producer migration must pass this compatibility test.
 
 ## Artifact and runtime boundaries
 
 Identity-bearing inputs belong in `SkyRLSpec`: the pinned MarinSkyRL runtime, model and tokenizer,
-data artifacts, topology, seed, retention, and the rendered config. Cluster routing,
+data artifacts, hardware, seed, retention, and the typed recipe. Cluster routing,
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
 not fork artifact identity.
 
@@ -162,7 +189,7 @@ temporary-storage helper for checkpoints and trajectories so paths have a bounde
 not repeat a source bucket prefix.
 
 The temporary checkpoint root is derived from the RL artifact name and version, not only from the
-runtime commit. When `SkyRLRuntime.commit` changes, use a fresh RL artifact version. Reusing the old
+runtime commit. When `MARIN_SKYRL.commit` changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old
 runtime. Reuse a version across a runtime repin only after establishing checkpoint compatibility or
 selecting a fresh checkpoint root.

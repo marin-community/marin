@@ -26,6 +26,7 @@ from datetime import date
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
+from urllib.parse import parse_qs, urlsplit
 
 PYPI_PROJECT_JSON_URL = "https://pypi.org/pypi/{distribution}/json"
 PYPI_VERSION_JSON_URL = "https://pypi.org/pypi/{distribution}/{version}/json"
@@ -603,8 +604,9 @@ def validate_targeted_lock_change(
     version: str,
     *,
     allowed_packages: Iterable[str] = (),
+    git_source: str | None = None,
 ) -> None:
-    """Reject lock changes outside the released distribution and requirement owner."""
+    """Reject lock changes outside the target distribution and requirement owner."""
     before_metadata, before_packages = _canonical_package_entries(before)
     after_metadata, after_packages = _canonical_package_entries(after)
     if before_metadata != after_metadata:
@@ -625,8 +627,20 @@ def validate_targeted_lock_change(
     if len(target_entries) != 1 or target_entries[0].get("version") != expected:
         versions = sorted(entry.get("version") for entry in target_entries)
         raise ValueError(f"Expected {distribution}=={expected} in uv.lock, found {versions}")
-    if "registry" not in target_entries[0].get("source", {}):
-        raise ValueError(f"Expected {distribution}=={expected} to resolve from a registry")
+    source = target_entries[0].get("source", {})
+    if git_source is None:
+        if "registry" not in source:
+            raise ValueError(f"Expected {distribution}=={expected} to resolve from a registry")
+    else:
+        actual, target = urlsplit(source.get("git", "")), urlsplit(git_source)
+        if (actual.scheme, actual.netloc, actual.path, actual.fragment, parse_qs(actual.query).get("subdirectory")) != (
+            target.scheme,
+            target.netloc,
+            target.path,
+            target.fragment,
+            parse_qs(target.query).get("subdirectory"),
+        ) or re.fullmatch(r"[0-9a-f]{40}", actual.fragment) is None:
+            raise ValueError(f"Expected {distribution} to resolve from {git_source}")
 
 
 def emit_github_output(path: Path | None, **values: str) -> None:

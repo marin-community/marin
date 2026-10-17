@@ -11,6 +11,7 @@
 import argparse
 import json
 import re
+import runpy
 import shutil
 import subprocess
 import tempfile
@@ -22,6 +23,9 @@ from urllib.parse import parse_qs, quote, urlsplit, urlunsplit
 
 ROOT = Path(__file__).parents[1]
 EXTERNAL_ROOT = Path(__file__).with_name("external")
+RECIPE_MANIFEST = ROOT / "lib/marin/pyproject.toml"
+RECIPE_SUBDIRECTORY = "packages/marinskyrl-recipe"
+RECIPE_DISTRIBUTION = "marinskyrl-recipe"
 GENERATED_PINS = ROOT / "lib" / "marin" / "src" / "marin" / "external_dependencies.py"
 GIT_SUFFIX = ".git"
 GIT_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
@@ -66,6 +70,7 @@ class LockedDependency:
 class LockedGitSource:
     repository: str
     commit: str
+    subdirectory: str | None = None
 
 
 @dataclass(frozen=True)
@@ -128,10 +133,14 @@ def locked_git_source(lock_path: Path, distribution: str) -> LockedGitSource:
     commit = parsed.fragment
     if GIT_COMMIT_PATTERN.fullmatch(commit) is None:
         raise ValueError(f"{lock_path}: expected a Git source ending in a full commit, found {source!r}")
-    if "subdirectory" in parse_qs(parsed.query):
-        raise ValueError(f"{lock_path}: expected a root Git source, found {source!r}")
+    subdirectories = parse_qs(parsed.query, keep_blank_values=True).get("subdirectory", [None])
+    if len(subdirectories) != 1 or (
+        subdirectories[0] is not None
+        and (not subdirectories[0] or any(part in {"", ".", ".."} for part in subdirectories[0].split("/")))
+    ):
+        raise ValueError(f"{lock_path}: invalid Git subdirectory in {source!r}")
     repository = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-    return LockedGitSource(repository=repository, commit=commit)
+    return LockedGitSource(repository=repository, commit=commit, subdirectory=subdirectories[0])
 
 
 def tpu_fork_source(path: Path, name: str) -> LockedGitSource:
@@ -547,6 +556,41 @@ def validate_marinskyrl_environment(project: ExternalProject) -> None:
         subprocess.run(["uv", "pip", "check", "--python", str(directory / ".venv" / "bin" / "python")], check=True)
 
 
+def synchronize_recipe_package(dependency: LockedDependency, *, check: bool) -> bool:
+    """Synchronize the recipe pin, returning True if requirement and lock already matched."""
+    requirement = (
+        f"{RECIPE_DISTRIBUTION} @ git+{dependency.repository}@{dependency.commit}" f"#subdirectory={RECIPE_SUBDIRECTORY}"
+    )
+    original = RECIPE_MANIFEST.read_text()
+    expected, count = re.subn(r"marinskyrl-recipe @ [^\"]+", requirement, original)
+    if count != 1:
+        raise ValueError(f"{RECIPE_MANIFEST}: expected one recipe package requirement")
+    expected_source = LockedGitSource(dependency.repository, dependency.commit, RECIPE_SUBDIRECTORY)
+    lock_path = ROOT / "uv.lock"
+    if check:
+        return expected == original and locked_git_source(lock_path, RECIPE_DISTRIBUTION) == expected_source
+    before = lock_path.read_text()
+    try:
+        RECIPE_MANIFEST.write_text(expected)
+        subprocess.run(["uv", "lock", "--project", str(ROOT), "--upgrade-package", RECIPE_DISTRIBUTION], check=True)
+        if locked_git_source(lock_path, RECIPE_DISTRIBUTION) != expected_source:
+            raise ValueError("recipe package and launcher commits differ")
+        validator = runpy.run_path(str(ROOT / "scripts/ci/package_release.py"))["validate_targeted_lock_change"]
+        validator(
+            before,
+            lock_path.read_text(),
+            RECIPE_DISTRIBUTION,
+            locked_package(lock_path, RECIPE_DISTRIBUTION)["version"],
+            allowed_packages=("marin-core",),
+            git_source=f"{dependency.repository}?subdirectory={RECIPE_SUBDIRECTORY}#{dependency.commit}",
+        )
+    except BaseException:
+        RECIPE_MANIFEST.write_text(original)
+        lock_path.write_text(before)
+        raise
+    return expected == original and before == lock_path.read_text()
+
+
 def regenerate_generated_pins(dependencies: tuple[LockedDependency, ...], *, check: bool) -> bool:
     """Render external_dependencies.py from the locks, TPU fork pins, and promoted GPU release.
 
@@ -672,8 +716,12 @@ def main() -> None:
         updates = dependency_updates(previous_dependencies, dependencies)
         selected_dependencies = tuple(dependency for dependency in dependencies if dependency.project in selected)
         args.summary_file.write_text(render_summary(selected_dependencies, updates))
+    recipe_match = synchronize_recipe_package(
+        next(dependency for dependency in dependencies if dependency.project.config_name == MARINSKYRL_CONFIG_NAME),
+        check=args.check or not any(project.config_name == MARINSKYRL_CONFIG_NAME for project in selected),
+    )
     pins_match = regenerate_generated_pins(dependencies, check=args.check)
-    if args.check and not pins_match:
+    if args.check and not (pins_match and recipe_match):
         raise SystemExit("external dependency pins are stale; run `uv run config/update-external.py`")
 
 

@@ -408,6 +408,24 @@ source = { registry = "https://pypi.org/simple" }
     with pytest.raises(ValueError, match="typing-extensions"):
         validate_targeted_lock_change(before, unrelated, "marin-iris-native", "0.1.4.dev30194118926")
 
+    old_source = (
+        "https://github.com/marin-community/MarinSkyRL.git?subdirectory=packages%2Fmarinskyrl-recipe#" + "a" * 40
+    )
+    new_source = old_source.replace("a" * 40, "b" * 40)
+    git_before = before.replace("marin-iris-native", "marinskyrl-recipe").replace(
+        'registry = "https://pypi.org/simple"', f'git = "{old_source}"', 1
+    )
+    git_after = git_before.replace(old_source, new_source)
+    validate_targeted_lock_change(git_before, git_after, "marinskyrl-recipe", "0.1.3", git_source=new_source)
+    with pytest.raises(ValueError):
+        validate_targeted_lock_change(
+            git_before,
+            git_after.replace("packages%2Fmarinskyrl-recipe", "packages%2Fother"),
+            "marinskyrl-recipe",
+            "0.1.3",
+            git_source=new_source,
+        )
+
 
 def test_validate_targeted_lock_change_accepts_newer_uv_lock_revision() -> None:
     before = """\

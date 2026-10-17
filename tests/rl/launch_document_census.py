@@ -1,9 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import inspect
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from functools import partial
 from itertools import product
 from pathlib import Path
@@ -59,14 +58,12 @@ def _iceball_step() -> ArtifactStep[SkyRLRun]:
     return iceball_micro.build_workflow(version=VERSION).rl
 
 
-def _probe_step(artifact_root: Path, settings: mismatch.ProbeSettings) -> ArtifactStep[SkyRLRun]:
-    # The build-options wrapper displays/runs a graph. Its wrapped Click build body returns that graph.
-    builder = inspect.unwrap(mismatch.main.callback)
-    return builder(
+def _probe_step(artifact_root: Path, settings: dict) -> ArtifactStep[SkyRLRun]:
+    return mismatch.build_run(
         model_uri=str(artifact_root / "iceball-sft"),
         data_uri=str(artifact_root / "gsm8k"),
         input_version=VERSION,
-        **asdict(settings),
+        **settings,
     )
 
 
@@ -136,7 +133,7 @@ def launch_builders(
     ]
     for options in [probe_base, *probe_variants]:
         cache, replay, updates, resume, reuse = (options[name] for name in probe_base)
-        settings = mismatch.ProbeSettings(
+        settings = dict(
             seed=17,
             prompt_count=2,
             samples_per_prompt=2,

@@ -39,6 +39,7 @@ EXTERNAL_RUNTIME_POLICIES = MappingProxyType(
                 {
                     f"config/external/{project.value}/uv.lock",
                     "lib/marin/src/marin/external_dependencies.py",
+                    *({"lib/marin/pyproject.toml", "uv.lock"} if project is ExternalRuntime.MARIN_SKYRL else set()),
                 }
             ),
         )
