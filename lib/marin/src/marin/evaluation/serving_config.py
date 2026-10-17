@@ -17,6 +17,7 @@ from iris.cluster.setup_scripts import default_setup_script
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
+from marin.evaluation.evalchemy.client import EVALCHEMY_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
 from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args
 from marin.inference.config import (
@@ -35,7 +36,7 @@ from marin.inference.config import (
 logger = logging.getLogger(__name__)
 
 ENDPOINT_READY_TIMEOUT_SECONDS = 2400
-_EVAL_BROKER_REQUEST_TIMEOUT_SECONDS = 1800.0
+_BROKER_DEADLINE_MARGIN_SECONDS = 60
 EVAL_SERVE_MAX_NUM_BATCHED_TOKENS = 512
 DEFAULT_SERVE_CPU = 8.0
 _HF_CONFIG_FILENAME = "config.json"
@@ -246,14 +247,16 @@ def inference_config_for_model(
     """Lower one model and selected accelerator into remote inference configuration."""
     serve = resolved_serve_config(model)
     if instances > 1 and broker is None:
-        # Match evaluation clients' long-generation budget and allow cold worker startup.
+        # Keep downstream deadlines beyond the evaluator budget, with time to relay the response.
         broker = BrokerConfig(
-            worker=InferenceWorkerConfig(request_timeout_seconds=_EVAL_BROKER_REQUEST_TIMEOUT_SECONDS * 0.9),
+            worker=InferenceWorkerConfig(
+                request_timeout_seconds=EVALCHEMY_REQUEST_TIMEOUT_SECONDS + _BROKER_DEADLINE_MARGIN_SECONDS,
+            ),
             proxy=InferenceProxyConfig(
-                request_timeout_seconds=_EVAL_BROKER_REQUEST_TIMEOUT_SECONDS,
+                request_timeout_seconds=EVALCHEMY_REQUEST_TIMEOUT_SECONDS + 3 * _BROKER_DEADLINE_MARGIN_SECONDS,
                 readiness_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
             ),
-            request_lease_timeout_seconds=_EVAL_BROKER_REQUEST_TIMEOUT_SECONDS * 0.95,
+            request_lease_timeout_seconds=EVALCHEMY_REQUEST_TIMEOUT_SECONDS + 2 * _BROKER_DEADLINE_MARGIN_SECONDS,
         )
     if serve.speculative is not None and accelerator.platform is not Platform.GPU:
         raise ValueError("speculative serving requires the GPU vLLM backend")

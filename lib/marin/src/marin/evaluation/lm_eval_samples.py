@@ -788,15 +788,18 @@ def _is_native_evalchemy_source(name: str) -> bool:
     return len(relative.parts) == 3 and relative.parts[1] == EVALCHEMY_NATIVE_SOURCE_DIR
 
 
-def read_evalchemy_results(out_path: str) -> dict[str, dict]:
+def read_evalchemy_results(out_path: str, *, expected_prefixes: Sequence[str] = ()) -> dict[str, dict]:
     """Read evaluator-owned result documents keyed by their task-config prefix."""
-    results = {
-        row["source_prefix"]: json.loads(row["document"])
-        for row in ReadView(out_path).iter_rows(EVALCHEMY_RESULTS_TABLE)
-    }
-    if not results:
+    rows = list(ReadView(out_path).iter_rows(EVALCHEMY_RESULTS_TABLE))
+    if not rows:
         raise FileNotFoundError(f"archive at {out_path!r} contains no Evalchemy results table rows")
-    return results
+    missing = sorted(set(expected_prefixes) - {row["source_prefix"] for row in rows})
+    if missing:
+        raise FileNotFoundError(f"archive at {out_path!r} contains no Evalchemy results for {missing}")
+    unscored = sorted(row["source_prefix"] for row in rows if not row["scored"])
+    if unscored:
+        raise ValueError(f"Evalchemy recorded unscored results for {unscored} in {out_path!r}")
+    return {row["source_prefix"]: json.loads(row["document"]) for row in rows}
 
 
 def summarize_native_eval_samples(
@@ -806,7 +809,11 @@ def summarize_native_eval_samples(
 ) -> EvaluationArchiveSummary:
     """Read coverage and evaluator metadata from native Evalchemy FineStore output."""
     reader = ReadView(out_path)
-    contracts = _evalchemy_contract_summary(read_evalchemy_results(out_path), tasks)
+    results = read_evalchemy_results(
+        out_path,
+        expected_prefixes=tuple(eval_task_directory(task.name, task.num_fewshot, task.task_alias) for task in tasks),
+    )
+    contracts = _evalchemy_contract_summary(results, tasks)
     coverage = dict(contracts.coverage)
 
     table = reader.scan(ARCHIVE_SAMPLES_TABLE)

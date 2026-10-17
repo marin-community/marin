@@ -931,6 +931,36 @@ def test_evalchemy_executor_classifies_missing_native_archive(tmp_path, monkeypa
     assert exc_info.value.jobs == {"eval": "/eval/completed"}
 
 
+@pytest.mark.parametrize("missing_result", [True, False], ids=["missing", "unscored"])
+def test_evalchemy_executor_rejects_incomplete_task_beside_scored_results(tmp_path, monkeypatch, missing_result):
+    output_dir = f"file://{tmp_path / 'incomplete'}"
+    _write_evalchemy_output(
+        output_dir,
+        "good_0shot",
+        {"good": {"exact_match,none": 1.0}},
+        {"good": [_lm_eval_generation(0, "exact_match", 1.0, "4")]},
+    )
+    if not missing_result:
+        with DataStore.open(output_dir, writer_id="unscored-task") as store:
+            store.table("evalchemy_results", primary_key=("source_prefix",)).append(
+                {"source_prefix": "bad_0shot", "document": json.dumps({"results": {}}), "scored": False}
+            )
+            store.seal()
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
+        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+    )
+    executor = EvalchemyExecutor(
+        EvalchemyRunConfig(name="mixed", tasks=(EvalTaskConfig("good", 0), EvalTaskConfig("bad", 0)))
+    )
+
+    with pytest.raises(EvaluationError, match="bad_0shot") as exc_info:
+        executor(_remote_session(), output_dir, {})
+
+    assert exc_info.value.status is RunStatus.ARTIFACT_FAILED
+    assert exc_info.value.jobs == {"eval": "/eval/completed"}
+
+
 def test_aggregate_coverage_keeps_the_full_benchmark_extent():
     coverage = {
         "custom": TaskCoverage(n_benchmark=100, n_attempted=10, n_scored=0, errors={"ungraded": 10}),
@@ -1157,7 +1187,9 @@ def test_evalchemy_executor_uses_aggregate_count_when_custom_task_omits_sample_s
         lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
     )
     executor = EvalchemyExecutor(
-        EvalchemyRunConfig(name="mmlu-pro", tasks=(EvalTaskConfig(name="MMLUPro", num_fewshot=0),))
+        EvalchemyRunConfig(
+            name="mmlu-pro", tasks=(EvalTaskConfig(name="MMLUPro", num_fewshot=0, task_alias="mmlu-pro"),)
+        )
     )
 
     outcome = executor(_remote_session(), output_dir, {})
@@ -1199,7 +1231,10 @@ def test_evalchemy_executor_uses_code_task_scored_count_when_samples_omit_scores
         lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
     )
     executor = EvalchemyExecutor(
-        EvalchemyRunConfig(name="humanevalplus", tasks=(EvalTaskConfig(name="HumanEvalPlus", num_fewshot=0),))
+        EvalchemyRunConfig(
+            name="humanevalplus",
+            tasks=(EvalTaskConfig(name="HumanEvalPlus", num_fewshot=0, task_alias="humanevalplus"),),
+        )
     )
 
     outcome = executor(_remote_session(), output_dir, {})

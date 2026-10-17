@@ -23,6 +23,7 @@ from importlib.util import find_spec
 from pathlib import Path
 
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
+EVALCHEMY_REQUEST_TIMEOUT_SECONDS = 1800
 
 # Without a configured cap, an lm-eval-native generation task gets the served context minus this
 # prompt reserve, so the model config's context window sets its budget the way Evalchemy's own
@@ -149,7 +150,7 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
         # lm-eval's per-request client timeout defaults to 300s; a long reasoning generation
         # (multi-thousand-token chat benchmark) can exceed that, and a spurious timeout retry-storms
         # the endpoint. 1800s covers a full max_gen_toks generation on a slow serve.
-        "timeout": 1800,
+        "timeout": EVALCHEMY_REQUEST_TIMEOUT_SECONDS,
     }
     args.update(config.get("extra_model_args", {}))
     if use_chat and config["chat_template_kwargs"]:
