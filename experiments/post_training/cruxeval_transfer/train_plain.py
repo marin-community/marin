@@ -11,7 +11,6 @@ from functools import partial
 from pathlib import Path
 from typing import cast
 
-import fsspec
 import numpy as np
 from fray.current_client import current_client, set_current_client
 from fray.iris_backend import FrayIrisClient
@@ -237,7 +236,7 @@ def main() -> None:
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     report = json.loads(StoragePath(args.report).read_text())
-    data_source = args.report.rsplit("/", 1)[0]
+    data_source = str(StoragePath(args.report).parent)
     artifacts = pipeline(report, args.learning_rate, args.wandb_entity, args.wandb_mode, data_source, args.arm)
     selected = artifacts[args.only]
     if not args.run:
@@ -246,9 +245,8 @@ def main() -> None:
         shapes = config.train_config.trainer.mesh.axis_shapes(num_devices=32, num_slices=4)
         print("mesh", shapes, "steps", config.train_config.trainer.num_train_steps)
         return
-    filesystem = fsspec.filesystem("s3")
     if args.only == "train":
-        receipt = json.loads(filesystem.cat(PARENT_DESTINATION + "/task133-readiness.json"))
+        receipt = json.loads((StoragePath(f"s3://{PARENT_DESTINATION}") / "task133-readiness.json").read_text())
         if receipt["objects"] != 87 or receipt["bytes"] != 134175117778:
             raise ValueError("Regional parent not verified")
     info = get_job_info()

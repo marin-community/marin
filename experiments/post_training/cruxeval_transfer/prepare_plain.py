@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prepare unfiltered sample-zero demonstrations, preserving the teacher's token IDs."""
+"""Prepare sample-zero or rejection-selected demonstrations with the teacher's token IDs."""
 
 import argparse
 import gzip
@@ -15,8 +15,8 @@ from pathlib import Path
 from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoTokenizer
 
-MODEL = "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92"
-REVISION = "fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab"
+from experiments.post_training.cruxeval_transfer.constants import STUDENT_MODEL, STUDENT_REVISION
+
 CONTEXT = 32768
 PAD_TOKEN = 128009
 
@@ -54,7 +54,7 @@ def main() -> None:
         raise ValueError("Expected 1600 unique prompts")
     if output.exists():
         raise ValueError("Use a fresh output prefix")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL, revision=REVISION)
+    tokenizer = AutoTokenizer.from_pretrained(STUDENT_MODEL, revision=STUDENT_REVISION)
     selection = json.loads(args.selection.read_text()) if args.selection else None
     selected = (
         selection["selected"]
@@ -143,8 +143,8 @@ def main() -> None:
         report = {
             "source": args.source,
             "source_manifest_sha256": hashlib.sha256(manifest_bytes.encode()).hexdigest(),
-            "student": MODEL,
-            "student_revision": REVISION,
+            "student": STUDENT_MODEL,
+            "student_revision": STUDENT_REVISION,
             "teacher": manifest["teacher"],
             "selection": (
                 selection["selection"]

@@ -24,15 +24,17 @@ export and B's tokenizer revision.
 
 | Run | Demonstrations | Optimizer | Updates | Selected export |
 | --- | --- | --- | --- | --- |
-| E | 1,454 correct, completed, reasoning-bearing GLM traces | AdamH, LR 1e-5, betas .9/.95, 3% warmup and cosine decay | 273, three epochs | 272 |
+| E | 1,454 correct, completed, reasoning-bearing GLM 5.3 traces | AdamH, LR 1e-5, betas .9/.95, 3% warmup and cosine decay | 273, three epochs | 272 |
 | Plain SFT | E sample 0 for all 1,600 prompts, unfiltered | AdamW, constant LR 1e-6, betas .9/.999 | 400, four epochs | 399 |
 | RS-SFT | First execution-correct E sample among eight; 1,503 prompts | Same AdamW recipe | 376, four epochs | 282 |
 
-All use batch 16, zero weight decay, gradient clip 1, frozen router biases,
+All use global batch 16, zero weight decay, gradient clip 1, frozen router biases,
 unpacked 32,768-token rows, and 32 H100s: expert parallelism 8 within each node,
 context parallelism 4 across nodes. The AdamH recipe imports the canonical
 `experiments.grug.moe` implementation with the zero-norm guard used by the
-historical recipe. Selected exports can precede the final update. The 97 RS-uncovered prompts remain in evaluation.
+historical recipe. Export indices are zero-based: `step-272` follows 273 updates.
+Selected exports can precede the final update. The 97 RS-uncovered prompts remain
+in evaluation.
 
 Regional inputs are historical artifact identities. Their current availability
 must be checked before a rerun; this consolidation does not recreate or move them.
@@ -46,7 +48,8 @@ must be checked before a rerun; this consolidation does not recreate or move the
 | RS transfer data | `cruxeval-transfer/task145-rs-prepared-20261009/` |
 
 `crux-report.json` is the E training manifest, including source hashes and token
-counts. Raw traces, token caches, model weights, grading bundles, and selection
+counts. The GLM prefix contains `requests.jsonl` (including each exact captured
+baseline request in `b_request`) and `raw-responses.jsonl`. Raw traces, token caches, model weights, grading bundles, and selection
 outputs are not checked into Git.
 
 ## Data path
@@ -68,7 +71,8 @@ outputs are not checked into Git.
    sample 0, or `--selection` for RS. Both preserve completion token IDs and
    shift the loss mask for next-token prediction, including emitted EOS.
 
-The collector's dataset pin is `c131e5ab`; the evaluator that actually ran was
+The collector fetches `eval/chat_benchmarks/CruxEval/data/cruxeval.jsonl` from
+`marin-community/evalchemy` at dataset pin `c131e5ab`; the evaluator that actually ran was
 `ae362881cf53f869a6ad52c8a59fa17343c0b5f8`. `constants.py` distinguishes these
 pins. The [frozen evaluator configurations](https://gist.github.com/karansag/49de943771b98a7a23d9348b58933f71)
 and final record describe vLLM H100x8, thinking enabled, the Grug reasoning
@@ -84,23 +88,36 @@ uv run python -m experiments.post_training.cruxeval_transfer.train_cruxeval \
   --learning-rate 1e-5 --wandb-entity marin-community --wandb-mode offline --only train
 ```
 
-For the SFT arms, use `train_plain --arm plain` or `--arm rs`, LR `1e-6`, and
-`--report <prepared-prefix>/manifest.json`. Without `--run`, the launcher reads
-that manifest and prints the graph. Run from the matching storage region.
+For the plain SFT arm, this reads the historical S3 manifest and prints the graph:
+
+```bash
+uv run python -m experiments.post_training.cruxeval_transfer.train_plain \
+  --arm plain \
+  --report s3://marin-us-east-02a/marin/teacher-traces/cruxeval-transfer/task145-plain-prepared-20261008/manifest.json \
+  --learning-rate 1e-6 --wandb-entity marin-community --wandb-mode offline --only train
+```
+
+For RS-SFT, use `--arm rs` and `task145-rs-prepared-20261009/manifest.json`.
+Run storage-reading commands on a worker local to the CoreWeave bucket.
 Historical output roots were `MARIN_PREFIX=s3://marin-us-east-02a/marin/experiments/task133-cruxeval`
 for E and `.../task145-cruxeval` for both transfer arms.
 
 Actual execution requires an Iris CPU coordinator with the regional storage
-credentials and `WANDB_API_KEY` for online logging. Build `--only cache --run`
+credentials and `WANDB_API_KEY` for online logging; see the [Iris operations
+manual](https://github.com/marin-community/marin/blob/6b135b3e9db669f8d03df4bcf9b089f43f1fe78c/lib/iris/OPS.md). The parent copy must retain its historical
+`task133-readiness.json` receipt (87 objects, 134,175,117,778 bytes). The recipes
+consume that verified input; they do not recreate the old TTL staging source. Build `--only cache --run`
 first, then `--only train --run`. The coordinator validates the cache and parent
 receipt before requesting GPUs. Obtain resource approval before launching;
-choose a new output root and artifact versions for any changed experiment.
+choose a new output root and change the `VERSION` constants and E's `SFTSpec.version`
+for any changed experiment.
 
 The HF export path sets `hf_save_reference_code=False` while retaining weights,
 configuration, tokenizer, and generation metadata. E disables native checkpoint
 saving; the SFT arms keep per-epoch native checkpoints. Before serving an export,
-verify its complete shard/index layout, tokenizer/template equality with B, and
-all 26 router-bias tensors against B after the export dtype cast. The final
+verify that every index entry has its tensor in an existing shard, that the
+shard headers agree with the index, and that tokenizer/template files match B.
+Compare all 26 router-bias tensors exactly to B after the export dtype cast. The final
 record reports those checks on the historical exports; local tests do not
 revalidate the stored 67B models.
 

@@ -13,7 +13,7 @@ import click
 from transformers import AutoTokenizer
 
 from experiments.post_training.cruxeval_transfer.constants import DATA_SHA256, STUDENT_MODEL, STUDENT_REVISION
-from experiments.post_training.cruxeval_transfer.rendering import token_counts, training_row
+from experiments.post_training.cruxeval_transfer.rendering import END_TURN_ID, token_counts, training_row
 
 
 def read_rows(path: Path) -> list[dict]:
@@ -100,7 +100,7 @@ def main(source: Path, grades: Path, output: Path, max_sequence_tokens: int) -> 
         padding = max_sequence_tokens - total
         prebuilt.append(
             {
-                "input_ids": encoded["input_ids"] + [128009] * padding,
+                "input_ids": encoded["input_ids"] + [END_TURN_ID] * padding,
                 "loss_weights": encoded["assistant_masks"][1:] + [0] * (padding + 1),
             }
         )
@@ -118,7 +118,7 @@ def main(source: Path, grades: Path, output: Path, max_sequence_tokens: int) -> 
             )
     output.mkdir(parents=True)
     padding_rows = -len(rows) % 16
-    empty = {"input_ids": [128009] * max_sequence_tokens, "loss_weights": [0] * max_sequence_tokens}
+    empty = {"input_ids": [END_TURN_ID] * max_sequence_tokens, "loss_weights": [0] * max_sequence_tokens}
     with gzip.open(output / "train-prebuilt.jsonl.gz", "wt") as stream:
         for row in prebuilt + [empty] * padding_rows:
             stream.write(json.dumps(row, separators=(",", ":")) + "\n")

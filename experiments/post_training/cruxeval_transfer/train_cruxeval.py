@@ -10,7 +10,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
-import fsspec
 import numpy as np
 from fray.current_client import current_client, set_current_client
 from fray.iris_backend import FrayIrisClient
@@ -27,7 +26,7 @@ from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext, lower, materialized_config, run
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache, tokenize
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import Duration
 
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
@@ -67,7 +66,7 @@ def verify_cache(config: TrainLmOnPodConfig) -> None:
         prefix_join(component.cache_dir, "train"),
         {"input_ids": np.zeros(0, dtype=np.int32), "loss_weights": np.zeros(0, dtype=np.float32)},
     )
-    report = json.loads(fsspec.filesystem("s3").cat(DATA_DESTINATION + "/manifest.json"))
+    report = json.loads((StoragePath(f"s3://{DATA_DESTINATION}") / "manifest.json").read_text())
     expected_rows = report["training_rows"] + report["padding_rows"]
     if len(cache) != expected_rows:
         raise ValueError(f"Wrong cache row count: {len(cache)} != {expected_rows}")
@@ -251,9 +250,8 @@ def main() -> None:
         shapes = config.train_config.trainer.mesh.axis_shapes(num_devices=32, num_slices=4)
         print("mesh", shapes, "steps", config.train_config.trainer.num_train_steps)
         return
-    filesystem = fsspec.filesystem("s3")
     if args.only == "train":
-        receipt = json.loads(filesystem.cat(PARENT_DESTINATION + "/task133-readiness.json"))
+        receipt = json.loads((StoragePath(f"s3://{PARENT_DESTINATION}") / "task133-readiness.json").read_text())
         if receipt["objects"] != 87 or receipt["bytes"] != 134175117778:
             raise ValueError("Regional parent not verified")
     info = get_job_info()
