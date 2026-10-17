@@ -7,8 +7,10 @@ import json
 import logging
 import socket
 import threading
+import time
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections import deque
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -32,6 +34,7 @@ from marin.inference.types import (
 )
 
 logger = logging.getLogger(__name__)
+TOKEN_RATE_WINDOW_SECONDS = 60.0
 
 
 @dataclass
@@ -40,6 +43,25 @@ class ProxyStats:
     dropped_responses: int = 0
     timed_out_requests: int = 0
     rejected_requests: int = 0
+    generation_responses: int = 0
+    responses_with_usage: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+
+def response_token_usage(payload: bytes) -> tuple[int, int] | None:
+    """Read optional OpenAI usage without disrupting response forwarding."""
+    try:
+        document = json.loads(payload)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(document, dict) or not isinstance(document.get("usage"), dict):
+        return None
+    usage = document["usage"]
+    prompt, completion = usage.get("prompt_tokens"), usage.get("completion_tokens")
+    if type(prompt) is not int or type(completion) is not int or prompt < 0 or completion < 0:
+        return None
+    return prompt, completion
 
 
 class InferenceProxy:
@@ -56,12 +78,16 @@ class InferenceProxy:
         response_fetch_batch_size: int,
         ignored_request_fields: Sequence[str] = (),
         backoff: ExponentialBackoff | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if max_pending_requests < 1:
             raise ValueError("max_pending_requests must be at least 1")
         if response_fetch_batch_size < 1:
             raise ValueError("response_fetch_batch_size must be at least 1")
         self._broker = broker
+        self._clock = clock
+        self._started_at = clock()
+        self._token_samples: deque[tuple[float, int, int]] = deque()
         self._model = model
         self._request_timeout_seconds = request_timeout_seconds
         self._readiness_timeout_seconds = readiness_timeout_seconds
@@ -129,7 +155,25 @@ class InferenceProxy:
         with self._lock:
             pending = len(self._pending)
             stats = replace(self.stats)
+            now = self._clock()
+            while self._token_samples and self._token_samples[0][0] <= now - TOKEN_RATE_WINDOW_SECONDS:
+                self._token_samples.popleft()
+            window_prompt = sum(sample[1] for sample in self._token_samples)
+            window_completion = sum(sample[2] for sample in self._token_samples)
+        elapsed = max(now - self._started_at, 0.001)
+        window = min(elapsed, TOKEN_RATE_WINDOW_SECONDS)
         metrics = (
+            ("Proxy uptime", f"{elapsed:.1f} seconds"),
+            ("Prompt tokens", stats.prompt_tokens),
+            ("Output tokens", stats.completion_tokens),
+            ("Total tokens", stats.prompt_tokens + stats.completion_tokens),
+            ("Prompt tokens/s (last 60s)", f"{window_prompt / window:.1f}"),
+            ("Output tokens/s (last 60s)", f"{window_completion / window:.1f}"),
+            ("Total tokens/s (last 60s)", f"{(window_prompt + window_completion) / window:.1f}"),
+            ("Output tokens/s (lifetime)", f"{stats.completion_tokens / elapsed:.1f}"),
+            ("Prompt tokens/s (lifetime)", f"{stats.prompt_tokens / elapsed:.1f}"),
+            ("Total tokens/s (lifetime)", f"{(stats.prompt_tokens + stats.completion_tokens) / elapsed:.1f}"),
+            ("Generation responses with usage", f"{stats.responses_with_usage} / {stats.generation_responses}"),
             ("Proxy outstanding", f"{pending} / {self._max_pending_requests}"),
             ("Broker queued", snapshot.queued_requests),
             ("Leased to workers", snapshot.leased_requests),
@@ -161,6 +205,10 @@ class InferenceProxy:
             f"<h1>Inference broker</h1><p>Model: {html.escape(self._model)}</p>"
             "<p>Refreshes every 5 seconds. Counts cover this broker process. Queue wait measures "
             "submission to first worker lease; inference time is excluded.</p>"
+            "<p>Token counts come from successful completion responses with valid usage. Rates count "
+            "tokens when responses finish, across all workers; they are not instantaneous GPU rates. "
+            "The 60-second window uses elapsed proxy lifetime until the first minute. "
+            "Missing usage is excluded. Totals reset when the proxy restarts.</p>"
             f"<table>{rows}</table><h2>Registered workers ({len(snapshot.workers)})</h2>"
             "<p>Registration does not imply current health.</p><table><tr><th>Worker</th>"
             f"<th>Backend</th><th>Tensor parallel size</th></tr>{workers}</table></body></html>"
@@ -270,6 +318,19 @@ class InferenceProxy:
             path,
             response.status_code,
         )
+        if path in {"/v1/completions", "/v1/chat/completions"} and 200 <= response.status_code < 300:
+            usage = response_token_usage(response.payload)
+            with self._lock:
+                self.stats.generation_responses += 1
+                if usage is not None:
+                    prompt, completion = usage
+                    self.stats.responses_with_usage += 1
+                    self.stats.prompt_tokens += prompt
+                    self.stats.completion_tokens += completion
+                    now = self._clock()
+                    while self._token_samples and self._token_samples[0][0] <= now - TOKEN_RATE_WINDOW_SECONDS:
+                        self._token_samples.popleft()
+                    self._token_samples.append((now, prompt, completion))
         return Response(content=response.payload, status_code=response.status_code, headers=dict(response.headers))
 
     def run_forever(

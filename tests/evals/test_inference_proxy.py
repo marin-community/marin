@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import re
 import socket
 import threading
 from collections.abc import Iterator
@@ -1021,6 +1022,7 @@ async def test_inference_proxy_times_out_inflight_request() -> None:
 
 @pytest.mark.asyncio
 async def test_proxy_routes_more_requests_than_the_default_thread_limit_and_serves_status() -> None:
+    now = 100.0
     broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     broker.register_worker("worker<script>", InferenceWorkerMetadata(tensor_parallel_size=1, backend_name="vllm"))
     proxy = InferenceProxy(
@@ -1030,6 +1032,7 @@ async def test_proxy_routes_more_requests_than_the_default_thread_limit_and_serv
         readiness_timeout_seconds=10,
         max_pending_requests=64,
         response_fetch_batch_size=64,
+        clock=lambda: now,
     )
     with proxy:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://proxy") as client:
@@ -1043,16 +1046,31 @@ async def test_proxy_routes_more_requests_than_the_default_thread_limit_and_serv
                 assert "model&lt;script&gt;" in status.text
                 assert "worker&lt;script&gt;" in status.text
                 assert "<script>" not in status.text
+                now = 110.0
                 broker.submit_responses(
                     _leased_response(
                         request,
-                        InferenceResponse(request_id=request.request.request_id, status_code=200, payload=b"{}"),
+                        InferenceResponse(
+                            request_id=request.request.request_id,
+                            status_code=200,
+                            payload=_json_bytes({"usage": {"prompt_tokens": 10, "completion_tokens": 5}}),
+                        ),
                     )
                     for request in leased
                 )
                 responses = await asyncio.gather(*tasks)
                 assert all(response.status_code == 200 for response in responses)
                 assert broker.status().completed_requests == 64
+                status = await client.get("/status")
+                metrics = dict(re.findall(r"<tr><th>([^<]+)</th><td>([^<]+)</td></tr>", status.text))
+                assert metrics["Total tokens"] == "960"
+                assert metrics["Generation responses with usage"] == "64 / 64"
+                assert float(metrics["Output tokens/s (last 60s)"]) == 32
+                now = 171.0
+                status = await client.get("/status")
+                metrics = dict(re.findall(r"<tr><th>([^<]+)</th><td>([^<]+)</td></tr>", status.text))
+                assert metrics["Total tokens"] == "960"
+                assert float(metrics["Output tokens/s (last 60s)"]) == 0
             finally:
                 for task in tasks:
                     task.cancel()

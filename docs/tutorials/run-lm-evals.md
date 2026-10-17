@@ -306,6 +306,11 @@ Brokered endpoints serve an HTML status page at `/status` (beside `/v1`, not und
 It refreshes every five seconds and shows proxy capacity, broker queue and lease counts,
 response errors, timeouts, rejections, and registered workers. Queue wait measures submission
 to the first worker lease, excluding inference time. Worker registration is not a health check.
+The page also reports prompt, output, and total tokens from successful completion responses,
+with rates over the last 60 seconds and the proxy's lifetime. Tokens enter these measurements
+when a response finishes, so long generations can produce bursts. Response usage coverage is
+shown alongside the totals; missing or invalid usage is excluded. Token totals reset when the
+proxy restarts and do not measure GPU utilization or tokens in unfinished responses.
 Requests wait asynchronously for inference, so the proxy's configured outstanding-request limit
 does not depend on the web server's thread-pool size.
 
