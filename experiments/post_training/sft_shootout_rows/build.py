@@ -23,6 +23,7 @@ Usage:
 """
 
 import argparse
+import base64
 import collections
 import gzip
 import hashlib
@@ -61,6 +62,30 @@ EPOCHS = 3
 # mini-swe-agent's own tool environment, installed in the sandbox at agent setup, holds clean copies of some repos
 # (pool v3 removes those repos); a trace that reads anything there is dropped. Pattern from #207 (chukar): path reads,
 # find/grep listings, 'uv tool dir|list|run' and the tool's own bin/lib all leave one of these strings.
+# The generation proxy's capability URL carries a secret JWT (three base64url segments starting 'eyJ', payload
+# aud == 'iris-proxy'); a trace that printed it (e.g. GLM running 'env') must never become a training row. Tokens are
+# decoded, not pattern-matched, because task content holds legitimate JWT fixtures (oauthlib tests); line breaks and
+# JSON escapes inside a printed token are tolerated. The scrubbed form ('<capability-token>' in the URL) is harmless and
+# only counted.
+JWT = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+LINE_BREAKS = re.compile(r"(?:\\+[nrt]|\s)+")
+SCRUBBED_PROXY_URL = re.compile(r"iris(?:-cw-us-east-02a)?\.oa\.dev/proxy/t/")
+
+
+def has_capability_token(text: str) -> bool:
+    """True when `text` holds a JWT whose payload's audience is the generation proxy."""
+    for token in JWT.findall(LINE_BREAKS.sub("", text)):
+        payload = token.split(".")[1]
+        try:
+            claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        except ValueError:
+            continue
+        audience = claims.get("aud") if isinstance(claims, dict) else None
+        if audience == "iris-proxy" or (isinstance(audience, list) and "iris-proxy" in audience):
+            return True
+    return False
+
+
 # Defense in depth for the same leak class: a library location (site-packages, dist-packages, a vendored copy, conda's
 # package cache, the Go module cache) followed by a path component named after the task repo's import name, e.g.
 # .../site-packages/setuptools/_vendor/typeguard/_checkers.py. Pool rows carry the repo's import names.
@@ -116,6 +141,8 @@ def candidates(arm: str, traces: list[dict], pool: dict[str, dict], tokenizer) -
         elif trace.get("exception"):
             # A trial that still passed after a harness exception (e.g. AgentTimeoutError) stops mid-task.
             reason = "harness_exception"
+        elif has_capability_token(json.dumps([trace["messages"], trace.get("tools")])):
+            reason = "contains_proxy_capability_token"
         elif AGENT_TOOL_ENV.search(json.dumps(trace["messages"])):
             reason = "touches_agent_tool_env"
         elif (pattern := library_copy_pattern(task.get("import_names") or [])) and pattern.search(
@@ -392,6 +419,9 @@ def main() -> None:
                     for family in sorted({d["family"] for d in dropped if d["family"]})
                 },
                 # One count per summarized trial (each contributes one dropped row per conversation).
+                "kept_with_scrubbed_proxy_url": sum(
+                    1 for _, _, trace in kept.values() if SCRUBBED_PROXY_URL.search(json.dumps(trace["messages"]))
+                ),
                 "library_copy_drops_by_task": dict(
                     collections.Counter(d["task_id"] for d in dropped if d["reason"] == "touches_library_copy_of_repo")
                 ),

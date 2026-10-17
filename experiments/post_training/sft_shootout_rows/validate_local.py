@@ -18,6 +18,7 @@ Usage:
 """
 
 import argparse
+import base64
 import copy
 import gzip
 import hashlib
@@ -32,6 +33,15 @@ from experiments.post_training.sft_shootout_rows.traces import STUDENT, TEACHER,
 from experiments.post_training.sweep_data.prepare_agentic import PAD_TOKEN
 from experiments.post_training.sweep_data.render import training_row
 from experiments.post_training.sweep_data.select import CONTEXT
+
+
+def fake_capability_token() -> str:
+    """A syntactically valid JWT with the proxy audience, for testing the secret guard (not a real credential)."""
+
+    def encode(data: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(data).encode()).decode().rstrip("=")
+
+    return f"{encode({'alg': 'none'})}.{encode({'aud': 'iris-proxy', 'sub': 'test'})}.dGVzdA"
 
 
 def stand_in_replay(tokenizer, root: Path) -> None:
@@ -191,6 +201,15 @@ def main() -> None:
             observation.get("content") or ""
         )
         touching.append(synthetic)
+    for trace in traces:
+        synthetic = copy.deepcopy(trace) | {"trial_id": trace["trial_id"] + "-secret"}
+        observations = [m for m in synthetic["messages"][1:] if m["role"] in ("tool", "user")]
+        fake = fake_capability_token()
+        observations[0]["content"] = (
+            f"OPENAI_API_BASE=https://iris.oa.dev/proxy/t/cluster=cw-us-east-02a/{fake}/glm-harbor.test-0000/v1\n"
+            + (observations[0].get("content") or "")
+        )
+        touching.append(synthetic)
     (work / "toolenv.jsonl").write_text("".join(json.dumps(trace) + "\n" for trace in touching))
     library = []
     for trace in traces:
@@ -255,7 +274,9 @@ def main() -> None:
     plain = build("plain", plain_inputs)
     reports = [check_arm(tokenizer, plain, by_id, heldout)]
     assert reports[0]["dropped"].get("summarized_trial") == len(summarized), "summarized trials were not dropped"
-    assert reports[0]["dropped"].get("touches_agent_tool_env") == len(touching), "tool-env traces were not dropped"
+    assert reports[0]["dropped"].get("touches_agent_tool_env") == len(touching) // 2, "tool-env traces were not dropped"
+    proxy_drops = reports[0]["dropped"].get("contains_proxy_capability_token")
+    assert proxy_drops == len(touching) // 2, "capability-token traces were not dropped"
     library_drops = reports[0]["dropped"].get("touches_library_copy_of_repo", 0)
     assert library_drops == len(library), "library-copy traces were not dropped"
     reports.append(check_arm(tokenizer, build("rs-multi", plain_inputs, plain), by_id, heldout))
