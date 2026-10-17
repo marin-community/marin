@@ -115,12 +115,12 @@ def _image_factory(backend: Backend | None, controller_url: str | None) -> Machi
     return DaytonaMachineFactory()
 
 
-def _publish_campaign(report_path: str, selected: dict[str, RlDataSource]) -> None:
+def _publish_campaign(report_path: str, selected: dict[str, RlDataSource], catalog_root: str) -> None:
     path = StoragePath(report_path)
     report = json.loads(path.read_text())
     # Selected recipes may supply declarations absent from the default inventory.
     sources = {**all_sources(), **{source.info.id: source for source in selected.values()}}
-    publish_catalog(str(path.parent / CATALOG_DIRECTORY), report["run_id"], sources.values())
+    publish_catalog(catalog_root, report["run_id"], sources.values())
 
 
 def _conversion_steps(
@@ -187,6 +187,7 @@ def _quick_conversion(
             pool=pool,
             runtime=options.runtime,
             report_path=report_path,
+            catalog_root=str(StoragePath(report_path).parent / CATALOG_DIRECTORY),
             source_ids={steps[name].name: source.info.id for name, source in selected.items()},
             mode=options.mode,
         )
@@ -397,6 +398,11 @@ def _embedding_pass(
 )
 @click.option("--assessment-model-revision", help="Grading model revision; defaults to the curation review revision.")
 @click.option("--report-path", help="SAMPLE/FULL report; defaults under --cache-dir. QUICK writes under --output-root.")
+@click.option(
+    "--publish-catalog",
+    "publication_catalog",
+    help="Shared catalog for remote FULL campaigns; otherwise publish beside the report.",
+)
 @click.option("--source", "sources", multiple=True, help="Catalog source name to execute; repeat to select multiple.")
 @click.option(
     "--input-root",
@@ -468,6 +474,7 @@ def main(
     assessment_rubric: Path | None,
     assessment_model_revision: str | None,
     report_path: str | None,
+    publication_catalog: str | None,
     sources: tuple[str, ...],
     input_root: Path | None,
     local_files: tuple[tuple[str, Path], ...],
@@ -493,6 +500,10 @@ def main(
     selected = _selected_sources(sources)
     runtime = CampaignRuntime()
     assess = assess if assess is not None else processing_mode == SourceProcessingMode.FULL
+    if publication_catalog is not None and (
+        processing_mode != SourceProcessingMode.FULL or cache_dir is not None or not assess
+    ):
+        raise click.UsageError("--publish-catalog requires FULL with assessment and without --cache-dir")
     if curation_attempt and processing_mode == SourceProcessingMode.QUICK:
         raise click.UsageError("--curation-attempt requires a SAMPLE/FULL curation run")
     if cache_dir is not None:
@@ -670,6 +681,8 @@ def main(
             scope.enter_context(artifact_prefix(str(cache_dir)))
             if report_path is None:
                 report_path = str(cache_dir / "campaigns/campaign.json")
+        assert report_path is not None
+        publication_root = publication_catalog or str(StoragePath(report_path).parent / CATALOG_DIRECTORY)
         steps = [cast(CurationPipeline, source.pipeline)(source, options) for source in selected.values()]
         curation_steps = steps
         assessments = {}
@@ -690,6 +703,7 @@ def main(
             plan = campaign_plan(steps, pool)
             plan["cache_dir"] = str(cache_dir) if cache_dir else None
             plan["report_path"] = report_path
+            plan["publication_catalog"] = publication_root
             plan["quality_policy"] = {"sample_size": quality_sample_size, "seed": seed}
             plan["embedding_stage"] = embed
             click.echo(json.dumps(plan, indent=2))
@@ -698,7 +712,6 @@ def main(
             client = LocalClient()
             scope.callback(client.shutdown)
             scope.enter_context(set_current_client(client))
-        assert report_path is not None
         if assessment is not None:
             assert recipe_settings.review_cache is not None
             compact_query_cache(recipe_settings.review_cache)
@@ -708,15 +721,16 @@ def main(
                 runtime=runtime,
                 pool=pool,
                 report_path=report_path,
+                catalog_root=publication_root,
                 mode=processing_mode,
                 source_ids={step.name: source.info.id for step, source in zip(steps, selected.values(), strict=True)},
                 assessments=assessments,
             )
         except CampaignFailed:
-            _publish_campaign(report_path, selected)
+            _publish_campaign(report_path, selected, publication_root)
             raise
         else:
-            _publish_campaign(report_path, selected)
+            _publish_campaign(report_path, selected, publication_root)
         if embedding is not None:
             roots = {source.info.id: step.path() for source, step in zip(selected.values(), curation_steps, strict=True)}
             _write_corpus(roots, inventory, report_path, "admitted")

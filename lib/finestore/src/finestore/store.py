@@ -9,18 +9,30 @@ import hashlib
 import json
 import logging
 import threading
+import time
 import uuid
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Protocol
 
 import pyarrow as pa
+from rigging import telemetry
+from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, LeaseLostError, create_lock, lease_refresh
 from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.timing import ExponentialBackoff
 
-from finestore.commit import ClearSeal, CommitCoordinator, CommitDelta, TableAddition, initialize_archive, write_schema
-from finestore.compaction import CompactionResult, compact_table, compact_writer_tables
+from finestore.commit import (
+    ClearSeal,
+    CommitConflict,
+    CommitCoordinator,
+    CommitDelta,
+    TableAddition,
+    initialize_archive,
+    write_schema,
+)
+from finestore.compaction import COMPACTION_TARGET_BYTES, CompactionResult, compact_level_zero_tables, compact_table
 from finestore.layout import (
     CHUNKED_BLOBS_FEATURE,
     RESERVED_COLUMNS,
@@ -28,6 +40,7 @@ from finestore.layout import (
     BlobTables,
     CommitToken,
     FineStoreLayout,
+    KeyRange,
     OnConflict,
     SealMarker,
     Shard,
@@ -50,6 +63,9 @@ OBJECT_PART_BYTES = 8 * 1024 * 1024
 INLINE_BLOB_BYTES = 128 * 1024
 _MAINTENANCE_BACKOFF_INITIAL = 1.0
 _MAINTENANCE_BACKOFF_MAXIMUM = 10 * 60.0
+
+_LEASE_ACQUIRED = telemetry.counter("finestore_maintenance_lease_acquired", unit="{acquisition}")
+_LEASE_LOST = telemetry.counter("finestore_maintenance_lease_lost", unit="{loss}")
 
 _BLOB_SCHEMA = pa.schema(
     [
@@ -161,6 +177,7 @@ class DataStore:
         flush_interval: float = DEFAULT_FLUSH_INTERVAL,
         max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
         compaction_levels: Sequence[int] = DEFAULT_COMPACTION_LEVELS,
+        compaction_target_bytes: int = COMPACTION_TARGET_BYTES,
     ) -> None:
         self.root = root
         self._layout = FineStoreLayout(self.root)
@@ -170,6 +187,7 @@ class DataStore:
         self._flush_interval = flush_interval
         self._max_buffer_bytes = max_buffer_bytes
         self._compaction_levels = tuple(compaction_levels)
+        self._compaction_target_bytes = compaction_target_bytes
         if not self._compaction_levels or any(limit < 1 for limit in self._compaction_levels):
             raise ValueError("compaction_levels must contain positive shard limits")
         self._tables: dict[str, DataTable] = {}
@@ -179,7 +197,13 @@ class DataStore:
         self._stop = threading.Event()
         self._error: BaseException | None = None
         self._closed = False
-        snapshot = self._commits.snapshot()
+        self._lease = create_lock(self._layout.maintenance_lease_path, worker_id=self.writer_id)
+        self._lease_epoch: int | None = None
+        self._lease_refreshed = 0.0
+        # Serializes maintenance passes from the background thread and from callers, so the
+        # lease is acquired, refreshed, and released by one pass at a time.
+        self._maintenance_lock = threading.RLock()
+        snapshot = self._commits.last_snapshot()
         if snapshot.manifest.sealed is not None:
             self._commits.commit(CommitDelta(seal_update=ClearSeal()), base=snapshot)
             logger.info("FineStore reopened sealed archive %s for writing", self.root)
@@ -353,49 +377,143 @@ class DataStore:
     def compact(self, table: str, *, generation: int | None = None) -> CompactionResult:
         """Logically compact one table against the current manifest."""
         with self._commit_lock:
-            return compact_table(self.root, table, generation=generation, coordinator=self._commits)
+            return compact_table(
+                self.root,
+                table,
+                generation=generation,
+                coordinator=self._commits,
+                target_bytes=self._compaction_target_bytes,
+            )
+
+    def _acquire_maintenance(self) -> bool:
+        """Hold the archive's maintenance lease, announcing a new epoch when first acquired.
+
+        One writer per archive compacts at a time. Acquisition publishes a manifest with the
+        next ``maintainer_epoch``; compactions prepared under an older epoch are then rejected
+        at commit, so a holder whose lease silently lapsed cannot publish stale work.
+        """
+        if self._lease_epoch is not None:
+            if time.monotonic() - self._lease_refreshed < HEARTBEAT_INTERVAL:
+                return True
+            try:
+                self._lease.refresh()
+            except LeaseLostError:
+                self._lease_epoch = None
+                _LEASE_LOST.add()
+                logger.warning("FineStore maintenance lease for %s was taken over", self.root)
+                return False
+            self._lease_refreshed = time.monotonic()
+            return True
+        if not self._lease.try_acquire():
+            return False
+        self._lease_refreshed = time.monotonic()
+        snapshot = self._commits.snapshot()
+        epoch = snapshot.manifest.maintainer_epoch + 1
+        try:
+            self._commits.commit(CommitDelta(epoch_update=epoch), base=snapshot)
+        except CommitConflict:
+            # Another maintainer announced a newer epoch between the stale-lease takeover and ours.
+            self._lease.release()
+            return False
+        self._lease_epoch = epoch
+        _LEASE_ACQUIRED.add()
+        return True
+
+    @contextmanager
+    def _maintenance(self) -> Iterator[bool]:
+        """Try to hold the maintenance lease for the block, refreshing it on a heartbeat while held.
+
+        Yields whether the lease is held. The lease stays held after the block so a maintainer
+        keeps its role across passes; ``_release_maintenance`` gives it up.
+        """
+        with self._maintenance_lock:
+            held = self._acquire_maintenance()
+            with lease_refresh(self._lease) if held else nullcontext():
+                yield held
+
+    def _release_maintenance(self) -> None:
+        with self._maintenance_lock:
+            if self._lease_epoch is None:
+                return
+            self._lease_epoch = None
+            self._lease.release()
 
     def maintain(self) -> CommitToken | None:
-        """Flush pending rows and compact each overfull level once."""
+        """Flush pending rows and, while holding the maintenance lease, compact each overfull level once.
+
+        The lease is refreshed on a heartbeat while compactions run, so a pass longer than the
+        lease timeout is not taken over mid-way.
+        """
         token = self.flush()
-        view = self.read_view()
-        for name in view.table_names():
-            for generation, shard_limit in enumerate(self._compaction_levels):
-                level_shards = [shard for shard in view.list_shards(name) if shard.generation == generation]
-                if len(level_shards) <= shard_limit:
-                    continue
-                self.compact(name, generation=generation)
-                view = self.read_view()
-                token = view.token
+        with self._maintenance() as held:
+            if not held:
+                return token
+            view = ReadView(self.root, self._commits.snapshot())
+            for name in view.table_names():
+                for generation, shard_limit in enumerate(self._compaction_levels):
+                    level_shards = [shard for shard in view.list_shards(name) if shard.generation == generation]
+                    if len(level_shards) <= shard_limit:
+                        continue
+                    self.compact(name, generation=generation)
+                    view = ReadView(self.root, self._commits.last_snapshot())
+                    token = view.token
         return token
 
     def seal(self) -> CommitToken:
-        """Flush, compact active tables, and publish sealed state in the manifest."""
+        """Flush, compact active tables, and publish sealed state in the manifest.
+
+        Sealing compacts without the maintenance lease when another writer holds it; the epoch
+        check still rejects its compactions if that holder is replaced meanwhile.
+        """
         self.flush()
         superseded = {}
-        for name in self.read_view().table_names():
-            result = self.compact(name)
-            if result.superseded:
-                superseded[name] = result.superseded
+        with self._maintenance() as held:
+            if not held:
+                logger.info("FineStore sealing %s while another writer holds the maintenance lease", self.root)
+            for name in self.read_view().table_names():
+                result = self.compact(name)
+                if result.superseded:
+                    superseded[name] = result.superseded
         return self._commits.commit(CommitDelta(seal_update=SealMarker(writer=self.writer_id, superseded=superseded)))
 
     def close(self) -> None:
-        """Flush pending writes and compact bounded groups of this writer's level-zero shards."""
+        """Flush pending writes and, as the maintainer, merge bounded groups of level-zero shards.
+
+        The merge is best effort. A closer that holds the maintenance lease, or can take a free
+        or stale one, folds every writer's level-zero shards within the close budget; a closer
+        that finds another writer maintaining the archive leaves its shards to that writer.
+        """
         if self._closed:
             return
         self._closed = True
         self.request_stop()
         self._thread.join()
         self.flush()
-        with self._commit_lock:
-            compact_writer_tables(
-                self.root,
-                list(self._tables),
-                writer_id=self.writer_id,
-                max_input_bytes=_CLOSE_COMPACTION_MAX_INPUT_BYTES,
-                max_input_rows=_CLOSE_COMPACTION_MAX_INPUT_ROWS,
-                coordinator=self._commits,
-            )
+        try:
+            if not self._has_level_zero_groups():
+                return
+            with self._maintenance() as held:
+                if not held:
+                    logger.info(
+                        "FineStore writer %s left level-zero shards in %s to the maintainer", self.writer_id, self.root
+                    )
+                    return
+                with self._commit_lock:
+                    compact_level_zero_tables(
+                        self.root,
+                        list(self._tables),
+                        max_input_bytes=_CLOSE_COMPACTION_MAX_INPUT_BYTES,
+                        max_input_rows=_CLOSE_COMPACTION_MAX_INPUT_ROWS,
+                        target_bytes=self._compaction_target_bytes,
+                        coordinator=self._commits,
+                    )
+        finally:
+            self._release_maintenance()
+
+    def _has_level_zero_groups(self) -> bool:
+        """Whether some registered table holds at least two level-zero shards, from any writer."""
+        view = ReadView(self.root, self._commits.last_snapshot())
+        return any(sum(1 for shard in view.list_shards(name) if shard.generation == 0) >= 2 for name in self._tables)
 
     def request_stop(self) -> None:
         """Request maintenance shutdown without waiting or performing storage I/O.
@@ -671,6 +789,7 @@ class DataTable:
             for group in table_row_groups(self.name, arrow_rows):
                 writer.write_table(group)
         written = writer.result
+        bounds = KeyRange.of(row.key for row in rows) if primary_key_sorted else None
         return Shard(
             path=path,
             writer=self._writer_id,
@@ -681,6 +800,8 @@ class DataTable:
             size_bytes=written.size_bytes,
             content_sha256=written.content_sha256,
             primary_key_sorted=primary_key_sorted,
+            min_key=None if bounds is None else bounds.lowest,
+            max_key=None if bounds is None else bounds.highest,
         )
 
     def flush(self) -> CommitToken | None:
