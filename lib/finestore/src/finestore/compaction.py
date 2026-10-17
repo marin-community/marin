@@ -84,6 +84,10 @@ def compact_table(
     unified = pa.unify_schemas(
         [pq.read_schema(shard.path, filesystem=pa_fs) for shard in shards], promote_options="permissive"
     )
+    unified = pa.schema(
+        [field for field in unified if field.name != SystemColumns.GENERATION],
+        metadata=unified.metadata,
+    )
     if SystemColumns.COMMIT not in unified.names:
         unified = unified.append(pa.field(SystemColumns.COMMIT, pa.int64()))
 

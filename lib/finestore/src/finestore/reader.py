@@ -412,10 +412,11 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None, *, scan_profile: 
                 fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
                 use_threads=False,
             ).to_table()
-        part = part.append_column(
-            SystemColumns.GENERATION,
-            pa.array([generation] * part.num_rows, pa.int32()),
-        )
+        if SystemColumns.GENERATION in part.column_names:
+            part = part.select(
+                [index for index, name in enumerate(part.column_names) if name != SystemColumns.GENERATION]
+            )
+        part = part.append_column(SystemColumns.GENERATION, pa.array([generation] * part.num_rows, pa.int32()))
         commit_values = pa.array([commit_sequence] * part.num_rows, pa.int64())
         if SystemColumns.COMMIT in part.column_names:
             commit_index = part.schema.get_field_index(SystemColumns.COMMIT)

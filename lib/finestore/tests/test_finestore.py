@@ -629,6 +629,25 @@ def test_recompaction_merges_all_generations(tmp_path):
     assert rows == {"0": 0.0, "1": 1.0, "2": 2.0, "3": 3.0, "4": 4.0}
 
 
+def test_reader_overrides_generation_persisted_by_legacy_compaction(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        store.table("samples", primary_key=("doc_id",)).append({"doc_id": "1", "score": 1.0})
+        store.flush()
+
+    shard = ReadView(root).list_shards("samples")[0]
+    legacy_table = pq.read_table(shard.path).append_column("_gen", pa.array([99], pa.int32()))
+    pq.write_table(legacy_table, shard.path)
+
+    result = ReadView(root).scan("samples")
+    assert result.column_names.count("_gen") == 1
+    assert result.to_pylist()[0]["_gen"] == shard.generation
+
+    compact_table(root, "samples")
+    compacted = ReadView(root).list_shards("samples")[0]
+    assert "_gen" not in pq.read_schema(compacted.path).names
+
+
 def test_compaction_deduplicates_one_level_zero_shard_then_becomes_stable(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
