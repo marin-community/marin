@@ -24,6 +24,7 @@ the GLM and v0 tokenizations, so the window holds for whichever model answers.
 import asyncio
 import hashlib
 import json
+import logging
 import threading
 import time
 from collections import defaultdict
@@ -38,6 +39,8 @@ from starlette.routing import Route
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from experiments.post_training.sft_shootout.relay import Author, TrialState, Trigger, is_completion_claim, route
+
+logger = logging.getLogger(__name__)
 
 TRIAL_HEADER = "x-ot-trial-id"
 UNLOGGED_REQUEST_KEYS = frozenset({"messages", "tools"})
@@ -197,24 +200,29 @@ def build_proxy(
             "messages": messages[first:],
             "tools": body.get("tools") if first == 0 else None,
         }
-        tokens = await counts(body)
-        record["prompt_tokens_local"] = {author.value: value for author, value in tokens.items()}
-
         backend, trigger = teacher, None
-        if relay is not None:
-            state = states[trial or ""]
-            author, trigger = route(state, messages, tokens[Author.STUDENT], relay.budget_tokens)
-            backend = relay.student if author is Author.STUDENT else teacher
-        response, latency = await call(backend, body)
-        turn = turn_record(backend, trigger, response, latency)
+        try:
+            tokens = await counts(body)
+            record["prompt_tokens_local"] = {author.value: value for author, value in tokens.items()}
 
-        if relay is not None and backend is relay.student and response.status_code == 200:
-            reply = turn["response_messages"][0] or {}
-            if is_completion_claim(reply):
-                states[trial or ""].takeover = Trigger.COMPLETION_CLAIM
-                record["withheld_student_turn"] = turn
-                response, latency = await call(teacher, body)
-                turn = turn_record(teacher, Trigger.COMPLETION_CLAIM, response, latency)
+            if relay is not None:
+                state = states[trial or ""]
+                author, trigger = route(state, messages, tokens[Author.STUDENT], relay.budget_tokens)
+                backend = relay.student if author is Author.STUDENT else teacher
+            response, latency = await call(backend, body)
+            turn = turn_record(backend, trigger, response, latency)
+
+            if relay is not None and backend is relay.student and response.status_code == 200:
+                reply = turn["response_messages"][0] or {}
+                if is_completion_claim(reply):
+                    states[trial or ""].takeover = Trigger.COMPLETION_CLAIM
+                    record["withheld_student_turn"] = turn
+                    response, latency = await call(teacher, body)
+                    turn = turn_record(teacher, Trigger.COMPLETION_CLAIM, response, latency)
+        except Exception as error:  # an unlogged 500 hides proxy failures (#212 SWE relay shard-00 round 3)
+            logger.exception("proxy failure for trial %s", trial)
+            log.write({**record, "author": backend.author.value, "trigger": trigger, "status": 502, "latency_s": None, "error": repr(error)[:2000]})
+            return JSONResponse({"error": f"proxy failure: {type(error).__name__}"}, status_code=502)
         log.write({**record, **turn})
         return Response(response.content, response.status_code, media_type=response.headers.get("content-type"))
 

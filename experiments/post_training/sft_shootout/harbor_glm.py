@@ -71,6 +71,7 @@ from starlette.applications import Starlette
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.sft_shootout.glm_proxy import Backend, RelayPolicy, RequestLog, build_proxy, load_tokenizer
+from experiments.post_training.sft_shootout.rebuild_traces import harbor_results
 from experiments.post_training.sft_shootout.relay import Author
 from experiments.post_training.sft_shootout.scrub_run import scrub_text
 
@@ -129,6 +130,9 @@ AGENTS = {
 }
 # Written to --output only after Harbor exits 0 and everything is uploaded.
 SUCCESS_MARKER = "_SUCCESS"
+# A run fails (no _SUCCESS; its outputs go to <output>.failed-<id>) when more than this share of its trials raised
+# without ever getting a 200 reply from the proxy: the proxy or a backend was down, not the agent.
+MAX_UNSERVED_SHARE = 0.2
 MODEL_FREE_AGENTS = {"oracle", "null", "network-probe", "tool-env-probe"}
 
 
@@ -398,13 +402,35 @@ def main() -> None:
     scrub(job_dir)
     if (work / "requests.jsonl").exists():
         scrub_file(work / "requests.jsonl")
-    StoragePath(args.output).upload_from(str(job_dir), recursive=True)
+    unserved = unserved_trials(job_dir, work / "requests.jsonl") if capability else None
+    output = args.output.rstrip("/")
+    if unserved and unserved["share"] > MAX_UNSERVED_SHARE:
+        output = f"{output}.failed-{uuid.uuid4().hex[:8]}"
+    StoragePath(output).upload_from(str(job_dir), recursive=True)
     if (work / "requests.jsonl").exists():
-        StoragePath(f"{args.output.rstrip('/')}/requests.jsonl").upload_from(str(work / "requests.jsonl"))
-    logger.info("Uploaded results to %s (harbor exit %d)", args.output, returncode)
+        StoragePath(f"{output}/requests.jsonl").upload_from(str(work / "requests.jsonl"))
+    logger.info("Uploaded results to %s (harbor exit %d, unserved %s)", output, returncode, json.dumps(unserved))
     if returncode != 0:
         raise SystemExit(returncode)
-    StoragePath(f"{args.output.rstrip('/')}/{SUCCESS_MARKER}").write_text("")
+    if output != args.output.rstrip("/"):
+        raise SystemExit(f"RUN_UNSERVED: {unserved['unserved']} of {unserved['trials']} trials raised with no proxy reply")
+    StoragePath(f"{output}/{SUCCESS_MARKER}").write_text("")
+
+
+def unserved_trials(job_dir: Path, requests: Path) -> dict:
+    """Trials whose final Harbor attempt raised and that never got a 200 reply from the proxy."""
+    served = set()
+    if requests.exists():
+        for line in requests.read_text().splitlines():
+            record = json.loads(line)
+            if record.get("status") == 200:
+                served.add(record.get("trial"))
+    final: dict[str, dict] = {}
+    for trial_id, attempt in harbor_results(StoragePath(str(job_dir))).items():
+        if attempt["trial_name"] not in final or attempt["retry"] > final[attempt["trial_name"]]["retry"]:
+            final[attempt["trial_name"]] = {**attempt, "trial_id": trial_id}
+    unserved = sum(1 for t in final.values() if t["exception"] and t["trial_id"] not in served)
+    return {"trials": len(final), "unserved": unserved, "share": unserved / len(final) if final else 0.0}
 
 
 if __name__ == "__main__":

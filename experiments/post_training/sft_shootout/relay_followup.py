@@ -5,7 +5,8 @@
 
 A relay episode is a passing trial (its final Harbor attempt) with at least one GLM turn, as in
 ``pilot_report.py``. A follow-up round runs every non-held-out task of the shard that has fewer than
-``--need`` episodes and fewer than ``--max-runs`` runs so far (one run = one trial, any round). Reads each
+``--need`` episodes and fewer than ``--max-runs`` runs so far (one run = one trial, any round; a trial that
+raised before any GLM turn, e.g. on proxy errors, is not a run). Reads each
 earlier round's Harbor results and ``rebuilt.jsonl``, writes ``--out`` (a ``harbor_glm.py --task-list``)
 with the remaining tasks and the per-task episode and run counts, and prints the number of remaining
 tasks as the last line.
@@ -24,7 +25,7 @@ from experiments.post_training.sft_shootout.rebuild_traces import harbor_results
 
 
 def round_counts(prefix: str) -> tuple[Counter, Counter]:
-    """(relay episodes, runs) per task in one round."""
+    """(relay episodes, runs) per task in one round. A trial that raised and has no GLM turn is not a run."""
     final: dict[str, dict] = {}
     for trial_id, attempt in harbor_results(StoragePath(prefix)).items():
         current = final.get(attempt["trial_name"])
@@ -35,7 +36,8 @@ def round_counts(prefix: str) -> tuple[Counter, Counter]:
         row = json.loads(line)
         glm_turns[row["trial_id"]] += row["tokens"].get("glm", {}).get("turns", 0)
     episodes = Counter(t["task_id"] for t in final.values() if t["passed"] and glm_turns[t["trial_id"]])
-    return episodes, Counter(t["task_id"] for t in final.values())
+    runs = Counter(t["task_id"] for t in final.values() if not t["exception"] or glm_turns[t["trial_id"]])
+    return episodes, runs
 
 
 def main() -> None:

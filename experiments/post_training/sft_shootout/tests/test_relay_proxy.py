@@ -175,3 +175,11 @@ def test_summarization_restart_and_retry_keep_conversations_apart(relay_app):
     conversation, _, problems, _ = rebuild(main)
     assert problems == []
     assert [m["content"] for m in conversation] == ["task", "a1 again", "$", '{"task_complete": true}']
+
+
+def test_backend_failure_is_logged_and_returns_502(relay_app):
+    test_client, _, _, log_path = relay_app  # no student reply queued: the student call raises
+    response = post(test_client, [{"role": "user", "content": "fix the bug"}])
+    assert response.status_code == 502
+    (record,) = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert record["status"] == 502 and record["author"] == Author.STUDENT.value and record["trial"] == "t1" and record["error"]
