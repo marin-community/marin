@@ -13,7 +13,8 @@ One row per conversation of a trial attempt (a trial has more than one when Term
 its context: the summarizer calls and the restarted history are separate conversations). Fields:
 family, agent, package_revision, relay, run, trial_id, conversation, n_conversations, task_id (the task
 folder name, as in the pool manifest), trial_name, sample (0-based index among the task's samples),
-retry (Harbor's infrastructure retry), reward, passed, exception, trial_seconds, agent_seconds, triggers, tokens (per author:
+retry (Harbor's infrastructure retry), reward, passed, exception, trial_seconds, agent_seconds, triggers, dropped_replies (replies the harness
+discarded, with the message index they preceded), tokens (per author:
 turns, prompt, completion, reasoning), messages (assistant turns carry author, trigger, usage,
 reasoning_content), tools, problems.
 
@@ -45,14 +46,17 @@ def assistant_turn(record: dict) -> dict:
     return turn
 
 
-def rebuild(records: list[dict]) -> tuple[list[dict], dict | None, list[str]]:
-    """Return one conversation, its tools, and any consistency problems, from its records in order.
+def rebuild(records: list[dict]) -> tuple[list[dict], dict | None, list[str], list[dict]]:
+    """Return one conversation, its tools, consistency problems and dropped replies, from its records in order.
 
     Each reply is kept until the next request echoes it as its first new message. A request that adds
-    nothing (a retry of the same request) replaces the pending reply.
+    nothing (a retry of the same request) replaces the pending reply. A reply the harness discarded
+    (mini-swe-agent drops a reply without a valid tool call and sends "Tool call error:" instead) is
+    left out of the conversation and returned in the dropped replies.
     """
     conversation: list[dict] = []
     problems: list[str] = []
+    dropped: list[dict] = []
     tools = records[0].get("tools")
     seen = 0
     pending: dict | None = None
@@ -63,7 +67,7 @@ def rebuild(records: list[dict]) -> tuple[list[dict], dict | None, list[str]]:
         new = list(record["messages"])
         if pending is not None and new:
             if new[0].get("role") != "assistant":
-                problems.append(f"the reply before message {record['first_message']} was not echoed")
+                dropped.append({**pending, "before_message": record["first_message"]})
             else:
                 if (new[0].get("content") or "").strip() != (pending.get("content") or "").strip():
                     problems.append(f"assistant message {len(conversation)} differs from its logged reply")
@@ -75,7 +79,7 @@ def rebuild(records: list[dict]) -> tuple[list[dict], dict | None, list[str]]:
         pending = assistant_turn(record) if record.get("status") == 200 else None
     if pending is not None:
         conversation.append(pending)
-    return conversation, tools, problems
+    return conversation, tools, problems, dropped
 
 
 def seconds(phase: dict | None) -> float | None:
@@ -158,7 +162,7 @@ def main() -> None:
     results = harbor_results(StoragePath(prefix))
     rows = []
     for (trial_id, index), records in sorted(by_conversation.items()):
-        conversation, tools, problems = rebuild(sorted(records, key=lambda r: r["ts"]))
+        conversation, tools, problems, dropped = rebuild(sorted(records, key=lambda r: r["ts"]))
         if trial_id not in results:
             problems.append("no Harbor trial carries this correlation id")
         rows.append(
@@ -173,6 +177,7 @@ def main() -> None:
                 "messages": conversation,
                 "tools": tools,
                 "problems": problems,
+                "dropped_replies": dropped,
             }
         )
     with StoragePath(output).open("w") as handle:

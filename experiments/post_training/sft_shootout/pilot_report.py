@@ -128,6 +128,8 @@ def main() -> None:
         "model_calls_per_trial": spread(calls),
         "trials_with_model_calls": len(conversations),
         "trials_summarized": sum(1 for n in conversations.values() if n > 1),
+        "dropped_replies": sum(len(row.get("dropped_replies", [])) for row in rows),
+        "trials_with_dropped_replies": len({row["trial_id"] for row in rows if row.get("dropped_replies")}),
     }
     if any("v0" in row["tokens"] for row in rows):
         report["relay"] = relay_stats(rows, final)

@@ -145,7 +145,7 @@ def test_rebuild_restores_replies_authors_and_the_final_turn(relay_app):
     second = first + [{"role": "assistant", "content": '{"commands": []}'}, {"role": "user", "content": "$"}]
     post(test_client, second)
     records = [json.loads(line) for line in log_path.read_text().splitlines()]
-    conversation, _, problems = rebuild(records)
+    conversation, _, problems, _ = rebuild(records)
     assert problems == []
     assert [m["role"] for m in conversation] == ["system", "user", "assistant", "user", "assistant"]
     assert conversation[2]["reasoning_content"] == "think first" and conversation[2]["author"] == "v0"
@@ -167,6 +167,6 @@ def test_summarization_restart_and_retry_keep_conversations_apart(relay_app):
     records = [json.loads(line) for line in log_path.read_text().splitlines()]
     assert [(r["conversation"], r["first_message"]) for r in records] == [(0, 0), (0, 1), (1, 0), (2, 0), (0, 1)]
     main = [r for r in records if r["conversation"] == 0]
-    conversation, _, problems = rebuild(main)
+    conversation, _, problems, _ = rebuild(main)
     assert problems == []
     assert [m["content"] for m in conversation] == ["task", "a1 again", "$", '{"task_complete": true}']
