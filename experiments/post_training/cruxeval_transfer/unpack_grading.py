@@ -12,6 +12,8 @@ import re
 import zipfile
 from pathlib import Path
 
+from experiments.post_training.cruxeval_transfer.constants import COLLECTION_SIZE
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -40,7 +42,7 @@ def main() -> None:
         manifest = json.loads(archive.read("manifest.json"))
     prompts = {row["custom_id"]: row for row in requests}
     identities = {prompt + f"::{sample}" for prompt in prompts for sample in range(8)}
-    if len(responses) != 12800 or {row["custom_id"] for row in responses} != identities:
+    if len(responses) != COLLECTION_SIZE or {row["custom_id"] for row in responses} != identities:
         raise ValueError("Expected eight distinct responses per prompt")
     args.output.mkdir(parents=True, exist_ok=False)
     (args.output / "bundle.zip").write_bytes(payload)

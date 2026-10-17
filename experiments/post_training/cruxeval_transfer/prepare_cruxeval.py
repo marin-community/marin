@@ -12,7 +12,12 @@ from pathlib import Path
 import click
 from transformers import AutoTokenizer
 
-from experiments.post_training.cruxeval_transfer.constants import DATA_SHA256, STUDENT_MODEL, STUDENT_REVISION
+from experiments.post_training.cruxeval_transfer.constants import (
+    BATCH_SIZE,
+    DATA_SHA256,
+    STUDENT_MODEL,
+    STUDENT_REVISION,
+)
 from experiments.post_training.cruxeval_transfer.rendering import END_TURN_ID, token_counts, training_row
 
 
@@ -117,7 +122,7 @@ def main(source: Path, grades: Path, output: Path, max_sequence_tokens: int) -> 
                 row | {"rendered": rendered, "input_ids": encoded["input_ids"], "loss_mask": encoded["assistant_masks"]}
             )
     output.mkdir(parents=True)
-    padding_rows = -len(rows) % 16
+    padding_rows = -len(rows) % BATCH_SIZE
     empty = {"input_ids": [END_TURN_ID] * max_sequence_tokens, "loss_weights": [0] * max_sequence_tokens}
     with gzip.open(output / "train-prebuilt.jsonl.gz", "wt") as stream:
         for row in prebuilt + [empty] * padding_rows:
@@ -133,9 +138,9 @@ def main(source: Path, grades: Path, output: Path, max_sequence_tokens: int) -> 
         "selection": "correct execution grade, finish_reason stop, nonempty reasoning; one per problem/direction",
         "training_rows": len(rows),
         "selected_by_task": dict(Counter(row["task"] for row in rows)),
-        "batch_size": 16,
+        "batch_size": BATCH_SIZE,
         "padding_rows": padding_rows,
-        "steps_per_epoch": (len(rows) + padding_rows) // 16,
+        "steps_per_epoch": (len(rows) + padding_rows) // BATCH_SIZE,
         "evaluation_denominators": {"input": 800, "output": 800},
         "max_sequence_tokens": max_sequence_tokens,
         "longest_row": max(row["tokens"] for row in audits),

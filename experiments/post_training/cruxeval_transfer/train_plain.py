@@ -11,7 +11,6 @@ from functools import partial
 from pathlib import Path
 from typing import cast
 
-import numpy as np
 from fray.current_client import current_client, set_current_client
 from fray.iris_backend import FrayIrisClient
 from fray.types import ANY_REGION, Entrypoint, JobRequest, ResourceConfig, create_environment
@@ -21,7 +20,6 @@ from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatas
 from levanter.data.text.formats import PrebuiltLmDatasetFormat
 from levanter.main.train_lm import TrainLmConfig
 from levanter.optim.config import AdamConfig
-from levanter.store.cache import TreeCache
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.utils.mesh import MeshConfig
@@ -31,6 +29,7 @@ from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import Duration
 
+from experiments.post_training.cruxeval_transfer.cache_integrity import verify_cache
 from experiments.post_training.cruxeval_transfer.constants import PARENT_DESTINATION, STUDENT_MODEL, STUDENT_REVISION
 from experiments.sft.launcher import HFModel, SFTSpec
 
@@ -53,35 +52,12 @@ def optimizer(learning_rate: float) -> AdamConfig:
     )
 
 
-def verify_cache(config: TrainLmOnPodConfig, report: dict) -> None:
-    training = cast(TrainLmConfig, config.train_config)
-    component = training.data.components["cruxeval"]
-    cache = TreeCache.load(
-        prefix_join(component.cache_dir, "train"),
-        {"input_ids": np.zeros(0, dtype=np.int32), "loss_weights": np.zeros(0, dtype=np.float32)},
-    )
-    expected_rows = report["training_rows"] + report["padding_rows"]
-    if len(cache) != expected_rows:
-        raise ValueError(f"Wrong cache row count: {len(cache)} != {expected_rows}")
-    supervised = 0
-    for start in range(0, expected_rows, 8):
-        for row in cache.get_batch_sync(list(range(start, min(start + 8, expected_rows)))):
-            if len(row["input_ids"]) != report["max_sequence_tokens"]:
-                raise ValueError("Cache sequence length differs from training context")
-            weights = row["loss_weights"]
-            if weights.shape != row["input_ids"].shape or not np.isin(weights, [0, 1]).all():
-                raise ValueError("Cache loss mask is malformed")
-            supervised += int(weights.sum())
-    if supervised != report["supervised_tokens"]:
-        raise ValueError("Cache changed the supervised token count")
-    print(json.dumps({"verified_cache_rows": len(cache), "supervised_tokens": supervised}), flush=True)
-
-
 def run_training(config: TrainLmOnPodConfig, report: dict) -> None:
     assert config.env_vars is not None
     if config.env_vars["WANDB_MODE"] == "online" and not os.environ.get("WANDB_API_KEY"):
         raise ValueError("Online W&B requires a nonempty WANDB_API_KEY before requesting GPUs")
-    verify_cache(config, report)
+    training = cast(TrainLmConfig, config.train_config)
+    verify_cache(training.data.components["cruxeval"].cache_dir, report)
     environment = {key: os.environ[key] for key in ("CW_KEY_ID", "CW_KEY_SECRET", "MARIN_PREFIX")}
     if "WANDB_API_KEY" in os.environ:
         environment["WANDB_API_KEY"] = os.environ["WANDB_API_KEY"]

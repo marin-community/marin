@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Source pins and regional inputs for the final #9920 experiment."""
+"""Frozen source pins and regional inputs for single-expert CruxEval transfer."""
+
+BATCH_SIZE = 16
+GENERATION_TOKENS = 30720
+COLLECTION_SIZE = 12800
 
 STUDENT_MODEL = "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92"
 STUDENT_REVISION = "fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab"

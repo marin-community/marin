@@ -25,6 +25,8 @@ from marin.inference.iris import remote_inference
 from marin.inference.types import OpenAIEndpoint
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.cruxeval_transfer.constants import GENERATION_TOKENS
+
 
 def validated_prompts(rows: list[dict]) -> list[dict]:
     identities = [row["custom_id"] for row in rows]
@@ -45,7 +47,7 @@ def request_body(prompt: dict, sample: int, model: str) -> dict:
     return {
         "model": model,
         "messages": prompt["b_request"]["messages"],
-        "max_tokens": 30720,
+        "max_tokens": GENERATION_TOKENS,
         "temperature": 1.0,
         "top_p": 1.0,
         "seed": seed,

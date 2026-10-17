@@ -32,6 +32,7 @@ from jax.experimental import multihost_utils
 from jax.random import PRNGKey
 from jax.sharding import NamedSharding, PartitionSpec as P
 from levanter.testing.helpers import skip_if_no_torch
+from rigging.filesystem.storage_path import StoragePath
 from rigging.tunnel import terminate_process_group
 from transformers import GPT2Config as HfGpt2Config
 
@@ -407,8 +408,9 @@ def test_save_pretrained_to_memory_fs(local_gpt2_tokenizer_path):
     )
     converter = gpt2_config.hf_checkpoint_converter()
     parent_path = f"memory://levanter/hf-parent/{uuid.uuid4().hex}"
-    with fs.open(parent_path + "/config.json", "w") as handle:
-        json.dump(gpt2_config.to_hf_config(converter.Vocab.size).to_dict(), handle)
+    (StoragePath(parent_path) / "config.json").write_text(
+        json.dumps(gpt2_config.to_hf_config(converter.Vocab.size).to_dict())
+    )
     converter = converter.replaced(reference_checkpoint=parent_path)
 
     try:

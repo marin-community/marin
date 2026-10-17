@@ -9,6 +9,8 @@ import json
 from collections import Counter
 from pathlib import Path
 
+from experiments.post_training.cruxeval_transfer.constants import COLLECTION_SIZE
+
 
 def select_first_correct(audit: list[dict], provenance: list[dict]) -> tuple[list[dict], list[str]]:
     grades = {row["custom_id"]: row for row in audit}
@@ -39,7 +41,7 @@ def main() -> None:
     audit = [json.loads(line) for line in args.audit.read_text().splitlines()]
     provenance = [json.loads(line) for line in args.provenance.read_text().splitlines()]
     selected, uncovered = select_first_correct(audit, provenance)
-    if len(audit) != 12800 or len(selected) + len(uncovered) != 1600:
+    if len(audit) != COLLECTION_SIZE or len(selected) + len(uncovered) != 1600:
         raise ValueError("Incomplete collection")
     result = {
         "selection": "first execution-correct sample in index order 0..7; no reasoning or finish-reason filter",

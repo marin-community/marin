@@ -14,6 +14,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.cruxeval_transfer.constants import COLLECTION_SIZE
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -23,7 +25,7 @@ def main() -> None:
     manifest_text = (source / "manifest.json").read_text()
     manifest = json.loads(manifest_text)
     complete = json.loads((source / "complete.json").read_text())
-    if manifest["requests"] != 12800 or complete["requests"] != 12800:
+    if manifest["requests"] != COLLECTION_SIZE or complete["requests"] != COLLECTION_SIZE:
         raise ValueError("Expected a completed 12800-response collection")
     requests_text = StoragePath(manifest["prompt_source"]).read_text()
     requests = {row["custom_id"]: row for row in map(json.loads, requests_text.splitlines())}
@@ -62,7 +64,7 @@ def main() -> None:
                     raise ValueError("Grading text exceeds 256 MiB export bound")
                 stream.write(encoded)
                 if (index + 1) % 1600 == 0:
-                    print(f"GRADING_EXPORT_READ {index + 1}/12800", flush=True)
+                    print(f"GRADING_EXPORT_READ {index + 1}/{COLLECTION_SIZE}", flush=True)
     payload = buffer.getvalue()
     if len(payload) > 64 * 1024 * 1024:
         raise ValueError("Compressed grading bundle exceeds 64 MiB")

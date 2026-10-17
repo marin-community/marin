@@ -488,7 +488,7 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism(monkeypatch
     run_on_cpu_devices(
         """
         import json
-        import fsspec
+        from rigging.filesystem.storage_path import StoragePath
         import math
         import tempfile
         from dataclasses import replace
@@ -589,9 +589,8 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism(monkeypatch
                 tokenizer=str(hf_path),
             )
             remote_parent = "memory://snowball-export-parent"
-            remote_fs = fsspec.filesystem("memory")
             for source in hf_path.iterdir():
-                remote_fs.put(str(source), remote_parent + "/" + source.name)
+                (StoragePath(remote_parent) / source.name).upload_from(str(source))
             main(TrainLmConfig(
                 data=data, model=model_cfg, initialize_from_hf=remote_parent,
                 optimizer=AdamConfig(learning_rate=5e-5),

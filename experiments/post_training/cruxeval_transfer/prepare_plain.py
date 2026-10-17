@@ -15,10 +15,15 @@ from pathlib import Path
 from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoTokenizer
 
-from experiments.post_training.cruxeval_transfer.constants import STUDENT_MODEL, STUDENT_REVISION
+from experiments.post_training.cruxeval_transfer.constants import (
+    BATCH_SIZE,
+    COLLECTION_SIZE,
+    STUDENT_MODEL,
+    STUDENT_REVISION,
+)
+from experiments.post_training.cruxeval_transfer.rendering import END_TURN_ID
 
 CONTEXT = 32768
-PAD_TOKEN = 128009
 
 
 def training_tokens(prompt_tokens: list[int], completion_tokens: list[int], context: int) -> dict:
@@ -31,7 +36,7 @@ def training_tokens(prompt_tokens: list[int], completion_tokens: list[int], cont
     mask = [0] * len(prompt_tokens) + [1] * len(completion_tokens)
     padding = context - len(tokens)
     return {
-        "input_ids": tokens + [PAD_TOKEN] * padding,
+        "input_ids": tokens + [END_TURN_ID] * padding,
         "loss_weights": mask[1:] + [0] * (padding + 1),
     }
 
@@ -44,10 +49,10 @@ def main() -> None:
     args = parser.parse_args()
     source = StoragePath(args.source)
     output = StoragePath(args.output)
-    manifest_bytes = (source / "manifest.json").read_text()
-    manifest = json.loads(manifest_bytes)
+    manifest_text = (source / "manifest.json").read_text()
+    manifest = json.loads(manifest_text)
     complete = json.loads((source / "complete.json").read_text())
-    if manifest["requests"] != 12800 or complete["requests"] != 12800:
+    if manifest["requests"] != COLLECTION_SIZE or complete["requests"] != COLLECTION_SIZE:
         raise ValueError("Expected completed eight-sample collection of all 1600 prompts")
     prompt_ids = manifest["prompt_ids"]
     if len(prompt_ids) != 1600 or len(set(prompt_ids)) != 1600:
@@ -133,16 +138,16 @@ def main() -> None:
                             "loss_weights": encoded["loss_weights"][: audit["tokens"]],
                         }
                     )
-            padding_rows = (-len(audits)) % 16
+            padding_rows = (-len(audits)) % BATCH_SIZE
             for _ in range(padding_rows):
-                stream.write(json.dumps({"input_ids": [PAD_TOKEN] * CONTEXT, "loss_weights": [0] * CONTEXT}) + "\n")
+                stream.write(json.dumps({"input_ids": [END_TURN_ID] * CONTEXT, "loss_weights": [0] * CONTEXT}) + "\n")
         if selection is None and Counter(row["task"] for row in audits) != {"input": 800, "output": 800}:
             raise ValueError("Lost direction coverage")
         for name, rows in (("token-audit.jsonl", audits), ("row-probes.jsonl", probes)):
             (directory / name).write_text("".join(json.dumps(row) + "\n" for row in rows))
         report = {
             "source": args.source,
-            "source_manifest_sha256": hashlib.sha256(manifest_bytes.encode()).hexdigest(),
+            "source_manifest_sha256": hashlib.sha256(manifest_text.encode()).hexdigest(),
             "student": STUDENT_MODEL,
             "student_revision": STUDENT_REVISION,
             "teacher": manifest["teacher"],
@@ -156,8 +161,8 @@ def main() -> None:
             "test_exposed": True,
             "training_rows": len(audits),
             "padding_rows": padding_rows,
-            "batch_size": 16,
-            "steps_per_epoch": (len(audits) + padding_rows) // 16,
+            "batch_size": BATCH_SIZE,
+            "steps_per_epoch": (len(audits) + padding_rows) // BATCH_SIZE,
             "max_sequence_tokens": CONTEXT,
             "supervised_tokens": sum(row["supervised_tokens"] for row in audits),
             "input_tokens": sum(row["tokens"] for row in audits),

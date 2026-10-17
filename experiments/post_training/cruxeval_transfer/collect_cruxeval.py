@@ -16,7 +16,7 @@ import click
 from marin.inference.openai_batch import jsonl_text
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.cruxeval_transfer.constants import DATA_REVISION, DATA_SHA256
+from experiments.post_training.cruxeval_transfer.constants import DATA_REVISION, DATA_SHA256, GENERATION_TOKENS
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 
 DATA_URL = (
@@ -74,7 +74,7 @@ def build_requests(captured: list[dict], problems: list[dict]) -> list[dict]:
     for original in captured:
         if set(original) != {"model", "messages", "max_tokens", "chat_template_kwargs"}:
             raise ValueError("Captured request settings differ from the reconciled baseline")
-        if original["max_tokens"] != 30720 or original["chat_template_kwargs"] != {"enable_thinking": True}:
+        if original["max_tokens"] != GENERATION_TOKENS or original["chat_template_kwargs"] != {"enable_thinking": True}:
             raise ValueError("Captured generation budget or thinking mode differs from baseline")
         messages = original["messages"]
         if len(messages) != 1 or messages[0]["role"] != "user":
