@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import shutil
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -100,13 +100,13 @@ class PolicySpec:
     # engine data parallelism, and model-specific vLLM flags and sampling
     # kwargs.
     serve_gpus: int
+    trainer_config: dict[str, Any]
     serve_memory: str | None = None
     serve_data_parallel_size: int | None = None
     serve_vllm_extra_args: tuple[str, ...] = ()
     serve_gen_kwargs: tuple[tuple[str, str], ...] = ()
     # Pre-existing model artifact; None mirrors the HF model via model_step.
     adopted_model: ArtifactStep[LevanterCheckpoint] | None = None
-    trainer_config: dict[str, Any] = field(default_factory=lambda: {"strategy": "fsdp2"})
 
 
 QWEN_POLICY = PolicySpec(
@@ -140,6 +140,14 @@ SNOWBALL_MODEL = ArtifactStep.adopt(
     kind=LevanterCheckpoint,
 )
 
+SNOWBALL_PARALLELISM = {
+    "tensor_model_parallel_size": 1,
+    "pipeline_model_parallel_size": 2,
+    "context_parallel_size": 1,
+    "expert_model_parallel_size": GPUS_PER_NODE,
+    "expert_tensor_parallel_size": 1,
+}
+
 # The Snowball SFT trains where its export lives (us-east-02a) so 134GB of
 # shards never stream cross-region. Rollout and serving engines mirror the
 # export's profile: one node-sized vLLM instance, tensor_parallel_size=1,
@@ -161,6 +169,7 @@ SNOWBALL_POLICY = PolicySpec(
     # and curb thinking loops with a light repetition penalty.
     serve_gen_kwargs=(("skip_special_tokens", "false"), ("repetition_penalty", "1.1")),
     adopted_model=SNOWBALL_MODEL,
+    trainer_config={"strategy": "megatron", "megatron_config": SNOWBALL_PARALLELISM},
 )
 POLICIES = {policy.label: policy for policy in (QWEN_POLICY, SNOWBALL_POLICY)}
 
@@ -216,6 +225,7 @@ class TrainerTuning:
     learning_rate: float
     weight_decay: float
     sampling_reversion_mass: float
+    megatron_config: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -294,29 +304,30 @@ FULL = ScalePreset(
     evals="math500,gsm8k-0shot",
 )
 
-# The 67B-A2B smoke: four FSDP2 policy nodes hold the sharded parameters and
-# AdamW state (~34GB/GPU), one node-sized expert-parallel engine generates.
+SNOWBALL_ROLE_PLAN = SkyRLRolePlan(
+    colocate_all=False,
+    policy_num_nodes=4,
+    policy_num_gpus_per_node=GPUS_PER_NODE,
+    colocate_policy_ref=False,
+    reference_num_nodes=2,
+    num_inference_engines=1,
+    inference_engine_tensor_parallel_size=1,
+    inference_engine_pipeline_parallel_size=1,
+    inference_engine_data_parallel_size=GPUS_PER_NODE,
+    inference_engine_expert_parallel_size=GPUS_PER_NODE,
+    train_batch_size=32,
+    policy_mini_batch_size=32,
+    micro_train_batch_size_per_gpu=4,
+    n_samples_per_prompt=4,
+)
+
+# The smoke uses four policy nodes, two reference nodes and one expert-parallel engine.
 # NCCL rank-drop failures on this stack appeared only at 32k contexts; this
 # preset stays at the 2k window.
 SNOWBALL_SMOKE = ScalePreset(
     label="snowball-smoke",
-    num_nodes=5,
-    role_plan=SkyRLRolePlan(
-        colocate_all=False,
-        policy_num_nodes=4,
-        policy_num_gpus_per_node=GPUS_PER_NODE,
-        colocate_policy_ref=True,
-        reference_num_nodes=4,
-        num_inference_engines=1,
-        inference_engine_tensor_parallel_size=1,
-        inference_engine_pipeline_parallel_size=1,
-        inference_engine_data_parallel_size=GPUS_PER_NODE,
-        inference_engine_expert_parallel_size=GPUS_PER_NODE,
-        train_batch_size=32,
-        policy_mini_batch_size=32,
-        micro_train_batch_size_per_gpu=4,
-        n_samples_per_prompt=4,
-    ),
+    num_nodes=7,
+    role_plan=SNOWBALL_ROLE_PLAN,
     max_steps=4,
     eval_interval=-1,
     ckpt_interval=4,
@@ -326,31 +337,19 @@ SNOWBALL_SMOKE = ScalePreset(
     evals="gsm8k-smoke",
 )
 
-# The 67B-A2B measurement point: 4 FSDP2 policy nodes + 4 expert-parallel
+# The measurement uses four policy nodes, two reference nodes and four expert-parallel
 # engine nodes. The smoke averaged 884 generated tokens against a 1024 cap,
 # so the full runs widen the window to 3072 with a 2048 response budget
 # (the 1024-token prompt budget still admits every pool row). 60 steps at
 # 128x8 responses bounds an arm near the round-2 per-arm token budget.
 SNOWBALL_FULL = ScalePreset(
     label="snowball-full",
-    num_nodes=8,
-    role_plan=SkyRLRolePlan(
-        colocate_all=False,
-        policy_num_nodes=4,
-        policy_num_gpus_per_node=GPUS_PER_NODE,
-        colocate_policy_ref=True,
-        reference_num_nodes=4,
+    num_nodes=10,
+    role_plan=replace(
+        SNOWBALL_ROLE_PLAN,
         num_inference_engines=4,
-        inference_engine_tensor_parallel_size=1,
-        inference_engine_pipeline_parallel_size=1,
-        inference_engine_data_parallel_size=GPUS_PER_NODE,
-        inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=128,
         policy_mini_batch_size=64,
-        # At micro=1 the FSDP update ran 32 sequential micro-steps, each
-        # re-gathering the full 134GB of shards; policy_train was ~1660s of a
-        # ~1770s step. micro=4 quarters the all-gather traffic per step.
-        micro_train_batch_size_per_gpu=4,
         n_samples_per_prompt=8,
     ),
     max_steps=60,
@@ -374,28 +373,24 @@ SNOWBALL_MUONH_TUNING = TrainerTuning(
     # MuonH validates weight_decay=0 because every group is decay-free by recipe.
     weight_decay=0.0,
     sampling_reversion_mass=2.0,
+    megatron_config={
+        "pipeline_model_parallel_size": 4,
+        "transformer_config_kwargs": {
+            "num_layers_in_first_pipeline_stage": 6,
+            "num_layers_in_last_pipeline_stage": 6,
+        },
+    },
 )
 
-# Memory probe for the round-4 recipe: same 4-node FSDP sharding as the full
-# preset so per-GPU headroom is representative, micro_train raised to 8 to
-# halve the all-gather passes if MuonH's FP32 master weights leave room.
+# The round-4 recipe trains one sequence per policy rank per microbatch.
 SNOWBALL_SMOKE_R4 = ScalePreset(
     label="snowball-smoke-r4",
-    num_nodes=5,
-    role_plan=SkyRLRolePlan(
-        colocate_all=False,
-        policy_num_nodes=4,
-        policy_num_gpus_per_node=GPUS_PER_NODE,
-        colocate_policy_ref=True,
-        reference_num_nodes=4,
-        num_inference_engines=1,
-        inference_engine_tensor_parallel_size=1,
-        inference_engine_pipeline_parallel_size=1,
-        inference_engine_data_parallel_size=GPUS_PER_NODE,
-        inference_engine_expert_parallel_size=GPUS_PER_NODE,
+    num_nodes=7,
+    role_plan=replace(
+        SNOWBALL_ROLE_PLAN,
         train_batch_size=64,
         policy_mini_batch_size=64,
-        micro_train_batch_size_per_gpu=8,
+        micro_train_batch_size_per_gpu=1,
         n_samples_per_prompt=8,
     ),
     max_steps=4,
@@ -410,23 +405,13 @@ SNOWBALL_SMOKE_R4 = ScalePreset(
 
 SNOWBALL_FULL_R4 = ScalePreset(
     label="snowball-full-r4",
-    num_nodes=8,
-    role_plan=SkyRLRolePlan(
-        colocate_all=False,
-        policy_num_nodes=4,
-        policy_num_gpus_per_node=GPUS_PER_NODE,
-        colocate_policy_ref=True,
-        reference_num_nodes=4,
+    num_nodes=10,
+    role_plan=replace(
+        SNOWBALL_ROLE_PLAN,
         num_inference_engines=4,
-        inference_engine_tensor_parallel_size=1,
-        inference_engine_pipeline_parallel_size=1,
-        inference_engine_data_parallel_size=GPUS_PER_NODE,
-        inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=64,
         policy_mini_batch_size=64,
-        # Eight 3072-token sequences per micro-batch fit in HBM at this window;
-        # fewer, larger micro-batches keep the per-step all-gather count low.
-        micro_train_batch_size_per_gpu=8,
+        micro_train_batch_size_per_gpu=1,
         n_samples_per_prompt=8,
     ),
     max_steps=120,
@@ -444,24 +429,15 @@ SNOWBALL_FULL_R4 = ScalePreset(
 # instead of truncating (at 2048, 40-48% of rollouts hit the cap and the
 # hardest bins truncated near-totally). Activation memory tracks tokens per
 # micro batch, and 8x3072-token micro batches sit at the OOM edge on these
-# nodes; micro_train=2 keeps 2x9216 safely below that.
+# nodes; these presets train one sequence per policy rank per microbatch.
 SNOWBALL_SMOKE_R5 = ScalePreset(
     label="snowball-smoke-r5",
-    num_nodes=5,
-    role_plan=SkyRLRolePlan(
-        colocate_all=False,
-        policy_num_nodes=4,
-        policy_num_gpus_per_node=GPUS_PER_NODE,
-        colocate_policy_ref=True,
-        reference_num_nodes=4,
-        num_inference_engines=1,
-        inference_engine_tensor_parallel_size=1,
-        inference_engine_pipeline_parallel_size=1,
-        inference_engine_data_parallel_size=GPUS_PER_NODE,
-        inference_engine_expert_parallel_size=GPUS_PER_NODE,
+    num_nodes=7,
+    role_plan=replace(
+        SNOWBALL_ROLE_PLAN,
         train_batch_size=64,
         policy_mini_batch_size=64,
-        micro_train_batch_size_per_gpu=2,
+        micro_train_batch_size_per_gpu=1,
         n_samples_per_prompt=8,
     ),
     max_steps=4,
@@ -476,21 +452,13 @@ SNOWBALL_SMOKE_R5 = ScalePreset(
 
 SNOWBALL_FULL_R5 = ScalePreset(
     label="snowball-full-r5",
-    num_nodes=8,
-    role_plan=SkyRLRolePlan(
-        colocate_all=False,
-        policy_num_nodes=4,
-        policy_num_gpus_per_node=GPUS_PER_NODE,
-        colocate_policy_ref=True,
-        reference_num_nodes=4,
+    num_nodes=10,
+    role_plan=replace(
+        SNOWBALL_ROLE_PLAN,
         num_inference_engines=4,
-        inference_engine_tensor_parallel_size=1,
-        inference_engine_pipeline_parallel_size=1,
-        inference_engine_data_parallel_size=GPUS_PER_NODE,
-        inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=64,
         policy_mini_batch_size=64,
-        micro_train_batch_size_per_gpu=2,
+        micro_train_batch_size_per_gpu=1,
         n_samples_per_prompt=8,
     ),
     max_steps=120,
@@ -599,9 +567,6 @@ trainer:
     optimizer_config:
       lr: 2.0e-6
       max_grad_norm: 1.0
-    fsdp_config:
-      cpu_offload: false
-      reshard_after_forward: true
 generator:
   backend: vllm
   model_dtype: bfloat16
@@ -610,8 +575,6 @@ generator:
   enforce_eager: false
   run_engines_locally: true
   weight_sync_backend: nccl
-  async_engine: true
-  batched: false
   sampling_params:
     temperature: 1.0
     top_p: 1.0
@@ -625,12 +588,9 @@ data:
     trainer = config["trainer"]
     if trainer["strategy"] == "megatron":
         trainer.pop("micro_forward_batch_size_per_gpu")
-        trainer["policy"].pop("fsdp_config")
         megatron_config = policy.trainer_config["megatron_config"].copy()
         trainer["policy"]["megatron_config"] = megatron_config
         trainer["ref"] = {"megatron_config": megatron_config.copy()}
-        config["generator"].pop("async_engine")
-        config["generator"].pop("batched")
     generator = config["generator"]
     data = config["data"]
     trainer["hf_hub_repo_id"] = None
@@ -644,6 +604,7 @@ data:
         trainer["algorithm"]["dynamic_sampling"] = {"type": "filter"}
     if preset.trainer_tuning is not None:
         tuning = preset.trainer_tuning
+        trainer["policy"]["megatron_config"].update(tuning.megatron_config)
         optimizer = trainer["policy"]["optimizer_config"]
         optimizer.update(
             optimizer=tuning.optimizer,
