@@ -603,6 +603,23 @@ def main() -> None:
         }
         if args.arm == "relay":
             manifest["relay_supervised_tokens"] = splits["train"]["supervised_total"] - replay_info["supervised_tokens"]
+            # Every usable relay episode before the subsample to B, so parity with plain can be read off directly.
+            pool_by_family: dict[str, dict] = {}
+            for attempt in attempts:
+                family = pool_by_family.setdefault(
+                    attempt.family, {"episodes": 0, "supervised_tokens": 0, "tasks": set()}
+                )
+                family["episodes"] += 1
+                family["supervised_tokens"] += attempt.supervised
+                family["tasks"].add(attempt.task_id)
+            manifest["relay_pool"] = {
+                family: {
+                    "episodes": v["episodes"],
+                    "supervised_tokens": v["supervised_tokens"],
+                    "tasks": len(v["tasks"]),
+                }
+                for family, v in sorted(pool_by_family.items())
+            }
         (out / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
         output.mkdirs()
         for path in sorted(out.iterdir(), key=lambda path: path.name == "manifest.json"):
