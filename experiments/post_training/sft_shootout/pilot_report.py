@@ -38,6 +38,41 @@ def spread(values: list[float]) -> dict:
     }
 
 
+def relay_stats(rows: list[dict], final: dict[str, dict]) -> dict:
+    """Trigger frequencies, author shares and episode classes for a relay run.
+
+    A relay episode (training data) passed and has at least one GLM turn; a v0-solo pass has none.
+    """
+    by_trial: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        by_trial[row["trial_id"]].append(row)
+    passed = {t["trial_id"]: t["passed"] for t in final.values()}
+    triggers = Counter()
+    first_trigger = Counter()
+    tokens = defaultdict(lambda: Counter())
+    classes = Counter()
+    for trial_id, trial_rows in by_trial.items():
+        trial_triggers = [trigger for row in trial_rows for trigger in row["triggers"]]
+        triggers.update(set(trial_triggers))
+        first_trigger[trial_triggers[0] if trial_triggers else "none"] += 1
+        glm_turns = 0
+        for row in trial_rows:
+            for author, counts in row["tokens"].items():
+                tokens[author].update(counts)
+            glm_turns += row["tokens"].get("glm", {}).get("turns", 0)
+        outcome = "pass" if passed.get(trial_id) else "fail"
+        classes[f"{outcome}_{'with_glm' if glm_turns else 'v0_solo'}"] += 1
+    total = {key: sum(t[key] for t in tokens.values()) for key in ("turns", "completion", "prompt")}
+    return {
+        "trials": len(by_trial),
+        "trials_with_trigger": {k: v for k, v in sorted(triggers.items())},
+        "first_trigger": dict(first_trigger),
+        "episodes": dict(classes),
+        "v0_share": {key: round(tokens["v0"][key] / total[key], 4) if total[key] else None for key in total},
+        "tokens_by_author": {author: dict(counts) for author, counts in tokens.items()},
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("prefix")
@@ -94,6 +129,8 @@ def main() -> None:
         "trials_with_model_calls": len(conversations),
         "trials_summarized": sum(1 for n in conversations.values() if n > 1),
     }
+    if any("v0" in row["tokens"] for row in rows):
+        report["relay"] = relay_stats(rows, final)
     if args.manifest:
         repos = {
             row["task_id"]: row["repo"]
