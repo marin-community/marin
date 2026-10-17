@@ -7376,6 +7376,14 @@ dependencies = [
     { name = "uvicorn" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "marin-iris", extra = ["controller"] },
+]
+test = [
+    { name = "marin-iris", extra = ["controller"] },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.71.0" },
@@ -7406,6 +7414,10 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "marin-iris", extras = ["controller"], editable = "lib/iris" }]
+test = [{ name = "marin-iris", extras = ["controller"], editable = "lib/iris" }]
 
 [[package]]
 name = "marin-rigging"
