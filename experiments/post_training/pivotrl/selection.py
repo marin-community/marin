@@ -47,8 +47,8 @@ def select_pivots(*, pass_rates_path: str, output_path: str, difficulty_threshol
     with (StoragePath(pass_rates_path) / PASS_RATES_FILENAME).open("rb") as source:
         table = pq.read_table(source)
     if criterion not in table.column_names:
-        raise ValueError(f"no {criterion!r} column; pass-rate counts are {_count_columns(table)}")
-    selected = table.filter(pivot_filter(criterion, difficulty_threshold)).drop_columns(_count_columns(table))
+        raise ValueError(f"no {criterion!r} column; pass-rate counts are {count_columns(table)}")
+    selected = table.filter(pivot_filter(criterion, difficulty_threshold)).drop_columns(count_columns(table))
     if not selected.num_rows:
         raise ValueError("no candidate is a pivot")
 
@@ -64,6 +64,6 @@ def select_pivots(*, pass_rates_path: str, output_path: str, difficulty_threshol
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
-def _count_columns(table: pa.Table) -> list[str]:
+def count_columns(table: pa.Table) -> list[str]:
     """The pass-rate count columns added to the candidate rows."""
     return [*PASS_COUNT_SCHEMA.names, *(name for name in table.column_names if name.startswith("passed_"))]
