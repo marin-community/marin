@@ -6,7 +6,7 @@
 # scrub each finished shard (_SUCCESS present) that has no rebuilt.jsonl yet; exit once every listed shard
 # is rebuilt.
 #   bash experiments/post_training/sft_shootout/finish_shards.sh <out> <shard numbers...>
-set -u
+set -uo pipefail
 out=$1
 shift
 dir=experiments/post_training/sft_shootout
@@ -21,7 +21,7 @@ while [ ${#pending[@]} -gt 0 ]; do
       done) ;;
       ready)
         uv run python $dir/rebuild_traces.py "$shard" "$shard/rebuilt.jsonl" | tail -1 || echo "REBUILD_FAILED $shard"
-        uv run python $dir/scrub_run.py "$shard" | tail -1 || echo "TOKENS_LEFT $shard" ;;
+        uv run python $dir/scrub_run.py "$shard" | tail -1 && uv run python $dir/scrub_run.py "$shard" --check | tail -1 || echo "TOKENS_LEFT $shard" ;;
       *) left+=("$i") ;;
     esac
   done
