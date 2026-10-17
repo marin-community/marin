@@ -134,6 +134,9 @@ const FORWARD_BATCH_BYTES: usize = MAX_WRITE_ROWS_BYTES - (10 << 20);
 /// Leave 5% below the hard byte limit when estimating the next chunk's row count.
 const FORWARD_CHUNK_HEADROOM_DIVISOR: usize = 20;
 
+/// Stop sizing once a chunk fills 90% of its budget rather than seeking an exact fit.
+const FORWARD_CHUNK_MIN_FILL_DIVISOR: usize = 10;
+
 const FORWARD_REQUEST_COMPRESSION: &str = "zstd";
 const FINELOG_ZSTD_LEVEL: i32 = 1;
 
@@ -1384,35 +1387,46 @@ fn chunk_by_bytes(
     let per_row = (ship.get_array_memory_size().max(1) / num_rows.max(1)).max(1);
     let mut rows_per_chunk = (max_bytes / per_row).max(1);
     let target_bytes = max_bytes - max_bytes / FORWARD_CHUNK_HEADROOM_DIVISOR;
+    let min_bytes = max_bytes - max_bytes / FORWARD_CHUNK_MIN_FILL_DIVISOR;
     let schema = ship.schema();
     let mut chunks = Vec::new();
     let mut start = 0;
     while start < num_rows {
         let remaining = num_rows - start;
         let mut len = rows_per_chunk.min(remaining);
-        let mut can_grow = true;
-        let ipc = loop {
+        let mut largest_fit: Option<(usize, Vec<u8>)> = None;
+        let mut smallest_oversized = remaining + 1;
+        let (len, ipc) = loop {
             let ipc = encode_ipc(&schema, &[ship.slice(start, len)])
                 .map_err(|e| StatsError::Internal(format!("encode ship chunk: {e}")))?;
             if ipc.len() <= max_bytes {
-                // Calibrate once, leaving room for varying row widths. Searching
-                // for the exact byte boundary repeatedly copies a full IPC chunk.
-                if can_grow {
-                    let expanded =
-                        (len.saturating_mul(target_bytes) / ipc.len().max(1)).min(remaining);
-                    if expanded > len {
-                        len = expanded;
-                        can_grow = false;
-                        continue;
-                    }
+                if ipc.len() >= min_bytes || len == remaining {
+                    break (len, ipc);
                 }
-                break ipc;
+                let expanded = len.saturating_mul(target_bytes) / ipc.len().max(1);
+                largest_fit = Some((len, ipc));
+                let lower = len + 1;
+                if lower >= smallest_oversized {
+                    break largest_fit.unwrap();
+                }
+                // A wider suffix can invalidate the proportional estimate. Keep
+                // the fitting prefix and bisect the bracket until sufficiently full.
+                len = if smallest_oversized <= remaining {
+                    lower + (smallest_oversized - lower) / 2
+                } else {
+                    expanded.clamp(lower, remaining)
+                };
+                continue;
             }
             if len == 1 {
-                break ipc;
+                break (len, ipc);
             }
-            can_grow = false;
-            len = (len.saturating_mul(target_bytes) / ipc.len()).clamp(1, len - 1);
+            smallest_oversized = len;
+            let lower = largest_fit.as_ref().map_or(1, |(fit, _)| fit + 1);
+            if lower >= smallest_oversized {
+                break largest_fit.expect("an oversized one-row chunk returns above");
+            }
+            len = (len.saturating_mul(target_bytes) / ipc.len()).clamp(lower, len - 1);
         };
         chunks.push((ipc, seqs.value(start + len - 1)));
         start += len;

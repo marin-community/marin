@@ -718,6 +718,43 @@ fn chunk_by_bytes_preserves_uneven_rows_and_isolates_oversized_rows() {
 }
 
 #[test]
+fn chunk_by_bytes_fills_requests_across_a_row_width_transition() {
+    let wide = "x".repeat(100);
+    let values: Vec<&str> = std::iter::repeat_n("x", 100_000)
+        .chain(std::iter::repeat_n(wide.as_str(), 100_000))
+        .collect();
+    let batch = RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![Field::new(
+            "data",
+            DataType::Utf8,
+            false,
+        )])),
+        vec![Arc::new(StringArray::from(values.clone()))],
+    )
+    .unwrap();
+    let seqs = Int64Array::from_iter_values(1..=values.len() as i64);
+    let max_bytes = 1_500_000;
+    let chunks = chunk_by_bytes(&batch, &seqs, max_bytes).unwrap();
+    // These rows need eight requests. Discarding a known fitting prefix at
+    // the width transition produced twelve, with four almost-empty requests.
+    assert!(chunks.len() <= 9, "underfilled chunks add serial hub waits");
+    let mut restored = Vec::new();
+    for (ipc, last_seq) in chunks {
+        assert!(ipc.len() <= max_bytes);
+        let decoded = decode_one_record_batch(&ipc).unwrap();
+        restored.extend(
+            decoded
+                .column(0)
+                .as_string::<i32>()
+                .iter()
+                .map(|value| value.unwrap().to_owned()),
+        );
+        assert_eq!(last_seq, restored.len() as i64);
+    }
+    assert_eq!(restored, values);
+}
+
+#[test]
 fn one_telemetry_sized_read_turn_fits_one_request() {
     let rows = FORWARD_BATCH_ROWS as usize;
     let row = "x".repeat(TELEMETRY_ROW_BYTES);
