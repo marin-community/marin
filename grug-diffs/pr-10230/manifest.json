@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "moe_cplm"
+  ],
+  "base_sha": "5e12684c85eac9295514a4c8cdbfee0a55ad497c",
+  "head_sha": "562d023021844e332069265a768a5a4e505a3547",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "snowball_synthetic",
+      "distance_score": 585,
+      "report_relpath": "moe_cplm/index.html",
+      "status_counts": {
+        "added": 2,
+        "changed": 2,
+        "removed": 2,
+        "unchanged": 0
+      },
+      "variant": "moe_cplm"
+    }
+  ]
+}
