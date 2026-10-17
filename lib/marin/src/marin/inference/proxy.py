@@ -59,7 +59,9 @@ def response_token_usage(payload: bytes) -> tuple[int, int] | None:
         return None
     usage = document["usage"]
     prompt, completion = usage.get("prompt_tokens"), usage.get("completion_tokens")
-    if type(prompt) is not int or type(completion) is not int or prompt < 0 or completion < 0:
+    if not isinstance(prompt, int) or not isinstance(completion, int):
+        return None
+    if isinstance(prompt, bool) or isinstance(completion, bool) or prompt < 0 or completion < 0:
         return None
     return prompt, completion
 
