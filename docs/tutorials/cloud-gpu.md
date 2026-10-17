@@ -82,8 +82,10 @@ CoreWeave `source_prefix`. Paths use `tmp/ttl=Nd/` lifecycle prefixes.
 
 Permanent outputs remain under `s3://marin-us-east-02a/marin`, or the existing
 west-region prefix on `cw-us-west-04a`. `s3://hero-checkpoints` is reserved for
-hero checkpoints. A per-job `MARIN_TEMP_PREFIX` overrides the shared scratch
-default when a job needs an explicit destination.
+hero checkpoints; the d6144 hero launcher explicitly keeps its rolling checkpoints
+there. A per-job `MARIN_TEMP_PREFIX` overrides the shared scratch default.
+Passing `temp_prefix` to `marin_temp_bucket` selects an explicit destination even
+when `MARIN_TEMP_PREFIX` is set.
 
 Do not read or copy data from GCS while running on CoreWeave without explicit
 user approval. The transfer can incur egress charges.
