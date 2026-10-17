@@ -28,7 +28,8 @@ import logging
 import threading
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
@@ -44,6 +45,10 @@ logger = logging.getLogger(__name__)
 
 TRIAL_HEADER = "x-ot-trial-id"
 UNLOGGED_REQUEST_KEYS = frozenset({"messages", "tools"})
+# How long a request keeps re-resolving a backend that refuses connections (e.g. a preempted v0 server that Iris
+# reschedules on another host) before the proxy gives up on it.
+RESOLVE_WINDOW_S = 1200
+RESOLVE_INTERVAL_S = 30
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,8 @@ class Backend:
     model: str
     tokenizer: PreTrainedTokenizerBase
     headers: dict[str, str]
+    # Returns the backend's current base URL; set for a backend whose address can change while the proxy runs.
+    resolve: Callable[[], str] | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -145,12 +152,31 @@ def build_proxy(
         values = await asyncio.gather(*(asyncio.to_thread(count_tokens, b.tokenizer, body) for b in backends))
         return {b.author: value for b, value in zip(backends, values, strict=True)}
 
+    base_urls = {backend.author: backend.base_url for backend in [teacher] + ([relay.student] if relay else [])}
+    resolving = asyncio.Lock()
+
     async def call(backend: Backend, body: dict) -> tuple[httpx.Response, float]:
         started = time.monotonic()
-        response = await client.post(
-            f"{backend.base_url}/chat/completions", json={**body, "model": backend.model}, headers=backend.headers
-        )
-        return response, time.monotonic() - started
+        while True:
+            url = base_urls[backend.author]
+            try:
+                response = await client.post(
+                    f"{url}/chat/completions", json={**body, "model": backend.model}, headers=backend.headers
+                )
+                return response, time.monotonic() - started
+            except httpx.ConnectError:
+                if backend.resolve is None or time.monotonic() - started > RESOLVE_WINDOW_S:
+                    raise
+            async with resolving:
+                if base_urls[backend.author] == url:
+                    try:
+                        base_urls[backend.author] = (await asyncio.to_thread(backend.resolve)).rstrip("/")
+                    except Exception:
+                        logger.exception("could not resolve %s", backend.author.value)
+                    if base_urls[backend.author] != url:
+                        logger.warning("%s moved; now serving at a new address", backend.author.value)
+            if base_urls[backend.author] == url:
+                await asyncio.sleep(RESOLVE_INTERVAL_S)
 
     def turn_record(backend: Backend, trigger: Trigger | None, response: httpx.Response, latency: float) -> dict:
         record: dict = {"author": backend.author.value, "trigger": trigger, "status": response.status_code, "latency_s": latency}

@@ -183,3 +183,31 @@ def test_backend_failure_is_logged_and_returns_502(relay_app):
     assert response.status_code == 502
     (record,) = [json.loads(line) for line in log_path.read_text().splitlines()]
     assert record["status"] == 502 and record["author"] == Author.STUDENT.value and record["trial"] == "t1" and record["error"]
+
+
+def test_a_moved_student_is_re_resolved(tmp_path, monkeypatch):
+    monkeypatch.setattr("experiments.post_training.sft_shootout.glm_proxy.RESOLVE_INTERVAL_S", 0)
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.host)
+        if request.url.host == "student-old":
+            raise httpx.ConnectError("All connection attempts failed", request=request)
+        return httpx.Response(200, json=reply("ls"))
+
+    student = Backend(
+        author=Author.STUDENT,
+        base_url="http://student-old/v1",
+        model="v0",
+        tokenizer=WordTokenizer(),
+        headers={},
+        resolve=lambda: "http://student-new/v1",
+    )
+    log_path = tmp_path / "requests.jsonl"
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app = build_proxy(backend(Author.TEACHER, "http://teacher/v1"), 100, RequestLog(log_path), RelayPolicy(student, 50), client=client)
+    response = post(TestClient(app), [{"role": "user", "content": "fix the bug"}])
+    assert response.status_code == 200
+    assert calls == ["student-old", "student-new"]
+    (record,) = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert record["status"] == 200 and record["author"] == Author.STUDENT.value

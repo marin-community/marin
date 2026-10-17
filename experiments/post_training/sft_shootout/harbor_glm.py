@@ -61,6 +61,7 @@ from marin.evaluation.harbor.agent_context import (
 )
 from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
 from marin.evaluation.model_config import load_model_config
+from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.evaluation.serving_config import inference_config_for_model, resolved_serve_config
 from marin.inference.dashboard_server import bind_serving_socket
 from marin.inference.iris import remote_inference
@@ -178,6 +179,8 @@ def served_student() -> Iterator[Backend]:
             model=endpoint.model,
             tokenizer=load_tokenizer(model.tokenizer or model.location, STUDENT_REVISION),
             headers={},
+            # A preempted v0 task comes back on another host; the proxy re-resolves the endpoint instead of failing.
+            resolve=lambda: f"{iris_ctx().client.resolve_endpoint(session.endpoint_name).rstrip('/')}{OPENAI_API_SUFFIX}",
         )
 
 
