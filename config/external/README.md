@@ -83,7 +83,7 @@ The external configurations intentionally model only what Marin needs:
   taxonomy advance atomically. Harbor is absent from Marin's workspace lock.
 - `MarinSkyRL` tracks the repository-root `marinskyrl` distribution. The
   external lock resolves its CPU-safe base for the isolated launcher. The
-  launcher synchronizes the selected `fsdp` or `megatron` profile from that
+  launcher synchronizes the `megatron` profile from that
   revision's frozen root lock inside the cluster's standard Iris task image.
   The lock overrides Rigging's source because a pinned Marin Git workspace
   advertises its development version while the launcher needs published Marin
