@@ -6,7 +6,8 @@
 mini-swe-agent is installed at agent setup into /root/.local/share/uv/tools/mini-swe-agent/, inside the agent's
 sandbox, and its site-packages hold clean copies of some pool repos (found in #207 run swe-net2: GLM read
 tenacity/retry.py there as "the reference"). Every pool repo whose distribution or import name appears in that
-environment is removed (leak_risk=agent_tool_clean_copy). The SWE-smith family is then topped back up to
+environment is removed (leak_risk=agent_tool_clean_copy), and so is mahmoud/boltons, whose clean copy sits in conda's
+package cache in every conda image (leak_risk=image_level_clean_copy). The SWE-smith family is then topped back up to
 SWESMITH_TASKS from DCAgent packages in the remaining repos: the shortfall is allocated across those repos in
 proportion to their unused packages (largest remainder) and drawn at random within each repo, seed
 '<SEED>:v3-topup'. No model's pass/fail is used. Added tasks get fixed packages (#10212) and are decontaminated like
@@ -51,6 +52,9 @@ from experiments.post_training.sft_shootout_pool.swesmith_restore import mirror,
 
 VERSION = 3
 REASON = "agent_tool_clean_copy"
+# Image-level copies found by #207's probe: conda depends on boltons, so every conda image holds a clean boltons 23.0.0
+# under /opt/miniconda3/pkgs/ (the mahmoud/boltons task image included).
+IMAGE_LEVEL = {"mahmoud/boltons": "image_level_clean_copy"}
 
 
 def normalize(name: str) -> str:
@@ -59,7 +63,8 @@ def normalize(name: str) -> str:
 
 def tool_env_repos(repos: set[str], tool_env: dict) -> dict[str, str]:
     """{repo: matched name} for repos whose name matches a tool-env distribution or top-level import name."""
-    names = {normalize(name) for name in tool_env["distributions"]} | {normalize(n) for n in tool_env["top_level"]}
+    distributions = [entry["name"] if isinstance(entry, dict) else entry for entry in tool_env["distributions"]]
+    names = {normalize(name) for name in distributions} | {normalize(name) for name in tool_env["top_level"]}
     matched = {}
     for repo in repos:
         name = repo.split("/", 1)[1]
@@ -95,12 +100,13 @@ def main() -> None:
     repo_of = {task: upstream_repo(config["repo"]) for task, config in configs.items()}
 
     leaking = tool_env_repos(set(repo_of.values()), tool_env)
-    removed = [row for row in rows if row["family"] == "swesmith" and row["repo"] in leaking]
+    reasons = {repo: REASON for repo in leaking} | IMAGE_LEVEL
+    removed = [row for row in rows if row["family"] == "swesmith" and row["repo"] in reasons]
     kept = [row for row in rows if row not in removed]
     previously_excluded = {row["task_id"] for row in excluded}
     excluded_repos = (
         SWEBENCH_VERIFIED_REPOS
-        | set(leaking)
+        | set(reasons)
         | {row["repo"] for row in excluded if row.get("leak_risk") == "vendored_clean_copy"}
     )
     in_pool = {row["task_id"] for row in kept}
@@ -189,7 +195,7 @@ def main() -> None:
             "family": "swesmith",
             "repo": row["repo"],
             "heldout": row["heldout"],
-            "leak_risk": REASON,
+            "leak_risk": reasons[row["repo"]],
         }
         for row in removed
     ]
@@ -207,7 +213,7 @@ def main() -> None:
     swesmith["excluded_after_build"].append(
         {
             "version": VERSION,
-            "repos": {repo: REASON for repo in sorted(leaking)},
+            "repos": dict(sorted(reasons.items())),
             "matched_names": leaking,
             "removed": len(removed),
             "removed_heldout": sum(row["heldout"] for row in removed),
