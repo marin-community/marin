@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = "==3.12.*"
 
 [[package]]
@@ -505,7 +505,7 @@ wheels = [
 [[package]]
 name = "evalchemy"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/evalchemy.git?branch=main#6e3454ac7ac4dc5316d7a85eeda1fa9abbd27f44" }
+source = { git = "https://github.com/marin-community/evalchemy.git?branch=main#28631c78ef39e36db149c455fa1c074914f322d5" }
 dependencies = [
     { name = "bespokelabs-curator" },
     { name = "datasets" },
@@ -1274,21 +1274,21 @@ requires-dist = [{ name = "evalchemy", git = "https://github.com/marin-community
 
 [[package]]
 name = "marin-finestore"
-version = "0.2.177.dev38607986055"
+version = "0.2.198.dev38999888318"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "marin-rigging" },
     { name = "pyarrow" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fd/57/48be57975cb8384d90be632dff752fdab9cfb64784885bf5b9310628ebea/marin_finestore-0.2.177.dev38607986055.tar.gz", hash = "sha256:1b52080a4e696ee671247ad9f1f728706c366f29dd0dba5994f15ed351a41d51", size = 63580, upload-time = "2026-10-14T17:38:22.727Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c5/39/ac5c65c5949b275ced57ecb1a7450bee30729ebf2cb9e15ef653d59aaffd/marin_finestore-0.2.198.dev38999888318.tar.gz", hash = "sha256:19af84becae9ffa97e182878d20f12989d369a4917fd0e3a5ace4a7f9db3ad98", size = 89255, upload-time = "2026-10-17T03:49:17.281Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d3/02/7c1d7107b3492d7a377de3e32edec1542ab6ecff2b4a97c43e3fda2e2d80/marin_finestore-0.2.177.dev38607986055-py3-none-any.whl", hash = "sha256:e24dd8870dad0957811a519c86701cd59c12022ffdff6e70025cdd887cd39420", size = 50672, upload-time = "2026-10-14T17:38:03.873Z" },
+    { url = "https://files.pythonhosted.org/packages/75/d1/c131dd3fe42817c8707b3079feff3f4ae0cada5d5ccfeb53dc92d1b167c4/marin_finestore-0.2.198.dev38999888318-py3-none-any.whl", hash = "sha256:402cf41a74a607c9eac4d130c95e0e2d11d19c9b7052afc9435fdead7d0b2b2f", size = 64925, upload-time = "2026-10-17T03:48:58.402Z" },
 ]
 
 [[package]]
 name = "marin-rigging"
-version = "0.2.177.dev38607986055"
+version = "0.2.198.dev38999888318"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiobotocore" },
@@ -1309,9 +1309,9 @@ dependencies = [
     { name = "starlette" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1e/e7/5c84ff7abae1a1ec5b49edacabf39ca5f569a0fda9f9dbf091a8c2dd5503/marin_rigging-0.2.177.dev38607986055.tar.gz", hash = "sha256:95fd44ec0d4378f955ed5af7797857f5d4f495ff5f6e3ee817dcb45eb2f27d44", size = 227103, upload-time = "2026-10-14T17:38:28.551Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/95/b0/b40235ede5cec2d22bfbbb25018b675066d790d257433010cbf708cabeeb/marin_rigging-0.2.198.dev38999888318.tar.gz", hash = "sha256:7ee45615909e5e8e79f51dcd7bf025a7c34efe424efb33483fd69e7ef93c74c9", size = 227441, upload-time = "2026-10-17T03:49:23.628Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/27/b3/7bdc005cab7fe005fef89c43067a2e7508dc3cefdce49111574f37f996ec/marin_rigging-0.2.177.dev38607986055-py3-none-any.whl", hash = "sha256:1cbc8e91281b633d4ccf30e678a3214937dc389df2abab88c922915d27ecda00", size = 543082, upload-time = "2026-10-14T17:38:11.96Z" },
+    { url = "https://files.pythonhosted.org/packages/78/1e/d36eb22437c43b9a141da16ace4c98332fbf7b4caa0be5aeb4bdbb5ee672/marin_rigging-0.2.198.dev38999888318-py3-none-any.whl", hash = "sha256:304d649473f9fe314b74f859c15edb6594532eb7a38663b00468ed433a0874e3", size = 553494, upload-time = "2026-10-17T03:49:07.332Z" },
 ]
 
 [[package]]

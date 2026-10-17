@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Generator, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, closing
 from dataclasses import dataclass
 from functools import partial
@@ -25,7 +26,7 @@ from finestore import shard_writer
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
 from finestore.layout import BlobTables, CommitToken, FineStoreLayout, KeyRange, Shard, SystemColumns
 from finestore.merge import key_values, merge_sorted_runs, sorted_by_key
-from finestore.reader import ReadView, _BoundedReadAheadHandler, iter_shard_row_groups, shard_schema
+from finestore.reader import ReadView, _BoundedReadAheadHandler, _CachedReadHandler, iter_shard_row_groups, shard_schema
 from finestore.shard_writer import ShardWriter
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,8 @@ _COMPACTIONS_ABANDONED = telemetry.counter("finestore_compactions_abandoned", un
 _COMPACTION_INPUT_BYTES = telemetry.counter("finestore_compaction_input_bytes", unit="By")
 _CLOSE_COMPACTION_MAX_ATTEMPTS = 3
 _COMPACTION_FILE_READ_AHEAD_BYTES = 1024 * 1024
+_COMPACTION_PREFETCH_BYTES = 16 * 1024 * 1024
+_COMPACTION_PREFETCH_WORKERS = 16
 COMPACTION_TARGET_BYTES = 400 * 1024 * 1024
 
 
@@ -212,7 +215,15 @@ def _compact_shards(
     )
 
     fs, _ = factory.url_to_fs(root)
-    pa_fs = PyFileSystem(_BoundedReadAheadHandler(fs, _COMPACTION_FILE_READ_AHEAD_BYTES))
+    if input_bytes <= _COMPACTION_PREFETCH_BYTES:
+        # Small compactions otherwise reopen each shard for its schema, footer, and rows.
+        # Keep every compressed input in one bounded cache and overlap the initial GETs.
+        handler = _CachedReadHandler(fs, shards, _COMPACTION_PREFETCH_BYTES)
+        with ThreadPoolExecutor(max_workers=min(len(shards), _COMPACTION_PREFETCH_WORKERS)) as pool:
+            list(pool.map(handler.prefetch, (shard.path for shard in shards)))
+        pa_fs = PyFileSystem(handler)
+    else:
+        pa_fs = PyFileSystem(_BoundedReadAheadHandler(fs, _COMPACTION_FILE_READ_AHEAD_BYTES))
     unified = pa.unify_schemas([shard_schema(shard.path, pa_fs) for shard in shards], promote_options="permissive")
     if SystemColumns.COMMIT not in unified.names:
         unified = unified.append(pa.field(SystemColumns.COMMIT, pa.int64()))

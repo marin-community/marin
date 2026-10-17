@@ -191,8 +191,10 @@ its unsorted inputs at once. The merge keeps only the newest version of each key
 the output shards of one compaction hold disjoint, ascending key ranges, and the seal
 records the superseded rows it removed. Otherwise memory holds about one decoded row
 group per input plus the rows at the merge frontier; Parquet pre-buffering is disabled
-and a small fsspec file buffer limits speculative byte reads. Output shards are cut at about
-`compaction_target_bytes` of decoded data, configurable on `DataStore` or as
+and a small fsspec file buffer limits speculative byte reads. When the compressed inputs
+total at most 16 MiB, compaction prefetches whole shards with up to 16 concurrent reads
+and caches them for both schema and row reads. Larger compactions retain bounded streaming
+reads. Output shards are cut at about `compaction_target_bytes` of decoded data, configurable on `DataStore` or as
 `target_bytes` on `compact_table`; one row group always fits, so a single large row
 group or row can exceed it. Reads apply the same newest-version rule: `iter_rows`
 streams the merge across a view's shards in primary-key order, and `scan` resolves
