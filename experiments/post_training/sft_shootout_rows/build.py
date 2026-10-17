@@ -68,7 +68,8 @@ REPLAY_CONTINGENCY = (
     "if plain's B exceeds 4x the slice's supervised tokens, extend the slice with a seeded continuation of the same "
     "#202 sampler (same partitions, same quotas, next rows in order) as a new artifact version; keep R = round(B / 4), "
     "never relax it. Pre-built (task #217): s3://marin-us-east-02a/marin/teacher-traces/mopd2/"
-    "task217-replay-continuation-v2-20261017, manifest sha256 32e6e20b30498eb6ae01a167d890e6ab84f573a0e7a6668c8f30c268e9d3fff4, "
+    "task217-replay-continuation-v2-20261017, manifest sha256 "
+    "32e6e20b30498eb6ae01a167d890e6ab84f573a0e7a6668c8f30c268e9d3fff4, "
     "10,355,114 supervised tokens (B up to 41.4M); the frozen rows come first, so cuts below the old total are unchanged"
 )
 LAUNCH_RULE = (
