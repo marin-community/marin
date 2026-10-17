@@ -293,7 +293,7 @@ def shell_harnesses(**options) -> dict:
 @pytest.mark.parametrize(
     "content", ["Solve the task.", [{"type": "text", "text": "Solve "}, {"type": "text", "text": "the task."}]]
 )
-async def test_agent_session_uses_isolated_task_grading_and_engine_cleanup(answer, reward, content):
+async def test_agent_harness_uses_isolated_task_grading_and_engine_cleanup(answer, reward, content):
     factory = RecordingShellSimFactory()
     model = ReplayModel([{"role": "assistant", "content": answer}])
     released = asyncio.Event()
@@ -326,7 +326,7 @@ async def test_agent_session_uses_isolated_task_grading_and_engine_cleanup(answe
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
-async def test_agent_session_file_grade_preserves_rejected_nonobject_tool_arguments(answer, reward):
+async def test_agent_harness_file_grade_preserves_rejected_nonobject_tool_arguments(answer, reward):
     rejected = shell_call("unused", call_id="rejected")
     rejected["tool_calls"][0]["function"]["arguments"] = '["echo incorrect > /workspace/answer"]'
     model = ReplayModel([rejected, {"role": "assistant", "content": answer}])
@@ -450,6 +450,19 @@ class BlockingFactory(RecordingShellSimFactory):
         return await super().create(spec)
 
 
+@dataclass
+class FirstTurnModel(ReplayModel):
+    """Answer the first request, and wait on each later one until it is cancelled. ``blocked`` is set then."""
+
+    blocked: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def complete(self, request):
+        if self.requests:
+            self.blocked.set()
+            await asyncio.Future()
+        return await super().complete(request)
+
+
 def report_task(**update) -> TaskSpec:
     return file_task(b"echo 1", grader=workspace_grader(argv=("sh", "/tests/grade.sh")), **update)
 
@@ -504,7 +517,7 @@ async def test_output_capture_over_the_file_budget_interrupts_grading():
 
 
 @pytest.mark.parametrize("compact", [False, True])
-async def test_agent_session_receives_engine_turns_and_controls_next_history(compact):
+async def test_agent_harness_receives_engine_turns_and_controls_next_history(compact):
     first = ({"role": "user", "content": "Return 12."},)
     observation = {"role": "tool", "tool_call_id": "write", "content": "Written."}
     received = []
@@ -540,7 +553,7 @@ async def test_agent_session_receives_engine_turns_and_controls_next_history(com
 
 
 @pytest.mark.parametrize("compact", [False, True])
-async def test_agent_session_replays_exact_tokens_on_later_turns(compact):
+async def test_agent_harness_replays_exact_tokens_on_later_turns(compact):
     first = ({"role": "user", "content": "Start."},)
     # The task's grader reads this chat, so the observation is a user message: the turn makes no tool call.
     observation = {"role": "user", "content": "Done."}
@@ -570,7 +583,7 @@ async def test_agent_session_replays_exact_tokens_on_later_turns(compact):
     assert result.rollout.conversations[-1].loss_mask == ((1,) if compact else (1, 0, 0, 1))
 
 
-async def test_agent_session_is_cancelled_when_engine_generation_is_cancelled():
+async def test_agent_harness_is_cancelled_when_engine_generation_is_cancelled():
     model_entered = asyncio.Event()
     agent_closed = asyncio.Event()
 
@@ -593,7 +606,7 @@ async def test_agent_session_is_cancelled_when_engine_generation_is_cancelled():
     assert agent_closed.is_set()
 
 
-async def test_agent_session_failure_retains_the_generated_turn():
+async def test_agent_harness_failure_retains_the_generated_turn():
     async def agent(complete):
         await complete(Prompt(({"role": "user", "content": "Return 12."},), {}))
         raise RuntimeError("Agent failed after receiving its response")
@@ -1309,7 +1322,7 @@ async def test_grader_without_matching_runtime_is_rejected_before_task_startup(g
     assert model.requests == []
 
 
-async def test_state_answer_is_rejected_because_the_shellbox_session_cannot_capture_state():
+async def test_state_answer_is_rejected_because_the_shell_harness_cannot_capture_state():
     factory = RecordingShellSimFactory()
     model = ReplayModel([])
     with pytest.raises(NotImplementedError):
@@ -2808,7 +2821,7 @@ async def test_an_agent_that_does_not_stop_is_a_cleanup_error_and_is_kept_until_
     assert record.grade.diagnostics["cleanup_errors"] == [{"operation": "agent_stop", "exception_type": "TimeoutError"}]
     await asyncio.wait_for(ended.wait(), timeout=5)
     await asyncio.sleep(0)
-    assert "Background resource operation failed" in caplog.text
+    assert any(isinstance(record.exc_info[1], OSError) for record in caplog.records if record.exc_info)
 
 
 async def test_recorded_step_data_keeps_the_tool_deadline():
@@ -3103,14 +3116,8 @@ async def test_an_agent_that_drains_its_handlers_stops_when_a_model_call_is_open
             # A server that shuts down waits for its open handlers.
             await asyncio.wait(handlers)
 
-    class BlockingModel(ReplayModel):
-        async def complete(self, request):
-            if self.requests:
-                await asyncio.Future()
-            return await super().complete(request)
-
     record = await engine(
-        BlockingModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": agent_harness(agent)}
+        FirstTurnModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": agent_harness(agent)}
     ).run_task(rollout_spec(arithmetic_task(), harness="agent", total_turn_timeout=0.05, cleanup_timeout=1))
     assert (record.rollout.stop_reason, record.grade.reward) == ("total_turn_timeout", 1.0)
     assert "cleanup_errors" not in record.grade.diagnostics
@@ -3154,14 +3161,8 @@ async def test_final_observations_replace_a_cancelled_reply():
             await asyncio.wait({call})
             recorder.record(observations=(final,))
 
-    class BlockingModel(ReplayModel):
-        async def complete(self, request):
-            if self.requests:
-                await asyncio.Future()
-            return await super().complete(request)
-
     record = await engine(
-        BlockingModel([{"role": "assistant", "content": "12"}]), harnesses={"fixture": CancelsItsReply()}
+        FirstTurnModel([{"role": "assistant", "content": "12"}]), harnesses={"fixture": CancelsItsReply()}
     ).run_task(rollout_spec(arithmetic_task(), harness="fixture"))
     [step] = record.rollout.conversations[-1].steps
     assert (step.transition.done, step.transition.observations) == (True, (final,))
@@ -3227,7 +3228,7 @@ async def test_an_agent_that_repeats_its_last_prompt_in_a_loop_cannot_block_a_de
 
 
 async def test_a_cancelled_reply_starts_a_new_tool_deadline():
-    generating = asyncio.Event()
+    model = FirstTurnModel([{"role": "assistant", "content": "12"}])
 
     async def agent(_context, complete):
         prompt = Prompt(({"role": "user", "content": "Return 12."},), {})
@@ -3235,22 +3236,15 @@ async def test_a_cancelled_reply_starts_a_new_tool_deadline():
         call = asyncio.create_task(
             complete(Prompt((*prompt.messages, turn.message, {"role": "user", "content": "Again."}), {}))
         )
-        await generating.wait()
+        await model.blocked.wait()
         # The client disconnects, and the agent never sends a request again.
         call.cancel()
         await asyncio.Future()
 
-    class Model(ReplayModel):
-        async def complete(self, request):
-            if self.requests:
-                generating.set()
-                await asyncio.Future()
-            return await super().complete(request)
-
     with pytest.raises(RolloutInterrupted) as caught:
-        await engine(
-            Model([{"role": "assistant", "content": "12"}]), harnesses={"agent": agent_harness(agent)}
-        ).run_task(rollout_spec(arithmetic_task(), harness="agent", tool_turn_timeout=0.05))
+        await engine(model, harnesses={"agent": agent_harness(agent)}).run_task(
+            rollout_spec(arithmetic_task(), harness="agent", tool_turn_timeout=0.05)
+        )
     assert (caught.value.operation, type(caught.value.__cause__)) == (RolloutOperation.ADVANCE, TimeoutError)
 
 
@@ -3268,15 +3262,9 @@ async def test_a_harness_records_step_data_only_between_model_requests():
             finally:
                 call.cancel()
 
-    class BlockingModel(ReplayModel):
-        async def complete(self, request):
-            if self.requests:
-                await asyncio.Future()
-            return await super().complete(request)
-
     with pytest.raises(RolloutInterrupted) as caught:
         await engine(
-            BlockingModel([{"role": "assistant", "content": "12"}]), harnesses={"fixture": RecordsDuringARequest()}
+            FirstTurnModel([{"role": "assistant", "content": "12"}]), harnesses={"fixture": RecordsDuringARequest()}
         ).run_task(rollout_spec(arithmetic_task(), harness="fixture"))
     assert (caught.value.operation, type(caught.value.__cause__)) == (RolloutOperation.ADVANCE, RuntimeError)
 

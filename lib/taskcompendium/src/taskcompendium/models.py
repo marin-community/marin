@@ -32,6 +32,7 @@ from verifyit.spec import (
     DEFAULT_OUTPUT,
     DEFAULT_WORKSPACE,
     GotestSpec,
+    JudgeSpec,
     JunitSpec,
     PytestSpec,
     ScriptSpec,
@@ -634,6 +635,11 @@ Grader = Annotated[VerifyitGrader | ScriptGrader | NoGrader, Field(discriminator
 def grades_in_process(grader: Grader) -> bool:
     """Whether the grader scores the extracted answer without a grading machine."""
     return isinstance(grader, VerifyitGrader) and grader.environment is None
+
+
+def grades_with_judge(grader: Grader) -> bool:
+    """Whether the grader is a verifyit judge, which grades the answer through a judge service."""
+    return isinstance(grader, VerifyitGrader) and isinstance(verifyit_spec(grader), JudgeSpec)
 
 
 def grader_workspace(grader: Grader) -> str:
