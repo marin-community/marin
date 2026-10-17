@@ -365,6 +365,15 @@ def main() -> None:
             "agent_phase_domain_allow_list": agent.get("kwargs", {}).get("agent_domain_allow_list"),
             "setup_and_verifier": "task policy (allow_internet)",
         },
+        # Terminus-2 resends earlier reasoning only with interleaved_thinking; the eval policy leaves it off, so the
+        # model never sees its earlier reasoning, at generation or at eval. The rows restore it for every turn.
+        "earlier_reasoning_resent": None
+        if args.agent != "terminus-2"
+        else {
+            "interleaved_thinking": agent.get("kwargs", {}).get("interleaved_thinking", False),
+            "source": "harbor 016dd78b: src/harbor/agents/terminus_2/terminus_2.py:415 (default False), "
+            "src/harbor/llms/chat.py assistant_message_from_response",
+        },
         "relay": None
         if not args.relay
         else {
