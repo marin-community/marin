@@ -59,6 +59,18 @@ from experiments.post_training.sweep_data.select import CONTEXT
 # Pool v4 (supersedes v2 ae4347bd...; see the pool README for the versions).
 POOL_MANIFEST_SHA256 = "755e874cc1daa93a10a2b73dd154805ba081206d966d11eb9a018ec16f22fe86"
 EPOCHS = 3
+LIMITATION = "results are for trajectories that fit 32,768 tokens in v0's chat template; longer passes are dropped"
+# Changes to row semantics or manifest accounting, newest last; recorded in every manifest.
+CHANGELOG = (
+    "2705769260 plain, RS-multi, relay arms from #207 canonical traces; v0 turns masked",
+    "1811670ebb shared validation arm; per-family drop counts",
+    "e9704e380b drop traces touching mini-swe-agent's tool env",
+    "21a1da4d16 drop traces reading a library copy of the task's repo",
+    "37801fc8c8 pool v4 pin; drop passes after a harness exception",
+    "2b656bcd99 per-family eligibility",
+    "c8e908696e drop traces holding a live proxy capability token (decoded JWT)",
+    "095f31382d eligibility counts only the arm's own run type (the relay denominator had included plain runs)",
+)
 # mini-swe-agent's own tool environment, installed in the sandbox at agent setup, holds clean copies of some repos
 # (pool v3 removes those repos); a trace that reads anything there is dropped. Pattern from #207 (chukar): path reads,
 # find/grep listings, 'uv tool dir|list|run' and the tool's own bin/lib all leave one of these strings.
@@ -440,6 +452,17 @@ def main() -> None:
                 ),
             },
             "eligibility": eligibility,
+            "limitation": LIMITATION,
+            "over_context_by_family": {
+                family: reasons.get("over_context", 0)
+                for family, reasons in sorted(
+                    {
+                        family: dict(collections.Counter(d["reason"] for d in dropped if d["family"] == family))
+                        for family in {d["family"] for d in dropped if d["family"]}
+                    }.items()
+                )
+            },
+            "builder_changelog": list(CHANGELOG),
             "B_supervised_tokens": b_tokens,
             "task_slots": sorted({item["task_id"] for item in selection}) if args.arm == "plain" else None,
             "splits": splits,
