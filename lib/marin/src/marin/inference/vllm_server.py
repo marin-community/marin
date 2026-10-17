@@ -76,7 +76,10 @@ _CUDA_NVCC_DISTRIBUTION = "nvidia-cuda-nvcc"
 # attention, MoE, sampling, and all-reduce kernels even when vLLM itself comes from a native wheel.
 # CUDA torch's cuda-toolkit dependency selects NVRTC for both vLLM variants.
 _CUDA_TOOLCHAIN_PACKAGES = (_CUDA_NVCC_DISTRIBUTION, "nvidia-cuda-crt", "nvidia-nvvm")
-_CUDA_NVCC_BOOTSTRAP = f"""\
+
+
+def _cuda_nvcc_bootstrap(*, pin_compilers: bool) -> str:
+    return f"""\
 import importlib.metadata
 import os
 from pathlib import Path
@@ -100,8 +103,15 @@ if nvrtc.is_file() and not nvrtc_link.exists():
     nvrtc_link.symlink_to(nvrtc.name)
 os.environ["CUDA_HOME"] = str(cuda_home)
 os.environ["PATH"] = os.pathsep.join((str(nvcc.parent), os.environ["PATH"]))
+if {pin_compilers!r}:
+    os.environ["NVRTC_HOME"] = str(cuda_home)
+    os.environ["FLASHINFER_NVCC"] = str(nvcc)
+    os.environ["TRITON_PTXAS_PATH"] = str(nvcc.parent / "ptxas")
+    os.environ["TRITON_PTXAS_BLACKWELL_PATH"] = str(nvcc.parent / "ptxas")
 os.execvp(sys.argv[1], sys.argv[1:])
 """
+
+
 _PYTHON_FILE_BOOTSTRAP = """\
 import runpy
 import sys
@@ -200,6 +210,7 @@ class _CudaVllmInstall:
     torch_install_args: tuple[str, ...]
     executable: str
     executable_args: tuple[str, ...] = ()
+    constraints_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -235,10 +246,13 @@ class IsolatedCudaVllm:
                     f"{_PYTORCH_WHEEL_INDEX_BASE}/{VLLM_GPU_RELEASE.torch_backend}",
                     "--index",
                     f"{_PYTORCH_WHEEL_INDEX_BASE}/cpu",
+                    "--index",
+                    "https://flashinfer.ai/whl/",
                     "--index-strategy",
                     "unsafe-best-match",
                 ),
                 executable="python",
+                constraints_url=wheel.constraints_url,
                 executable_args=(
                     "-c",
                     _PYTHON_FILE_BOOTSTRAP,
@@ -266,6 +280,17 @@ class IsolatedCudaVllm:
         if self.source is VllmType.MARIN_FORK:
             # The promoted release records the CUDA torch build; pin it so a conflict cannot select CPU torch.
             command.extend(("--with", f"torch=={VLLM_GPU_RELEASE.torch_version}"))
+        if install.constraints_url is not None:
+            command.extend(
+                (
+                    "--constraint",
+                    install.constraints_url,
+                    "--with",
+                    "cuda-toolkit[nvcc,cccl,nvrtc]",
+                    "--with",
+                    "flashinfer-cubin",
+                )
+            )
         for package in _CUDA_TOOLCHAIN_PACKAGES:
             requirement = f"{package}=={install.toolchain_version}"
             command.extend(("--with", requirement))
@@ -275,7 +300,7 @@ class IsolatedCudaVllm:
             (
                 "python",
                 "-c",
-                _CUDA_NVCC_BOOTSTRAP,
+                _cuda_nvcc_bootstrap(pin_compilers=self.source is VllmType.MARIN_FORK),
                 install.executable,
                 *install.executable_args,
             )
