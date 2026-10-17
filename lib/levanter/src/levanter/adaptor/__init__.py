@@ -54,6 +54,7 @@ class AdaptorExportConfig:
     hf_upload: bool | str | RepoRef | None = False
     hf_save_steps: int | None = None
     hf_save_dtype: str | None = None
+    hf_save_reference_code: bool | None = None
     generation_config: GenerationConfigDict | None = None
 
     peft_save_path: str | None = None
@@ -150,6 +151,7 @@ class NoAdaptorConfig(AdaptorConfig):
                 converter,
                 upload_to_hf=export.hf_upload or False,
                 save_dtype=save_dtype,
+                save_reference_code=export.hf_save_reference_code,
                 generation_config=export.generation_config,
             ),
             every=export.hf_save_steps,
@@ -222,6 +224,7 @@ class LoraAdaptorConfig(LoraConfig, AdaptorConfig):
                     converter,
                     export.merged_hf_upload,
                     generation_config=export.generation_config,
+                    save_reference_code=export.hf_save_reference_code,
                     model_getter=export_model,
                 ),
                 every=export.hf_save_steps,

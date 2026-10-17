@@ -654,7 +654,9 @@ class Trainer:
                 ProgressEvent.CHECKPOINT_STARTED,
                 ProgressEvent.CHECKPOINT_FINISHED,
             ):
-                checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
+                checkpointer.on_step(
+                    tree=info.state.saveable_state, step=info.step, force=force and self.config.save_final_checkpoint
+                )
 
         self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
 
@@ -927,6 +929,7 @@ class TrainerConfig:
     max_eval_batches: Optional[int] = None  # max number of batches to evaluate on. None means all batches
 
     checkpointer: CheckpointerConfig = field(default_factory=CheckpointerConfig)
+    save_final_checkpoint: bool = True
     load_checkpoint: Optional[bool] = None
     """if None (default), we'll load a checkpoint if it exists. If true, we must load a checkpoint"""
     load_checkpoint_path: Optional[str | list[str]] = None
