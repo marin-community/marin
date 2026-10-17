@@ -5,7 +5,7 @@
 
 Each shard is one ``harbor_glm.py`` job with its own output prefix, so a failed job loses only its
 shard. Shards are contiguous slices of the sorted task ids. Writes ``<out-dir>/<family>-shard-NN.json``
-with the manifest's sha256, the shard's tasks and their held-out flags. Paths may be remote; each
+with the sha256 of the pool tasks.jsonl, the shard's tasks and their held-out flags. Paths may be remote; each
 shard file is a ``harbor_glm.py --task-list``. ``--added-in`` keeps only tasks a pool version added.
 
     python -m experiments.post_training.sft_shootout.shard_tasks --family tmax \
@@ -40,7 +40,7 @@ def main() -> None:
     for index, shard in enumerate(shards):
         record = {
             "family": args.family,
-            "manifest_sha256": digest,
+            "tasks_jsonl_sha256": digest,
             "package_revision": sorted({row["package_revision"] for row in shard}),
             "shard": index,
             "shards": len(shards),
@@ -49,7 +49,7 @@ def main() -> None:
         }
         name = f"{args.prefix or args.family}-shard-{index:02d}.json"
         StoragePath(f"{args.out_dir.rstrip('/')}/{name}").write_text(json.dumps(record, indent=2) + "\n")
-    print(json.dumps({"family": args.family, "tasks": len(rows), "shards": len(shards), "manifest_sha256": digest}))
+    print(json.dumps({"family": args.family, "tasks": len(rows), "shards": len(shards), "tasks_jsonl_sha256": digest}))
 
 
 if __name__ == "__main__":
