@@ -1,160 +1,275 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compaction: merge a table's small shards into one sorted, deduplicated next-generation shard.
-
-Compaction is an optimization, not a correctness requirement — a reader deduplicates regardless. It
-streams a k-way merge over the table's shards in primary-key order and writes the surviving rows to the
-next generation, one row group at a time, then optionally deletes the shards it superseded. Because
-the merged rows keep their original ``_seq`` and the new shard has a higher generation, a reader
-prefers it; a crash between the write and the delete leaves both, and dedup still returns one row per
-key.
-
-The merge is bounded in memory. A compacted shard (generation >= 1) was written in primary-key order,
-so it streams a row group at a time; a level-0 shard is one flush (bounded by the writer's row cap),
-so it is sorted in memory. Neither path materializes the whole table, so an archive far larger than
-memory still compacts.
-"""
+"""Manifest-driven logical compaction for FineStore tables."""
 
 from __future__ import annotations
 
-import heapq
-import itertools
 import logging
 import uuid
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, closing
 from dataclasses import dataclass
+from functools import partial
+from typing import Protocol
 
 import pyarrow as pa
-import pyarrow.dataset as pds
-import pyarrow.parquet as pq
-from pyarrow.fs import FSSpecHandler, PyFileSystem
-from rigging.filesystem import factory
+import pyarrow.compute as pc
+import rigging.filesystem.factory as factory
+from pyarrow.fs import PyFileSystem
+from rigging import telemetry
+from rigging.filesystem.s3_errors import is_transient_s3_error
+from rigging.timing import retry_with_backoff
 
-from finestore.layout import SEQ_COLUMN, FineStoreLayout, Shard
-from finestore.reader import CompositeReader
-from finestore.shard_writer import ROW_GROUP_ROWS, ShardWriter
+from finestore import shard_writer
+from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
+from finestore.layout import BlobTables, CommitToken, FineStoreLayout, KeyRange, Shard, SystemColumns
+from finestore.merge import key_values, merge_sorted_runs, sorted_by_key
+from finestore.reader import ReadView, _BoundedReadAheadHandler, _CachedReadHandler, iter_shard_row_groups, shard_schema
+from finestore.shard_writer import ShardWriter
 
 logger = logging.getLogger(__name__)
 
-# The writer identity stamped on compacted shards, distinct from any live append writer.
 _COMPACTOR = "compactor"
-
-# Surviving rows the merge accumulates before writing one output batch. Matched to the writer's
-# row-group cap so a compacted shard's groups are the same size as a flush's, keeping read pruning
-# uniform; it also bounds the merge's working set independently of the archive's total size.
-_COMPACT_BATCH_ROWS = ROW_GROUP_ROWS
-
-# One item in the merge heap: (primary-key tuple, generation, seq, row dict). The key sorts the merge;
-# seq then generation breaks ties so the latest write of a key wins (same rule the reader applies).
-_MergeItem = tuple[tuple, int, int, dict]
-
-
-def _key_tuple(row: dict, primary_key: tuple[str, ...]) -> tuple:
-    """A null-safe, order-stable primary-key tuple: ``None`` sorts before any value without comparing it."""
-    return tuple((row.get(name) is None, row.get(name)) for name in primary_key)
+_COMPACTIONS = telemetry.counter("finestore_compactions", unit="{compaction}")
+_COMPACTIONS_ABANDONED = telemetry.counter("finestore_compactions_abandoned", unit="{compaction}")
+_COMPACTION_INPUT_BYTES = telemetry.counter("finestore_compaction_input_bytes", unit="By")
+_CLOSE_COMPACTION_MAX_ATTEMPTS = 3
+_COMPACTION_FILE_READ_AHEAD_BYTES = 1024 * 1024
+_COMPACTION_PREFETCH_BYTES = 16 * 1024 * 1024
+_COMPACTION_PREFETCH_WORKERS = 16
+COMPACTION_TARGET_BYTES = 400 * 1024 * 1024
 
 
-def _shard_rows(shard: Shard, unified: pa.Schema, primary_key: tuple[str, ...], pa_fs) -> Iterator[_MergeItem]:
-    """Yield a shard's rows in primary-key order, each tagged for the merge's tie-break.
+class CompactionCoordinator(Protocol):
+    def snapshot(self) -> ArchiveSnapshot: ...
 
-    A level-0 shard is unsorted but bounded by the writer's row cap, so it is sorted in memory; a
-    compacted shard was written in primary-key order, so its row groups stream in order. Reading through
-    the unified schema promotes columns a shard lacks to null.
-    """
-    dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
-    if shard.generation == 0:
-        table = dataset.to_table()
-        sort_columns = [(name, "ascending") for name in primary_key if name in unified.names]
-        if sort_columns:
-            table = table.sort_by(sort_columns)
-        batches = table.to_batches()
-    else:
-        # A compacted shard is already in primary-key order; scan it single-threaded so its row groups
-        # stream in that order (a threaded scan may reorder them, breaking the merge invariant).
-        batches = dataset.scanner(use_threads=False).to_batches()
-    for batch in batches:
-        for row in batch.to_pylist():
-            yield _key_tuple(row, primary_key), shard.generation, row.get(SEQ_COLUMN) or 0, row
+    def last_snapshot(self) -> ArchiveSnapshot: ...
+
+    def commit(self, delta: CommitDelta, *, base: ArchiveSnapshot | None = None) -> CommitToken: ...
 
 
 @dataclass(frozen=True)
 class CompactionResult:
-    """What one compaction did: rows written, and rows a later write of the same key replaced.
-
-    ``superseded`` counts inputs that lost their primary key to a higher ``(seq, generation)`` row. It
-    is zero for a table whose keys are unique, so a non-zero count is the signal that supersession
-    actually happened rather than an assumption that it did not.
-    """
+    """Rows written and duplicate inputs superseded by one compaction."""
 
     written: int
     superseded: int = 0
 
 
-def _merge_dedup(streams: list[Iterator[_MergeItem]], counter: list[int]) -> Iterator[dict]:
-    """Merge per-shard sorted streams into one primary-key-ordered stream, one surviving row per key.
+def _sorted_run(
+    shard: Shard, unified: pa.Schema, pa_fs: PyFileSystem, primary_key: tuple[str, ...]
+) -> Generator[pa.Table, None, None]:
+    """Yield one shard's rows in primary-key order, a row group at a time when the shard is sorted."""
+    with closing(iter_shard_row_groups(shard, unified, pa_fs)) as groups:
+        yield from groups if shard.primary_key_sorted else sorted_by_key(groups, primary_key)
 
-    Each item already carries its primary-key tuple, so the streams are grouped on that. Losing rows
-    are counted into ``counter[0]`` so the caller can report supersession instead of discarding it
-    without trace.
+
+def _write_output_shards(
+    layout: FineStoreLayout,
+    table: str,
+    generation: int,
+    unified: pa.Schema,
+    primary_key: tuple[str, ...],
+    groups: Iterator[pa.Table],
+    target_bytes: int,
+) -> list[Shard]:
+    """Write key-ordered row groups into shards near ``target_bytes`` decoded bytes.
+
+    A shard always takes at least one row group, so a single oversized group still lands.
     """
-    merged = heapq.merge(*streams, key=lambda item: item[0])
-    for _key, group in itertools.groupby(merged, key=lambda item: item[0]):
-        items = list(group)
-        counter[0] += len(items) - 1
-        winner = max(items, key=lambda item: (item[2], item[1]))
-        yield winner[3]
+    outputs: list[Shard] = []
+    group = next(groups, None)
+    while group is not None:
+        path = layout.shard_path(table, _COMPACTOR, generation, 0, uuid.uuid4().hex[:8])
+        first = last = group
+        rows = decoded_bytes = 0
+        min_seq: int | None = None
+        max_seq: int | None = None
+        with ShardWriter(path, unified) as writer:
+            while group is not None and (rows == 0 or decoded_bytes + group.nbytes <= target_bytes):
+                writer.write_table(group)
+                sequences = pc.fill_null(group[SystemColumns.SEQUENCE], 0)
+                low, high = pc.min(sequences).as_py(), pc.max(sequences).as_py()
+                min_seq = low if min_seq is None else min(min_seq, low)
+                max_seq = high if max_seq is None else max(max_seq, high)
+                rows += group.num_rows
+                decoded_bytes += group.nbytes
+                last = group
+                group = next(groups, None)
+        bounds = KeyRange.of([key_values(first, 0, primary_key), key_values(last, last.num_rows - 1, primary_key)])
+        outputs.append(
+            Shard(
+                path=path,
+                writer=_COMPACTOR,
+                generation=generation,
+                rows=rows,
+                min_seq=min_seq,
+                max_seq=max_seq,
+                size_bytes=writer.result.size_bytes,
+                content_sha256=writer.result.content_sha256,
+                primary_key_sorted=True,
+                min_key=None if bounds is None else bounds.lowest,
+                max_key=None if bounds is None else bounds.highest,
+            )
+        )
+    return outputs
 
 
-def compact(root: str, table: str, *, delete_source: bool = True) -> CompactionResult:
-    """Compact ``table`` under ``root`` into one sorted shard; report rows written and superseded.
+def compact_table(
+    root: str,
+    table: str,
+    *,
+    generation: int | None = None,
+    coordinator: CompactionCoordinator | None = None,
+    target_bytes: int = COMPACTION_TARGET_BYTES,
+) -> CompactionResult:
+    """Replace one generation, or all active shards, through one manifest commit.
 
-    Writes nothing when the table is empty or has no shards. When ``delete_source`` is set, shards
-    from generations below the new one are removed after the merged shard is published.
+    Source objects remain immutable and reachable by older read views. Garbage collection is
+    deliberately separate from compaction because the store does not yet track reader leases.
     """
-    reader = CompositeReader(root)
-    shards = reader.list_shards(table)
+    layout = FineStoreLayout(root)
+    commits = coordinator or CommitCoordinator(layout)
+    snapshot = commits.snapshot()
+    view = ReadView(root, snapshot)
+    active_shards = view.list_shards(table)
+    shards = active_shards if generation is None else tuple(s for s in active_shards if s.generation == generation)
+    return _compact_shards(root, table, shards, snapshot=snapshot, coordinator=commits, target_bytes=target_bytes)
+
+
+def compact_level_zero_tables(
+    root: str,
+    tables: Sequence[str],
+    *,
+    max_input_bytes: int,
+    max_input_rows: int,
+    target_bytes: int,
+    coordinator: CompactionCoordinator,
+) -> None:
+    """Merge each table's level-zero shards, from every writer, within an aggregate input budget."""
+    for table in sorted(tables, key=lambda name: (name != BlobTables.DESCRIPTORS, name)):
+        snapshot = retry_with_backoff(
+            coordinator.snapshot,
+            retryable=is_transient_s3_error,
+            max_attempts=_CLOSE_COMPACTION_MAX_ATTEMPTS,
+            operation=f"FineStore close snapshot at {root}",
+        )
+        shards = tuple(shard for shard in ReadView(root, snapshot).list_shards(table) if shard.generation == 0)
+        if len(shards) < 2:
+            continue
+        input_bytes = sum(shard.size_bytes for shard in shards)
+        input_rows = sum(shard.rows for shard in shards)
+        if input_bytes > max_input_bytes or input_rows > max_input_rows:
+            continue
+        # Filter the merge inputs, keeping the full publication base and unrelated shards.
+        retry_with_backoff(
+            partial(
+                _compact_shards,
+                root,
+                table,
+                shards,
+                snapshot=snapshot,
+                coordinator=coordinator,
+                target_bytes=target_bytes,
+            ),
+            retryable=is_transient_s3_error,
+            max_attempts=_CLOSE_COMPACTION_MAX_ATTEMPTS,
+            operation=f"FineStore close compaction at {root} table={table}",
+        )
+        max_input_bytes -= input_bytes
+        max_input_rows -= input_rows
+
+
+def _compact_shards(
+    root: str,
+    table: str,
+    shards: Sequence[Shard],
+    *,
+    snapshot: ArchiveSnapshot,
+    coordinator: CompactionCoordinator,
+    target_bytes: int,
+) -> CompactionResult:
     if not shards:
         return CompactionResult(written=0)
-    primary_key = reader.primary_key(table)
+    if len(shards) == 1 and shards[0].writer == _COMPACTOR:
+        return CompactionResult(written=0)
+    layout = FineStoreLayout(root)
+    primary_key = ReadView(root, snapshot).primary_key(table)
     next_generation = max(shard.generation for shard in shards) + 1
+    input_rows = sum(shard.rows for shard in shards)
+    input_bytes = sum(shard.size_bytes for shard in shards)
+    _COMPACTIONS.add()
+    _COMPACTION_INPUT_BYTES.add(input_bytes)
+    logger.info(
+        "FineStore compacting %s table=%s input_generations=%s input_shards=%d input_rows=%d "
+        "input_bytes=%d output_generation=%d",
+        root,
+        table,
+        sorted({shard.generation for shard in shards}),
+        len(shards),
+        input_rows,
+        input_bytes,
+        next_generation,
+    )
 
     fs, _ = factory.url_to_fs(root)
-    pa_fs = PyFileSystem(FSSpecHandler(fs))
-    unified = pa.unify_schemas(
-        [pq.read_schema(shard.path, filesystem=pa_fs) for shard in shards], promote_options="permissive"
-    )
+    if input_bytes <= _COMPACTION_PREFETCH_BYTES:
+        # Small compactions otherwise reopen each shard for its schema, footer, and rows.
+        # Keep every compressed input in one bounded cache and overlap the initial GETs.
+        handler = _CachedReadHandler(fs, shards, _COMPACTION_PREFETCH_BYTES)
+        with ThreadPoolExecutor(max_workers=min(len(shards), _COMPACTION_PREFETCH_WORKERS)) as pool:
+            list(pool.map(handler.prefetch, (shard.path for shard in shards)))
+        pa_fs = PyFileSystem(handler)
+    else:
+        pa_fs = PyFileSystem(_BoundedReadAheadHandler(fs, _COMPACTION_FILE_READ_AHEAD_BYTES))
+    unified = pa.unify_schemas([shard_schema(shard.path, pa_fs) for shard in shards], promote_options="permissive")
+    if SystemColumns.COMMIT not in unified.names:
+        unified = unified.append(pa.field(SystemColumns.COMMIT, pa.int64()))
+    if SystemColumns.GENERATION not in unified.names:
+        unified = unified.append(pa.field(SystemColumns.GENERATION, pa.int32()))
 
-    streams = [_shard_rows(shard, unified, primary_key, pa_fs) for shard in shards]
-    superseded = [0]
-    survivors = _merge_dedup(streams, superseded)
-    first = next(survivors, None)
-    if first is None:
+    with ExitStack() as stack:
+        runs = [stack.enter_context(closing(_sorted_run(shard, unified, pa_fs, primary_key))) for shard in shards]
+        groups = shard_writer.table_row_groups(table, merge_sorted_runs(runs, primary_key))
+        outputs = _write_output_shards(layout, table, next_generation, unified, primary_key, groups, target_bytes)
+    written = sum(shard.rows for shard in outputs)
+    superseded = input_rows - written
+
+    if not outputs:
+        raise ValueError(f"FineStore table {table!r} has {len(shards)} non-empty shard descriptors but no rows")
+    try:
+        coordinator.commit(
+            CommitDelta(
+                replacements={
+                    table: TableReplacement(
+                        input_paths=frozenset(shard.path for shard in shards), output_shards=tuple(outputs)
+                    )
+                },
+                expected_epoch=snapshot.manifest.maintainer_epoch,
+            ),
+            base=snapshot,
+        )
+    except CommitConflict:
+        _COMPACTIONS_ABANDONED.add()
+        logger.info(
+            "FineStore abandoned compaction for %s table=%s input_shards=%d because its inputs changed",
+            root,
+            table,
+            len(shards),
+        )
         return CompactionResult(written=0)
-
-    out_path = FineStoreLayout(root).shard_path(table, _COMPACTOR, next_generation, 0, uuid.uuid4().hex[:8])
-    written = 0
-    with ShardWriter(out_path, unified) as writer:
-        batch = [first]
-        for row in survivors:
-            batch.append(row)
-            if len(batch) >= _COMPACT_BATCH_ROWS:
-                writer.write_table(pa.Table.from_pylist(batch, schema=unified))
-                written += len(batch)
-                batch = []
-        if batch:
-            writer.write_table(pa.Table.from_pylist(batch, schema=unified))
-            written += len(batch)
     logger.info(
-        "finestore compacted %s to generation %d (%d rows, %d superseded)",
+        "FineStore compacted %s table=%s input_generations=%s input_shards=%d output_shards=%d "
+        "output_generation=%d rows=%d superseded=%d",
+        root,
         table,
+        sorted({shard.generation for shard in shards}),
+        len(shards),
+        len(outputs),
         next_generation,
         written,
-        superseded[0],
+        superseded,
     )
-
-    if delete_source:
-        for shard in shards:
-            if shard.generation < next_generation:
-                fs.rm(shard.path)
-    return CompactionResult(written=written, superseded=superseded[0])
+    return CompactionResult(written=written, superseded=superseded)

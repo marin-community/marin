@@ -71,7 +71,7 @@ var is unset, so local runs and environments without the secret stay silent. A
 POST failure is logged and never fails the run. The webhook (a standard Slack
 incoming webhook, same `{"text": …}` contract as the repo's `notify-slack`
 action) determines the channel — point `webhook_url_env` at a webhook bound to
-`#marin-eng`. Remove the `alerts` block (or its `rules`) to disable.
+`#marin-alerts`. Remove the `alerts` block (or its `rules`) to disable.
 
 ## Providers and required secrets
 

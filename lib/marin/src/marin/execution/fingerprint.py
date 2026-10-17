@@ -35,6 +35,8 @@ from typing import Any
 import jax
 import numpy as np
 
+from marin.utilities.json_encoder import scalar_dtype
+
 logger = logging.getLogger(__name__)
 
 # Custom canonical encoders, keyed by type, consulted before the best-effort fallback.
@@ -116,10 +118,10 @@ class _FingerprintEncoder(json.JSONEncoder):
         if isinstance(o, type):
             # dtype *type* objects (np.float32, jnp.bfloat16) canonicalize to their name;
             # any other class is identified by its fully-qualified name.
-            try:
-                return {"__dtype__": np.dtype(o).name}
-            except TypeError:
-                return {"__type__": f"{o.__module__}.{o.__qualname__}"}
+            dtype = scalar_dtype(o)
+            if dtype is not None:
+                return {"__dtype__": dtype.name}
+            return {"__type__": f"{o.__module__}.{o.__qualname__}"}
 
         encode = _registered_encoder(type(o))
         if encode is not None:

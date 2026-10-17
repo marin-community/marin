@@ -9,7 +9,7 @@ from typing import Any, List, Optional
 
 import jax
 import wandb
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 import jax.numpy as jnp
 import numpy as np
 from jax.experimental import multihost_utils

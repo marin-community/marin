@@ -1,23 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
+import html
 import json
 import logging
 import socket
 import threading
+import time
 import uuid
+from collections import deque
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import Future
-from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import anyio
 import uvicorn
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from marin.inference.http_proxy import forwardable_request_headers
@@ -31,6 +34,7 @@ from marin.inference.types import (
 )
 
 logger = logging.getLogger(__name__)
+TOKEN_RATE_WINDOW_SECONDS = 60.0
 
 
 @dataclass
@@ -39,6 +43,27 @@ class ProxyStats:
     dropped_responses: int = 0
     timed_out_requests: int = 0
     rejected_requests: int = 0
+    generation_responses: int = 0
+    responses_with_usage: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+
+def response_token_usage(payload: bytes) -> tuple[int, int] | None:
+    """Read optional OpenAI usage without disrupting response forwarding."""
+    try:
+        document = json.loads(payload)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(document, dict) or not isinstance(document.get("usage"), dict):
+        return None
+    usage = document["usage"]
+    prompt, completion = usage.get("prompt_tokens"), usage.get("completion_tokens")
+    if not isinstance(prompt, int) or not isinstance(completion, int):
+        return None
+    if isinstance(prompt, bool) or isinstance(completion, bool) or prompt < 0 or completion < 0:
+        return None
+    return prompt, completion
 
 
 class InferenceProxy:
@@ -61,6 +86,8 @@ class InferenceProxy:
         if response_fetch_batch_size < 1:
             raise ValueError("response_fetch_batch_size must be at least 1")
         self._broker = broker
+        self._started_at = time.monotonic()
+        self._token_samples: deque[tuple[float, int, int]] = deque()
         self._model = model
         self._request_timeout_seconds = request_timeout_seconds
         self._readiness_timeout_seconds = readiness_timeout_seconds
@@ -77,7 +104,10 @@ class InferenceProxy:
         self.stats = ProxyStats()
         self.app = Starlette(
             routes=[
+                Route("/", self._status),
+                Route("/status", self._status),
                 Route("/health", self._health),
+                Route("/tokenize", self._forward, methods=["POST"]),
                 Route("/v1/{path:path}", self._forward, methods=["GET", "POST", "OPTIONS"]),
             ],
         )
@@ -120,6 +150,70 @@ class InferenceProxy:
         ready = self._poll_thread is not None and self._poll_thread.is_alive()
         return JSONResponse({"status": "ok" if ready else "stopped"}, status_code=200 if ready else 503)
 
+    async def _status(self, _request: Request) -> Response:
+        snapshot = await anyio.to_thread.run_sync(self._broker.status)
+        with self._lock:
+            pending = len(self._pending)
+            stats = replace(self.stats)
+            now = time.monotonic()
+            while self._token_samples and self._token_samples[0][0] <= now - TOKEN_RATE_WINDOW_SECONDS:
+                self._token_samples.popleft()
+            window_prompt = sum(sample[1] for sample in self._token_samples)
+            window_completion = sum(sample[2] for sample in self._token_samples)
+        elapsed = max(now - self._started_at, 0.001)
+        window = min(elapsed, TOKEN_RATE_WINDOW_SECONDS)
+        metrics = (
+            ("Proxy uptime", f"{elapsed:.1f} seconds"),
+            ("Prompt tokens", stats.prompt_tokens),
+            ("Output tokens", stats.completion_tokens),
+            ("Total tokens", stats.prompt_tokens + stats.completion_tokens),
+            ("Prompt tokens/s (last 60s)", f"{window_prompt / window:.1f}"),
+            ("Output tokens/s (last 60s)", f"{window_completion / window:.1f}"),
+            ("Total tokens/s (last 60s)", f"{(window_prompt + window_completion) / window:.1f}"),
+            ("Output tokens/s (lifetime)", f"{stats.completion_tokens / elapsed:.1f}"),
+            ("Prompt tokens/s (lifetime)", f"{stats.prompt_tokens / elapsed:.1f}"),
+            ("Total tokens/s (lifetime)", f"{(stats.prompt_tokens + stats.completion_tokens) / elapsed:.1f}"),
+            ("Generation responses with usage", f"{stats.responses_with_usage} / {stats.generation_responses}"),
+            ("Proxy outstanding", f"{pending} / {self._max_pending_requests}"),
+            ("Broker queued", snapshot.queued_requests),
+            ("Leased to workers", snapshot.leased_requests),
+            ("Responses awaiting proxy", snapshot.buffered_responses),
+            ("Submitted", snapshot.submitted_requests),
+            ("Dispatched", snapshot.dispatched_requests),
+            ("Completed", snapshot.completed_requests),
+            ("HTTP errors from workers", snapshot.failed_responses),
+            ("Mean queue wait", f"{snapshot.mean_queue_wait_seconds:.3f} seconds"),
+            ("Max queue wait", f"{snapshot.max_queue_wait_seconds:.3f} seconds"),
+            ("Proxy timeouts", stats.timed_out_requests),
+            ("Proxy rejections", stats.rejected_requests),
+            ("Broker stale responses", snapshot.dropped_responses),
+            ("Proxy stale responses", stats.dropped_responses),
+        )
+        rows = "".join(f"<tr><th>{label}</th><td>{value}</td></tr>" for label, value in metrics)
+        workers = "".join(
+            f"<tr><td>{html.escape(worker)}</td><td>{html.escape(metadata.backend_name)}</td>"
+            f"<td>{metadata.tensor_parallel_size}</td></tr>"
+            for worker, metadata in sorted(snapshot.workers.items())
+        )
+        return HTMLResponse(
+            '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            '<meta http-equiv="refresh" content="5"><title>Inference broker</title>'
+            "<style>body{font:16px system-ui;max-width:900px;margin:2rem auto;padding:0 1rem}"
+            "table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{text-align:left;"
+            "padding:.4rem;border-bottom:1px solid #ddd}th{font-weight:500}</style></head><body>"
+            f"<h1>Inference broker</h1><p>Model: {html.escape(self._model)}</p>"
+            "<p>Refreshes every 5 seconds. Counts cover this broker process. Queue wait measures "
+            "submission to first worker lease; inference time is excluded.</p>"
+            "<p>Token counts come from successful completion responses with valid usage. Rates count "
+            "tokens when responses finish, across all workers; they are not instantaneous GPU rates. "
+            "The 60-second window uses elapsed proxy lifetime until the first minute. "
+            "Missing usage is excluded. Totals reset when the proxy restarts.</p>"
+            f"<table>{rows}</table><h2>Registered workers ({len(snapshot.workers)})</h2>"
+            "<p>Registration does not imply current health.</p><table><tr><th>Worker</th>"
+            f"<th>Backend</th><th>Tensor parallel size</th></tr>{workers}</table></body></html>"
+        )
+
     async def _forward(self, request: Request) -> Response:
         body = await request.body()
         timeout_seconds = (
@@ -140,18 +234,16 @@ class InferenceProxy:
                     key: value for key, value in request_json.items() if key not in self._ignored_request_fields
                 }
                 body = json.dumps(request_json, separators=(",", ":")).encode()
-        return await anyio.to_thread.run_sync(
-            lambda: self.forward_raw_request(
-                request.url.path,
-                body,
-                method=request.method,
-                query_string=request.url.query,
-                headers=forwardable_request_headers(request.headers),
-                timeout_seconds=timeout_seconds,
-            )
+        return await self.forward_raw_request(
+            request.url.path,
+            body,
+            method=request.method,
+            query_string=request.url.query,
+            headers=forwardable_request_headers(request.headers),
+            timeout_seconds=timeout_seconds,
         )
 
-    def forward_raw_request(
+    async def forward_raw_request(
         self,
         path: str,
         body: bytes,
@@ -184,16 +276,15 @@ class InferenceProxy:
             pending_count = len(self._pending)
 
         try:
-            self._broker.submit_request(
-                InferenceRequest(
-                    request_id=request_id,
-                    method=method,
-                    path=path,
-                    payload=body,
-                    query_string=query_string,
-                    headers=tuple((headers or {}).items()),
-                ),
+            broker_request = InferenceRequest(
+                request_id=request_id,
+                method=method,
+                path=path,
+                payload=body,
+                query_string=query_string,
+                headers=tuple((headers or {}).items()),
             )
+            await anyio.to_thread.run_sync(lambda: self._broker.submit_request(broker_request))
             logger.info(
                 "InferenceProxy submitted request request_id=%s method=%s path=%s pending=%d/%d",
                 request_id,
@@ -202,8 +293,9 @@ class InferenceProxy:
                 pending_count,
                 self._max_pending_requests,
             )
-            response = future.result(timeout=timeout_seconds)
-        except FutureTimeoutError:
+            # Waiting for inference must not occupy AnyIO's bounded thread pool.
+            response = await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(future)), timeout=timeout_seconds)
+        except TimeoutError:
             self.stats.timed_out_requests += 1
             logger.warning(
                 "InferenceProxy timed out waiting for response request_id=%s method=%s path=%s timeout_seconds=%.1f",
@@ -226,6 +318,19 @@ class InferenceProxy:
             path,
             response.status_code,
         )
+        if path in {"/v1/completions", "/v1/chat/completions"} and 200 <= response.status_code < 300:
+            usage = response_token_usage(response.payload)
+            with self._lock:
+                self.stats.generation_responses += 1
+                if usage is not None:
+                    prompt, completion = usage
+                    self.stats.responses_with_usage += 1
+                    self.stats.prompt_tokens += prompt
+                    self.stats.completion_tokens += completion
+                    now = time.monotonic()
+                    while self._token_samples and self._token_samples[0][0] <= now - TOKEN_RATE_WINDOW_SECONDS:
+                        self._token_samples.popleft()
+                    self._token_samples.append((now, prompt, completion))
         return Response(content=response.payload, status_code=response.status_code, headers=dict(response.headers))
 
     def run_forever(
@@ -258,8 +363,8 @@ class InferenceProxy:
                 future.set_result(response)
                 matched_ids.append(response.request_id)
             pending_count = len(self._pending)
-        self.stats.matched_responses += len(matched_ids)
-        self.stats.dropped_responses += len(dropped_ids)
+            self.stats.matched_responses += len(matched_ids)
+            self.stats.dropped_responses += len(dropped_ids)
         if responses:
             logger.info(
                 "InferenceProxy fetched responses count=%d matched=%d dropped=%d "

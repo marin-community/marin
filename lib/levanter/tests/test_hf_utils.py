@@ -4,8 +4,8 @@
 import os
 
 import huggingface_hub
-from rigging.filesystem import StoragePath
-from test_utils import skip_if_hf_model_not_accessible
+from rigging.filesystem.storage_path import StoragePath
+from levanter.testing.helpers import skip_if_hf_model_not_accessible
 
 from levanter.compat.hf_checkpoints import _patch_hf_hub_download, load_tokenizer
 from levanter.utils.hf_utils import byte_length_of_token

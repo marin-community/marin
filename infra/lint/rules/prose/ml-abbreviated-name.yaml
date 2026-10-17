@@ -1,0 +1,16 @@
+schema_version: 1
+code: ml-abbreviated-name
+lane: prose
+title: Cryptic abbreviation in a name
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** No abbreviations like `exe`; use `exec` or full words.
+  Abbreviations save typing once and cost readability forever.
+
+  **When allowed:** Domain-standard short forms (`MAP`/`REDUCE` in enums,
+  `http`, `url`, `id`).
+
+  **Bad example:**
+  ```python
+  def _list_stg_files(inp_path: str): ...   # staged_files, input_path.
+  ```

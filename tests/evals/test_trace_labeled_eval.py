@@ -7,6 +7,7 @@ from levanter.data.sharded_datasource import FirstRowsShardedDataSource, Sharded
 from levanter.data.text.datasets import UrlDatasetSourceConfig
 from levanter.data.text.trace_chat import TraceChatEvaluationFormat
 from levanter.tokenizers import load_tokenizer
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.evaluation.trace_labeled_eval import (
     DEFAULT_OUTCOME_JUDGE_PROMPT,
     TraceLabeledEvalDatasetConfig,
@@ -16,8 +17,6 @@ from marin.evaluation.trace_labeled_eval import (
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import WhitespaceSplit
-
-from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE
 
 
 class FailingAfterLimitSource(ShardedDataSource[int]):

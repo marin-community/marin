@@ -12,14 +12,13 @@ from __future__ import annotations
 
 import hashlib
 
-from rigging.filesystem import (
-    StoragePath,
+from rigging.filesystem.cluster_config import (
     get_bucket_location,
     load_cluster_config,
     marin_temp_bucket,
-    prefix_join,
     use_data_config,
 )
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 LEGACY_SAMPLES_KIND = "eval-archive-legacy"
 SUPERSEDED_SAMPLES_KIND = "eval-archive-superseded"

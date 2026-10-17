@@ -10,8 +10,10 @@ Modes:
   hang <counter>                 Record the start, then sleep without becoming ready.
   stuck-fault <counter>          Log a streamer fault while the parent stays alive.
   exit                           Exit successfully without becoming ready.
+  record-args <path>             Record argv, then answer /v1/models.
 """
 
+import json
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -45,6 +47,9 @@ def _serve() -> None:
 def main() -> None:
     mode = sys.argv[1]
     if mode == "serve":
+        _serve()
+    elif mode == "record-args":
+        Path(sys.argv[2]).write_text(json.dumps(sys.argv[3:]))
         _serve()
     elif mode == "hang":
         _record_start(sys.argv[2])

@@ -26,7 +26,6 @@ from iris.cluster.platforms.k8s.types import (
     KubectlError,
     KubectlLogLine,
     KubectlLogResult,
-    PodResourceUsage,
     parse_k8s_quantity,
 )
 from iris.cluster.service_mode import ServiceMode
@@ -105,18 +104,6 @@ class FakeNode:
         else:
             result["spec"] = {}
         return result
-
-
-@dataclass
-class NodePoolConfig:
-    """Configuration for a pool of identical nodes."""
-
-    name: str
-    instance_type: str
-    node_count: int
-    labels: dict[str, str] = field(default_factory=dict)
-    taints: list[dict[str, str]] = field(default_factory=list)
-    per_node_resources: FakeNodeResources = field(default_factory=FakeNodeResources)
 
 
 # ---------------------------------------------------------------------------
@@ -273,13 +260,11 @@ class InMemoryK8sService:
         )
         self._resources: dict[tuple[str, str], dict] = {}  # (kind, name) -> manifest
         self._injected_failures: dict[str, Exception] = {}
-        self._persistent_failures: dict[str, Exception] = {}
         self._logs: dict[str, str] = {}  # pod_name -> log text
         self._events: list[dict] = []
         self._exec_responses: dict[str, list[ExecResult]] = {}
         self._file_contents: dict[tuple[str, str], bytes] = {}  # (pod_name, path) -> data
         self._rm_files_calls: list[tuple[str, list[str]]] = []
-        self._top_pod_overrides: dict[str, PodResourceUsage | None] = {}
         self._log_watermarks: dict[str, int] = {}  # pod_name -> bytes consumed
 
         # Pods living outside the service's own namespace, keyed by
@@ -289,10 +274,12 @@ class InMemoryK8sService:
         # Every explicit-namespace pod call as (operation, namespace), so
         # tests can assert the eviction feature stays silent when disabled.
         self.namespaced_pod_calls: list[tuple[str, str]] = []
+        # Every explicit-namespace pod list as (namespace, labels, field_selector), so
+        # tests can assert a caller filters server-side instead of listing everything.
+        self.namespaced_pod_list_selectors: list[tuple[str, dict[str, str] | None, str | None]] = []
 
         # Node model
         self._nodes: dict[str, FakeNode] = {}
-        self._node_pools: dict[str, NodePoolConfig] = {}
         # Track which node each pod was scheduled on + its resource requests
         self._pod_node_assignments: dict[str, str] = {}  # pod_name -> node_name
         self._pod_resource_requests: dict[str, dict[str, int]] = {}  # pod_name -> requests
@@ -475,30 +462,7 @@ class InMemoryK8sService:
         """Inject a one-shot failure consumed by the next call to *operation*."""
         self._injected_failures[operation] = error
 
-    def inject_persistent_failure(self, operation: str, error: Exception) -> None:
-        """Fail every call to *operation* until cleared.
-
-        Needed for operations a background loop retries on its own cadence,
-        where a one-shot failure would be consumed by the first poll.
-        """
-        self._persistent_failures[operation] = error
-
-    def clear_failure(self, operation: str) -> None:
-        self._injected_failures.pop(operation, None)
-        self._persistent_failures.pop(operation, None)
-
     # -- Node pool management --
-
-    def remove_node_pool(self, pool_name: str) -> None:
-        """Remove a node pool and all its nodes."""
-        if self._available_node_pools is not None:
-            self._available_node_pools.discard(pool_name)
-        # Remove nodes belonging to this pool
-        if pool_name in self._node_pools:
-            pool = self._node_pools.pop(pool_name)
-            for i in range(pool.node_count):
-                node_name = f"{pool_name}-{i}"
-                self._nodes.pop(node_name, None)
 
     def add_node_pool(
         self,
@@ -508,7 +472,6 @@ class InMemoryK8sService:
         labels: dict[str, str] | None = None,
         taints: list[dict[str, str]] | None = None,
         resources: FakeNodeResources | None = None,
-        instance_type: str = "n1-standard-4",
     ) -> None:
         """Add a node pool with actual FakeNode objects.
 
@@ -524,16 +487,6 @@ class InMemoryK8sService:
         pool_taints = list(taints or [])
         per_node = resources or FakeNodeResources()
 
-        config = NodePoolConfig(
-            name=pool_name,
-            instance_type=instance_type,
-            node_count=node_count,
-            labels=pool_labels,
-            taints=pool_taints,
-            per_node_resources=per_node,
-        )
-        self._node_pools[pool_name] = config
-
         for i in range(node_count):
             node_name = f"{pool_name}-{i}"
             self._nodes[node_name] = FakeNode(
@@ -547,35 +500,6 @@ class InMemoryK8sService:
                     ephemeral_storage_bytes=per_node.ephemeral_storage_bytes,
                 ),
             )
-
-    def set_node_count(self, pool_name: str, count: int) -> None:
-        """Adjust node count for an existing pool."""
-        if pool_name not in self._node_pools:
-            raise KubectlError(f"Node pool {pool_name!r} not found")
-
-        config = self._node_pools[pool_name]
-        current = config.node_count
-
-        if count > current:
-            for i in range(current, count):
-                node_name = f"{pool_name}-{i}"
-                self._nodes[node_name] = FakeNode(
-                    name=node_name,
-                    labels=dict(config.labels),
-                    taints=list(config.taints),
-                    allocatable=FakeNodeResources(
-                        cpu_millicores=config.per_node_resources.cpu_millicores,
-                        memory_bytes=config.per_node_resources.memory_bytes,
-                        gpu_count=config.per_node_resources.gpu_count,
-                        ephemeral_storage_bytes=config.per_node_resources.ephemeral_storage_bytes,
-                    ),
-                )
-        elif count < current:
-            for i in range(count, current):
-                node_name = f"{pool_name}-{i}"
-                self._nodes.pop(node_name, None)
-
-        config.node_count = count
 
     # -- Pod lifecycle helpers --
 
@@ -617,10 +541,6 @@ class InMemoryK8sService:
         """Pre-populate file content readable via read_file."""
         self._file_contents[(pod_name, path)] = data
 
-    def set_top_pod(self, pod_name: str, result: PodResourceUsage | None) -> None:
-        """Configure a pod's reported resource usage (None = metrics absent)."""
-        self._top_pod_overrides[pod_name] = result
-
     def seed_resource(self, resource: K8sResource, name: str, manifest: dict) -> None:
         """Directly insert a resource into the in-memory store for test setup.
 
@@ -633,11 +553,25 @@ class InMemoryK8sService:
         """Insert a pod in an arbitrary namespace (outside the service's own)."""
         self._namespaced_pods[(namespace, name)] = manifest
 
+    def patch_node(self, name: str, patch: dict) -> None:
+        self._check_failure("patch_node")
+        node = self._resources[(K8sResource.NODES.plural, name)]
+        metadata = patch.get("metadata", {})
+        expected = metadata.get("resourceVersion")
+        if expected is not None and expected != node["metadata"].get("resourceVersion"):
+            raise KubectlError("node resourceVersion conflict")
+        annotations = node["metadata"].setdefault("annotations", {})
+        for key, value in metadata.get("annotations", {}).items():
+            if value is None:
+                annotations.pop(key, None)
+            else:
+                annotations[key] = value
+        node.setdefault("spec", {}).update(patch.get("spec", {}))
+        node["metadata"]["resourceVersion"] = str(int(node["metadata"].get("resourceVersion", "0")) + 1)
+
     # -- Protocol methods --
 
     def _check_failure(self, operation: str) -> None:
-        if err := self._persistent_failures.get(operation):
-            raise err
         if err := self._injected_failures.pop(operation, None):
             raise err
 
@@ -654,6 +588,13 @@ class InMemoryK8sService:
         if resource is K8sResource.PODS and (resource.plural, name) in self._resources:
             return
 
+        if resource is K8sResource.SECRETS:
+            previous = self._resources.get((resource.plural, name))
+            version = int(previous["metadata"].get("resourceVersion", "0")) if previous else 0
+            if previous is None or previous.get("data") != manifest.get("data"):
+                version += 1
+            manifest["metadata"]["uid"] = f"fake-secret-{name}"
+            manifest["metadata"]["resourceVersion"] = str(version)
         self._resources[(resource.plural, name)] = manifest
 
         # Run scheduling for pod-bearing manifests
@@ -675,9 +616,26 @@ class InMemoryK8sService:
         field_selector: str | None = None,
         namespace: str | None = None,
     ) -> Iterator[dict]:
-        # The fake holds one namespace, so an override resolves to the same store; it
-        # is accepted so the fake still stands in for cross-namespace reads.
-        yield from self.list_json(resource, labels=labels, field_selector=field_selector)
+        self._check_failure("iter_json")
+        if namespace is None or namespace == self._namespace:
+            yield from self.list_json(resource, labels=labels, field_selector=field_selector)
+            return
+        if resource is not K8sResource.PODS:
+            raise NotImplementedError(f"the fake stores no foreign-namespace {resource.plural}")
+        # A foreign namespace reads the store seeded by seed_namespaced_pod. The selectors
+        # are applied here because the real service applies them server-side; the recorded
+        # pair lets tests pin that they were pushed down rather than filtered by the caller.
+        self.namespaced_pod_calls.append(("list", namespace))
+        self.namespaced_pod_list_selectors.append((namespace, labels, field_selector))
+        for (pod_namespace, _), manifest in self._namespaced_pods.items():
+            if pod_namespace != namespace:
+                continue
+            pod_labels = manifest.get("metadata", {}).get("labels", {})
+            if labels and not all(pod_labels.get(key) == value for key, value in labels.items()):
+                continue
+            if field_selector and not _matches_field_selector(manifest, field_selector):
+                continue
+            yield manifest
 
     def list_json(
         self,
@@ -764,23 +722,6 @@ class InMemoryK8sService:
         for name in to_delete:
             self.delete(resource, name)
 
-    def list_pods_in_namespace(self, namespace: str) -> list[dict]:
-        """List pods in an explicit namespace (not the service's own)."""
-        self._check_failure("list_pods_in_namespace")
-        self.namespaced_pod_calls.append(("list", namespace))
-        if namespace == self._namespace:
-            return self.list_json(K8sResource.PODS)
-        return [manifest for (ns, _), manifest in self._namespaced_pods.items() if ns == namespace]
-
-    def delete_pod_in_namespace(self, namespace: str, name: str) -> None:
-        """Delete a pod in an explicit namespace, ignoring NotFound."""
-        self._check_failure("delete_pod_in_namespace")
-        self.namespaced_pod_calls.append(("delete", namespace))
-        if namespace == self._namespace:
-            self.delete(K8sResource.PODS, name)
-            return
-        self._namespaced_pods.pop((namespace, name), None)
-
     def remove_finalizer(self, resource: K8sResource, name: str, finalizer: str) -> None:
         """Strip a single finalizer from a stored resource (no-op if absent)."""
         self._check_failure("remove_finalizer")
@@ -851,6 +792,8 @@ class InMemoryK8sService:
             return self._exec_responses[pod_name].pop(0)
         if not any(name == pod_name for (_, name) in self._resources):
             return ExecResult(returncode=1, stdout="", stderr=f"pod {pod_name!r} not found")
+        if len(cmd) == 2 and cmd[0] == "touch":
+            self._file_contents[(pod_name, cmd[1])] = b""
         return ExecResult(returncode=0, stdout="", stderr="")
 
     def set_image(self, resource: K8sResource, name: str, container: str, image: str) -> None:
@@ -874,27 +817,6 @@ class InMemoryK8sService:
             if _matches_field_selector(event, field_selector):
                 results.append(event)
         return results
-
-    def top_pods(self, *, labels: dict[str, str] | None = None) -> dict[str, PodResourceUsage]:
-        self._check_failure("top_pods")
-        plural = K8sResource.PODS.plural
-        usage: dict[str, PodResourceUsage] = {}
-        for (stored_plural, name), manifest in self._resources.items():
-            if stored_plural != plural:
-                continue
-            if labels:
-                res_labels = manifest.get("metadata", {}).get("labels", {})
-                if not all(res_labels.get(k) == v for k, v in labels.items()):
-                    continue
-            usage[name] = PodResourceUsage(cpu_millicores=100, memory_bytes=256 * 1024 * 1024)
-        # Per-pod overrides win regardless of the label scope; a None override
-        # means "metrics absent" and drops the pod from the result.
-        for name, override in self._top_pod_overrides.items():
-            if override is None:
-                usage.pop(name, None)
-            else:
-                usage[name] = override
-        return usage
 
     def read_file(
         self,

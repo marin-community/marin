@@ -4,16 +4,15 @@
 """
 Implements sequence packing, mostly for doing evaluation on lots of short sequences.
 
-Our strategy is basically to maintain a pool of SequencePackers, each of which can hold a fixed number of tokens
-(and a maximum number of segments). We then iterate over the sequences, adding them to the packers if they fit, and
-yielding the packed examples when they are full.
+Our strategy is to greedily fill each pack with consecutive documents until the next one would exceed the
+sequence length (or the maximum number of segments), then start a new pack.
 
 This achieves about a 90% "real token" rate, compared to like 10% without packing.
 """
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import Iterable, Iterator, Literal, Sequence, TypeVar
+from typing import Iterable, Literal, Sequence, TypeVar
 
 import haliax as hax
 import jax
@@ -26,71 +25,13 @@ from levanter.data.dataset import AsyncDataset
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmExample
 from levanter.store.jagged_array import JaggedArrayStore
-from levanter.utils.jax_utils import leaf_key_paths, local_cpu_mesh, tree_broadcast_to
+from levanter.utils.jax_utils import leaf_key_paths, tree_broadcast_to
 
 # cf https://github.com/tensorflow/tensor2tensor/blob/bafdc1b67730430d38d6ab802cbd51f9d053ba2e/tensor2tensor/data_generators/generator_utils.py#L623
 
 # todo should we use something like this: https://arxiv.org/pdf/2107.02027?
 
 T = TypeVar("T", bound=PyTree)
-
-
-class SequencePacker:
-    """
-    Packs sequences into a single LmExample.
-    """
-
-    def __init__(self, Pos: hax.Axis, max_pack_size: int, pad_token: int):
-        self.Pos = Pos
-        self._ids: list[int] = []
-        self._segment_ids: list[int] = []
-        self._loss_weight: list[float] = []
-        self.num_segments = 0
-        self.pad_token = pad_token
-        self.max_pack_size = max_pack_size
-        assert pad_token is not None, "pad_token must be set"
-
-    def can_pack(self, ids: list[int]) -> bool:
-        return len(ids) + len(self._ids) <= self.Pos.size and self.num_segments < self.max_pack_size
-
-    def add_example(self, ids: list[int], loss_weight: list[float] | np.ndarray, segment_id: int | None = None):
-        if len(ids) != len(loss_weight):
-            raise ValueError("ids and loss_weight must have the same length")
-
-        if len(ids) == 0:
-            return
-
-        if len(ids) + len(self._ids) > self.Pos.size:
-            raise ValueError("Too many tokens")
-
-        if self.num_segments >= self.max_pack_size:
-            raise ValueError("Too many segments")
-
-        self._ids.extend(ids)
-        if segment_id is None:
-            segment_id = self.num_segments
-
-        self.num_segments += 1
-
-        self._segment_ids.extend([segment_id] * len(ids))
-
-        self._loss_weight.extend(loss_weight)
-
-    def pack(self) -> LmExample:
-        ids = self._ids + [self.pad_token] * (self.Pos.size - len(self._ids))
-
-        segment_ids = self._segment_ids + [-1] * (self.Pos.size - len(self._segment_ids))
-
-        loss_weight = self._loss_weight + [0.0] * (self.Pos.size - len(self._loss_weight))
-
-        with local_cpu_mesh():
-            tokens = hax.named(ids, self.Pos).astype(jnp.int32)
-            segment_ids = hax.named(segment_ids, self.Pos).astype(jnp.int32)
-            loss_weight = hax.named(loss_weight, self.Pos).astype(jnp.float32)
-
-            attn_mask = AttentionMask.causal().with_segment_ids(segment_ids)
-
-            return LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
 
 
 @dataclass(frozen=True)
@@ -109,45 +50,6 @@ class PromptCompletion:
                 f"PromptCompletion must have strictly more tokens than the prompt length. Got {len(self.ids)} tokens"
                 f" and prompt length {self.prompt_length}"
             )
-
-
-def pack_prompt_completions(
-    Pos: hax.Axis,
-    sequences: Iterable[PromptCompletion],
-    pad_token: int,
-    max_segments_per_example: int = 64,
-    max_buffered_examples: int = 64,
-) -> Iterator[LmExample]:
-    """
-    Packs a list of prompt completions into LmExamples using the SequencePacker
-    """
-
-    packers = [SequencePacker(Pos, max_segments_per_example, pad_token)]
-
-    for sequence in sequences:
-        loss_weight = (np.arange(len(sequence.ids)) >= sequence.prompt_length - 1).astype(np.float32)
-        loss_weight[-1] = 0
-        assert np.any(loss_weight)
-
-        for packer in packers:
-            if packer.can_pack(sequence.ids):
-                packer.add_example(sequence.ids, loss_weight, sequence.segment_id)
-
-                if packer.num_segments == max_segments_per_example:
-                    yield packer.pack()
-                    packers.remove(packer)
-                break
-        else:
-            # no packer could fit the example, create a new one
-            packer = SequencePacker(Pos, max_segments_per_example, pad_token)
-            packer.add_example(sequence.ids, loss_weight, sequence.segment_id)
-            packers.append(packer)
-
-        while len(packers) >= max_buffered_examples:
-            yield packers.pop(0).pack()
-
-    for packer in packers:
-        yield packer.pack()
 
 
 def per_segment_loss(

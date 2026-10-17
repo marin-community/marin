@@ -4,4 +4,5 @@ task_options:
     num_fewshot: 0
     task_alias: gsm8k_0shot
     generation: true
-max_tokens: 512
+# No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own
+# benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.

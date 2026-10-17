@@ -15,7 +15,8 @@ from collections.abc import Iterable
 from typing import Any
 
 from datasets import load_dataset
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 
 def _parquet_file_matches_split(path: str, split: str) -> bool:

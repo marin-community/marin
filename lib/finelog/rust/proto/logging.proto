@@ -115,6 +115,7 @@ message FetchLogsRequest {
   // Stop before this autoincrement id (exclusive). 0 = unbounded above; the
   // first row ever written has seq 1, so no row is excluded by the default.
   int64 until_cursor = 10;
+  string regex = 11;           // Regex match on log data
 }
 
 message FetchLogsResponse {

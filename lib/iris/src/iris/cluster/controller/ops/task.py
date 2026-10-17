@@ -7,17 +7,17 @@ The glues here are small per-tick wrappers around the transition kernel: load
 a closed snapshot covering the affected tasks, call the matching
 ``ReconcileState`` verb, return the effects. ``finalize`` wraps the kernel's
 ``finalize_tasks`` against the caller's write transaction and commits; the
-backend-facing ``apply_dispatch_updates`` wraps ``record_updates`` against the
-backend's read snapshot and returns the effects uncommitted (the controller
-commits them via ``commit_effects``). ``assign`` is the only scheduler-driven
+controller-facing ``apply_reconcile_updates`` validates exact backend
+observations against a fresh read snapshot, wraps ``apply_updates``, and returns
+effects uncommitted. ``assign`` is the only scheduler-driven
 write that doesn't go through the kernel — PENDING → ASSIGNED is a direct-write
 transition with no cascade semantics.
 
-Worker-reported task states are authored through ``ops.worker.apply_reconcile``
-(the reconcile loop), not here.
+All backend-reported task states enter through ``apply_reconcile_updates``.
 """
 
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, replace
 
 from rigging.timing import Timestamp
 
@@ -32,10 +32,13 @@ from iris.cluster.controller.reconcile import (
 )
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.loader import TransitionReader, load_closed_snapshot
-from iris.cluster.controller.task_state import task_row_can_be_scheduled
+from iris.cluster.controller.reconcile.snapshot import TransitionSnapshot
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -118,31 +121,90 @@ def assign(
     writes.mark_jobs_running(cur, jobs_to_update, now_ms)
 
 
-def apply_dispatch_updates(
+def apply_reconcile_updates(
     source: TransitionReader,
-    updates: list[TaskUpdate],
+    observations: list[TaskUpdate],
     *,
     now: Timestamp,
 ) -> ControllerEffects:
-    """Author effects for direct-provider updates from a read snapshot (no commit).
+    """Author effects for exact backend observations from a fresh snapshot.
 
-    The cluster backend's reconcile glue: load a snapshot covering the updated
-    tasks through the backend's own read surface, run the direct-dispatch state
-    machine, and return the effects for the controller to commit. ``now`` stamps
-    the snapshot, which ``record_updates`` reads for its transition timestamps.
+    Observations from every backend use this path. Exact Attempt UIDs prevent a
+    late report from targeting a replacement incarnation; optional ``worker_id``
+    identifies observations that also participate in Iris worker liveness.
     """
-    relevant_task_ids = [
-        update.task_id
-        for update in updates
-        if update.new_state not in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING)
+    snapshot = _reconcile_snapshot(source, observations, now=now)
+    updates = [
+        _resolve_missing_observation(snapshot, update) for update in _exact_current_observations(snapshot, observations)
     ]
-    attempt_keys = [(update.task_id, update.attempt_id) for update in updates]
-    snapshot = source.transition_snapshot(
+    return ReconcileState.open(snapshot).apply_updates(updates)
+
+
+def _reconcile_snapshot(
+    source: TransitionReader,
+    observations: list[TaskUpdate],
+    *,
+    now: Timestamp,
+) -> TransitionSnapshot:
+    relevant_task_ids = [
+        observation.task_id
+        for observation in observations
+        if observation.new_state not in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING)
+    ]
+    attempt_keys = [(observation.task_id, observation.attempt_id) for observation in observations]
+    return source.transition_snapshot(
         now=now,
         seed_task_ids=relevant_task_ids,
         extra_attempt_keys=attempt_keys,
+        observation_uids=[observation.attempt_uid for observation in observations if observation.attempt_uid],
+        seed_worker_ids=[observation.worker_id for observation in observations if observation.worker_id],
     )
-    return ReconcileState.open(snapshot).record_updates(updates)
+
+
+def _exact_current_observations(
+    snapshot: TransitionSnapshot,
+    observations: list[TaskUpdate],
+) -> list[TaskUpdate]:
+    accepted: list[TaskUpdate] = []
+    for observation in observations:
+        if observation.attempt_uid is None:
+            logger.warning(
+                "Dropping backend observation without Attempt UID: task=%s attempt=%d",
+                observation.task_id,
+                observation.attempt_id,
+            )
+            continue
+        resolved = snapshot.attempt_uid_index.get(observation.attempt_uid)
+        if resolved != (observation.task_id, observation.attempt_id):
+            logger.warning(
+                "Dropping stale provider observation: task=%s attempt=%d uid=%s",
+                observation.task_id,
+                observation.attempt_id,
+                observation.attempt_uid,
+            )
+            continue
+        if observation.worker_id is not None and observation.worker_id not in snapshot.active_workers:
+            logger.warning(
+                "Dropping observation from inactive worker: task=%s attempt=%d worker=%s",
+                observation.task_id,
+                observation.attempt_id,
+                observation.worker_id,
+            )
+            continue
+        accepted.append(observation)
+    return accepted
+
+
+def _resolve_missing_observation(snapshot: TransitionSnapshot, observation: TaskUpdate) -> TaskUpdate:
+    if observation.new_state != job_pb2.TASK_STATE_MISSING:
+        return observation
+    task = snapshot.tasks.get(observation.task_id)
+    missing_state = (
+        job_pb2.TASK_STATE_WORKER_FAILED
+        if task is not None and task.state in ACTIVE_TASK_STATES
+        else job_pb2.TASK_STATE_FAILED
+    )
+    return replace(observation, new_state=missing_state, error="worker_lost_spec")
 
 
 def finalize(

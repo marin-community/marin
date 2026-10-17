@@ -4,21 +4,9 @@ import { RouterLink } from 'vue-router'
 import { statsRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { formatBytes, formatNumber } from '@/utils/formatting'
-import type { ProtoSchema } from '@/types/stats'
+import type { ListNamespacesResponse } from '@/types/stats'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
-
-interface NamespaceInfo {
-  namespace: string
-  schema?: ProtoSchema
-  rowCount?: string | number
-  byteSize?: string | number
-  segmentCount?: number
-}
-
-interface ListNamespacesResponse {
-  namespaces?: NamespaceInfo[]
-}
 
 interface NamespaceRow {
   namespace: string
@@ -90,6 +78,11 @@ function setSort(key: string) {
 
 <template>
   <div class="space-y-3">
+    <div>
+      <h2 class="text-lg">Tables</h2>
+      <p class="text-xs text-text-muted mt-0.5">Registered tables and their current storage footprint.</p>
+    </div>
+
     <div
       v-if="error"
       class="px-4 py-3 text-sm text-status-danger bg-status-danger-bg rounded-lg border border-status-danger-border"
@@ -97,14 +90,14 @@ function setSort(key: string) {
       {{ error }}
     </div>
 
-    <InfoCard title="Registered namespaces">
+    <InfoCard title="Registered tables">
       <DataTable
         :columns="columns"
         :rows="sorted"
         :loading="loading"
         :sort-key="sortKey"
         :sort-dir="sortDir"
-        empty-message="No namespaces registered."
+        empty-message="No tables registered."
         @sort="(k) => setSort(k)"
       >
         <template #cell-namespace="{ value }">

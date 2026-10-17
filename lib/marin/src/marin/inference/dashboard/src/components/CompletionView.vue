@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onUnmounted, ref, watch } from 'vue'
-import { requestCompletion } from '../lib/api'
+import { isAbortError, requestCompletion } from '../lib/api'
 import { COMPLETION_EXAMPLES } from '../lib/examples'
 import type { SamplingParams } from '../lib/types'
 
@@ -70,7 +70,7 @@ async function run() {
       },
     )
   } catch (err) {
-    if (!(err instanceof DOMException && err.name === 'AbortError')) error.value = String(err)
+    if (!isAbortError(err)) error.value = String(err)
   } finally {
     busy.value = false
     abort = null
