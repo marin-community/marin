@@ -17,7 +17,7 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Self, Tuple, Type, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Protocol, Self, Tuple, Type, TypeVar, Union, cast
 
 import draccus
 import equinox as eqx
@@ -312,7 +312,19 @@ class HFCompatConfig(LmConfig["LmWithHfSerializationMixin"]):
         pass
 
 
-MConfig = TypeVar("MConfig", bound=HFCompatConfig)
+class HfSerializableConfig(Protocol):
+    """Configuration contract shared by language and vision checkpoint models."""
+
+    @property
+    def model_type(self) -> Type["LmHeadModel | ModelWithHfSerializationMixin"]: ...
+
+    def to_hf_config(self, vocab_size: int, config_overrides: Optional[dict] = None) -> HfConfig: ...
+
+    @classmethod
+    def from_hf_config(cls, hf_config: HfConfig) -> Self: ...
+
+
+MConfig = TypeVar("MConfig", bound=HfSerializableConfig)
 
 
 class ModelWithHfSerializationMixin(Generic[MConfig]):
@@ -346,7 +358,7 @@ def _coerce_to_rr(s: Union[str, RepoRef]) -> RepoRef:
         return RepoRef.from_string(s)
 
 
-LevConfig = TypeVar("LevConfig", bound=HFCompatConfig)
+LevConfig = TypeVar("LevConfig", bound=HfSerializableConfig)
 
 # just for generating unique ids
 
@@ -572,7 +584,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         ref = _coerce_to_rr(reference_checkpoint) if reference_checkpoint is not None else None
         HfConfigClass = HFCheckpointConverter._infer_config_class(HfConfigClass, ref, trust_remote_code)
-        tokenizer = HFCheckpointConverter._infer_tokenizer(tokenizer, ref, trust_remote_code)
+        if tokenizer is not None or issubclass(LevConfigClass, LmConfig):
+            tokenizer = HFCheckpointConverter._infer_tokenizer(tokenizer, ref, trust_remote_code)
 
         self.__default_init__(  # type: ignore
             LevConfigClass=LevConfigClass,
@@ -937,9 +950,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
     def load_pretrained(
         self,
-        lm_model_cls: Type[ModelWithHfSerializationMixin],
+        lm_model_cls: Type[LmHeadModel | ModelWithHfSerializationMixin],
         ref: Optional[Union[str, RepoRef]] = None,
-        config: Optional[HFCompatConfig] = None,
+        config: Optional[HfSerializableConfig] = None,
         axis_mapping: Optional[ResourceMapping] = None,
         resize_vocab_to_match_tokenizer: bool = False,
         dtype: Optional[jnp.dtype] = None,
@@ -962,8 +975,12 @@ class HFCheckpointConverter(Generic[LevConfig]):
         lm_model_cls = config.model_type
 
         # Vocab: first we have to resize the vocab as loaded from the checkpoint
-        tokenizer_Vocab = self.Vocab
-        Vocab = tokenizer_Vocab.resize(hf_config.vocab_size)
+        if isinstance(config, LmConfig):
+            tokenizer_Vocab = self.Vocab
+            Vocab = tokenizer_Vocab.resize(hf_config.vocab_size)
+        else:
+            # Vision models accept an unused vocabulary axis through the serialization interface.
+            tokenizer_Vocab = Vocab = Axis("vocab", 0)
 
         # TODO: in an ideal world, we would only load the part of the array we needed, but
         # AFAICT neither torch state dicts nor safetensors support this.
@@ -1241,7 +1258,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     logger.info(f"Copying reference code from {self.reference_checkpoint}")
                     self._save_code_local(local_path)
 
-                if save_tokenizer:
+                if save_tokenizer and self.tokenizer is not None:
                     logger.info("Saving tokenizer")
                     _save_tokenizer_pretrained(self.tokenizer, local_path, chat_template=chat_template)
 

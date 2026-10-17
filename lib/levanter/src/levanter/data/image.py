@@ -1,0 +1,1794 @@
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
+
+"""Image and conversation sources, preprocessing, batching, and caching."""
+
+import pyarrow.parquet as pq
+
+import abc
+import copy
+import asyncio
+import json
+import logging
+import threading
+import weakref
+from collections import OrderedDict
+from dataclasses import dataclass
+from functools import cached_property
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Protocol, Sequence, Tuple, Union, cast
+
+import datasets
+import equinox as eqx
+import jax
+import numpy as np
+from draccus import field
+from haliax import Axis, NamedArray
+
+from levanter.data.mixture import MixtureDataset, StopStrategy
+from jaxtyping import PRNGKeyArray
+from typing_extensions import TypedDict
+
+from levanter.compat.hf_checkpoints import load_processor
+from levanter.data.dataset import AsyncDataset
+from levanter.data._preprocessor import BatchProcessor
+from levanter.data.dataset import MappedAsyncDataset
+from levanter.data.sharded_datasource import (
+    ShardedDataSource,
+    UrlBackedShardedDataSource,
+    WrappedHFDataSource,
+    _sniff_format_for_dataset,
+)
+from levanter.store.cache import CacheOptions, TreeCache, build_or_load_cache
+from levanter.utils.jax_utils import key_iterator
+from levanter.utils.logging import silence_transformer_nag
+
+silence_transformer_nag()
+from transformers import (  # noqa: E402
+    BatchFeature,
+    PreTrainedTokenizerBase,
+    ProcessorMixin,
+)
+
+from io import BytesIO  # noqa: E402
+
+import requests  # noqa: E402
+from PIL import Image  # noqa: E402
+from rigging.filesystem.storage_path import StoragePath, prefix_join  # noqa: E402
+
+logger = logging.getLogger("levanter.data.image")
+
+DEFAULT_IMAGE_TILE_SIZE = 384
+
+
+class ImageTextUrlDataSource(UrlBackedShardedDataSource[dict]):
+    """
+    Dataset for image-text pairs from various file formats (JSON, JSONL, Parquet).
+
+    This data source reads image-text pairs where:
+    - image_key: points to the image data (can be path, URL, bytes, or HF dict format)
+    - text_key: points to the text description/caption
+
+    Supports HuggingFace-style image formats:
+    - {"bytes": <raw_bytes>}
+    - {"path": "path/to/image.jpg"}
+    - Direct path string or URL
+    """
+
+    def __init__(self, urls: Sequence[str], image_key: str = "image", text_key: str = "text") -> None:
+        super().__init__(urls)
+        self.image_key = image_key
+        self.text_key = text_key
+
+    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
+        url = self._shard_name_to_url_mapping[shard_name]
+        i = 0
+        format = _sniff_format_for_dataset(url)
+        if format == ".parquet":
+
+            with StoragePath(url).open("rb") as f:
+                table = pq.read_table(f)
+                data = table.to_pydict()
+                num_rows = table.num_rows
+                for idx in range(row, num_rows):
+                    yield {
+                        "image": data[self.image_key][idx],
+                        "text": data[self.text_key][idx],
+                    }
+        else:
+            with StoragePath(url).open("r", compression="infer") as f:
+                match format:
+                    case ".jsonl":
+                        for line in f:
+                            if i >= row:
+                                data = json.loads(line)
+                                yield {
+                                    "image": data[self.image_key],
+                                    "text": data[self.text_key],
+                                }
+                            i += 1
+                    case ".json":
+                        data = json.load(f)
+                        for doc in data[row:]:
+                            yield {
+                                "image": doc[self.image_key],
+                                "text": doc[self.text_key],
+                            }
+                    case _:
+                        raise ValueError(f"Unknown format {format}")
+
+
+class ImageConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
+    """
+    Dataset for conversation-format image-text data (VLM training format).
+
+    This data source reads conversation data with interleaved images and text,
+    used for vision-language model training like LLaVA.
+
+    Expected data format:
+    {
+        "messages": [
+            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "..."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
+        ],
+        "images": ["path/to/image.jpg"]  # or PIL Images, URLs, or bytes
+    }
+    """
+
+    def __init__(self, urls: Sequence[str], messages_key: str = "messages", images_key: str = "images") -> None:
+        super().__init__(urls)
+        self.messages_key = messages_key
+        self.images_key = images_key
+
+    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
+        url = self._shard_name_to_url_mapping[shard_name]
+        i = 0
+        format = _sniff_format_for_dataset(url)
+        if format == ".parquet":
+
+            with StoragePath(url).open("rb") as f:
+                table = pq.read_table(f)
+                data = table.to_pydict()
+                num_rows = table.num_rows
+                for idx in range(row, num_rows):
+                    yield {
+                        "messages": data[self.messages_key][idx],
+                        "images": data[self.images_key][idx] if self.images_key in data else [],
+                        "audio": data["audio"][idx] if "audio" in data else [],
+                        "videos": data["videos"][idx] if "videos" in data else [],
+                    }
+        else:
+            with StoragePath(url).open("r", compression="infer") as f:
+                match format:
+                    case ".jsonl":
+                        for line in f:
+                            if i >= row:
+                                data = json.loads(line)
+                                yield {
+                                    "messages": data[self.messages_key],
+                                    "images": data.get(self.images_key, []),
+                                    "audio": data.get("audio", []),
+                                    "videos": data.get("videos", []),
+                                }
+                            i += 1
+                    case ".json":
+                        data = json.load(f)
+                        for doc in data[row:]:
+                            yield {
+                                "messages": doc[self.messages_key],
+                                "images": doc.get(self.images_key, []),
+                                "audio": doc.get("audio", []),
+                                "videos": doc.get("videos", []),
+                            }
+                    case _:
+                        raise ValueError(f"Unknown format {format}")
+
+
+def processor_with_tokenizer(
+    processor: ProcessorMixin,
+    tokenizer: PreTrainedTokenizerBase,
+    *,
+    image_token: str,
+    video_token: str,
+) -> ProcessorMixin:
+    """Copy a processor with explicit modality tokens and a compatible tokenizer.
+
+    Retains the original processor class, its image expansion logic, and its other
+    modality processors. Shared sub-processors are not mutated.
+    """
+    old_tokenizer = processor.tokenizer
+    if old_tokenizer.eos_token_id != tokenizer.eos_token_id:
+        raise ValueError("Replacement tokenizer must preserve the EOS token ID")
+    old_modality_tokens = {getattr(processor, "image_token", None), getattr(processor, "video_token", None)}
+    for token in old_tokenizer.all_special_tokens:
+        if token not in old_modality_tokens and old_tokenizer.convert_tokens_to_ids(
+            token
+        ) != tokenizer.convert_tokens_to_ids(token):
+            raise ValueError(f"Replacement tokenizer changes special token {token!r}")
+    for token in (image_token, video_token):
+        if token not in tokenizer.get_vocab():
+            raise ValueError(f"Tokenizer does not contain the configured modality token {token!r}")
+    result = copy.copy(processor)
+    result.tokenizer = tokenizer
+    result.image_token = image_token
+    result.video_token = video_token
+    result.image_token_id = tokenizer.convert_tokens_to_ids(image_token)
+    result.video_token_id = tokenizer.convert_tokens_to_ids(video_token)
+    return result
+
+
+def image_source_urls(urls: Sequence[str]) -> list[str]:
+    """Expand shard patterns and recursively discover parquet files in directories."""
+    result: list[str] = []
+    for specification in urls:
+        for path in StoragePath(specification).expand_glob():
+            if path.isdir():
+                result.extend(str(match) for match in (path / "**/*.parquet").glob())
+            else:
+                result.append(str(path))
+    return sorted(result)
+
+
+ConversationMessage = TypedDict(
+    "ConversationMessage",
+    {
+        "role": str,  # "user", "assistant", "system"
+        "content": List[Dict[str, Any]],  # [{"type": "image"}, {"type": "text", "text": "..."}]
+    },
+)
+
+ConversationDict = TypedDict(
+    "ConversationDict",
+    {
+        "messages": List[ConversationMessage],
+        "images": list[Any],
+        "audio": list[Any],
+        "videos": list[Any],
+    },
+    total=False,
+)
+
+
+# Pixel values are optional to support text-only examples.
+class ImageTextDict(TypedDict, total=False):
+    """Processed arrays consumed by the cache and image dataset.
+
+    Attributes:
+        pixel_values: Padded image tiles, shaped (tiles, channels, height, width).
+        input_ids: Integer text tokens, shaped (sequence,).
+        attention_mask: Valid text positions, shaped (sequence,).
+        image_sizes: Original (height, width) for each image; empty for text-only examples.
+        loss_mask: Positions contributing to the language loss, shaped (sequence,).
+        grid_mask: Valid image tiles, shaped (tiles,), or None.
+        unpad_indices: Feature indices in processor order, or None.
+    """
+
+    pixel_values: np.ndarray | None
+    input_ids: np.ndarray
+    attention_mask: np.ndarray
+    image_sizes: np.ndarray | None
+    loss_mask: np.ndarray
+    grid_mask: np.ndarray | None
+    unpad_indices: np.ndarray | None
+
+
+# TreeCache uses this exemplar to infer array dtypes and field structure; it is not a training example.
+IMAGE_TEXT_CACHE_EXEMPLAR: ImageTextDict = {
+    "pixel_values": np.zeros((1, 3, DEFAULT_IMAGE_TILE_SIZE, DEFAULT_IMAGE_TILE_SIZE), dtype=np.float32),
+    "input_ids": np.zeros((1,), dtype=np.int32),
+    "attention_mask": np.zeros((1,), dtype=np.int32),
+    "image_sizes": np.zeros((1, 2), dtype=np.int32),
+    "loss_mask": np.zeros((1,), dtype=np.float32),
+    "grid_mask": None,  # Always included, may be None
+    "unpad_indices": None,  # Always included, may be None
+}
+
+
+def load_image_from_path_or_url(path_or_url: str) -> Image.Image:
+    """Load an image from a local path, URL, or cloud storage.
+
+    Args:
+        path_or_url: Local file path, URL, or cloud storage path (gs://, s3://) to the image
+
+    Returns:
+        PIL Image in RGB format
+    """
+    if path_or_url.startswith(("http://", "https://")):
+        response = requests.get(path_or_url, timeout=30)
+        response.raise_for_status()
+        image = Image.open(BytesIO(response.content))
+    elif path_or_url.startswith(("gs://", "s3://")):
+        with StoragePath(path_or_url).open("rb") as f:
+            image = Image.open(f)
+            image.load()
+    else:
+        image = Image.open(path_or_url)
+
+    return image.convert("RGB")
+
+
+def load_image(image_data: Any) -> Image.Image:
+    """Load an image from various formats.
+
+    Args:
+        image_data: Can be PIL Image, numpy array, path string, URL, or HF dict with bytes
+
+    Returns:
+        PIL Image in RGB format
+    """
+    match image_data:
+        case Image.Image():
+            return image_data.convert("RGB")
+        case str():
+            return load_image_from_path_or_url(image_data)
+        case np.ndarray():
+            return Image.fromarray(image_data).convert("RGB")
+        case {"bytes": bytes() as encoded}:
+            with Image.open(BytesIO(encoded)) as image:
+                return image.convert("RGB")
+        case {"path": str() as path}:
+            return load_image_from_path_or_url(path)
+        case _:
+            raise ValueError(f"Unsupported image data: {type(image_data)}")
+
+
+@dataclass(frozen=True)
+class AnyResolutionParams:
+    grid_pinpoints: Optional[List[List[int]]]
+    patch_size: int
+    vision_feature_height: Optional[int]
+    max_num_patches: Optional[int]
+
+
+class ImageProcessorCallable(Protocol):
+    def __call__(
+        self,
+        *,
+        text: list[str],
+        return_tensors: str,
+        padding: str | bool,
+        max_length: int,
+        truncation: bool,
+        images: Optional[list[Image.Image]] = None,
+    ) -> BatchFeature: ...
+
+
+def _extract_anyres_params(processor: ProcessorMixin) -> AnyResolutionParams:
+    """Read tiling parameters from the processor's image configuration."""
+    image_processor = getattr(processor, "image_processor", None)
+    if image_processor is None:
+        return AnyResolutionParams(None, DEFAULT_IMAGE_TILE_SIZE, None, None)
+
+    grid_pinpoints = getattr(image_processor, "image_grid_pinpoints", None)
+    size_dict = getattr(image_processor, "crop_size", None) or getattr(image_processor, "size", {})
+    patch_size = (
+        size_dict.get("height", size_dict.get("shortest_edge", DEFAULT_IMAGE_TILE_SIZE))
+        if isinstance(size_dict, dict)
+        else DEFAULT_IMAGE_TILE_SIZE
+    )
+    assert isinstance(patch_size, int)
+    vision_feature_height = patch_size // 14
+    max_num_patches = None
+
+    # Try to get max_num_patches from vision_aspect_ratio (LLaVA-specific)
+    vision_aspect_ratio = getattr(image_processor, "vision_aspect_ratio", None)
+    if vision_aspect_ratio and isinstance(vision_aspect_ratio, str) and "anyres_max_" in vision_aspect_ratio:
+        max_num_patches = int(vision_aspect_ratio.split("anyres_max_")[-1])
+
+    # Fallback: compute from grid_pinpoints if available
+    if max_num_patches is None and grid_pinpoints:
+        max_resolution = max(max(h, w) for h, w in grid_pinpoints)
+        max_patches_per_dim = max_resolution // patch_size
+        max_num_patches = max_patches_per_dim * max_patches_per_dim  # +1 for base is added in _pad_pixel_values
+
+    return AnyResolutionParams(grid_pinpoints, patch_size, vision_feature_height, max_num_patches)
+
+
+class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
+    """
+    A batch processor that converts conversation-format data into model-ready inputs.
+
+    This processor handles the conversation format used by VLMs like LLaVA:
+    - Applies chat template to convert messages to text with image placeholders
+    - Processes images using the HuggingFace processor
+    - Creates loss_mask for training (1.0 for assistant tokens, 0.0 for others)
+
+    Input format:
+    {
+        "messages": [
+            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "..."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
+        ],
+        "images": [<image_data>]  # PIL, path, URL, or HF bytes dict
+    }
+
+    Output format (ImageTextDict):
+    {
+        "pixel_values": np.ndarray or None,
+            # Shape: (TOTAL_PATCHES, C, H, W) where TOTAL_PATCHES = max_num_patches + 1
+            # Preprocessed image patches ready for the vision encoder. Padded to fixed size
+            # for JIT compatibility. For single image: includes base patch + anyres grid patches.
+            # For multiple images: only base patches (one per image). None for text-only examples.
+
+        "input_ids": np.ndarray,
+            # Shape: (seq_len,) dtype: int32
+            # Tokenized text sequence with image placeholder tokens inserted where images appear.
+            # The image placeholder token (e.g., <|image_pad|>) is repeated for each image feature.
+
+        "attention_mask": np.ndarray,
+            # Shape: (seq_len,) dtype: int32
+            # Binary mask indicating valid tokens (1) vs padding tokens (0).
+            # Used to prevent attention to padding positions.
+
+        "image_sizes": np.ndarray,
+            # Shape: (num_images, 2) dtype: int32
+            # Original image dimensions as (height, width) for each image.
+            # Used by the model for spatial unpadding in anyres processing. Empty for text-only.
+
+        "loss_mask": np.ndarray,
+            # Shape: (seq_len,) dtype: float32
+            # Training loss mask for causal language modeling. 1.0 for assistant response
+            # tokens that should contribute to the loss; 0.0 for all other tokens
+            # (system, user, padding). Assistant terminators contribute to the loss.
+
+        "grid_mask": np.ndarray or None,
+            # Shape: (TOTAL_PATCHES,) dtype: bool
+            # Boolean mask indicating which patches are real (True) vs padding (False).
+            # Enables fixed-shape tensors for JIT while tracking actual patch count.
+            # None if max_num_patches is not configured.
+
+        "unpad_indices": np.ndarray or None,
+            # Shape: (num_image_tokens,) dtype: int32
+            # Index mapping from HuggingFace's unpadded feature order to Levanter's padded order.
+            # Used to reorder vision features after encoding to match HF's spatial unpadding.
+            # Only computed for single-image anyres case; None otherwise.
+    }
+    """
+
+    def __init__(
+        self,
+        processor: ProcessorMixin,
+        *,
+        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        image_token: str | None = None,
+        video_token: str | None = None,
+        max_length: int = 2048,
+        padding: bool = True,
+        messages_key: str = "messages",
+        images_key: str = "images",
+        add_generation_prompt: bool = False,
+        mask_prompt: bool = True,
+        max_num_patches: Optional[int] = 9,
+        grid_pinpoints: Optional[List[List[int]]] = None,
+        patch_size: int = DEFAULT_IMAGE_TILE_SIZE,
+        vision_feature_height: Optional[int] = None,
+    ) -> None:
+        """
+        Initialize the BatchImageProcessor.
+
+        Args:
+            processor: HuggingFace processor (e.g., AutoProcessor.from_pretrained(...))
+            tokenizer: Optional tokenizer to replace the processor's tokenizer.
+                       Use this to ensure tokenization matches the LLM's tokenizer (e.g., Qwen3-1.7B).
+                       If provided, critical special tokens will be verified for consistency.
+            max_length: Maximum sequence length for tokenization
+            padding: Whether to pad sequences to max_length
+            messages_key: Key for messages list in input dictionaries
+            images_key: Key for images list in input dictionaries
+            add_generation_prompt: Whether to add generation prompt at the end
+            mask_prompt: Whether to mask non-assistant tokens (set loss_mask to 0.0)
+            grid_pinpoints: List of grid resolutions for anyres processing, e.g., [[384,384], [768,384], ...]
+            patch_size: Size of each image patch (default 384)
+            vision_feature_height: Vision encoder output tokens per spatial dim (e.g., 27 for 384/14)
+            max_num_patches: Maximum number of patches for anyres constraint (e.g., 9 for anyres_max_9)
+        """
+        self.processor = processor
+        self.max_length = max_length
+        self.padding = padding
+        self.messages_key = messages_key
+        self.images_key = images_key
+        self.add_generation_prompt = add_generation_prompt
+        self.mask_prompt = mask_prompt
+
+        self.grid_pinpoints = grid_pinpoints
+        self.patch_size = patch_size
+        self.vision_feature_height = vision_feature_height
+        self.max_num_patches = max_num_patches
+
+        if grid_pinpoints is not None:
+            self._grid_h: np.ndarray | None = np.array([p[0] for p in grid_pinpoints], dtype=np.float64)
+            self._grid_w: np.ndarray | None = np.array([p[1] for p in grid_pinpoints], dtype=np.float64)
+            self._grid_area: np.ndarray | None = self._grid_h * self._grid_w
+        else:
+            self._grid_h = None
+            self._grid_w = None
+            self._grid_area = None
+
+        if tokenizer is not None:
+            self.processor = processor_with_tokenizer(
+                processor,
+                tokenizer,
+                image_token=image_token or processor.image_token,
+                video_token=video_token or processor.video_token,
+            )
+
+        self._padding_mode = "max_length" if self.padding else False
+
+        final_tokenizer = self.processor.tokenizer
+        self._cached_im_start_id: int = final_tokenizer.convert_tokens_to_ids("<|im_start|>")
+        self._cached_im_end_id: int = final_tokenizer.convert_tokens_to_ids("<|im_end|>")
+        assistant_ids = final_tokenizer.encode("assistant", add_special_tokens=False)
+        self._cached_num_assistant_tokens: int = len(assistant_ids)
+        self._cached_assistant_token_ids_array: np.ndarray = np.array(assistant_ids, dtype=np.int32)
+
+    def _compute_grid_shape(self, image_size: Tuple[int, int]) -> Tuple[int, int]:
+        """Select the tile grid that preserves the most image area with least padding."""
+        if self._grid_h is None or self.patch_size is None:
+            return (1, 1)  # Default for no anyres
+
+        assert self._grid_w is not None and self._grid_area is not None
+        orig_h, orig_w = image_size
+        orig_area = orig_h * orig_w
+
+        # scale = min(w/orig_w, h/orig_h) for each resolution
+        scales = np.minimum(self._grid_w / orig_w, self._grid_h / orig_h)
+
+        scaled_h = (orig_h * scales).astype(np.int64)
+        scaled_w = (orig_w * scales).astype(np.int64)
+        eff = np.minimum(scaled_h * scaled_w, orig_area)
+
+        waste = self._grid_area - eff
+
+        # Combined score: maximize eff first, then minimize waste
+        # Use large multiplier to ensure eff dominates
+        scores = eff.astype(np.float64) * 1e12 - waste
+        best_idx = int(np.argmax(scores))
+
+        assert self.grid_pinpoints is not None
+        best_h, best_w = self.grid_pinpoints[best_idx]
+        gh = best_h // self.patch_size
+        gw = best_w // self.patch_size
+        return (gh, gw)
+
+    def _compute_unpad_indices_for_image(
+        self,
+        orig_height: int,
+        orig_width: int,
+        patches_height: int,
+        patches_width: int,
+        scale_height: int,
+        scale_width: int,
+        features_per_patch: int,
+    ) -> np.ndarray:
+        """Compute indices to reorder Levanter's padded features to HF's unpadded order.
+
+        HF's pack_image_features applies spatial unpadding based on original image aspect ratio.
+        This function computes the mapping from HF's feature positions to Levanter's sequential
+        feature layout.
+
+        Args:
+            orig_height: Original image height
+            orig_width: Original image width
+            patches_height: Number of patches per tile in height (e.g., 27)
+            patches_width: Number of patches per tile in width (e.g., 27)
+            scale_height: Number of tiles in height (e.g., 3 for 3x3 grid)
+            scale_width: Number of tiles in width (e.g., 3 for 3x3 grid)
+            features_per_patch: Features per patch/tile (e.g., 729)
+
+        Returns:
+            unpad_indices: Array of shape (num_unpadded_features,) where
+                          unpad_indices[i] = Levanter index for HF position i
+        """
+        base_indices = np.arange(features_per_patch, dtype=np.int32)
+
+        curr_height = patches_height * scale_height
+        curr_width = patches_width * scale_width
+
+        # Compute unpadding bounds based on original aspect ratio
+        # This matches HF's unpad_image logic
+        original_aspect_ratio = orig_width / orig_height
+        current_aspect_ratio = curr_width / curr_height
+
+        if original_aspect_ratio > current_aspect_ratio:
+            scale_factor = curr_width / orig_width
+            new_height = int(round(orig_height * scale_factor, 7))
+            padding = (curr_height - new_height) // 2
+            row_start = padding
+            row_end = curr_height - padding
+            col_start = 0
+            col_end = curr_width
+        else:
+            scale_factor = curr_height / orig_height
+            new_width = int(round(orig_width * scale_factor, 7))
+            padding = (curr_width - new_width) // 2
+            row_start = 0
+            row_end = curr_height
+            col_start = padding
+            col_end = curr_width - padding
+
+        # Build mapping from HF grid position to Levanter grid index (vectorized)
+        # HF order: row-major through unpadded region
+        # Levanter order: patch-by-patch (tile-by-tile), then row-major within each patch
+
+        rows = np.arange(row_start, row_end, dtype=np.int32)
+        cols = np.arange(col_start, col_end, dtype=np.int32)
+        row_grid, col_grid = np.meshgrid(rows, cols, indexing="ij")
+        row_flat = row_grid.ravel()
+        col_flat = col_grid.ravel()
+
+        tile_rows = row_flat // patches_height
+        tile_cols = col_flat // patches_width
+        local_rows = row_flat % patches_height
+        local_cols = col_flat % patches_width
+
+        tile_indices = tile_rows * scale_width + tile_cols
+        local_indices = local_rows * patches_width + local_cols
+        grid_indices = features_per_patch + tile_indices * features_per_patch + local_indices
+
+        return np.concatenate([base_indices, grid_indices])
+
+    def _pad_pixel_values(self, pixel_values: np.ndarray, valid_patches: int) -> Tuple[np.ndarray, np.ndarray]:
+        """Pad pixel_values to fixed TOTAL_PATCHES size and create grid_mask.
+
+        Args:
+            pixel_values: Image patches array of shape (actual_patches, C, H, W)
+            valid_patches: Number of patches to mark as valid in grid_mask
+
+        Returns:
+            Tuple of (padded_pixel_values, grid_mask)
+        """
+        assert self.max_num_patches is not None
+        total_patches = self.max_num_patches + 1  # +1 for base patch
+        actual_patches = pixel_values.shape[0]
+
+        grid_mask = np.zeros(total_patches, dtype=np.bool_)
+        grid_mask[:valid_patches] = True
+
+        if actual_patches < total_patches:
+            pad_size = total_patches - actual_patches
+            padding = np.zeros((pad_size,) + pixel_values.shape[1:], dtype=pixel_values.dtype)
+            pixel_values = np.concatenate([pixel_values, padding], axis=0)
+        elif actual_patches > total_patches:
+            pixel_values = pixel_values[:total_patches]
+            grid_mask[:] = True
+
+        return pixel_values, grid_mask
+
+    def _create_loss_mask(self, input_ids: np.ndarray) -> np.ndarray:
+        """Select assistant content and its terminator, including truncated responses."""
+        if not self.mask_prompt:
+            return np.ones(len(input_ids), dtype=np.float32)
+
+        n = len(input_ids)
+        num_assistant_tokens = self._cached_num_assistant_tokens
+        empty_mask = np.zeros(n, dtype=np.float32)
+
+        if n < 3:
+            return empty_mask
+
+        im_start_positions = np.where(input_ids == self._cached_im_start_id)[0]
+        valid_positions = im_start_positions[im_start_positions + 1 + num_assistant_tokens <= n]
+        if len(valid_positions) == 0:
+            return empty_mask
+
+        offsets = np.arange(1, num_assistant_tokens + 1)
+        check_indices = valid_positions[:, None] + offsets
+        check_tokens = input_ids[check_indices]
+        matches = np.all(check_tokens == self._cached_assistant_token_ids_array, axis=1)
+        pattern_starts = valid_positions[matches]
+        if len(pattern_starts) == 0:
+            return empty_mask
+
+        im_end_positions = np.where(input_ids == self._cached_im_end_id)[0]
+
+        # Content starts after: <|im_start|> + assistant_tokens
+        # Note: The \n after "assistant" is INCLUDED in loss (matches HF behavior)
+        content_starts = pattern_starts + 1 + num_assistant_tokens
+        valid_mask = content_starts < n
+        content_starts = content_starts[valid_mask]
+        if len(content_starts) == 0:
+            return empty_mask
+
+        end_indices = np.searchsorted(im_end_positions, content_starts, side="left")
+        # A truncated final response still supervises its visible prefix.
+        end_positions = np.append(im_end_positions + 1, n)[end_indices]
+
+        diff = np.zeros(n + 1, dtype=np.int8)
+        np.add.at(diff, content_starts, 1)
+        np.add.at(diff, end_positions, -1)
+        mask = np.cumsum(diff[:-1]) > 0
+
+        return mask.astype(np.float32)
+
+    def __call__(self, batch: Sequence[Dict[str, Any]]) -> Sequence[ImageTextDict]:
+        """
+        Process a batch of conversation data.
+
+        Args:
+            batch: Sequence of conversation dictionaries with 'messages' and 'images' keys.
+
+        Returns:
+            Sequence of processed ImageTextDict
+        """
+        batch_size = len(batch)
+        all_images: list = []
+        all_texts: list[str] = []
+        images_per_example: list[int] = []
+
+        for item in batch:
+            if item.get("audio") or item.get("videos"):
+                raise ValueError(
+                    "BatchImageProcessor accepts images and text; use an audio/video processor for other modalities"
+                )
+            messages = item.get(self.messages_key, [])
+            images_data = item.get(self.images_key, [])
+
+            all_images.extend(load_image(img) for img in images_data)
+            images_per_example.append(len(images_data))
+
+            all_texts.append(
+                self.processor.apply_chat_template(
+                    messages,
+                    add_generation_prompt=self.add_generation_prompt,
+                )
+            )
+
+        if all_images:
+            processed: BatchFeature = cast(ImageProcessorCallable, self.processor)(
+                images=all_images,
+                text=all_texts,
+                return_tensors="np",
+                padding=self._padding_mode,
+                max_length=self.max_length,
+                truncation=True,
+            )
+        else:
+            processed: BatchFeature = cast(ImageProcessorCallable, self.processor)(
+                text=all_texts,
+                return_tensors="np",
+                padding=self._padding_mode,
+                max_length=self.max_length,
+                truncation=True,
+            )
+
+        input_ids_batch = processed["input_ids"].astype(np.int32)
+        attention_mask_batch = processed["attention_mask"].astype(np.int32)
+
+        has_pixel_values = "pixel_values" in processed
+        has_image_sizes = "image_sizes" in processed
+        pv = processed["pixel_values"] if has_pixel_values else None
+        if pv is not None and pv.ndim == 4:
+            # Single-crop processors return (images, channels, height, width).
+            pv = pv[:, None, ...]
+        img_sizes = (
+            processed["image_sizes"].astype(np.int32)
+            if has_image_sizes
+            else np.asarray([(image.height, image.width) for image in all_images], dtype=np.int32).reshape(-1, 2)
+        )
+
+        cum_images = np.cumsum(images_per_example)
+
+        out: list[ImageTextDict] = []
+        for i in range(batch_size):
+            input_ids = input_ids_batch[i]
+            num_images = images_per_example[i]
+
+            pv_end = cum_images[i]
+            pv_start = pv_end - num_images
+
+            grid_mask = None
+            unpad_indices = None
+            if num_images > 0 and has_pixel_values:
+                assert pv is not None  # Guarded by has_pixel_values
+                if num_images == 1:
+                    # Single image: use anyres with all patches
+                    pixel_values = pv[pv_start]
+                    if self.max_num_patches is not None:
+                        pixel_values, grid_mask = self._pad_pixel_values(
+                            pixel_values, valid_patches=pixel_values.shape[0]
+                        )
+                else:
+                    # Multiple images: only use base patch (first patch) from each image
+                    # This matches HF behavior where multi-image doesn't use anyres
+                    base_patches = [pv[j][0] for j in range(pv_start, pv_end)]
+                    pixel_values = np.stack(base_patches, axis=0)  # (num_images, C, H, W)
+                    if self.max_num_patches is not None:
+                        pixel_values, grid_mask = self._pad_pixel_values(pixel_values, valid_patches=num_images)
+            else:
+                pixel_values = None
+
+            image_sizes = img_sizes[pv_start:pv_end].reshape(-1, 2)
+
+            # Compute unpad_indices only for single-image anyres case
+            # Multi-image doesn't use anyres (each image is just 1 base patch)
+            if num_images == 1 and has_image_sizes and self.grid_pinpoints and self.vision_feature_height:
+                orig_height, orig_width = int(image_sizes[0, 0]), int(image_sizes[0, 1])
+                gh, gw = self._compute_grid_shape((orig_height, orig_width))
+                patches_height = patches_width = self.vision_feature_height
+                features_per_patch = patches_height * patches_width
+                unpad_indices_raw = self._compute_unpad_indices_for_image(
+                    orig_height=orig_height,
+                    orig_width=orig_width,
+                    patches_height=patches_height,
+                    patches_width=patches_width,
+                    scale_height=gh,
+                    scale_width=gw,
+                    features_per_patch=features_per_patch,
+                )
+                if self.max_num_patches is not None:
+                    max_features = (self.max_num_patches + 1) * features_per_patch
+                    unpad_indices = np.zeros(max_features, dtype=np.int32)
+                    unpad_indices[: len(unpad_indices_raw)] = unpad_indices_raw
+                else:
+                    unpad_indices = unpad_indices_raw
+
+            result: ImageTextDict = {
+                "pixel_values": pixel_values,
+                "input_ids": input_ids,
+                "attention_mask": attention_mask_batch[i],
+                "image_sizes": image_sizes,
+                "loss_mask": self._create_loss_mask(input_ids),
+                "grid_mask": grid_mask,
+                "unpad_indices": unpad_indices,
+            }
+            out.append(result)
+
+        return out
+
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        return {
+            "processor": type(self.processor).__name__,
+            "max_length": self.max_length,
+            "padding": self.padding,
+            "mask_prompt": self.mask_prompt,
+            "max_num_patches": self.max_num_patches,
+            "patch_size": self.patch_size,
+            "grid_pinpoints": self.grid_pinpoints,
+            "vision_feature_height": self.vision_feature_height,
+        }
+
+    @property
+    def output_exemplar(self) -> ImageTextDict:
+        exemplar: ImageTextDict = {**IMAGE_TEXT_CACHE_EXEMPLAR}
+        if self.max_num_patches is not None:
+            total_patches = self.max_num_patches + 1
+            exemplar["pixel_values"] = np.zeros((total_patches, 3, self.patch_size, self.patch_size), dtype=np.float32)
+            exemplar["grid_mask"] = np.zeros((total_patches,), dtype=np.bool_)
+            if self.grid_pinpoints and self.vision_feature_height:
+                features_per_patch = self.vision_feature_height * self.vision_feature_height
+                max_features = (self.max_num_patches + 1) * features_per_patch
+                exemplar["unpad_indices"] = np.zeros((max_features,), dtype=np.int32)
+        return exemplar
+
+    @property
+    def num_cpus(self) -> int:
+        return 2  # Image processing can benefit from multiple CPUs
+
+    @property
+    def num_gpus(self) -> int:
+        return 0
+
+
+def image_caption_to_conversation(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Represent an image-caption pair as a user image and assistant caption."""
+    return {
+        "messages": [
+            {"role": "user", "content": [{"type": "image"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": record["text"]}]},
+        ],
+        "images": [record["image"]],
+    }
+
+
+def _image_split_urls(split: str, split_urls: Mapping[str, Sequence[str]]) -> List[str]:
+    if split not in split_urls:
+        raise ValueError(f"Unknown split: {split}")
+    return image_source_urls(list(split_urls[split]))
+
+
+@dataclass
+class ImageDatasetSourceConfig:
+    """Configuration for a simple image-text dataset source (single image + text pairs)."""
+
+    id: Optional[str] = None  # HuggingFace dataset id or path
+    name: Optional[str] = None  # Dataset configuration name
+
+    stream: bool = True  # Whether to use streaming
+    image_key: str = "image"  # Key for image field
+    text_key: str = "text"  # Key for text field
+
+    train_split: str = "train"
+    validation_split: str = "validation"
+    train_urls: List[str] = ()  # type: ignore
+    validation_urls: List[str] = ()  # type: ignore
+    cache_dir: Optional[str] = None
+
+    def get_shard_source(self, split: str) -> Optional[ShardedDataSource[Dict[str, Any]]]:
+        """Get a sharded data source for the specified split."""
+        if self.id is not None:
+            try:
+                ds = WrappedHFDataSource(self.id, split=split, name=self.name, streaming=self.stream)
+            except ValueError as e:
+                if str(e).startswith("Bad split"):
+                    logger.warning(f"Split {split} not found for {self.id} {self.name}")
+                    return None
+                raise
+
+            if len(ds.shard_names) == 0:
+                return None
+
+            def extract_fields(x: dict[str, Any]) -> dict[str, Any]:
+                return {
+                    "image": x[self.image_key],
+                    "text": x[self.text_key],
+                }
+
+            return ds.map(extract_fields).map(image_caption_to_conversation)
+        else:
+            split_urls = self.urls_for_split(split)
+            if len(split_urls) == 0:
+                return None
+            return ImageTextUrlDataSource(split_urls, image_key=self.image_key, text_key=self.text_key).map(
+                image_caption_to_conversation
+            )
+
+    def doc_iterator(self, split: str) -> Iterator[Dict[str, Any]]:
+        """Iterate over documents in the specified split."""
+        if self.id is not None:
+            data = datasets.load_dataset(self.id, split=split, name=self.name, streaming=self.stream)
+            for raw_doc in data:
+                doc = cast(Dict[str, Any], raw_doc)
+                yield {
+                    "image": doc[self.image_key],
+                    "text": doc[self.text_key],
+                }
+        else:
+            urls = self.urls_for_split(split)
+            yield from ImageTextUrlDataSource(urls, image_key=self.image_key, text_key=self.text_key)
+
+    def urls_for_split(self, split: str) -> List[str]:
+        return _image_split_urls(
+            split, {self.train_split: self.train_urls, self.validation_split: self.validation_urls}
+        )
+
+
+@dataclass
+class ConversationDatasetSourceConfig:
+    """Configuration for a conversation-format image-text dataset source.
+
+    This is used for VLM training data with conversation format like LLaVA.
+    Supports single image, multiple images, and interleaved image/text content.
+
+    1. Single image:
+    {
+        "messages": [
+            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe this image."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
+        ],
+        "images": ["path/to/image.jpg"]
+    }
+
+    2. Multiple images:
+    {
+        "messages": [
+            {"role": "user", "content": [{"type": "image"}, {"type": "image"}, {"type": "text", "text": "Compare these two images."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
+        ],
+        "images": ["path/to/image1.jpg", "path/to/image2.jpg"]
+    }
+
+    3. Interleaved image and text:
+    {
+        "messages": [
+            {"role": "user", "content": [
+                {"type": "text", "text": "First image:"},
+                {"type": "image"},
+                {"type": "text", "text": "Second image:"},
+                {"type": "image"},
+                {"type": "text", "text": "What are the differences?"}
+            ]},
+            {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
+        ],
+        "images": ["path/to/image1.jpg", "path/to/image2.jpg"]
+    }
+
+    Note: {"type": "image"} placeholders are replaced with images from the "images" list in order.
+    """
+
+    id: Optional[str] = None  # HuggingFace dataset id or path
+    name: Optional[str] = None  # Dataset configuration name
+
+    stream: bool = True  # Whether to use streaming
+    messages_key: str = "messages"  # Key for messages field
+    images_key: str = "images"  # Key for images field
+
+    train_split: str = "train"
+    validation_split: str = "validation"
+    train_urls: List[str] = ()  # type: ignore
+    validation_urls: List[str] = ()  # type: ignore
+    cache_dir: Optional[str] = None
+
+    def get_shard_source(self, split: str) -> Optional[ShardedDataSource[ConversationDict]]:
+        """Get a sharded data source for the specified split."""
+        if self.id is not None:
+            try:
+                ds = WrappedHFDataSource(self.id, split=split, name=self.name, streaming=self.stream)
+            except ValueError as e:
+                if str(e).startswith("Bad split"):
+                    logger.warning(f"Split {split} not found for {self.id} {self.name}")
+                    return None
+                raise
+
+            if len(ds.shard_names) == 0:
+                return None
+
+            def extract_fields(x: dict[str, Any]) -> ConversationDict:
+                return {
+                    "messages": x[self.messages_key],
+                    "images": x.get(self.images_key, []),
+                    "audio": x.get("audio", []),
+                    "videos": x.get("videos", []),
+                }
+
+            return ds.map(extract_fields)
+        else:
+            split_urls = self.urls_for_split(split)
+            if len(split_urls) == 0:
+                return None
+            return cast(
+                ShardedDataSource[ConversationDict],
+                ImageConversationUrlDataSource(split_urls, messages_key=self.messages_key, images_key=self.images_key),
+            )
+
+    def doc_iterator(self, split: str) -> Iterator[ConversationDict]:
+        """Iterate over documents in the specified split."""
+        if self.id is not None:
+            data = datasets.load_dataset(self.id, split=split, name=self.name, streaming=self.stream)
+            for raw_doc in data:
+                doc = cast(Dict[str, Any], raw_doc)
+                yield {
+                    "messages": doc[self.messages_key],
+                    "images": doc.get(self.images_key, []),
+                    "audio": doc.get("audio", []),
+                    "videos": doc.get("videos", []),
+                }
+        else:
+            urls = self.urls_for_split(split)
+            for doc in ImageConversationUrlDataSource(
+                urls, messages_key=self.messages_key, images_key=self.images_key
+            ):
+                yield cast(ConversationDict, doc)
+
+    def urls_for_split(self, split: str) -> List[str]:
+        return _image_split_urls(
+            split, {self.train_split: self.train_urls, self.validation_split: self.validation_urls}
+        )
+
+
+@dataclass
+class ImageTaskConfig(abc.ABC):
+    """Base configuration for image-text tasks."""
+
+    processor: str
+    max_length: int = 2048
+    padding: bool = True
+
+    @cached_property
+    def the_processor(self) -> ProcessorMixin:
+        return load_processor(self.processor)
+
+    @cached_property
+    def pad_token_id(self) -> int:
+        return self.the_processor.tokenizer.pad_token_id
+
+    @cached_property
+    def the_tokenizer(self) -> PreTrainedTokenizerBase:
+        return self.the_processor.tokenizer
+
+    @abc.abstractmethod
+    def train_set(
+        self,
+        options: CacheOptions = CacheOptions.default(),
+        *,
+        key: Optional[PRNGKeyArray] = None,
+    ) -> AsyncDataset[ImageTextDict]:
+        pass
+
+    @abc.abstractmethod
+    def validation_sets(self) -> Mapping[str, AsyncDataset[ImageTextDict]]:
+        pass
+
+
+class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
+    """Indexed dataset that keeps raw records in memory and processes images on demand.
+
+    HF source iteration can stream, but random access materializes those records.
+    Use the raw source's doc_iterator for bounded, sequential HF streaming.
+    """
+
+    DEFAULT_CACHE_SIZE = 256  # ~256 examples * ~2MB each = ~512MB
+
+    # Per-processor locks - each processor instance gets its own lock
+    # This allows different processors to run in parallel while ensuring
+    # thread-safety for each individual processor (HF tokenizers are not thread-safe)
+    _processor_locks: Optional[weakref.WeakKeyDictionary] = None  # Lazy init
+    _processor_locks_lock: Optional[threading.Lock] = None  # Lazy init
+
+    @classmethod
+    def _init_class_locks(cls) -> None:
+        """Initialize class-level locks lazily."""
+        if cls._processor_locks is None:
+            cls._processor_locks = weakref.WeakKeyDictionary()
+            cls._processor_locks_lock = threading.Lock()
+
+    @classmethod
+    def _get_processor_lock(cls, processor: ProcessorMixin) -> threading.Lock:
+        """Get or create a lock for a specific processor instance."""
+        cls._init_class_locks()
+        assert cls._processor_locks_lock is not None
+        assert cls._processor_locks is not None
+        with cls._processor_locks_lock:
+            if processor not in cls._processor_locks:
+                cls._processor_locks[processor] = threading.Lock()
+            return cls._processor_locks[processor]
+
+    def __init__(
+        self,
+        source: ShardedDataSource[Dict[str, Any]],
+        processor: ProcessorMixin,
+        max_length: int = 2048,
+        padding: bool = True,
+        messages_key: str = "messages",
+        images_key: str = "images",
+        cache_size: int = DEFAULT_CACHE_SIZE,
+        max_num_patches: Optional[int] = None,
+    ) -> None:
+        super().__init__()
+        self.source = source
+        self.processor = processor
+        self.max_length = max_length
+        self.padding = padding
+        self.messages_key = messages_key
+        self.images_key = images_key
+        self.cache_size = cache_size
+
+        params = _extract_anyres_params(processor)
+        if max_num_patches is None:
+            max_num_patches = params.max_num_patches
+
+        self._batch_processor = BatchImageProcessor(
+            processor,
+            max_length=max_length,
+            padding=padding,
+            messages_key=messages_key,
+            images_key=images_key,
+            grid_pinpoints=params.grid_pinpoints,
+            patch_size=params.patch_size,
+            vision_feature_height=params.vision_feature_height,
+            max_num_patches=max_num_patches,
+        )
+
+        self._processor_lock = self._get_processor_lock(processor)
+
+        # Raw records may include decoded images as well as paths or encoded bytes.
+        self._raw_data: Optional[List[Dict[str, Any]]] = None
+        self._length: Optional[int] = None
+        self._data_lock = threading.Lock()
+        self._data_loaded = threading.Event()
+
+        # Prefetch cache for PROCESSED data (large - includes pixel_values)
+        # Key: global_idx, Value: ImageTextDict
+        # Items are popped when accessed - cache only holds prefetched but not-yet-accessed data
+        self._processed_cache: OrderedDict[int, ImageTextDict] = OrderedDict()
+        self._cache_lock = threading.Lock()
+
+        self._prefetch_thread: Optional[threading.Thread] = None
+        self._stop_prefetch = threading.Event()
+        self._prefetch_error: Optional[Exception] = None
+
+    def _ensure_data_loaded(self) -> None:
+        """Load all raw data into memory (synchronous)."""
+        if self._raw_data is not None:
+            return
+
+        with self._data_lock:
+            if self._raw_data is not None:
+                return
+
+            logger.info("Loading raw records into memory for indexed image access...")
+
+            raw_data: list[Dict[str, Any]] = []
+            for shard_name in self.source.shard_names:
+                shard_data = list(self.source.open_shard(shard_name))
+                raw_data.extend(shard_data)
+
+            self._raw_data = raw_data
+            self._length = len(raw_data)
+            self._data_loaded.set()
+            logger.info(f"Loaded {self._length} raw examples into memory")
+
+            self._start_prefetch_thread()
+
+    def _start_prefetch_thread(self) -> None:
+        """Start background thread to prefetch data sequentially."""
+        if self._prefetch_thread is not None:
+            return
+
+        def prefetch_worker() -> None:
+            """Background worker that prefetches data sequentially.
+
+            Simple sequential prefetch - processes data from index 0 to end,
+            keeping the cache filled ahead of consumption.
+            """
+            batch_size = 32
+            next_idx = 0
+
+            while not self._stop_prefetch.is_set():
+                if self._length is None or self._raw_data is None:
+                    self._stop_prefetch.wait(0.05)
+                    continue
+
+                cache_len = len(self._processed_cache)
+                if cache_len >= self.cache_size:
+                    self._stop_prefetch.wait(0.05)
+                    continue
+
+                if next_idx >= self._length:
+                    return
+
+                end_idx = min(next_idx + batch_size, self._length)
+                with self._cache_lock:
+                    indices_to_prefetch = [i for i in range(next_idx, end_idx) if i not in self._processed_cache]
+
+                if not indices_to_prefetch:
+                    next_idx = end_idx
+                    continue
+
+                try:
+                    raw_items = [self._raw_data[i] for i in indices_to_prefetch]
+                    with self._processor_lock:
+                        processed = self._batch_processor(raw_items)
+
+                    with self._cache_lock:
+                        for idx, item in zip(indices_to_prefetch, processed):
+                            self._processed_cache[idx] = item
+                        while len(self._processed_cache) > self.cache_size:
+                            self._processed_cache.popitem(last=False)
+                except Exception as error:
+                    # Transfer worker failures to the caller rather than retrying forever.
+                    self._prefetch_error = error
+                    return
+
+                next_idx = end_idx
+
+        self._prefetch_thread = threading.Thread(target=prefetch_worker, daemon=True)
+        self._prefetch_thread.start()
+        logger.debug("Started sequential prefetch thread")
+
+    def _process_items(self, indices: Sequence[int]) -> List[ImageTextDict]:
+        """Process items - must be called with _processor_lock held."""
+        assert self._raw_data is not None, "Data not loaded"
+        raw_items = [self._raw_data[i] for i in indices]
+        processed = self._batch_processor(raw_items)
+        return list(processed)
+
+    def _get_from_cache_or_process(self, indices: Sequence[int]) -> List[ImageTextDict]:
+        """Consume prefetched items and process cache misses."""
+        self._ensure_data_loaded()
+        if self._prefetch_error is not None:
+            raise self._prefetch_error
+
+        results: List[Optional[ImageTextDict]] = [None] * len(indices)
+        indices_to_process: List[Tuple[int, int]] = []  # (result_idx, global_idx)
+
+        with self._cache_lock:
+            for result_idx, global_idx in enumerate(indices):
+                if global_idx in self._processed_cache:
+                    results[result_idx] = self._processed_cache.pop(global_idx)
+                else:
+                    indices_to_process.append((result_idx, global_idx))
+
+        if indices_to_process:
+            global_indices = [gidx for _, gidx in indices_to_process]
+
+            assert self._raw_data is not None, "Data not loaded"
+            raw_items = [self._raw_data[i] for i in global_indices]
+
+            with self._processor_lock:
+                processed = self._batch_processor(raw_items)
+
+            for (result_idx, _), item in zip(indices_to_process, processed):
+                results[result_idx] = item
+
+        return results  # type: ignore
+
+    async def async_len(self) -> int:
+        self._ensure_data_loaded()
+        assert self._length is not None, "Data not loaded"
+        return self._length
+
+    def is_finite(self) -> bool:
+        return True
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[ImageTextDict]:
+        """Get a batch of processed items."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
+
+    def __del__(self) -> None:
+        """Clean up background thread."""
+        self._stop_prefetch.set()
+        if self._prefetch_thread is not None:
+            self._prefetch_thread.join(timeout=1.0)
+
+
+class ProcessedImageCache(AsyncDataset[ImageTextDict]):
+    """
+    Cache for preprocessed image-text data.
+    """
+
+    def __init__(self, cache: TreeCache[ImageTextDict]) -> None:
+        super().__init__()
+        self.cache = cache
+
+    async def async_len(self) -> int:
+        return await self.cache.async_len()
+
+    def is_finite(self) -> bool:
+        return self.cache.is_finite()
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[ImageTextDict]:
+        return await self.cache.get_batch(indices)
+
+    @staticmethod
+    def build_or_load(
+        cache_dir: str,
+        source: ShardedDataSource[Dict[str, Any]],
+        processor: ProcessorMixin,
+        max_length: int = 2048,
+        padding: bool = True,
+        messages_key: str = "messages",
+        images_key: str = "images",
+        cache_options: CacheOptions = CacheOptions.default(),
+        max_num_patches: Optional[int] = None,
+    ) -> "ProcessedImageCache":
+        params = _extract_anyres_params(processor)
+        if max_num_patches is None:
+            max_num_patches = params.max_num_patches
+
+        bp = BatchImageProcessor(
+            processor,
+            max_length=max_length,
+            padding=padding,
+            messages_key=messages_key,
+            images_key=images_key,
+            grid_pinpoints=params.grid_pinpoints,
+            patch_size=params.patch_size,
+            vision_feature_height=params.vision_feature_height,
+            max_num_patches=max_num_patches,
+        )
+        cache = build_or_load_cache(cache_dir, source, bp, options=cache_options)
+
+        if cache.is_finished:
+            logger.info(f"Cache {cache_dir} is complete.")
+        else:
+            logger.info(f"Cache {cache_dir} is incomplete.")
+
+        return ProcessedImageCache(cache)
+
+
+@dataclass(kw_only=True)
+class ImageIODatasetConfig(ImageTaskConfig):
+    """Preprocess a normalized image source into a persistent cache."""
+
+    source: Union[ImageDatasetSourceConfig, ConversationDatasetSourceConfig]
+    cache_dir: str
+
+    def train_set(
+        self,
+        options: CacheOptions = CacheOptions.default(),
+        *,
+        key: Optional[PRNGKeyArray] = None,
+    ) -> ProcessedImageCache:
+        dataset = self.build_or_load_cache(self.source.train_split, options)
+        if dataset is None:
+            raise ValueError("No training set!")
+        return dataset
+
+    def validation_sets(self) -> Mapping[str, ProcessedImageCache]:
+        dataset = self.build_or_load_cache(self.source.validation_split)
+        return {"": dataset} if dataset is not None else {}
+
+    def build_or_load_cache(
+        self,
+        split: str,
+        cache_options: CacheOptions = CacheOptions.default(),
+        max_num_patches: Optional[int] = None,
+    ) -> Optional[ProcessedImageCache]:
+        source = self.source.get_shard_source(split)
+        if source is None:
+            return None
+        return ProcessedImageCache.build_or_load(
+            prefix_join(self.cache_dir, split),
+            source,
+            self.the_processor,
+            max_length=self.max_length,
+            padding=self.padding,
+            cache_options=cache_options,
+            max_num_patches=max_num_patches,
+        )
+
+
+class ImageTextExample(eqx.Module):
+    """Named-array PyTree consumed by the trainer and its batch loader.
+
+    The loss mask selects text targets. Grid masks and unpadding indices describe
+    the processor's image tiles. These fields remain separate from attention masks.
+    """
+
+    pixel_values: NamedArray | None  # (TOTAL_PATCHES, channels, height, width) - FIXED shape, padded
+    input_ids: NamedArray  # (position,)
+    loss_mask: NamedArray | None = None  # (position,) - mask for loss computation (1.0 for valid, 0.0 for masked)
+    # Boolean mask indicating valid patches (True for actual, False for padding)
+    # Shape: (TOTAL_PATCHES,) where TOTAL_PATCHES = max_patches + 1
+    grid_mask: NamedArray | None = None
+    # Pre-computed indices to reorder features to HF's unpadded order
+    # Shape: (num_image_tokens,) - maps HF position to Levanter index
+    unpad_indices: NamedArray | None = None
+
+    @staticmethod
+    def init(
+        pixel_values: NamedArray | None,
+        input_ids: NamedArray,
+        loss_mask: NamedArray | None = None,
+        grid_mask: NamedArray | None = None,
+        unpad_indices: NamedArray | None = None,
+    ) -> "ImageTextExample":
+        """Initialize an ImageTextExample with optional loss masking.
+
+        Args:
+            pixel_values: Image pixel values (FIXED shape, padded), or None for text-only
+            input_ids: Token IDs
+            loss_mask: Loss mask (float32) with 1.0 for valid tokens, 0.0 for masked.
+            grid_mask: Boolean mask indicating valid patches (TOTAL_PATCHES,)
+            unpad_indices: Indices for unpadding image features (num_image_tokens,)
+        """
+        result_loss_mask = None
+        if loss_mask is not None:
+            result_loss_mask = loss_mask.astype(np.float32)
+
+        return ImageTextExample(
+            pixel_values=pixel_values,
+            input_ids=input_ids,
+            loss_mask=result_loss_mask,
+            grid_mask=grid_mask,
+            unpad_indices=unpad_indices,
+        )
+
+
+class RepeatedImageDataset(AsyncDataset[ImageTextDict]):
+    """Repeat a finite image dataset for a specified number of epochs."""
+
+    def __init__(self, dataset: AsyncDataset[ImageTextDict], epochs: int) -> None:
+        if not dataset.is_finite() or epochs <= 0:
+            raise ValueError("Repetition requires a finite dataset and positive epochs.")
+        self.dataset = dataset
+        self.epochs = epochs
+
+    async def async_len(self) -> int:
+        return self.epochs * await self.dataset.async_len()
+
+    def is_finite(self) -> bool:
+        return True
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[ImageTextDict]:
+        if not indices:
+            return []
+        length = await self.dataset.async_len()
+        if any(index < 0 or index >= self.epochs * length for index in indices):
+            raise IndexError("Image dataset index exceeds the configured epochs.")
+        return await self.dataset.get_batch([index % length for index in indices])
+
+
+class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
+    """Dataset that converts ImageTextDict to ImageTextExample with proper axes."""
+
+    def __init__(
+        self,
+        dataset: AsyncDataset[ImageTextDict],
+        Position: Axis,
+        NumPatches: Axis,
+        Channels: Axis,
+        Height: Axis,
+        Width: Axis,
+        key: Optional[PRNGKeyArray] = None,
+        pixel_dtype: Optional[np.dtype] = None,
+        grid_pinpoints: Optional[List[List[int]]] = None,
+        patch_size: int = DEFAULT_IMAGE_TILE_SIZE,
+        NumImageTokens: Optional[Axis] = None,
+    ) -> None:
+        """
+        Args:
+            dataset: Source dataset providing ImageTextDict
+            Position: Axis for sequence position
+            NumPatches: Axis for number of image patches
+            Channels: Axis for image channels
+            Height: Axis for image height
+            Width: Axis for image width
+            key: Optional random key
+            pixel_dtype: dtype for pixel values when moving to device.
+                        If None, uses the original dtype (float32).
+                        Set to jnp.bfloat16 to save memory on TPU.
+            grid_pinpoints: List of grid resolutions for anyres processing.
+            patch_size: Size of each image patch (default 384).
+            NumImageTokens: Axis for unpad_indices. If provided, unpad_indices
+                           will be included with this size.
+        """
+        self.dataset = dataset
+        self.Position = Position
+        self.NumPatches = NumPatches
+        self.Channels = Channels
+        self.Height = Height
+        self.Width = Width
+        self.key = key
+        self.pixel_dtype = pixel_dtype
+        self.grid_pinpoints = grid_pinpoints
+        self.patch_size = patch_size
+        self.NumImageTokens = NumImageTokens
+
+        # Process on CPU with numpy, avoid jnp.asarray() which would allocate on TPU
+        # Use NamedArray constructor directly instead of hax.named() to keep data as numpy
+        # DataLoader will handle the conversion to JAX arrays during batching
+        def _convert_example(inputs: ImageTextDict) -> ImageTextExample:
+            pv = inputs.get("pixel_values")
+            pv_dtype = np.dtype(self.pixel_dtype) if self.pixel_dtype is not None else np.float32
+
+            if pv is None:
+                # Text-only: zero-padded pixel_values, grid_mask will be all-False
+                pv = np.zeros(
+                    (self.NumPatches.size, self.Channels.size, self.Height.size, self.Width.size),
+                    dtype=pv_dtype,
+                )
+            elif pv.ndim == 4:
+                actual_num_patches = pv.shape[0]
+                target_num_patches = self.NumPatches.size
+
+                if actual_num_patches < target_num_patches:
+                    pad_size = target_num_patches - actual_num_patches
+                    padding = np.zeros((pad_size,) + pv.shape[1:], dtype=pv.dtype)
+                    pv = np.concatenate([pv, padding], axis=0)
+                elif actual_num_patches > target_num_patches:
+                    pv = pv[:target_num_patches]
+
+                if self.pixel_dtype is not None:
+                    pv = pv.astype(pv_dtype)
+            elif pv.ndim == 3:
+                if self.pixel_dtype is not None:
+                    pv = pv.astype(pv_dtype)
+            else:
+                raise ValueError(f"Unexpected pixel_values shape: {pv.shape}")
+
+            if pv.ndim == 4:
+                pixel_values = NamedArray(pv, (self.NumPatches, self.Channels, self.Height, self.Width))
+            else:
+                pixel_values = NamedArray(pv, (self.Channels, self.Height, self.Width))
+
+            input_ids = NamedArray(inputs["input_ids"], (self.Position,))
+
+            loss_mask = None
+            if "loss_mask" in inputs:
+                loss_mask = NamedArray(inputs["loss_mask"], (self.Position,))
+
+            gm_arr = inputs.get("grid_mask")
+            if gm_arr is not None:
+                grid_mask = NamedArray(gm_arr, (self.NumPatches,))
+            else:
+                # No grid_mask from preprocessing: all-True if image present, all-False if text-only
+                has_image = inputs.get("pixel_values") is not None
+                gm_arr = (
+                    np.ones(self.NumPatches.size, dtype=np.bool_)
+                    if has_image
+                    else np.zeros(self.NumPatches.size, dtype=np.bool_)
+                )
+                grid_mask = NamedArray(gm_arr, (self.NumPatches,))
+
+            unpad_indices = None
+            if self.NumImageTokens is not None:
+                ui_arr = inputs.get("unpad_indices")
+                if ui_arr is not None:
+                    target_size = self.NumImageTokens.size
+                    if len(ui_arr) < target_size:
+                        padded = np.zeros(target_size, dtype=np.int32)
+                        padded[: len(ui_arr)] = ui_arr
+                        ui_arr = padded
+                    else:
+                        ui_arr = ui_arr[:target_size]
+                else:
+                    ui_arr = np.zeros(self.NumImageTokens.size, dtype=np.int32)
+                unpad_indices = NamedArray(ui_arr, (self.NumImageTokens,))
+
+            out = ImageTextExample.init(
+                pixel_values,
+                input_ids,
+                loss_mask=loss_mask,
+                grid_mask=grid_mask,
+                unpad_indices=unpad_indices,
+            )
+            return out
+
+        super().__init__(self.dataset, _convert_example)
+
+
+@dataclass
+class ImageMixtureDatasetConfig(ImageTaskConfig):
+    """Configuration for a mixture of image-text datasets with their associated weights.
+
+    This class supports mixing multiple image-text data sources for training,
+    similar to AudioMixtureDatasetConfig for audio data.
+
+    Example:
+        config = ImageMixtureDatasetConfig(
+            cache_dir="cache/",
+            configs={
+                "coco": ImageDatasetSourceConfig(id="coco-dataset", ...),
+                "llava": ConversationDatasetSourceConfig(id="llava-dataset", ...),
+            },
+            train_weights={"coco": 0.3, "llava": 0.7},
+        )
+    """
+
+    cache_dir: Optional[str] = "cache/"
+
+    configs: Dict[str, Union[ImageDatasetSourceConfig, ConversationDatasetSourceConfig]] = field(default_factory=dict)
+    """Configuration of each dataset source (URLs, HF dataset ID, etc.)"""
+    train_weights: Dict[str, float] = field(default_factory=dict)
+    """Weights for each dataset source. They will be normalized to sum to 1."""
+    shuffle: bool | int = False
+    """Whether to shuffle the dataset. True means shuffle the whole dataset, False means don't shuffle.
+    If you want to shuffle in eras, set this to the era length."""
+    stop_strategy: str = field(default=StopStrategy.RESTART_STRATEGY)
+    mixture_block_size: int = 2048
+    """Block size for the mixture dataset."""
+    use_cache: bool = True
+    """Whether to cache preprocessed data. When False, retain raw records in memory and process images on demand."""
+
+    def __post_init__(self) -> None:
+        if len(self.configs) == 0:
+            raise ValueError("At least one dataset must be provided")
+
+        if set(self.configs.keys()) != set(self.train_weights.keys()):
+            raise ValueError(
+                f"The keys in configs and weights must be the same; got {self.configs.keys()} and"
+                f" {self.train_weights.keys()}"
+            )
+
+    def train_set(
+        self,
+        options: CacheOptions = CacheOptions.default(),
+        *,
+        key: Optional[PRNGKeyArray] = None,
+        epochs: Optional[int] = None,
+        max_num_patches: Optional[int] = None,
+    ) -> AsyncDataset[ImageTextDict]:
+        image_datasets = self.training_sets(max_num_patches=max_num_patches, options=options)
+
+        if key is None:
+            key = jax.random.PRNGKey(0)
+
+        mix_key, shuffle_key = jax.random.split(key)
+
+        # Shuffle components, not the overall mixture, to preserve "stable batch" property
+        def shuffle_ds(ds: AsyncDataset[ImageTextDict], key: PRNGKeyArray) -> AsyncDataset[ImageTextDict]:
+            if self.shuffle is True:
+                ds = ds.shuffle(key)
+            elif isinstance(self.shuffle, int):
+                ds = ds.era_shuffle(self.shuffle, key=key)
+            return ds
+
+        if self.shuffle:
+            out_datasets = {}
+            key_iter = key_iterator(shuffle_key)
+            for name, ds in image_datasets.items():
+                out_datasets[name] = shuffle_ds(ds, next(key_iter))
+            image_datasets = out_datasets
+
+        if epochs and epochs > 0:
+            logger.info(f"Wrapping each dataset in RepeatedImageDataset with max_epochs={epochs}")
+            epoch_wrapped_datasets = {}
+            for name, ds in image_datasets.items():
+                epoch_wrapped_datasets[name] = RepeatedImageDataset(ds, epochs=epochs)
+            image_datasets = epoch_wrapped_datasets
+
+        mixture = MixtureDataset(
+            datasets=image_datasets,
+            weights={name: self.train_weights[name] for name in image_datasets},
+            stop_strategy=self.stop_strategy,
+            key=mix_key,
+            block_size=self.mixture_block_size,
+        )
+
+        return mixture
+
+    def training_sets(
+        self, max_num_patches: Optional[int] = None, options: CacheOptions = CacheOptions.default()
+    ) -> Mapping[str, AsyncDataset[ImageTextDict]]:
+        if self.use_cache:
+            return self.build_caches("train", options=options, max_num_patches=max_num_patches)
+        else:
+            return self.build_on_demand_datasets("train", max_num_patches=max_num_patches)
+
+    def validation_sets(self, max_num_patches: Optional[int] = None) -> Mapping[str, AsyncDataset[ImageTextDict]]:
+        if self.use_cache:
+            return self.build_caches("validation", max_num_patches=max_num_patches)
+        else:
+            return self.build_on_demand_datasets("validation", max_num_patches=max_num_patches)
+
+    def build_on_demand_datasets(
+        self, split: str, max_num_patches: Optional[int] = None
+    ) -> Dict[str, OnDemandImageDataset]:
+        """Build indexed datasets that retain raw records and process images on demand."""
+        datasets_dict = {}
+
+        for name, source_config in self.configs.items():
+            weight = self.train_weights.get(name, 0)
+
+            if weight == 0 and split == "train":
+                continue
+
+            if split == "train":
+                source = source_config.get_shard_source(source_config.train_split)
+            elif split == "validation":
+                source = source_config.get_shard_source(source_config.validation_split)
+            else:
+                source = source_config.get_shard_source(split)
+
+            if source is None:
+                logger.warning(f"Skipping {name} for split {split} because no source was provided")
+                continue
+
+            dataset = OnDemandImageDataset(
+                source=source,
+                processor=self.the_processor,
+                max_length=self.max_length,
+                padding=self.padding,
+                max_num_patches=max_num_patches,
+            )
+
+            datasets_dict[name] = dataset
+
+        return datasets_dict
+
+    def build_caches(
+        self,
+        split: str,
+        options: CacheOptions = CacheOptions.default(),
+        max_num_patches: Optional[int] = None,
+    ) -> Dict[str, ProcessedImageCache]:
+        caches = {}
+        for name, source in self.configs.items():
+            if self.train_weights[name] == 0 and split == "train":
+                continue
+            cache_dir = source.cache_dir
+            if cache_dir is None:
+                if self.cache_dir is None:
+                    raise ValueError(f"No cache directory configured for {name}")
+                cache_dir = prefix_join(self.cache_dir, name)
+            dataset = ImageIODatasetConfig(
+                processor=self.processor,
+                max_length=self.max_length,
+                padding=self.padding,
+                source=source,
+                cache_dir=cache_dir,
+            )
+            source_split = (
+                source.train_split if split == "train" else source.validation_split if split == "validation" else split
+            )
+            cache = dataset.build_or_load_cache(source_split, options, max_num_patches=max_num_patches)
+            if cache is not None:
+                caches[name] = cache
+        return caches
+
+    @property
+    def sources(self) -> Mapping[str, Union[ImageDatasetSourceConfig, ConversationDatasetSourceConfig]]:
+        return self.configs
