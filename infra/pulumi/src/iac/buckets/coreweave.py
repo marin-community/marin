@@ -20,9 +20,10 @@ COREWEAVE_MULTIPART_EXPIRATION = 7
 
 # Temporary carve-out for one reviewed thinning of the CoreWeave hero's permanent checkpoints.
 # While these constants are set, the hero deletion deny names every protected path explicitly
-# instead of the ``marin/grug/hero-*`` wildcard, leaving only the step directories absent from
-# HERO_THINNING_KEPT_STEPS deletable. Revert this change once the deletion finishes; hero runs
-# created while it is applied are not protected.
+# instead of the ``marin/grug/hero-*`` wildcard. Under the six thinned runs, anything outside
+# ``analysis/``, ``.executor*`` and the kept step directories is deletable; when this was written
+# that was exactly the 17 superseded step directories in the reviewed manifest. Hero runs created
+# while this is applied are not protected. Owner: ClassicLarry; revert by 2026-10-23.
 HERO_THINNING_VERSION = "2026.08.19.2"
 HERO_THINNING_KEPT_STEPS: dict[str, tuple[int, ...]] = {
     "hero-12d8b6f0-dee637": (6000, 12000, 24000, 36000, 48000, 54000),
