@@ -4,7 +4,8 @@ Usage: build_artifacts.py <cruxeval|two-expert> [--upload]
 Runs on cw-us-east-02a. Copies each listed S3 object to /tmp/artifacts/<repo>/<path relative to marin/>, checks size, computes
 sha256, writes MANIFEST.tsv (path, bytes, sha256, S3 origin, issue, purpose) and README.md. Without --upload it prints README.md
 and MANIFEST.tsv and uploads nothing. With --upload (needs HF_TOKEN in the env, never printed) it creates the public dataset repo,
-uploads with upload_large_folder, then checks every file's size and sha256 (LFS) or git blob id (small files) on the Hub.
+uploads only the files missing or different on the Hub (README.md and MANIFEST.tsv always), in commits of 1,000 files
+(the Hub allows 128 commits per hour), then checks every file's size and sha256 (LFS) or git blob id (small files) on the Hub.
 """
 import collections, concurrent.futures as cf, hashlib, os, pathlib, sys
 import fsspec
@@ -114,14 +115,25 @@ if "--upload" not in sys.argv:
         print("MANIFEST\t" + line, flush=True)
     sys.exit(0)
 
-from huggingface_hub import HfApi  # noqa: E402
+from huggingface_hub import CommitOperationAdd, HfApi  # noqa: E402
 
 api = HfApi(token=os.environ["HF_TOKEN"])
 api.create_repo(repo, repo_type="dataset", private=False, exist_ok=True)
-api.upload_large_folder(repo_id=repo, folder_path=str(local), repo_type="dataset", print_report=False)
+
+
+def mismatched(hub):
+    return [r[0] for r in rows if r[0] not in hub or hub[r[0]].size != r[1] or
+            (hub[r[0]].lfs.sha256 if hub[r[0]].lfs else hub[r[0]].blob_id) != (r[2] if hub[r[0]].lfs else r[3])]
+
+
+todo = mismatched({s.rfilename: s for s in api.dataset_info(repo, files_metadata=True).siblings}) + ["README.md", "MANIFEST.tsv"]
+print(f"TODO {len(todo)} files", flush=True)
+for i in range(0, len(todo), 1000):
+    part = todo[i:i + 1000]
+    c = api.create_commit(repo, repo_type="dataset", commit_message=f"Add task #210 artifacts ({i + len(part)}/{len(todo)})",
+                          operations=[CommitOperationAdd(path_in_repo=p, path_or_fileobj=str(local / p)) for p in part])
+    print(f"COMMIT {c.oid} {i + len(part)}/{len(todo)}", flush=True)
 info = api.dataset_info(repo, files_metadata=True)
-hub = {s.rfilename: s for s in info.siblings}
-bad = [r[0] for r in rows if r[0] not in hub or hub[r[0]].size != r[1] or
-       (hub[r[0]].lfs.sha256 if hub[r[0]].lfs else hub[r[0]].blob_id) != (r[2] if hub[r[0]].lfs else r[3])]
+bad = mismatched({s.rfilename: s for s in info.siblings})
 print(f"UPLOADED {repo} sha {info.sha} files {len(info.siblings)} mismatched {len(bad)} {bad[:10]} "
       f"url https://huggingface.co/datasets/{repo}/tree/{info.sha}", flush=True)
