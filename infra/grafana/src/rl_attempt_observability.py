@@ -19,6 +19,7 @@ RL_ATTEMPT_MAX_STEP_ROWS = 50_000
 RL_ATTEMPT_MAX_PROCESS_ROWS = 10_000
 RL_ATTEMPT_MAX_RESULT_ROWS = 200_000
 MEGATRON_DETAIL_ROWS = 5_000
+ROLLOUT_OVERLAP_DETAIL_STEPS = 50
 GIB = 1073741824
 FINITE_VALUE_LIMIT_SQL = "1e308"
 MARINSKYRL_TABLE = '"telemetry_v1.marinskyrl"'
@@ -327,8 +328,7 @@ WITH selected AS (
            CAST(NULL AS DOUBLE) AS p95,
            MIN(timestamp_ms) AS first_ms,
            MAX(timestamp_ms) AS last_ms,
-           FIRST_VALUE(value ORDER BY timestamp_ms DESC, seq DESC) AS last_value,
-           MAX(CASE WHEN json_get(resource_attributes_json, 'training_type') = 'async' THEN 1 ELSE 0 END) AS is_async
+           FIRST_VALUE(value ORDER BY timestamp_ms DESC, seq DESC) AS last_value
     FROM selected
     WHERE name NOT IN ({sql_values(_GAUGE_NAMES + _PERCENTILE_NAMES)})
     GROUP BY 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
@@ -343,8 +343,7 @@ WITH selected AS (
            CAST(NULL AS DOUBLE) AS p95,
            timestamp_ms AS first_ms,
            timestamp_ms AS last_ms,
-           value AS last_value,
-           CASE WHEN json_get(resource_attributes_json, 'training_type') = 'async' THEN 1 ELSE 0 END AS is_async
+           value AS last_value
     FROM (
         SELECT t, name, execution_uid, value, timestamp_ms, resource_attributes_json,
                ROW_NUMBER() OVER (
@@ -364,8 +363,7 @@ WITH selected AS (
            approx_percentile_cont(value, 0.95) AS p95,
            MIN(timestamp_ms) AS first_ms,
            MAX(timestamp_ms) AS last_ms,
-           FIRST_VALUE(value ORDER BY timestamp_ms DESC, seq DESC) AS last_value,
-           MAX(CASE WHEN json_get(resource_attributes_json, 'training_type') = 'async' THEN 1 ELSE 0 END) AS is_async
+           FIRST_VALUE(value ORDER BY timestamp_ms DESC, seq DESC) AS last_value
     FROM selected
     WHERE name = 'rollout_staleness_steps'
        OR (name = 'rollout_buffer_dwell_seconds' AND disposition = 'consumed')
@@ -458,6 +456,19 @@ WITH events AS (
 )
 SELECT * FROM lifecycle
 UNION ALL SELECT * FROM exporter
+UNION ALL
+SELECT CAST(NULL AS VARCHAR) AS execution_uid,
+       CAST(NULL AS VARCHAR) AS role,
+       CAST(NULL AS VARCHAR) AS process,
+       'last_record' AS name,
+       CAST(NULL AS VARCHAR) AS status,
+       CAST(NULL AS VARCHAR) AS reason,
+       CAST(NULL AS DOUBLE) AS observed_value,
+       CAST(NULL AS BIGINT) AS export_lost_records,
+       CAST(NULL AS BIGINT) AS export_queued_records,
+       MAX(timestamp_ms) AS last_record_ms
+FROM {MARINSKYRL_TABLE}
+WHERE {identity}
 ORDER BY last_record_ms DESC, execution_uid, name
 LIMIT {RL_ATTEMPT_MAX_PROCESS_ROWS + 1}
 """.strip()
@@ -577,7 +588,7 @@ WITH r AS (
 ), coverage AS (
     SELECT execution_uid, COUNT(*) AS calls FROM c GROUP BY 1
 )
-SELECT p.execution_uid, p.step,
+SELECT p.execution_uid, p.step, MAX(p.finished) AS observed_ms,
        CASE WHEN MIN(p.started) < {start_ms} THEN 'partial interval'
             WHEN MAX(coverage.calls) IS NULL THEN 'no rollout records'
             ELSE 'observed' END AS coverage,
@@ -689,11 +700,8 @@ SELECT (SELECT current_step FROM current_step) AS current_step,
                    AND name = 'work_completed' AND work_kind = 'generated_token')) AS generated_tokens_per_second,
        ({end_ms} - (SELECT last_step_ms FROM current_step)) / 1000.0 AS since_last_step,
        ({end_ms} - (SELECT MAX(last_ms) FROM observations)) / 1000.0 AS since_last_record,
-       CASE WHEN NOT EXISTS (SELECT 1 FROM core
-                             WHERE statistic = 'percentile' AND name = 'rollout_staleness_steps') THEN NULL
-            WHEN (SELECT MAX(is_async) FROM core) = 0 THEN 0
-            ELSE (SELECT p95 FROM core WHERE statistic = 'percentile' AND name = 'rollout_staleness_steps'
-                  ORDER BY last_ms DESC, execution_uid DESC LIMIT 1) END AS staleness_p95
+       (SELECT p95 FROM core WHERE statistic = 'percentile' AND name = 'rollout_staleness_steps'
+        ORDER BY last_ms DESC, execution_uid DESC LIMIT 1) AS staleness_p95
 """.strip()
         ),
         "policy_step": (
@@ -827,7 +835,15 @@ ORDER BY 1, 2
 """.strip()
         ),
         "training_overlap": (
-            "SELECT execution_uid, step, coverage, completed_calls, returned_tokens FROM overlap ORDER BY step"
+            f"""
+SELECT execution_uid, step, coverage, completed_calls, returned_tokens
+FROM (
+    SELECT * FROM overlap
+    ORDER BY observed_ms DESC, execution_uid DESC, step DESC
+    LIMIT {ROLLOUT_OVERLAP_DETAIL_STEPS}
+)
+ORDER BY step, execution_uid
+""".strip()
         ),
         "group_dispositions": (
             "SELECT t, disposition || ' · ' || execution_uid AS series, SUM(sum_value) AS value "
