@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, TypedDict
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.factory import open_url, url_to_fs
@@ -76,11 +76,41 @@ class BenchmarkMetricRef(BaseModel):
     higher_is_better: bool
 
 
+class BenchmarkSourceRef(TypedDict):
+    """The dataset, split, and revision used by a benchmark."""
+
+    dataset: str
+    split: str
+    revision: str | None
+
+
+class BenchmarkReducerRef(TypedDict):
+    """The reduction and metric names used to aggregate benchmark grades."""
+
+    name: str
+    accuracy: str
+    stderr: str
+    repeat_ddof: int
+    groups: dict[str, str]
+    group_suffix: str
+    group_weights: dict[str, float]
+    trial_metric: str | None
+    selected_trial: int | None
+
+
+class BenchmarkPromptLengthRef(TypedDict):
+    """The size and digest of a benchmark's measured prompt corpus."""
+
+    distinct_prompt_count: int
+    longest_prompt_chars: int
+    longest_prompt_tokens: int
+    sha256: str
+
+
 class BenchmarkMetadataRef(BaseModel):
     """The benchmark protocol emitted by an evaluation harness."""
 
-    # Preserve evaluator-owned provenance without duplicating each harness's schema.
-    model_config = ConfigDict(frozen=True, extra="allow")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: Literal[1]
     task: str
@@ -89,6 +119,10 @@ class BenchmarkMetadataRef(BaseModel):
     metrics: tuple[BenchmarkMetricRef, ...]
     n_benchmark: int | None = Field(ge=0)
     n_attempted: int | None = Field(ge=0)
+    source: BenchmarkSourceRef | None = None
+    reducers: tuple[BenchmarkReducerRef, ...] = ()
+    prompt_length: BenchmarkPromptLengthRef | None = None
+    requires_judge: bool = False
 
     @model_validator(mode="after")
     def validate_protocol(self) -> "BenchmarkMetadataRef":

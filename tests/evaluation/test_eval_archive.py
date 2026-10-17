@@ -99,7 +99,19 @@ def test_archive_row_round_trips_each_sample_kind():
         {},
         {
             "source": {"dataset": "openai/gsm8k", "split": "test", "revision": None},
-            "reducers": [{"name": "mean", "accuracy": "exact_match", "stderr": "exact_match_stderr"}],
+            "reducers": [
+                {
+                    "name": "mean",
+                    "accuracy": "exact_match",
+                    "stderr": "exact_match_stderr",
+                    "repeat_ddof": 0,
+                    "groups": {},
+                    "group_suffix": "",
+                    "group_weights": {},
+                    "trial_metric": "accuracy",
+                    "selected_trial": None,
+                }
+            ],
             "prompt_length": {
                 "distinct_prompt_count": 1,
                 "longest_prompt_chars": 100,
@@ -164,7 +176,13 @@ def test_native_summary_reads_evalchemy_normalized_rows(tmp_path, provenance):
     assert summary.canonical_metrics == {"gsm8k_5shot": {"accuracy": 1.0}}
     task = EvalTaskRef.model_validate_json(summary.tasks[0].model_dump_json())
     assert task.benchmark is not None
-    assert task.benchmark.model_dump(mode="json") == benchmark
+    assert task.benchmark.model_dump(mode="json") == {
+        "source": None,
+        "reducers": [],
+        "prompt_length": None,
+        "requires_judge": False,
+        **benchmark,
+    }
 
 
 def test_native_summary_partitions_repeated_task_configurations(tmp_path):
