@@ -358,7 +358,7 @@ seconds and red at 900 seconds. Staleness p95 uses the newest bucket of the newe
 execution; sync observations yield zero and missing data stays empty. The two optimizer panels
 share one view and filter its series for their respective axes. The learner-memory bars show the
 largest phase peaks across selected ranks and executions, with maximum device capacity as a
-reference. Phase-throughput bars include sampled-interval coverage on the right axis. Overlap
+reference. Phase-throughput bars include sampled-interval coverage on a separate percentage axis. Overlap
 bars retain the newest 50 execution/step windows by finish time. The latest generated-token rate
 uses a display bucket whose width grows with the selected range.
 

@@ -2656,7 +2656,7 @@
       "id": 42,
       "type": "barchart",
       "title": "Inference sampled throughput by learner phase",
-      "description": "Sampled vLLM token throughput during each learner phase, separated by execution, collector, engine, model and counter. Compare generation during training and weight sync to locate interference. Sample coverage on the right axis shows the fraction of each phase represented by valid counter intervals. Resets and boundary-crossing intervals are excluded; phase attribution requires trainer.rollout_spans.",
+      "description": "Sampled vLLM token throughput during each learner phase, separated by execution, collector, engine, model and counter. Compare generation during training and weight sync to locate interference. Sample coverage on a separate percentage axis shows the fraction of each phase represented by valid counter intervals. Resets and boundary-crossing intervals are excluded; phase attribution requires trainer.rollout_spans.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -2680,7 +2680,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": "^coverage_fraction"
+              "options": "/^coverage_fraction/"
             },
             "properties": [
               {
@@ -3774,7 +3774,7 @@
               {
                 "matcher": {
                   "id": "byRegexp",
-                  "options": "^device_total_gib"
+                  "options": "/^device_total_gib/"
                 },
                 "properties": [
                   {
