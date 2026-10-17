@@ -32,7 +32,6 @@ import contextlib
 import hashlib
 import io
 import json
-import re
 import logging
 import os
 import subprocess
@@ -73,6 +72,7 @@ from starlette.applications import Starlette
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.sft_shootout.glm_proxy import Backend, RelayPolicy, RequestLog, build_proxy, load_tokenizer
 from experiments.post_training.sft_shootout.relay import Author
+from experiments.post_training.sft_shootout.scrub_run import scrub_text
 
 logger = logging.getLogger(__name__)
 
@@ -188,24 +188,21 @@ def extract_packages(parquet: str, names: list[str] | None, dest: Path) -> None:
         raise ValueError(f"not in {parquet}: {sorted(wanted - found)}")
 
 
-def scrub(root: Path, capability: str) -> None:
-    """Replace the capability URL's token in every text file under ``root``.
+def scrub_file(path: Path) -> None:
+    """Remove Iris capability tokens from one text file (see scrub_run.py)."""
+    try:
+        text = path.read_text()
+    except UnicodeDecodeError:
+        return
+    scrubbed, found = scrub_text(text)
+    if found:
+        path.write_text(scrubbed)
 
-    Agents echo the URL in their logs, sometimes wrapped across lines (also JSON-escaped as ``\\n``
-    inside result.json), so the token is matched with any line breaks between its characters.
-    """
-    token = max(urlparse(capability).path.split("/"), key=len)
-    pattern = re.compile(r"(?:\s|\\n)*".join(re.escape(c) for c in token))
+
+def scrub(root: Path) -> None:
     for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        try:
-            text = path.read_text()
-        except UnicodeDecodeError:
-            continue
-        scrubbed = pattern.sub("<capability-token>", text)
-        if scrubbed != text:
-            path.write_text(scrubbed)
+        if path.is_file():
+            scrub_file(path)
 
 
 def policy(family: str) -> dict:
@@ -361,8 +358,11 @@ def main() -> None:
         },
     }
     (job_dir / "driver_config.json").write_text(json.dumps(provenance, indent=2))
-    if capability is not None:
-        scrub(job_dir, capability)
+    # Agents can print the capability URL (e.g. an `env` listing), so it can reach any output, including
+    # the request log's observations.
+    scrub(job_dir)
+    if (work / "requests.jsonl").exists():
+        scrub_file(work / "requests.jsonl")
     StoragePath(args.output).upload_from(str(job_dir), recursive=True)
     if (work / "requests.jsonl").exists():
         StoragePath(f"{args.output.rstrip('/')}/requests.jsonl").upload_from(str(work / "requests.jsonl"))
