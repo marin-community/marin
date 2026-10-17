@@ -98,6 +98,11 @@ STUDENT_REVISION = "4eeb756b404db25bc04e4daf49dfb9817bceb741"
 # and agent kwargs come from the YAML, and model_info is reconciled the way the eval launcher does it.
 POLICY_DIR = Path("experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/harbor-configs")
 POLICIES = {"tmax": POLICY_DIR / "tb2-recovery.yaml", "swesmith": POLICY_DIR / "swebench-verified.yaml"}
+# Generation-only change to the policy: a smaller context window (model_info max_input_tokens, the total window in
+# Harbor) so a trajectory that fits it also fits 32,768 tokens in v0's chat template, the SFT row length. In the
+# SWE-smith pilot, v0-template / GLM tokens for passing traces was median 1.038, p99 1.073, max 1.089, so
+# 30,000 x 1.089 = 32,670. TMax keeps the policy window (the ratio there is not stable).
+GENERATION_WINDOW = {"swesmith": 30_000}
 AGENTS = {
     # Runs each task's solution/solve.sh with no model; used for task and visibility probes.
     "oracle": {"name": "oracle"},
@@ -216,6 +221,8 @@ def policy_agent(args: argparse.Namespace, served_info: dict | None) -> dict:
         raise ValueError(f"the {args.family} policy runs {agent['name']}, not {args.agent}")
     kwargs = {**agent.get("kwargs", {}), **AGENTS[args.agent].get("kwargs", {})}
     kwargs[MODEL_INFO_KEY] = reconciled_model_info(served_info, kwargs.get(MODEL_INFO_KEY))
+    if args.family in GENERATION_WINDOW:
+        kwargs[MODEL_INFO_KEY][MAX_INPUT_TOKENS_KEY] = GENERATION_WINDOW[args.family]
     if args.agent == "terminus-2":
         kwargs["llm_call_kwargs"] = {**kwargs.get("llm_call_kwargs", {}), "max_tokens": kwargs[MODEL_INFO_KEY][MAX_OUTPUT_TOKENS_KEY]}
     return {**{k: v for k, v in agent.items() if k != "name"}, **AGENTS[args.agent], "kwargs": kwargs}
@@ -328,6 +335,17 @@ def main() -> None:
         "args": vars(args),
         "harbor": config,
         "policy": str(POLICIES[args.family]),
+        "policy_changes": None
+        if args.family not in GENERATION_WINDOW
+        else {
+            "model_info.max_input_tokens": {
+                "policy": reconciled_model_info(
+                    None, policy(args.family)["agents"][0].get("kwargs", {}).get(MODEL_INFO_KEY)
+                )[MAX_INPUT_TOKENS_KEY],
+                "generation": GENERATION_WINDOW[args.family],
+                "why": "generation only: keep trajectories within 32,768 tokens in v0's chat template",
+            }
+        },
         "teacher": {
             "model": GLM_MODEL,
             "relay_job": args.glm_relay_job,
