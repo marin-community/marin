@@ -10,11 +10,16 @@ task #202 replay slice, and for RS-multi and relay the plain arm's built prefix 
 Rows follow task #202: input_ids padded to 32,768 with pad id 128001, loss_weights shifted so weight i scores token
 i + 1, zero-loss padding rows to a multiple of 16, nothing truncated. Replay is a prefix of the frozen slice in a seeded,
 fixed order, cut where its supervised tokens reach R = round(B / 4) with B from plain; every arm gets the same rows
-(checked by hash against plain's manifest). Replay rows are mixed with the arm's rows by a seeded shuffle.
+(checked by hash against plain's manifest).
 
-Outputs under --output: train-prebuilt.jsonl.gz (plain, relay), train-epoch-<e>-prebuilt.jsonl.gz (RS-multi, one
-file per epoch, same row count) or validation-<family>-prebuilt.jsonl.gz (validation: the shared set for all arms,
-GLM's first passing trace per held-out task, no replay), train-index.jsonl or validation-index.jsonl (row -> source),
+Training order: the trainer reads rows in file order (mixture block 16, one block per batch) and concatenates the
+epoch files in order without shuffling. So each epoch file is its own seeded permutation of that epoch's rows (seed
+'<SEED>:<arm>:epoch-<e>:<pool manifest sha256>', recorded per split), with zero-loss padding rows at the end to a
+multiple of 16. Plain and relay repeat the same rows in each epoch; RS-multi picks new attempts per epoch.
+
+Outputs under --output: train-epoch-<e>-prebuilt.jsonl.gz for e in 0..2 (plain, RS-multi, relay) or
+validation-<family>-prebuilt.jsonl.gz (validation: the shared set for all arms, GLM's first passing trace per
+held-out task, no replay), train-index.jsonl (with epoch) or validation-index.jsonl (row -> source),
 selection.jsonl (task or slot -> chosen trial),
 dropped.jsonl, and manifest.json with per-family supervised and context tokens and file hashes.
 
@@ -100,6 +105,8 @@ CHANGELOG = (
     "45b4478e04 pool v5 pin (frozen pool; drops 11 tasks with broken or hanging verifiers)",
     "d43ab0af02 replay cut at R = round(B / 4) with plain's B; same rows in every arm (hash-checked)",
     "65b0b9d36b continuation slices (base_rows): frozen rows keep their order, continuation rows follow",
+    "c1b656a907 relay manifest records the full usable relay pool per family",
+    "EPOCHFILES every training arm writes 3 epoch files, each a seeded permutation (seed recorded per split)",
 )
 # mini-swe-agent's own tool environment, installed in the sandbox at agent setup, holds clean copies of some repos
 # (pool v3 removes those repos); a trace that reads anything there is dropped. Pattern from #207 (chukar): path reads,
@@ -315,6 +322,21 @@ def cut_replay(
     }
 
 
+def epoch_seed(arm: str, epoch: int) -> str:
+    return f"{SEED}:{arm}:epoch-{epoch}:{POOL_MANIFEST_SHA256}"
+
+
+def write_epochs(out: Path, arm: str, rows_for_epoch, splits: dict) -> list[dict]:
+    """Write train-epoch-<e> files, each a seeded permutation of its epoch's rows; return the index with epochs."""
+    index = []
+    for epoch in range(EPOCHS):
+        epoch_index, splits[f"epoch-{epoch}"] = write_split(
+            out / f"train-epoch-{epoch}-prebuilt.jsonl.gz", rows_for_epoch(epoch), epoch_seed(arm, epoch)
+        )
+        index += [{"epoch": epoch} | item for item in epoch_index]
+    return index
+
+
 def write_split(path: Path, entries: list[tuple[str, dict]], seed: str) -> tuple[list[dict], dict]:
     """Shuffle (row json, index entry) pairs with `seed`, write rows plus zero-loss padding, re-read and check."""
     order = list(range(len(entries)))
@@ -352,6 +374,7 @@ def write_split(path: Path, entries: list[tuple[str, dict]], seed: str) -> tuple
         "padding_rows": padding,
         # Rows the trainer reads per epoch of this file (a multiple of 16); the consumer sets its block size from it.
         "padded_rows": len(index) + padding,
+        "permutation_seed": seed,
         "steps": (len(index) + padding) // BATCH,
         "supervised_tokens": dict(supervised),
         "context_tokens": dict(context),
@@ -445,7 +468,7 @@ def main() -> None:
             ]
             b_tokens = sum(a.supervised for a in chosen.values())
             rows = [entry(a, {}) for _, a in sorted(chosen.items())] + replay_for(b_tokens)
-            index, splits["train"] = write_split(out / "train-prebuilt.jsonl.gz", rows, f"{SEED}:plain")
+            index = write_epochs(out, "plain", lambda epoch: rows, splits)
         elif args.arm == "rs-multi":
             tasks = sorted(plain["task_slots"])
             missing = [task for task in tasks if not any(a.task_id == task for a in attempts)]
@@ -454,17 +477,17 @@ def main() -> None:
             plan = rs_multi_epochs([a for a in attempts if a.task_id in set(tasks)], tasks, EPOCHS)
             b_tokens = plain["B_supervised_tokens"]
             replay = replay_for(b_tokens)
-            index = []
             for epoch, chosen in enumerate(plan):
                 selection += [
                     {"epoch": epoch, "task_id": task, "trial_id": a.trial_id, "sample": a.sample}
                     for task, a in sorted(chosen.items())
                 ]
-                rows = [entry(a, {"epoch": epoch}) for _, a in sorted(chosen.items())] + replay
-                epoch_index, splits[f"epoch-{epoch}"] = write_split(
-                    out / f"train-epoch-{epoch}-prebuilt.jsonl.gz", rows, f"{SEED}:rs-multi:shuffle:{epoch}"
-                )
-                index += [{"epoch": epoch} | item for item in epoch_index]
+            index = write_epochs(
+                out,
+                "rs-multi",
+                lambda epoch: [entry(a, {}) for _, a in sorted(plan[epoch].items())] + replay,
+                splits,
+            )
         elif args.arm == "validation":
             # One fixed set for every arm: GLM's first passing trace per held-out task, per family, no replay.
             chosen = first_passing(attempts)
@@ -483,7 +506,7 @@ def main() -> None:
             chosen_episodes, _ = relay_subsample(attempts, b_tokens)
             selection = [{"trial_id": a.trial_id, "task_id": a.task_id, "sample": a.sample} for a in chosen_episodes]
             rows = [entry(a, {}) for a in chosen_episodes] + replay_for(b_tokens)
-            index, splits["train"] = write_split(out / "train-prebuilt.jsonl.gz", rows, f"{SEED}:relay")
+            index = write_epochs(out, "relay", lambda epoch: rows, splits)
 
         index_name = "validation-index.jsonl" if args.arm == "validation" else "train-index.jsonl"
         (out / index_name).write_text("".join(json.dumps(item) + "\n" for item in index))
@@ -604,7 +627,9 @@ def main() -> None:
             },
         }
         if args.arm == "relay":
-            manifest["relay_supervised_tokens"] = splits["train"]["supervised_total"] - replay_info["supervised_tokens"]
+            manifest["relay_supervised_tokens"] = (
+                splits["epoch-0"]["supervised_total"] - replay_info["supervised_tokens"]
+            )
             # Every usable relay episode before the subsample to B, so parity with plain can be read off directly.
             pool_by_family: dict[str, dict] = {}
             for attempt in attempts:

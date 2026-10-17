@@ -68,7 +68,7 @@ def main() -> None:
         eligibility = plain["eligibility"].get(family, {})
         attempted = eligibility.get("tasks_attempted", 0)
         eligible = eligibility.get("tasks_eligible", 0)
-        b = plain["splits"]["train"]["supervised_tokens"].get(family, 0)
+        b = plain["splits"]["epoch-0"]["supervised_tokens"].get(family, 0)
         projected_b[family] = b / attempted * POOL_NOT_HELD_OUT[family] if attempted else 0
         pool = (relay.get("relay_pool") or {}).get(family, {})
         relay_attempted = relay["eligibility"].get(family, {}).get("tasks_attempted", 0)
@@ -79,7 +79,7 @@ def main() -> None:
             "plain tasks attempted / eligible": f"{attempted:,} / {eligible:,}",
             "plain eligibility": f"{eligible / attempted:.3f}" if attempted else "-",
             "plain B (supervised)": fmt(b),
-            "plain context tokens": fmt(plain["splits"]["train"]["context_tokens"].get(family, 0)),
+            "plain context tokens": fmt(plain["splits"]["epoch-0"]["context_tokens"].get(family, 0)),
             "projected B": fmt(projected_b[family]),
             "RS-multi epoch supervised": " / ".join(
                 fmt(rs["splits"][f"epoch-{e}"]["supervised_tokens"].get(family, 0)) for e in range(3)
@@ -107,9 +107,8 @@ def main() -> None:
         cells = [by_family.get(family, "0" if " drop: " in key else "-") for family in families]
         out.append(f"| {key} | " + " | ".join(cells) + f" | {totals.get(key, '')} |")
     epochs = {
-        "plain": [plain["splits"]["train"]],
-        "rs-multi": [rs["splits"][f"epoch-{e}"] for e in range(3)],
-        "relay": [relay["splits"]["train"]],
+        arm: [data["splits"][f"epoch-{e}"] for e in range(3)]
+        for arm, data in (("plain", plain), ("rs-multi", rs), ("relay", relay))
     }
     padded = "; ".join(
         f"{arm} " + " / ".join(f"{s.get('padded_rows', s['rows'] + s['padding_rows']):,}" for s in splits)
@@ -121,7 +120,7 @@ def main() -> None:
         "",
         f"Replay cut (plain's B {fmt(plain['B_supervised_tokens'])}): R = {fmt(replay['target_supervised_tokens'])}, "
         f"achieved {fmt(replay['supervised_tokens'])} in {replay['rows']} of {replay['slice_rows']} rows, share "
-        f"{replay['share_of_supervised']['train']:.3f}; rs-multi and relay `rows_sha256` "
+        f"{replay['share_of_supervised']['epoch-0']:.3f}; rs-multi and relay `rows_sha256` "
         + (
             "equal plain's"
             if rs["replay"]["rows_sha256"] == relay["replay"]["rows_sha256"] == replay["rows_sha256"]

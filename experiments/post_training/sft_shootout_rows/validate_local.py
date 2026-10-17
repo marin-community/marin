@@ -316,6 +316,20 @@ def main() -> None:
     reports.append(check_arm(tokenizer, relay_arm, by_id, heldout))
     for prefix in (rs_multi, relay_arm):
         assert replay_used(prefix)[0] == plain_replay[0], f"{prefix.name} replay rows differ from plain's"
+    for prefix in (plain, rs_multi, relay_arm):
+        manifest = json.loads((prefix / "manifest.json").read_text())
+        epochs = [manifest["splits"][f"epoch-{e}"] for e in range(3)]
+        assert all(split["padded_rows"] % 16 == 0 for split in epochs), f"{prefix.name}: epoch not padded to 16"
+        assert len({split["permutation_seed"] for split in epochs}) == 3, f"{prefix.name}: epoch seeds not distinct"
+        index = [json.loads(line) for line in (prefix / "train-index.jsonl").read_text().splitlines()]
+        orders = [
+            [item.get("trial_id") or f"replay:{item.get('byte_offset')}" for item in index if item["epoch"] == e]
+            for e in range(3)
+        ]
+        if prefix.name != "rs-multi":
+            assert all(sorted(order) == sorted(orders[0]) for order in orders), f"{prefix.name}: epochs hold other rows"
+            if len(orders[0]) > 2:
+                assert len({tuple(order) for order in orders}) == 3, f"{prefix.name}: epochs share an order"
     validation = build("validation", [*plain_inputs, str(work / "heldout.jsonl")])
     reports.append(check_arm(tokenizer, validation, by_id, heldout))
     mixed = build("plain-with-heldout-input", [*plain_inputs, str(work / "heldout.jsonl")])
