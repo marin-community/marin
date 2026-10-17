@@ -29,6 +29,7 @@ Outputs under ``--output``: Harbor's job folder, ``requests.jsonl`` (the canonic
 
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import re
@@ -77,6 +78,7 @@ CAPABILITY_ORIGIN = "https://iris-cw-us-east-02a.oa.dev"
 AGENT_DOMAIN_ALLOW_LIST = "iris.oa.dev"
 HARBOR_PROJECT = "config/external/harbor"
 AGENTS_PATH = Path(__file__).parent / "harbor_agents"
+MINI_SWE_CONSTRAINTS = AGENTS_PATH / "mini-swe-agent-2.1.0-constraints.txt"
 # v0: the policy's serving config for Snowball v0, at the revision pinned for the sweep (4eeb756b has
 # the same weights as the config's 271c4b3c; the later commit only corrects the model card).
 STUDENT_CONFIG = Path(
@@ -328,6 +330,13 @@ def main() -> None:
             # Clients send only model and max_tokens (see requests.jsonl), so the service defaults apply;
             # GLM 5.3's chat template then renders "Reasoning Effort: Max".
             "effective_settings": "service defaults; template reasoning effort Max",
+        },
+        "mini_swe_agent_install": None
+        if args.agent not in ("mini-swe-agent", "tool-env-probe")
+        else {
+            "constraints": str(MINI_SWE_CONSTRAINTS),
+            "constraints_sha256": hashlib.sha256(MINI_SWE_CONSTRAINTS.read_bytes()).hexdigest(),
+            "python": "3.12",
         },
         "agent_network": {
             "agent_phase_domain_allow_list": AGENTS[args.agent].get("kwargs", {}).get("agent_domain_allow_list"),

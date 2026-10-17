@@ -13,9 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from harbor.agents.base import BaseAgent
-from harbor.agents.installed.mini_swe_agent import MiniSweAgent
-
-from trial_agents import AgentPhaseNetwork
+from trial_agents import AgentPhaseNetwork, PinnedMiniSweInstall
 
 TARGETS = [
     "https://github.com/swesmith",
@@ -109,8 +107,8 @@ echo "== other site-packages dirs"; find / -xdev -type d \( -name site-packages 
 """
 
 
-class ToolEnvProbe(MiniSweAgent):
-    """Runs mini-swe-agent's real setup, then lists its tool env instead of calling a model."""
+class ToolEnvProbe(PinnedMiniSweInstall):
+    """Runs mini-swe-agent's real (pinned) setup, then lists its tool env instead of calling a model."""
 
     async def run(self, instruction: str, environment: Any, context: Any) -> None:
         result = await environment.exec(command=TOOL_ENV_LISTING, timeout_sec=300)

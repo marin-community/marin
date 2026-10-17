@@ -13,14 +13,20 @@ domains for the agent's run only. Setup and verification keep the task's own pol
 download uv from github.com; the agent run cannot reach github.com (e.g. the public
 ``github.com/swesmith`` mirrors that hold every task's clean code). The policy applied and the
 sandbox's reported state are written to ``agent_network.json`` in the logs directory.
+
+mini-swe-agent is installed from ``mini-swe-agent-2.1.0-constraints.txt`` (every dependency pinned) on
+Python 3.12, so its tool env, which the agent can read and which holds clean copies of some
+libraries, is the same in every trial. The pool excludes repos found in it.
 """
 
+import hashlib
 import json
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 
+from harbor.agents.installed import mini_swe_agent
 from harbor.agents.installed.mini_swe_agent import MiniSweAgent
 from harbor.agents.terminus_2.terminus_2 import Terminus2
 
@@ -28,6 +34,9 @@ TRIAL_HEADER = "x-ot-trial-id"
 ID_FILE = "trial_correlation_id.txt"
 NETWORK_FILE = "agent_network.json"
 READY_TIMEOUT_SEC = 60
+MINI_SWE_CONSTRAINTS = Path(__file__).with_name("mini-swe-agent-2.1.0-constraints.txt")
+MINI_SWE_CONSTRAINTS_SHA256 = hashlib.sha256(MINI_SWE_CONSTRAINTS.read_bytes()).hexdigest()
+MINI_SWE_PYTHON = "3.12"
 
 
 def _record(logs_dir: Any, trial_id: str) -> None:
@@ -76,6 +85,39 @@ class AgentPhaseNetwork:
         await super().run(instruction=instruction, environment=environment, context=context)
 
 
+class PinnedMiniSweInstall(MiniSweAgent):
+    """Harbor's mini-swe-agent install, with the pinned constraints file and Python version."""
+
+    async def install(self, environment: Any) -> None:
+        await self.exec_as_root(
+            environment,
+            command="apt-get update && apt-get install -y curl build-essential git",
+            env={"DEBIAN_FRONTEND": "noninteractive"},
+        )
+        constraints = f"{mini_swe_agent._MODEL_DIRECTORY}/{MINI_SWE_CONSTRAINTS.name}"
+        await self.exec_as_root(environment, command=f"mkdir -p {mini_swe_agent._MODEL_DIRECTORY}")
+        await environment.upload_file(MINI_SWE_CONSTRAINTS, constraints)
+        await self.exec_as_agent(
+            environment,
+            command=(
+                "set -euo pipefail; "
+                "curl -LsSf https://astral.sh/uv/0.7.13/install.sh | sh && "
+                'if ! grep -q \'export PATH="$HOME/.local/bin:$PATH"\' "$HOME/.bashrc" 2>/dev/null; then'
+                '  echo \'export PATH="$HOME/.local/bin:$PATH"\' >> "$HOME/.bashrc";'
+                " fi && "
+                'source "$HOME/.local/bin/env" && '
+                f"uv tool install --python {MINI_SWE_PYTHON} -c {constraints} mini-swe-agent=={self._version} && "
+                "mini-swe-agent --help"
+            ),
+        )
+        if self._model_info is not None:
+            for source in (
+                Path(mini_swe_agent.__file__).with_name("mini_swe_model.py"),
+                Path(mini_swe_agent.__file__).parents[2] / "llms" / "vllm_tokenization.py",
+            ):
+                await environment.upload_file(source, f"{mini_swe_agent._MODEL_DIRECTORY}/{source.name}")
+
+
 class TrialTerminus2(Terminus2):
     """Terminus-2 whose chat requests carry the trial id header."""
 
@@ -88,7 +130,7 @@ class TrialTerminus2(Terminus2):
         _record(self.logs_dir, trial_id)
 
 
-class TrialMiniSweAgent(AgentPhaseNetwork, MiniSweAgent):
+class TrialMiniSweAgent(AgentPhaseNetwork, PinnedMiniSweInstall):
     """Mini-SWE whose requests carry the trial id header (the adapter's rollout correlation id)."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
