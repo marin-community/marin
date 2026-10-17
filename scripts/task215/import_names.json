@@ -1,0 +1,117 @@
+{
+ "Cog-Creators/Red-DiscordBot": [
+  "redbot"
+ ],
+ "Knio/dominate": [
+  "dominate"
+ ],
+ "PyCQA/flake8": [
+  "flake8"
+ ],
+ "Suor/funcy": [
+  "funcy"
+ ],
+ "agronholm/exceptiongroup": [
+  "exceptiongroup"
+ ],
+ "agronholm/typeguard": [
+  "typeguard"
+ ],
+ "andialbrecht/sqlparse": [
+  "sqlparse"
+ ],
+ "ariga/atlas": [
+  "ariga/atlas"
+ ],
+ "bottlepy/bottle": [
+  "bottle"
+ ],
+ "c-bata/go-prompt": [
+  "c-bata/go-prompt"
+ ],
+ "caarlos0/env": [
+  "caarlos0/env"
+ ],
+ "cantools/cantools": [
+  "cantools"
+ ],
+ "chardet/chardet": [
+  "chardet"
+ ],
+ "cknd/stackprinter": [
+  "stackprinter"
+ ],
+ "google/textfsm": [
+  "textfsm"
+ ],
+ "hjson/hjson-go": [
+  "hjson/hjson-go"
+ ],
+ "hukkin/tomli": [
+  "tomli"
+ ],
+ "jaraco/inflect": [
+  "inflect"
+ ],
+ "jd/tenacity": [
+  "tenacity"
+ ],
+ "joke2k/faker": [
+  "faker"
+ ],
+ "keleshev/schema": [
+  "schema"
+ ],
+ "lepture/mistune": [
+  "mistune"
+ ],
+ "luozhouyang/python-string-similarity": [
+  "strsimilarity"
+ ],
+ "madzak/python-json-logger": [
+  "pythonjsonlogger"
+ ],
+ "mahmoud/boltons": [
+  "boltons"
+ ],
+ "marshmallow-code/webargs": [
+  "webargs"
+ ],
+ "matthewwithanm/python-markdownify": [
+  "markdownify"
+ ],
+ "oauthlib/oauthlib": [
+  "oauthlib"
+ ],
+ "pandas-dev/pandas": [
+  "pandas"
+ ],
+ "paramiko/paramiko": [
+  "paramiko"
+ ],
+ "pdfminer/pdfminer.six": [
+  "pdfminer"
+ ],
+ "pudo/dataset": [
+  "dataset"
+ ],
+ "pygments/pygments": [
+  "pygments"
+ ],
+ "pytest-dev/iniconfig": [
+  "iniconfig"
+ ],
+ "python-openxml/python-docx": [
+  "docx"
+ ],
+ "pyupio/safety": [
+  "safety"
+ ],
+ "rsalmei/alive-progress": [
+  "alive_progress"
+ ],
+ "seatgeek/thefuzz": [
+  "thefuzz",
+  "fuzzywuzzy"
+ ]
+}
