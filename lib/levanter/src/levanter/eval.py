@@ -36,6 +36,7 @@ from levanter.data.text.examples import (
     named_lm_example_from_labeled,
 )
 from levanter.models.lm_model import LmExample, LmHeadModel
+from levanter.models.loss import shift_next_token_ids
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.hf_utils import byte_length_of_token
 from levanter.utils.jax_utils import axis_resource_is_explicit
@@ -206,6 +207,17 @@ def _per_pos_out_sharding(device_mesh, axis_mapping, EvalBatch: hax.Axis) -> Opt
     return None
 
 
+def _byte_lookup_sharding(token_ids: jax.Array, preferred: NamedSharding | None) -> NamedSharding | None:
+    if preferred is not None:
+        return preferred
+    sharding = jax.typeof(token_ids).sharding
+    if isinstance(sharding, NamedSharding) and any(
+        axis_resource_is_explicit(sharding.mesh, entry) for entry in sharding.spec
+    ):
+        return sharding
+    return None
+
+
 def _ensure_named_lm_example(batch: LmEvalExample, *, EvalBatch: hax.Axis, model_pos: hax.Axis) -> LmExample:
     if isinstance(batch, LmExample):
         return batch
@@ -235,7 +247,7 @@ def _default_lm_eval_loss_fn(
         model = mp.cast_to_compute(model)
     per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
     per_pos_weight = named_batch.loss_weight.array
-    per_pos_token_id = jnp.roll(named_batch.tokens.array, -1, axis=-1)
+    per_pos_token_id = shift_next_token_ids(named_batch.tokens, model.Pos.name).array
     return per_pos_loss, per_pos_weight, per_pos_token_id
 
 
@@ -274,7 +286,7 @@ def _default_labeled_lm_eval_loss_fn(
     if mp is not None:
         model = mp.cast_to_compute(model)
     per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
-    per_pos_token_id = jnp.roll(named_batch.tokens.array, -1, axis=-1)
+    per_pos_token_id = shift_next_token_ids(named_batch.tokens, model.Pos.name).array
     return per_pos_loss, loss_labels.array, per_pos_token_id
 
 
@@ -574,7 +586,9 @@ class TaggedEvaluator(Generic[Ex, M]):
                 state = dataclasses.replace(state, loss_per_tag=mean_per_tag)
 
             if bytes_per_token is not None:
-                bytes_per_pos = bytes_per_token.at[token_ids].get(out_sharding=per_pos_out_sharding)
+                bytes_per_pos = bytes_per_token.at[token_ids].get(
+                    out_sharding=_byte_lookup_sharding(token_ids, per_pos_out_sharding)
+                )
                 this_bytes = jnp.sum(bytes_per_pos * weights)
                 bytes_per_tag = jnp.einsum(
                     "bt,bt,bk->k", bytes_per_pos, weights, tags, out_sharding=per_tag_out_sharding
@@ -776,7 +790,9 @@ class LabeledEvaluator(Generic[Ex, M]):
             state = dataclasses.replace(state, loss_per_label=mean_per_label)
 
             if bytes_per_token is not None:
-                bytes_per_pos = bytes_per_token.at[token_ids].get(out_sharding=per_pos_out_sharding)
+                bytes_per_pos = bytes_per_token.at[token_ids].get(
+                    out_sharding=_byte_lookup_sharding(token_ids, per_pos_out_sharding)
+                )
                 bytes_per_label = jnp.sum(
                     bytes_per_pos[:, None, :] * weights_per_aggregate,
                     axis=(0, 2),

@@ -5,6 +5,7 @@ import json
 import logging
 from types import SimpleNamespace
 
+import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
@@ -13,9 +14,11 @@ import pytest
 from haliax import Axis
 from haliax.partitioning import ResourceAxis
 from jax._src import config as jax_config
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.callbacks import ProgressEvent
 from levanter.data.dataset import ListAsyncDataset
+from levanter.data.passthrough_tokenizer import PassthroughTokenizer
 from levanter.data.text.examples import (
     GrugLmExample,
     LabeledLmExample,
@@ -31,6 +34,7 @@ from levanter.eval import (
     LossLabelSpec,
     TaggedEvaluator,
     cb_tagged_evaluate,
+    cb_tagged_lm_evaluate,
 )
 from levanter.models.lm_model import LmExample
 from levanter.tracker import current_tracker
@@ -39,6 +43,94 @@ from levanter.utils.tree_utils import inference_mode
 
 from levanter.testing.helpers import use_test_mesh
 from levanter.testing.toy_lm import ToyLmConfig, ToyLmHeadModel
+
+
+class _TokenLossModel(eqx.Module):
+    Pos: Axis = eqx.field(static=True)
+
+    def compute_next_token_loss(self, example, *, reduction, reduction_axis):
+        del reduction, reduction_axis
+        return hax.named(example.tokens.array.astype(jnp.float32), example.tokens.axes)
+
+
+def test_default_tagged_lm_eval_context_sharding_matches_unsharded(caplog):
+    if len(jax.devices()) < 2:
+        pytest.skip("requires two devices for context sharding")
+
+    model = _TokenLossModel(Axis("position", 8))
+    tokens = jnp.array([1, 10, 2, 11, 3, 12, 4, 13], dtype=jnp.int32)
+    dataset = ListAsyncDataset([LmExample.causal(hax.named(tokens, Axis("position", 8)))])
+    tokenizer = PassthroughTokenizer(32)
+    mesh_devices = np.asarray(jax.devices()[:2]).reshape(1, 2)
+    reference_mesh = Mesh(mesh_devices, ("data", "context"))
+    context_mesh = Mesh(mesh_devices, ("data", "context"), axis_types=(AxisType.Auto, AxisType.Explicit))
+    tracker_name = "test.context_sharded_tagged_eval"
+    tracker = JsonLoggerConfig(logger_name=tracker_name).init(run_id=None)
+    step = SimpleNamespace(
+        step=0,
+        model=model,
+        eval_model=model,
+        state=SimpleNamespace(model_averaging=None),
+        emit_event=lambda event: None,
+    )
+    caplog.set_level(logging.INFO, logger=tracker_name)
+
+    with current_tracker(tracker):
+        for mesh, mapping in (
+            (reference_mesh, {"batch": "data", "position": None}),
+            (context_mesh, {"batch": "data", "position": "context"}),
+        ):
+            with use_test_mesh(mesh=mesh):
+                callback = cb_tagged_lm_evaluate(
+                    EvalBatch=Axis("batch", 1),
+                    tagged_eval_sets=[(dataset, ["eval"])],
+                    tokenizer=tokenizer,
+                    device_mesh=mesh,
+                    axis_mapping=mapping,
+                    eval_ema=False,
+                )
+                callback(step)
+
+    metrics = [
+        json.loads(record.message)["metrics"]
+        for record in caplog.records
+        if record.name == tracker_name and json.loads(record.message).get("event") == "log"
+    ]
+    assert len(metrics) == 2
+    np.testing.assert_allclose(metrics[1]["eval/loss"], metrics[0]["eval/loss"], rtol=1e-5)
+    np.testing.assert_allclose(metrics[1]["eval/bpb"], metrics[0]["eval/bpb"], rtol=1e-5)
+
+
+def test_default_labeled_lm_eval_context_sharding_shifts_token_ids():
+    if len(jax.devices()) < 2:
+        pytest.skip("requires two devices for context sharding")
+
+    model = _TokenLossModel(Axis("position", 8))
+    tokens = jnp.array([1, 10, 2, 11, 3, 12, 4, 13], dtype=jnp.int32)
+    labels = jnp.array([1, 1, 2, 2, 1, 2, 1, 0], dtype=jnp.int32)
+    dataset = ListAsyncDataset([LabeledLmExample(tokens=tokens, loss_labels=labels)])
+    label_spec = LossLabelSpec(id_to_name={0: "ignore", 1: "first", 2: "second"})
+    mesh_devices = np.asarray(jax.devices()[:2]).reshape(1, 2)
+    context_mesh = Mesh(mesh_devices, ("data", "context"), axis_types=(AxisType.Auto, AxisType.Explicit))
+    sharding = NamedSharding(context_mesh, P(None, "context"))
+    sharded_batch = LabeledLmExample(
+        tokens=jax.device_put(tokens[None, :], sharding),
+        loss_labels=jax.device_put(labels[None, :], sharding),
+    )
+
+    with use_test_mesh(mesh=context_mesh):
+        evaluator = LabeledEvaluator.for_labeled_examples(
+            EvalBatch=Axis("batch", 1),
+            eval_set=dataset,
+            label_spec=label_spec,
+            device_mesh=context_mesh,
+            axis_mapping={"batch": "data", "position": "context"},
+        )
+        losses, actual_labels, shifted_ids = jax.jit(lambda batch: evaluator.loss_fn(model, batch))(sharded_batch)
+
+    np.testing.assert_array_equal(shifted_ids, np.roll(np.asarray(tokens)[None, :], -1, axis=-1))
+    np.testing.assert_array_equal(losses, np.asarray(tokens)[None, :])
+    np.testing.assert_array_equal(actual_labels, np.asarray(labels)[None, :])
 
 
 @pytest.mark.asyncio
