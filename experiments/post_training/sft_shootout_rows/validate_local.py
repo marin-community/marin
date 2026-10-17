@@ -150,6 +150,10 @@ def main() -> None:
     work.mkdir(parents=True)
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir)
     pool_rows = [json.loads(line) for line in Path(args.pool).read_text().splitlines()]
+    for family in ("tmax", "swesmith"):
+        pool_rows.append(
+            {"task_id": f"test-library-{family}", "family": family, "heldout": False, "import_names": ["demopkg"]}
+        )
     for pair in args.add_to_pool:
         task, family = pair.split(":")
         pool_rows.append({"task_id": task, "family": family, "heldout": False})
@@ -188,7 +192,25 @@ def main() -> None:
         )
         touching.append(synthetic)
     (work / "toolenv.jsonl").write_text("".join(json.dumps(trace) + "\n" for trace in touching))
-    plain_inputs = [*args.traces, str(work / "summarized.jsonl"), str(work / "toolenv.jsonl")]
+    library = []
+    for trace in traces:
+        synthetic = copy.deepcopy(trace) | {
+            "trial_id": trace["trial_id"] + "-library",
+            "task_id": f"test-library-{trace['family']}",
+        }
+        observations = [m for m in synthetic["messages"][1:] if m["role"] in ("tool", "user")]
+        observations[0]["content"] = (
+            "/opt/miniconda3/envs/testbed/lib/python3.10/site-packages/setuptools/_vendor/demopkg/core.py\n"
+            + (observations[0].get("content") or "")
+        )
+        library.append(synthetic)
+    (work / "library.jsonl").write_text("".join(json.dumps(trace) + "\n" for trace in library))
+    plain_inputs = [
+        *args.traces,
+        str(work / "summarized.jsonl"),
+        str(work / "toolenv.jsonl"),
+        str(work / "library.jsonl"),
+    ]
     heldout_by_family = {}
     for row in pool_rows:
         if row["heldout"]:
@@ -234,6 +256,8 @@ def main() -> None:
     reports = [check_arm(tokenizer, plain, by_id, heldout)]
     assert reports[0]["dropped"].get("summarized_trial") == len(summarized), "summarized trials were not dropped"
     assert reports[0]["dropped"].get("touches_agent_tool_env") == len(touching), "tool-env traces were not dropped"
+    library_drops = reports[0]["dropped"].get("touches_library_copy_of_repo", 0)
+    assert library_drops == len(library), "library-copy traces were not dropped"
     reports.append(check_arm(tokenizer, build("rs-multi", plain_inputs, plain), by_id, heldout))
     reports.append(check_arm(tokenizer, build("relay", [str(work / "relay.jsonl")], plain), by_id, heldout))
     validation = build("validation", [*plain_inputs, str(work / "heldout.jsonl")])

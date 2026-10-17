@@ -60,6 +60,19 @@ EPOCHS = 3
 # mini-swe-agent's own tool environment, installed in the sandbox at agent setup, holds clean copies of some repos
 # (pool v3 removes those repos); a trace that reads anything there is dropped. Pattern from #207 (chukar): path reads,
 # find/grep listings, 'uv tool dir|list|run' and the tool's own bin/lib all leave one of these strings.
+# Defense in depth for the same leak class: a library location (site-packages, dist-packages, a vendored copy, conda's
+# package cache, the Go module cache) followed by a path component named after the task repo's import name, e.g.
+# .../site-packages/setuptools/_vendor/typeguard/_checkers.py. Pool rows carry the repo's import names.
+LIBRARY_LOCATION = r"(?:site-packages|dist-packages|_vendor|/opt/miniconda3/pkgs|/go/pkg/mod)/(?:[^\s\"'<>]*/)?"
+
+
+def library_copy_pattern(import_names: list[str]) -> re.Pattern | None:
+    if not import_names:
+        return None
+    names = "|".join(re.escape(name) for name in import_names)
+    return re.compile(LIBRARY_LOCATION + rf"(?:{names})(?:/|\.py\b|-[0-9]|@)")
+
+
 AGENT_TOOL_ENV = re.compile(r"(?:\.local/share/uv/tools|uv\s+tool\s+(?:dir|list|run)|mini-swe-agent/(?:bin|lib)/)")
 
 
@@ -101,6 +114,10 @@ def candidates(arm: str, traces: list[dict], pool: dict[str, dict], tokenizer) -
             reason = "not_passed"
         elif AGENT_TOOL_ENV.search(json.dumps(trace["messages"])):
             reason = "touches_agent_tool_env"
+        elif (pattern := library_copy_pattern(task.get("import_names") or [])) and pattern.search(
+            json.dumps(trace["messages"])
+        ):
+            reason = "touches_library_copy_of_repo"
         if reason is None:
             authors = [m.get("author") for m in trace["messages"] if m["role"] == "assistant"]
             if TEACHER not in authors:
@@ -354,6 +371,9 @@ def main() -> None:
                     for family in sorted({d["family"] for d in dropped if d["family"]})
                 },
                 # One count per summarized trial (each contributes one dropped row per conversation).
+                "library_copy_drops_by_task": dict(
+                    collections.Counter(d["task_id"] for d in dropped if d["reason"] == "touches_library_copy_of_repo")
+                ),
                 "agent_tool_env_drops_by_task": dict(
                     collections.Counter(d["task_id"] for d in dropped if d["reason"] == "touches_agent_tool_env")
                 ),
