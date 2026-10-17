@@ -55,10 +55,12 @@ TIER3_SCALE = PipelineScale(
     ),
     fuzzy=FuzzyClusterConfig(
         text=ClusterTextParams(output_shards=1024),
-        worker=ResourceConfig(cpu=16, ram="128g", disk="64g"),
+        # 8 tasks per worker. At 16 tasks, cluster text peaked at 66 GiB and verify at
+        # 26 GiB. A 16-CPU/128g worker fits once per v5e host, and verify waited 3h46m.
+        worker=ResourceConfig(cpu=8, ram="64g", disk="32g"),
         map_task=ResourceConfig(cpu=1, ram="8g", disk="8g"),
         reduce_task=ResourceConfig(cpu=1, ram="8g", disk="8g"),
-        max_workers=32,
+        max_workers=64,
     ),
     store=StoreConfig(task_count=256, worker=ResourceConfig(cpu=2, ram="16g", disk="32g")),
     dedup_max_parallelism=1024,
