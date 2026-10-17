@@ -67,7 +67,9 @@ REPLAY_ORDER_SEED = f"{SEED}:replay-order"
 REPLAY_CONTINGENCY = (
     "if plain's B exceeds 4x the slice's supervised tokens, extend the slice with a seeded continuation of the same "
     "#202 sampler (same partitions, same quotas, next rows in order) as a new artifact version; keep R = round(B / 4), "
-    "never relax it"
+    "never relax it. Pre-built (task #217): s3://marin-us-east-02a/marin/teacher-traces/mopd2/"
+    "task217-replay-continuation-v2-20261017, manifest sha256 32e6e20b30498eb6ae01a167d890e6ab84f573a0e7a6668c8f30c268e9d3fff4, "
+    "10,355,114 supervised tokens (B up to 41.4M); the frozen rows come first, so cuts below the old total are unchanged"
 )
 LAUNCH_RULE = (
     "plain's manifest (B) and the replay cut are frozen before any arm launches; any later change to either is a new "
@@ -96,6 +98,7 @@ CHANGELOG = (
     "095f31382d eligibility counts only the arm's own run type (the relay denominator had included plain runs)",
     "45b4478e04 pool v5 pin (frozen pool; drops 11 tasks with broken or hanging verifiers)",
     "d43ab0af02 replay cut at R = round(B / 4) with plain's B; same rows in every arm (hash-checked)",
+    "65b0b9d36b continuation slices (base_rows): frozen rows keep their order, continuation rows follow",
 )
 # mini-swe-agent's own tool environment, installed in the sandbox at agent setup, holds clean copies of some repos
 # (pool v3 removes those repos); a trace that reads anything there is dropped. Pattern from #207 (chukar): path reads,
