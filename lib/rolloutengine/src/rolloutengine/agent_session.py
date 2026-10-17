@@ -11,7 +11,14 @@ from typing import Any, Protocol
 
 from taskcompendium.grading_result import GradeResult
 
-from rolloutengine.contracts import ModelTurn, RolloutContractError, SessionStart, TaskGrader, Transition
+from rolloutengine.contracts import (
+    ModelTurn,
+    ResponseAbandoned,
+    RolloutContractError,
+    SessionStart,
+    TaskGrader,
+    Transition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +98,8 @@ class AgentTaskSession:
     async def advance(self, turn: ModelTurn) -> Transition:
         assert self.pending is not None
         previous = self.pending
+        if previous.response.cancelled():
+            raise ResponseAbandoned("The agent no longer awaits this model response")
         previous.response.set_result(turn)
         self.pending = await self._next_request()
         if self.pending is None:

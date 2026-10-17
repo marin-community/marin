@@ -23,6 +23,7 @@ from rolloutengine.contracts import (
     BUDGET_STOP_REASON,
     LENGTH_STOP_REASON,
     MAX_TURNS_STOP_REASON,
+    RESPONSE_ABANDONED_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
     AttemptEnded,
     AttemptStarted,
@@ -32,6 +33,7 @@ from rolloutengine.contracts import (
     ModelRequest,
     ModelTurn,
     ModelTurnCompleted,
+    ResponseAbandoned,
     RolloutContractError,
     RolloutData,
     RolloutInterrupted,
@@ -321,6 +323,7 @@ class RolloutEngine:
                         tuple(messages),
                     )
                     # Token evidence belongs to the attempt even if a tool operation fails.
+                    delivered = completed
                     completed = RolloutData(
                         task.id,
                         tuple(messages),
@@ -337,6 +340,13 @@ class RolloutEngine:
                     try:
                         async with asyncio.timeout(limits.tool_turn_timeout):
                             transition = await session.advance(turn)
+                    except ResponseAbandoned:
+                        # Grade the work performed before the cancelled request, without
+                        # assigning credit to tokens the agent never received.
+                        completed = delivered
+                        messages = list(delivered.messages)
+                        stop_reason = RESPONSE_ABANDONED_STOP_REASON
+                        break
                     except RolloutContractError:
                         raise
                     except Exception as error:

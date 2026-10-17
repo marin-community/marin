@@ -191,6 +191,52 @@ async def test_external_agent_cleanup_preserves_prior_cancellation():
         await session.close()
 
 
+@pytest.mark.parametrize("delivered_turns", [0, 1])
+async def test_abandoned_agent_response_grades_only_delivered_turns(delivered_turns):
+    pending_request = None
+    received = []
+    abandoned = asyncio.Event()
+    initial = ({"role": "user", "content": "Return 12."},)
+
+    async def agent(complete):
+        nonlocal pending_request
+        messages = initial
+        if delivered_turns:
+            turn = await complete(SessionStart(messages, {}))
+            received.append(turn)
+            messages = (*messages, turn.message)
+        pending_request = asyncio.create_task(complete(SessionStart(messages, {})))
+        try:
+            await pending_request
+        except asyncio.CancelledError:
+            abandoned.set()
+
+    calls = 0
+
+    async def model(request):
+        nonlocal calls
+        calls += 1
+        if calls > delivered_turns:
+            assert pending_request is not None
+            pending_request.cancel()
+            await abandoned.wait()
+        prefix = (10, 11) if calls == 1 else (10, 11, 20)
+        return ModelTurn({"role": "assistant", "content": str(calls)}, prefix, (19 + calls,), (-0.5,), "stop")
+
+    async def grade(messages, *, stop_reason, outputs):
+        assert abandoned.is_set()
+        assert messages == (*initial, *(turn.message for turn in received))
+        assert stop_reason == "response_abandoned"
+        return GradeResult(Outcome.GRADED, 0.5)
+
+    runner = RolloutEngine(model, {}, sessions={"agent": lambda _context: AgentTaskSession(agent, grade)})
+    result = await runner.run(lowered(arithmetic_task(), task_session="agent"))
+    assert result.grade.reward == 0.5
+    assert result.response_token_ids == ((20,) if delivered_turns else ())
+    assert result.loss_mask == ((1,) if delivered_turns else ())
+    assert len(result.steps) == delivered_turns
+
+
 @pytest.mark.parametrize("alter_prefix", [False, True])
 async def test_external_agent_preserves_exact_tokens_after_history_reset(alter_prefix):
     requests = []

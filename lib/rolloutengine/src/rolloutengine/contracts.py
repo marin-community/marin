@@ -19,6 +19,7 @@ LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"
 TOTAL_TURN_TIMEOUT_STOP_REASON = "total_turn_timeout"
 BUDGET_STOP_REASON = "budget_reached"
+RESPONSE_ABANDONED_STOP_REASON = "response_abandoned"
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,10 @@ class GenerationLimitReached(Exception):
     def __init__(self, prompt_token_ids: tuple[int, ...]):
         self.prompt_token_ids = prompt_token_ids
         super().__init__("The prompt reached the configured generation limit")
+
+
+class ResponseAbandoned(Exception):
+    """The agent cancelled its request before receiving the generated response."""
 
 
 @dataclass(frozen=True)
