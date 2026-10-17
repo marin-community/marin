@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12, <3.14"
 resolution-markers = [
     "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-10-marin-root-pipeline' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu' and extra == 'group-10-marin-fray-fray-tpu-test' and extra == 'group-10-marin-iris-dev' and extra == 'group-10-marin-iris-test'",
@@ -6395,7 +6395,7 @@ requires-dist = [
     { name = "marin-levanter", extras = ["serve"], editable = "lib/levanter" },
     { name = "marin-rigging", extras = ["prometheus"], editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
-    { name = "marinskyrl-recipe", git = "https://github.com/marin-community/MarinSkyRL.git?subdirectory=packages%2Fmarinskyrl-recipe&rev=bb3fd7b4000b563bcd5b463bade7c43d41233ddd" },
+    { name = "marinskyrl-recipe", git = "https://github.com/marin-community/MarinSkyRL.git?subdirectory=packages%2Fmarinskyrl-recipe&rev=37cdc0b604fd4c60a8261798da3061b08a99bb84" },
     { name = "markdownify", specifier = ">=0.14.1" },
     { name = "mcp", specifier = ">=2" },
     { name = "msgspec", specifier = ">=0.18.0" },
@@ -7876,7 +7876,7 @@ test = [
 [[package]]
 name = "marinskyrl-recipe"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?subdirectory=packages%2Fmarinskyrl-recipe&rev=bb3fd7b4000b563bcd5b463bade7c43d41233ddd#bb3fd7b4000b563bcd5b463bade7c43d41233ddd" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?subdirectory=packages%2Fmarinskyrl-recipe&rev=37cdc0b604fd4c60a8261798da3061b08a99bb84#37cdc0b604fd4c60a8261798da3061b08a99bb84" }
 dependencies = [
     { name = "pydantic" },
 ]
