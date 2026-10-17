@@ -119,6 +119,8 @@ def wants_gpu_extra(extras: Sequence[str]) -> bool:
 _LIBDEVICE_FILE = "libdevice.10.bc"
 # XLA's built-in default --xla_gpu_cuda_data_dir, resolved relative to the workdir.
 _XLA_CUDA_DATA_DIR = "cuda_sdk_lib"
+# The wheel that owns ptxas and nvlink in the CUDA 13 JAX environment.
+CUDA_TOOLCHAIN_PACKAGE = "nvidia-cuda-nvcc"
 # These are the only CUDA 12/13 distributions in the resolved GPU environment
 # that both install files under the same nvidia namespace.  Reinstalling them
 # last makes the requested CUDA 13 wheel own its shared-library paths again.
@@ -132,16 +134,14 @@ def cuda_toolchain_setup_script() -> str:
     CUDA 13 shared libraries after mixed CUDA package installs. It restores CUDA 13
     cuDNN and NCCL precedence when those packages are installed, puts the
     ``jax[cuda13]`` toolchain (``ptxas``/``nvlink``) on ``PATH``, and stages
-    ``libdevice.10.bc`` where XLA looks. Staging is a no-op when the venv carries
-    no ``ptxas``, and the script fails when ``ptxas`` is present but not executable.
+    ``libdevice.10.bc`` where XLA looks. It repairs an installed toolchain wheel
+    when its files are missing. Staging is a no-op when the venv has no toolchain,
+    and the script fails when ``ptxas`` is present but not executable.
     """
     cuda_13_library_packages = " ".join(CUDA_13_LIBRARY_PACKAGES)
     return rf"""set -e
-for _cuda13_package in {cuda_13_library_packages}; do
-  _cuda13_version=""
-  if [ -x "$IRIS_VENV/bin/python" ]; then
-    _cuda13_version="$(
-      "$IRIS_VENV/bin/python" - "$_cuda13_package" <<'PY'
+installed_package_version() {{
+  "$IRIS_VENV/bin/python" - "$1" <<'PY'
 import importlib.metadata as md
 import sys
 
@@ -150,7 +150,11 @@ try:
 except md.PackageNotFoundError:
     pass
 PY
-    )"
+}}
+for _cuda13_package in {cuda_13_library_packages}; do
+  _cuda13_version=""
+  if [ -x "$IRIS_VENV/bin/python" ]; then
+    _cuda13_version="$(installed_package_version "$_cuda13_package")"
   fi
   if [ -n "$_cuda13_version" ]; then
     echo "restoring CUDA 13 library precedence for $_cuda13_package"
@@ -160,10 +164,28 @@ PY
       "$_cuda13_package==$_cuda13_version"
   fi
 done
-cuda_bin=""
-for _d in "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin; do
-  if [ -f "$_d/ptxas" ]; then cuda_bin="$_d"; break; fi
-done
+find_cuda_bin() {{
+  for _d in "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin; do
+    if [ -f "$_d/ptxas" ]; then echo "$_d"; return; fi
+  done
+}}
+cuda_bin="$(find_cuda_bin)"
+if [ -z "$cuda_bin" ] && [ -x "$IRIS_VENV/bin/python" ]; then
+  _toolchain_version="$(installed_package_version "{CUDA_TOOLCHAIN_PACKAGE}")"
+  if [ -n "$_toolchain_version" ]; then
+    echo 'repairing missing CUDA toolchain files'
+    uv pip install --python "$IRIS_VENV/bin/python" \
+      --no-cache \
+      {_UV_LINK_MODE_FLAG} \
+      --reinstall-package "{CUDA_TOOLCHAIN_PACKAGE}" \
+      "{CUDA_TOOLCHAIN_PACKAGE}==$_toolchain_version"
+    cuda_bin="$(find_cuda_bin)"
+    if [ -z "$cuda_bin" ]; then
+      echo 'CUDA toolchain repair did not restore ptxas' >&2
+      exit 1
+    fi
+  fi
+fi
 if [ -z "$cuda_bin" ]; then echo 'no CUDA toolchain to stage'; exit 0; fi
 if [ ! -x "$cuda_bin/ptxas" ]; then
   echo "$cuda_bin/ptxas is not executable; the venv install lost file modes" >&2

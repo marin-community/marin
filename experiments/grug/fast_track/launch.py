@@ -3,10 +3,11 @@
 
 """H100 dense-vs-MoE scaling ladder for the 16k-vocab BPE tokenizer study.
 
-Rungs d512 / d768 / d1024 / d1280 map the model, data, and optimizer onto Hopper nodes and train on
-the in-region 16k BPE flat cache. Each variant (dense / MoE) has a baseline recipe; a run either
-data-matches or compute-matches it (``--match``, default data), or sets ``--batch-size`` /
-``--num-steps`` explicitly. See README.md for the results table and launch commands.
+Rungs d512 / d768 / d1024 / d1280 map the model, data, and optimizer onto Hopper nodes. This command
+trains on the in-region 16k BPE flat cache. The quality track supplies its own ``TrainingSource``.
+Each variant (dense / MoE) has a baseline recipe. A run data-matches or compute-matches it
+(``--match``, default data), or sets ``--batch-size`` / ``--num-steps`` explicitly.
+See README.md for launch commands.
 """
 
 import dataclasses
@@ -14,8 +15,10 @@ import math
 import os
 import shlex
 import sys
+from collections.abc import Callable, Sequence
 from datetime import timedelta
 from enum import StrEnum
+from typing import NoReturn, Protocol
 
 import click
 import jmp
@@ -33,12 +36,18 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
+from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
+from experiments.grug.fast_track.contracts import (
+    FrozenBaselineComponent,
+    FrozenBaselineManifest,
+    ResolvedTrainingBudget,
+)
 from experiments.grug.fast_track.heuristic import MoeHeuristic
 from experiments.grug.fast_track.model import GrugModelConfig
 from experiments.grug.fast_track.train import (
@@ -112,6 +121,10 @@ V16384_VOCAB = 16384
 PALOMA_DETOK_VERSION = "2026.09.17"
 # In-process read cache for the tensorstore data loader. 1 GB is ample for the flat cache.
 TENSORSTORE_CACHE_BYTES = 1_000_000_000
+FROZEN_BASELINE = FrozenBaselineManifest(
+    tokenizer=V16384_TOKENIZER,
+    components=(FrozenBaselineComponent(name="train", cache_dir=V16384_CACHE_DIR, weight=1.0),),
+)
 
 # Model geometry shared across rungs.
 SEQ_LEN = 4096
@@ -212,42 +225,122 @@ def _active_params(cfg: GrugModelConfig) -> int:
     return cfg.num_layers * (attn + router + routed + latent_proj + shared)
 
 
-def _flat_cache_data_config(
-    *,
-    ctx: StepContext,
-    validation,
-    tokenizer: str,
-    train_cache_dir: str,
-) -> LmDataConfig:
-    """Straight-through single-source training on one pre-built flat cache (tokenizer-ablation runs).
+class TrainingSource(Protocol):
+    """Build the training data and list its artifact dependencies."""
 
-    Mirrors the Harrier config's validation wiring, but trains on a single pre-tokenized cache at
-    constant weight -- no mixture phases, no simulated epoching. ``validation`` sets are folded in as
-    zero-weight components (built as executor deps, tokenized with the same ``tokenizer``).
-    """
-    components = {
-        "train": DatasetComponent(
-            source=None,
-            cache_dir=train_cache_dir,
-            format=TextLmDatasetFormat(),
-            tags=["train"],
-            flat_cache=True,
+    def dependencies(self) -> tuple[ArtifactStep, ...]: ...
+
+    def data_config(
+        self,
+        *,
+        ctx: StepContext,
+        validation: Sequence[ArtifactStep[TokenizedCache]],
+        tokenizer: str,
+        budget: ResolvedTrainingBudget,
+    ) -> LmDataConfig: ...
+
+
+@dataclasses.dataclass(frozen=True)
+class FlatCacheTrainingSource:
+    """Train on a fixed mixture of prebuilt flat caches."""
+
+    manifest: FrozenBaselineManifest = FROZEN_BASELINE
+
+    def dependencies(self) -> tuple[ArtifactStep, ...]:
+        return ()
+
+    def data_config(
+        self,
+        *,
+        ctx: StepContext,
+        validation: Sequence[ArtifactStep[TokenizedCache]],
+        tokenizer: str,
+        budget: ResolvedTrainingBudget,
+    ) -> LmDataConfig:
+        if tokenizer != self.manifest.tokenizer:
+            raise ValueError(f"baseline tokenizer {self.manifest.tokenizer!r} does not match requested {tokenizer!r}")
+        components = {
+            component.name: DatasetComponent(
+                source=None,
+                cache_dir=component.cache_dir,
+                format=TextLmDatasetFormat(),
+                tags=[component.name],
+                flat_cache=True,
+            )
+            for component in self.manifest.components
+        }
+        if ctx.is_fingerprint:
+            val_components = {item.name: _val_component(ctx.artifact_path(item)) for item in validation}
+        else:
+            val_components = {item.name: ctx.resolved(item).as_component() for item in validation}
+        collisions = components.keys() & val_components.keys()
+        if collisions:
+            raise ValueError(f"validation components collide with training components: {sorted(collisions)}")
+        return LmDataConfig(
+            tokenizer=tokenizer,
+            cache_dir=None,
+            components={**components, **val_components},
+            train_weights={component.name: component.weight for component in self.manifest.components}
+            | {name: 0.0 for name in val_components},
+            auto_build_caches=False,
         )
-    }
-    if ctx.is_fingerprint:
-        val_components = {item.name: _val_component(ctx.artifact_path(item)) for item in validation}
+
+
+def resolve_h100_ladder_budget(
+    *,
+    size: str,
+    dense: bool,
+    match: MatchMode,
+    num_steps: int | None,
+    batch_size: int | None,
+    model: GrugModelConfig | None = None,
+) -> ResolvedTrainingBudget:
+    """Resolve the ladder budget, pricing the named baseline when no candidate model is supplied."""
+    rung = _h100_ladder_rung(size)
+    if (size, dense) not in _BASELINE_ACTIVE_PARAMS:
+        raise ValueError(f"No baseline budget recorded for (size={size!r}, dense={dense})")
+    # Keep the recorded baseline active-parameter count fixed so a candidate model cannot move its reference.
+    baseline_active = _BASELINE_ACTIVE_PARAMS[(size, dense)]
+    baseline_tpp = DENSE_TPP if dense else MOE_TPP
+    baseline_steps = max(1, round(baseline_tpp * baseline_active / (rung.baseline_batch * SEQ_LEN)))
+    baseline_tokens = rung.baseline_batch * baseline_steps * SEQ_LEN
+    # Use the recorded FLOPs per example so compute-match holds the reference run's true total FLOPs.
+    baseline_flops = _BASELINE_FLOPS_PER_EXAMPLE[(size, dense)] * baseline_steps * rung.baseline_batch
+
+    resolved_batch_size = batch_size if batch_size is not None else rung.baseline_batch
+    if resolved_batch_size <= 0 or resolved_batch_size % rung.global_device_count != 0:
+        raise ValueError(
+            f"batch_size must be positive and divisible by {rung.global_device_count}, got {resolved_batch_size}"
+        )
+    if num_steps is None:
+        if match is MatchMode.DATA:
+            # Data-match keeps the fixed baseline token count.
+            resolved_steps = max(1, round(baseline_tokens / (resolved_batch_size * SEQ_LEN)))
+        else:
+            # Compute-match prices the candidate model against the fixed baseline FLOPs.
+            candidate_model = model if model is not None else _h100_ladder_model(rung, dense=dense)
+            candidate_flops_per_example, _ = _compute_flops(model_config=candidate_model)
+            resolved_steps = max(1, round(baseline_flops / (candidate_flops_per_example * resolved_batch_size)))
+    elif num_steps <= 0:
+        raise ValueError(f"--num-steps must be positive, got {num_steps}")
     else:
-        val_components = {item.name: ctx.resolved(item).as_component() for item in validation}
-    collisions = components.keys() & val_components.keys()
-    if collisions:
-        raise ValueError(f"validation components collide with the training component: {sorted(collisions)}")
-    train_weights = {"train": 1.0, **{name: 0.0 for name in val_components}}
-    return LmDataConfig(
-        tokenizer=tokenizer,
-        cache_dir=None,
-        components={**components, **val_components},
-        train_weights=train_weights,
-        auto_build_caches=False,
+        resolved_steps = num_steps
+
+    return ResolvedTrainingBudget(
+        batch_size=resolved_batch_size,
+        num_steps=resolved_steps,
+        sequence_length=SEQ_LEN,
+    )
+
+
+def maximum_h100_ladder_tokens() -> int:
+    """Return the largest default data-match budget across the training ladder."""
+    return max(
+        resolve_h100_ladder_budget(
+            size=size, dense=dense, match=MatchMode.DATA, num_steps=None, batch_size=None
+        ).token_count
+        for size in H100_LADDER_SIZES
+        for dense in (False, True)
     )
 
 
@@ -261,11 +354,13 @@ def build_h100_ladder_run(
     wandb_project: str = DEFAULT_WANDB_PROJECT,
     version: str | None = None,
     tokenizer: str = V16384_TOKENIZER,
-    train_cache_dir: str = V16384_CACHE_DIR,
+    training_source: TrainingSource = FlatCacheTrainingSource(),
     vocab_size: int = V16384_VOCAB,
     no_eval: bool = False,
     dense: bool = False,
     save_checkpoints: bool = False,
+    seed: int = 0,
+    data_seed: int | None = None,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -290,33 +385,16 @@ def build_h100_ladder_run(
             f"global_device_count ({rung.global_device_count})"
         )
 
-    # Baseline: the recorded dense/MoE baseline for this size (DENSE_TPP/MOE_TPP at the rung's baseline
-    # batch). baseline_active is a FIXED reference (not the candidate's), so an architecture change moves
-    # the candidate's FLOPs/token but never the budget it is compared against.
-    if (size, dense) not in _BASELINE_ACTIVE_PARAMS:
-        raise ValueError(f"No baseline budget recorded for (size={size!r}, dense={dense})")
-    baseline_active = _BASELINE_ACTIVE_PARAMS[(size, dense)]
-    baseline_tpp = DENSE_TPP if dense else MOE_TPP
-    baseline_steps = max(1, round(baseline_tpp * baseline_active / (rung.baseline_batch * SEQ_LEN)))
-    baseline_tokens = rung.baseline_batch * baseline_steps * SEQ_LEN
-    # Baseline's true total training FLOPs (fixed): flops/example * examples, at the baseline batch.
-    baseline_flops = _BASELINE_FLOPS_PER_EXAMPLE[(size, dense)] * baseline_steps * rung.baseline_batch
-
-    batch_size = batch_size if batch_size is not None else rung.baseline_batch
-    if batch_size <= 0 or batch_size % rung.global_device_count != 0:
-        raise ValueError(f"batch_size must be positive and divisible by {rung.global_device_count}, got {batch_size}")
-    if num_steps is None:
-        if match is MatchMode.DATA:
-            # DATA holds the baseline's token budget.
-            num_steps = max(1, round(baseline_tokens / (batch_size * SEQ_LEN)))
-        else:
-            # COMPUTE holds the baseline's *true* training FLOPs, derived from the candidate's own
-            # flops/example (the trainer's `_compute_flops`, which counts the lm_head and attention that
-            # `_active_params` omits) -- so an architecture change never buys or loses compute.
-            candidate_flops_per_example, _ = _compute_flops(model_config=model)
-            num_steps = max(1, round(baseline_flops / (candidate_flops_per_example * batch_size)))
-    elif num_steps <= 0:
-        raise ValueError(f"--num-steps must be positive, got {num_steps}")
+    resolved_budget = resolve_h100_ladder_budget(
+        size=size,
+        dense=dense,
+        match=match,
+        num_steps=num_steps,
+        batch_size=batch_size,
+        model=model,
+    )
+    batch_size = resolved_budget.batch_size
+    num_steps = resolved_budget.num_steps
 
     # Eval at the midpoint and end; no_eval disables it entirely below (the forced final callback would
     # otherwise still run a full eval, so pushing the interval past the end is not enough).
@@ -328,7 +406,7 @@ def build_h100_ladder_run(
         seq_len=SEQ_LEN,
     )
     grug_trainer = GrugTrainerConfig(
-        data_seed=None,
+        data_seed=data_seed,
         log_every=1,
         z_loss_weight=1e-4,
         watch_mode=WatchMode.INLINE,
@@ -359,7 +437,7 @@ def build_h100_ladder_run(
         temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
         trainer = TrainerConfig(
             id=run_id,
-            seed=0,
+            seed=seed,
             train_batch_size=batch_size,
             num_train_steps=num_steps,
             jax_config=dict(DEFAULT_JAX_CONFIG),
@@ -396,8 +474,11 @@ def build_h100_ladder_run(
                 keep_last_temporary_checkpoints=1,
             ),
         )
-        data = _flat_cache_data_config(
-            ctx=ctx, validation=validation, tokenizer=tokenizer, train_cache_dir=train_cache_dir
+        data = training_source.data_config(
+            ctx=ctx,
+            validation=validation,
+            tokenizer=tokenizer,
+            budget=resolved_budget,
         )
         return GrugRunConfig(
             model=model,
@@ -429,7 +510,7 @@ def build_h100_ladder_run(
         artifact_type=ThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(*validation,),
+        deps=(*training_source.dependencies(), *validation),
         runtime_args={"train_resources": train_resources},
     )
 
@@ -437,16 +518,36 @@ def build_h100_ladder_run(
 _WANDB_PROJECT = "marin_moe"
 
 
-def _submit_to_cluster(run_id: str, target_cluster: str | None) -> None:
-    """Re-exec this launcher as an Iris H100 job: wrap the same launcher args in ``iris job run ... --
-    python -m ...launch <args> --run``. Replaces the old ``irun`` shell wrapper. Never returns."""
+def seed_options[F: Callable[..., object]](command: F) -> F:
+    """Add the model initialization and training data order seed options."""
+    command = click.option(
+        "--data-seed",
+        type=click.IntRange(min=0),
+        default=None,
+        help="Training data order seed. Omit to derive it from --seed.",
+    )(command)
+    return click.option(
+        "--seed", type=click.IntRange(min=0), default=0, show_default=True, help="Model initialization seed."
+    )(command)
+
+
+def rung_options[F: Callable[..., object]](command: F) -> F:
+    """Add the ladder rung width and the dense or MoE model options."""
+    command = click.option("--dense/--moe", default=False, show_default=True, help="Select the dense or MoE model.")(
+        command
+    )
+    return click.option("--size", type=click.Choice(H100_LADDER_SIZES), default="d512", show_default=True)(command)
+
+
+def _submit_to_cluster(run_id: str, *, target_cluster: str) -> NoReturn:
+    """Run the current command in an Iris coordinator job."""
     launch_args = [a for a in sys.argv[1:] if a != "--submit"]
     if "--run" not in launch_args:
         launch_args.append("--run")
     wandb_key = os.environ.get("WANDB_API_KEY")
-    if not wandb_key:
-        raise click.ClickException("WANDB_API_KEY must be set in the environment to submit a cluster run.")
-    placement_args = ["--target-cluster", target_cluster] if target_cluster else ["--reserve", "H100"]
+    wandb_mode = os.environ.get("WANDB_MODE")
+    if not wandb_key and wandb_mode != "disabled":
+        raise click.ClickException("Set WANDB_API_KEY, or set WANDB_MODE=disabled for an untracked run.")
     cmd = [
         "uv",
         "run",
@@ -457,24 +558,19 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None) -> None:
         "run",
         "--no-wait",
         "--enable-extra-resources",
-        *placement_args,
+        "--target-cluster",
+        target_cluster,
         "--priority",
         "interactive",
         "--job-name",
         f"{run_id}-coord",
-        "-e",
-        "WANDB_API_KEY",
-        wandb_key,
-        "-e",
-        "WANDB_PROJECT",
-        _WANDB_PROJECT,
-        "--",
-        "python",
-        "-m",
-        "experiments.grug.fast_track.launch",
-        *launch_args,
     ]
-    printable = " ".join(shlex.quote("$WANDB_API_KEY" if c == wandb_key else c) for c in cmd)
+    if wandb_key:
+        cmd.extend(["-e", "WANDB_API_KEY", wandb_key, "-e", "WANDB_PROJECT", _WANDB_PROJECT])
+    if wandb_mode:
+        cmd.extend(["-e", "WANDB_MODE", wandb_mode])
+    cmd.extend(["--", "python", "-m", "experiments.grug.fast_track.launch", *launch_args])
+    printable = " ".join(shlex.quote("$WANDB_API_KEY" if wandb_key and c == wandb_key else c) for c in cmd)
     click.echo(f"submitting: {printable}", err=True)
     os.execvp(cmd[0], cmd)
 
@@ -502,6 +598,7 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None) -> None:
     help="Override the step budget directly (else derived from --match).",
 )
 @click.option("--no-eval", is_flag=True, help="Disable in-run eval (clean MFU probes).")
+@seed_options
 @click.option("--dense", is_flag=True, help="Dense baseline: 3x hidden SwiGLU per block, no MoE.")
 @click.option(
     "--save-checkpoints",
@@ -517,8 +614,9 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None) -> None:
 )
 @click.option(
     "--target-cluster",
-    default=None,
-    help="Pin the submitted job to this Iris cluster. Omit to let Iris select an H100 cluster.",
+    default="cw-us-east-02a",
+    show_default=True,
+    help="Iris cluster for the submitted job. The data paths stay on marin-us-east-02a.",
 )
 @build_options
 def main(
@@ -528,13 +626,16 @@ def main(
     batch_size: int | None,
     num_steps: int | None,
     no_eval: bool,
+    seed: int,
+    data_seed: int | None,
     dense: bool,
     save_checkpoints: bool,
     submit: bool,
-    target_cluster: str | None,
+    target_cluster: str,
 ) -> ArtifactStep[ThroughputResult]:
     if submit:
-        _submit_to_cluster(run_id, target_cluster)  # re-execs iris; never returns
+        _submit_to_cluster(run_id, target_cluster=target_cluster)
+
     return build_h100_ladder_run(
         run_id=run_id,
         size=size,
@@ -544,6 +645,8 @@ def main(
         no_eval=no_eval,
         dense=dense,
         save_checkpoints=save_checkpoints,
+        seed=seed,
+        data_seed=data_seed,
     )
 
 
