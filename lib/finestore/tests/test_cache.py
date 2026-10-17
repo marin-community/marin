@@ -365,13 +365,14 @@ def test_blob_lookup_avoids_remote_readahead_of_unmatched_row_groups(tmp_path, m
 def test_compaction_buffers_compressed_file_reads(tmp_path, monkeypatch):
     root = str(tmp_path / "archive")
     row_bytes = 1024 * 1024
+    rows_per_flush = 9
     monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", row_bytes // 2)
     with DataStore.open(root, flush_interval=3600, max_buffer_bytes=2**40, compaction_levels=(1000,)) as store:
         table = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
         expected = {}
         for revision in range(2):
-            for index in range(4):
-                doc = random.Random(1729 + revision * 4 + index).randbytes(row_bytes)
+            for index in range(rows_per_flush):
+                doc = random.Random(1729 + revision * rows_per_flush + index).randbytes(row_bytes)
                 table.append({"id": index, "revision": revision, "doc": doc})
                 if revision == 1:
                     expected[index] = doc
@@ -381,12 +382,13 @@ def test_compaction_buffers_compressed_file_reads(tmp_path, monkeypatch):
         with monkeypatch.context() as patch:
             patch.setattr(factory, "url_to_fs", lambda path: (filesystem, path))
             result = compact_table(root, "samples")
-        assert result.written + result.superseded == 8
+        assert result.written + result.superseded == 2 * rows_per_flush
         assert filesystem.fetched_bytes > 0
+        # Inputs above the whole-file prefetch budget must retain bounded streaming reads.
         assert filesystem.largest_fetch <= 2 * row_bytes
         rows = ReadView(root).iter_rows("samples")
         assert [(row["id"], row["revision"], row["doc"]) for row in rows] == [
-            (index, 1, expected[index]) for index in range(4)
+            (index, 1, expected[index]) for index in range(rows_per_flush)
         ]
 
 

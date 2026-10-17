@@ -162,6 +162,10 @@ class _CachedReadHandler(FSSpecHandler):
         self._sizes = {shard.path: shard.size_bytes for shard in shards}
         self._cache = _ReadRangeCache(filesystem, shards, capacity)
 
+    def prefetch(self, path: str) -> None:
+        """Cache a complete immutable shard for later schema and row reads."""
+        self._cache.read(path, 0, self._sizes[path])
+
     def get_file_info(self, paths: list[str]) -> list[FileInfo]:
         # The pinned manifest already identifies these immutable files and their sizes.
         return [FileInfo(path, FileType.File, size=self._sizes[path]) for path in paths]
