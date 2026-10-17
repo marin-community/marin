@@ -11,8 +11,10 @@ Rows follow task #202: input_ids padded to 32,768 with pad id 128001, loss_weigh
 i + 1, zero-loss padding rows to a multiple of 16, nothing truncated. The replay slice is reused unchanged in every
 arm; its rows are mixed with the arm's rows by a seeded shuffle.
 
-Outputs under --output: train-prebuilt.jsonl.gz (plain, relay) or train-epoch-<e>-prebuilt.jsonl.gz (RS-multi, one
-file per epoch, same row count), train-index.jsonl (row -> source), selection.jsonl (task or slot -> chosen trial),
+Outputs under --output: train-prebuilt.jsonl.gz (plain, relay), train-epoch-<e>-prebuilt.jsonl.gz (RS-multi, one
+file per epoch, same row count) or validation-<family>-prebuilt.jsonl.gz (validation: the shared set for all arms,
+GLM's first passing trace per held-out task, no replay), train-index.jsonl or validation-index.jsonl (row -> source),
+selection.jsonl (task or slot -> chosen trial),
 dropped.jsonl, and manifest.json with per-family supervised and context tokens and file hashes.
 
 Usage:
@@ -79,11 +81,11 @@ def candidates(arm: str, traces: list[dict], pool: dict[str, dict], tokenizer) -
         task = pool.get(trace.get("task_id"))
         if task is None:
             reason = "task_not_in_pool"
-        elif task["heldout"]:
-            reason = "heldout_task"
+        elif task["heldout"] != (arm == "validation"):
+            reason = "heldout_task" if task["heldout"] else "not_heldout"
         elif task["family"] != trace["family"]:
             reason = "family_mismatch"
-        elif trace["relay"] != (arm == "relay"):
+        elif trace["relay"] != (arm == "relay"):  # validation, like plain, uses plain GLM runs
             reason = "relay_run" if trace["relay"] else "plain_run"
         elif trace.get("n_conversations", 1) > 1:
             # Terminus-2 summarized this trial's history: the trial does not fit one 32k row.
@@ -107,7 +109,15 @@ def candidates(arm: str, traces: list[dict], pool: dict[str, dict], tokenizer) -
                 if len(rendered.ids) > CONTEXT:
                     reason = "over_context"
         if reason:
-            dropped.append({"trial_id": trace["trial_id"], "task_id": trace.get("task_id"), "reason": reason})
+            dropped.append(
+                {
+                    "trial_id": trace["trial_id"],
+                    "conversation": trace.get("conversation", 0),
+                    "task_id": trace.get("task_id"),
+                    "family": trace.get("family"),
+                    "reason": reason,
+                }
+            )
             continue
         attempt = Attempt(
             task_id=trace["task_id"],
@@ -191,7 +201,7 @@ def write_split(path: Path, entries: list[tuple[str, dict]], seed: str) -> tuple
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--arm", choices=("plain", "rs-multi", "relay"), required=True)
+    parser.add_argument("--arm", choices=("plain", "rs-multi", "relay", "validation"), required=True)
     parser.add_argument("--traces", nargs="+", required=True)
     parser.add_argument("--pool", required=True, help="pool v2 tasks.jsonl")
     parser.add_argument("--pool-manifest", required=True, help="pool v2 manifest.json (hash-checked)")
@@ -213,7 +223,7 @@ def main() -> None:
         if pool_hash != json.loads(pool_manifest)["file_sha256"]["tasks.jsonl"]:
             raise ValueError("tasks.jsonl does not match the pool manifest")
     plain = json.loads((StoragePath(args.plain) / "manifest.json").read_text()) if args.plain else None
-    if args.arm != "plain" and plain is None:
+    if args.arm in ("rs-multi", "relay") and plain is None:
         raise ValueError("--plain is required for rs-multi and relay")
 
     with tempfile.TemporaryDirectory() as temporary:
@@ -233,6 +243,7 @@ def main() -> None:
         attempts = [attempt for attempt, _, _ in kept.values()]
         replay_lines, replay_index, replay_info = replay_rows(args.replay)
         replay_entries = list(zip(replay_lines, replay_index, strict=True))
+        b_tokens = None
 
         def entry(attempt: Attempt, extra: dict) -> tuple[str, dict]:
             _, rendered, trace = kept[attempt.trial_id]
@@ -284,6 +295,19 @@ def main() -> None:
                 )
                 index += [{"epoch": epoch} | item for item in epoch_index]
             b_tokens = plain["B_supervised_tokens"]
+        elif args.arm == "validation":
+            # One fixed set for every arm: GLM's first passing trace per held-out task, per family, no replay.
+            chosen = first_passing(attempts)
+            selection = [
+                {"task_id": task, "trial_id": a.trial_id, "sample": a.sample} for task, a in sorted(chosen.items())
+            ]
+            index = []
+            for family in sorted({a.family for a in chosen.values()}):
+                rows = [entry(a, {}) for _, a in sorted(chosen.items()) if a.family == family]
+                family_index, splits[f"validation-{family}"] = write_split(
+                    out / f"validation-{family}-prebuilt.jsonl.gz", rows, f"{SEED}:validation:{family}"
+                )
+                index += [{"split": f"validation-{family}"} | item for item in family_index]
         else:
             b_tokens = plain["B_supervised_tokens"]
             chosen_episodes, _ = relay_subsample(attempts, b_tokens)
@@ -291,11 +315,15 @@ def main() -> None:
             rows = [entry(a, {}) for a in chosen_episodes] + replay_entries
             index, splits["train"] = write_split(out / "train-prebuilt.jsonl.gz", rows, f"{SEED}:relay")
 
-        (out / "train-index.jsonl").write_text("".join(json.dumps(item) + "\n" for item in index))
+        index_name = "validation-index.jsonl" if args.arm == "validation" else "train-index.jsonl"
+        (out / index_name).write_text("".join(json.dumps(item) + "\n" for item in index))
         (out / "selection.jsonl").write_text("".join(json.dumps(item) + "\n" for item in selection))
         (out / "dropped.jsonl").write_text("".join(json.dumps(item) + "\n" for item in dropped))
         heldout_rows = sum(1 for item in index if item.get("task_id") and pool[item["task_id"]]["heldout"])
-        if heldout_rows:
+        agentic_rows = sum(1 for item in index if item.get("task_id"))
+        if args.arm == "validation" and heldout_rows != agentic_rows:
+            raise ValueError("Validation rows must all come from held-out tasks")
+        if args.arm != "validation" and heldout_rows:
             raise ValueError(f"{heldout_rows} rows come from held-out tasks")
         manifest = {
             "task": 211,
@@ -312,19 +340,36 @@ def main() -> None:
             "candidates": {
                 "kept": len(kept),
                 "dropped": dict(collections.Counter(d["reason"].split(":")[0] for d in dropped)),
+                "dropped_by_family": {
+                    family: dict(
+                        collections.Counter(d["reason"].split(":")[0] for d in dropped if d["family"] == family)
+                    )
+                    for family in sorted({d["family"] for d in dropped if d["family"]})
+                },
+                # One count per summarized trial (each contributes one dropped row per conversation).
+                "summarized_trials_by_family": dict(
+                    collections.Counter(
+                        d["family"] for d in dropped if d["reason"] == "summarized_trial" and d["conversation"] == 0
+                    )
+                ),
             },
             "B_supervised_tokens": b_tokens,
             "task_slots": sorted({item["task_id"] for item in selection}) if args.arm == "plain" else None,
             "splits": splits,
             "replay": (
-                replay_info
-                | {
-                    "share_of_supervised": {
-                        name: s["supervised_tokens"].get("replay", 0) / s["supervised_total"]
-                        for name, s in splits.items()
-                    },
-                    "ratio_to_B": replay_info["supervised_tokens"] / b_tokens if b_tokens else None,
-                }
+                None
+                if args.arm == "validation"
+                else (
+                    replay_info
+                    | {
+                        "note": "achieved share of each split's active (supervised) tokens; not a target, not rescaled",
+                        "share_of_supervised": {
+                            name: s["supervised_tokens"].get("replay", 0) / s["supervised_total"]
+                            for name, s in splits.items()
+                        },
+                        "ratio_to_B": replay_info["supervised_tokens"] / b_tokens if b_tokens else None,
+                    }
+                )
             ),
             "selection_rule": {
                 "plain": "first passing attempt per eligible task by sample index",
@@ -333,9 +378,10 @@ def main() -> None:
                     "without replacement until a task's passes are used, then refilled"
                 ),
                 "relay": f"passing relay episodes with >=1 GLM turn, seeded order '{SEED}:relay', whole episodes to B",
+                "validation": "first passing GLM attempt per held-out pool v2 task, one file per family, no replay",
             }[args.arm],
             "loss_mask": "assistant turns authored by glm; v0 turns, prompts and tool output are context",
-            "heldout_rows": 0,
+            "heldout_rows": heldout_rows,
             "output_hashes": {
                 path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(out.iterdir())
             },

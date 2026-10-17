@@ -73,12 +73,18 @@ def stand_in_replay(tokenizer, root: Path) -> None:
 
 def check_arm(tokenizer, prefix: Path, traces: dict[str, dict], heldout: set[str]) -> dict:
     manifest = json.loads((prefix / "manifest.json").read_text())
-    index = [json.loads(line) for line in (prefix / "train-index.jsonl").read_text().splitlines()]
-    files = sorted(prefix.glob("train*-prebuilt.jsonl.gz"))
+    validation = manifest["arm"] == "validation"
+    index_name = "validation-index.jsonl" if validation else "train-index.jsonl"
+    index = [json.loads(line) for line in (prefix / index_name).read_text().splitlines()]
+    files = sorted(prefix.glob("validation-*-prebuilt.jsonl.gz" if validation else "train*-prebuilt.jsonl.gz"))
     checked = 0
     for path in files:
-        epoch = int(path.name.split("-")[2]) if "epoch" in path.name else None
-        entries = [item for item in index if item.get("epoch") == epoch]
+        if validation:
+            split = path.name.removesuffix("-prebuilt.jsonl.gz")
+            entries = [item for item in index if item["split"] == split]
+        else:
+            epoch = int(path.name.split("-")[2]) if "epoch" in path.name else None
+            entries = [item for item in index if item.get("epoch") == epoch]
         with gzip.open(path, "rt") as stream:
             for row_number, line in enumerate(stream):
                 row = json.loads(line)
@@ -87,7 +93,8 @@ def check_arm(tokenizer, prefix: Path, traces: dict[str, dict], heldout: set[str
                     assert not any(weights) and set(ids) == {PAD_TOKEN}, "padding row with content or loss"
                     continue
                 entry = entries[row_number]
-                assert entry["task_id"] not in heldout if "task_id" in entry else True, "held-out task in training"
+                if "task_id" in entry:
+                    assert (entry["task_id"] in heldout) == validation, "row's held-out status does not match its arm"
                 length = entry["context_tokens"]
                 assert not any(weights[length - 1 :]), "loss past the row's content"
                 if entry["family"] == "replay":
@@ -171,10 +178,22 @@ def main() -> None:
     ]
     (work / "summarized.jsonl").write_text("".join(json.dumps(trace) + "\n" for trace in summarized))
     plain_inputs = [*args.traces, str(work / "summarized.jsonl")]
-    by_id = {trace["trial_id"]: trace for trace in traces + relay}
+    heldout_by_family = {}
+    for row in pool_rows:
+        if row["heldout"]:
+            heldout_by_family.setdefault(row["family"], row["task_id"])
+    held = [
+        copy.deepcopy(trace)
+        | {"trial_id": trace["trial_id"] + "-heldout", "task_id": heldout_by_family[trace["family"]]}
+        for trace in traces
+        if trace["family"] in heldout_by_family
+    ]
+    (work / "heldout.jsonl").write_text("".join(json.dumps(trace) + "\n" for trace in held))
+    by_id = {trace["trial_id"]: trace for trace in traces + relay + held}
 
     def build(arm: str, trace_files: list[str], plain: Path | None = None) -> Path:
         output = work / arm
+        arm = arm.split("-with-")[0]
         command = [
             sys.executable,
             "-m",
@@ -205,6 +224,11 @@ def main() -> None:
     assert reports[0]["dropped"].get("summarized_trial") == len(summarized), "summarized trials were not dropped"
     reports.append(check_arm(tokenizer, build("rs-multi", plain_inputs, plain), by_id, heldout))
     reports.append(check_arm(tokenizer, build("relay", [str(work / "relay.jsonl")], plain), by_id, heldout))
+    validation = build("validation", [*plain_inputs, str(work / "heldout.jsonl")])
+    reports.append(check_arm(tokenizer, validation, by_id, heldout))
+    mixed = build("plain-with-heldout-input", [*plain_inputs, str(work / "heldout.jsonl")])
+    mixed_dropped = json.loads((mixed / "manifest.json").read_text())["candidates"]["dropped"]
+    assert mixed_dropped.get("heldout_task") == len(held), "held-out traces were not dropped from training"
     print("LOCAL_VALIDATION " + json.dumps(reports), flush=True)
 
 
