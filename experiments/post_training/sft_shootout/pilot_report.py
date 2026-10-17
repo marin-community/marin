@@ -8,14 +8,15 @@ or agent error before grading), exception type, wall time. Per task: pass@1 (mea
 and pass@k (any of its k trials passed). Per trial attempt's model calls (from ``rebuilt.jsonl``):
 sequence length (the last call's prompt + completion tokens, per conversation), assistant tokens
 (completion, reasoning included), and trials with more than one conversation (Terminus-2 context
-summarization). Writes ``pilot_report.json`` next to the run and prints it.
+summarization). With ``--manifest`` (a pool ``tasks.jsonl``), also pass@1 / pass@k per repo. Writes
+``pilot_report.json`` next to the run and prints it.
 
-    uv run python experiments/post_training/sft_shootout/pilot_report.py <run prefix>
+    uv run python experiments/post_training/sft_shootout/pilot_report.py <run prefix> [--manifest <tasks.jsonl>]
 """
 
+import argparse
 import json
 import statistics
-import sys
 from collections import Counter, defaultdict
 
 from rigging.filesystem.storage_path import StoragePath
@@ -38,7 +39,11 @@ def spread(values: list[float]) -> dict:
 
 
 def main() -> None:
-    prefix = sys.argv[1].rstrip("/")
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("prefix")
+    parser.add_argument("--manifest", help="Pool tasks.jsonl, for a per-repo breakdown.")
+    args = parser.parse_args()
+    prefix = args.prefix.rstrip("/")
     attempts = harbor_results(StoragePath(prefix))
     final: dict[str, dict] = {}
     for trial_id, attempt in attempts.items():
@@ -89,6 +94,22 @@ def main() -> None:
         "trials_with_model_calls": len(conversations),
         "trials_summarized": sum(1 for n in conversations.values() if n > 1),
     }
+    if args.manifest:
+        repos = {
+            row["task_id"]: row["repo"]
+            for row in map(json.loads, StoragePath(args.manifest).read_text().splitlines())
+        }
+        per_repo: dict[str, list[list[bool]]] = defaultdict(list)
+        for task, passes in by_task.items():
+            per_repo[repos.get(task) or "unknown"].append(passes)
+        report["by_repo"] = {
+            repo: {
+                "tasks": len(tasks),
+                "pass@1": round(statistics.fmean(statistics.fmean(v) for v in tasks), 4),
+                "pass@k": round(statistics.fmean(any(v) for v in tasks), 4),
+            }
+            for repo, tasks in sorted(per_repo.items())
+        }
     StoragePath(f"{prefix}/pilot_report.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
 
