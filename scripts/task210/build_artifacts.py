@@ -2,12 +2,13 @@
 
 Usage: build_artifacts.py <cruxeval|two-expert> [--upload]
 Runs on cw-us-east-02a. Copies each listed S3 object to /tmp/artifacts/<repo>/<path relative to marin/>, checks size, computes
-sha256, writes MANIFEST.tsv (path, bytes, sha256, S3 origin, issue, purpose) and README.md. Without --upload it prints README.md
-and MANIFEST.tsv and uploads nothing. With --upload (needs HF_TOKEN in the env, never printed) it creates the public dataset repo,
-uploads only the files missing or different on the Hub (README.md and MANIFEST.tsv always), in commits of 1,000 files
-(the Hub allows 128 commits per hour), then checks every file's size and sha256 (LFS) or git blob id (small files) on the Hub.
+sha256, packs each folder of more than 1,000 files into one tar (the Hub allows 10,000 files per folder) and re-hashes its
+members, writes MANIFEST.tsv (path, bytes, sha256, S3 origin, issue, stored_in, purpose) and README.md. Without --upload it
+prints README.md and MANIFEST.tsv and uploads nothing. With --upload (needs HF_TOKEN in the env, never printed) it creates the
+public dataset repo, uploads only the repo files that are missing or different (README.md and MANIFEST.tsv always), removes
+stale ones, in commits of 1,000 operations (the Hub allows 128 commits per hour), then checks every file's size and sha256 (LFS) or git blob id (small files) on the Hub.
 """
-import collections, concurrent.futures as cf, hashlib, os, pathlib, sys
+import collections, concurrent.futures as cf, hashlib, os, pathlib, posixpath, sys, tarfile
 import fsspec
 
 B = "marin-us-east-02a/marin"
@@ -84,8 +85,31 @@ with cf.ThreadPoolExecutor(32) as ex:
         for rel, size, sha, gsha in ex.map(lambda i: fetch(i, local), infos):
             rows.append((rel, size, sha, gsha, entry, purpose))
 rows.sort()
-(local / "MANIFEST.tsv").write_text("path\tbytes\tsha256\ts3_origin\tissue\tpurpose\n" + "".join(
-    f"{r[0]}\t{r[1]}\t{r[2]}\ts3://{B}/{r[0]}\t#{issue}\t{r[5]}\n" for r in rows))
+
+# The Hub allows at most 10,000 files per folder, so every folder with more than 1,000 files is stored as one uncompressed
+# tar (<folder>.tar, members named by their full path, so extracting at the repo root restores the S3 layout).
+counts = collections.Counter(posixpath.dirname(r[0]) for r in rows)
+packed = sorted(d for d, n in counts.items() if n > 1000)
+stored_in = {r[0]: (posixpath.dirname(r[0]) + ".tar" if posixpath.dirname(r[0]) in packed else r[0]) for r in rows}
+tars = {}
+for d in packed:
+    members = [r for r in rows if posixpath.dirname(r[0]) == d]
+    with tarfile.open(local / f"{d}.tar", "w", format=tarfile.PAX_FORMAT) as tf:
+        for rel, size, *_ in members:
+            ti = tf.gettarinfo(str(local / rel), arcname=rel)
+            ti.mtime, ti.uid, ti.gid, ti.uname, ti.gname, ti.mode = 0, 0, 0, "", "", 0o644
+            with open(local / rel, "rb") as f:
+                tf.addfile(ti, f)
+    want = {r[0]: (r[1], r[2]) for r in members}
+    with tarfile.open(local / f"{d}.tar") as tf:
+        got = {m.name: (m.size, hashlib.sha256(tf.extractfile(m).read()).hexdigest()) for m in tf.getmembers()}
+    assert got == want, d
+    data = (local / f"{d}.tar").read_bytes()
+    tars[f"{d}.tar"] = (len(data), hashlib.sha256(data).hexdigest(), hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest(), len(members))
+    print(f"PACKED {d}.tar {len(members)} files {len(data)} bytes sha256 {tars[f'{d}.tar'][1]} (members re-hashed OK)", flush=True)
+
+(local / "MANIFEST.tsv").write_text("path\tbytes\tsha256\ts3_origin\tissue\tstored_in\tpurpose\n" + "".join(
+    f"{r[0]}\t{r[1]}\t{r[2]}\ts3://{B}/{r[0]}\t#{issue}\t{stored_in[r[0]]}\t{r[5]}\n" for r in rows))
 
 groups = collections.OrderedDict()
 for rel, size, sha, gsha, entry, purpose in rows:
@@ -97,17 +121,27 @@ md = [f"---\nlicense: apache-2.0\npretty_name: {repo.split('/')[1]}\ntags:\n- ma
       "These files were moved from CoreWeave S3 (`s3://marin-us-east-02a/marin/`) when the experiment's S3 data was cleaned up "
       "(marin task #210). Each file keeps its S3 path relative to `marin/`, so `s3_origin` = `s3://marin-us-east-02a/marin/<path>`. "
       "The S3 copies are deleted after this upload is verified.\n",
-      f"Totals: {len(rows):,} files, {sum(r[1] for r in rows)/1e6:,.1f} MB. `MANIFEST.tsv` lists every file with bytes, sha256, S3 origin, issue and purpose.\n",
+      f"Totals: {len(rows):,} files, {sum(r[1] for r in rows)/1e6:,.1f} MB. `MANIFEST.tsv` lists every file with bytes, sha256, "
+      "S3 origin, issue, the repo file that holds it (`stored_in`) and purpose.\n",
+      "The Hub allows at most 10,000 files per folder. So each folder with more than 1,000 files is stored as one uncompressed tar, "
+      "`<folder>.tar`. Its members keep their full paths, so `tar -xf <folder>.tar` at the repo root restores the original layout.\n",
       "## Contents\n", "| S3 origin (under `s3://marin-us-east-02a/marin/`) | Purpose | Files | MB |", "|---|---|---:|---:|"]
 for entry, (purpose, n, b, _) in groups.items():
     md.append(f"| `{entry}` | {purpose} | {n:,} | {b/1e6:,.2f} |")
 md += ["", "## License", "", f"Apache-2.0. {provider}Teacher-model outputs remain subject to their providers' terms."]
+if tars:
+    md += ["", "## Packed folders", "", "| Repo file | Files inside | Bytes | sha256 |", "|---|---:|---:|---|"]
+    md += [f"| `{t}` | {n:,} | {b:,} | `{sha}` |" for t, (b, sha, _, n) in tars.items()]
 md += ["", "## Files (folders with more than 20 files are summarised above; see MANIFEST.tsv)", "", "| Path | Bytes | sha256 |", "|---|---:|---|"]
 for entry, (purpose, n, b, files) in groups.items():
     if n <= 20:
         md += [f"| `{rel}` | {size:,} | `{sha}` |" for rel, size, sha in files]
 (local / "README.md").write_text("\n".join(md) + "\n")
-print(f"STAGED {repo} {len(rows)} files {sum(r[1] for r in rows)} bytes at {local}", flush=True)
+
+# What the repo must hold: loose files (path, bytes, sha256, git blob id) and the tars.
+expect = {r[0]: (r[1], r[2], r[3]) for r in rows if stored_in[r[0]] == r[0]}
+expect.update({t: v[:3] for t, v in tars.items()})
+print(f"STAGED {repo} {len(rows)} files {sum(r[1] for r in rows)} bytes at {local}; repo files {len(expect)} ({len(tars)} tars)", flush=True)
 
 if "--upload" not in sys.argv:
     print("README-BEGIN\n" + (local / "README.md").read_text() + "README-END", flush=True)
@@ -115,25 +149,35 @@ if "--upload" not in sys.argv:
         print("MANIFEST\t" + line, flush=True)
     sys.exit(0)
 
-from huggingface_hub import CommitOperationAdd, HfApi  # noqa: E402
+from huggingface_hub import CommitOperationAdd, CommitOperationDelete, HfApi  # noqa: E402
 
 api = HfApi(token=os.environ["HF_TOKEN"])
 api.create_repo(repo, repo_type="dataset", private=False, exist_ok=True)
 
 
+def hub_files():
+    return {s.rfilename: s for s in api.dataset_info(repo, files_metadata=True).siblings}
+
+
 def mismatched(hub):
-    return [r[0] for r in rows if r[0] not in hub or hub[r[0]].size != r[1] or
-            (hub[r[0]].lfs.sha256 if hub[r[0]].lfs else hub[r[0]].blob_id) != (r[2] if hub[r[0]].lfs else r[3])]
+    return [p for p, (size, sha, gsha) in expect.items() if p not in hub or hub[p].size != size or
+            (hub[p].lfs.sha256 if hub[p].lfs else hub[p].blob_id) != (sha if hub[p].lfs else gsha)]
 
 
-todo = mismatched({s.rfilename: s for s in api.dataset_info(repo, files_metadata=True).siblings}) + ["README.md", "MANIFEST.tsv"]
-print(f"TODO {len(todo)} files", flush=True)
-for i in range(0, len(todo), 1000):
-    part = todo[i:i + 1000]
-    c = api.create_commit(repo, repo_type="dataset", commit_message=f"Add task #210 artifacts ({i + len(part)}/{len(todo)})",
-                          operations=[CommitOperationAdd(path_in_repo=p, path_or_fileobj=str(local / p)) for p in part])
-    print(f"COMMIT {c.oid} {i + len(part)}/{len(todo)}", flush=True)
+hub = hub_files()
+todo = mismatched(hub) + ["README.md", "MANIFEST.tsv"]
+stale = sorted(p for p in hub if p not in expect and p not in ("README.md", "MANIFEST.tsv", ".gitattributes"))
+stale_dirs = [d for d in packed if any(p.startswith(d + "/") for p in stale)]
+stale = [p for p in stale if posixpath.dirname(p) not in stale_dirs]
+print(f"TODO add {len(todo)} files, remove {len(stale)} stale files and {len(stale_dirs)} unpacked folders", flush=True)
+ops = [CommitOperationDelete(path_in_repo=d + "/", is_folder=True) for d in stale_dirs] + [CommitOperationDelete(path_in_repo=p) for p in stale] + [CommitOperationAdd(path_in_repo=p, path_or_fileobj=str(local / p)) for p in todo]
+for i in range(0, len(ops), 1000):
+    part = ops[i:i + 1000]
+    c = api.create_commit(repo, repo_type="dataset", commit_message=f"Task #210 artifacts: sync ({i + len(part)}/{len(ops)} operations)", operations=part)
+    print(f"COMMIT {c.oid} {i + len(part)}/{len(ops)}", flush=True)
 info = api.dataset_info(repo, files_metadata=True)
-bad = mismatched({s.rfilename: s for s in info.siblings})
-print(f"UPLOADED {repo} sha {info.sha} files {len(info.siblings)} mismatched {len(bad)} {bad[:10]} "
+hub = {s.rfilename: s for s in info.siblings}
+bad = mismatched(hub)
+extra = sorted(p for p in hub if p not in expect and p not in ("README.md", "MANIFEST.tsv", ".gitattributes"))
+print(f"UPLOADED {repo} sha {info.sha} files {len(hub)} mismatched {len(bad)} {bad[:10]} extra {len(extra)} {extra[:10]} "
       f"url https://huggingface.co/datasets/{repo}/tree/{info.sha}", flush=True)
