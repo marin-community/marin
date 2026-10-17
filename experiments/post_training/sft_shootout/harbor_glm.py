@@ -53,6 +53,13 @@ from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import EndpointAccess
 from iris.rpc import job_pb2
+from marin.evaluation.harbor.agent_context import (
+    MAX_INPUT_TOKENS_KEY,
+    MAX_OUTPUT_TOKENS_KEY,
+    MODEL_INFO_KEY,
+    reconciled_model_info,
+    served_model_info,
+)
 from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
 from marin.evaluation.model_config import load_model_config
 from marin.evaluation.serving_config import inference_config_for_model, resolved_serve_config
@@ -87,28 +94,10 @@ STUDENT_CONFIG = Path(
 )
 STUDENT_REVISION = "4eeb756b404db25bc04e4daf49dfb9817bceb741"
 
-# Retry list and timeouts copied from the eval campaign policies
-# (experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/harbor-configs).
-RETRY = {
-    "max_retries": 10,
-    "include_exceptions": [
-        "InternalServerError",
-        "APIConnectionError",
-        "APITimeoutError",
-        "LLMRequestTimeoutError",
-        "SandboxBuildFailedError",
-        "ContainerRegistryThrottledError",
-        "AgentSetupTimeoutError",
-        "DaytonaSandboxStopError",
-        "DaytonaProcessError",
-        "VerifierRuntimeError",
-    ],
-    "exclude_exceptions": [],
-    "wait_multiplier": 2.0,
-    "min_wait_sec": 1.0,
-    "max_wait_sec": 60.0,
-}
-COST = {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+# Each family runs under its eval-campaign Harbor policy: retry list, verifier timeout, agent timeouts
+# and agent kwargs come from the YAML, and model_info is reconciled the way the eval launcher does it.
+POLICY_DIR = Path("experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/harbor-configs")
+POLICIES = {"tmax": POLICY_DIR / "tb2-recovery.yaml", "swesmith": POLICY_DIR / "swebench-verified.yaml"}
 AGENTS = {
     # Runs each task's solution/solve.sh with no model; used for task and visibility probes.
     "oracle": {"name": "oracle"},
@@ -125,30 +114,16 @@ AGENTS = {
         "import_path": "probe_agents:NetworkProbe",
         "kwargs": {"agent_domain_allow_list": AGENT_DOMAIN_ALLOW_LIST},
     },
-    # tb2-recovery.yaml: Terminus-2, 65,536 input / 16,384 output tokens.
-    "terminus-2": {
-        "import_path": "trial_agents:TrialTerminus2",
-        "override_setup_timeout_sec": 360,
-        "override_timeout_sec": 1800,
-        "kwargs": {
-            "model_info": {"max_input_tokens": 65536, "max_output_tokens": 16384, **COST},
-            "llm_call_kwargs": {"max_tokens": 16384},
-        },
-    },
-    # swebench-verified.yaml: mini-swe-agent 2.1.0, 32,768-token total context. The agent runs inside
-    # the sandbox, which reaches only the proxy during the run (no github.com/swesmith mirrors).
+    # Policy agents, run through subclasses that tag requests with the trial id.
+    "terminus-2": {"import_path": "trial_agents:TrialTerminus2"},
+    # Runs inside the sandbox, which reaches only the proxy during the run (no github.com/swesmith mirrors).
     "mini-swe-agent": {
         "import_path": "trial_agents:TrialMiniSweAgent",
-        "override_setup_timeout_sec": 360,
-        "override_timeout_sec": 1800,
-        "kwargs": {
-            "version": "2.1.0",
-            "model_info": {"max_input_tokens": 32768, "max_output_tokens": 16384, **COST},
-            "agent_domain_allow_list": AGENT_DOMAIN_ALLOW_LIST,
-        },
+        "kwargs": {"agent_domain_allow_list": AGENT_DOMAIN_ALLOW_LIST},
     },
 }
-
+# Written to --output only after Harbor exits 0 and everything is uploaded.
+SUCCESS_MARKER = "_SUCCESS"
 MODEL_FREE_AGENTS = {"oracle", "null", "network-probe", "tool-env-probe"}
 
 
@@ -233,24 +208,41 @@ def scrub(root: Path, capability: str) -> None:
             path.write_text(scrubbed)
 
 
-def job_config(args: argparse.Namespace, api_base: str | None, jobs_dir: Path) -> dict:
-    agent = json.loads(json.dumps(AGENTS[args.agent]))
+def policy(family: str) -> dict:
+    return yaml.safe_load(POLICIES[family].read_text())
+
+
+def policy_agent(args: argparse.Namespace, served_info: dict | None) -> dict:
+    """The family policy's agent block, with model_info reconciled as the eval launcher does it."""
+    (agent,) = policy(args.family)["agents"]
+    if agent["name"] != args.agent:
+        raise ValueError(f"the {args.family} policy runs {agent['name']}, not {args.agent}")
+    kwargs = {**agent.get("kwargs", {}), **AGENTS[args.agent].get("kwargs", {})}
+    kwargs[MODEL_INFO_KEY] = reconciled_model_info(served_info, kwargs.get(MODEL_INFO_KEY))
+    if args.agent == "terminus-2":
+        kwargs["llm_call_kwargs"] = {**kwargs.get("llm_call_kwargs", {}), "max_tokens": kwargs[MODEL_INFO_KEY][MAX_OUTPUT_TOKENS_KEY]}
+    return {**{k: v for k, v in agent.items() if k != "name"}, **AGENTS[args.agent], "kwargs": kwargs}
+
+
+def job_config(args: argparse.Namespace, agent: dict, api_base: str | None, jobs_dir: Path) -> dict:
+    agent = json.loads(json.dumps(agent))
     if api_base is not None:
         agent["model_name"] = f"hosted_vllm/{GLM_MODEL}"
         agent["kwargs"]["api_base"] = api_base
     dataset: dict = {"path": str(Path(args.tasks).resolve())}
     if args.task_names:
         dataset["task_names"] = args.task_names
+    family_policy = policy(args.family)
     return {
         "job_name": args.name,
         "jobs_dir": str(jobs_dir),
         "n_attempts": args.n_attempts,
         "n_concurrent_trials": args.n_concurrent,
-        "retry": RETRY,
+        "retry": family_policy["retry"],
         "environment": {"type": "daytona"},
         "agents": [agent],
         "datasets": [dataset],
-        "verifier": {"override_timeout_sec": 600},
+        "verifier": family_policy["verifier"],
     }
 
 
@@ -281,11 +273,15 @@ def main() -> None:
         "--budget-fraction", type=float, default=0.75, help="Relay context-budget trigger, as a fraction of the window."
     )
     parser.add_argument("--glm-relay-job", default=DEFAULT_GLM_RELAY_JOB)
+    parser.add_argument("--skip-if-done", action="store_true", help=f"Exit if --output holds {SUCCESS_MARKER}.")
     parser.add_argument("--family", choices=["tmax", "swesmith"], required=True)
     parser.add_argument("--package-revision", required=True, help="Source and revision of the task packages, for provenance.")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+    if args.skip_if_done and StoragePath(f"{args.output.rstrip('/')}/{SUCCESS_MARKER}").exists():
+        logger.info("%s already holds a finished run; skipping", args.output)
+        return
     args.task_source = args.tasks
     if args.task_list:
         args.task_names = json.loads(StoragePath(args.task_list).read_text())["tasks"]
@@ -301,9 +297,17 @@ def main() -> None:
     capability = None
     with contextlib.ExitStack() as stack:
         if args.agent in MODEL_FREE_AGENTS:
-            config = job_config(args, None, work / "jobs")
+            agent = AGENTS[args.agent]
+            config = job_config(args, agent, None, work / "jobs")
         else:
-            window = AGENTS[args.agent]["kwargs"]["model_info"]["max_input_tokens"]
+            student_model = load_model_config(STUDENT_CONFIG)
+            served_info = (
+                served_model_info(student_model.serve.max_model_len, student_model.generation.max_gen_toks)
+                if args.relay
+                else None
+            )
+            agent = policy_agent(args, served_info)
+            window = agent["kwargs"][MODEL_INFO_KEY][MAX_INPUT_TOKENS_KEY]
             teacher = Backend(
                 author=Author.TEACHER,
                 base_url=resolve_glm_base_url(args.glm_relay_job),
@@ -318,7 +322,7 @@ def main() -> None:
             capability = stack.enter_context(capability_endpoint(app, args.name))
             if urlparse(capability).hostname != AGENT_DOMAIN_ALLOW_LIST:
                 raise RuntimeError(f"the capability URL's host is not the agent-phase allow-list {AGENT_DOMAIN_ALLOW_LIST}")
-            config = job_config(args, f"{capability}/v1", work / "jobs")
+            config = job_config(args, agent, f"{capability}/v1", work / "jobs")
         returncode = run_harbor(args, config, work)
 
     job_dir = work / "jobs" / args.name
@@ -326,6 +330,7 @@ def main() -> None:
     provenance = {
         "args": vars(args),
         "harbor": config,
+        "policy": str(POLICIES[args.family]),
         "teacher": {
             "model": GLM_MODEL,
             "relay_job": args.glm_relay_job,
@@ -342,7 +347,7 @@ def main() -> None:
             "python": "3.12",
         },
         "agent_network": {
-            "agent_phase_domain_allow_list": AGENTS[args.agent].get("kwargs", {}).get("agent_domain_allow_list"),
+            "agent_phase_domain_allow_list": agent.get("kwargs", {}).get("agent_domain_allow_list"),
             "setup_and_verifier": "task policy (allow_internet)",
         },
         "relay": None
@@ -350,7 +355,7 @@ def main() -> None:
         else {
             "student": f"{STUDENT_CONFIG}@{STUDENT_REVISION}",
             "budget_fraction": args.budget_fraction,
-            "budget_tokens": int(AGENTS[args.agent]["kwargs"]["model_info"]["max_input_tokens"] * args.budget_fraction),
+            "budget_tokens": int(window * args.budget_fraction),
             "budget_counted_with": "student tokenizer",
             "triggers": ["format_error: one teacher repair turn", "context_budget: teacher to the end", "completion_claim: student reply withheld, teacher to the end"],
         },
@@ -364,6 +369,7 @@ def main() -> None:
     logger.info("Uploaded results to %s (harbor exit %d)", args.output, returncode)
     if returncode != 0:
         raise SystemExit(returncode)
+    StoragePath(f"{args.output.rstrip('/')}/{SUCCESS_MARKER}").write_text("")
 
 
 if __name__ == "__main__":
