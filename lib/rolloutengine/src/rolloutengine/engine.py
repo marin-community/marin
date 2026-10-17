@@ -268,7 +268,8 @@ class RolloutEngine:
                             )
                     except GenerationLimitReached as limit:
                         stop_reason = LENGTH_STOP_REASON
-                        if not steps:
+                        # History resets clear segment evidence, not prior agent actions.
+                        if index == 0:
                             return replace(
                                 completed,
                                 prompt_token_ids=trace.generation_limit_prompt(limit.prompt_token_ids),

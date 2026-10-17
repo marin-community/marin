@@ -1506,6 +1506,36 @@ async def test_context_limit_keeps_served_evidence_and_grades_only_completed_ope
     assert record.loss_mask == ((1,) if completed_turns else ())
 
 
+async def test_context_limit_after_history_reset_preserves_trial_grade():
+    class Session:
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Perform the task."},), {})
+
+        async def advance(self, _turn):
+            return Transition(done=False, reset_conversation=({"role": "user", "content": "Task performed."},))
+
+        async def grade(self, messages, *, stop_reason, outputs):
+            return GradeResult(Outcome.GRADED, 1.0)
+
+        async def close(self):
+            pass
+
+    class LimitedModel(ReplayModel):
+        async def complete(self, request):
+            if self.requests:
+                raise GenerationLimitReached((90, 91))
+            return await super().complete(request)
+
+    record = await engine(
+        LimitedModel([{"role": "assistant", "content": "Done."}]),
+        sessions={"fixture": lambda _context: Session()},
+    ).run(lowered(arithmetic_task(), task_session="fixture"))
+    assert record.stop_reason == "length"
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    # The new conversation has no response tokens; earlier tokens must not be invented in it.
+    assert record.response_token_ids == ()
+
+
 @pytest.mark.parametrize(
     "usage, budget, requests, stop_reason",
     [
