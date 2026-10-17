@@ -966,11 +966,17 @@ def test_evalchemy_executor_rejects_incomplete_task_beside_scored_results(tmp_pa
     assert exc_info.value.jobs == {"eval": "/eval/completed"}
 
 
-def test_evalchemy_executor_accepts_scored_partial_results_and_reports_drops(tmp_path, monkeypatch):
+@pytest.mark.parametrize("failed_sample_has_grade", [True, False])
+def test_evalchemy_executor_accepts_scored_partial_results_and_reports_drops(
+    tmp_path, monkeypatch, failed_sample_has_grade
+):
     output_dir = f"file://{tmp_path / 'partial'}"
     marker = f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}] request timed out"
     samples = [_lm_eval_generation(i, "exact_match", 1.0, "4") for i in range(9)]
-    samples.append(_lm_eval_generation(9, "exact_match", 0.0, marker))
+    failed_sample = _lm_eval_generation(9, "exact_match", 0.0, marker)
+    if not failed_sample_has_grade:
+        failed_sample.pop("exact_match")
+    samples.append(failed_sample)
     _write_evalchemy_output(
         output_dir,
         "gsm8k_5shot",

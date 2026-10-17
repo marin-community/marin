@@ -423,7 +423,7 @@ class _TaskCoverageAccumulator:
         self.seen.add(sample.doc_id)
         self.any_metrics = self.any_metrics or bool(sample.metrics)
         self.first.setdefault(sample.doc_id, summary)
-        if sample.grading is None:
+        if sample.grading is None and not summary.infrastructure_error:
             return
         self.graded.setdefault(sample.doc_id, []).append(summary)
 
