@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-mode token bookkeeping for the rollout turn loop."""
+"""Per-mode token bookkeeping for the recorder."""
 
 from typing import Protocol
 

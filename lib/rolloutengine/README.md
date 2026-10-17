@@ -1,7 +1,7 @@
 # Rollout engine
 
 `marin-rolloutengine` runs and grades one attempt of a TaskCompendium task. It returns a `GradedRollout`: the
-`Rollout`, with the conversation, exact tokens, loss mask, optional log probabilities, per-turn steps, and run
+`Rollout`, with its conversations, exact tokens, loss masks, optional log probabilities, per-turn steps, and run
 outputs, and its grade.
 
 ```python
@@ -13,26 +13,28 @@ result = await engine.run_task(spec, model)
 ```
 
 - `TaskRolloutSpec` holds an unchanged `TaskSpec` and the choices that run it: the harness name, the task and
-  verifier machines, the limits, and the trace mode.
+  verifier machines, the limits, the trace mode, and an optional judge connection that is never serialized.
 - The model is the policy under rollout, an async function from `ModelRequest` to `ModelTurn`. Pass it to each
   `engine.run_task` call.
-- A harness runs the model side of a task. Register each `Harness(open, check, grade)` in the `harnesses`
-  mapping; `TaskRolloutSpec.harness` selects one by its key. `check` rejects a spec before any machine starts,
-  `open` starts an episode for one attempt, and `grade` grades a task whose grader is `SessionGrader`, which
-  leaves grading to the harness. The engine grades every other task with the task's grader.
-- An episode returns the first prompt (`prepare`), handles each model turn (`advance`), and releases its
-  resources (`close`). Each `Transition` that `advance` returns becomes one of `Rollout.steps`, and it
-  can carry the harness's own step data, such as rewards for training.
-- Built-in harnesses: `shell_harness` serves a shell tool on the task machine and host tools from
-  registered providers; `agent_harness` runs an agent that owns its prompts and tool loop, for example an
-  installed agent behind an HTTP proxy, and sends each of its model calls through the engine.
-- The engine owns the machines, the turn loop and its limits, token accumulation, grading, cleanup, and
-  progress events for an optional observer, `RolloutEngine(..., observer=...)`.
+- A harness is the agent loop of a task. It implements `Harness`: `check(task, limits)` rejects a task before
+  any machine starts, and `run(context, recorder)` runs one attempt. The harness calls the model only through
+  its `RolloutRecorder` (`start`, `reply`, and `record`), which records the exact tokens and applies the turn
+  and token limits. Register each harness in the `harnesses` mapping; `TaskRolloutSpec.harness` selects one by
+  its key.
+- A harness does not grade. The engine grades the last conversation with the task's grader. A harness can
+  attach its own step data, such as rewards for training, with `record(data=...)`.
+- Built-in harnesses: `shell_harness` serves a shell tool on the task machine and host tools from registered
+  providers; `agent_harness` runs an agent that owns its prompts and tool loop, for example an installed agent
+  behind an HTTP proxy; `step_harness` runs an `Episode` that returns the first prompt and handles each turn.
+- `harness_rollout` runs one harness on one task with one model, without grading. `task_machine` starts the
+  task machine for it.
+- The engine owns the machines, the attempt deadline, grading, cleanup, and progress events for an optional
+  observer, `RolloutEngine(..., observer=...)`.
 
 `TraceMode.EXACT_TOKENS`, the default, enforces the exact-token contract. `TraceMode.MESSAGES` accepts chat
 endpoints that re-tokenize each request and records an all-zero loss mask. Never train on those rollouts:
 their token IDs need not be the tokens that the model sampled.
-See the [task rollout reference](../../docs/references/task-rollouts.md) for the harness lifecycle, the
+See the [task rollout reference](../../docs/references/task-rollouts.md) for the harness contract, the
 exact-token contract, trace modes, failure handling, and backend configuration.
 
 From the Marin repository root:
