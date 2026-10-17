@@ -13,7 +13,7 @@ One row per conversation of a trial attempt (a trial has more than one when Term
 its context: the summarizer calls and the restarted history are separate conversations). Fields:
 family, agent, package_revision, relay, run, trial_id, conversation, n_conversations, task_id (the task
 folder name, as in the pool manifest), trial_name, sample (0-based index among the task's samples),
-retry (Harbor's infrastructure retry), reward, passed, exception, triggers, tokens (per author:
+retry (Harbor's infrastructure retry), reward, passed, exception, trial_seconds, agent_seconds, triggers, tokens (per author:
 turns, prompt, completion, reasoning), messages (assistant turns carry author, trigger, usage,
 reasoning_content), tools, problems.
 
@@ -26,6 +26,7 @@ assistant message the harness echoed back matches the logged reply's content.
 import json
 import sys
 from collections import defaultdict
+from datetime import datetime
 
 from rigging.filesystem.storage_path import StoragePath
 
@@ -77,6 +78,13 @@ def rebuild(records: list[dict]) -> tuple[list[dict], dict | None, list[str]]:
     return conversation, tools, problems
 
 
+def seconds(phase: dict | None) -> float | None:
+    if not phase or not phase.get("started_at") or not phase.get("finished_at"):
+        return None
+    start, end = (datetime.fromisoformat(phase[k]) for k in ("started_at", "finished_at"))
+    return round((end - start).total_seconds(), 1)
+
+
 def harbor_results(root: StoragePath) -> dict[str, dict]:
     """Map trial correlation id to its Harbor trial attempt: task, sample index, retry, reward, exception.
 
@@ -109,6 +117,8 @@ def harbor_results(root: StoragePath) -> dict[str, dict]:
             "reward": reward,
             "passed": reward == 1.0,
             "exception": (result.get("exception_info") or {}).get("exception_type"),
+            "trial_seconds": seconds(result),
+            "agent_seconds": seconds(result.get("agent_execution")),
         }
     return results
 
