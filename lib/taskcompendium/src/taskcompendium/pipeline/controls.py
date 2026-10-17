@@ -12,7 +12,7 @@ from typing import Any, Protocol
 from shellbox.machine import Command, MachineFactory, MachineSpec
 from verifyit.grade import positive_candidate
 from verifyit.modes.grade_judge import JudgeConnection
-from verifyit.spec import ExactSpec, JudgeSpec, MathSpec, McqSpec, NumericSpec
+from verifyit.spec import ExactSpec, MathSpec, McqSpec, NumericSpec
 
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
@@ -26,6 +26,7 @@ from taskcompendium.models import (
     TextMessage,
     VerifyitGrader,
     grades_in_process,
+    grades_with_judge,
     require_resolved_environment,
     verifyit_spec,
 )
@@ -137,10 +138,6 @@ def _empty_submission(task: TaskSpec) -> ControlSubmission:
     return WorkspaceFiles({})
 
 
-def _is_judge_task(task: TaskSpec) -> bool:
-    return isinstance(task.grader, VerifyitGrader) and isinstance(verifyit_spec(task.grader), JudgeSpec)
-
-
 async def _control_checks(
     task: TaskSpec,
     controls: Controls,
@@ -157,7 +154,7 @@ async def _control_checks(
                 )
             ]
         )
-    judge_task = _is_judge_task(task)
+    judge_task = grades_with_judge(task.grader)
     if judge_task and judge_connection is None:
         raise ValueError("Judge controls require an explicit remote connection")
     sandbox = None
@@ -245,7 +242,7 @@ async def _control(
         else await sandbox_grade(task, attempt, *sandbox.grader)
     )
     if (
-        _is_judge_task(task)
+        grades_with_judge(task.grader)
         and grade.status in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE}
         and "model" not in (grade.detail or {})
     ):
