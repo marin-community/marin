@@ -125,7 +125,7 @@ class ConversationRecord:
     """One conversation of an attempt: from a ``RolloutRecorder.start`` to the next one, or to the end."""
 
     messages: tuple[dict[str, Any], ...]
-    """The chat of this conversation, through its last model response. The grader reads the last conversation."""
+    """The chat of this conversation, through its last model response. The grader reads the last one with a turn."""
     prompt_token_ids: tuple[int, ...]
     """The tokens of the first prompt of this conversation."""
     response_token_ids: tuple[int, ...]
@@ -167,7 +167,7 @@ class GradedRollout:
     rollout: Rollout
     """What happened in the attempt."""
     grade: GradeResult
-    """The verdict of the task's grader on the last conversation. Unavailable if no response."""
+    """The verdict of the task's grader on the last conversation that has a model turn. Unavailable if none has."""
 
 
 class RolloutOperation(StrEnum):
@@ -239,8 +239,11 @@ class Transition:
 class RolloutStep:
     turn: ModelTurn
     transition: Transition
+    """What followed the turn: the observations of the next request, or the end of the harness."""
     response_end: int
+    """The index of the turn's last response token in the conversation's ``response_token_ids``."""
     messages: tuple[dict[str, Any], ...]
+    """The chat at this step, through the turn's message."""
 
 
 class RolloutEventType(StrEnum):
