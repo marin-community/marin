@@ -89,6 +89,9 @@ def main() -> None:
     parser.add_argument(
         "--exclude", action="append", default=[], help="repo=reason=where the clean copy lives (repeatable)"
     )
+    parser.add_argument(
+        "--exclude-task", action="append", default=[], help="task=reason=evidence, either family (repeatable)"
+    )
     args = parser.parse_args()
     version = args.version
     pool = StoragePath(args.pool)
@@ -106,6 +109,10 @@ def main() -> None:
     for entry in args.exclude:
         repo, reason, where = entry.split("=", 2)
         explicit[repo] = {"reason": reason, "where": where}
+    task_exclusions = {}
+    for entry in args.exclude_task:
+        task, reason, evidence = entry.split("=", 2)
+        task_exclusions[task] = {"reason": reason, "evidence": evidence}
 
     rows = [json.loads(line) for line in files["tasks.jsonl"].decode().splitlines()]
     excluded = [json.loads(line) for line in files["excluded.jsonl"].decode().splitlines()]
@@ -116,7 +123,13 @@ def main() -> None:
 
     leaking = tool_env_repos(set(repo_of.values()), tool_env)
     reasons = {repo: REASON for repo in leaking} | {repo: item["reason"] for repo, item in explicit.items()}
-    removed = [row for row in rows if row["family"] == "swesmith" and row["repo"] in reasons]
+    removed = [
+        row
+        for row in rows
+        if (row["family"] == "swesmith" and row["repo"] in reasons) or row["task_id"] in task_exclusions
+    ]
+    if missing := sorted(set(task_exclusions) - {row["task_id"] for row in rows}):
+        raise ValueError(f"Excluded tasks are not in the pool: {missing}")
     kept = [row for row in rows if row not in removed]
     previously_excluded = {row["task_id"] for row in excluded}
     excluded_repos = (
@@ -125,9 +138,15 @@ def main() -> None:
         | {row["repo"] for row in excluded if row.get("leak_risk") in REPO_LEVEL_REASONS}
     )
     in_pool = {row["task_id"] for row in kept}
+    removed_ids = {row["task_id"] for row in removed}
     unused: dict[str, list[str]] = {}
     for task, repo in sorted(repo_of.items()):
-        if task not in in_pool and task not in previously_excluded and repo not in excluded_repos:
+        if (
+            task not in in_pool
+            and task not in previously_excluded
+            and task not in removed_ids
+            and repo not in excluded_repos
+        ):
             unused.setdefault(repo, []).append(task)
     shortfall = SWESMITH_TASKS - sum(row["family"] == "swesmith" for row in kept)
     allocation = proportional({repo: len(tasks) for repo, tasks in unused.items()}, shortfall)
@@ -209,10 +228,12 @@ def main() -> None:
     excluded += [
         {
             "task_id": row["task_id"],
-            "family": "swesmith",
+            "family": row["family"],
             "repo": row["repo"],
             "heldout": row["heldout"],
-            "leak_risk": reasons[row["repo"]],
+            "leak_risk": (
+                task_exclusions[row["task_id"]]["reason"] if row["task_id"] in task_exclusions else reasons[row["repo"]]
+            ),
         }
         for row in removed
     ]
@@ -221,6 +242,38 @@ def main() -> None:
     files["swesmith-packages.jsonl"] = "".join(json.dumps(record) + "\n" for record in records).encode()
 
     swesmith = manifest["families"]["swesmith"]
+    tmax_removed = [row for row in removed if row["family"] == "tmax"]
+    if tmax_removed:
+        # TMax-SFT-16.5K has no spare environments, so removed TMax tasks are not replaced; held-out is topped back up
+        # to round(5%) of the remaining TMax tasks from non-held-out ones if needed.
+        tmax_rows = [row for row in kept if row["family"] == "tmax"]
+        tmax_target = round(HELDOUT_FRACTION * len(tmax_rows))
+        tmax_held = sum(row["heldout"] for row in tmax_rows)
+        tmax_pool = sorted(row["task_id"] for row in tmax_rows if not row["heldout"])
+        tmax_rng = random.Random(f"{SEED}:v{version}-heldout-tmax")
+        tmax_new = set(tmax_rng.sample(tmax_pool, max(0, tmax_target - tmax_held)))
+        for row in tmax_rows:
+            if row["task_id"] in tmax_new:
+                row["heldout"] = True
+                row["heldout_added_in"] = version
+        tmax = manifest["families"]["tmax"]
+        tmax["pool_tasks"] = len(tmax_rows)
+        tmax["heldout_tasks"] = sum(row["heldout"] for row in tmax_rows)
+        tmax.setdefault("excluded_after_build", []).append(
+            {
+                "version": version,
+                "tasks": {row["task_id"]: task_exclusions[row["task_id"]] for row in tmax_removed},
+                "removed": len(tmax_removed),
+                "removed_heldout": sum(row["heldout"] for row in tmax_removed),
+                "replaced": 0,
+                "heldout_added": sorted(tmax_new),
+            }
+        )
+    swesmith_task_exclusions = {
+        row["task_id"]: task_exclusions[row["task_id"]]
+        for row in removed
+        if row["family"] == "swesmith" and row["task_id"] in task_exclusions
+    }
     swesmith["pool_tasks"] = sum(row["family"] == "swesmith" for row in kept)
     swesmith["heldout_tasks"] = sum(row["family"] == "swesmith" and row["heldout"] for row in kept)
     swesmith["repos"] = len({row["repo"] for row in kept if row["family"] == "swesmith"})
@@ -231,9 +284,10 @@ def main() -> None:
         {
             "version": version,
             "repos": dict(sorted(reasons.items())),
+            "tasks": swesmith_task_exclusions,
             "matched_names": leaking,
-            "removed": len(removed),
-            "removed_heldout": sum(row["heldout"] for row in removed),
+            "removed": sum(row["family"] == "swesmith" for row in removed),
+            "removed_heldout": sum(row["heldout"] for row in removed if row["family"] == "swesmith"),
         }
     )
     swesmith[f"topped_up_in_v{version}"] = {
