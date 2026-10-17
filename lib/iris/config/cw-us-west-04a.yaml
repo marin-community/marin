@@ -49,6 +49,9 @@ provisioning:
 # operator's shell and projects it as IRIS_SIGNING_KEY through the iris-controller-env
 # Secret, which task pods do not mount. Rotate with `iris cluster init-keys --rotate`.
 auth:
+  principal_directory:
+    - env:IRIS_PRINCIPAL_DIRECTORY
+    - gcp-secret://projects/hai-gcp-models/secrets/iris-principal-directory/versions/latest
   signing_key:
     - env:IRIS_SIGNING_KEY
     - gcp-secret://projects/748532799086/secrets/iris-cw-us-west-04a-signing-key/versions/1
@@ -60,7 +63,7 @@ auth:
       -----END PUBLIC KEY-----
   allowed_submitters:
     - "*@openathena.ai"
-    - contractor@hai-gcp-models.iam.gserviceaccount.com
+    - principal:human-076
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
 
 platform:
