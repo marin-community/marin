@@ -4,7 +4,7 @@ Usage: build_artifacts.py <cruxeval|two-expert> [--upload]
 Runs on cw-us-east-02a. Copies each listed S3 object to /tmp/artifacts/<repo>/<path relative to marin/>, checks size, computes
 sha256, packs each folder of more than 1,000 files into one tar (the Hub allows 10,000 files per folder) and re-hashes its
 members, writes MANIFEST.tsv (path, bytes, sha256, S3 origin, issue, stored_in, purpose) and README.md. Without --upload it
-prints README.md and MANIFEST.tsv and uploads nothing. With --upload (needs HF_TOKEN in the env, never printed) it creates the
+prints README.md and the repo file count per folder, and uploads nothing. With --upload (needs HF_TOKEN in the env, never printed) it creates the
 public dataset repo, uploads only the repo files that are missing or different (README.md and MANIFEST.tsv always), removes
 stale ones, in commits of 1,000 operations (the Hub allows 128 commits per hour), then checks every file's size and sha256 (LFS) or git blob id (small files) on the Hub.
 """
@@ -145,8 +145,8 @@ print(f"STAGED {repo} {len(rows)} files {sum(r[1] for r in rows)} bytes at {loca
 
 if "--upload" not in sys.argv:
     print("README-BEGIN\n" + (local / "README.md").read_text() + "README-END", flush=True)
-    for line in (local / "MANIFEST.tsv").read_text().splitlines():
-        print("MANIFEST\t" + line, flush=True)
+    for d, n in sorted(collections.Counter(posixpath.dirname(p) for p in expect).items()):
+        print(f"REPO-FOLDER {d or '.'} {n} files", flush=True)
     sys.exit(0)
 
 from huggingface_hub import CommitOperationAdd, CommitOperationDelete, HfApi  # noqa: E402
