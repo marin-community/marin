@@ -94,8 +94,40 @@ def test_archive_row_round_trips_each_sample_kind():
         assert sample_from_archive_row(row) == sample
 
 
-def test_native_summary_reads_evalchemy_normalized_rows(tmp_path):
+@pytest.mark.parametrize(
+    "provenance",
+    [
+        {},
+        {
+            "source": {"dataset": "openai/gsm8k", "split": "test", "revision": None},
+            "reducers": [
+                {
+                    "name": "mean",
+                    "accuracy": "exact_match",
+                    "stderr": "exact_match_stderr",
+                    "repeat_ddof": 0,
+                    "groups": {},
+                    "group_suffix": "",
+                    "group_weights": {},
+                    "trial_metric": "accuracy",
+                    "selected_trial": None,
+                }
+            ],
+            "prompt_length": {
+                "distinct_prompt_count": 1,
+                "longest_prompt_chars": 100,
+                "longest_prompt_tokens": 25,
+                "sha256": "a" * 64,
+            },
+            "requires_judge": False,
+        },
+    ],
+    ids=["core", "provenance"],
+)
+def test_native_summary_reads_evalchemy_normalized_rows(tmp_path, provenance):
     root = str(tmp_path / "run" / "results")
+    contract = _result_contract("gsm8k", "exact_match", "accuracy", 1.0, n_benchmark=1, n_attempted=1)
+    benchmark = {**contract["benchmark_metadata"]["gsm8k"], **provenance}
     data_store = DataStore.open(root, writer_id="evalchemy")
     store = EvaluationStore(data_store)
     try:
@@ -110,14 +142,8 @@ def test_native_summary_reads_evalchemy_normalized_rows(tmp_path):
                 "document": json.dumps(
                     {
                         "results": {"gsm8k": {"exact_match,flexible-extract": 1.0}},
-                        **_result_contract(
-                            "gsm8k",
-                            "exact_match",
-                            "accuracy",
-                            1.0,
-                            n_benchmark=1,
-                            n_attempted=1,
-                        ),
+                        **contract,
+                        "benchmark_metadata": {"gsm8k": benchmark},
                     }
                 ),
                 "scored": True,
@@ -152,8 +178,14 @@ def test_native_summary_reads_evalchemy_normalized_rows(tmp_path):
         )
     }
     assert summary.canonical_metrics == {"gsm8k_5shot": {"accuracy": 1.0}}
-    assert summary.tasks[0].benchmark is not None
-    assert summary.tasks[0].benchmark.primary_metric == "accuracy"
+    task = EvalTaskRef.model_validate_json(summary.tasks[0].model_dump_json())
+    assert task.model_dump(mode="json")["benchmark"] == {
+        "source": None,
+        "reducers": [],
+        "prompt_length": None,
+        "requires_judge": False,
+        **benchmark,
+    }
 
 
 def test_native_summary_partitions_repeated_task_configurations(tmp_path):
@@ -827,8 +859,25 @@ def test_export_uses_evaluator_metadata_for_chat_native_task(tmp_path):
     contract = _result_contract("MATH500", "accuracy", "accuracy", 1.0, n_benchmark=500, n_attempted=10)
     source_metadata = {
         "source": {"dataset": "HuggingFaceH4/MATH-500", "split": "test", "revision": None},
-        "reducers": [{"name": "mean", "accuracy_key": "accuracy", "selected_trial": None}],
-        "prompt_length": {"distinct_prompt_count": 500, "longest_prompt_tokens": 2048},
+        "reducers": [
+            {
+                "name": "mean",
+                "accuracy": "accuracy",
+                "stderr": "accuracy_stderr",
+                "repeat_ddof": 0,
+                "groups": {},
+                "group_suffix": "",
+                "group_weights": {},
+                "trial_metric": "accuracy",
+                "selected_trial": None,
+            }
+        ],
+        "prompt_length": {
+            "distinct_prompt_count": 500,
+            "longest_prompt_chars": 8192,
+            "longest_prompt_tokens": 2048,
+            "sha256": "b" * 64,
+        },
         "requires_judge": False,
     }
     contract["benchmark_metadata"]["MATH500"].update(source_metadata)

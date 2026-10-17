@@ -1920,6 +1920,8 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
                     ],
                     "n_benchmark": 1,
                     "n_attempted": 1,
+                    "reducers": [],
+                    "requires_judge": False,
                 },
             }
         ],
