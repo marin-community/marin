@@ -527,6 +527,7 @@ def marin_temp_bucket(
     prefix: str = "",
     *,
     source_prefix: str | None = None,
+    temp_prefix: str | None = None,
     use_overrides: bool = True,
 ) -> str:
     """Return a lifecycle-managed temporary path. Never returns ``None``.
@@ -550,8 +551,7 @@ def marin_temp_bucket(
     Pulumi-managed lifecycle rules on every data bucket auto-delete objects
     under ``tmp/ttl=Nd/`` after *N* days.
     When ``MARIN_TEMP_PREFIX`` is set, it overrides ambient and explicit source
-    prefixes so every temporary write in that cluster uses the configured
-    bucket.
+    prefixes. An explicit ``temp_prefix`` takes precedence over the environment.
 
     Args:
         ttl_days: Lifecycle TTL in days.  Values not in the active config's
@@ -562,6 +562,8 @@ def marin_temp_bucket(
         source_prefix: Optional path used to choose the temp bucket region.
             Useful when configuring a remote job from a launcher that may be in
             a different region than the job output path.
+        temp_prefix: Explicit scratch destination, taking precedence over
+            ``MARIN_TEMP_PREFIX`` and backend scratch routing.
         use_overrides: Honor ``MARIN_TEMP_PREFIX`` and backend scratch routing.
             Disable only when resolving a legacy data-local path for reads,
             never for writes.
@@ -569,11 +571,10 @@ def marin_temp_bucket(
     cfg = data_config()
     ttl_days = _resolve_ttl_days(ttl_days, cfg.ttl_days)
 
-    override_prefix = os.environ.get(_MARIN_TEMP_PREFIX_ENV) if use_overrides else None
+    override_prefix = temp_prefix or (os.environ.get(_MARIN_TEMP_PREFIX_ENV) if use_overrides else None)
     mp = override_prefix or source_prefix or marin_prefix()
 
-    # A cluster temp override takes precedence over explicit source routing so
-    # all disposable writes from the cluster share one lifecycle-managed bucket.
+    # An explicit destination wins over cluster and backend defaults.
     # Otherwise source_prefix fully determines the backend and region, taking
     # precedence over the ambient marin prefix and VM metadata.
     if override_prefix is not None:
