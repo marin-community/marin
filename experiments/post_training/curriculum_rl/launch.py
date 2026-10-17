@@ -382,7 +382,6 @@ SNOWBALL_MUONH_TUNING = TrainerTuning(
     },
 )
 
-# The round-4 recipe trains one sequence per policy rank per microbatch.
 SNOWBALL_SMOKE_R4 = ScalePreset(
     label="snowball-smoke-r4",
     num_nodes=7,
