@@ -14,10 +14,8 @@ from rigging.filesystem.storage_path import StoragePath as P
 
 for root in sys.argv[1:]:
     root = root.rstrip("/")
-    for kind in sorted(P(root).listdir()):
-        kind = str(kind).rstrip("/")
-        for run in sorted(P(kind).listdir()):
-            run = str(run).rstrip("/")
+    for kind in sorted(str(path).rstrip("/") for path in P(root).ls() if path.isdir()):
+        for run in sorted(str(path).rstrip("/") for path in P(kind).ls() if path.isdir()):
             rounds = [f"{run}/round-1", f"{run}/round-2"] if "-relay" in kind else [run]
             for prefix in rounds:
                 if "/generation/" in prefix or P(f"{prefix}/_SUCCESS").exists():
