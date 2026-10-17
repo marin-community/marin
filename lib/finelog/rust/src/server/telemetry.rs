@@ -43,6 +43,7 @@ const MAX_RECORDS: usize = 10_000;
 const MAX_ATTRIBUTES: usize = 64;
 const MAX_STRING_BYTES: usize = 4_096;
 const MAX_JSON_DEPTH: usize = 32;
+const MAX_HISTOGRAM_BOUNDS: usize = 512;
 const NORMALIZED_ROW_OVERHEAD: usize = 128;
 pub(crate) const TELEMETRY_MAX_ROW_GROUP_ROWS: u32 = 128 * 1024;
 const TELEMETRY_VERSION: u32 = 1;
@@ -209,6 +210,19 @@ struct TelemetryRecord {
     unit: Option<String>,
     #[serde(default)]
     attributes: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExplicitHistogramBody {
+    encoding: String,
+    aggregation_temporality: String,
+    explicit_bounds: Vec<f64>,
+    bucket_counts: Vec<i64>,
+    count: i64,
+    sum: f64,
+    producer_epoch: Option<String>,
+    sequence: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -727,6 +741,11 @@ fn validate_batch(batch: &TelemetryBatch) -> Result<(), ApiError> {
                     "records[{index}] event requires body and forbids value/unit"
                 )));
             }
+            RecordKind::Histogram if record.body.is_some() && record.value.is_none() => {
+                let body = record.body.as_ref().unwrap();
+                validate_json(body, index)?;
+                validate_histogram_body(body, index)?;
+            }
             _ if record.value.is_some_and(f64::is_finite) && record.body.is_none() => {}
             _ => {
                 return Err(ApiError::bad_request(format!(
@@ -782,6 +801,68 @@ fn validate_json(root: &Value, record_index: usize) -> Result<(), ApiError> {
             }
             _ => {}
         }
+    }
+    Ok(())
+}
+
+fn validate_histogram_body(root: &Value, record_index: usize) -> Result<(), ApiError> {
+    let body: ExplicitHistogramBody = serde_json::from_value(root.clone()).map_err(|error| {
+        ApiError::bad_request(format!(
+            "records[{record_index}].body is not an explicit-bucket histogram: {error}"
+        ))
+    })?;
+    if body.encoding != "explicit_bucket_v1" || body.aggregation_temporality != "cumulative" {
+        return Err(ApiError::bad_request(format!(
+            "records[{record_index}].body has an unsupported histogram encoding or temporality"
+        )));
+    }
+    if body.producer_epoch.is_some() != body.sequence.is_some() {
+        return Err(ApiError::bad_request(format!(
+            "records[{record_index}].body requires producer_epoch and sequence together"
+        )));
+    }
+    if let Some(producer_epoch) = &body.producer_epoch {
+        validate_string(
+            producer_epoch,
+            &format!("records[{record_index}].body.producer_epoch"),
+            false,
+        )?;
+    }
+    if body.sequence.is_some_and(|sequence| sequence < 0) || body.count < 0 || !body.sum.is_finite()
+    {
+        return Err(ApiError::bad_request(format!(
+            "records[{record_index}].body has an invalid sequence, count, or sum"
+        )));
+    }
+    if body.explicit_bounds.len() > MAX_HISTOGRAM_BOUNDS
+        || body.bucket_counts.len() != body.explicit_bounds.len() + 1
+        || body.explicit_bounds.iter().any(|bound| !bound.is_finite())
+        || body
+            .explicit_bounds
+            .windows(2)
+            .any(|bounds| bounds[0] >= bounds[1])
+    {
+        return Err(ApiError::bad_request(format!(
+            "records[{record_index}].body has invalid explicit bounds or bucket shape"
+        )));
+    }
+    let mut bucket_total = 0_i64;
+    for bucket_count in body.bucket_counts {
+        if bucket_count < 0 {
+            return Err(ApiError::bad_request(format!(
+                "records[{record_index}].body has a negative bucket count"
+            )));
+        }
+        bucket_total = bucket_total.checked_add(bucket_count).ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "records[{record_index}].body bucket count exceeds the signed-64 range"
+            ))
+        })?;
+    }
+    if bucket_total != body.count {
+        return Err(ApiError::bad_request(format!(
+            "records[{record_index}].body count does not match its buckets"
+        )));
     }
     Ok(())
 }
