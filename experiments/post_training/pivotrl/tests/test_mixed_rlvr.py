@@ -15,9 +15,15 @@ RLVR_MESSAGE = pa.struct([("role", pa.large_string()), ("content", pa.large_stri
 PIVOT_MESSAGE = pa.struct([("role", pa.string()), ("content", pa.string()), ("reasoning_content", pa.string())])
 
 
-def _extra_info(count: int, route: str = "skyrl_gym") -> list[dict]:
-    ultra = {"agent": "a", "route": route, "request_json": json.dumps({"tools": []})}
-    return [{"index": index, "nemotron_ultra": ultra} for index in range(count)]
+def _extra_info(count: int, agents: list[str] | None = None) -> list[dict]:
+    agents = agents or ["a"] * count
+    return [
+        {
+            "index": index,
+            "nemotron_ultra": {"agent": agent, "route": "skyrl_gym", "request_json": json.dumps({"tools": []})},
+        }
+        for index, agent in enumerate(agents)
+    ]
 
 
 def _write(path, filename: str, table: pa.Table) -> dict[str, str]:
@@ -26,10 +32,10 @@ def _write(path, filename: str, table: pa.Table) -> dict[str, str]:
     return {"path": str(path), "filename": filename}
 
 
-def _rlvr(ids: list[str]) -> pa.Table:
+def _rlvr(ids: list[str], agents: list[str] | None = None) -> pa.Table:
     prompts = [[{"role": "user", "content": row_id}] for row_id in ids]
     columns = {"prompt": pa.array(prompts, pa.large_list(RLVR_MESSAGE)), "id": pa.array(ids, pa.large_string())}
-    return pa.table({**columns, "extra_info": _extra_info(len(ids))})
+    return pa.table({**columns, "extra_info": _extra_info(len(ids), agents)})
 
 
 def _pivots(ids: list[str], **counts: list) -> pa.Table:
@@ -38,10 +44,11 @@ def _pivots(ids: list[str], **counts: list) -> pa.Table:
     return pa.table({**columns, "extra_info": _extra_info(len(ids)), **counts})
 
 
-def test_arms_tag_rows_by_route_rlvr_first_and_drop_unscored_turns_and_blank_messages(tmp_path):
+def test_arms_tag_rows_by_route_rlvr_first_and_drop_excluded_rows(tmp_path):
     # Every row also moves to the task-session route MarinSkyRL grades Nemotron Ultra rows on, and a
     # capped pool's rows carry their reply cap in their request.
-    rlvr = _write(tmp_path / "rlvr", "data/train.parquet", _rlvr(["r0", "r1", " "]))
+    rows = _rlvr(["r0", "r1", " ", "code"], agents=["a", "a", "a", "code_gen_simple_agent"])
+    rlvr = {**_write(tmp_path / "rlvr", "data/train.parquet", rows), "exclude_agents": ["code_gen_simple_agent"]}
     swe = {**_write(tmp_path / "swe", TRAIN_FILENAME, _pivots(["s0"])), "max_output_tokens": 4096}
     scored = _pivots(
         ["t0", "t1", "t2"],

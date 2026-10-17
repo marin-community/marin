@@ -52,6 +52,14 @@ class Route(StrEnum):
     TERMINAL = "terminal"
 
 
+MACHINE_AGENTS = (
+    "code_gen_simple_agent",
+    "math_formal_lean_refinement_agent",
+    "ns_tools_simple_agent",
+    "nvarc_inductive_simple_agent",
+)
+"""RLVR1 agents whose sessions execute code in a Docker task machine, which Iris task pods cannot start."""
+
 RETIRED_ROUTE = "skyrl_gym"
 TASK_SESSION_ROUTE = "task_session"
 
@@ -71,6 +79,9 @@ def _pool_rows(pool: dict[str, Any]) -> pa.Table:
     if pool["filename"] == PASS_RATES_FILENAME:
         # Random turns are the candidates the frozen policy was scored on, without their counts.
         table = table.filter(pc.field("exclusion").is_null()).drop_columns(count_columns(table))
+    if "exclude_agents" in pool:
+        agents = pc.struct_field(pc.struct_field(table.column("extra_info"), "nemotron_ultra"), "agent")
+        table = table.filter(pc.invert(pc.is_in(agents, pa.array(pool["exclude_agents"]))))
     if "max_output_tokens" in pool:
         table = _with_output_cap(table, pool["max_output_tokens"])
     return table
@@ -148,7 +159,8 @@ def mix_routes(*, train: dict[str, dict[str, Any]], validation: dict[str, dict[s
 
     Args:
         train: Pools by route, each ``{"path": artifact, "filename": file}``, in row order. A
-            ``pass_rates.parquet`` pool keeps the rows its policy was scored on, and a pool with
+            ``pass_rates.parquet`` pool keeps the rows its policy was scored on, a pool with
+            ``exclude_agents`` drops those Nemotron Ultra agents' rows, and a pool with
             ``max_output_tokens`` caps its rows' replies at that many tokens.
         validation: Validation pools in the same form.
         output_path: Where the two files and ``manifest.json`` go.
@@ -182,9 +194,9 @@ def arm_datasets() -> dict[str, ArtifactStep[Artifact]]:
     """One dataset per kind of arm: ``rlvr1``, ``selected`` pivots and ``random`` candidate turns."""
     runs = {Route.SWE if run.candidates == SWE_CANDIDATES else Route.TERMINAL: run for run in GRUG_K16_LAMBDA_065_RUNS}
     steps = {route: pivot_steps(run) for route, run in runs.items()}
-    rlvr = {Route.RLVR: {"path": RLVR1, "filename": "data/train.parquet"}}
+    rlvr = {Route.RLVR: {"path": RLVR1, "filename": "data/train.parquet", "exclude_agents": MACHINE_AGENTS}}
     validation = {
-        Route.RLVR: {"path": RLVR1, "filename": "data/validation.parquet"},
+        Route.RLVR: {"path": RLVR1, "filename": "data/validation.parquet", "exclude_agents": MACHINE_AGENTS},
         **{
             route: {"path": candidate_step(run.candidates), "filename": VALIDATION_FILENAME}
             for route, run in runs.items()
@@ -207,7 +219,7 @@ def arm_datasets() -> dict[str, ArtifactStep[Artifact]]:
         name: apply(
             user_owned_name(f"pivotrl/mixed-rlvr/{name}"),
             remote(mix_routes, resources=ResourceConfig.with_cpu(cpu=4, ram="64g")),
-            version="2026.10.16.2",
+            version="2026.10.16.3",
             train={**rlvr, **pools},
             validation=validation,
             output_path=OUT,
