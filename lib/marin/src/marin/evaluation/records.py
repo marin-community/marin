@@ -77,9 +77,9 @@ class BenchmarkMetricRef(BaseModel):
 
 
 class BenchmarkMetadataRef(BaseModel):
-    """The benchmark protocol emitted by an evaluation harness."""
+    """The benchmark protocol, retaining evaluator-owned metadata beyond the shared fields."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     schema_version: Literal[1]
     task: str
@@ -325,7 +325,7 @@ class EvalRef(BaseModel):
 
 
 class HardwareRef(BaseModel):
-    """The slice the model was served on. ``region_or_cluster`` is the GCP region or CW cluster name."""
+    """Serving allocation: ``task_count`` slices per instance, placed in a GCP region or CW cluster."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -333,6 +333,7 @@ class HardwareRef(BaseModel):
     accelerator: str
     region_or_cluster: str | None
     task_count: int = 1
+    instances: int = 1
 
 
 class HostedJudgeRef(BaseModel):
