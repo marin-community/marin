@@ -8,9 +8,13 @@ request with ``relay.route``. For every chat completion the proxy:
 
 - adds the backend's credentials (the GLM token never reaches an agent or sandbox);
 - writes one ``requests.jsonl`` record: trial id (``x-ot-trial-id``), author, relay trigger, the
-  request settings exactly as sent, the messages new since the trial's previous request, usage,
+  request settings exactly as sent, the conversation it continues and the messages it adds, usage,
   latency and the full reply (reasoning included). This log is the canonical trace; see
   ``rebuild_traces.py``.
+
+A trial can hold several conversations: Terminus-2's context summarization sends summarizer calls
+and then restarts from a shorter history. A request continues the trial's conversation whose
+messages are a prefix of its own (the longest such); otherwise it starts a new one.
 
 It also serves vLLM's ``/tokenize`` (``count``, ``max_model_len``), which Harbor's mini-swe-agent
 context limiter needs and the GLM relay does not provide. In relay runs the count is the larger of
@@ -18,6 +22,7 @@ the GLM and v0 tokenizations, so the window holds for whichever model answers.
 """
 
 import asyncio
+import hashlib
 import json
 import threading
 import time
@@ -99,6 +104,28 @@ def count_tokens(tokenizer: PreTrainedTokenizerBase, body: dict) -> int:
     return len(tokenizer.encode(rendered, add_special_tokens=False))
 
 
+def message_key(message: dict) -> str:
+    """Identity of a message for prefix matching: role, content, tool calls and tool call id."""
+    calls = [(c.get("function") or {}) for c in message.get("tool_calls") or []]
+    fields = {
+        "role": message.get("role"),
+        "content": message.get("content"),
+        "tool_calls": [[c.get("name"), c.get("arguments")] for c in calls],
+        "tool_call_id": message.get("tool_call_id"),
+    }
+    return hashlib.sha1(json.dumps(fields, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def continued_conversation(conversations: list[list[str]], keys: list[str]) -> int | None:
+    """Index of the longest conversation whose message keys are a prefix of ``keys``."""
+    best = None
+    for index, known in enumerate(conversations):
+        if len(known) <= len(keys) and keys[: len(known)] == known:
+            if best is None or len(known) > len(conversations[best]):
+                best = index
+    return best
+
+
 def build_proxy(
     teacher: Backend,
     max_model_len: int,
@@ -108,7 +135,7 @@ def build_proxy(
 ) -> Starlette:
     client = client or httpx.AsyncClient(timeout=httpx.Timeout(1800, connect=30))
     states: dict[str, TrialState] = defaultdict(TrialState)
-    seen_messages: dict[str, int] = defaultdict(int)
+    conversations: dict[str, list[list[str]]] = defaultdict(list)
 
     async def counts(body: dict) -> dict[Author, int]:
         backends = [teacher] + ([relay.student] if relay else [])
@@ -151,17 +178,25 @@ def build_proxy(
             return JSONResponse({"error": "streaming is not supported by this proxy"}, status_code=400)
         trial = request.headers.get(TRIAL_HEADER)
         messages = body.get("messages", [])
+        keys = [message_key(m) for m in messages]
+        known = conversations[trial or ""]
+        index = continued_conversation(known, keys) if trial else None
+        first = len(known[index]) if index is not None else 0
+        if index is None:
+            known.append(keys)
+            index = len(known) - 1
+        else:
+            known[index] = keys
         record: dict = {
             "ts": time.time(),
             "trial": trial,
             "settings": {k: v for k, v in body.items() if k not in UNLOGGED_REQUEST_KEYS},
+            "conversation": index,
             "n_messages": len(messages),
-            "first_message": seen_messages[trial] if trial else 0,
-            "messages": messages[seen_messages[trial] :] if trial else messages,
-            "tools": body.get("tools") if not trial or seen_messages[trial] == 0 else None,
+            "first_message": first,
+            "messages": messages[first:],
+            "tools": body.get("tools") if first == 0 else None,
         }
-        if trial:
-            seen_messages[trial] = len(messages)
         tokens = await counts(body)
         record["prompt_tokens_local"] = {author.value: value for author, value in tokens.items()}
 

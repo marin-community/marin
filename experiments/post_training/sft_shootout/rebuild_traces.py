@@ -9,7 +9,9 @@ the logged reply (``reasoning`` kept as ``reasoning_content``) and tagged with i
 trigger. The final reply, which no later request echoes, closes the conversation. Each trial attempt
 is joined to its Harbor result through ``agent/trial_correlation_id.txt``.
 
-One row per trial attempt: family, agent, package_revision, relay, run, trial_id, task_id (the task
+One row per conversation of a trial attempt (a trial has more than one when Terminus-2 summarizes
+its context: the summarizer calls and the restarted history are separate conversations). Fields:
+family, agent, package_revision, relay, run, trial_id, conversation, n_conversations, task_id (the task
 folder name, as in the pool manifest), trial_name, sample (0-based index among the task's samples),
 retry (Harbor's infrastructure retry), reward, passed, exception, triggers, tokens (per author:
 turns, prompt, completion, reasoning), messages (assistant turns carry author, trigger, usage,
@@ -43,33 +45,35 @@ def assistant_turn(record: dict) -> dict:
 
 
 def rebuild(records: list[dict]) -> tuple[list[dict], dict | None, list[str]]:
-    """Return the conversation, the tools, and any consistency problems for one trial's records."""
-    messages: list[dict] = []
-    replies: list[dict] = []
+    """Return one conversation, its tools, and any consistency problems, from its records in order.
+
+    Each reply is kept until the next request echoes it as its first new message. A request that adds
+    nothing (a retry of the same request) replaces the pending reply.
+    """
+    conversation: list[dict] = []
     problems: list[str] = []
     tools = records[0].get("tools")
+    seen = 0
+    pending: dict | None = None
     for record in records:
-        if record["first_message"] != len(messages):
-            problems.append(f"gap: expected message {len(messages)}, record starts at {record['first_message']}")
-        messages.extend(record["messages"])
-        if record.get("status") == 200:
-            replies.append(assistant_turn(record))
-    conversation: list[dict] = []
-    reply_index = 0
-    for message in messages:
-        if message.get("role") != "assistant":
-            conversation.append(message)
-            continue
-        if reply_index >= len(replies):
-            problems.append("an echoed assistant message has no logged reply")
-            conversation.append(message)
-            continue
-        turn = replies[reply_index]
-        reply_index += 1
-        if (message.get("content") or "").strip() != (turn.get("content") or "").strip():
-            problems.append(f"assistant turn {reply_index} differs from its logged reply")
-        conversation.append(turn)
-    conversation.extend(replies[reply_index:])
+        if record["first_message"] != seen:
+            problems.append(f"gap: expected message {seen}, record starts at {record['first_message']}")
+        seen = record["n_messages"]
+        new = list(record["messages"])
+        if pending is not None and new:
+            if new[0].get("role") != "assistant":
+                problems.append(f"the reply before message {record['first_message']} was not echoed")
+            else:
+                if (new[0].get("content") or "").strip() != (pending.get("content") or "").strip():
+                    problems.append(f"assistant message {len(conversation)} differs from its logged reply")
+                conversation.append(pending)
+                new = new[1:]
+        if any(m.get("role") == "assistant" for m in new):
+            problems.append(f"record at message {record['first_message']} adds an assistant message with no logged reply")
+        conversation.extend(new)
+        pending = assistant_turn(record) if record.get("status") == 200 else None
+    if pending is not None:
+        conversation.append(pending)
     return conversation, tools, problems
 
 
@@ -134,13 +138,16 @@ def main() -> None:
         "relay": provenance["relay"] is not None,
         "run": prefix,
     }
-    by_trial: dict[str, list[dict]] = defaultdict(list)
+    by_conversation: dict[tuple[str, int], list[dict]] = defaultdict(list)
     for line in StoragePath(f"{prefix}/requests.jsonl").read_text().splitlines():
         record = json.loads(line)
-        by_trial[record.get("trial") or "unknown"].append(record)
+        by_conversation[(record.get("trial") or "unknown", record["conversation"])].append(record)
+    n_conversations = defaultdict(int)
+    for trial_id, _ in by_conversation:
+        n_conversations[trial_id] += 1
     results = harbor_results(StoragePath(prefix))
     rows = []
-    for trial_id, records in sorted(by_trial.items()):
+    for (trial_id, index), records in sorted(by_conversation.items()):
         conversation, tools, problems = rebuild(sorted(records, key=lambda r: r["ts"]))
         if trial_id not in results:
             problems.append("no Harbor trial carries this correlation id")
@@ -148,6 +155,8 @@ def main() -> None:
             {
                 **run,
                 "trial_id": trial_id,
+                "conversation": index,
+                "n_conversations": n_conversations[trial_id],
                 **results.get(trial_id, {}),
                 "triggers": [m["trigger"] for m in conversation if m.get("trigger")],
                 "tokens": token_counts(conversation),
@@ -159,7 +168,7 @@ def main() -> None:
     with StoragePath(output).open("w") as handle:
         for row in rows:
             handle.write(json.dumps(row) + "\n")
-    print(json.dumps({"trials": len(rows), "with_problems": sum(1 for r in rows if r["problems"]), "output": output}))
+    print(json.dumps({"trials": len(n_conversations), "conversations": len(rows), "with_problems": sum(1 for r in rows if r["problems"]), "output": output}))
 
 
 if __name__ == "__main__":

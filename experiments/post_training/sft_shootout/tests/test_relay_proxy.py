@@ -150,3 +150,23 @@ def test_rebuild_restores_replies_authors_and_the_final_turn(relay_app):
     assert [m["role"] for m in conversation] == ["system", "user", "assistant", "user", "assistant"]
     assert conversation[2]["reasoning_content"] == "think first" and conversation[2]["author"] == "v0"
     assert conversation[4]["author"] == "glm" and conversation[4]["trigger"] == "completion_claim"
+
+
+def test_summarization_restart_and_retry_keep_conversations_apart(relay_app):
+    from experiments.post_training.sft_shootout.rebuild_traces import rebuild
+
+    test_client, student_replies, _, log_path = relay_app
+    student_replies.extend([reply("a1"), reply("a1 again"), reply("summary"), reply("b1"), reply("{\"task_complete\": true}")])
+    first = [{"role": "user", "content": "task"}]
+    post(test_client, first)
+    post(test_client, first)  # retried request: replaces the pending reply
+    post(test_client, [{"role": "user", "content": "summarize: task a1 again"}])
+    restarted = [{"role": "user", "content": "task, summary so far"}]
+    post(test_client, restarted)
+    post(test_client, first + [{"role": "assistant", "content": "a1 again"}, {"role": "user", "content": "$"}])
+    records = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert [(r["conversation"], r["first_message"]) for r in records] == [(0, 0), (0, 1), (1, 0), (2, 0), (0, 1)]
+    main = [r for r in records if r["conversation"] == 0]
+    conversation, _, problems = rebuild(main)
+    assert problems == []
+    assert [m["content"] for m in conversation] == ["task", "a1 again", "$", '{"task_complete": true}']
