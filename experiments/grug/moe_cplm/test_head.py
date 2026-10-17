@@ -58,6 +58,7 @@ def example():
 def test_tiled_loss_matches_dense_mixture_values_and_gradients(example, tile):
     params, tokens, labels, segments = example
     weights = jnp.linspace(0, 1, tokens.size).reshape(tokens.shape)
+
     def actual(p):
         return tiled_loss(p, tokens, labels, segments, tile)
 
