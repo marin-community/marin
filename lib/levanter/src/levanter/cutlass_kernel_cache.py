@@ -96,9 +96,13 @@ def cutlass_call(launcher: Any, **kwargs: Any) -> Any:
     site re-traces and re-lowers the same kernel as its own nested ``pjit``.
 
     Keyword arguments must be passed in a consistent order: ``lru_cache`` does not
-    sort them, so a reordered call misses rather than hits.
+    sort them, so a reordered call misses rather than hits. Because the arguments are
+    hashed, ``input_output_aliases`` is given as ``((input_index, output_index), ...)``
+    rather than ``cutlass.jax``'s dict.
     """
     cjax = importlib.import_module("cutlass.jax")
+    if "input_output_aliases" in kwargs:
+        kwargs["input_output_aliases"] = dict(kwargs["input_output_aliases"])
     return cjax.cutlass_call(launcher, **kwargs)
 
 
