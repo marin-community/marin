@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import gc
 import hashlib
+import itertools
 import json
 import random
 import threading
@@ -706,6 +707,70 @@ def test_compaction_streams_multiple_row_groups(monkeypatch, archive_root):
     assert {s.generation for s in ReadView(root).list_shards("samples")} == {2}
     rows = {r["doc_id"]: r["score"] for r in _rows(ReadView(root), "samples")}
     assert rows == {f"{i:03d}": float(i) for i in range(10)}
+
+
+def test_compaction_splits_output_into_disjoint_ascending_key_ranges(monkeypatch, archive_root):
+    # Overlapping flushes merge into several output shards; each key lands in exactly one, newest first.
+    monkeypatch.setattr(shard_writer, "ROW_GROUP_ROWS", 8)
+    root = archive_root
+    store = DataStore.open(root, writer_id="w1", flush_interval=3600)
+    table = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
+    for revision in range(4):
+        table.extend({"id": index, "revision": revision, "pad": "x" * 256} for index in range(revision, 120, 2))
+        store.flush()
+    store.request_stop()
+
+    compact_table(root, "samples", target_bytes=8 * 1024)
+
+    view = ReadView(root)
+    shards = sorted(view.list_shards("samples"), key=lambda shard: shard.min_key or ())
+    assert len(shards) > 1
+    assert all(earlier.max_key < later.min_key for earlier, later in itertools.pairwise(shards))
+    assert sum(shard.rows for shard in shards) == 120
+    revisions = {row["id"]: row["revision"] for row in _rows(view, "samples", columns=["id", "revision"])}
+    assert revisions == {index: index if index < 2 else 2 + index % 2 for index in range(120)}
+
+
+def test_rows_without_every_key_column_merge_in_key_order_before_and_after_compaction(monkeypatch, archive_root):
+    # A row missing a key column leaves its flush unsorted, so both the reader and compaction must sort it
+    # before merging; one-row row groups make the unsorted shard arrive in several pieces.
+    monkeypatch.setattr(shard_writer, "ROW_GROUP_ROWS", 1)
+    root = archive_root
+    store = DataStore.open(root, writer_id="w1", flush_interval=3600)
+    table = store.table("samples", primary_key=("task", "doc"), on_conflict=OnConflict.SUPERSEDE)
+    table.extend([{"task": "b", "doc": 1, "value": 1}, {"task": "a", "doc": 2, "value": 1}])
+    store.flush()
+    table.extend([{"task": "b", "doc": 1, "value": 2}, {"task": "a", "value": 2}, {"task": "a", "doc": 2, "value": 3}])
+    store.flush()
+    store.request_stop()
+    expected = [
+        {"task": "a", "doc": 2, "value": 3},
+        {"task": "a", "doc": None, "value": 2},
+        {"task": "b", "doc": 1, "value": 2},
+    ]
+
+    assert list(ReadView(root).iter_rows("samples", columns=["task", "doc", "value"])) == expected
+    assert compact_table(root, "samples") == CompactionResult(written=3, superseded=2)
+    assert list(ReadView(root).iter_rows("samples", columns=["task", "doc", "value"])) == expected
+
+
+def test_a_key_column_no_row_sets_is_null_for_every_row(archive_root):
+    # No row carries "doc", so the column is absent from every shard and versions resolve on "task" alone.
+    root = archive_root
+    store = DataStore.open(root, writer_id="w1", flush_interval=3600)
+    table = store.table("samples", primary_key=("task", "doc"), on_conflict=OnConflict.SUPERSEDE)
+    table.extend([{"task": "b", "value": 1}, {"task": "a", "value": 1}])
+    store.flush()
+    table.append({"task": "b", "value": 2})
+    store.flush()
+    store.request_stop()
+    expected = [{"task": "a", "value": 1}, {"task": "b", "value": 2}]
+
+    view = ReadView(root)
+    assert list(view.iter_rows("samples", columns=["task", "value"])) == expected
+    assert sorted(_rows(view, "samples", columns=["task", "value"]), key=lambda row: row["task"]) == expected
+    assert compact_table(root, "samples") == CompactionResult(written=2, superseded=1)
+    assert list(ReadView(root).iter_rows("samples", columns=["task", "value"])) == expected
 
 
 def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(tmp_path, monkeypatch):

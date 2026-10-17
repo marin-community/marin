@@ -32,12 +32,29 @@ BLOB_PART_ROW_GROUP_ROWS = 1
 BLOB_DESCRIPTOR_ROW_GROUP_ROWS = 1024
 
 
+def _bounded_slices(rows: pa.Table, max_rows: int) -> Iterator[pa.Table]:
+    """Split rows into slices within the row limit and, above one row, the byte target."""
+    start = 0
+    while start < rows.num_rows:
+        length = min(max_rows, rows.num_rows - start)
+        piece = rows.slice(start, length)
+        while length > 1 and piece.nbytes > ROW_GROUP_TARGET_BYTES:
+            length //= 2
+            piece = rows.slice(start, length)
+        yield piece
+        start += length
+
+
 def row_groups(row_tables: Iterable[pa.Table], *, max_rows: int) -> Iterator[pa.Table]:
-    """Group retained Arrow rows by row count and actual buffer size."""
+    """Group retained Arrow rows by row count and actual buffer size.
+
+    Tables of any length are accepted; one larger than a row group is split first. A single
+    row can still exceed the byte target.
+    """
     group: list[pa.Table] = []
     group_rows = 0
     group_bytes = 0
-    for table in row_tables:
+    for table in (piece for rows in row_tables for piece in _bounded_slices(rows, max_rows)):
         if group and (group_rows + table.num_rows > max_rows or group_bytes + table.nbytes > ROW_GROUP_TARGET_BYTES):
             yield pa.concat_tables(group)
             group = []
