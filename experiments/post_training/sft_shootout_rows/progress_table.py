@@ -62,7 +62,7 @@ def main() -> None:
         "| | " + " | ".join(families) + " | total |",
         "|---|" + "---:|" * (len(families) + 1),
     ]
-    rows: dict[str, list[str]] = {}
+    rows: dict[str, dict[str, str]] = {}
     projected_b, projected_relay = {}, {}
     for family in families:
         eligibility = plain["eligibility"].get(family, {})
@@ -92,16 +92,10 @@ def main() -> None:
             ),
         }
         for key, value in values.items():
-            rows.setdefault(key, []).append(value)
-        drops = plain["candidates"]["dropped_by_family"].get(family, {})
-        for reason, count in sorted(drops.items()):
-            rows.setdefault(f"plain drop: {reason}", []).append(fmt(count))
-        relay_drops = relay["candidates"]["dropped_by_family"].get(family, {})
-        for reason, count in sorted(relay_drops.items()):
-            rows.setdefault(f"relay drop: {reason}", []).append(fmt(count))
-    width = len(families)
-    for key, values in rows.items():
-        values += ["-"] * (width - len(values))
+            rows.setdefault(key, {})[family] = value
+        for arm_name, arm in (("plain", plain), ("relay", relay)):
+            for reason, count in sorted(arm["candidates"]["dropped_by_family"].get(family, {}).items()):
+                rows.setdefault(f"{arm_name} drop: {reason}", {})[family] = fmt(count)
     total_b = sum(projected_b.values())
     total_relay = sum(projected_relay.values())
     totals = {
@@ -109,8 +103,9 @@ def main() -> None:
         "projected B": fmt(total_b),
         "projected relay pool / projected B": f"{total_relay / total_b:.2f}" if total_b else "-",
     }
-    for key, values in rows.items():
-        out.append(f"| {key} | " + " | ".join(values) + f" | {totals.get(key, '')} |")
+    for key, by_family in rows.items():
+        cells = [by_family.get(family, "0" if " drop: " in key else "-") for family in families]
+        out.append(f"| {key} | " + " | ".join(cells) + f" | {totals.get(key, '')} |")
     epochs = {
         "plain": [plain["splits"]["train"]],
         "rs-multi": [rs["splits"][f"epoch-{e}"] for e in range(3)],
