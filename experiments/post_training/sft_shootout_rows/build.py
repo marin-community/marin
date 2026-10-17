@@ -377,7 +377,12 @@ def main() -> None:
         attempted: dict[str, set[str]] = collections.defaultdict(set)
         for trace in traces:
             task = pool.get(trace.get("task_id"))
-            if task is not None and task["heldout"] == (args.arm == "validation") and task["family"] == trace["family"]:
+            if (
+                task is not None
+                and task["heldout"] == (args.arm == "validation")
+                and task["family"] == trace["family"]
+                and trace["relay"] == (args.arm == "relay")
+            ):
                 attempted[trace["family"]].add(trace["task_id"])
         eligible: dict[str, set[str]] = collections.defaultdict(set)
         for attempt in attempts:
