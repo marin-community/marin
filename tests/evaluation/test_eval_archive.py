@@ -93,8 +93,28 @@ def test_archive_row_round_trips_each_sample_kind():
         assert sample_from_archive_row(row) == sample
 
 
-def test_native_summary_reads_evalchemy_normalized_rows(tmp_path):
+@pytest.mark.parametrize(
+    "provenance",
+    [
+        {},
+        {
+            "source": {"dataset": "openai/gsm8k", "split": "test", "revision": None},
+            "reducers": [{"name": "mean", "accuracy": "exact_match", "stderr": "exact_match_stderr"}],
+            "prompt_length": {
+                "distinct_prompt_count": 1,
+                "longest_prompt_chars": 100,
+                "longest_prompt_tokens": 25,
+                "sha256": "a" * 64,
+            },
+            "requires_judge": False,
+        },
+    ],
+    ids=["core", "provenance"],
+)
+def test_native_summary_reads_evalchemy_normalized_rows(tmp_path, provenance):
     root = str(tmp_path / "run" / "results")
+    contract = _result_contract("gsm8k", "exact_match", "accuracy", 1.0, n_benchmark=1, n_attempted=1)
+    benchmark = {**contract["benchmark_metadata"]["gsm8k"], **provenance}
     store = EvaluationStore.open(root, writer_id="evalchemy")
     try:
         store.add_source_artifact(
@@ -107,14 +127,8 @@ def test_native_summary_reads_evalchemy_normalized_rows(tmp_path):
             json.dumps(
                 {
                     "results": {"gsm8k": {"exact_match,flexible-extract": 1.0}},
-                    **_result_contract(
-                        "gsm8k",
-                        "exact_match",
-                        "accuracy",
-                        1.0,
-                        n_benchmark=1,
-                        n_attempted=1,
-                    ),
+                    **contract,
+                    "benchmark_metadata": {"gsm8k": benchmark},
                 }
             ).encode(),
             content_type="application/json",
@@ -148,8 +162,9 @@ def test_native_summary_reads_evalchemy_normalized_rows(tmp_path):
         )
     }
     assert summary.canonical_metrics == {"gsm8k_5shot": {"accuracy": 1.0}}
-    assert summary.tasks[0].benchmark is not None
-    assert summary.tasks[0].benchmark.primary_metric == "accuracy"
+    task = EvalTaskRef.model_validate_json(summary.tasks[0].model_dump_json())
+    assert task.benchmark is not None
+    assert task.benchmark.model_dump(mode="json") == benchmark
 
 
 def test_native_summary_partitions_repeated_task_configurations(tmp_path):
