@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import pickle
 import tarfile
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
@@ -325,31 +326,6 @@ async def test_agent_harness_uses_isolated_task_grading_and_engine_cleanup(answe
             await machine.run(Command(("true",)))
 
 
-@pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
-async def test_agent_harness_file_grade_preserves_rejected_nonobject_tool_arguments(answer, reward):
-    rejected = shell_call("unused", call_id="rejected")
-    rejected["tool_calls"][0]["function"]["arguments"] = '["echo incorrect > /workspace/answer"]'
-    model = ReplayModel([rejected, {"role": "assistant", "content": answer}])
-
-    async def agent(machine, complete):
-        assert machine is not None
-        prefix = ({"role": "user", "content": "Write the answer."},)
-        first = await complete(Prompt(prefix, {}))
-        feedback = {"role": "tool", "tool_call_id": "rejected", "content": "Arguments must be an object"}
-        response = await complete(Prompt((*prefix, first.message, feedback), {}))
-        result = await machine.run(Command(("sh", "-c", f"echo {response.message['content']} > /workspace/answer")))
-        assert result.exit_code == 0
-
-    record = await engine(
-        model,
-        {"local": RecordingShellSimFactory()},
-        harnesses={"agent": agent_harness(lambda context, complete: agent(context.machine, complete))},
-    ).run_task(rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), harness="agent"))
-    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
-    assert record.rollout.conversations[-1].messages[1] == rejected
-    assert record.rollout.conversations[-1].messages[2]["tool_call_id"] == "rejected"
-
-
 @pytest.mark.parametrize("arguments", ['["invalid"]', '"invalid"', "null", "42"])
 async def test_shell_rejects_nonobject_arguments_and_grades_repaired_file(arguments):
     rejected = shell_call("unused", call_id="rejected")
@@ -383,38 +359,6 @@ async def test_declared_outputs_return_in_the_record_and_reach_the_grader():
     )
     assert record.rollout.outputs == {"/workspace/out/task.json": b'{"id": 1}\n'}
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
-
-
-async def test_a_step_harness_returns_declared_outputs_to_the_task_grader():
-    class Session:
-        def __init__(self, context):
-            self.machine = context.machine
-
-        async def prepare(self):
-            return Prompt(({"role": "user", "content": "Write the report."},), {})
-
-        async def advance(self, turn):
-            written = await self.machine.run(
-                Command(("sh", "-c", f"echo {turn.message['content']} > /workspace/report.txt; echo x > /workspace/x"))
-            )
-            assert written.exit_code == 0
-            return Transition(done=True)
-
-        async def close(self):
-            pass
-
-    task = file_task(
-        b'test "$(cat /workspace/report.txt)" = ready && echo 1 || echo 0',
-        output_paths=("/workspace/report.txt",),
-        grader=workspace_grader(argv=("sh", "/tests/grade.sh")),
-    )
-    record = await engine(
-        ReplayModel([{"role": "assistant", "content": "ready"}]),
-        {"local": RecordingShellSimFactory()},
-        harnesses={"fixture": step_harness(Session)},
-    ).run_task(rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime(), harness="fixture"))
-    assert record.rollout.outputs == {"/workspace/report.txt": b"ready\n"}
-    assert record.grade.reward == 1.0
 
 
 class OutputWritingSession:
@@ -1321,20 +1265,128 @@ async def test_grader_without_matching_runtime_is_rejected_before_task_startup(g
     assert model.requests == []
 
 
-@pytest.mark.parametrize("harness", [SHELL, "fixture"])
-async def test_a_graded_state_task_is_rejected_for_every_harness_because_the_engine_captures_no_state(harness):
-    factory = RecordingShellSimFactory()
-    model = ReplayModel([])
-    harnesses = {"fixture": step_harness(lambda _context: FinishingSession())}
-    with pytest.raises(NotImplementedError, match="state answer"):
-        await engine(model, {"local": factory}, harnesses=harnesses).run_task(
-            rollout_spec(
+def workspace_task() -> TaskSpec:
+    return arithmetic_task(
+        answer_type=AnswerType.FILE,
+        grader=workspace_grader(
+            argv=("sh", "/tests/grade.sh"),
+            artifacts=(
+                VerifierArtifact(source="/workspace/answer", target="/workspace/answer", kind=ArtifactKind.FILE),
+            ),
+        ),
+        resources=ResourceGroups(verifier=(inline_resource("grade.sh", b"echo 1"),)),
+    )
+
+
+def bash_binding_task() -> TaskSpec:
+    definition = FunctionDefinition(
+        name="Bash",
+        parameters={
+            "type": "object",
+            "properties": {"script": {"type": "string"}},
+            "required": ["script"],
+            "additionalProperties": False,
+        },
+    )
+    return arithmetic_task(
+        interaction_tools=(definition,), tool_bindings={"Bash": ShellToolBinding(command_parameter="script")}
+    )
+
+
+JUDGE_CONNECTION = JudgeConnection("http://judge.invalid/v1", "private-test-key")
+
+
+@pytest.mark.parametrize(
+    "spec,error,message",
+    [
+        # The engine does not capture state, so it rejects a graded state task for every harness.
+        pytest.param(
+            lambda: rollout_spec(
+                file_task(answer_type=AnswerType.STATE), machine=machine_runtime(), verifier_machine=machine_runtime()
+            ),
+            NotImplementedError,
+            "state answer",
+            id="state-shell",
+        ),
+        pytest.param(
+            lambda: rollout_spec(
                 file_task(answer_type=AnswerType.STATE),
-                harness=harness,
+                harness="step",
                 machine=machine_runtime(),
                 verifier_machine=machine_runtime(),
-            )
-        )
+            ),
+            NotImplementedError,
+            "state answer",
+            id="state-step",
+        ),
+        pytest.param(
+            lambda: rollout_spec(workspace_task(), verifier_machine=machine_runtime()),
+            ValueError,
+            "Workspace tasks require a task machine",
+            id="workspace-shell",
+        ),
+        pytest.param(
+            lambda: rollout_spec(workspace_task(), verifier_machine=machine_runtime(), harness="agent"),
+            ValueError,
+            "Workspace tasks require a task machine",
+            id="workspace-agent",
+        ),
+        # The agent never gets the submit_answer tool, so the grader would reject every answer.
+        pytest.param(
+            lambda: rollout_spec(arithmetic_task(answer_format=AnswerCall()), harness="agent"),
+            NotImplementedError,
+            "task tools",
+            id="answer-call-agent",
+        ),
+        pytest.param(lambda: rollout_spec(judge_task()), ValueError, BASE_URL_ENV, id="judge-without-service"),
+        pytest.param(
+            lambda: rollout_spec(judge_task(model=""), judge_connection=JUDGE_CONNECTION),
+            ValueError,
+            MODEL_ENV,
+            id="judge-without-model",
+        ),
+        pytest.param(
+            lambda: rollout_spec(judge_task(AnswerType.FILE), judge_connection=JUDGE_CONNECTION),
+            NotImplementedError,
+            "conversation answer",
+            id="judge-file-answer",
+        ),
+        pytest.param(
+            lambda: rollout_spec(judge_task(), verifier_machine=machine_runtime(), judge_connection=JUDGE_CONNECTION),
+            ValueError,
+            "does not use a verifier machine",
+            id="judge-verifier-machine",
+        ),
+        pytest.param(
+            lambda: rollout_spec(bash_binding_task()),
+            ValueError,
+            "A shell binding requires a task machine",
+            id="shell-binding-without-machine",
+        ),
+        pytest.param(
+            lambda: rollout_spec(
+                arithmetic_task(environment_requirements=EnvironmentRequirements(capabilities=("shell",)))
+            ),
+            ValueError,
+            "need a selected machine",
+            id="shell-capability-without-machine",
+        ),
+    ],
+)
+async def test_a_spec_that_the_engine_cannot_run_is_rejected_before_machines_and_model_requests(
+    spec, error, message, monkeypatch
+):
+    monkeypatch.delenv(BASE_URL_ENV, raising=False)
+    monkeypatch.delenv(MODEL_ENV, raising=False)
+
+    async def agent(_context, complete):
+        await complete(Prompt(({"role": "user", "content": "Return 12."},), {}))
+
+    factory = RecordingShellSimFactory()
+    model = ReplayModel([{"role": "assistant", "content": "12"}])
+    harnesses = {"step": step_harness(lambda _context: FinishingSession()), "agent": agent_harness(agent)}
+    with pytest.raises(error, match=message):
+        await engine(model, {"local": factory}, harnesses=harnesses).run_task(spec())
     assert factory.machines == []
     assert model.requests == []
 
@@ -2513,30 +2565,6 @@ async def test_blocked_observer_does_not_hold_the_rollout():
     assert record.rollout.metrics["observer_undelivered_events"] > 0
 
 
-async def test_harness_independent_checks_reject_a_workspace_task_without_a_machine_for_every_harness():
-    async def agent(context, complete):
-        await complete(Prompt(({"role": "user", "content": "Write the answer."},), {}))
-
-    task = arithmetic_task(
-        answer_type=AnswerType.FILE,
-        grader=workspace_grader(
-            argv=("sh", "/tests/grade.sh"),
-            artifacts=(
-                VerifierArtifact(source="/workspace/answer", target="/workspace/answer", kind=ArtifactKind.FILE),
-            ),
-        ),
-        resources=ResourceGroups(verifier=(inline_resource("grade.sh", b"echo 1"),)),
-    )
-    factory = RecordingShellSimFactory()
-    model = ReplayModel([])
-    runner = engine(model, {"local": factory}, harnesses={"agent": agent_harness(agent)})
-    for harness in (SHELL, "agent"):
-        with pytest.raises(ValueError, match="Workspace tasks require a task machine"):
-            await runner.run_task(rollout_spec(task, verifier_machine=machine_runtime(), harness=harness))
-    assert factory.machines == []
-    assert model.requests == []
-
-
 async def test_steps_keep_the_harness_data_of_each_transition():
     class Session:
         def __init__(self):
@@ -2561,18 +2589,6 @@ async def test_steps_keep_the_harness_data_of_each_transition():
     assert [step.transition.data for step in record.rollout.conversations[-1].steps] == [("reward", 1), ("reward", 2)]
     # The engine grades with the task's grader; the episode only handled the turns.
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
-
-
-async def test_agent_harness_answer_call_task_is_rejected_before_the_model_runs():
-    # The agent never gets the submit_answer tool, so the grader would reject every answer.
-    async def agent(_context, complete):
-        await complete(Prompt(({"role": "user", "content": "Return 12."},), {}))
-
-    model = ReplayModel([{"role": "assistant", "content": "12"}])
-    runner = engine(model, harnesses={"agent": agent_harness(agent)})
-    with pytest.raises(NotImplementedError):
-        await runner.run_task(rollout_spec(arithmetic_task(answer_format=AnswerCall()), harness="agent"))
-    assert model.requests == []
 
 
 async def test_an_agent_with_two_open_requests_ends_only_its_own_attempt():
@@ -2926,45 +2942,17 @@ async def test_a_judge_task_without_a_connection_uses_the_environment(judge_serv
     assert request["model"] == "environment-judge"
 
 
-@pytest.mark.parametrize(
-    "judge_model,connection,missing",
-    [
-        ("fixture-judge", None, BASE_URL_ENV),
-        ("", JudgeConnection("http://judge.invalid/v1", "private-test-key"), MODEL_ENV),
-    ],
-)
-async def test_a_judge_task_without_a_judge_service_or_model_is_rejected_before_the_model_runs(
-    judge_model, connection, missing, monkeypatch
-):
-    monkeypatch.delenv(BASE_URL_ENV, raising=False)
-    monkeypatch.delenv(MODEL_ENV, raising=False)
-    model = ReplayModel([{"role": "assistant", "content": "12"}])
-    spec = rollout_spec(judge_task(model=judge_model), judge_connection=connection)
-    with pytest.raises(ValueError, match=missing):
-        await engine(model).run_task(spec)
-    assert model.requests == []
-
-
-@pytest.mark.parametrize(
-    "answer_type,verifier_machine,error",
-    [(AnswerType.FILE, None, NotImplementedError), (AnswerType.TEXT, machine_runtime(), ValueError)],
-)
-async def test_a_judge_task_that_the_host_cannot_grade_is_rejected_before_the_model_runs(
-    answer_type, verifier_machine, error
-):
-    connection = JudgeConnection("http://judge.invalid/v1", "private-test-key")
-    spec = rollout_spec(judge_task(answer_type), verifier_machine=verifier_machine, judge_connection=connection)
-    model = ReplayModel([{"role": "assistant", "content": "12"}])
-    with pytest.raises(error):
-        await engine(model, {"local": RecordingShellSimFactory()}).run_task(spec)
-    assert model.requests == []
-
-
 def test_a_judge_connection_never_reaches_the_serialized_spec():
     spec = rollout_spec(judge_task(), judge_connection=JudgeConnection("http://judge.invalid/v1", "private-test-key"))
     serialized = spec.model_dump_json()
     assert "private-test-key" not in serialized
     assert TaskRolloutSpec.model_validate_json(serialized).judge_connection is None
+    pickled = pickle.dumps(spec)
+    assert b"private-test-key" not in pickled
+    restored = pickle.loads(pickled)
+    assert (restored.judge_connection, restored.task, restored.limits) == (None, spec.task, spec.limits)
+    # The spec in memory keeps its connection.
+    assert spec.judge_connection is not None
 
 
 async def test_a_harness_that_catches_its_tool_deadline_cannot_block_the_event_loop():
@@ -3342,27 +3330,6 @@ async def test_a_turn_after_the_model_turn_deadline_is_a_model_failure(answers):
         )
     assert (caught.value.operation, type(caught.value.__cause__)) == (RolloutOperation.MODEL, TimeoutError)
     assert caught.value.rollout.conversations[-1].steps == ()
-
-
-@pytest.mark.parametrize("declaration", ["binding", "capability"])
-def test_a_shell_tool_without_a_task_machine_is_rejected_before_the_model_runs(declaration):
-    if declaration == "binding":
-        definition = FunctionDefinition(
-            name="Bash",
-            parameters={
-                "type": "object",
-                "properties": {"script": {"type": "string"}},
-                "required": ["script"],
-                "additionalProperties": False,
-            },
-        )
-        task = arithmetic_task(
-            interaction_tools=(definition,), tool_bindings={"Bash": ShellToolBinding(command_parameter="script")}
-        )
-    else:
-        task = arithmetic_task(environment_requirements=EnvironmentRequirements(capabilities=("shell",)))
-    with pytest.raises(ValueError, match=r"requires a task machine|need a selected machine"):
-        engine(ReplayModel([])).check(rollout_spec(task))
 
 
 async def test_a_new_conversation_cut_off_by_the_end_of_the_harness_is_recorded_once():

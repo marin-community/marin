@@ -110,10 +110,6 @@ class Harness(Protocol):
         ...
 
 
-def accept(task: TaskSpec) -> None:
-    pass
-
-
 class Episode(Protocol):
     """One attempt of a step-style harness: the first prompt, then the response to each model turn."""
 
@@ -124,13 +120,14 @@ class Episode(Protocol):
     async def close(self) -> None: ...
 
 
+def _accept(task: TaskSpec, limits: RolloutLimits) -> None:
+    pass
+
+
 @dataclass(frozen=True)
 class _StepHarness:
     open: Callable[[HarnessContext], Episode]
-    check_task: Callable[[TaskSpec], None]
-
-    def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
-        self.check_task(task)
+    check: Callable[[TaskSpec, RolloutLimits], None]
 
     async def run(self, context: HarnessContext, recorder: RolloutRecorder) -> None:
         episode = self.open(context)
@@ -146,11 +143,12 @@ class _StepHarness:
 
 
 def step_harness(
-    open_episode: Callable[[HarnessContext], Episode], *, check: Callable[[TaskSpec], None] = accept
+    open_episode: Callable[[HarnessContext], Episode], *, check: Callable[[TaskSpec, RolloutLimits], None] = _accept
 ) -> Harness:
     """A harness for an ``Episode``: ``prepare`` gives the first prompt, and ``advance`` answers each model turn.
 
     ``open_episode`` starts one episode per attempt, for example an episode class. The episode closes in
-    the attempt's cleanup.
+    the attempt's cleanup. ``check`` is the harness's ``check(task, limits)``, and by default it accepts
+    every task.
     """
     return _StepHarness(open_episode, check)

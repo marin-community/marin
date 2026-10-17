@@ -40,11 +40,10 @@ A `ScriptGrader`, or a `VerifyitGrader` with an environment, declares separate r
 
 Fields require explicit values except `trace`, which defaults to `TraceMode.EXACT_TOKENS`, and `judge_connection`,
 which defaults to `None`. `judge_connection` is a verifyit `JudgeConnection` for a judge grader (see
-[Grading](#grading)). It holds an API key, so it is never serialized: `model_dump` and `model_dump_json` omit it.
-Optional fields accept `None`.
-`RolloutLimits.cleanup_timeout` requires a finite, positive value.
-Other deadlines accept `None` or a finite, positive value.
-`max_total_tokens` accepts `None` or a positive integer.
+[Grading](#grading)). It holds an API key, so `model_dump`, `model_dump_json`, and `pickle` leave it out, and a spec
+loaded from them has no connection. Optional fields accept `None`. `RolloutLimits.cleanup_timeout` requires a
+finite, positive value. Other deadlines accept `None` or a finite, positive value. `max_total_tokens` accepts `None`
+or a positive integer.
 
 The engine resolves two registries by key:
 
@@ -171,9 +170,10 @@ async with task_machine(task, factory, runtime, cleanup_timeout=30) as machine:
 
 ### Step harness
 
-`step_harness(open_episode, *, check=accept)` from `rolloutengine.harness` runs an `Episode`, a step-style
-loop. `open_episode(context)` starts one episode for each attempt. An episode class whose constructor takes the
-context can be `open_episode`:
+`step_harness(open_episode, *, check=...)` from `rolloutengine.harness` runs an `Episode`, a step-style loop.
+`check(task, limits)` is the harness's check, and by default it accepts every task. `open_episode(context)`
+starts one episode for each attempt. An episode class whose constructor takes the context can be
+`open_episode`:
 
 1. `prepare()` returns the first `Prompt`. The harness calls `start` with it.
 2. `advance(turn)` runs the turn's operations and returns a `Transition`. If the transition is not done, the
@@ -228,7 +228,7 @@ engine = RolloutEngine(machine_factories, {"agent": agent_harness(run_agent)})
   grading, is a cleanup error.
 - The default `check` rejects a task that declares tools other than a shell binding: final tools, the
   `submit_answer` tool of an `AnswerCall` task, other interaction tools, and tool providers. The agent harness
-  does not give these tools to the agent. An agent that serves them passes its own `check`.
+  does not give these tools to the agent. An agent that serves them passes its own `check(task, limits)`.
 
 ### Shell harness
 
@@ -499,7 +499,8 @@ the service of `TaskRolloutSpec.judge_connection`, or else of `VERIFYIT_JUDGE_BA
 `VERIFYIT_JUDGE_API_KEY`. The judge model is `JudgeSpec.model`, or else `VERIFYIT_JUDGE_MODEL`. The judge reads only
 the conversation. Each judge request has `JudgeSpec.request_timeout`, 120 s by default, and for every rubric except
 labels the OpenAI client retries a failed request up to two times. The verifier deadline stops only the engine's
-wait: the judge call continues in its worker thread until it ends. `check` rejects a judge task with a verifier
+wait: the judge call continues in its worker thread until it ends
+([#10246](https://github.com/marin-community/marin/issues/10246)). `check` rejects a judge task with a verifier
 machine, a judge task whose answer is not in the conversation, such as a file, a judge task with no connection when
 `VERIFYIT_JUDGE_BASE_URL` is not set, and a judge task with no model.
 
