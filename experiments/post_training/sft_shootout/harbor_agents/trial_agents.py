@@ -27,6 +27,7 @@ from harbor.agents.terminus_2.terminus_2 import Terminus2
 TRIAL_HEADER = "x-ot-trial-id"
 ID_FILE = "trial_correlation_id.txt"
 NETWORK_FILE = "agent_network.json"
+READY_TIMEOUT_SEC = 60
 
 
 def _record(logs_dir: Any, trial_id: str) -> None:
@@ -55,9 +56,16 @@ class AgentPhaseNetwork:
             return await super().run(instruction=instruction, environment=environment, context=context)
         sandbox = environment._sandbox
         record: dict[str, Any] = {"agent_domain_allow_list": self.agent_domain_allow_list}
+        started = time.time()
         await sandbox.update_network_settings(domain_allow_list=self.agent_domain_allow_list)
-        record["agent_phase"] = {"at": time.time(), **_sandbox_network(sandbox)}
+        record["agent_phase"] = {"at": started, **_sandbox_network(sandbox)}
         try:
+            # Wait (up to READY_TIMEOUT_SEC) until each allowed domain resolves, and record whether it did.
+            for domain in self.agent_domain_allow_list.split(","):
+                wait = f"for i in $(seq {READY_TIMEOUT_SEC}); do getent hosts {domain} >/dev/null && exit 0; sleep 1; done; exit 1"
+                result = await environment.exec(command=wait, timeout_sec=READY_TIMEOUT_SEC + 30)
+                record["agent_phase"][f"resolves:{domain}"] = result.return_code == 0
+            record["agent_phase"]["ready_after_s"] = round(time.time() - started, 1)
             return await self.run_limited(instruction, environment, context)
         finally:
             await sandbox.update_network_settings(network_block_all=False)
