@@ -127,7 +127,10 @@ def _accept(task: TaskSpec, limits: RolloutLimits) -> None:
 @dataclass(frozen=True)
 class _StepHarness:
     open: Callable[[HarnessContext], Episode]
-    check: Callable[[TaskSpec, RolloutLimits], None]
+    check_task: Callable[[TaskSpec, RolloutLimits], None]
+
+    def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
+        self.check_task(task, limits)
 
     async def run(self, context: HarnessContext, recorder: RolloutRecorder) -> None:
         episode = self.open(context)

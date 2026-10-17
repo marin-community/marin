@@ -54,7 +54,10 @@ def agent_harness(run: AgentRun, *, check: Callable[[TaskSpec, RolloutLimits], N
 @dataclass(frozen=True)
 class _AgentHarness:
     agent: AgentRun
-    check: Callable[[TaskSpec, RolloutLimits], None]
+    check_task: Callable[[TaskSpec, RolloutLimits], None]
+
+    def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
+        self.check_task(task, limits)
 
     async def run(self, context: HarnessContext, recorder: RolloutRecorder) -> None:
         completions = _Completions(recorder)
