@@ -25,6 +25,7 @@ from finestore.eval import (
     write_sample_parquet,
 )
 from finestore.reader import ReadView
+from finestore.store import DataStore
 from fsspec.core import url_to_fs
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.lm_eval_samples import (
@@ -95,29 +96,32 @@ def test_archive_row_round_trips_each_sample_kind():
 
 def test_native_summary_reads_evalchemy_normalized_rows(tmp_path):
     root = str(tmp_path / "run" / "results")
-    store = EvaluationStore.open(root, writer_id="evalchemy")
+    data_store = DataStore.open(root, writer_id="evalchemy")
+    store = EvaluationStore(data_store)
     try:
         store.add_source_artifact(
             "evalchemy/gsm8k_5shot/native/samples_gsm8k_native.jsonl",
             b'{"doc_id": 999}\n',
             content_type="application/x-ndjson",
         )
-        store.add_source_artifact(
-            "evalchemy/gsm8k_5shot/native/results_gsm8k.json",
-            json.dumps(
-                {
-                    "results": {"gsm8k": {"exact_match,flexible-extract": 1.0}},
-                    **_result_contract(
-                        "gsm8k",
-                        "exact_match",
-                        "accuracy",
-                        1.0,
-                        n_benchmark=1,
-                        n_attempted=1,
-                    ),
-                }
-            ).encode(),
-            content_type="application/json",
+        data_store.table("evalchemy_results", primary_key=("source_prefix",)).append(
+            {
+                "source_prefix": "gsm8k_5shot",
+                "document": json.dumps(
+                    {
+                        "results": {"gsm8k": {"exact_match,flexible-extract": 1.0}},
+                        **_result_contract(
+                            "gsm8k",
+                            "exact_match",
+                            "accuracy",
+                            1.0,
+                            n_benchmark=1,
+                            n_attempted=1,
+                        ),
+                    }
+                ),
+                "scored": True,
+            }
         )
         store.add_sample(
             EvalSample(
@@ -154,7 +158,8 @@ def test_native_summary_reads_evalchemy_normalized_rows(tmp_path):
 
 def test_native_summary_partitions_repeated_task_configurations(tmp_path):
     root = str(tmp_path / "run" / "results")
-    store = EvaluationStore.open(root, writer_id="evalchemy")
+    data_store = DataStore.open(root, writer_id="evalchemy")
+    store = EvaluationStore(data_store)
     try:
         for task, score in (("hellaswag_0shot", 0.0), ("hellaswag_10shot", 1.0)):
             store.add_source_artifact(
@@ -162,22 +167,24 @@ def test_native_summary_partitions_repeated_task_configurations(tmp_path):
                 b'{"doc_id": 0}\n',
                 content_type="application/x-ndjson",
             )
-            store.add_source_artifact(
-                f"evalchemy/{task}/native/results_hellaswag.json",
-                json.dumps(
-                    {
-                        "results": {"hellaswag": {"acc,none": score}},
-                        **_result_contract(
-                            "hellaswag",
-                            "acc",
-                            "accuracy",
-                            score,
-                            n_benchmark=1,
-                            n_attempted=1,
-                        ),
-                    }
-                ).encode(),
-                content_type="application/json",
+            data_store.table("evalchemy_results", primary_key=("source_prefix",)).append(
+                {
+                    "source_prefix": task,
+                    "document": json.dumps(
+                        {
+                            "results": {"hellaswag": {"acc,none": score}},
+                            **_result_contract(
+                                "hellaswag",
+                                "acc",
+                                "accuracy",
+                                score,
+                                n_benchmark=1,
+                                n_attempted=1,
+                            ),
+                        }
+                    ),
+                    "scored": True,
+                }
             )
             store.add_sample(
                 EvalSample(

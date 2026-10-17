@@ -1,8 +1,8 @@
 # Running Evaluations with Marin
 
 The shared evaluation launcher runs Evalchemy and Harbor evaluations against a registered model or a
-file-backed model configuration. Selected evaluations share one OpenAI-compatible model server
-and each writes a durable record. The server stops when the group finishes.
+file-backed model configuration. Selected evaluations share one OpenAI-compatible endpoint
+and each writes a durable record. Serving workers stop when the group finishes.
 
 Use the launcher for routine post-hoc evaluations. Use the composable APIs later in this page when
 an evaluation must be part of a Marin pipeline or consume an `ArtifactStep[LevanterCheckpoint]`.
@@ -261,6 +261,10 @@ documents how to register a Hugging Face model or object-store checkpoint.
 - `--limit N` overrides the configured instance cap for every selected evaluation.
 - `--max-concurrent N` caps simultaneous evaluators (default 1). All share one candidate and,
   when configured, one judge. Server-wide inference metrics are omitted when this exceeds 1.
+- `--instances N` starts candidate serving workers behind one request broker (default 1). Each
+  worker gets the full selected accelerator allocation, so `--accelerator H100x1 --instances 8`
+  uses eight H100s, while `H100x8` with eight instances uses 64 H100s.
+  Pipeline parallelism requires one instance. A hosted judge keeps its own single serving instance.
 - `--no-wait` returns after Iris submission. Without it, the command waits for terminal records and
   prints their metrics.
 - `--platform tpu|gpu` overrides the model's default platform when the model resource hint supports
@@ -272,6 +276,25 @@ documents how to register a Hugging Face model or object-store checkpoint.
   it preserves Iris priority inheritance.
 - `--version` and `--description` attach run metadata.
 - `--records-prefix` changes the result store.
+
+Run eight evaluators against eight one-H100 Qwen3-8B workers on RNO2A:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b --platform gpu --accelerator H100x1 \
+  --instances 8 --max-concurrent 8 --federated_cluster cw-rno2a \
+  --evals core --records-prefix s3://marin-us-east-02a/tmp/ttl=7d/evals/qwen3-8b \
+  --no-wait
+```
+
+`--max-concurrent 8` starts up to eight evaluation jobs against the candidate broker endpoint.
+Each Evalchemy evaluator bounds its active evaluation items through
+`extra_model_args.num_concurrent` in its YAML configuration (default 16). Eight evaluators at that
+default can have up to 128 active items. Each broker worker allows 16 concurrent HTTP requests;
+the proxy allows 256 outstanding requests, including requests already running on workers.
+Items can make multiple requests, so these counts measure different stages of execution.
+Brokered sessions do not provide server-wide inference metrics. Results and
+samples under the example's temporary prefix expire after seven days.
 
 Each selected evaluation runs as its own step against shared inference. An evaluation failure gets
 a record for that eval; other steps continue. A server startup failure marks every pending eval as
@@ -292,12 +315,12 @@ TPU-routed runs default to `gs://marin-eval-metadata/evals`. CoreWeave GPU runs 
 `s3://marin-us-east-02a/marin/evals`. `--dry-run` prints the effective prefix.
 
 Every selected evaluation writes `{records_prefix}/{run_id}/record.json` and a FineStore archive
-under its results directory. Evalchemy writes its aggregate JSON and per-task JSONL as FineStore
-source artifacts and writes normalized samples for every extraction filter. Marin derives one
+under its results directory. Evalchemy writes aggregate result documents to the `evalchemy_results`
+table and normalized samples for every extraction filter to `samples`. Marin derives one
 evaluator-neutral `rollouts_v1` conversation per `(task, doc_id, trial_id)` attempt from those samples,
 deduplicated across extraction filters. Harbor preserves its job metadata, trial results, and
 trajectories while writing normalized agentic samples and steps; Marin derives its `rollouts_v1` rows
-from `steps`. The evaluator's raw artifacts remain in FineStore. Harbor's job tree remains the
+from `steps`. Harbor's raw artifacts remain in FineStore. Its job tree remains the
 checkpoint used for resume and inspection. Evalchemy records include the
 normalized launch configuration; Harbor records include the dataset, agent, environment, task limit,
 and source-policy digest. A Harbor infrastructure exception remains ungraded and counts against the

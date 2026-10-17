@@ -27,7 +27,7 @@ from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_REQUIREMENT,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
-from marin.evaluation.lm_eval_samples import rebuild_lm_eval_samples, summarize_native_eval_samples
+from marin.evaluation.lm_eval_samples import summarize_native_eval_samples
 from marin.evaluation.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
     EvalTaskRef,
@@ -301,16 +301,7 @@ def run_evalchemy(
             output_dir,
             tasks=config.tasks,
         )
-        rebuild_lm_eval_samples(
-            output_dir,
-            tasks=summary.tasks,
-            writer_id=f"marin-evalchemy-samples-{uuid.uuid4().hex}",
-        )
         normalize_rollouts(output_dir, writer_id=f"marin-evalchemy-rollouts-{uuid.uuid4().hex}")
-        summary = summarize_native_eval_samples(
-            output_dir,
-            tasks=config.tasks,
-        )
     except Exception as exc:
         raise EvalPipelineError(
             str(exc),

@@ -325,7 +325,7 @@ class EvalRef(BaseModel):
 
 
 class HardwareRef(BaseModel):
-    """The slice the model was served on. ``region_or_cluster`` is the GCP region or CW cluster name."""
+    """Serving allocation: ``task_count`` slices per instance, placed in a GCP region or CW cluster."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -333,6 +333,7 @@ class HardwareRef(BaseModel):
     accelerator: str
     region_or_cluster: str | None
     task_count: int = 1
+    instances: int = 1
 
 
 class HostedJudgeRef(BaseModel):

@@ -7,9 +7,8 @@ Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG``; the parent builds it in
 :mod:`marin.evaluation.evalchemy.runner`. Each task runs through the evalchemy fork's ``evalchemy``
 CLI once (one invocation per task so each carries its own ``num_fewshot``) with lm-eval's
 ``local-completions`` (or ``local-chat-completions``) API model pointed at the served URL. Evalchemy
-writes its aggregate JSON, sample JSONL, and normalized sample rows directly to the FineStore archive
-at ``out_path``. The ordinary ``--output_path`` is a temporary directory used for Evalchemy's local
-completion check and is discarded after each task.
+writes result documents and normalized sample rows directly to FineStore tables at ``out_path``.
+The parent validates those tables after this client finishes.
 """
 
 from __future__ import annotations
@@ -19,14 +18,11 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import urllib.request
 from importlib.util import find_spec
 from pathlib import Path
 
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
-EVALCHEMY_RESULTS_PREFIX = "results_"
-EVALCHEMY_RESULTS_SUFFIX = ".json"
 
 # Without a configured cap, an lm-eval-native generation task gets the served context minus this
 # prompt reserve, so the model config's context window sets its budget the way Evalchemy's own
@@ -165,7 +161,7 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
     return ",".join(f"{key}={value}" for key, value in args.items())
 
 
-def build_command(config: dict, task: dict, output_path: str, python: str, max_length: int | None) -> list[str]:
+def build_command(config: dict, task: dict, python: str, max_length: int | None) -> list[str]:
     """The ``evalchemy`` argv for one task. ``python`` identifies the evaluator virtualenv.
 
     One invocation per task so each carries its own ``num_fewshot`` (lm-eval's ``--num_fewshot`` is a
@@ -192,11 +188,6 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         task["name"],
         *(["--gen_kwargs", ",".join(gen_kwargs)] if gen_kwargs else []),
         *budget_args,
-        "--output_path",
-        output_path,
-        # FineStore owns the durable native artifacts and normalized sample rows. Evalchemy keeps
-        # its aggregate JSON in this temporary directory only for the completion check below.
-        "--log_samples",
         "--finestore_output_path",
         config["out_path"],
         "--finestore_output_prefix",
@@ -224,22 +215,6 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
     return cmd
 
 
-def scored_results(local_out: str) -> bool:
-    """Whether any ``results_*.json`` under ``local_out`` holds a non-empty ``results`` payload.
-
-    lm-eval exits 0 and writes an empty ``results`` dict when every request to the endpoint failed
-    (e.g. the server crashed mid-task), so exit code and file presence alone cannot vouch for a task.
-    """
-    for dirpath, _, filenames in os.walk(local_out):
-        for filename in filenames:
-            if not (filename.startswith(EVALCHEMY_RESULTS_PREFIX) and filename.endswith(EVALCHEMY_RESULTS_SUFFIX)):
-                continue
-            with open(os.path.join(dirpath, filename)) as handle:
-                if json.load(handle).get("results"):
-                    return True
-    return False
-
-
 def main() -> None:
     config = json.loads(os.environ[CONFIG_ENV_KEY])
     tasks = config["tasks"]
@@ -255,19 +230,12 @@ def main() -> None:
     print(f"served max_model_len: {served} (lm-eval max_length={max_length})", flush=True)
     failures: list[str] = []
     for task in tasks:
-        with tempfile.TemporaryDirectory() as local_out:
-            # Evalchemy is installed beside the uvx environment's interpreter.
-            cmd = build_command(config, task, local_out, sys.executable, max_length)
-            print(f"running evalchemy: {' '.join(cmd)}", flush=True)
-            result = subprocess.run(cmd)
-            produced = os.listdir(local_out)
-            scored = scored_results(local_out)
+        # Evalchemy is installed beside the uvx environment's interpreter.
+        cmd = build_command(config, task, sys.executable, max_length)
+        print(f"running evalchemy: {' '.join(cmd)}", flush=True)
+        result = subprocess.run(cmd)
         if result.returncode != 0:
             failures.append(f"{task['name']}: evalchemy exited {result.returncode}")
-        elif not produced:
-            failures.append(f"{task['name']}: produced no artifacts")
-        elif not scored:
-            failures.append(f"{task['name']}: results are empty (every request to the endpoint failed?)")
     print(f"evalchemy client wrote {len(tasks)} task result(s) to FineStore at {out_path}", flush=True)
     if failures:
         raise SystemExit("evalchemy task failures: " + "; ".join(failures))

@@ -155,6 +155,7 @@ class EvaluationBatch:
     provenance: LaunchProvenance
     submission_cluster: str
     max_concurrent: int
+    instances: int = 1
     judge: HostedJudge | None = None
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
     source_model_config: ModelConfigRef | None = None
@@ -247,6 +248,7 @@ def _record(
         eval=evaluation,
         hardware=HardwareRef(
             task_count=serving.task_count,
+            instances=batch.instances,
             platform=batch.accelerator.platform.value,
             accelerator=batch.accelerator.label,
             region_or_cluster=(batch.accelerator.target_cluster or batch.accelerator.region or _UNCONSTRAINED),
@@ -502,6 +504,7 @@ def run_evaluation_steps(
         capability_origin=batch.capability_origin,
         api_model=batch.api_model,
         priority=batch.priority_band,
+        instances=batch.instances,
     )
     with ExitStack() as stack:
         try:

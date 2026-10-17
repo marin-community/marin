@@ -21,6 +21,8 @@ from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geome
 from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args
 from marin.inference.config import (
     BrokerConfig,
+    InferenceProxyConfig,
+    InferenceWorkerConfig,
     IrisConfig,
     LevanterEngineConfig,
     RemoteInferenceConfig,
@@ -33,6 +35,7 @@ from marin.inference.config import (
 logger = logging.getLogger(__name__)
 
 ENDPOINT_READY_TIMEOUT_SECONDS = 2400
+_EVAL_BROKER_REQUEST_TIMEOUT_SECONDS = 1800.0
 EVAL_SERVE_MAX_NUM_BATCHED_TOKENS = 512
 DEFAULT_SERVE_CPU = 8.0
 _HF_CONFIG_FILENAME = "config.json"
@@ -242,6 +245,16 @@ def inference_config_for_model(
 ) -> RemoteInferenceConfig:
     """Lower one model and selected accelerator into remote inference configuration."""
     serve = resolved_serve_config(model)
+    if instances > 1 and broker is None:
+        # Match evaluation clients' long-generation budget and allow cold worker startup.
+        broker = BrokerConfig(
+            worker=InferenceWorkerConfig(request_timeout_seconds=_EVAL_BROKER_REQUEST_TIMEOUT_SECONDS * 0.9),
+            proxy=InferenceProxyConfig(
+                request_timeout_seconds=_EVAL_BROKER_REQUEST_TIMEOUT_SECONDS,
+                readiness_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
+            ),
+            request_lease_timeout_seconds=_EVAL_BROKER_REQUEST_TIMEOUT_SECONDS * 0.95,
+        )
     if serve.speculative is not None and accelerator.platform is not Platform.GPU:
         raise ValueError("speculative serving requires the GPU vLLM backend")
     geometry = serving_geometry(serve, accelerator)

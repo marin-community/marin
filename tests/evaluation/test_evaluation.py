@@ -18,13 +18,12 @@ import pytest
 from click.testing import CliRunner
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
-    EvalSample,
     EvaluationStore,
-    Grading,
     SampleKind,
     sample_from_archive_row,
 )
 from finestore.reader import ReadView
+from finestore.store import DataStore
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
 from marin.evaluation.eval_policy import HARBOR_COMMIT, SEPTEMBER_16_VERSION, source_config_digest
@@ -580,31 +579,28 @@ def _write_evalchemy_output(
         }
         canonical_results[task] = {canonical_name: next(iter(results[task].values()))}
 
-    store = EvaluationStore.open(output_dir, writer_id="evalchemy-test")
+    data_store = DataStore.open(output_dir, writer_id="evalchemy-test")
+    store = EvaluationStore(data_store)
     try:
-        store.add_source_artifact(
-            f"evalchemy/{task_dir}/native/results_test.json",
-            json.dumps(
-                {
-                    "results": results,
-                    "benchmark_metadata": benchmark_metadata,
-                    "canonical_results": canonical_results,
-                    "task_outcomes": {
-                        task: {"status": "succeeded", "scored_count": (scored_counts or {}).get(task, count)}
-                        for task, count in sample_counts.items()
-                    },
-                }
-            ).encode(),
-            content_type="application/json",
+        data_store.table("evalchemy_results", primary_key=("source_prefix",)).append(
+            {
+                "source_prefix": task_dir,
+                "document": json.dumps(
+                    {
+                        "results": results,
+                        "benchmark_metadata": benchmark_metadata,
+                        "canonical_results": canonical_results,
+                        "task_outcomes": {
+                            task: {"status": "succeeded", "scored_count": (scored_counts or {}).get(task, count)}
+                            for task, count in sample_counts.items()
+                        },
+                    }
+                ),
+                "scored": True,
+            }
         )
         for task, rows in samples.items():
             normalized_task = task_dir if len(samples) == 1 else f"{task_dir}/{task}"
-            payload = ("\n".join(json.dumps(row) for row in rows) + "\n").encode()
-            store.add_source_artifact(
-                f"evalchemy/{task_dir}/native/samples_{task}_native.jsonl",
-                payload,
-                content_type="application/x-ndjson",
-            )
             for row in rows:
                 for sample in samples_from_lm_eval(normalized_task, row, primary_sources[task]):
                     store.add_sample(sample)
@@ -1220,7 +1216,7 @@ def test_evalchemy_executor_uses_code_task_scored_count_when_samples_omit_scores
     }
 
 
-def test_evalchemy_executor_rebuilds_native_prompts_before_normalizing_rollouts(tmp_path, monkeypatch):
+def test_evalchemy_executor_normalizes_native_prompts_into_rollouts(tmp_path, monkeypatch):
     output_dir = f"file://{tmp_path / 'native-prompt'}"
     prompt = json.dumps([{"role": "user", "content": "Question: 2+2?"}])
     raw = _lm_eval_generation(0, "exact_match", 1.0, "4")
@@ -1231,25 +1227,6 @@ def test_evalchemy_executor_rebuilds_native_prompts_before_normalizing_rollouts(
         {"gsm8k": {"exact_match,none": 1.0}},
         {"gsm8k": [raw]},
     )
-    with EvaluationStore.open(output_dir, writer_id="evalchemy-without-prompt") as store:
-        store.add_sample(
-            EvalSample(
-                task="gsm8k_5shot",
-                doc_id="0",
-                kind=SampleKind.GENERATION,
-                output="4",
-                grading=Grading(
-                    method="lm-eval:exact_match",
-                    metric="exact_match",
-                    filter="none",
-                    score=1.0,
-                    passed=True,
-                ),
-                metrics={"exact_match": 1.0},
-                correct=True,
-            )
-        )
-        store.seal()
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
         lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
@@ -2291,12 +2268,14 @@ def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
         evaluations=(final_evaluation,),
         priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         max_concurrent=1,
+        instances=8,
     )
 
     paths = _run_test_batch(batch)
 
     assert len(paths) == 1
     assert read_record(paths[0]).status is RunStatus.SUCCEEDED
+    assert read_record(paths[0]).hardware.instances == 8
     assert _step_status(batch, 0) == STATUS_SUCCESS
     assert executed == [final_evaluation.identity.output_dir]
     assert priorities == [job_pb2.PRIORITY_BAND_INTERACTIVE]
