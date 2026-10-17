@@ -14,11 +14,12 @@ from taskcompendium.models import (
     NoGrader,
     ScriptGrader,
     VerifyitGrader,
+    grades_with_judge,
     require_resolved_environment,
 )
 from taskcompendium.runtime.environment import validate_machine_spec
 
-from rolloutengine.grading import is_judge, judge_connection
+from rolloutengine.grading import judge_connection
 from rolloutengine.machines import _machine_spec
 from rolloutengine.spec import TaskRolloutSpec
 
@@ -33,7 +34,7 @@ def check_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, MachineFac
     """
     task = spec.task
     grader = task.grader
-    judge = is_judge(grader)
+    judge = grades_with_judge(grader)
     # The engine grades a judge on the host, so it uses no machine for the judge's environment.
     grader_environment = grader.environment if isinstance(grader, VerifyitGrader | ScriptGrader) and not judge else None
     if judge:
