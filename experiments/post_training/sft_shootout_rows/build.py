@@ -253,7 +253,10 @@ def replay_rows(prefix: str) -> tuple[list[str], list[dict], dict]:
 
 
 def cut_replay(entries: list[tuple[str, dict]], b_tokens: int) -> tuple[list[tuple[str, dict]], dict]:
-    """Take the frozen slice in seeded order up to the first prefix whose supervised tokens reach round(B / 4)."""
+    """Take the frozen slice in seeded order up to the first prefix whose supervised tokens reach round(B / 4).
+
+    Whole rows only: the row that crosses R is kept in full (the overshoot is retained, no boundary-row masking).
+    """
     target = round(REPLAY_FRACTION_OF_B * b_tokens)
     order = list(range(len(entries)))
     random.Random(REPLAY_ORDER_SEED).shuffle(order)
@@ -265,7 +268,10 @@ def cut_replay(entries: list[tuple[str, dict]], b_tokens: int) -> tuple[list[tup
         supervised += entries[position][1]["supervised_tokens"]
     if supervised < target:
         raise ValueError(f"Replay slice holds {supervised} supervised tokens, short of R = {target}")
+    if len(cut) > len(entries):
+        raise ValueError("Replay cut holds more rows than the slice")
     return cut, {
+        "rule": "whole rows, first seeded prefix reaching R; overshoot retained, no boundary-row masking",
         "order_seed": REPLAY_ORDER_SEED,
         "target_supervised_tokens": target,
         "supervised_tokens": supervised,
