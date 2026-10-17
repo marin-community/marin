@@ -2,20 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import logging
 import os
 import subprocess
-import time
 import tomllib
-from dataclasses import asdict
 from pathlib import Path
 
 import pytest
 from marin.external_dependencies import MARIN_SKYRL
 
 from tests.rl.launch_document_census import render_launch_census
-
-logger = logging.getLogger(__name__)
 
 
 @pytest.mark.timeout(540)
@@ -26,7 +21,6 @@ def test_rl_launch_documents_load_with_the_installed_launcher(tmp_path: Path) ->
     package = next(package for package in lock["package"] if package["name"] == MARIN_SKYRL.distribution)
     assert package["source"]["git"].rsplit("#", 1)[1] == MARIN_SKYRL.commit
     census = render_launch_census(tmp_path / "artifacts")
-    (tmp_path / "manifest.json").write_text(json.dumps(asdict(census)))
     assert not census.failures, census.failures
     assert census.documents
     assert {entry.document["runtime"]["launcher_commit"] for entry in census.documents} == {MARIN_SKYRL.commit}
@@ -35,7 +29,6 @@ def test_rl_launch_documents_load_with_the_installed_launcher(tmp_path: Path) ->
     output = tmp_path / "loaded.json"
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
-    start = time.monotonic()
     result = subprocess.run(
         [
             "uv",
@@ -60,15 +53,6 @@ def test_rl_launch_documents_load_with_the_installed_launcher(tmp_path: Path) ->
     )
     assert output.exists(), result.stderr
     report = json.loads(output.read_text())
-    logger.info(
-        "Launcher %s at %s: %d loaded, %d failed; setup %.2fs, loading %.2fs",
-        report["installed_commit"],
-        report["launcher_source"],
-        len(report["documents"]),
-        len(report["failures"]),
-        time.monotonic() - start - report["load_duration"],
-        report["load_duration"],
-    )
     assert not report["failures"], report["failures"]
     assert result.returncode == 0, result.stderr
     assert tuple(entry["case"] for entry in report["documents"]) == census.cases
