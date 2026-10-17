@@ -9,7 +9,7 @@ comment's last edit, so editing an approved comment needs a fresh approval. The 
 ids, not logins: ids never change or get reused, while a login freed by a rename can be claimed by someone else.
 
 An approved comment first gets an experiment id in the Marin Belay registry (``experiments/belay/registry`` on the
-registry branch): the next free ``X####``, with a ``status: approved`` entry built from the comment, recorded in the
+registry branch): the next free ``X####``, with a ``status: queued`` entry built from the comment, recorded in the
 registry's ``intake_ids.json`` so a retried run reuses it. It is then copied (quoted, attributed, headed with its id,
 with @-mentions and marker syntax neutralized) into the week's Belay issue (the one open issue labeled
 ``belay-weekly``), the bot replies on the intake issue with the id, and the intake comment gets a rocket reaction.
@@ -152,7 +152,7 @@ def registry_entry(
         f"category: {q(category)}",
         f"summary: {q(summary)}",
         "source: intake",
-        "status: approved",
+        "status: queued",
         "details:",
         *(f"- {q(line)}" for line in comment.body.splitlines() if line.strip()),
         "intake:",

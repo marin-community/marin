@@ -115,7 +115,7 @@ def test_intake_bot_entries_are_valid_registry_files(tmp_path):
     (experiment,) = R.load_registry(tmp_path)
     assert experiment.id == "X0042" and experiment.slug == "per-head-router-temperature"
     assert experiment.category == "Unsorted"  # not one of the categories
-    assert experiment.status is R.Status.APPROVED and experiment.source is R.Source.INTAKE
+    assert experiment.status is R.Status.QUEUED and experiment.source is R.Source.INTAKE
     assert experiment.intake == R.Intake(url=comment.url, author="someone", approved_by="ClassicLarry")
     assert experiment.summary == "learn it"
 

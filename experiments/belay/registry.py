@@ -37,7 +37,7 @@ CATEGORIES: tuple[str, ...] = tuple(json.loads((REGISTRY_DIR / "categories.json"
 class Status(StrEnum):
     """Where an experiment is in its lifecycle."""
 
-    APPROVED = "approved"
+    QUEUED = "queued"
     """Accepted for testing (intake approval or agent proposal); no trial yet."""
     RUNNING = "running"
     """At least one trial is in flight."""
@@ -329,7 +329,7 @@ def main(argv: list[str]) -> None:
     summary = sub.add_parser("summary", help="markdown summary of a week's experiments")
     summary.add_argument("--since", required=True, help="ISO date, inclusive")
     summary.add_argument("--until", required=True, help="ISO date, exclusive")
-    new = sub.add_parser("new", help="allocate the next id and write an approved entry")
+    new = sub.add_parser("new", help="allocate the next id and write a queued entry")
     new.add_argument("--slug", required=True)
     new.add_argument("--name", required=True)
     new.add_argument("--category", required=True, choices=CATEGORIES)
@@ -360,7 +360,7 @@ def main(argv: list[str]) -> None:
             category=args.category,
             summary=args.summary,
             source=Source(args.source),
-            status=Status.APPROVED,
+            status=Status.QUEUED,
             first_batch=args.first_batch,
             intake=intake,
         )
