@@ -9,14 +9,23 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import matplotlib as mpl
 
 mpl.use("Agg")
 import matplotlib.pyplot as plt
-from plot import SURVIVAL, tracker_cells
+
+PLOT_PATH = Path(__file__).with_name("plot.py")
+PLOT_SPEC = importlib.util.spec_from_file_location("campaign_critical_difference", PLOT_PATH)
+if PLOT_SPEC is None or PLOT_SPEC.loader is None:
+    raise ImportError(f"could not load campaign critical-difference module from {PLOT_PATH}")
+plot = importlib.util.module_from_spec(PLOT_SPEC)
+sys.modules[PLOT_SPEC.name] = plot
+PLOT_SPEC.loader.exec_module(plot)
 
 SHORT_NAMES = {
     "Qwen/Qwen3.6-35B-A3B": "Qwen3.6",
@@ -54,22 +63,24 @@ def main() -> None:
     if selection["tracker_sha256"] != tracker_hash:
         raise ValueError("selection and baseline plots must use the same tracker snapshot")
     winner = selection["winner"]
-    benchmarks, cells = tracker_cells(args.tracker)
+    benchmark_order, cells = plot.tracker_cells(args.tracker)
     flops_rows = csv_rows(args.flops)
     flops = {row["model"]: float(row["total_flops"]) for row in flops_rows}
     models = [winner, *SHORT_NAMES]
     if set(flops) != set(models):
         raise ValueError("FLOP cohort differs from the selected winner and fixed baselines")
+    benchmarks = plot.comparison_benchmarks(benchmark_order, cells, models, selection)
     statistics = {(row["model"], row["benchmark"]): row for row in csv_rows(args.statistics)}
-    if len(statistics) != len(models) * len(benchmarks):
-        raise ValueError("statistics omit at least one model-benchmark cell")
+    expected_statistics = {(model, benchmark) for model in models for benchmark in benchmarks}
+    if set(statistics) != expected_statistics:
+        raise ValueError("statistics differ from the selected model-benchmark panel")
     rows = []
     for benchmark in benchmarks:
         for model in models:
             cell = cells[model][benchmark]
             stat = statistics[(model, benchmark)]
             score = float(stat["score"])
-            if abs(score - cell.score) > 1e-9 or stat["source"] != cell.results_path:
+            if abs(float(stat["tracker_score"]) - cell.score) > 1e-9 or stat["source"] != cell.results_path:
                 raise ValueError(f"statistics differ from tracker: {model} / {benchmark}")
             radius = CI_MULTIPLIER * float(stat["adjusted_sem"])
             rows.append(
@@ -133,7 +144,8 @@ def main() -> None:
         "selection_sha256": hashlib.sha256(args.selection.read_bytes()).hexdigest(),
         "statistics_sha256": hashlib.sha256(args.statistics.read_bytes()).hexdigest(),
         "flops_sha256": hashlib.sha256(args.flops.read_bytes()).hexdigest(),
-        "confidence_interval": f"score +/- 1.96 x task-level SEM / sqrt({SURVIVAL}), clipped to [0, 1]",
+        "score_precision": "full-precision task aggregate; tracker score is presentation-only",
+        "confidence_interval": f"score +/- 1.96 x task-level SEM / sqrt({plot.SURVIVAL}), clipped to [0, 1]",
         "benchmark_count": len(benchmarks),
         "baseline_count": len(models) - 1,
     }

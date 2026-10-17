@@ -35,9 +35,13 @@ DRAWS = 100_000
 SEED = 20260924
 SCORE = re.compile(r"^([01](?:\.\d+)?)\s+\((s3://[^)]+)\)$")
 CONTINUOUS = frozenset({"truthfulqa", "mrcr", "SOTOPIA-hard", "cruxeval", "ot-tblite-recovery"})
+EARLY_SEAL_REQUIREMENTS = {
+    "swebench-verified": (450, 0.002),
+    "ot-tblite-recovery": (270, 0.02),
+}
 SNOWBALL_FLOPS = 1.2440924703713099e23
 SHARED100_MODEL = "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09"
-STATISTICS_VERSION = "recovered-metrics-v5"
+STATISTICS_VERSION = "recovered-metrics-v6-full-precision"
 
 
 @dataclass(frozen=True)
@@ -97,12 +101,11 @@ def scored_count(cell: Cell) -> tuple[int, str]:
         rewards, _ = continuous_rewards(cell)
         if view.is_sealed():
             return int(rewards.size), "sealed_finestore_sample_rewards"
-        if (
-            cell.benchmark == "swebench-verified"
-            and rewards.size >= 450
-            and abs(float(np.mean(rewards)) - cell.score) <= 0.002
-        ):
-            return int(rewards.size), "early_sealed_swebench_sample_rewards"
+        requirement = EARLY_SEAL_REQUIREMENTS.get(cell.benchmark)
+        if requirement is not None:
+            minimum_trials, score_tolerance = requirement
+            if rewards.size >= minimum_trials and abs(float(np.mean(rewards)) - cell.score) <= score_tolerance:
+                return int(rewards.size), "early_sealed_sample_rewards"
         raise ValueError(f"unsealed results for {cell.model} / {cell.benchmark}")
     task_name, task_coverage = next(iter(coverage.items()))
     count = int(task_coverage.get("n_scored") or 0)
@@ -173,7 +176,8 @@ def recovered_statistics(cell: Cell, recovered: dict[str, dict]) -> dict[str, ob
     return {
         "model": cell.model,
         "benchmark": cell.benchmark,
-        "score": cell.score,
+        "score": mean,
+        "tracker_score": cell.score,
         "trial_count": count,
         "raw_reward_mean": mean,
         "sem": sem,
@@ -200,7 +204,8 @@ def cell_statistics(cell: Cell, recovered: dict[str, dict]) -> dict[str, object]
             return {
                 "model": cell.model,
                 "benchmark": cell.benchmark,
-                "score": cell.score,
+                "score": mean,
+                "tracker_score": cell.score,
                 "trial_count": count,
                 "raw_reward_mean": mean,
                 "sem": sem,
@@ -218,7 +223,8 @@ def cell_statistics(cell: Cell, recovered: dict[str, dict]) -> dict[str, object]
         return {
             "model": cell.model,
             "benchmark": cell.benchmark,
-            "score": cell.score,
+            "score": mean,
+            "tracker_score": cell.score,
             "trial_count": count,
             "raw_reward_mean": mean,
             "sem": sem,
@@ -245,7 +251,8 @@ def cell_statistics(cell: Cell, recovered: dict[str, dict]) -> dict[str, object]
     return {
         "model": cell.model,
         "benchmark": cell.benchmark,
-        "score": cell.score,
+        "score": mean,
+        "tracker_score": cell.score,
         "trial_count": count,
         "raw_reward_mean": mean,
         "sem": sem,
@@ -261,6 +268,25 @@ def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
         writer = csv.DictWriter(target, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
+
+
+def comparison_benchmarks(
+    benchmark_order: list[str],
+    cells: dict[str, dict[str, Cell]],
+    models: list[str],
+    selection: dict[str, object],
+) -> list[str]:
+    """Return the selection panel after verifying baseline coverage."""
+    requested = selection.get("benchmarks", benchmark_order)
+    if not isinstance(requested, list) or not all(isinstance(benchmark, str) for benchmark in requested):
+        raise ValueError("selection benchmarks must be a list of benchmark names")
+    unknown = set(requested) - set(benchmark_order)
+    if unknown:
+        raise ValueError(f"selection contains benchmarks absent from tracker: {sorted(unknown)}")
+    missing = [(model, benchmark) for model in models for benchmark in requested if benchmark not in cells[model]]
+    if missing:
+        raise ValueError(f"baseline cohort is incomplete on the selection panel: {missing[:5]}")
+    return requested
 
 
 def collect_statistics(
@@ -279,7 +305,7 @@ def collect_statistics(
                     row.get("statistics_version") == STATISTICS_VERSION
                     and row.get("recovered_manifest_sha256") == recovered_hash
                 ):
-                    cache[(row["model"], row["benchmark"], row["source"], row["score"])] = row
+                    cache[(row["model"], row["benchmark"], row["source"], row["tracker_score"])] = row
     rows: list[dict[str, object]] = []
     pending = []
     for model in models:
@@ -417,7 +443,7 @@ def main() -> None:
     models = [winner, *baselines]
     if any(model not in cells for model in models):
         raise ValueError(f"missing model rows: {set(models) - set(cells)}")
-    benchmarks = [name for name in benchmark_order if all(name in cells[model] for model in models)]
+    benchmarks = comparison_benchmarks(benchmark_order, cells, models, selection)
     if len(benchmarks) < 2:
         raise ValueError("insufficient complete paired benchmarks")
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -457,10 +483,12 @@ def main() -> None:
     (args.output_dir / "README.md").write_text(
         f"# Critical-difference figures\n\nSelected Snowball: `{winner}`. "
         f"The cohort has {len(baselines)} non-Snowball baselines and "
-        f"{len(benchmarks)} jointly scored benchmarks. Excluded pending benchmarks: {', '.join(excluded) or 'none'}. "
+        f"{len(benchmarks)} selection-panel benchmarks. Excluded benchmarks: {', '.join(excluded) or 'none'}. "
         f"Tracker SHA-256: `{tracker_hash}`. Recovered-metrics SHA-256: `{recovered_hash}`. "
         f"Baseline-FLOPs SHA-256: `{hashlib.sha256(flops_path.read_bytes()).hexdigest()}`.\n\n"
-        "Scores are sampled 100,000 times from independent normal distributions using task-level SEM expanded by "
+        "Calculations use full-precision task aggregates recovered from durable trial evidence; tracker scores are "
+        "three-decimal presentation values only. Scores are sampled 100,000 times from independent normal "
+        "distributions using task-level SEM expanded by "
         "1/sqrt(0.9) for infrastructure tolerance, then clipped to [0, 1]. Binary-score SEM is the exact Bernoulli "
         "sample-variance expression from the score and scored-trial count; continuous metrics use stored trial rewards. "
         "Audited recovered cells use their independently aggregated reward SEM and scored-trial count. "

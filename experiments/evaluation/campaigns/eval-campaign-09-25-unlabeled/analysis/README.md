@@ -1,13 +1,18 @@
 # Campaign analysis
 
 `snowball_tournament/pairwise.py` selects one Snowball-lineage checkpoint from
-the five candidate rows in the campaign tracker. It adapts the September 17
-campaign's `generate_snowball_paired_win_rates.py` and writes the complete
-pairwise table, ranking, and tracker-snapshot hash.
+all Snowball and Grug candidate rows in the campaign tracker. It requires a
+complete observed candidate panel after excluding FinanceBench, PIQA, and
+TriviaQA. A benchmark is decisive only when the adjusted 95% confidence
+interval for the paired score difference excludes zero; all other outcomes are
+ties. Comparisons use the full-precision aggregate recovered from durable trial
+evidence; the tracker's three-decimal score is presentation-only. The tool
+writes the benchmark-level decisions, complete pairwise table, ranking, cell
+statistics, and input hashes.
 
 `critical_difference/plot.py` adapts the September 17 campaign's
 `release-figures/generate_release_figures.py`. It plots the selected checkpoint
-against the ten non-Snowball baselines in `critical_difference/baseline_flops.csv`.
+against the 13 non-Snowball baselines in `critical_difference/baseline_flops.csv`.
 It reads each scored archive and any audited recovered metrics, then writes the
 cell-level uncertainty table, FLOP table, rank tables, and uncontrolled and
 FLOP-controlled critical-difference figures. The output README records the

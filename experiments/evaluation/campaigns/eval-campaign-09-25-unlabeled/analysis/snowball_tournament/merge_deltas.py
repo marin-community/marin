@@ -21,7 +21,7 @@ mpl.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 from matplotlib.patches import Rectangle
-from pairwise import tracker_scores
+from pairwise import critical_difference
 
 MODEL_BASES = {
     "open-athena/Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12": (
@@ -67,7 +67,10 @@ def source_links(path: Path, models: set[str]) -> dict[tuple[str, str], str]:
 
 
 def comparison_rows(tracker: Path) -> tuple[list[str], list[dict[str, object]]]:
-    benchmarks, _, scores = tracker_scores(tracker)
+    benchmarks, cells = critical_difference.tracker_cells(tracker)
+    scores = {
+        model: {benchmark: cell.score for benchmark, cell in model_cells.items()} for model, model_cells in cells.items()
+    }
     models = set(MODEL_BASES) | {base for base, _, _, _, _ in MODEL_BASES.values()}
     links = source_links(tracker, models)
     rows = []

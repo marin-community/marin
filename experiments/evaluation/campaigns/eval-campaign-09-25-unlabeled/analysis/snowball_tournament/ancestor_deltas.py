@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.patches import Rectangle
 from merge_deltas import COLORS, COLUMNS, source_links
-from pairwise import tracker_scores
+from pairwise import critical_difference
 
 PREFIX = "open-athena/"
 STEP92 = PREFIX + "Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92"
@@ -98,7 +98,10 @@ class Comparison:
 
 
 def comparisons(tracker: Path, lineages: tuple[Lineage, ...]) -> list[Comparison]:
-    benchmarks, _, scores = tracker_scores(tracker)
+    benchmarks, cells = critical_difference.tracker_cells(tracker)
+    scores = {
+        model: {benchmark: cell.score for benchmark, cell in model_cells.items()} for model, model_cells in cells.items()
+    }
     models = {lineage.model for lineage in lineages} | {
         parent.model for lineage in lineages for parent in lineage.parents
     }

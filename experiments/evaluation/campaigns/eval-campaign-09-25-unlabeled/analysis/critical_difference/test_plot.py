@@ -35,6 +35,8 @@ def test_corrected_replay_cell_uses_trial_rewards_for_uncertainty(monkeypatch) -
     statistics = plot.cell_statistics(cell, {})
 
     assert statistics["trial_count"] == 3
+    assert math.isclose(statistics["score"], 2 / 3)
+    assert statistics["tracker_score"] == 0.667
     assert math.isclose(statistics["raw_reward_mean"], 2 / 3)
     assert math.isclose(statistics["sem"], 1 / 3)
     assert statistics["sem_basis"] == "corrected_replay_trial_rewards"
@@ -94,6 +96,58 @@ def test_tblite_fractional_rewards_use_observed_variance(monkeypatch) -> None:
     cell = plot.Cell("model", "ot-tblite-recovery", 0.5, "s3://bucket/results")
     result = plot.cell_statistics(cell, {})
     assert result["trial_count"] == 3
+    assert result["score"] == 0.5
+    assert result["tracker_score"] == 0.5
     assert result["raw_reward_mean"] == 0.5
     assert math.isclose(result["sem"], 1 / math.sqrt(12), abs_tol=1e-12)
     assert math.isclose(result["adjusted_sem"], 1 / math.sqrt(12 * 0.9), abs_tol=1e-12)
+
+
+def test_tblite_early_seal_requires_ninety_percent_of_trials(monkeypatch) -> None:
+    plot = load_plot()
+
+    class SampleView:
+        def __init__(self, _url):
+            pass
+
+        def is_sealed(self):
+            return False
+
+    class Filesystem:
+        def exists(self, _path):
+            return True
+
+    monkeypatch.setattr(plot, "ReadView", SampleView)
+    monkeypatch.setattr(plot, "filesystem_for", lambda url: (Filesystem(), url))
+    monkeypatch.setattr(plot, "read_json", lambda _: {"status": "failed", "coverage": {}})
+    cell = plot.Cell("model", "ot-tblite-recovery", 0.5, "s3://bucket/results")
+    monkeypatch.setattr(plot, "continuous_rewards", lambda _: (plot.np.full(270, 0.5), "grading:reward:None"))
+
+    count, basis = plot.scored_count(cell)
+
+    assert count == 270
+    assert basis == "early_sealed_sample_rewards"
+
+    monkeypatch.setattr(plot, "continuous_rewards", lambda _: (plot.np.full(269, 0.5), "grading:reward:None"))
+    try:
+        plot.scored_count(cell)
+    except ValueError as error:
+        assert "unsealed results" in str(error)
+    else:
+        raise AssertionError("an early seal below 90% must not be accepted")
+
+
+def test_comparison_benchmarks_uses_selection_panel() -> None:
+    plot = load_plot()
+    models = ["snowball", "baseline"]
+    cells = {
+        model: {
+            benchmark: plot.Cell(model, benchmark, 0.5, f"s3://bucket/{model}/{benchmark}/results")
+            for benchmark in ("included", "excluded")
+        }
+        for model in models
+    }
+
+    assert plot.comparison_benchmarks(["included", "excluded"], cells, models, {"benchmarks": ["included"]}) == [
+        "included"
+    ]
