@@ -513,9 +513,10 @@ The engine grades by grader kind:
 
 A judge grades on the host even when its grader declares an environment, so it uses no verifier machine. It
 calls the service of `TaskRolloutSpec.judge_connection`, or else of `VERIFYIT_JUDGE_BASE_URL` with the key in
-`VERIFYIT_JUDGE_API_KEY`. The judge reads only the conversation. `check` rejects a judge task with a verifier
-machine, a judge task whose answer is not in the conversation, such as a file, and a judge task with no
-connection when `VERIFYIT_JUDGE_BASE_URL` is not set.
+`VERIFYIT_JUDGE_API_KEY`. The judge model is `JudgeSpec.model`, or else `VERIFYIT_JUDGE_MODEL`. The judge reads
+only the conversation. `check` rejects a judge task with a verifier machine, a judge task whose answer is not in
+the conversation, such as a file, a judge task with no connection when `VERIFYIT_JUDGE_BASE_URL` is not set, and a
+judge task with no model.
 
 Group grading belongs to the caller.
 

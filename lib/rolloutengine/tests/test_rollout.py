@@ -55,7 +55,7 @@ from taskcompendium.runtime.output_capture import MAX_OUTPUT_FILES
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import ShellToolConfig
 from verifyit.grade import grade as verifyit_grade
-from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, JudgeConnection
+from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
 from verifyit.spec import RUBRIC_LABELS, FunctionCall, JudgeSpec, PredictedActionSpec, StructuredExactSpec, parse_spec
 
 from rolloutengine.agent import agent_harness
@@ -269,14 +269,14 @@ def file_task(
     )
 
 
-def judge_task(answer_type: AnswerType = AnswerType.TEXT) -> TaskSpec:
+def judge_task(answer_type: AnswerType = AnswerType.TEXT, *, model: str = "fixture-judge") -> TaskSpec:
     spec = JudgeSpec(
         references=("12",),
         rubric=RUBRIC_LABELS,
         system_prompt="Grade the response.",
         prompt_template="Reference: {reference}\nCandidate: {candidate}",
         label_scores={"PASS": 1.0, "FAIL": 0.0},
-        model="fixture-judge",
+        model=model,
     )
     return arithmetic_task(answer_type=answer_type, grader=verifyit_package(spec, environment=GRADER_ENVIRONMENT).grader)
 
@@ -2915,17 +2915,31 @@ async def test_a_judge_task_grades_on_the_host_without_a_verifier_machine(judge_
 async def test_a_judge_task_without_a_connection_uses_the_environment(judge_server, monkeypatch):
     monkeypatch.setenv(BASE_URL_ENV, judge_url(judge_server))
     monkeypatch.setenv(API_KEY_ENV, "private-test-key")
+    monkeypatch.setenv(MODEL_ENV, "environment-judge")
     judge_server.reply = "FAIL"
-    record = await engine(ReplayModel([{"role": "assistant", "content": "13"}])).run_task(rollout_spec(judge_task()))
+    model = ReplayModel([{"role": "assistant", "content": "13"}])
+    record = await engine(model).run_task(rollout_spec(judge_task(model="")))
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 0.0)
-    assert len(judge_server.requests) == 1
+    [request] = judge_server.requests
+    assert request["model"] == "environment-judge"
 
 
-async def test_a_judge_task_without_a_judge_service_is_rejected_before_the_model_runs(monkeypatch):
+@pytest.mark.parametrize(
+    "judge_model,connection,missing",
+    [
+        ("fixture-judge", None, BASE_URL_ENV),
+        ("", JudgeConnection("http://judge.invalid/v1", "private-test-key"), MODEL_ENV),
+    ],
+)
+async def test_a_judge_task_without_a_judge_service_or_model_is_rejected_before_the_model_runs(
+    judge_model, connection, missing, monkeypatch
+):
     monkeypatch.delenv(BASE_URL_ENV, raising=False)
+    monkeypatch.delenv(MODEL_ENV, raising=False)
     model = ReplayModel([{"role": "assistant", "content": "12"}])
-    with pytest.raises(ValueError, match=BASE_URL_ENV):
-        await engine(model).run_task(rollout_spec(judge_task()))
+    spec = rollout_spec(judge_task(model=judge_model), judge_connection=connection)
+    with pytest.raises(ValueError, match=missing):
+        await engine(model).run_task(spec)
     assert model.requests == []
 
 
