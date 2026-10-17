@@ -31,6 +31,7 @@ import argparse
 import contextlib
 import io
 import json
+import re
 import logging
 import os
 import subprocess
@@ -40,6 +41,7 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator
+from urllib.parse import urlparse
 from dataclasses import replace
 from pathlib import Path
 
@@ -70,9 +72,9 @@ GLM_TOKENIZER = "zai-org/GLM-5.3"
 GLM_TOKENIZER_REVISION = "ba32f8c19c8738e2c57c71798c601d477a7bf844"
 CLUSTER = "cw-us-east-02a"
 CAPABILITY_ORIGIN = "https://iris-cw-us-east-02a.oa.dev"
-# The only host a sandbox may reach during the agent run (the proxy's capability URL); see
-# AgentPhaseNetwork in harbor_agents/trial_agents.py.
-AGENT_DOMAIN_ALLOW_LIST = CAPABILITY_ORIGIN.removeprefix("https://")
+# The only host a sandbox may reach during the agent run: the host of the proxy's minted capability URL
+# (checked when the URL is minted); see AgentPhaseNetwork in harbor_agents/trial_agents.py.
+AGENT_DOMAIN_ALLOW_LIST = "iris.oa.dev"
 HARBOR_PROJECT = "config/external/harbor"
 AGENTS_PATH = Path(__file__).parent / "harbor_agents"
 # v0: the policy's serving config for Snowball v0, at the revision pinned for the sweep (4eeb756b has
@@ -203,8 +205,14 @@ def extract_packages(parquet: str, names: list[str] | None, dest: Path) -> None:
         raise ValueError(f"not in {parquet}: {sorted(wanted - found)}")
 
 
-def scrub(root: Path, secret: str) -> None:
-    """Replace ``secret`` in every text file under ``root``."""
+def scrub(root: Path, capability: str) -> None:
+    """Replace the capability URL's token in every text file under ``root``.
+
+    Agents echo the URL in their logs, sometimes wrapped across lines (also JSON-escaped as ``\\n``
+    inside result.json), so the token is matched with any line breaks between its characters.
+    """
+    token = max(urlparse(capability).path.split("/"), key=len)
+    pattern = re.compile(r"(?:\s|\\n)*".join(re.escape(c) for c in token))
     for path in root.rglob("*"):
         if not path.is_file():
             continue
@@ -212,8 +220,9 @@ def scrub(root: Path, secret: str) -> None:
             text = path.read_text()
         except UnicodeDecodeError:
             continue
-        if secret in text:
-            path.write_text(text.replace(secret, "<capability-url>"))
+        scrubbed = pattern.sub("<capability-token>", text)
+        if scrubbed != text:
+            path.write_text(scrubbed)
 
 
 def job_config(args: argparse.Namespace, api_base: str | None, jobs_dir: Path) -> dict:
@@ -296,6 +305,8 @@ def main() -> None:
                 relay = RelayPolicy(student=stack.enter_context(served_student()), budget_tokens=int(window * args.budget_fraction))
             app = build_proxy(teacher, window, RequestLog(work / "requests.jsonl"), relay)
             capability = stack.enter_context(capability_endpoint(app, args.name))
+            if urlparse(capability).hostname != AGENT_DOMAIN_ALLOW_LIST:
+                raise RuntimeError(f"the capability URL's host is not the agent-phase allow-list {AGENT_DOMAIN_ALLOW_LIST}")
             config = job_config(args, f"{capability}/v1", work / "jobs")
         returncode = run_harbor(args, config, work)
 

@@ -27,16 +27,21 @@ TARGETS = [
     "https://astral.sh/uv/0.7.13/install.sh",
     "http://deb.debian.org/debian/",
     "http://archive.ubuntu.com/ubuntu/",
-    "https://iris-cw-us-east-02a.oa.dev/",
+    "https://iris.oa.dev/",
     "https://www.google.com/",
+    # By IP address, without DNS: GitHub (140.82.112.0/20) and Cloudflare's resolver.
+    "https://140.82.112.3/",
+    "https://140.82.114.4/",
+    "https://1.1.1.1/",
 ]
 # Prints one JSON object: target -> HTTP status, or the error class when the request fails.
 PROBE = r"""
-import json, sys, urllib.request, urllib.error
+import json, ssl, sys, urllib.request, urllib.error
+insecure = ssl._create_unverified_context()
 out = {}
 for url in sys.argv[1:]:
     try:
-        out[url] = urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=10).status
+        out[url] = urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=10, context=insecure).status
     except urllib.error.HTTPError as e:
         out[url] = e.code
     except Exception as e:

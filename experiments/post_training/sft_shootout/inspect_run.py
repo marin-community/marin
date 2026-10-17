@@ -42,6 +42,8 @@ def show_trial(result_path: StoragePath) -> None:
     for path in agent_dir.ls() if agent_dir.exists() else []:
         if str(path).endswith(".txt"):
             print(f"  agent log {path.name}:\n{path.read_text()[-4000:]}")
+        if path.name in ("agent_network.json", "network_probe.json"):
+            print(f"  {path.name}:\n{path.read_text()}")
     trajectory = StoragePath(f"{agent_dir}/trajectory.json")
     if not trajectory.exists():
         return
