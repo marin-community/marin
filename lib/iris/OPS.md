@@ -414,7 +414,7 @@ iris process profile cpu -t /user/job/0     # profile a running task container
 
 Iris compares JAX compile keys across participating GPU processes before a multi-process compile enters XLA. A `GPU compile fingerprint mismatch` error lists each process index and compile key; check for rank-dependent lowering, shapes, or compiler options. A missing peer fails this check after 60 seconds with the identities that arrived. This check uses JAX's pre-compile key, so a stall caused by divergence inside XLA can still require a native thread profile (`iris process profile --native -t <task> threads`).
 
-GPU environments set `NCCL_RAS_ENABLE=1`, `NCCL_DEBUG=INFO`, and `NCCL_DEBUG_SUBSYS=INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS`. The default timestamp is `[%F %T.%3f]`. Short debug-smoke jobs may additionally select `COLL,PROXY,NVLS,REG`; do not use `TRACE` or `CALL` for normal runs.
+GPU environments set `NCCL_RAS_ENABLE=1` and `NCCL_DEBUG=WARN`, with timestamp `[%F %T.%3f]`. To trace NCCL init or network selection, set `NCCL_DEBUG=INFO` and `NCCL_DEBUG_SUBSYS=INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS` on that job; short debug-smoke jobs may additionally select `COLL,PROXY,NVLS,REG`. Do not use `TRACE` or `CALL` for normal runs. At INFO, three concurrent 32-GPU training jobs logged about 80,000 lines per second, more than Finelog forwards, so leave it off for production training.
 
 GPU Levanter runs persist NCCL's job-global communicator view from JAX process 0 every ten minutes. The probe is bounded and records unavailable, failed, and timed-out polls explicitly. See [`docs/ops/training-stall-alert-contract.md`](../../docs/ops/training-stall-alert-contract.md#nccl-ras-snapshots) for metric semantics and a bounded Finelog query.
 

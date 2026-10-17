@@ -776,8 +776,10 @@ class EnvironmentSpec:
             default_env_vars.update(
                 {
                     NCCL_RAS_ENABLE_ENV: "1",
-                    "NCCL_DEBUG": "INFO",
-                    "NCCL_DEBUG_SUBSYS": "INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS",
+                    # WARN only: at INFO with the diagnostic subsystems, three
+                    # concurrent 32-GPU training jobs wrote ~80k lines/s, above
+                    # Finelog's forwarding rate. Jobs needing init/network traces set INFO.
+                    "NCCL_DEBUG": "WARN",
                     "NCCL_DEBUG_TIMESTAMP": "[%F %T.%3f]",
                 }
             )
