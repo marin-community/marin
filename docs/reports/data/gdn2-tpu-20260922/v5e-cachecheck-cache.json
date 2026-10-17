@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "entries": {
+    "6a3ab3623cfeb6ec85c2af38c1aa6e77c3b311d69651774f43278d4fa6c7cc87": {
+      "context": {
+        "source_sha256": "6e915d62c411aebb5dd658dddc893ec6edff4118c41aed7d66b6f8361bfc4c9e",
+        "jax_version": "0.11.1",
+        "device_type": "TPU v5 lite",
+        "device_count": 1,
+        "shape": [
+          1,
+          256,
+          1,
+          128
+        ],
+        "dtype": "float32",
+        "implementation": "candidate",
+        "backend_env": {
+          "LIBTPU_INIT_ARGS": "--xla_tpu_scoped_vmem_limit_kib=50000 --xla_tpu_use_enhanced_launch_barrier=true",
+          "JAX_PLATFORMS": "tpu,cpu",
+          "JAX_DEFAULT_MATMUL_PRECISION": "",
+          "GDN2_FWD_DIAG": ""
+        },
+        "xla_flags": "",
+        "configs": [
+          [
+            128,
+            16
+          ],
+          [
+            128,
+            32
+          ]
+        ],
+        "objective": "forward_backward",
+        "seed": 0,
+        "decay": 0.01,
+        "reference_backend": "cpu",
+        "atol": 0.0001,
+        "rtol": 0.0001,
+        "repetitions": 3,
+        "warmup": 2
+      },
+      "block_sizes": {
+        "bt": 128,
+        "bc": 64,
+        "mb": 32
+      },
+      "objective_time": 0.00033614999847486615,
+      "results_path": "/iris/outputs/gdn2-1790110194171403712.jsonl"
+    }
+  }
+}
