@@ -72,6 +72,10 @@ class _Conversation:
         self.assistant_index: int | None = None
         self.unserved_prompt: tuple[int, ...] | None = None
 
+    @property
+    def has_turn(self) -> bool:
+        return bool(self.steps) or self.pending is not None
+
     def request(self, observations: tuple[dict[str, Any], ...], token_ids: tuple[int, ...] | None) -> ModelRequest:
         messages = (*self.messages, *observations)
         if token_ids is not None:
@@ -175,9 +179,16 @@ class _Recorder:
 
     @property
     def has_response(self) -> bool:
-        """Whether the last conversation has a model turn. The engine grades only then."""
+        """Whether a conversation has a model turn. The engine grades only then."""
         conversation = self.conversation
-        return conversation is not None and (bool(conversation.steps) or conversation.pending is not None)
+        return (conversation is not None and conversation.has_turn) or any(record.steps for record in self.earlier)
+
+    def graded_messages(self) -> tuple[dict[str, Any], ...] | None:
+        """The chat of the last conversation that has a model turn, or ``None``."""
+        conversation = self.conversation
+        if conversation is not None and conversation.has_turn:
+            return tuple(conversation.messages)
+        return next((record.messages for record in reversed(self.earlier) if record.steps), None)
 
     async def start(self, prompt: Prompt) -> ModelTurn:
         await self._enter()
@@ -293,9 +304,10 @@ class _Recorder:
         conversation = self.conversation
         assert conversation is not None
         if isinstance(outcome, GenerationLimitReached):
+            if not conversation.has_turn:
+                conversation.unserved_prompt = outcome.prompt_token_ids
             if not self.has_response:
                 self.no_response_reason = "Generation limit reached before the first response"
-                conversation.unserved_prompt = outcome.prompt_token_ids
             self.stop_reason = LENGTH_STOP_REASON
             self.stopped = True
             raise LimitReached(LENGTH_STOP_REASON) from outcome

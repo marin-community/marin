@@ -41,6 +41,8 @@ def check_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, MachineFac
         judge_connection(spec)
         if task.answer_type not in CONVERSATION_ANSWERS:
             raise NotImplementedError(f"The engine grades a judge only on a conversation answer, not {task.answer_type}")
+    if task.answer_type == AnswerType.STATE and not isinstance(grader, NoGrader):
+        raise NotImplementedError("The engine does not capture a state answer, so it cannot grade one")
     require_resolved_environment(task.environment_requirements)
     if grader_environment is not None:
         require_resolved_environment(grader_environment)

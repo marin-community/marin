@@ -1322,13 +1322,18 @@ async def test_grader_without_matching_runtime_is_rejected_before_task_startup(g
     assert model.requests == []
 
 
-async def test_state_answer_is_rejected_because_the_shell_harness_cannot_capture_state():
+@pytest.mark.parametrize("harness", [SHELL, "fixture"])
+async def test_a_graded_state_task_is_rejected_for_every_harness_because_the_engine_captures_no_state(harness):
     factory = RecordingShellSimFactory()
     model = ReplayModel([])
-    with pytest.raises(NotImplementedError):
-        await engine(model, {"local": factory}).run_task(
+    harnesses = {"fixture": step_harness(lambda _context: FinishingSession())}
+    with pytest.raises(NotImplementedError, match="state answer"):
+        await engine(model, {"local": factory}, harnesses=harnesses).run_task(
             rollout_spec(
-                file_task(answer_type=AnswerType.STATE), machine=machine_runtime(), verifier_machine=machine_runtime()
+                file_task(answer_type=AnswerType.STATE),
+                harness=harness,
+                machine=machine_runtime(),
+                verifier_machine=machine_runtime(),
             )
         )
     assert factory.machines == []
@@ -3411,3 +3416,44 @@ async def test_a_task_machine_reports_its_close_failure_when_the_body_fails():
         async with task_machine(task, Factory(), machine_runtime(), cleanup_timeout=1):
             raise ValueError("body failed")
     assert caught.value.__notes__ == ["Machine cleanup failed: ['machine_close']"]
+
+
+class StartsTwice:
+    def check(self, task, limits):
+        pass
+
+    async def run(self, context, recorder):
+        await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+        await recorder.start(Prompt(({"role": "user", "content": "Start again."},), {}))
+
+
+async def test_a_model_failure_in_a_new_conversation_grades_the_earlier_one():
+    class FailingModel(ReplayModel):
+        async def complete(self, request):
+            if self.requests:
+                raise ConnectionError("inference server unavailable")
+            return await super().complete(request)
+
+    with pytest.raises(GradedRolloutInterrupted) as caught:
+        await engine(
+            FailingModel([{"role": "assistant", "content": "12"}]), harnesses={"fixture": StartsTwice()}
+        ).run_task(rollout_spec(arithmetic_task(), harness="fixture"))
+    assert caught.value.operation == RolloutOperation.MODEL
+    assert (caught.value.grade.status, caught.value.grade.reward) == (Outcome.GRADED, 1.0)
+    first, failed = caught.value.rollout.conversations
+    assert (len(first.steps), failed.steps) == (1, ())
+
+
+async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one():
+    class LimitedModel(ReplayModel):
+        async def complete(self, request):
+            if self.requests:
+                raise GenerationLimitReached((70, 71))
+            return await super().complete(request)
+
+    record = await engine(
+        LimitedModel([{"role": "assistant", "content": "12"}]), harnesses={"fixture": StartsTwice()}
+    ).run_task(rollout_spec(arithmetic_task(), harness="fixture"))
+    assert (record.rollout.stop_reason, record.grade.status, record.grade.reward) == ("length", Outcome.GRADED, 1.0)
+    first, unserved = record.rollout.conversations
+    assert (len(first.steps), unserved.steps, unserved.prompt_token_ids) == (1, (), (70, 71))
