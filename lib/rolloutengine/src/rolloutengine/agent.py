@@ -25,7 +25,7 @@ AgentRun = Callable[[HarnessContext, AgentCompletion], Coroutine[Any, Any, None]
 """An agent: it gets the attempt's context and a completion function, and sends one prompt at a time."""
 
 
-def _check_task_tools(task: TaskSpec) -> None:
+def _check_task_tools(task: TaskSpec, limits: RolloutLimits) -> None:
     """Reject the tools that a task's own prompt advertises, because the agent does not get them.
 
     A shell binding is exempt: the agent uses its own shell.
@@ -37,7 +37,7 @@ def _check_task_tools(task: TaskSpec) -> None:
         raise NotImplementedError(f"The agent harness does not give these task tools to the agent: {tools}")
 
 
-def agent_harness(run: AgentRun, *, check: Callable[[TaskSpec], None] = _check_task_tools) -> Harness:
+def agent_harness(run: AgentRun, *, check: Callable[[TaskSpec, RolloutLimits], None] = _check_task_tools) -> Harness:
     """A harness for an agent that owns its prompts and tool loop.
 
     Each completion call sends one prompt and returns the exact ``ModelTurn``, also from tasks that the agent
@@ -54,10 +54,7 @@ def agent_harness(run: AgentRun, *, check: Callable[[TaskSpec], None] = _check_t
 @dataclass(frozen=True)
 class _AgentHarness:
     agent: AgentRun
-    check_task: Callable[[TaskSpec], None]
-
-    def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
-        self.check_task(task)
+    check: Callable[[TaskSpec, RolloutLimits], None]
 
     async def run(self, context: HarnessContext, recorder: RolloutRecorder) -> None:
         completions = _Completions(recorder)

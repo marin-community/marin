@@ -4,6 +4,7 @@
 """Serializable choices that run one task: the harness, the machines, the limits, and the trace mode."""
 
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 from shellbox.machine import NetworkPolicy
@@ -74,7 +75,15 @@ class TaskRolloutSpec(BaseModel):
     task_machine: MachineRuntimeSpec | None
     verifier_machine: MachineRuntimeSpec | None
     judge_connection: JudgeConnection | None = Field(default=None, exclude=True)
-    """The service of a judge grader, which grades on the host. It is never serialized. Without it, the
-    engine reads ``VERIFYIT_JUDGE_BASE_URL`` and ``VERIFYIT_JUDGE_API_KEY``."""
+    """The service of a judge grader, which grades on the host. ``model_dump``, JSON, and pickle leave it out,
+    so a spec loaded from them has none. Without it, the engine reads ``VERIFYIT_JUDGE_BASE_URL`` and
+    ``VERIFYIT_JUDGE_API_KEY``."""
     limits: RolloutLimits
     trace: TraceMode = TraceMode.EXACT_TOKENS
+
+    def __getstate__(self) -> dict[Any, Any]:
+        # Pickle leaves out the judge connection and its API key, as JSON does. The state holds the live fields.
+        state = super().__getstate__()
+        fields = {**state["__dict__"], "judge_connection": None}
+        fields_set = state["__pydantic_fields_set__"] - {"judge_connection"}
+        return {**state, "__dict__": fields, "__pydantic_fields_set__": fields_set}
