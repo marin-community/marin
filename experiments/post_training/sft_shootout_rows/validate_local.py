@@ -19,16 +19,19 @@ Usage:
 
 import argparse
 import base64
+import collections
 import copy
 import gzip
 import hashlib
 import json
+import random
 import subprocess
 import sys
 from pathlib import Path
 
 from transformers import AutoTokenizer
 
+from experiments.post_training.sft_shootout_rows.arms import SEED
 from experiments.post_training.sft_shootout_rows.traces import STUDENT, TEACHER, template_messages
 from experiments.post_training.sweep_data.prepare_agentic import PAD_TOKEN
 from experiments.post_training.sweep_data.render import training_row
@@ -47,7 +50,9 @@ def fake_capability_token() -> str:
 def stand_in_replay(tokenizer, root: Path) -> None:
     root.mkdir(parents=True)
     rows, index = [], []
-    for number, (question, answer) in enumerate((("What is 2+2?", "4."), ("Name a prime.", "7."))):
+    # Enough rows and tokens that the B / 4 cut takes a strict prefix of the slice.
+    pairs = [(f"Count from {n} to {n + 40} in words.", " ".join(f"step {n + k}" for k in range(41))) for n in range(64)]
+    for number, (question, answer) in enumerate(pairs):
         encoded = tokenizer.apply_chat_template(
             [{"role": "user", "content": question}, {"role": "assistant", "content": answer}],
             tokenize=True,
@@ -271,16 +276,46 @@ def main() -> None:
         subprocess.run(command, check=True)
         return output
 
+    replay_index = [json.loads(line) for line in (work / "replay" / "replay-rows.jsonl").read_text().splitlines()]
+
+    def replay_used(prefix: Path) -> list[set[int]]:
+        """Replay rows per training file of an arm (by stand-in offset), after checking the manifest's cut."""
+        manifest = json.loads((prefix / "manifest.json").read_text())
+        target = round(manifest["B_supervised_tokens"] / 4)
+        order = list(range(len(replay_index)))
+        random.Random(f"{SEED}:replay-order").shuffle(order)
+        expected, total = set(), 0
+        for position in order:
+            if total >= target:
+                break
+            expected.add(position)
+            total += replay_index[position]["supervised_tokens"]
+        assert 0 < len(expected) < len(replay_index), "stand-in replay too small to test a strict cut"
+        assert manifest["replay"]["target_supervised_tokens"] == target, "replay target is not round(B / 4)"
+        assert manifest["replay"]["supervised_tokens"] == total, "replay tokens differ from the expected prefix"
+        index = [json.loads(line) for line in (prefix / "train-index.jsonl").read_text().splitlines()]
+        used = collections.defaultdict(set)
+        for item in index:
+            if item["family"] == "replay":
+                used[item.get("epoch")].add(item["byte_offset"])
+        assert all(rows == expected for rows in used.values()), "replay rows are not the seeded B / 4 prefix"
+        return list(used.values())
+
     plain = build("plain", plain_inputs)
     reports = [check_arm(tokenizer, plain, by_id, heldout)]
+    plain_replay = replay_used(plain)
     assert reports[0]["dropped"].get("summarized_trial") == len(summarized), "summarized trials were not dropped"
     assert reports[0]["dropped"].get("touches_agent_tool_env") == len(touching) // 2, "tool-env traces were not dropped"
     proxy_drops = reports[0]["dropped"].get("contains_proxy_capability_token")
     assert proxy_drops == len(touching) // 2, "capability-token traces were not dropped"
     library_drops = reports[0]["dropped"].get("touches_library_copy_of_repo", 0)
     assert library_drops == len(library), "library-copy traces were not dropped"
-    reports.append(check_arm(tokenizer, build("rs-multi", plain_inputs, plain), by_id, heldout))
-    reports.append(check_arm(tokenizer, build("relay", [str(work / "relay.jsonl")], plain), by_id, heldout))
+    rs_multi = build("rs-multi", plain_inputs, plain)
+    reports.append(check_arm(tokenizer, rs_multi, by_id, heldout))
+    relay_arm = build("relay", [str(work / "relay.jsonl")], plain)
+    reports.append(check_arm(tokenizer, relay_arm, by_id, heldout))
+    for prefix in (rs_multi, relay_arm):
+        assert replay_used(prefix)[0] == plain_replay[0], f"{prefix.name} replay rows differ from plain's"
     validation = build("validation", [*plain_inputs, str(work / "heldout.jsonl")])
     reports.append(check_arm(tokenizer, validation, by_id, heldout))
     mixed = build("plain-with-heldout-input", [*plain_inputs, str(work / "heldout.jsonl")])

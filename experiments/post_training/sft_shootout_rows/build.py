@@ -8,8 +8,9 @@ fc55028ddd or later), the pool task table, the frozen
 task #202 replay slice, and for RS-multi and relay the plain arm's built prefix (it fixes the task slots and B).
 
 Rows follow task #202: input_ids padded to 32,768 with pad id 128001, loss_weights shifted so weight i scores token
-i + 1, zero-loss padding rows to a multiple of 16, nothing truncated. The replay slice is reused unchanged in every
-arm; its rows are mixed with the arm's rows by a seeded shuffle.
+i + 1, zero-loss padding rows to a multiple of 16, nothing truncated. Replay is a prefix of the frozen slice in a seeded,
+fixed order, cut where its supervised tokens reach R = round(B / 4) with B from plain; every arm gets the same rows
+(checked by hash against plain's manifest). Replay rows are mixed with the arm's rows by a seeded shuffle.
 
 Outputs under --output: train-prebuilt.jsonl.gz (plain, relay), train-epoch-<e>-prebuilt.jsonl.gz (RS-multi, one
 file per epoch, same row count) or validation-<family>-prebuilt.jsonl.gz (validation: the shared set for all arms,
@@ -59,6 +60,9 @@ from experiments.post_training.sweep_data.select import CONTEXT
 # Pool v5, the frozen pool (supersedes v4 755e874c...; see the pool README for the versions).
 POOL_MANIFEST_SHA256 = "7f3d6f7dbef1ed80d302f251540c72a5c548edb871fd0afed729653d7b6def68"
 EPOCHS = 3
+# Replay for every arm: R = round(B / 4) supervised tokens, so replay is about 20% of a split (queen, 2026-10-17).
+REPLAY_FRACTION_OF_B = 0.25
+REPLAY_ORDER_SEED = f"{SEED}:replay-order"
 LIMITATION = "results are for trajectories that fit 32,768 tokens in v0's chat template; longer passes are dropped"
 # Queen's decision 2026-10-17 (option a): keep one multi-turn row per trace, as the community recipes under test do.
 FAMILY_NOTES = {
@@ -247,6 +251,29 @@ def replay_rows(prefix: str) -> tuple[list[str], list[dict], dict]:
     return lines, index, info
 
 
+def cut_replay(entries: list[tuple[str, dict]], b_tokens: int) -> tuple[list[tuple[str, dict]], dict]:
+    """Take the frozen slice in seeded order up to the first prefix whose supervised tokens reach round(B / 4)."""
+    target = round(REPLAY_FRACTION_OF_B * b_tokens)
+    order = list(range(len(entries)))
+    random.Random(REPLAY_ORDER_SEED).shuffle(order)
+    cut, supervised = [], 0
+    for position in order:
+        if supervised >= target:
+            break
+        cut.append(entries[position])
+        supervised += entries[position][1]["supervised_tokens"]
+    if supervised < target:
+        raise ValueError(f"Replay slice holds {supervised} supervised tokens, short of R = {target}")
+    return cut, {
+        "order_seed": REPLAY_ORDER_SEED,
+        "target_supervised_tokens": target,
+        "supervised_tokens": supervised,
+        "rows": len(cut),
+        "slice_rows": len(entries),
+        "rows_sha256": hashlib.sha256("".join(line + "\n" for line, _ in cut).encode()).hexdigest(),
+    }
+
+
 def write_split(path: Path, entries: list[tuple[str, dict]], seed: str) -> tuple[list[dict], dict]:
     """Shuffle (row json, index entry) pairs with `seed`, write rows plus zero-loss padding, re-read and check."""
     order = list(range(len(entries)))
@@ -294,7 +321,9 @@ def main() -> None:
     parser.add_argument("--arm", choices=("plain", "rs-multi", "relay", "validation"), required=True)
     parser.add_argument("--traces", nargs="+", required=True)
     parser.add_argument("--pool", required=True, help="pool tasks.jsonl")
-    parser.add_argument("--pool-manifest", required=True, help="pool manifest.json (hash-checked against POOL_MANIFEST_SHA256)")
+    parser.add_argument(
+        "--pool-manifest", required=True, help="pool manifest.json (hash-checked against POOL_MANIFEST_SHA256)"
+    )
     parser.add_argument("--replay", required=True, help="task #202 replay component prefix")
     parser.add_argument("--plain", help="built plain arm prefix (required for rs-multi and relay)")
     parser.add_argument("--output", required=True)
@@ -335,6 +364,13 @@ def main() -> None:
         replay_entries = list(zip(replay_lines, replay_index, strict=True))
         b_tokens = None
 
+        def replay_for(b: int) -> list[tuple[str, dict]]:
+            cut, cut_info = cut_replay(replay_entries, b)
+            if plain is not None and cut_info["rows_sha256"] != plain["replay"].get("rows_sha256"):
+                raise ValueError("Replay rows differ from plain's; rebuild plain with this builder")
+            replay_info.update({"slice_supervised_tokens": replay_info["supervised_tokens"]} | cut_info)
+            return cut
+
         def entry(attempt: Attempt, extra: dict) -> tuple[str, dict]:
             _, rendered, trace = kept[attempt.trial_id]
             line = json.dumps(training_row(rendered.ids, rendered.mask, CONTEXT, PAD_TOKEN), separators=(",", ":"))
@@ -364,27 +400,28 @@ def main() -> None:
             selection = [
                 {"task_id": task, "trial_id": a.trial_id, "sample": a.sample} for task, a in sorted(chosen.items())
             ]
-            rows = [entry(a, {}) for _, a in sorted(chosen.items())] + replay_entries
-            index, splits["train"] = write_split(out / "train-prebuilt.jsonl.gz", rows, f"{SEED}:plain")
             b_tokens = sum(a.supervised for a in chosen.values())
+            rows = [entry(a, {}) for _, a in sorted(chosen.items())] + replay_for(b_tokens)
+            index, splits["train"] = write_split(out / "train-prebuilt.jsonl.gz", rows, f"{SEED}:plain")
         elif args.arm == "rs-multi":
             tasks = sorted(plain["task_slots"])
             missing = [task for task in tasks if not any(a.task_id == task for a in attempts)]
             if missing:
                 raise ValueError(f"Plain task slots without RS candidates: {missing[:5]}")
             plan = rs_multi_epochs([a for a in attempts if a.task_id in set(tasks)], tasks, EPOCHS)
+            b_tokens = plain["B_supervised_tokens"]
+            replay = replay_for(b_tokens)
             index = []
             for epoch, chosen in enumerate(plan):
                 selection += [
                     {"epoch": epoch, "task_id": task, "trial_id": a.trial_id, "sample": a.sample}
                     for task, a in sorted(chosen.items())
                 ]
-                rows = [entry(a, {"epoch": epoch}) for _, a in sorted(chosen.items())] + replay_entries
+                rows = [entry(a, {"epoch": epoch}) for _, a in sorted(chosen.items())] + replay
                 epoch_index, splits[f"epoch-{epoch}"] = write_split(
                     out / f"train-epoch-{epoch}-prebuilt.jsonl.gz", rows, f"{SEED}:rs-multi:shuffle:{epoch}"
                 )
                 index += [{"epoch": epoch} | item for item in epoch_index]
-            b_tokens = plain["B_supervised_tokens"]
         elif args.arm == "validation":
             # One fixed set for every arm: GLM's first passing trace per held-out task, per family, no replay.
             chosen = first_passing(attempts)
@@ -402,7 +439,7 @@ def main() -> None:
             b_tokens = plain["B_supervised_tokens"]
             chosen_episodes, _ = relay_subsample(attempts, b_tokens)
             selection = [{"trial_id": a.trial_id, "task_id": a.task_id, "sample": a.sample} for a in chosen_episodes]
-            rows = [entry(a, {}) for a in chosen_episodes] + replay_entries
+            rows = [entry(a, {}) for a in chosen_episodes] + replay_for(b_tokens)
             index, splits["train"] = write_split(out / "train-prebuilt.jsonl.gz", rows, f"{SEED}:relay")
 
         index_name = "validation-index.jsonl" if args.arm == "validation" else "train-index.jsonl"
@@ -496,7 +533,10 @@ def main() -> None:
                 else (
                     replay_info
                     | {
-                        "note": "achieved share of each split's active (supervised) tokens; not a target, not rescaled",
+                        "note": (
+                            "seeded prefix of the frozen slice cut at R = round(B / 4) with plain's B, same rows in "
+                            "every arm; share_of_supervised is the achieved share of each split's supervised tokens"
+                        ),
                         "share_of_supervised": {
                             name: s["supervised_tokens"].get("replay", 0) / s["supervised_total"]
                             for name, s in splits.items()
