@@ -29,6 +29,7 @@ import openai
 from fray.types import ResourceConfig
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.agent import agent_harness
+from rolloutengine.contracts import AttemptEnded, ModelTurnCompleted, RolloutEvent
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.spec import RolloutLimits
 from zephyr.context import ZephyrContext
@@ -136,6 +137,25 @@ def glm_model(relay_job: str) -> ChatModel:
     return ChatModel(client, GLM_MODEL, max_tokens=32_768, reasoning_effort="medium")
 
 
+class ProgressLog:
+    """Log each model turn and the end of each attempt, so that the job log shows the progress of every agent."""
+
+    async def on_event(self, event: RolloutEvent) -> None:
+        payload = event.payload
+        if isinstance(payload, ModelTurnCompleted):
+            tools = [call["function"]["name"] for call in payload.message.get("tool_calls") or ()]
+            logger.info(
+                "%s turn %d: %.0f s, %s, tools %s",
+                event.run_id,
+                payload.turn_index,
+                payload.duration,
+                payload.usage,
+                tools,
+            )
+        elif isinstance(payload, AttemptEnded):
+            logger.info("%s ended: %s %s", event.run_id, payload.stop_reason or payload.operation, payload.error or "")
+
+
 def result(item: dict[str, Any], outcome: AgentOutcome) -> dict[str, Any]:
     """The record of one attempt: the answer, and what the rollout shows about how the agent got there."""
     rollout = outcome.rollout
@@ -158,7 +178,8 @@ def result(item: dict[str, Any], outcome: AgentOutcome) -> dict[str, Any]:
 async def _run_attempts(
     items: list[dict[str, Any]], pull_request: PullRequest, model: ChatModel, limits: RolloutLimits
 ) -> list[dict[str, Any]]:
-    engine = RolloutEngine({}, {REVIEWER: agent_harness(reviewer(pull_request, max_turns=limits.max_turns))})
+    harness = agent_harness(reviewer(pull_request, max_turns=limits.max_turns))
+    engine = RolloutEngine({}, {REVIEWER: harness}, observer=ProgressLog())
     manager = ManagedAgent(engine, model, concurrency=len(items))
     by_id = {item["id"]: item for item in items}
     specs = [agent_spec(agent_task(item["id"], item["instructions"]), REVIEWER, limits) for item in items]

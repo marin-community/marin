@@ -6,8 +6,8 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from rolloutengine.agent import agent_harness
 from openai.types.chat import ChatCompletion
+from rolloutengine.agent import agent_harness
 from rolloutengine.contracts import ModelRequest, ModelTurn, Prompt, TokenUsage
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.shell import task_prompt
@@ -104,7 +104,9 @@ async def test_the_reviewer_asks_for_its_answer_when_one_turn_is_left():
 
     engine = RolloutEngine({}, {"reviewer": agent_harness(reviewer(PULL_REQUEST, max_turns=2))})
     limits = LIMITS.model_copy(update={"max_turns": 2})
-    [outcome] = (await outcomes(engine, model, [agent_spec(agent_task("review", "Review it."), "reviewer", limits)], 1)).values()
+    [outcome] = (
+        await outcomes(engine, model, [agent_spec(agent_task("review", "Review it."), "reviewer", limits)], 1)
+    ).values()
 
     assert len(requests) == 2
     assert requests[1].messages[-1] == {"role": "user", "content": LAST_TURN_PROMPT}
@@ -147,5 +149,10 @@ async def test_the_chat_model_sends_the_cache_key_and_keeps_only_the_fields_that
     [request] = requests
     assert request["tools"] == ["tool"]
     assert request["extra_body"] == {"chat_template_kwargs": {"reasoning_effort": "low"}, "prompt_cache_key": "run-1"}
-    assert result.message == {"role": "assistant", "content": "", "tool_calls": [call], "reasoning_content": "Look first."}
+    assert result.message == {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [call],
+        "reasoning_content": "Look first.",
+    }
     assert (result.stop_reason, result.usage) == ("tool_calls", TokenUsage(10, 5))
