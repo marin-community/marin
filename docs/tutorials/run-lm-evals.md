@@ -311,6 +311,9 @@ with rates over the last 60 seconds and the proxy's lifetime. Tokens enter these
 when a response finishes, so long generations can produce bursts. Response usage coverage is
 shown alongside the totals; missing or invalid usage is excluded. Token totals reset when the
 proxy restarts and do not measure GPU utilization or tokens in unfinished responses.
+Evaluation requests have a 30-minute per-attempt timeout and a total retry budget three times
+that timeout. The larger total budget prevents Evalchemy's transport retry wrapper from
+cancelling a valid long generation before its per-attempt timeout.
 Requests wait asynchronously for inference, so the proxy's configured outstanding-request limit
 does not depend on the web server's thread-pool size.
 

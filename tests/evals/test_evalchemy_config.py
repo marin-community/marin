@@ -248,6 +248,7 @@ def test_build_command_completion_route_with_fewshot_and_limit():
     assert model_args["base_url"] == "http://10.0.0.1:30000/v1/completions"
     assert model_args["model"] == "Qwen/Qwen3-0.6B"
     assert model_args["tokenizer"] == "Qwen/Qwen3-0.6B"
+    assert float(model_args["transport_retry_budget"]) > float(model_args["timeout"])
 
 
 def test_build_command_uses_evaluator_default_when_fewshot_is_unset():

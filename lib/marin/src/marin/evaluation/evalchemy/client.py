@@ -152,6 +152,8 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
         "timeout": EVALCHEMY_REQUEST_TIMEOUT_SECONDS,
     }
     args.update(config.get("extra_model_args", {}))
+    # The total retry budget must cover a valid long generation and leave room for retries.
+    args.setdefault("transport_retry_budget", 3 * float(args["timeout"]))
     if use_chat and config["chat_template_kwargs"]:
         # lm-eval splits model args at every comma; Evalchemy decodes this before building the HTTP payload.
         encoded = base64.urlsafe_b64encode(json.dumps(config["chat_template_kwargs"]).encode("utf-8")).decode("ascii")
