@@ -170,10 +170,9 @@ async with task_machine(task, factory, runtime, cleanup_timeout=30) as machine:
 
 ### Step harness
 
-`step_harness(open_episode, *, check=...)` from `rolloutengine.harness` runs an `Episode`, a step-style loop.
-`check(task, limits)` is the harness's check, and by default it accepts every task. `open_episode(context)`
-starts one episode for each attempt. An episode class whose constructor takes the context can be
-`open_episode`:
+`step_harness(open_episode)` from `rolloutengine.harness` runs an `Episode`, a step-style loop, and accepts every
+task. `open_episode(context)` starts one episode for each attempt. An episode class whose constructor takes the
+context can be `open_episode`:
 
 1. `prepare()` returns the first `Prompt`. The harness calls `start` with it.
 2. `advance(turn)` runs the turn's operations and returns a `Transition`. If the transition is not done, the
@@ -192,7 +191,7 @@ A `Transition` has these fields:
 
 ### Agent harness
 
-`agent_harness(run, *, check=...)` from `rolloutengine.agent` runs an agent that owns its prompts and tool loop,
+`agent_harness(run)` from `rolloutengine.agent` runs an agent that owns its prompts and tool loop,
 for example an installed agent behind an HTTP proxy. `run(context, complete)` sends one `Prompt` at a time to
 `complete` and receives the exact `ModelTurn`:
 
@@ -226,9 +225,9 @@ engine = RolloutEngine(machine_factories, {"agent": agent_harness(run_agent)})
 - An agent that fails while the attempt runs ends only its own attempt: `run_task` raises
   `GradedRolloutInterrupted` with the record so far. A failure after the attempt ends, for example during
   grading, is a cleanup error.
-- The default `check` rejects a task that declares tools other than a shell binding: final tools, the
+- `check` rejects a task that declares tools other than a shell binding: final tools, the
   `submit_answer` tool of an `AnswerCall` task, other interaction tools, and tool providers. The agent harness
-  does not give these tools to the agent. An agent that serves them passes its own `check(task, limits)`.
+  does not give these tools to the agent. An agent that serves them needs its own harness, whose `run` can call this harness's `run`.
 
 ### Shell harness
 
