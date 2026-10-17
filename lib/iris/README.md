@@ -11,8 +11,9 @@ Distributed job orchestration for Marin.
 uv run iris --cluster=marin cluster start
 
 # Start a local cluster for testing (mimics the config without GCP)
-# Dashboard is available at the printed URL; press Ctrl+C to stop.
-uv run iris --cluster=marin cluster start --local
+# Dashboard is available at the printed URL; press Ctrl+C to stop. The local
+# controller embeds the native log server from the `controller` extra.
+uv run --package marin-iris --extra controller iris --cluster=marin cluster start --local
 
 # Check cluster status
 uv run iris --cluster=marin cluster status

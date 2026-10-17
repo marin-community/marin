@@ -6965,7 +6965,6 @@ dependencies = [
     { name = "httpx" },
     { name = "humanfriendly" },
     { name = "marin-finelog" },
-    { name = "marin-finelog-server" },
     { name = "marin-finestore" },
     { name = "marin-iris-native" },
     { name = "marin-rigging" },
@@ -6985,6 +6984,7 @@ dependencies = [
 [package.optional-dependencies]
 controller = [
     { name = "kubernetes" },
+    { name = "marin-finelog-server" },
     { name = "marin-rigging", extra = ["secrets"] },
 ]
 iap = [
@@ -6996,7 +6996,7 @@ dev = [
     { name = "ipykernel" },
     { name = "jax", version = "0.11.1", source = { registry = "https://pypi.org/simple" } },
     { name = "jupyter" },
-    { name = "kubernetes" },
+    { name = "marin-iris", extra = ["controller"], marker = "extra == 'group-10-marin-iris-dev' or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-root-pipeline') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-root-pipeline') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-10-marin-root-pipeline') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-root-pipeline' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-root-pipeline' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-root-pipeline' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-root-pipeline' and extra == 'group-10-marin-iris-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "memray" },
     { name = "nbconvert" },
     { name = "nbformat" },
@@ -7016,7 +7016,7 @@ examples = [
 ]
 test = [
     { name = "jax", version = "0.11.1", source = { registry = "https://pypi.org/simple" } },
-    { name = "kubernetes" },
+    { name = "marin-iris", extra = ["controller"], marker = "extra == 'group-10-marin-iris-test' or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-root-pipeline') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-root-pipeline') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-10-marin-root-pipeline') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-root-pipeline' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-root-pipeline' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-root-pipeline' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-root-pipeline' and extra == 'group-10-marin-iris-dev') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "memray" },
     { name = "playwright" },
     { name = "pytest" },
@@ -7041,7 +7041,7 @@ requires-dist = [
     { name = "humanfriendly", specifier = ">=10.0" },
     { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0,!=36.0.0,<37" },
     { name = "marin-finelog", editable = "lib/finelog" },
-    { name = "marin-finelog-server", specifier = ">=0.2.54.dev35409391246" },
+    { name = "marin-finelog-server", marker = "extra == 'controller'", specifier = ">=0.2.54.dev35409391246" },
     { name = "marin-finestore", editable = "lib/finestore" },
     { name = "marin-iris-native", specifier = ">=0.1.11.dev37977873285" },
     { name = "marin-rigging", editable = "lib/rigging" },
@@ -7066,7 +7066,7 @@ dev = [
     { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "jax", specifier = "==0.11.1" },
     { name = "jupyter", specifier = ">=1.1.1" },
-    { name = "kubernetes", specifier = ">=31.0.0,!=36.0.0,<37" },
+    { name = "marin-iris", extras = ["controller"], editable = "lib/iris" },
     { name = "memray", specifier = ">=1.19.3" },
     { name = "nbconvert", specifier = ">=7.16.6" },
     { name = "nbformat", specifier = ">=5.10.4" },
@@ -7086,7 +7086,7 @@ examples = [
 ]
 test = [
     { name = "jax", specifier = "==0.11.1" },
-    { name = "kubernetes", specifier = ">=31.0.0,!=36.0.0,<37" },
+    { name = "marin-iris", extras = ["controller"], editable = "lib/iris" },
     { name = "memray", specifier = ">=1.19.3" },
     { name = "playwright", specifier = ">=1.49.0" },
     { name = "pytest", specifier = ">=8.4" },
@@ -7376,6 +7376,14 @@ dependencies = [
     { name = "uvicorn" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "marin-iris", extra = ["controller"] },
+]
+test = [
+    { name = "marin-iris", extra = ["controller"] },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.71.0" },
@@ -7406,6 +7414,10 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "marin-iris", extras = ["controller"], editable = "lib/iris" }]
+test = [{ name = "marin-iris", extras = ["controller"], editable = "lib/iris" }]
 
 [[package]]
 name = "marin-rigging"
@@ -7831,11 +7843,13 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "marin-iris", extra = ["controller"] },
     { name = "pytest" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 test = [
+    { name = "marin-iris", extra = ["controller"] },
     { name = "pytest" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
@@ -7863,11 +7877,13 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "marin-iris", extras = ["controller"], editable = "lib/iris" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 test = [
+    { name = "marin-iris", extras = ["controller"], editable = "lib/iris" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
