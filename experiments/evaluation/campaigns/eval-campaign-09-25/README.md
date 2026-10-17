@@ -42,8 +42,8 @@ Pass `--version LABEL` only when a submitter-controlled cohort label is useful. 
 the label to Marin unchanged. It remains provenance metadata and does not alter the conformance
 boundary above.
 
-For current verified launches, pass `--version eval-policy-2026-10-17-verified`. Benchmark settings and
-evaluator revisions are frozen in `lib/marin/src/marin/evaluation/policies/october_17.json`.
+For current verified launches, pass `--version eval-policy-2026-10-19-verified`. Benchmark settings and
+evaluator revisions are frozen in `lib/marin/src/marin/evaluation/policies/october_19.json`.
 EvalDash excludes runs whose recorded settings or evaluator revisions differ from that profile.
 Partial benchmark subsets are allowed. EvalDash groups runs by model name within the selected cohort.
 
@@ -52,7 +52,7 @@ shared judge server. Completed evals remain cached. With this setting, per-eval 
 metrics are omitted because server counters cannot separate overlapping evals.
 
 ```bash
-./launch-campaign.sh --version eval-policy-2026-10-17-verified --model Qwen-Qwen3.6-35B-A3B
+./launch-campaign.sh --version eval-policy-2026-10-19-verified --model Qwen-Qwen3.6-35B-A3B
 ```
 
 From a clean checkout of the campaign's pinned Marin commit:
