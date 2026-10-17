@@ -16,6 +16,7 @@ I84 = "https://github.com/marin-community/marin/issues/9984"
 T, K = "teacher-traces", "users/karan"
 SETS = {
     "cruxeval": ("open-athena/Snowball-67B-A2B-CruxEval-Transfer-Artifacts-2026.10", 9920, I20,
+                 "The GLM teacher responses come from [GLM 5.3](https://huggingface.co/zai-org/GLM-5.3). ",
                  "CruxEval transfer experiment: plain SFT, rejection-sampled SFT and on-policy distillation (OPD) from expert E into student B", [
         (f"{T}/cruxeval-test-exposed/task133-20261007-glm", "GLM teacher requests (`requests.jsonl`, also the prompt source for later sampling) and responses on the 1,600 CruxEval prompts; training data for expert E"),
         (f"{T}/cruxeval-test-exposed/task133-20261007-prepared-v2", "Expert E SFT training set built from the GLM responses (prepared rows, audits, scores)"),
@@ -29,7 +30,7 @@ SETS = {
         (f"{K}/skyrl/snowball-opd-cruxeval-e-2/", "OPD run launch config and terminal record (run snowball-opd-cruxeval-e-2)"),
         (f"{K}/skyrl/snowball-opd-cruxeval-e-2/exports/global_step_75/policy/.marinskyrl-model-manifest.json", "MarinSkyRL manifest of the OPD update-75 export"),
     ]),
-    "two-expert": ("open-athena/Snowball-67B-A2B-Two-Expert-Transfer-Artifacts-2026.10", 9984, I84,
+    "two-expert": ("open-athena/Snowball-67B-A2B-Two-Expert-Transfer-Artifacts-2026.10", 9984, I84, "",
                    "Two-expert transfer experiment: experts E (CruxEval) and E_2 (MMLU-Pro) into student B by mixed SFT, mixed RS-SFT, MOPD and weight merges", [
         (f"{T}/mopd2/task162-e2-prepared-20261009-v1", "Expert E_2 SFT training set (MMLU-Pro), prepared"),
         (f"{T}/mopd2/task163-e2-step254-k8-20261010", "Expert E_2 step-254 k=8 teacher-trace pool on the MMLU-Pro prompts, with per-response grades"),
@@ -72,7 +73,7 @@ def fetch(info, local):
 
 
 key = sys.argv[1]
-repo, issue, url, title, entries = SETS[key]
+repo, issue, url, provider, title, entries = SETS[key]
 local = pathlib.Path("/tmp/artifacts") / repo.replace("/", "__")
 rows = []
 with cf.ThreadPoolExecutor(32) as ex:
@@ -99,6 +100,7 @@ md = [f"---\nlicense: apache-2.0\npretty_name: {repo.split('/')[1]}\ntags:\n- ma
       "## Contents\n", "| S3 origin (under `s3://marin-us-east-02a/marin/`) | Purpose | Files | MB |", "|---|---|---:|---:|"]
 for entry, (purpose, n, b, _) in groups.items():
     md.append(f"| `{entry}` | {purpose} | {n:,} | {b/1e6:,.2f} |")
+md += ["", "## License", "", f"Apache-2.0. {provider}Teacher-model outputs remain subject to their providers' terms."]
 md += ["", "## Files (folders with more than 20 files are summarised above; see MANIFEST.tsv)", "", "| Path | Bytes | sha256 |", "|---|---:|---|"]
 for entry, (purpose, n, b, files) in groups.items():
     if n <= 20:
