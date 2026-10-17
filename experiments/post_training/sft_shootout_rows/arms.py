@@ -3,7 +3,7 @@
 
 """Per-arm attempt selection for the SFT shootout (task #211); rules from the experts-methods matrix.
 
-Eligible tasks: pool v2 tasks that are not held out and have at least one passing GLM attempt that fits the context.
+Eligible tasks: pool tasks that are not held out and have at least one passing GLM attempt that fits the context.
 
 - plain (RS-1): the first passing attempt per eligible task, by sample index. One row per task; defines B.
 - RS-multi: the same task slots; in each epoch every slot draws one of its task's passing attempts with a seeded

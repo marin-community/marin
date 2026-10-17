@@ -3,7 +3,7 @@
 
 """Build arms from real #207 pilot traces and re-check every row independently (task #211).
 
-Runs build.py for each requested arm into a local directory with the real pool v4 and the #202 replay slice, re-decodes
+Runs build.py for each requested arm into a local directory with the real pool (the version build.py pins) and the #202 replay slice, re-decodes
 every row with validate_local.check_arm (trained spans equal the glm turns, no loss on padding or past content,
 held-out status matches the arm), uploads each arm prefix under --output, and prints one report line per arm.
 

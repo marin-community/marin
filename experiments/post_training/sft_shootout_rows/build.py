@@ -4,7 +4,7 @@
 """Build one arm's Levanter SFT rows from #207 canonical traces (task #211).
 
 Inputs: one or more rebuild_traces.py outputs (one row per conversation of a Harbor trial attempt; task/207 @
-fc55028ddd or later), the pool v2 task table, the frozen
+fc55028ddd or later), the pool task table, the frozen
 task #202 replay slice, and for RS-multi and relay the plain arm's built prefix (it fixes the task slots and B).
 
 Rows follow task #202: input_ids padded to 32,768 with pad id 128001, loss_weights shifted so weight i scores token
@@ -56,8 +56,8 @@ from experiments.post_training.sweep_data.prepare_agentic import (
 from experiments.post_training.sweep_data.render import training_row
 from experiments.post_training.sweep_data.select import CONTEXT
 
-# Pool v4 (supersedes v2 ae4347bd...; see the pool README for the versions).
-POOL_MANIFEST_SHA256 = "755e874cc1daa93a10a2b73dd154805ba081206d966d11eb9a018ec16f22fe86"
+# Pool v5, the frozen pool (supersedes v4 755e874c...; see the pool README for the versions).
+POOL_MANIFEST_SHA256 = "7f3d6f7dbef1ed80d302f251540c72a5c548edb871fd0afed729653d7b6def68"
 EPOCHS = 3
 LIMITATION = "results are for trajectories that fit 32,768 tokens in v0's chat template; longer passes are dropped"
 # Queen's decision 2026-10-17 (option a): keep one multi-turn row per trace, as the community recipes under test do.
@@ -292,13 +292,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arm", choices=("plain", "rs-multi", "relay", "validation"), required=True)
     parser.add_argument("--traces", nargs="+", required=True)
-    parser.add_argument("--pool", required=True, help="pool v2 tasks.jsonl")
-    parser.add_argument("--pool-manifest", required=True, help="pool v2 manifest.json (hash-checked)")
+    parser.add_argument("--pool", required=True, help="pool tasks.jsonl")
+    parser.add_argument("--pool-manifest", required=True, help="pool manifest.json (hash-checked against POOL_MANIFEST_SHA256)")
     parser.add_argument("--replay", required=True, help="task #202 replay component prefix")
     parser.add_argument("--plain", help="built plain arm prefix (required for rs-multi and relay)")
     parser.add_argument("--output", required=True)
     parser.add_argument("--tokenizer-dir", help="local v0 tokenizer files (hash-checked); default: the regional copy")
-    parser.add_argument("--test-pool", action="store_true", help="skip the pool v2 hash checks (local validation only)")
+    parser.add_argument("--test-pool", action="store_true", help="skip the pool hash checks (local validation only)")
     args = parser.parse_args()
     output = StoragePath(args.output)
     if output.exists():
@@ -307,7 +307,7 @@ def main() -> None:
     if not args.test_pool:
         pool_manifest = StoragePath(args.pool_manifest).read_bytes()
         if hashlib.sha256(pool_manifest).hexdigest() != POOL_MANIFEST_SHA256:
-            raise ValueError("Pool manifest is not pool v2")
+            raise ValueError("Pool manifest is not pool v5")
         pool_hash = hashlib.sha256(StoragePath(args.pool).read_bytes()).hexdigest()
         if pool_hash != json.loads(pool_manifest)["file_sha256"]["tasks.jsonl"]:
             raise ValueError("tasks.jsonl does not match the pool manifest")
@@ -511,7 +511,7 @@ def main() -> None:
                     "without replacement until a task's passes are used, then refilled"
                 ),
                 "relay": f"passing relay episodes with >=1 GLM turn, seeded order '{SEED}:relay', whole episodes to B",
-                "validation": "first passing GLM attempt per held-out pool v2 task, one file per family, no replay",
+                "validation": "first passing GLM attempt per held-out pool task, one file per family, no replay",
             }[args.arm],
             "loss_mask": "assistant turns authored by glm; v0 turns, prompts and tool output are context",
             "heldout_rows": heldout_rows,
