@@ -71,7 +71,10 @@ incomplete multipart uploads after seven days.
 
 CoreWeave bucket access policies preserve S3 access for principals in the Open Athena organization.
 Only `marin-us-east-02a` denies every principal the `s3:DeleteObject` and
-`s3:DeleteObjectVersion` actions under `marin/grug/hero-*`. The `hero-checkpoints` bucket and
+`s3:DeleteObjectVersion` actions under `marin/grug/hero-*`. During a reviewed checkpoint thinning,
+`HERO_THINNING_KEPT_STEPS` and `HERO_THINNING_UNTOUCHED_RUNS` in
+`infra/pulumi/src/iac/buckets/coreweave.py` replace that wildcard with an explicit list of protected
+paths; revert them once the deletion finishes. The `hero-checkpoints` bucket and
 temporary checkpoint staging paths remain deletable. Before a policy update, audit each bucket's
 live access policy; Pulumi replaces the complete bucket policy.
 
