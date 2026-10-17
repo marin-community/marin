@@ -165,7 +165,6 @@ class GradedRollout:
     """One attempt of a task, and its grade."""
 
     rollout: Rollout
-    """What happened in the attempt."""
     grade: GradeResult
     """The verdict of the task's grader on the last conversation that has a model turn. Unavailable if none has."""
 
