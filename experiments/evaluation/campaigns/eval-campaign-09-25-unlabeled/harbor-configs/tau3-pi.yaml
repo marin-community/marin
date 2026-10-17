@@ -63,7 +63,7 @@ user_agent:
 datasets:
 - name: tau3-bench
   version: 1.0.1
-  registry_url: https://raw.githubusercontent.com/marin-community/harbor/016dd78b301b621ee4089f2da5776ebe80236820/registry.json
+  registry_url: https://raw.githubusercontent.com/marin-community/harbor/a0e0e7c430b91b90002fceb212e08e9467d4501d/registry.json
 verifier:
   override_timeout_sec: 300
   env:
