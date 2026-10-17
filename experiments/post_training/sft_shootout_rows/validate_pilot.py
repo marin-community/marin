@@ -3,9 +3,11 @@
 
 """Build arms from real #207 pilot traces and re-check every row independently (task #211).
 
-Runs build.py for each requested arm into a local directory with the real pool (the version build.py pins) and the #202 replay slice, re-decodes
-every row with validate_local.check_arm (trained spans equal the glm turns, no loss on padding or past content,
-held-out status matches the arm), uploads each arm prefix under --output, and prints one report line per arm.
+Runs build.py for each requested arm into a local directory with the real pool (the version build.py pins) and the
+#202 replay slice, re-decodes every row with validate_local.check_arm (trained spans equal the glm turns, no loss on
+padding or past content, held-out status matches the arm), uploads each arm prefix under --output, and prints one
+report line per arm with the build's wall time and peak memory. Every output prefix gets a DRY_RUN_NOT_FOR_TRAINING
+marker: validation rows never feed an arm.
 
 Usage:
     python -m experiments.post_training.sft_shootout_rows.validate_pilot --traces <rebuilt.jsonl> ... \\
@@ -15,9 +17,11 @@ Usage:
 import argparse
 import hashlib
 import json
+import resource
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from huggingface_hub import hf_hub_download
@@ -77,7 +81,11 @@ def main() -> None:
             ]
             if arm in ("rs-multi", "relay"):
                 command += ["--plain", str(plain)]
+            started = time.monotonic()
             subprocess.run(command, check=True)
+            build_seconds = round(time.monotonic() - started, 1)
+            # Peak RSS of the largest child so far (KiB on Linux); arms run in order, so later arms report at least this.
+            peak_child_mib = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss // 1024
             if arm == "plain":
                 plain = out
             report = check_arm(tokenizer, out, by_id, heldout)
@@ -86,6 +94,8 @@ def main() -> None:
                 "candidates": manifest["candidates"],
                 "B": manifest["B_supervised_tokens"],
                 "replay": manifest["replay"],
+                "build_seconds": build_seconds,
+                "peak_child_rss_mib": peak_child_mib,
             }
             target = StoragePath(args.output) / arm
             for path in sorted(out.iterdir()):
@@ -93,6 +103,9 @@ def main() -> None:
                 uploaded = hashlib.sha256((target / path.name).read_bytes()).hexdigest()
                 if uploaded != hashlib.sha256(path.read_bytes()).hexdigest():
                     raise ValueError(f"Upload mismatch {arm}/{path.name}")
+            (target / "DRY_RUN_NOT_FOR_TRAINING").write_text(
+                "validation output of validate_pilot.py; never feed an arm\n"
+            )
             print("PILOT_VALIDATION " + json.dumps(report), flush=True)
 
 
