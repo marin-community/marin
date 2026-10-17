@@ -25,6 +25,7 @@ import gzip
 import hashlib
 import json
 import random
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -36,6 +37,8 @@ from experiments.post_training.sft_shootout_rows.traces import STUDENT, TEACHER,
 from experiments.post_training.sweep_data.prepare_agentic import PAD_TOKEN
 from experiments.post_training.sweep_data.render import training_row
 from experiments.post_training.sweep_data.select import CONTEXT
+
+THINK_MARKUP = re.compile(r"<\|(?:start|end)_think\|>")
 
 
 def fake_capability_token() -> str:
@@ -139,9 +142,13 @@ def check_arm(tokenizer, prefix: Path, traces: dict[str, dict], heldout: set[str
                         assert span.startswith("<|start_think|>") and reasoning in span, "reasoning not trained"
                     assert body[:200] in span, "turn text not inside its trained span"
                 if STUDENT in authors:
+                    # Spans already match the teacher turns one to one (count and text). This catches student text in a
+                    # span, ignoring think markup alone (e.g. a student turn that is just "<|end_think|>") and text the
+                    # teacher itself repeats verbatim in one of its turns.
+                    teacher_text = "\n".join(reasoning + "\n" + body for reasoning, body in expected)
                     for message, author in zip([m for m in messages if m["role"] == "assistant"], authors, strict=True):
-                        text = (message.get("content") or "").strip()[:200]
-                        if author == STUDENT and text:
+                        text = THINK_MARKUP.sub("", message.get("content") or "").strip()[:200]
+                        if author == STUDENT and text and text not in teacher_text:
                             assert all(text not in span for span in spans), "student turn text inside a trained span"
                 checked += 1
     return {
@@ -187,6 +194,9 @@ def main() -> None:
         assistant = [m for m in synthetic["messages"] if m["role"] == "assistant"]
         for message in assistant[: max(1, len(assistant) // 2)]:
             message["author"] = STUDENT
+        if not relay:
+            # A v0 turn that is only think markup appears in every teacher span; the student check must ignore it.
+            assistant[0]["content"] = "<|end_think|>"
         relay.append(synthetic)
     (work / "relay.jsonl").write_text("".join(json.dumps(trace) + "\n" for trace in relay))
     summarized = [
