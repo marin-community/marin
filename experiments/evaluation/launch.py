@@ -79,6 +79,8 @@ DEFAULT_EVAL_CONCURRENCY = 1
 _ORCHESTRATOR_CPU = 4.0
 _ORCHESTRATOR_MEMORY = "16g"
 _ORCHESTRATOR_DISK = "16g"
+_SERVE_THROUGHPUT_FIELDS = {"max_num_batched_tokens", "max_num_seqs", "gpu_memory_utilization"}
+_EVALCHEMY_THROUGHPUT_FIELDS = {"num_concurrent"}
 
 logger = logging.getLogger(__name__)
 
@@ -335,22 +337,16 @@ def build_evaluation_batch(
                 "pipeline": spec.cache_key or group_id,
                 "model": model_ref.model_dump(
                     mode="json",
-                    exclude=(
-                        {
-                            "config": {"serve": {"max_num_batched_tokens", "max_num_seqs", "gpu_memory_utilization"}},
-                            "source_config": {
-                                "serve": {"max_num_batched_tokens", "max_num_seqs", "gpu_memory_utilization"}
-                            },
-                        }
-                        if spec.cache_key is None
-                        else None
-                    ),
+                    exclude={
+                        "config": {"serve": _SERVE_THROUGHPUT_FIELDS},
+                        "source_config": {"serve": _SERVE_THROUGHPUT_FIELDS},
+                    },
                 ),
                 "evaluation": definition.record_ref.model_dump(
                     mode="json",
                     exclude=(
-                        {"source_digest": True, "evalchemy": {"num_concurrent"}}
-                        if spec.cache_key is None and definition.record_ref.evalchemy is not None
+                        {"source_digest": True, "evalchemy": _EVALCHEMY_THROUGHPUT_FIELDS}
+                        if definition.record_ref.evalchemy is not None
                         else None
                     ),
                 ),
