@@ -185,7 +185,13 @@ class RolloutEngine:
         failure = await _run_harness(attempt.harness, context, attempt.recorder)
         # A model failure leaves the completed turns intact, so the engine grades them.
         if attempt.recorder.has_response and (failure is None or failure[0] == RolloutOperation.MODEL):
-            await self._grade(attempt, machine, resources)
+            try:
+                await self._grade(attempt, machine, resources)
+            except _Interrupted as interrupted:
+                if failure is None:
+                    raise
+                # The model failure stays the attempt's failure, and its cause names the grading failure.
+                failure[1].add_note(f"Grading the completed turns failed: {interrupted.__cause__!r}")
         if failure is not None:
             raise _Interrupted(failure[0]) from failure[1]
 

@@ -91,7 +91,9 @@ class RolloutRecorder(Protocol):
         """Add to the step of the last turn: observations that the model never receives, data, and metrics.
 
         ``data`` is for the trainer, for example a reward, and the engine does not read it. A turn with
-        recorded observations ends the conversation's turns: ``reply`` refuses it.
+        recorded observations ends the conversation's turns: ``reply`` refuses it. After ``LimitReached`` or a
+        failed model request, the harness can still add data and metrics, for example a final reward, to the
+        step of the last turn until it returns.
         """
         ...
 
