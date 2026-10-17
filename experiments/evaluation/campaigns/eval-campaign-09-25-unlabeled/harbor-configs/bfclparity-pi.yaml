@@ -40,6 +40,6 @@ agents:
 datasets:
 - name: bfcl_parity
   version: '1.0'
-  registry_url: https://raw.githubusercontent.com/marin-community/harbor/7863a2a3bade3acbfd7b5780ea0fd8ed113860bb/registry.json
+  registry_url: https://raw.githubusercontent.com/marin-community/harbor/d69b14a5f57f575ba72e2346c3ba59e3f5e24b52/registry.json
 verifier:
   override_timeout_sec: 300
