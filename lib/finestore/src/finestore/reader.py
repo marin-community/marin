@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import functools
-import heapq
 import io
 import itertools
 import threading
@@ -41,6 +40,7 @@ from finestore.layout import (
     TableMetadata,
     parse_uri,
 )
+from finestore.merge import merge_sorted_runs, newest_indices, sorted_by_key
 
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
 MAX_DESCRIPTOR_READS = 4
@@ -162,6 +162,10 @@ class _CachedReadHandler(FSSpecHandler):
         self._sizes = {shard.path: shard.size_bytes for shard in shards}
         self._cache = _ReadRangeCache(filesystem, shards, capacity)
 
+    def prefetch(self, path: str) -> None:
+        """Cache a complete immutable shard for later schema and row reads."""
+        self._cache.read(path, 0, self._sizes[path])
+
     def get_file_info(self, paths: list[str]) -> list[FileInfo]:
         # The pinned manifest already identifies these immutable files and their sizes.
         return [FileInfo(path, FileType.File, size=self._sizes[path]) for path in paths]
@@ -185,17 +189,6 @@ _TABLE_SCAN_PROFILE = _ScanProfile(batch_rows=16_384, batch_readahead=16, fragme
 _BLOB_DESCRIPTOR_SCAN_PROFILE = _ScanProfile(batch_rows=64, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
 _BLOB_PART_SCAN_PROFILE = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
 _ArrowRows = TypeVar("_ArrowRows", pa.Table, pa.RecordBatch)
-
-
-@dataclass(frozen=True)
-class VersionedRow:
-    """One row tagged with its key and manifest ordering coordinates."""
-
-    key: tuple
-    commit_sequence: int
-    sequence: int
-    generation: int
-    row: dict
 
 
 class BlobCorruptionError(ValueError):
@@ -379,14 +372,6 @@ class FilterClause:
             return field.isin(self.value)
         return field == self.value if self.operator == "==" else field != self.value
 
-    def matches(self, row: Mapping[str, object]) -> bool:
-        candidate = row.get(self.column)
-        if candidate is None:
-            return False
-        if self.operator == "in":
-            return candidate in cast(Iterable[object], self.value)
-        return (candidate == self.value) == (self.operator == "==")
-
 
 def shard_may_contain(shard: _ReadableShard, primary_key: tuple[str, ...], clauses: Sequence[FilterClause]) -> bool:
     """Whether ``clauses`` can match a row inside the shard's recorded primary-key range.
@@ -500,54 +485,17 @@ def _resolved_version_columns(rows: _ArrowRows, commit_sequence: int, generation
     return cast(_ArrowRows, result)
 
 
-def iter_shard_rows(
+def _sorted_shard_run(
     shard: _ReadableShard,
-    unified: pa.Schema,
-    primary_key: tuple[str, ...],
-    pa_fs: PyFileSystem,
-    columns: list[str] | None = None,
-    where: Sequence[FilterClause] | None = None,
-    scan_profile: _ScanProfile = _TABLE_SCAN_PROFILE,
-) -> Generator[VersionedRow, None, None]:
-    """Yield rows from one shard in primary-key order with version coordinates."""
-    with closing(iter_shard_batches(shard, unified, pa_fs, columns, where, scan_profile)) as batches:
-        if shard.primary_key_sorted:
-            ordered_batches = batches
-        else:
-            buffered = list(batches)
-            if not buffered:
-                return
-            sort_columns = [(name, "ascending") for name in primary_key if name in buffered[0].schema.names]
-            ordered_batches = (
-                pa.Table.from_batches(buffered).sort_by(sort_columns).to_batches(max_chunksize=scan_profile.batch_rows)
-            )
-        for batch in ordered_batches:
-            for row in batch.to_pylist():
-                key = tuple((row.get(name) is None, row.get(name)) for name in primary_key)
-                generation = row.pop(SystemColumns.GENERATION)
-                yield VersionedRow(
-                    key=key,
-                    commit_sequence=row[SystemColumns.COMMIT],
-                    sequence=row.get(SystemColumns.SEQUENCE) or 0,
-                    generation=generation,
-                    row=row,
-                )
-
-
-def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[dict]:
-    """Merge sorted shard streams and retain the newest row for each key."""
-    merged = heapq.merge(*streams, key=lambda item: item.key)
-    for _key, group in itertools.groupby(merged, key=lambda item: item.key):
-        winner: VersionedRow | None = None
-        for item in group:
-            if winner is None or (item.commit_sequence, item.sequence, item.generation) > (
-                winner.commit_sequence,
-                winner.sequence,
-                winner.generation,
-            ):
-                winner = item
-        assert winner is not None
-        yield winner.row
+    plan: _ReadPlan,
+    scan_profile: _ScanProfile,
+) -> Generator[pa.Table, None, None]:
+    """Yield one shard's matching rows in primary-key order, a batch at a time when the shard is sorted."""
+    with closing(
+        iter_shard_batches(shard, plan.schema, plan.filesystem, plan.columns, plan.pushdown_where, scan_profile)
+    ) as batches:
+        tables = (pa.Table.from_batches([batch]) for batch in batches)
+        yield from tables if shard.primary_key_sorted else sorted_by_key(tables, plan.primary_key)
 
 
 def _read_plan(
@@ -618,8 +566,7 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None, *, scan_profile: 
         parts.append(_resolved_version_columns(part, commit_sequence, generation))
 
     combined = parts[0] if len(parts) == 1 else pa.concat_tables(parts, promote_options="permissive")
-    if all(name in combined.column_names for name in plan.primary_key):
-        combined = _deduplicate(combined, plan.primary_key)
+    combined = _deduplicate(combined, plan.primary_key)
     if plan.post_dedup_where:
         combined = pds.dataset(combined).to_table(filter=_build_filter(plan.post_dedup_where))
     if columns is not None:
@@ -723,28 +670,15 @@ class _ReadOperations:
         if plan is None:
             return
         with ExitStack() as stack:
-            streams = [
-                stack.enter_context(
-                    closing(
-                        iter_shard_rows(
-                            shard,
-                            plan.schema,
-                            plan.primary_key,
-                            plan.filesystem,
-                            plan.columns,
-                            plan.pushdown_where,
-                            scan_profile,
-                        )
-                    )
-                )
-                for shard in plan.shards
-            ]
-            for row in merge_deduplicated_rows(streams):
-                if not all(clause.matches(row) for clause in plan.post_dedup_where):
-                    continue
-                if columns is not None:
-                    row = {name: row[name] for name in columns if name in row}
-                yield row
+            runs = [stack.enter_context(closing(_sorted_shard_run(shard, plan, scan_profile))) for shard in plan.shards]
+            for rows in merge_sorted_runs(runs, plan.primary_key):
+                if plan.post_dedup_where:
+                    rows = rows.filter(_build_filter(plan.post_dedup_where))
+                if columns is None:
+                    rows = rows.drop_columns([SystemColumns.GENERATION])
+                else:
+                    rows = rows.select([name for name in columns if name in rows.column_names])
+                yield from rows.to_pylist()
 
     def point(self, table: str, **keys) -> dict | None:
         result = self.scan(table, where=[(key, "==", value) for key, value in keys.items()])
@@ -959,20 +893,6 @@ class ReadView(_ReadOperations):
 
 
 def _deduplicate(table: pa.Table, primary_key: tuple[str, ...]) -> pa.Table:
-    """Keep the latest committed row per primary key."""
-    if table.num_rows == 0:
-        return table
-    key_columns = [table.column(name).to_pylist() for name in primary_key]
-    commits = table.column(SystemColumns.COMMIT).to_pylist()
-    generations = table.column(SystemColumns.GENERATION).to_pylist()
-    sequences = (
-        table.column(SystemColumns.SEQUENCE).to_pylist()
-        if SystemColumns.SEQUENCE in table.column_names
-        else [0] * table.num_rows
-    )
-    order = sorted(range(table.num_rows), key=lambda index: (commits[index], sequences[index], generations[index]))
-    winners: dict[tuple, int] = {}
-    for index in order:
-        winners[tuple(column[index] for column in key_columns)] = index
-    keep = sorted(winners.values())
-    return table if len(keep) == table.num_rows else table.take(pa.array(keep, pa.int64()))
+    """Keep the latest committed row per primary key, in the table's existing row order."""
+    winners = newest_indices(table, primary_key)
+    return table if len(winners) == table.num_rows else table.take(winners.sort())
