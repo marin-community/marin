@@ -65,8 +65,8 @@ Each attempt creates a fresh verifier machine from that selection.
 
 `RolloutEngine.check(spec)` rejects a spec before any machine starts, and `run_task` calls it again. It checks the
 factory identifiers, the supported requirements, and the machines that engine grading needs: task resources,
-and a `file`, `state`, or `workspace_state` answer that the engine grades, need a task machine. Then it calls
-the harness's own `check(task, limits)`.
+and a `file` or `workspace_state` answer that the engine grades, need a task machine. It rejects a graded
+`state` task, because the engine does not capture state. Then it calls the harness's own `check(task, limits)`.
 The selected factory applies network and hardware settings. Memory is advisory on Local;
 preparation omits that allocation because bubblewrap cannot enforce it.
 
@@ -187,7 +187,9 @@ A `Transition` has these fields:
 - `metrics` holds the step's metrics; `Rollout.metrics` starts from the last step's metrics.
 - `data` is the harness's own record of the step, for example the rewards and token credit that a trainer
   reads. The engine keeps it unchanged in `RolloutStep.transition` and does not interpret it. A consumer that
-  aligns rewards or credit with response tokens must check their lengths against `RolloutStep.response_end`.
+  aligns per-token rewards or credit with a turn's response tokens checks their length against
+  `len(step.turn.response_token_ids)`. `RolloutStep.response_end` is the index of the turn's last response token
+  in the conversation's `response_token_ids`.
 
 ### Agent harness
 
@@ -520,7 +522,7 @@ Group grading belongs to the caller.
 The task's answer format extracts text, number, JSON, and final-action submissions from the final conversation.
 A malformed submission receives `Outcome.SUBMISSION_FAILURE` with reward 0.
 File submissions use captured workspace files.
-The engine does not capture state, so it cannot grade a `state` answer, and the shell harness rejects one.
+The engine does not capture state, so `check` rejects a graded `state` task for every harness.
 A `VerifyitGrader` with an environment cannot grade a `native_action` answer.
 
 A `ScriptGrader` declares a command, collect commands, artifacts, an answer path, a conversation path, and a reward source.
@@ -575,7 +577,8 @@ Each `start` begins a new `ConversationRecord` with a fresh prefix check, for ex
 its conversation or changes its tools, or after a failed proof attempt. The new `Prompt` holds its public
 messages, its model options, and optionally its exact tokens. The workspace files and the harness's state stay.
 The rollout keeps the earlier conversations, and the trainer selects what to train on.
-Final grading receives the last conversation.
+Final grading receives the last conversation that has a model turn, so a new conversation whose first request
+fails leaves the earlier one to grade.
 
 `GenerationLimitReached` retains rendered prompt tokens when the model cannot start another response.
 The engine grades completed state with stop reason `length`.

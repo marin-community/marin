@@ -190,16 +190,16 @@ class RolloutEngine:
             raise _Interrupted(failure[0]) from failure[1]
 
     async def _grade(self, attempt: _Attempt, machine: Machine | None, resources: AsyncExitStack) -> None:
-        """Capture the run outputs and grade the last conversation with the task's grader."""
         spec, recorder = attempt.spec, attempt.recorder
-        assert recorder.conversation is not None
+        messages = recorder.graded_messages()
+        assert messages is not None
         started = time.monotonic()
         try:
             async with asyncio.timeout(spec.limits.verifier_timeout):
                 attempt.outputs = await _captured_outputs(spec, machine)
                 grade = await _grade_rollout(
                     spec,
-                    tuple(recorder.conversation.messages),
+                    messages,
                     attempt.outputs,
                     machine,
                     self.machine_factories,

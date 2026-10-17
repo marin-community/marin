@@ -163,8 +163,6 @@ def _provider_tools(
 
 @dataclass(frozen=True)
 class _ShellHarness:
-    """The shell harness's configuration, and its loop for each attempt."""
-
     command_timeout: float | None
     shell_tool: ShellToolConfig
     tools: Mapping[str, ToolProvider]
@@ -174,8 +172,6 @@ class _ShellHarness:
             raise ValueError(f"The command timeout must be a positive, finite number: {self.command_timeout!r}")
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
-        if task.answer_type == AnswerType.STATE:
-            raise NotImplementedError("The shell harness does not capture state answers")
         shell_tool = resolve_shell_tool(task, self.shell_tool)
         turn_limit = limits.tool_turn_timeout
         if self.command_timeout is not None and turn_limit is not None and self.command_timeout >= turn_limit:

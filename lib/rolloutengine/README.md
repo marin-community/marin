@@ -21,8 +21,8 @@ result = await engine.run_task(spec, model)
   its `RolloutRecorder` (`start`, `reply`, and `record`), which records the exact tokens and applies the turn
   and token limits. Register each harness in the `harnesses` mapping; `TaskRolloutSpec.harness` selects one by
   its key.
-- A harness does not grade. The engine grades the last conversation with the task's grader. A harness can
-  attach its own step data, such as rewards for training, with `record(data=...)`.
+- A harness does not grade. The engine grades the last conversation that has a model turn with the task's
+  grader. A harness can attach its own step data, such as rewards for training, with `record(data=...)`.
 - Built-in harnesses: `shell_harness` serves a shell tool on the task machine and host tools from registered
   providers; `agent_harness` runs an agent that owns its prompts and tool loop, for example an installed agent
   behind an HTTP proxy; `step_harness` runs an `Episode` that returns the first prompt and handles each turn.
