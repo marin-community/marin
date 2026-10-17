@@ -2821,7 +2821,11 @@ async def test_an_agent_that_does_not_stop_is_a_cleanup_error_and_is_kept_until_
     assert record.grade.diagnostics["cleanup_errors"] == [{"operation": "agent_stop", "exception_type": "TimeoutError"}]
     await asyncio.wait_for(ended.wait(), timeout=5)
     await asyncio.sleep(0)
-    assert any(isinstance(record.exc_info[1], OSError) for record in caplog.records if record.exc_info)
+    # The cleanup logs the kept agent's failure. Without it, only asyncio would log the task that nobody awaited.
+    assert any(
+        record.name == "rolloutengine.cleanup" and record.exc_info and isinstance(record.exc_info[1], OSError)
+        for record in caplog.records
+    )
 
 
 async def test_recorded_step_data_keeps_the_tool_deadline():
