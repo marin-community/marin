@@ -32,6 +32,7 @@ import json
 import random
 import re
 import tempfile
+from collections import Counter
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -334,6 +335,8 @@ def main() -> None:
         "heldout_seed": f"{SEED}:v{version}-heldout",
         "decon_contaminated": sorted(task for task in added if marks[task]["contaminated"]),
     }
+    removal_counts = Counter(row["leak_risk"] for row in excluded[len(excluded) - len(removed) :])
+    removal_summary = ", ".join(f"{reason} {count}" for reason, count in sorted(removal_counts.items()))
     history = manifest.get("supersedes") or []
     manifest["version"] = version
     manifest["supersedes"] = [
@@ -341,7 +344,7 @@ def main() -> None:
         {
             "manifest": f"manifest-v{version - 1}.json",
             "sha256": hashlib.sha256(previous_bytes).hexdigest(),
-            "change": f"v{version}: drop repos with clean copies in the agent's sandbox, top SWE-smith up to 2,100",
+            "change": f"v{version}: drop {len(removed)} tasks ({removal_summary}), top SWE-smith up to 2,100",
         },
     ]
     if tool_env_bytes:
