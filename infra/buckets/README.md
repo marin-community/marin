@@ -2,7 +2,7 @@
 
 This Pulumi project owns the shared Marin buckets and their complete lifecycle policies across
 GCS, CoreWeave AI Object Storage, and Cloudflare R2. The `marin-buckets` stack is operated
-manually because the CoreWeave provider requires a broad account token.
+manually because its provider credentials are not available to CI.
 
 Bucket names, stores, locations, and endpoints come from the reviewed `data:` blocks in
 [`config/marin.yaml`](../../config/marin.yaml) and
@@ -20,11 +20,17 @@ gcloud auth application-default login
 gcloud auth application-default set-quota-project hai-gcp-models
 ```
 
-Export an AI Object Storage account token only in the operator process:
+Export a current CoreWeave API token only in the operator process:
 
 ```bash
 export COREWEAVE_API_TOKEN=<coreweave-object-storage-token>
 ```
+
+The provider exchanges this token for temporary S3 credentials. It does not use
+`CW_KEY_ID` and `CW_KEY_SECRET`, which authenticate direct S3 access through `fsutil`.
+The managed CoreWeave token is stored in the `loom-coreweave-iris-kubeconfig` secret in
+`hai-gcp-models`, under `users[].user.token`. Use the latest secret version when a stale
+environment token returns `401` during the credential exchange.
 
 Cloudflare account tokens are stored in GCP Secret Manager. Use the read token for previews and
 the write token for updates:
@@ -74,9 +80,9 @@ incomplete multipart uploads after seven days.
 mirror set. Permanent east-region artifacts remain in `marin-us-east-02a`; `hero-checkpoints`
 is reserved for hero checkpoints.
 
-Before switching existing deployments, import the existing `marin-us-east-08a` bucket into
-this stack and apply its lifecycle and access policy. Review the preview for bucket
-replacement or deletion. The standard prefixes affect only `tmp/ttl=Nd/` objects; existing
+When adopting an existing bucket, import the bucket and its lifecycle and access policies
+before switching deployments. Review the preview for bucket replacement or deletion.
+The standard prefixes affect only `tmp/ttl=Nd/` objects; existing
 data stays at its current location. Roll out the CoreWeave task defaults after the bucket
 policy is active. Already running jobs retain their environment.
 
