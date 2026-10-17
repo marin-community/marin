@@ -394,18 +394,14 @@ DEFAULT_GPU_NCCL_TERMINATION_TIMEOUT = 600
 
 
 def _add_gpu_collective_watchdog_env(env: dict[str, str]) -> None:
-    """Set the NCCL collective-watchdog timeout and NCCL_DEBUG in ``env`` (in place).
+    """Set the NCCL collective-watchdog timeout in ``env`` (in place).
 
-    Defers to an explicit termination timeout already in ``XLA_FLAGS`` and to a
-    preset ``NCCL_DEBUG``.
+    Defers to an explicit termination timeout already in ``XLA_FLAGS``.
     """
     xla_flags = env.get("XLA_FLAGS", "")
     if GPU_NCCL_TERMINATION_TIMEOUT_FLAG not in xla_flags:
         flag = f"--{GPU_NCCL_TERMINATION_TIMEOUT_FLAG}={DEFAULT_GPU_NCCL_TERMINATION_TIMEOUT}"
         env["XLA_FLAGS"] = f"{xla_flags} {flag}".strip()
-
-    # WARN surfaces the abort and transport errors without INFO's per-collective volume.
-    env.setdefault("NCCL_DEBUG", "WARN")
 
 
 def resolve_training_env(

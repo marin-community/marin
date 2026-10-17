@@ -719,6 +719,7 @@ class EnvironmentSpec:
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
     - HF_TOKEN: from os.environ (if set)
     - WANDB_API_KEY: from os.environ (if set)
+    - NCCL_DEBUG: "WARN" for GPU jobs (preserves errors without INFO log volume)
     - MARIN_PROVENANCE: the launch's ``rigging.provenance.Provenance`` as JSON, captured
       at submission (or forwarded from this process's own env when re-submitting inside
       a task), so tasks stamp artifacts with the submitter's git identity
@@ -765,8 +766,7 @@ class EnvironmentSpec:
             default_env_vars.update(
                 {
                     NCCL_RAS_ENABLE_ENV: "1",
-                    "NCCL_DEBUG": "INFO",
-                    "NCCL_DEBUG_SUBSYS": "INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS",
+                    "NCCL_DEBUG": "WARN",
                     "NCCL_DEBUG_TIMESTAMP": "[%F %T.%3f]",
                 }
             )
