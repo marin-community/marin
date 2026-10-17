@@ -93,6 +93,10 @@ def main() -> None:
         "--exclude-task", action="append", default=[], help="task=reason=evidence, either family (repeatable)"
     )
     parser.add_argument(
+        "--staged",
+        help="tasks.parquet of already-built packages for the added tasks (integrity-checked); used byte for byte",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true", help="print the SWE-smith removals and replacement draw; write nothing"
     )
     args = parser.parse_args()
@@ -188,11 +192,21 @@ def main() -> None:
         mirrors = work / "mirrors"
         mirrors.mkdir()
         new_rows = []
+        staged = {}
+        if args.staged:
+            staged = {
+                row["path"]: row["task_binary"]
+                for row in pq.read_table(io.BytesIO(StoragePath(args.staged).read_bytes())).to_pylist()
+            }
+            if set(staged) != set(added):
+                raise ValueError(f"Staged packages {sorted(staged)} differ from the draw {added}")
         for task in added:
             package = read_package(upstream[task])
             instance = instance_id(package)
             restored, deleted = restore_payload(mirror(MIRROR_NAME.match(instance)[1], mirrors), instance)
-            binary = write_package(fixed_package(package, restored, deleted))
+            binary = staged.get(task) or write_package(fixed_package(package, restored, deleted))
+            if task in staged and read_package(binary)["tests/config.json"] != package["tests/config.json"]:
+                raise ValueError(f"Staged package for {task} is not built from its upstream package")
             new_rows.append({"path": task, "task_binary": binary})
             records.append(
                 {
