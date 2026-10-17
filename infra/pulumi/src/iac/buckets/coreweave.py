@@ -91,7 +91,7 @@ class CoreweaveDataBuckets(pulumi.ComponentResource):
             )
             for rule in expiration_rules(lifecycle_config)
         )
-        for bucket in sorted(data_config.region_buckets.values(), key=lambda spec: spec.name):
+        for bucket in sorted(data_config.buckets.values(), key=lambda spec: spec.name):
             if bucket.store is not StoreType.COREWEAVE:
                 continue
             if bucket.signing_region is None:

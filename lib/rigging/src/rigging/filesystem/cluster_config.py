@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cluster data config, storage-prefix/region resolution, region-local temp
+"""Cluster data config, storage-prefix/region resolution, lifecycle-managed temp
 storage, and GCS-location utilities.
 
 A :class:`DataConfig` describes where a cluster's data lives: the
@@ -10,7 +10,7 @@ region-to-bucket mirror set, the URL scheme, and the temp TTL policy.
 :func:`use_data_config`, else the cluster named by ``MARIN_CLUSTER`` (default
 ``marin``), loaded from ``config/<cluster>.yaml``. Every "where does data live"
 answer flows through it: :func:`marin_prefix` is ``data_config().resolved_root()``,
-while :func:`marin_temp_bucket` resolves region-local scratch, honoring a
+while :func:`marin_temp_bucket` resolves backend scratch storage, honoring a
 cluster-wide ``MARIN_TEMP_PREFIX`` override when configured. Lifecycle rules
 on every configured data bucket are managed by ``infra/buckets``.
 """
@@ -116,7 +116,7 @@ class BucketSpec:
 
 @dataclasses.dataclass(frozen=True)
 class StoreConfig:
-    """How to reach one S3-compatible backend: its endpoint and the variables holding its keys.
+    """Connection settings and shared scratch storage for one S3-compatible backend.
 
     Declared under ``data.stores`` in a cluster config so the connection details live
     beside the buckets they serve rather than as constants in code. Each environment
@@ -128,12 +128,15 @@ class StoreConfig:
         endpoint_env: Variable overriding ``endpoint``.
         key_id_env: Variable holding the access key ID.
         key_secret_env: Variable holding the secret access key.
+        temp_bucket: Shared lifecycle-managed scratch bucket for this backend.
+            When absent, temporary paths stay in the source bucket.
     """
 
     endpoint: str
     endpoint_env: str
     key_id_env: str
     key_secret_env: str
+    temp_bucket: BucketSpec | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -159,6 +162,15 @@ class DataConfig:
     temp_path: str = "tmp"
     ttl_days: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 30)
     root: str | None = None
+
+    @property
+    def buckets(self) -> Mapping[str, BucketSpec]:
+        """All data and scratch buckets, keyed by name."""
+        buckets = {bucket.name: bucket for bucket in self.region_buckets.values()}
+        for store in self.stores.values():
+            if store.temp_bucket is not None:
+                buckets[store.temp_bucket.name] = store.temp_bucket
+        return buckets
 
     def resolved_root(self) -> str:
         """Resolve the storage root for this config. Never returns ``None``.
@@ -309,7 +321,10 @@ def _parse_store_config(name: object, value: object) -> StoreConfig:
     required = ("endpoint", "endpoint_env", "key_id_env", "key_secret_env")
     if not isinstance(value, Mapping) or any(field not in value for field in required):
         raise ValueError(f"stores.{name} must be a mapping setting {', '.join(required)}: {value!r}")
-    return StoreConfig(**{field: str(value[field]) for field in required})
+    temp_bucket = _parse_bucket_spec(value["temp_bucket"]) if value.get("temp_bucket") is not None else None
+    if temp_bucket is not None and temp_bucket.store != StoreType(str(name)):
+        raise ValueError(f"stores.{name}.temp_bucket must use the same store: {value['temp_bucket']!r}")
+    return StoreConfig(**{field: str(value[field]) for field in required}, temp_bucket=temp_bucket)
 
 
 def _parse_data_config(data: Mapping[str, object]) -> DataConfig:
@@ -411,7 +426,7 @@ def data_buckets() -> Mapping[str, BucketSpec]:
     """
     registry: dict[str, BucketSpec] = {}
     for cluster in list_cluster_configs(MARIN_CLUSTER_CONFIG_DIRS):
-        for spec in load_cluster_config(cluster).region_buckets.values():
+        for spec in load_cluster_config(cluster).buckets.values():
             registry.setdefault(spec.name, spec)
     return MappingProxyType(registry)
 
@@ -512,9 +527,9 @@ def marin_temp_bucket(
     prefix: str = "",
     *,
     source_prefix: str | None = None,
-    use_env_override: bool = True,
+    temp_prefix: str | None = None,
 ) -> str:
-    """Return a path on region-local temp storage. Never returns ``None``.
+    """Return a lifecycle-managed temporary path. Never returns ``None``.
 
     For a GCS marin prefix with a known region, or an explicitly provided
     ``source_prefix`` with a known region, returns a path under the
@@ -522,11 +537,11 @@ def marin_temp_bucket(
 
         gs://marin-{region}/tmp/ttl={N}d/{prefix}
 
-    For a known S3-compatible prefix — an R2 or CoreWeave bucket in
-    :func:`s3_data_buckets` — returns a path at the bucket root::
+    For a known S3-compatible prefix, use its backend's configured shared
+    scratch bucket, or the source bucket when none is configured::
 
         s3://marin-na/tmp/ttl={N}d/{prefix}
-        s3://marin-us-east-02a/tmp/ttl={N}d/{prefix}
+        s3://marin-us-east-08a/tmp/ttl={N}d/{prefix}
 
     Otherwise falls back to a flat path under the marin prefix::
 
@@ -535,8 +550,7 @@ def marin_temp_bucket(
     Pulumi-managed lifecycle rules on every data bucket auto-delete objects
     under ``tmp/ttl=Nd/`` after *N* days.
     When ``MARIN_TEMP_PREFIX`` is set, it overrides ambient and explicit source
-    prefixes so every temporary write in that cluster uses the configured
-    bucket.
+    prefixes. An explicit ``temp_prefix`` takes precedence over the environment.
 
     Args:
         ttl_days: Lifecycle TTL in days.  Values not in the active config's
@@ -547,17 +561,16 @@ def marin_temp_bucket(
         source_prefix: Optional path used to choose the temp bucket region.
             Useful when configuring a remote job from a launcher that may be in
             a different region than the job output path.
-        use_env_override: Honor ``MARIN_TEMP_PREFIX`` when set. Disable only
-            when resolving a legacy data-local path for reads, never for writes.
+        temp_prefix: Explicit scratch destination, taking precedence over
+            ``MARIN_TEMP_PREFIX`` and backend scratch routing.
     """
     cfg = data_config()
     ttl_days = _resolve_ttl_days(ttl_days, cfg.ttl_days)
 
-    override_prefix = os.environ.get(_MARIN_TEMP_PREFIX_ENV) if use_env_override else None
+    override_prefix = temp_prefix or os.environ.get(_MARIN_TEMP_PREFIX_ENV)
     mp = override_prefix or source_prefix or marin_prefix()
 
-    # A cluster temp override takes precedence over explicit source routing so
-    # all disposable writes from the cluster share one lifecycle-managed bucket.
+    # An explicit destination wins over cluster and backend defaults.
     # Otherwise source_prefix fully determines the backend and region, taking
     # precedence over the ambient marin prefix and VM metadata.
     if override_prefix is not None:
@@ -576,12 +589,12 @@ def marin_temp_bucket(
             path = f"gs://{spec.name}/{cfg.temp_path}/ttl={ttl_days}d"
             return _append_path_prefix(path, prefix)
 
-    # R2 and CoreWeave temp lives at the bucket root so the `tmp/ttl=Nd/`
-    # lifecycle prefix managed by infra/buckets applies. The
-    # bucket already pins the region (R2 is non-regional; CoreWeave encodes it in
-    # the name, e.g. marin-us-east-02a), and the runtime marin prefix carries a
-    # `marin/` data subdir (e.g. `s3://marin-na/marin`) that we deliberately strip.
     if s3_bucket:
+        if override_prefix is None:
+            store = store_configs().get(s3_data_buckets()[s3_bucket].store)
+            if store is not None and store.temp_bucket is not None:
+                s3_bucket = store.temp_bucket.name
+        # Lifecycle rules match the bucket-root tmp/ prefix, outside marin/.
         path = f"s3://{s3_bucket}/{cfg.temp_path}/ttl={ttl_days}d"
         return _append_path_prefix(path, prefix)
 
