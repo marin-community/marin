@@ -85,6 +85,7 @@ CHANGELOG = (
     "c8e908696e drop traces holding a live proxy capability token (decoded JWT)",
     "095f31382d eligibility counts only the arm's own run type (the relay denominator had included plain runs)",
     "45b4478e04 pool v5 pin (frozen pool; drops 11 tasks with broken or hanging verifiers)",
+    "d43ab0af02 replay cut at R = round(B / 4) with plain's B; same rows in every arm (hash-checked)",
 )
 # mini-swe-agent's own tool environment, installed in the sandbox at agent setup, holds clean copies of some repos
 # (pool v3 removes those repos); a trace that reads anything there is dropped. Pattern from #207 (chukar): path reads,
