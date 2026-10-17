@@ -45,7 +45,7 @@ def main() -> None:
             versions[dist["name"].lower()].add(dist["version"])
         for line in parts["top_level"]:
             names_part = line.split(":", 1)[1].replace("(no top_level.txt)", "")
-            top_level.update(n for n in names_part.split() if n.replace(".", "_").isidentifier() and not n.startswith("_"))
+            top_level.update(n for n in names_part.split() if n[:1].isalpha() and n.replace(".", "_").isidentifier())
         pythons.update(parts["python"])
         others.update(parts["other site-packages dirs"])
         tasks[task] = len(distributions)
