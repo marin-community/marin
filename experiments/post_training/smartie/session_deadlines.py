@@ -37,7 +37,7 @@ def extend_model_deadline(payload: str, model_timeout: float) -> str:
 def extend_dataset_deadlines(
     source: StoragePath, source_manifest: StoragePath, output: StoragePath, model_timeout: float
 ) -> dict:
-    """Write a fresh cohort with unchanged rows and hash-linked source provenance."""
+    """Write extended deadlines with unchanged task content and hash-linked provenance."""
     if output.exists():
         raise FileExistsError(f"Deadline output must be new: {output}")
     manifest_bytes = source_manifest.read_bytes()

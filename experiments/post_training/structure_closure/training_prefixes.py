@@ -13,6 +13,7 @@ from pathlib import Path
 from verifyit.closure_scoring import ContinuationOutcome, continuation_outcome
 
 from experiments.post_training.structure_closure.benchmark import (
+    CONTINUE_REQUIRED,
     ClosureCase,
     Family,
     Split,
@@ -24,7 +25,7 @@ from experiments.post_training.structure_closure.benchmark import (
 
 def near_boundary_case(case: ClosureCase) -> ClosureCase:
     """Advance only ordinary training controls, retaining known reference content."""
-    if case.split != Split.TRAIN or case.control != "continue_required":
+    if case.split != Split.TRAIN or case.control != CONTINUE_REQUIRED:
         return case
     if not case.expected.startswith(case.prefix):
         raise ValueError(f"Prefix is not part of the reference: {case.case_id}")
