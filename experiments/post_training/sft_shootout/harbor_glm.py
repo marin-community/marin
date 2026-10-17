@@ -112,6 +112,12 @@ AGENTS = {
     "oracle": {"name": "oracle"},
     # Changes nothing, so an intact task must score 0.
     "null": {"import_path": "probe_agents:NullAgent"},
+    # mini-swe-agent 2.1.0's real setup, then a listing of its tool env (no model calls).
+    "tool-env-probe": {
+        "import_path": "probe_agents:ToolEnvProbe",
+        "model_name": "hosted_vllm/none",
+        "kwargs": {"version": "2.1.0"},
+    },
     # A null agent plus reachability checks before, during and after the agent-phase network limit.
     "network-probe": {
         "import_path": "probe_agents:NetworkProbe",
@@ -141,7 +147,7 @@ AGENTS = {
     },
 }
 
-MODEL_FREE_AGENTS = {"oracle", "null", "network-probe"}
+MODEL_FREE_AGENTS = {"oracle", "null", "network-probe", "tool-env-probe"}
 
 
 def serve(app: Starlette, host: str) -> int:

@@ -40,7 +40,9 @@ def show_trial(result_path: StoragePath) -> None:
     print(f"  verifier stdout tail:\n{stdout[-1500:]}")
     agent_dir = StoragePath(str(result_path.parent) + "/attempts/000/agent")
     for path in agent_dir.ls() if agent_dir.exists() else []:
-        if str(path).endswith(".txt"):
+        if path.name == "tool_env.txt":
+            print(f"  {path.name}:\n{path.read_text()}")
+        elif str(path).endswith(".txt"):
             print(f"  agent log {path.name}:\n{path.read_text()[-4000:]}")
         if path.name in ("agent_network.json", "network_probe.json"):
             print(f"  {path.name}:\n{path.read_text()}")

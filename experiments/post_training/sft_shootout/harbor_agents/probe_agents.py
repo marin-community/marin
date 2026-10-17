@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from harbor.agents.base import BaseAgent
+from harbor.agents.installed.mini_swe_agent import MiniSweAgent
 
 from trial_agents import AgentPhaseNetwork
 
@@ -88,3 +89,29 @@ class NetworkProbe(AgentPhaseNetwork, NullAgent):
     async def run_limited(self, instruction: str, environment: Any, context: Any) -> None:
         await self.probe(environment, "agent_phase")
         await super().run_limited(instruction, environment, context)
+
+
+# Lists what mini-swe-agent's own install puts in the sandbox: its tool env's distributions and their
+# top-level import names, plus every other site-packages directory on the sandbox's filesystem.
+TOOL_ENV_LISTING = r"""
+. "$HOME/.local/bin/env"
+tool=$(uv tool dir)/mini-swe-agent
+echo "== python"; "$tool/bin/python" --version
+echo "== distributions"; uv pip list --python "$tool/bin/python" --format json
+echo "== top_level"
+for d in "$tool"/lib/python3*/site-packages/*.dist-info; do
+  name=$(basename "$d" .dist-info)
+  if [ -f "$d/top_level.txt" ]; then echo "$name: $(tr '\n' ' ' < "$d/top_level.txt")";
+  else echo "$name: (no top_level.txt) $(sed -n 's|^\([^/,]*\)/.*|\1|p' "$d/RECORD" | sort -u | grep -v dist-info | tr '\n' ' ')"; fi
+done
+echo "== site_packages entries"; ls "$tool"/lib/python3*/site-packages
+echo "== other site-packages dirs"; find / -xdev -type d \( -name site-packages -o -name dist-packages \) 2>/dev/null | grep -v "^$tool"
+"""
+
+
+class ToolEnvProbe(MiniSweAgent):
+    """Runs mini-swe-agent's real setup, then lists its tool env instead of calling a model."""
+
+    async def run(self, instruction: str, environment: Any, context: Any) -> None:
+        result = await environment.exec(command=TOOL_ENV_LISTING, timeout_sec=300)
+        (Path(str(self.logs_dir)) / "tool_env.txt").write_text((result.stdout or "") + (result.stderr or ""))
