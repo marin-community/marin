@@ -1035,7 +1035,7 @@
       "id": 22,
       "type": "timeseries",
       "title": "Training reward and informative groups",
-      "description": "Raw training reward, reward/avg_pass_at_{n} and the fraction of informative groups. Compare sustained reward changes with held-out evaluation; an uninformative group fraction near one leaves little relative training signal. Reward scales depend on the task, and pass-at-n depends on group size; requires trainer.training_metrics.",
+      "description": "Raw training reward, reward/avg_pass_at_{n} and the fraction of informative groups. Compare sustained reward changes with held-out evaluation; an informative-group fraction near zero means most groups provide little relative training signal. Reward scales depend on the task, and pass-at-n depends on group size; requires trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1153,7 +1153,7 @@
       "id": 49,
       "type": "timeseries",
       "title": "Evaluation response length and stop coverage",
-      "description": "Mean/maximum evaluation response length and stop-class fractions. Rising length limits can explain score changes caused by truncation; compare fractions only at complete stop-reason coverage. Evaluations are sparse and incomplete fractions stay blank; requires trainer.training_metrics.",
+      "description": "Mean/maximum evaluation response length and stop-class fractions. Rising length-stop fractions can explain score changes caused by truncation; compare fractions only at complete stop-reason coverage. Evaluations are sparse and incomplete fractions stay blank; requires trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1240,7 +1240,7 @@
       "id": 50,
       "type": "timeseries",
       "title": "Evaluation score contributions by stop class",
-      "description": "Evaluation score contributions from length-stopped and completed responses, alongside the overall score. Use them to identify which stop class drives a score change. Each contribution uses its own coverage and aggregation; requires trainer.training_metrics.",
+      "description": "Evaluation score contributions from length-stopped and completed responses, alongside the overall score. Each contribution is the sum of scores in its stop class divided by the total evaluated response count. Compare them to identify which class drives a score change. Contributions require complete stop-reason coverage; other stop classes can contribute to the overall score. Requires trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -3014,7 +3014,7 @@
       "id": 111,
       "type": "timeseries",
       "title": "vLLM request latency (mean by stage)",
-      "description": "Mean queue, prefill, decode, first-token and end-to-end latency per finished request. Rising queue time means requests wait to start; rising decode time means generation slows. Means hide tails, and first-token/end-to-end stages overlap the other stages; requires engine telemetry. Run-wide: this panel ignores the Job and Execution pickers.",
+      "description": "Mean queue, prefill, decode, first-token and end-to-end latency per finished request. Rising queue time means requests wait to start; rising decode time can reflect longer responses or slower decoding. Means hide tails, and first-token/end-to-end stages overlap the other stages; requires engine telemetry. Run-wide: this panel ignores the Job and Execution pickers.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

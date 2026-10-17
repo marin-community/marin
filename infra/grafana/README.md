@@ -349,21 +349,18 @@ table. No status tile adds a Finelog source: overview still reads two sources,
 GPU detail one, attempts ten, and the producer census reads each available
 namespace among MarinSkyRL, vLLM and Harbor.
 
-Status ages are relative to the selected range end. The newest step-reporting
-execution supplies the current step and its observed step rate; two distinct
-observation times are needed for a rate. Record age covers every record type in the selected attempts. A fresh record age beside an
-old step age can distinguish a trainer stall from missing telemetry. A finished
-run reads as old because ages use the range end; check its terminal event
-in Diagnostics. Both turn
-orange at 300 seconds and red at 900 seconds. Staleness p95 uses the newest bucket of the newest
-reporting execution; sync observations yield zero and missing data stays
-empty. The two optimizer panels share one view and filter its series for their
-respective axes. The learner-memory bars show the largest phase peaks across
-selected ranks and executions, with maximum device capacity as a reference.
-Phase-throughput bars include sampled-interval coverage on the right axis.
-Overlap bars retain the newest 50 execution/step windows by finish time.
-The latest generated-token rate uses a display bucket whose width grows
-with the selected range.
+Status ages are relative to the selected range end. The newest step-reporting execution supplies
+the current step and its observed step rate; two distinct observation times are needed for a
+rate. Record age covers every record type in the selected attempts. A fresh record age beside an
+old step age can distinguish a trainer stall from missing telemetry. A finished run reads as old
+because ages use the range end; check its terminal event in Diagnostics. Both turn orange at 300
+seconds and red at 900 seconds. Staleness p95 uses the newest bucket of the newest reporting
+execution; sync observations yield zero and missing data stays empty. The two optimizer panels
+share one view and filter its series for their respective axes. The learner-memory bars show the
+largest phase peaks across selected ranks and executions, with maximum device capacity as a
+reference. Phase-throughput bars include sampled-interval coverage on the right axis. Overlap
+bars retain the newest 50 execution/step windows by finish time. The latest generated-token rate
+uses a display bucket whose width grows with the selected range.
 
 RL panels have a 360-point budget. Overview, GPU and attempt requests pass
 Grafana's interval. Attempt panels use a 30-second minimum; run-wide charts use one minute.
