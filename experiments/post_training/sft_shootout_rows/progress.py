@@ -3,10 +3,10 @@
 
 """Dry-build plain, RS-multi and relay over every finished #212 shard and print one progress summary (task #218).
 
-A shard is finished when its rebuilt.jsonl has a _SUCCESS marker beside it. All finished shards of both families
-(plain and relay runs) go to validate_pilot.py, which builds and re-checks each arm under --output (a dry-run prefix
-with DRY_RUN_NOT_FOR_TRAINING markers; never an arm's input). The summary line holds, per arm, the manifest fields
-the progress table needs.
+A shard is finished when its rebuilt.jsonl sits at a shard or round path (SHARD_PATH) with a _SUCCESS marker beside
+it. All finished shards of both families (plain and relay runs) go to validate_pilot.py, which builds and re-checks
+each arm under --output (a dry-run prefix with DRY_RUN_NOT_FOR_TRAINING markers; never an arm's input). The summary
+line holds, per arm, the manifest fields the progress table needs.
 
 Usage:
     python -m experiments.post_training.sft_shootout_rows.progress --traces-root <s3 .../traces/> --pool <tasks.jsonl> \\
@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 
@@ -24,12 +25,17 @@ from rigging.filesystem.storage_path import StoragePath
 ARMS = ("plain", "rs-multi", "relay")
 
 
+# <family>/shard-NN/rebuilt.jsonl or <family>-relay/shard-NN/round-N/rebuilt.jsonl. Anything else, such as a failed round
+# moved aside to round-N.failed-<id>/, is not a finished shard.
+SHARD_PATH = re.compile(r"/[a-z]+(?:-relay)?/shard-[0-9a-z]+/(?:round-[0-9]+/)?rebuilt\.jsonl$")
+
+
 def finished_shards(root: str) -> list[str]:
     fs, path = fsspec.core.url_to_fs(root)
     protocol = root.split("://", 1)[0] + "://"
     found = []
     for rebuilt in sorted(fs.glob(f"{path.rstrip('/')}/**/rebuilt.jsonl")):
-        if fs.exists(rebuilt.rsplit("/", 1)[0] + "/_SUCCESS"):
+        if SHARD_PATH.search(rebuilt) and fs.exists(rebuilt.rsplit("/", 1)[0] + "/_SUCCESS"):
             found.append(protocol + rebuilt)
     return found
 
