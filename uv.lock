@@ -6965,7 +6965,6 @@ dependencies = [
     { name = "httpx" },
     { name = "humanfriendly" },
     { name = "marin-finelog" },
-    { name = "marin-finelog-server" },
     { name = "marin-finestore" },
     { name = "marin-iris-native" },
     { name = "marin-rigging" },
@@ -6985,6 +6984,7 @@ dependencies = [
 [package.optional-dependencies]
 controller = [
     { name = "kubernetes" },
+    { name = "marin-finelog-server" },
     { name = "marin-rigging", extra = ["secrets"] },
 ]
 iap = [
@@ -6997,6 +6997,7 @@ dev = [
     { name = "jax", version = "0.11.1", source = { registry = "https://pypi.org/simple" } },
     { name = "jupyter" },
     { name = "kubernetes" },
+    { name = "marin-finelog-server" },
     { name = "memray" },
     { name = "nbconvert" },
     { name = "nbformat" },
@@ -7017,6 +7018,7 @@ examples = [
 test = [
     { name = "jax", version = "0.11.1", source = { registry = "https://pypi.org/simple" } },
     { name = "kubernetes" },
+    { name = "marin-finelog-server" },
     { name = "memray" },
     { name = "playwright" },
     { name = "pytest" },
@@ -7041,7 +7043,7 @@ requires-dist = [
     { name = "humanfriendly", specifier = ">=10.0" },
     { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0,!=36.0.0,<37" },
     { name = "marin-finelog", editable = "lib/finelog" },
-    { name = "marin-finelog-server", specifier = ">=0.2.54.dev35409391246" },
+    { name = "marin-finelog-server", marker = "extra == 'controller'", specifier = ">=0.2.54.dev35409391246" },
     { name = "marin-finestore", editable = "lib/finestore" },
     { name = "marin-iris-native", specifier = ">=0.1.11.dev37977873285" },
     { name = "marin-rigging", editable = "lib/rigging" },
@@ -7067,6 +7069,7 @@ dev = [
     { name = "jax", specifier = "==0.11.1" },
     { name = "jupyter", specifier = ">=1.1.1" },
     { name = "kubernetes", specifier = ">=31.0.0,!=36.0.0,<37" },
+    { name = "marin-finelog-server", specifier = ">=0.2.54.dev35409391246" },
     { name = "memray", specifier = ">=1.19.3" },
     { name = "nbconvert", specifier = ">=7.16.6" },
     { name = "nbformat", specifier = ">=5.10.4" },
@@ -7087,6 +7090,7 @@ examples = [
 test = [
     { name = "jax", specifier = "==0.11.1" },
     { name = "kubernetes", specifier = ">=31.0.0,!=36.0.0,<37" },
+    { name = "marin-finelog-server", specifier = ">=0.2.54.dev35409391246" },
     { name = "memray", specifier = ">=1.19.3" },
     { name = "playwright", specifier = ">=1.49.0" },
     { name = "pytest", specifier = ">=8.4" },
@@ -7831,11 +7835,13 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "marin-finelog-server" },
     { name = "pytest" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 test = [
+    { name = "marin-finelog-server" },
     { name = "pytest" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
@@ -7863,11 +7869,13 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "marin-finelog-server", specifier = ">=0.2.54.dev35409391246" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 test = [
+    { name = "marin-finelog-server", specifier = ">=0.2.54.dev35409391246" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },

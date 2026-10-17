@@ -9,16 +9,9 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
     "marin-finestore",
     "marin-rigging",
-    # marin-finelog is the pure-Python client/deploy/proto. The controller also
-    # starts an in-process native log server (module `finelog_server`), which
-    # ships as the separate marin-finelog-server platform wheel; the pure client
-    # does not depend on it, so the controller — its one consumer — pulls it in
-    # explicitly.
+    # marin-finelog is the pure-Python client/deploy/proto. The native log server
+    # the controller embeds lives in the `controller` extra below.
     "marin-finelog >= 0.2.10",
-    # The floor must stay at or above 0.2.46.dev33324331711, which added the catalog
-    # parser for list-valued histogram schemas. Older servers cannot reopen catalogs containing
-    # COLUMN_TYPE_FLOAT64_LIST or COLUMN_TYPE_INT64_LIST.
-    "marin-finelog-server>=0.2.54.dev35409391246",
     # Platform companion wheel containing the Rust-owned public proxy listener.
     "marin-iris-native>=0.1.11.dev37977873285",
     "click>=8.3.1",
@@ -55,6 +48,12 @@ controller = [
     # Manager client. Only the controller runs resolve_config_secrets, so this
     # stays off the worker/CLI import path.
     "marin-rigging[secrets]",
+    # The controller (and LocalCluster) starts an in-process native log server
+    # (module `finelog_server`) from the separate marin-finelog-server platform
+    # wheel. The floor must stay at or above 0.2.46.dev33324331711, which added the
+    # catalog parser for list-valued histogram schemas. Older servers cannot
+    # reopen catalogs containing COLUMN_TYPE_FLOAT64_LIST or COLUMN_TYPE_INT64_LIST.
+    "marin-finelog-server>=0.2.54.dev35409391246",
 ]
 worker = []
 # Interactive `iris login` against an IAP-fronted cluster (desktop OAuth flow).
@@ -78,6 +77,8 @@ test = [
     "jax==0.11.1",
     # v36.0.0 omits bearer-token auth: https://github.com/kubernetes-client/python/pull/2585
     "kubernetes>=31.0.0,!=36.0.0,<37",
+    # LocalCluster-backed tests start the embedded native log server.
+    "marin-finelog-server>=0.2.54.dev35409391246",
     "memray>=1.19.3",
     "playwright>=1.49.0",
     "pytest-asyncio",
