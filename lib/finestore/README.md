@@ -183,19 +183,20 @@ Close-time compaction does not repair archives left by terminated writers or gua
 one shard across repeated writer sessions. Ordinary leveled maintenance still handles
 larger groups; explicit compaction remains available across all active shards.
 
-Compaction pins a manifest and scans one Parquet row group at a time from each input
-shard. It takes the next group by its first primary key, then adds that group's rows
-to the output buffer. The ordering is approximate for unsorted input shards. A 1 MiB
-fsspec file buffer limits speculative byte reads; Parquet pre-buffering is disabled.
-A required column read or decoded row group can be larger than the file buffer.
-Compaction retains the newest version seen per key in a buffer with a 400 MiB
-default target, configurable as `compaction_target_bytes` on `DataStore` or
-`target_bytes` on `compact_table`. It concatenates and sorts the retained Arrow
-tables when the next row group would exceed that target. Each buffer becomes a
-sorted output shard at the next level. A single input row group or row can exceed
-the target. The shard writer splits output row groups by its own row and byte
-limits. Duplicate keys in different output shards remain valid; readers
-resolve them, and the seal records only duplicates removed during that compaction.
+Compaction pins a manifest and merges its input shards as sorted runs, reading one
+Parquet row group at a time from each. Flushed and compacted shards are already sorted
+by primary key. An unsorted input, such as a flush with a row missing a key column or a
+shard migrated from format 1, is sorted whole in memory, and a compaction holds all of
+its unsorted inputs at once. The merge keeps only the newest version of each key, so
+the output shards of one compaction hold disjoint, ascending key ranges, and the seal
+records the superseded rows it removed. Otherwise memory holds about one decoded row
+group per input plus the rows at the merge frontier; Parquet pre-buffering is disabled
+and a small fsspec file buffer limits speculative byte reads. Output shards are cut at about
+`compaction_target_bytes` of decoded data, configurable on `DataStore` or as
+`target_bytes` on `compact_table`; one row group always fits, so a single large row
+group or row can exceed it. Reads apply the same newest-version rule: `iter_rows`
+streams the merge across a view's shards in primary-key order, and `scan` resolves
+versions in one vectorised pass.
 The manifest replaces the input paths with the output shards through the same `HEAD`
 compare and swap. If another compactor removes an input first, the losing output remains
 unreferenced and the operation is a benign no-op. If another writer adds a shard,
