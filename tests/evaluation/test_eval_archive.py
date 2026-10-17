@@ -179,8 +179,7 @@ def test_native_summary_reads_evalchemy_normalized_rows(tmp_path, provenance):
     }
     assert summary.canonical_metrics == {"gsm8k_5shot": {"accuracy": 1.0}}
     task = EvalTaskRef.model_validate_json(summary.tasks[0].model_dump_json())
-    assert task.benchmark is not None
-    assert task.benchmark.model_dump(mode="json") == {
+    assert task.model_dump(mode="json")["benchmark"] == {
         "source": None,
         "reducers": [],
         "prompt_length": None,
