@@ -239,7 +239,7 @@ The `CurationRecipe` configuration has these fields:
 | Field | Meaning |
 |---|---|
 | `name` | Catalog key and artifact name. |
-| `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)`. |
+| `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)` or `HarborHubSource(name, revision)`. |
 | `convert` | `(RawRow, ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection`; it fixes the task's grader. |
 | `version` | Converter revision; bump it when conversion or bundled grader code changes. |
 | `intended_use` | `train` or `eval`. |
@@ -247,7 +247,7 @@ The `CurationRecipe` configuration has these fields:
 | `controls` | Optional `Controls(golden, negative, memory_mb, negative_reward)` for grader verification. |
 | `inputs` | Auxiliary pinned sources, staged by name in `ConversionContext.inputs`. |
 | `grader` | The `Environment` that grade scripts need, such as `GRADER_PACKAGES` from `datasets/environments.py`. The pipeline builds it and decides where it runs (see [Environments](#environments)); the converter reads the result as `ConversionContext.grader_environment`. |
-| `resource_budget_bytes` | Decoded resource bytes admitted by reviewed modes, default 1,000,000; larger tasks are deferred as `resources_over_budget`. Quick mode skips this budget. |
+| `resource_budget_bytes` | Decoded resource bytes admitted by reviewed modes, default 1,000,000; larger tasks are deferred as `resources_over_budget`. Quick mode skips this budget. Harbor Hub export has a separate 8 MiB ceiling (`export_size_ceiling`) before conversion. |
 
 Families whose members differ only by data are tables: one module builds every
 declaration of the family in a loop.
@@ -257,6 +257,26 @@ two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, th
 `EnvironmentRequirements` of the declared `grader` as the pipeline placed it, or
 `None` when the declaration names no `grader`.
 `required_grader_environment(context)` returns the environment or raises.
+
+Harbor Hub sources acquire the complete pinned release through the existing cached
+source-download step. The isolated `config/external/harbor` runtime checks that
+Harbor resolves the requested release digest and verifies each task's content
+before writing `tasks/<task-reference-hash>.jsonl` and a release manifest.
+Each filename hashes the full immutable task reference, so differently named
+tasks with identical contents remain separate. The manifest records the resolved
+task list. Dataset-level scoring files are not supported. Packages with links or
+more than 8 MiB of exported files produce explicit unsupported rows.
+
+Release membership is resolved by Harbor using the pinned release digest.
+
+The download identity includes the release, exporter code, and pinned Harbor commit;
+unrelated runtime dependency updates do not invalidate downloaded tasks.
+Curation sampling happens after acquisition. Existing `--input-root` and
+`--input-file` overrides bypass acquisition; for a bounded local export, run
+`python -m experiments.post_training.task_curation.harbor_hub --help` in the
+pinned Harbor environment. Retries reuse completed task rows; partial writes are
+not treated as completed exports. Use a fresh directory when changing the release
+or selected task set.
 
 ## Environments
 

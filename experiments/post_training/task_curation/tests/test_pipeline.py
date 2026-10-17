@@ -53,6 +53,7 @@ from experiments.post_training.task_curation.pipeline import (
     CampaignMachines,
     CurationRecipe,
     DownloadRequest,
+    HarborHubSource,
     HfSource,
     UrlSource,
     download_source,
@@ -568,3 +569,60 @@ def test_recipe_without_review_uses_its_explicit_connection_for_judge_controls(
         assert review_server.requests[0]["model"] == "fixture-judge"
     finally:
         client.shutdown()
+
+
+def test_harbor_hub_download_reuses_cache_and_separates_release_pins(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    original_run = pipeline_module.subprocess.run
+    acquired = []
+
+    def exporter(command, **kwargs):
+        if str(pipeline_module.HARBOR_EXPORTER) not in command:
+            return original_run(command, **kwargs)
+        release = command[command.index("--release") + 1]
+        output = StoragePath(command[command.index("--output") + 1])
+        acquired.append(release)
+        (output / "tasks/task.jsonl").write_text(json.dumps({"release": release}) + "\n", auto_mkdir=True)
+        (output / "release.json").write_text(json.dumps({"release": release}))
+        return None
+
+    monkeypatch.setattr(pipeline_module.subprocess, "run", exporter)
+    source = HarborHubSource("fixture/tasks", "sha256:" + "a" * 64)
+    runtime = CampaignRuntime()
+    client = LocalClient()
+    try:
+        with set_current_client(client):
+            first = run(download_step(source, runtime), max_concurrent=1)[0]
+            monkeypatch.setattr(
+                pipeline_module, "HARBOR", replace(pipeline_module.HARBOR, runtime_requirements=("daytona==99.0.0",))
+            )
+            repeated = run(download_step(source, runtime), max_concurrent=1)[0]
+            changed = replace(source, revision="sha256:" + "c" * 64)
+            other = run(download_step(changed, runtime), max_concurrent=1)[0]
+        assert first.path == repeated.path != other.path
+        assert acquired == [f"{source.name}@{source.revision}", f"{changed.name}@{changed.revision}"]
+        for artifact, expected in ((first, acquired[0]), (other, acquired[1])):
+            row = json.loads((StoragePath(artifact.path) / "tasks/task.jsonl").read_text())
+            assert row["release"] == expected
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.QUICK, SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+def test_harbor_hub_input_override_bypasses_acquisition_and_tracks_content(tmp_path, config, mode):
+    source = HarborHubSource("fixture/tasks", "sha256:" + "a" * 64)
+    recipe = replace(math500(), source=source, convert=convert_fixture, rubric=None, controls=None, grader=None)
+    options = PipelineOptions(mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=replace(config, mode=mode)))
+    automatic = source_step(recipe, options)
+    assert len(automatic.deps) == 1
+    root = tmp_path / "input"
+    (root / "tasks").mkdir(parents=True)
+    payload = root / "tasks/task.jsonl"
+    payload.write_text('{"prompt": "one", "answer": "1"}\n')
+    local_options = replace(options, inputs=InputOverrides(root=str(root)))
+    first = source_step(recipe, local_options)
+    assert first.deps == ()
+    payload.write_text('{"prompt": "two", "answer": "2"}\n')
+    second = source_step(recipe, local_options)
+    if mode != SourceProcessingMode.QUICK:
+        assert first.name != second.name
