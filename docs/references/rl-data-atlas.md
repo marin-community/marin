@@ -255,6 +255,31 @@ Start the local stack as shown in [Updating Atlas](#updating-atlas), then use th
 same curriculum-loader command with its printed ID and origin. Stop the stack
 with Ctrl-C when finished.
 
+## PDBThink coordinate tasks
+
+`Hugging Face:pdbthink-coordinate-tasks` registers
+[PDBThink Coordinate Tasks v1.3.0](https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/tree/3734406cb97b1702844319f9a5d860cbbf8fe660)
+as an inventory-only source, with no conversion pipeline or current assessment.
+The pinned [release manifest](https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/blob/3734406cb97b1702844319f9a5d860cbbf8fe660/manifest.json)
+records 100,000 tasks across 19 families: 91,154 train, 4,411 validation and 4,435
+test tasks. The [benchmark exclusions](https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/blob/3734406cb97b1702844319f9a5d860cbbf8fe660/README.md#relationship-to-the-benchmark)
+cover the frozen PDBThink benchmark's source entries, exact protein sequences
+and associated RCSB clusters at 30% sequence identity.
+
+The task protocol requires one tool-free response to displayed protein coordinates.
+Expose only `prompt.json` to the solver; gold, provenance, tests and oracle
+solutions are evaluator-only. The pinned [usage instructions](https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/blob/3734406cb97b1702844319f9a5d860cbbf8fe660/USAGE.md)
+describe `CoordinateNoToolsAgent` and native-token budgets. A curation conversion
+must preserve these restrictions and the bundled deterministic verifier, whose
+source is in [generator_source.tar.gz](https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/blob/3734406cb97b1702844319f9a5d860cbbf8fe660/generator_source.tar.gz).
+Conversion or grader changes must bump the pipeline version used by assessments.
+
+The publisher's [v1.3.0 correction audit](https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/blob/3734406cb97b1702844319f9a5d860cbbf8fe660/audits/contract_revision/regressions.json)
+is release evidence. The separately published [GLM teacher traces v1.0.0](https://huggingface.co/datasets/open-athena/pdbthink-glm53-teacher-traces/tree/v1.0.0)
+retain task-v1.2.0 prompts and scores. Neither supplies a current curation
+assessment for this entry. Publish the inventory through a SAMPLE or FULL
+campaign and use the [Atlas loader](#updating-atlas) to display it.
+
 ## Historical reviews
 
 Historical reviews and raw artifacts remain in their original Postgres tables.

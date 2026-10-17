@@ -7,6 +7,8 @@
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_REPO, TASKTROVE_REVISION
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
+PDBTHINK_REPO = "open-athena/pdbthink-coordinate-tasks"
+PDBTHINK_REVISION = "3734406cb97b1702844319f9a5d860cbbf8fe660"
 TASKTROVE_INPUT = SourceReference(
     TASKTROVE_REPO,
     TASKTROVE_REVISION,
@@ -21,6 +23,29 @@ TASKTROVE_RELEASE = SourceReference(
 
 def sources() -> list[RlDataSource]:
     return [
+        RlDataSource(
+            info=SourceInfo(
+                id="Hugging Face:pdbthink-coordinate-tasks",
+                title=PDBTHINK_REPO,
+                origin="Hugging Face",
+                family="protein-coordinate-reasoning",
+                tags=("rlvr", "single-turn", "tool-free", "license:apache-2.0"),
+                count=100000,
+                notes=(
+                    "PDBThink Coordinate Tasks v1.3.0: 19 families, with 91,154 train, 4,411 validation "
+                    "and 4,435 test tasks in the pinned manifest. Harbor packages the tasks and deterministic "
+                    "verifiers; solving requires one tool-free response with only prompt.json exposed to the model. "
+                    "Gold, provenance, tests and oracle solutions are evaluator-only. "
+                    "The frozen PDBThink benchmark's source entries, exact protein sequences and RCSB clusters "
+                    "at 30% sequence identity were excluded. Apache-2.0; provenance identifies public PDB sources."
+                ),
+                dataset=SourceReference(
+                    PDBTHINK_REPO,
+                    PDBTHINK_REVISION,
+                    f"https://huggingface.co/datasets/{PDBTHINK_REPO}/tree/{PDBTHINK_REVISION}",
+                ),
+            )
+        ),
         RlDataSource(
             info=SourceInfo(
                 id="Harbor Hub:skill2env",
