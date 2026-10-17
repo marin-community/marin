@@ -30,7 +30,6 @@ VERSION = "2026.10.15"
 class LaunchDocument:
     case: str
     document: dict[str, Any]
-    fingerprint: str
 
 
 @dataclass(frozen=True)
@@ -41,17 +40,10 @@ class BuildFailure:
 
 
 @dataclass(frozen=True)
-class UnsupportedCase:
-    case: str
-    reason: str
-
-
-@dataclass(frozen=True)
 class LaunchCensus:
     cases: tuple[str, ...]
     documents: tuple[LaunchDocument, ...]
     failures: tuple[BuildFailure, ...]
-    unsupported: tuple[UnsupportedCase, ...]
 
 
 def _curriculum_step(scale, policy, arm) -> ArtifactStep[SkyRLRun]:
@@ -77,14 +69,12 @@ def _probe_step(artifact_root: Path, settings: dict) -> ArtifactStep[SkyRLRun]:
 
 def launch_builders(
     artifact_root: Path,
-) -> tuple[dict[str, Callable[[], ArtifactStep[SkyRLRun]]], tuple[UnsupportedCase, ...]]:
+) -> dict[str, Callable[[], ArtifactStep[SkyRLRun]]]:
     """Enumerate current public presets and representative document-changing CLI options."""
     builders = {}
-    unsupported = []
     for scale, policy, arm in product(curriculum.SCALES, curriculum.POLICIES.values(), curriculum.ARMS.values()):
         name = f"curriculum/{scale}/{policy.label}/{arm.name}"
         if (policy is curriculum.SNOWBALL_POLICY) != scale.startswith("snowball-"):
-            unsupported.append(UnsupportedCase(name, f"scale {scale!r} belongs to a different policy family"))
             continue
         builders[name] = partial(_curriculum_step, scale, policy, arm)
     for label, preset in async_rl.PRESETS.items():
@@ -94,19 +84,26 @@ def launch_builders(
         _async_step, default, ("trainer.max_steps=3", "trainer.eval_interval=2")
     )
     builders["async/settings/sampling"] = partial(_async_step, default, ("generator.sampling_params.temperature=0.9",))
-    for preset, lane, model, checkpoint, export in product(
-        canary.PRESETS, ("async", "sync"), canary.MODELS, (False, True), (False, True)
-    ):
-        key = f"canary/{preset}/{lane}/{model}/checkpoint={checkpoint}/export={export}"
-        builders[key] = partial(
-            canary.build_run,
-            preset=preset,
-            lane=lane,
-            model=model,
-            checkpoint=checkpoint,
-            export=export,
-            version=VERSION,
+    canary_base = {"preset": "dry", "lane": "async", "model": canary.DEFAULT_MODEL, "checkpoint": False, "export": False}
+    canary_axes = {
+        "preset": canary.PRESETS,
+        "lane": ("async", "sync"),
+        "model": canary.MODELS,
+        "checkpoint": (False, True),
+        "export": (False, True),
+    }
+    canary_variants = [
+        canary_base | {name: value}
+        for name, choices in canary_axes.items()
+        for value in choices
+        if value != canary_base[name]
+    ]
+    for options in [canary_base, *canary_variants]:
+        key = (
+            f"canary/{options['preset']}/{options['lane']}/{options['model']}"
+            f"/checkpoint={options['checkpoint']}/export={options['export']}"
         )
+        builders[key] = partial(canary.build_run, **options, version=VERSION)
     builders["canary/settings/context-budget"] = partial(
         canary.build_run,
         preset="dry",
@@ -120,9 +117,22 @@ def launch_builders(
     for label, preset in snowball_online_eagle.PRESETS.items():
         builders[f"eagle/{label}"] = partial(snowball_online_eagle.online_eagle_step, preset)
     replay_choices = ((), *((mode,) for mode in mismatch.REPLAY_MODES), mismatch.REPLAY_MODES)
-    for cache, replay, updates, resume, reuse in product(
-        ("off", "on", "both"), replay_choices, (0, 2), (False, True), (False, True)
-    ):
+    probe_base = {"cache": "off", "replay": (), "updates": 0, "resume": False, "reuse": False}
+    probe_axes = {
+        "cache": ("off", "on", "both"),
+        "replay": replay_choices,
+        "updates": (0, 2),
+        "resume": (False, True),
+        "reuse": (False, True),
+    }
+    probe_variants = [
+        probe_base | {name: value}
+        for name, choices in probe_axes.items()
+        for value in choices
+        if value != probe_base[name]
+    ]
+    for options in [probe_base, *probe_variants]:
+        cache, replay, updates, resume, reuse = (options[name] for name in probe_base)
         settings = dict(
             seed=17,
             prompt_count=2,
@@ -136,7 +146,7 @@ def launch_builders(
         )
         key = f"mismatch/cache={cache}/replay={','.join(replay)}/updates={updates}/resume={resume}/reuse={reuse}"
         builders[key] = partial(_probe_step, artifact_root, settings)
-    return builders, tuple(unsupported)
+    return builders
 
 
 def _write_model_metadata(step: ArtifactStep[SkyRLRun], artifact_root: Path) -> None:
@@ -154,7 +164,7 @@ def _write_model_metadata(step: ArtifactStep[SkyRLRun], artifact_root: Path) -> 
 
 def render_launch_census(artifact_root: Path) -> LaunchCensus:
     """Render runtime documents using local metadata without running steps."""
-    builders, unsupported = launch_builders(artifact_root)
+    builders = launch_builders(artifact_root)
     documents = []
     failures = []
     with (
@@ -166,7 +176,7 @@ def render_launch_census(artifact_root: Path) -> LaunchCensus:
                 step = build()
                 _write_model_metadata(step, artifact_root)
                 config = materialized_config(step, str(artifact_root))
-                documents.append(LaunchDocument(name, yaml.safe_load(config.launch_config_yaml), step.fingerprint()))
+                documents.append(LaunchDocument(name, yaml.safe_load(config.launch_config_yaml)))
             except Exception as error:
                 failures.append(BuildFailure(name, type(error).__name__, str(error)))
-    return LaunchCensus(tuple(builders), tuple(documents), tuple(failures), unsupported)
+    return LaunchCensus(tuple(builders), tuple(documents), tuple(failures))
