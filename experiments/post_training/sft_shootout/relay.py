@@ -6,7 +6,8 @@
 Rules (owner-approved for #207): the student answers until a trigger.
 
 - Format error: the newest observation is the harness's parse-error message. The teacher writes that
-  one turn (a repair); control then returns to the student.
+  one turn (a repair); control then returns to the student. Terminus-2 keeps the bad reply in the
+  history before its error; mini-swe-agent drops it and appends its error as the newest message.
 - Context budget: the prompt reaches ``budget_tokens`` (student tokenizer). The teacher takes over to
   the end of the episode.
 - Completion claim: the student's reply claims the task is done. The reply is withheld; the teacher
@@ -63,8 +64,15 @@ def latest_observation(messages: list[dict]) -> str:
 
 
 def is_format_error(messages: list[dict]) -> bool:
-    observation = latest_observation(messages)
-    return TERMINUS_PARSE_ERROR in observation or observation.lstrip().startswith(MINI_SWE_FORMAT_ERROR)
+    if TERMINUS_PARSE_ERROR in latest_observation(messages):
+        return True
+    # mini-swe-agent: the error follows the previous turn's observation (or the task, on the first turn).
+    users = [i for i, message in enumerate(messages) if message.get("role") == "user"]
+    return (
+        len(users) > 1
+        and users[-1] == len(messages) - 1
+        and _text(messages[-1].get("content")).lstrip().startswith(MINI_SWE_FORMAT_ERROR)
+    )
 
 
 def is_completion_claim(reply: dict) -> bool:

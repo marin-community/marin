@@ -46,9 +46,12 @@ TERMINUS_ERROR = [
     {"role": "assistant", "content": "not json"},
     {"role": "user", "content": "Previous response had parsing errors:\nERROR: No valid JSON found"},
 ]
+# mini-swe-agent drops the reply without a tool call, so its error follows the previous turn's observation.
+MINI_CALL = {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {"name": "bash", "arguments": "{}"}}]}
 MINI_ERROR = [
     {"role": "user", "content": "task"},
-    {"role": "assistant", "content": "thinking"},
+    MINI_CALL,
+    {"role": "tool", "tool_call_id": "c1", "content": "file"},
     {"role": "user", "content": "Tool call error:\n\n<error>\nNo tool calls found\n</error>"},
 ]
 
@@ -56,6 +59,8 @@ MINI_ERROR = [
 def test_format_errors_from_both_harnesses():
     assert is_format_error(TERMINUS_ERROR)
     assert is_format_error(MINI_ERROR)
+    assert is_format_error([MINI_ERROR[0], MINI_ERROR[-1]])  # the first reply was dropped
+    assert not is_format_error(MINI_ERROR[:3])
     assert not is_format_error([{"role": "user", "content": "Tool call error: in the task text"}])
     assert not is_format_error(TERMINUS_ERROR[:2] + [{"role": "user", "content": "$ ls\nfile"}])
 
