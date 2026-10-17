@@ -50,7 +50,7 @@ def test_batch_invariant_rms_norm_leading_layout_and_jitted_vjp_primal_match(sha
     np.testing.assert_array_equal(np.asarray(plain), np.asarray(differentiated))
 
 
-def test_batch_invariant_rms_norm_matches_independent_reference_and_gradient():
+def test_batch_invariant_rms_norm_matches_independent_reference_and_fixed_schedule_gradient():
     key_x, key_w = jax.random.split(jax.random.key(17))
     x = jax.random.normal(key_x, (3, 128), dtype=jnp.float32)
     weight = jax.random.normal(key_w, (128,), dtype=jnp.float32)
@@ -64,8 +64,14 @@ def test_batch_invariant_rms_norm_matches_independent_reference_and_gradient():
     def expected_loss(value, scale):
         return jnp.sum(_independent_reference(value, scale, 1e-5) ** 2)
 
+    def fixed_reference_loss(value, scale):
+        return jnp.sum(batch_invariant_rms_norm_reference(value, scale, eps=1e-5) ** 2)
+
+    np.testing.assert_allclose(
+        np.asarray(actual_loss(x, weight)), np.asarray(expected_loss(x, weight)), rtol=1e-5, atol=1e-5
+    )
     actual_grad = jax.grad(actual_loss, argnums=(0, 1))(x, weight)
-    expected_grad = jax.grad(expected_loss, argnums=(0, 1))(x, weight)
+    expected_grad = jax.grad(fixed_reference_loss, argnums=(0, 1))(x, weight)
     for actual_component, expected_component in zip(actual_grad, expected_grad, strict=True):
         np.testing.assert_allclose(np.asarray(actual_component), np.asarray(expected_component), rtol=1e-5, atol=1e-5)
 
@@ -137,6 +143,43 @@ def test_batch_invariant_rms_norm_named_sharding_contract_on_tpu():
         multidevice_weight = jax.device_put(jnp.ones((128,), dtype=jnp.float32), weight_sharding)
         with pytest.raises(PallasRmsNormUnsupportedError, match="row-sharded"):
             batch_invariant_rms_norm(replicated_x, multidevice_weight, 1e-5, implementation="pallas_tpu")
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_batch_invariant_rms_norm_explicit_three_dimensional_vjp_preserves_sharding(dtype):
+    if jax.default_backend() != "tpu" or len(jax.devices()) < 4:
+        pytest.skip("requires four TPU devices for the production row-sharded layout")
+
+    mesh = jax.sharding.Mesh(
+        np.asarray(jax.devices()[:4]).reshape((1, 4, 1, 1)),
+        ("replica_dcn", "data", "context", "expert"),
+        axis_types=(jax.sharding.AxisType.Explicit,) * 4,
+    )
+    x_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(("replica_dcn", "data"), "expert", None))
+    weight_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(None))
+    values = jnp.arange(4 * 128 * 256, dtype=jnp.float32).reshape(4, 128, 256) / 256.0
+    scales = jnp.linspace(0.5, 1.5, 256, dtype=jnp.float32)
+    x = jax.device_put(values.astype(dtype), x_sharding)
+    weight = jax.device_put(scales.astype(dtype), weight_sharding)
+
+    def apply(value, scale):
+        return batch_invariant_rms_norm(value, scale, 1e-5, implementation="pallas_tpu")
+
+    primal, pullback = jax.vjp(apply, x, weight)
+    dx, dw = pullback(jnp.ones_like(primal))
+    expected_primal = _independent_reference(x, weight, 1e-5)
+    _, expected_pullback = jax.vjp(lambda value, scale: _independent_reference(value, scale, 1e-5), x, weight)
+    expected_dx, expected_dw = expected_pullback(jnp.ones_like(expected_primal))
+    np.testing.assert_allclose(np.asarray(primal), np.asarray(expected_primal), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(dx), np.asarray(expected_dx), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(dw), np.asarray(expected_dw), rtol=1e-5, atol=1e-5)
+    assert dx.dtype == x.dtype
+    assert dw.dtype == weight.dtype
+    assert dx.sharding == x_sharding
+    assert dw.sharding == weight_sharding
+
+    hlo = str(jax.jit(apply).lower(x, weight).compiler_ir()).lower()
+    assert "all-gather" not in hlo
 
 
 def test_batch_invariant_rms_norm_named_mesh_survives_public_jit_and_vjp(monkeypatch):

@@ -13,9 +13,10 @@ from typing import Literal, TypeAlias
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
+from jax.sharding import NamedSharding
 
 from .pallas_tpu import batch_invariant_rms_norm_pallas_tpu
-from .reference import MAX_FLATTENED_ROWS, SUPPORTED_HIDDEN_DIMS, _sum_hidden_tiles, batch_invariant_rms_norm_reference
+from .reference import MAX_FLATTENED_ROWS, SUPPORTED_HIDDEN_DIMS, batch_invariant_rms_norm_reference
 
 Implementation: TypeAlias = Literal["reference", "pallas_tpu"]
 ArrayImpl = Callable[..., jax.Array]
@@ -33,6 +34,16 @@ IMPLEMENTATIONS: dict[str, ArrayImpl] = {
     "reference": _reference_impl,
     "pallas_tpu": _pallas_tpu_impl,
 }
+
+
+def _sharding(value: jax.Array):
+    return jax.typeof(value).sharding if isinstance(value, jax.core.Tracer) else value.sharding
+
+
+def _reshard_to_nonempty_named_mesh(value: jax.Array, target_sharding) -> jax.Array:
+    if isinstance(target_sharding, NamedSharding) and not target_sharding.mesh.empty:
+        return jax.sharding.reshard(value, target_sharding)
+    return value
 
 
 def _validate_public_inputs(x: jax.Array, weight: jax.Array, eps: float) -> None:
@@ -86,17 +97,16 @@ def _batch_invariant_rms_norm_fwd(x, weight, eps, implementation):
 def _batch_invariant_rms_norm_bwd(eps, implementation, residual, dy):
     del implementation
     x, weight = residual
-    x32 = x.astype(jnp.float32)
-    weight32 = weight.astype(jnp.float32)
-    dy32 = dy.astype(jnp.float32)
-    tile_sums = _sum_hidden_tiles(x32)
-    variance = tile_sums[..., None] / x32.shape[-1]
-    inv = jax.lax.rsqrt(variance + eps)
-    normalized = x32 * inv
-    weighted_grad = dy32 * weight32
-    dx32 = weighted_grad * inv - x32 * (inv * inv * inv) * jnp.mean(weighted_grad * x32, axis=-1, keepdims=True)
-    dw32 = jnp.sum(dy32 * normalized, axis=tuple(range(dy32.ndim - 1)))
-    return dx32.astype(x.dtype), dw32.astype(weight.dtype)
+    x_sharding = _sharding(x)
+    dy_aligned = _reshard_to_nonempty_named_mesh(dy, x_sharding)
+
+    def reference(value, scale):
+        output = batch_invariant_rms_norm_reference(value, scale, eps=eps)
+        return _reshard_to_nonempty_named_mesh(output, x_sharding)
+
+    _, pullback = jax.vjp(reference, x, weight)
+    dx, dw = pullback(dy_aligned)
+    return dx.astype(x.dtype), dw.astype(weight.dtype)
 
 
 batch_invariant_rms_norm.defvjp(_batch_invariant_rms_norm_fwd, _batch_invariant_rms_norm_bwd)

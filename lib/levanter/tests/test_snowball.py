@@ -31,12 +31,14 @@ from safetensors.numpy import load_file
 from levanter.grug.grug_moe import PreparedMoERouteCapture
 from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.kernels.pallas.rms_norm import batch_invariant_rms_norm_reference
 from levanter.models.lm_model import LmConfig
 from levanter.layers.attention import AttentionMask as LmAttentionMask
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
     GRUG_MOE_MODEL_TYPE,
+    RMSNorm,
     GrugMoeHfConfig,
     SnowballConfig,
     SnowballDecodeRouteCaptureBatch,
@@ -125,6 +127,176 @@ def test_snowball_config_hf_roundtrip():
     # The serialized config carries one canonical name per field and no dropped alias, while
     # from_hf_config still round-trips it (above) through its tolerant fallback tuples.
     validate_single_name_config(hf.to_dict(), cfg)
+    assert "rms_norm_implementation" not in hf.to_dict()
+
+
+def test_snowball_shared_rms_norm_reference_jit_and_vjp_match_fixed_schedule_reference():
+    x = jnp.linspace(-1.0, 1.0, 4 * 128 * 256, dtype=jnp.float32).reshape(4, 128, 256)
+    weight = jnp.linspace(0.5, 1.5, 256, dtype=jnp.float32)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+
+        def apply(value, scale):
+            return RMSNorm(weight=scale, eps=1e-5, implementation="reference")(value)
+
+        def independent(value, scale):
+            value32 = value.astype(jnp.float32)
+            rms = jax.lax.rsqrt(jnp.mean(jnp.square(value32), axis=-1, keepdims=True) + 1e-5)
+            return (value32 * rms * scale).astype(value.dtype)
+
+        def fixed_schedule_reference(value, scale):
+            return batch_invariant_rms_norm_reference(value, scale, eps=1e-5)
+
+        expected = independent(x, weight)
+        actual = jax.jit(apply)(x, weight)
+        np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+
+        actual_value, actual_grad = jax.jit(
+            jax.value_and_grad(lambda value, scale: jnp.sum(apply(value, scale) ** 2), argnums=(0, 1))
+        )(x, weight)
+        expected_reference_value, expected_grad = jax.value_and_grad(
+            lambda value, scale: jnp.sum(fixed_schedule_reference(value, scale) ** 2), argnums=(0, 1)
+        )(x, weight)
+    expected_independent_value = jax.value_and_grad(
+        lambda value, scale: jnp.sum(independent(value, scale) ** 2), argnums=(0, 1)
+    )(x, weight)[0]
+    np.testing.assert_allclose(np.asarray(actual_value), np.asarray(expected_independent_value), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(actual_value), np.asarray(expected_reference_value), rtol=1e-5, atol=1e-5)
+    for actual_component, expected_component in zip(actual_grad, expected_grad, strict=True):
+        np.testing.assert_allclose(np.asarray(actual_component), np.asarray(expected_component), rtol=1e-5, atol=1e-5)
+
+
+def test_snowball_rms_norm_native_remains_default():
+    cfg = SnowballConfig()
+    assert cfg.rms_norm_implementation == "native"
+    x = jnp.arange(2 * 256, dtype=jnp.float32).reshape(2, 256)
+    weight = jnp.linspace(0.5, 1.5, 256, dtype=jnp.float32)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        norm = RMSNorm(weight=weight, eps=1e-5, implementation="native")
+        expected = (x * jax.lax.rsqrt(jnp.mean(jnp.square(x), axis=-1, keepdims=True) + 1e-5) * weight).astype(x.dtype)
+        np.testing.assert_array_equal(np.asarray(norm(x)), np.asarray(expected))
+
+
+def test_snowball_reference_rms_norm_uses_real_training_capture_and_cached_decode_paths():
+    cfg = _tiny_config(
+        hidden_dim=256,
+        intermediate_dim=64,
+        shared_expert_intermediate_dim=64,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=2,
+        head_dim=64,
+        max_seq_len=8,
+        sliding_window=4,
+        moe_implementation="scatter",
+        rms_norm_implementation="reference",
+    )
+    ids = hax.named(jnp.asarray([[2, 7, 0, 9]], dtype=jnp.int32), ("batch", "position"))
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(43))
+        training_logits = model(ids)
+        capture = model.capture_route_captures(ids)
+        replay_logits = model(ids, route_captures=capture)
+
+        state_dict = model.to_state_dict()
+        assert state_dict["model.embed_norm.weight"].shape == (256,)
+        assert state_dict["model.layers.0.input_layernorm.weight"].shape == (256,)
+        assert state_dict["model.layers.0.post_attention_layernorm.weight"].shape == (256,)
+        assert state_dict["model.norm.weight"].shape == (256,)
+        assert "rms_norm_implementation" not in cfg.to_hf_config(cfg.vocab_size).to_dict()
+
+        cache = model.initial_cache(PageTableSpec(num_pages=4, page_size=2, max_seqs=1), dtype=jnp.float32)
+        prefill_ids = hax.named(ids.array[0], "position")
+        prefill_positions = hax.named(jnp.arange(4, dtype=jnp.int32), "position")
+        prefill_info = PageBatchInfo(
+            slot_ids=hax.named(jnp.asarray([0], dtype=jnp.int32), "seq"),
+            page_indices=hax.named(jnp.asarray([[0, 1]], dtype=jnp.int32), ("seq", "page")),
+            seq_lens=hax.named(jnp.asarray([4], dtype=jnp.int32), "seq"),
+            cu_q_lens=hax.named(jnp.asarray([0, 4], dtype=jnp.int32), "seq"),
+            num_seqs=jnp.asarray(1, dtype=jnp.int32),
+            new_token_dests=hax.named(jnp.arange(4, dtype=jnp.int32), "position"),
+            page_size=2,
+        )
+        prefill_logits, cache, decode_capture = model.decode_with_route_captures(
+            prefill_ids, cache, prefill_info, prefill_positions
+        )
+        continuation_ids = hax.named(jnp.asarray([11], dtype=jnp.int32), "position")
+        continuation_positions = hax.named(jnp.asarray([4], dtype=jnp.int32), "position")
+        continuation_info = dataclasses.replace(
+            prefill_info,
+            page_indices=hax.named(jnp.asarray([[0, 1, 2]], dtype=jnp.int32), ("seq", "page")),
+            seq_lens=hax.named(jnp.asarray([5], dtype=jnp.int32), "seq"),
+            cu_q_lens=hax.named(jnp.asarray([0, 1], dtype=jnp.int32), "seq"),
+            new_token_dests=hax.named(jnp.asarray([4], dtype=jnp.int32), "position"),
+        )
+        continuation_logits, _, continuation_capture = model.decode_with_route_captures(
+            continuation_ids, cache, continuation_info, continuation_positions
+        )
+
+    np.testing.assert_allclose(
+        np.asarray(training_logits.array), np.asarray(replay_logits.array), rtol=1e-5, atol=1e-5
+    )
+    assert isinstance(decode_capture, SnowballDecodeRouteCaptureBatch)
+    assert isinstance(continuation_capture, SnowballDecodeRouteCaptureBatch)
+    assert prefill_logits.array.shape == (4, cfg.vocab_size)
+    assert continuation_logits.array.shape == (1, cfg.vocab_size)
+
+
+@pytest.mark.skipif(jax.default_backend() != "tpu" or jax.device_count() != 4, reason="requires four-device TPUv4")
+def test_snowball_pallas_rms_norm_explicit_train_decode_layouts_and_context_rejection():
+    train_mesh = compact_grug_mesh(expert_axis_size=1, context_axis_size=1)
+    train_spec = P(("replica_dcn", "data", "expert"), None, None)
+    weight_spec = P(None)
+    with jax.set_mesh(train_mesh):
+        x_train = jax.device_put(jnp.ones((4, 128, 256), dtype=jnp.float32), NamedSharding(train_mesh, train_spec))
+        weight = jax.device_put(jnp.linspace(0.5, 1.5, 256, dtype=jnp.float32), NamedSharding(train_mesh, weight_spec))
+
+        def apply(value, scale):
+            return RMSNorm(weight=scale, eps=1e-5, implementation="pallas_tpu")(value)
+
+        train_output = apply(x_train, weight)
+        train_value, train_gradient = jax.jit(
+            jax.value_and_grad(lambda value, scale: jnp.sum(apply(value, scale)), argnums=0)
+        )(x_train, weight)
+        train_hlo = str(jax.jit(apply).lower(x_train, weight).compiler_ir()).lower()
+
+        x_decode = jax.device_put(jnp.ones((32, 1, 256), dtype=jnp.float32), NamedSharding(train_mesh, train_spec))
+        decode_output = apply(x_decode, weight)
+        decode_value, decode_gradient = jax.jit(
+            jax.value_and_grad(lambda value, scale: jnp.sum(apply(value, scale)), argnums=0)
+        )(x_decode, weight)
+
+        def independent(value):
+            variance = jnp.mean(jnp.square(value), axis=-1, keepdims=True)
+            return value * jax.lax.rsqrt(variance + 1e-5) * weight
+
+        expected_train = independent(x_train)
+        expected_decode = independent(x_decode)
+
+    assert train_output.shape == x_train.shape
+    assert decode_output.shape == x_decode.shape
+    assert train_value.shape == () and decode_value.shape == ()
+    assert train_gradient.shape == x_train.shape and decode_gradient.shape == x_decode.shape
+    np.testing.assert_allclose(np.asarray(train_output), np.asarray(expected_train), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(decode_output), np.asarray(expected_decode), rtol=1e-5, atol=1e-5)
+    assert isinstance(train_output.sharding, NamedSharding)
+    assert isinstance(decode_output.sharding, NamedSharding)
+    assert train_output.sharding.spec == x_train.sharding.spec
+    assert decode_output.sharding.spec == x_decode.sharding.spec
+    assert "all-gather" not in train_hlo and "all_gather" not in train_hlo
+
+    context_mesh = compact_grug_mesh(expert_axis_size=1, context_axis_size=2)
+    with jax.set_mesh(context_mesh):
+        context_x = jax.device_put(
+            jnp.ones((4, 128, 256), dtype=jnp.float32),
+            NamedSharding(context_mesh, P(("replica_dcn", "data", "expert"), "context", None)),
+        )
+        context_weight = jax.device_put(jnp.ones((256,), dtype=jnp.float32), NamedSharding(context_mesh, P(None)))
+        context_norm = RMSNorm(weight=context_weight, eps=1e-5, implementation="pallas_tpu")
+        with pytest.raises(ValueError, match="later leading axis"):
+            context_norm(context_x)
 
 
 def test_snowball_hf_config_does_not_initialize_jax_backend():

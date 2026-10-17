@@ -21,7 +21,7 @@ guards against drift.
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, Literal, NamedTuple, Optional, Type, cast
+from typing import Any, Literal, NamedTuple, Optional, Type, TypeAlias, cast
 
 import equinox as eqx
 import jax
@@ -70,6 +70,8 @@ from levanter.grug.sharding import (
 )
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
+from levanter.kernels.pallas.rms_norm import Implementation as BatchInvariantRmsNormImplementation
+from levanter.kernels.pallas.rms_norm import batch_invariant_rms_norm
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.models.lm_model import LmConfig, LmHeadModel
@@ -88,6 +90,7 @@ GRUG_MOE_ATTENTION_MODE = "production"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
 SnowballProjectionImplementation = Literal["native", "fixed_schedule"]
+SnowballRMSNormImplementation: TypeAlias = Literal["native"] | BatchInvariantRmsNormImplementation
 
 
 class SnowballRouteCaptureBatch(NamedTuple):
@@ -410,6 +413,8 @@ class SnowballConfig(HFCompatConfig):
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
     moe_implementation: Optional[MoeImplementation] = None
     projection_implementation: SnowballProjectionImplementation = "native"
+    # Runtime knob only; it is intentionally omitted from the HF architectural config.
+    rms_norm_implementation: SnowballRMSNormImplementation = "native"
 
     reference_checkpoint: Optional[str] = None
     tokenizer: Optional[str] = None
@@ -417,6 +422,8 @@ class SnowballConfig(HFCompatConfig):
     def __post_init__(self) -> None:
         if self.projection_implementation not in ("native", "fixed_schedule"):
             raise ValueError(f"unknown Snowball projection implementation: {self.projection_implementation!r}")
+        if self.rms_norm_implementation not in ("native", "reference", "pallas_tpu"):
+            raise ValueError(f"unknown Snowball RMSNorm implementation: {self.rms_norm_implementation!r}")
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
         if self.num_experts_per_token > self.num_experts:
@@ -561,14 +568,39 @@ class RMSNorm(eqx.Module):
 
     weight: jax.Array
     eps: float = eqx.field(static=True)
+    implementation: SnowballRMSNormImplementation = eqx.field(static=True)
 
     @staticmethod
-    def init(dim: int, eps: float) -> "RMSNorm":
-        return RMSNorm(weight=jnp.ones((dim,), dtype=jnp.float32), eps=eps)
+    def init(dim: int, eps: float, implementation: SnowballRMSNormImplementation = "native") -> "RMSNorm":
+        return RMSNorm(weight=jnp.ones((dim,), dtype=jnp.float32), eps=eps, implementation=implementation)
+
+    @staticmethod
+    def _validate_pallas_layout(x: jax.Array) -> None:
+        """Reject context-sharded leading axes before the accepted kernel flattens them."""
+        sharding = jax.typeof(x).sharding if isinstance(x, jax.core.Tracer) else x.sharding
+        if not isinstance(sharding, NamedSharding):
+            return
+        spec = tuple(sharding.spec)
+        if len(spec) < x.ndim:
+            spec += (None,) * (x.ndim - len(spec))
+        for entry in spec[1:-1]:
+            axes = entry if isinstance(entry, tuple) else (() if entry is None else (entry,))
+            if any(int(sharding.mesh.shape[axis]) > 1 for axis in axes):
+                raise ValueError("Snowball pallas_tpu RMSNorm does not support partitioning a later leading axis")
 
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
         weight = unshard(self.weight)
+        if self.implementation != "native":
+            implementation = cast(BatchInvariantRmsNormImplementation, self.implementation)
+            if implementation == "pallas_tpu":
+                self._validate_pallas_layout(x)
+            output = batch_invariant_rms_norm(x, weight, self.eps, implementation)
+            if x.ndim == 3:
+                input_sharding = jax.typeof(x).sharding if isinstance(x, jax.core.Tracer) else x.sharding
+                if isinstance(input_sharding, NamedSharding) and not input_sharding.mesh.empty:
+                    return reshard(output, input_sharding)
+            return output
         dtype = x.dtype
         x = x.astype(jnp.float32)
         variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
@@ -932,10 +964,10 @@ class SnowballBlock(eqx.Module):
     def init(cfg: SnowballConfig, *, key: PRNGKeyArray) -> "SnowballBlock":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
         return SnowballBlock(
-            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, cfg.rms_norm_implementation),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
             attn=SnowballAttention.init(cfg, key=attn_key),
-            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, cfg.rms_norm_implementation),
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=SnowballMoEMLP.init(cfg, key=mlp_key),
             shared=DenseMLP.init(
@@ -1039,11 +1071,11 @@ class SnowballTransformer(eqx.Module):
         blocks = tuple(SnowballBlock.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
         return SnowballTransformer(
             token_embed=token_embed,
-            embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, cfg.rms_norm_implementation),
             embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
             output_proj=output_proj,
             blocks=blocks,
-            final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, cfg.rms_norm_implementation),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
         )

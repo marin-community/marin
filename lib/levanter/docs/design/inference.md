@@ -82,6 +82,34 @@ invariance for the tested TPUv4 shapes, not arbitrary sharding, throughput,
 full-model parity, or distribution-level equality. The opt-in therefore does
 not change attention, RoPE, KV-cache casts, MoE routing, or Splash selection.
 
+### Opt-in shared weighted RMSNorm
+
+Snowball also exposes `rms_norm_implementation="reference"` or
+`"pallas_tpu"` as a runtime-only opt-in. The default `"native"` path and all
+HF architectural configuration and state-dict keys remain unchanged. The
+existing `RMSNorm` objects are shared by embedding, both per-block weighted
+norms, and the final norm, so the selected implementation is used by training,
+route capture, prefill, and cached decode, with the accepted
+`batch_invariant_rms_norm` custom VJP supplying the backward path.
+The readable fixed-schedule reference is the independent AD oracle for
+gradient checks; the ordinary mean-reduction expression remains the separate
+forward and scalar-value comparison.
+
+The accepted kernel validates the public contract: FP32/BF16 inputs and
+weights, hidden dimensions 128/256/2560, and a global flattened leading-row
+count from 1 through 512. The TPU implementation additionally requires a
+same-mesh explicit `NamedSharding` with row-sharded flattened activations and a
+replicated rank-1 weight (`P(None)`). Snowball does not add a fallback, gather,
+chunking, or reshape around these limits; unsupported layouts fail through the
+accepted kernel validation. In particular, a context-sharded mixed-axis
+flatten is rejected at the Snowball RMSNorm boundary when its later leading
+axis is genuinely partitioned. A length-one context axis is accepted because
+it does not partition the rows.
+
+This is a bounded RMSNorm forward/backward step toward inference parity, not a
+whole-model zero-KL claim. TPU layout and numerical validation remain a
+separate runtime gate.
+
 ### Service Architecture
 The inference server is built around a `GenerationService` that encapsulates:
 - Model loading and initialization via `HFCheckpointConverter`
