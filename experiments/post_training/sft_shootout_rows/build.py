@@ -60,6 +60,16 @@ from experiments.post_training.sweep_data.select import CONTEXT
 POOL_MANIFEST_SHA256 = "755e874cc1daa93a10a2b73dd154805ba081206d966d11eb9a018ec16f22fe86"
 EPOCHS = 3
 LIMITATION = "results are for trajectories that fit 32,768 tokens in v0's chat template; longer passes are dropped"
+# Queen's decision 2026-10-17 (option a): keep one multi-turn row per trace, as the community recipes under test do.
+FAMILY_NOTES = {
+    "tmax": (
+        "Terminus-2 rows carry earlier turns' reasoning in context, which the harness does not resend at inference; "
+        "v0/GLM length ratio p50 1.70, p99 3.77 (pilot, length_ratio.py)"
+    ),
+    "swesmith": (
+        "mini-swe-agent resends earlier reasoning, so rows match the harness; v0/GLM length ratio p50 1.03, p99 1.07"
+    ),
+}
 # Changes to row semantics or manifest accounting, newest last; recorded in every manifest.
 CHANGELOG = (
     "2705769260 plain, RS-multi, relay arms from #207 canonical traces; v0 turns masked",
@@ -453,6 +463,7 @@ def main() -> None:
             },
             "eligibility": eligibility,
             "limitation": LIMITATION,
+            "family_notes": {family: FAMILY_NOTES[family] for family in sorted(eligibility) if family in FAMILY_NOTES},
             "over_context_by_family": {
                 family: reasons.get("over_context", 0)
                 for family, reasons in sorted(
