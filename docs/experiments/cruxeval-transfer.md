@@ -115,11 +115,22 @@ for any changed experiment.
 The HF export path sets `hf_save_reference_code=False` while retaining weights,
 configuration, tokenizer, and generation metadata. E disables native checkpoint
 saving; the SFT arms keep per-epoch native checkpoints. Before serving an export,
-verify that every index entry has its tensor in an existing shard, that the
-shard headers agree with the index, and that tokenizer/template files match B.
-Compare all 26 router-bias tensors exactly to B after the export dtype cast. The final
-record reports those checks on the historical exports; local tests do not
-revalidate the stored 67B models.
+run the range-read audit from the same storage region:
+
+```bash
+uv run python -m experiments.post_training.cruxeval_transfer.verify_export \
+  --export <export-prefix>
+```
+
+It checks index/header agreement, payload bounds and object sizes,
+tokenizer/template equality with B, and exact router-bias equality after the
+export dtype cast. The Snowball exports should report 26 router-bias tensors.
+It does not checksum all weights or run model inference. This consolidates the
+surviving external `task144_verify_export.py` and `task144_verify_router_bias.py`
+audit scripts, with guarded storage access and no monitoring sleep. Their
+identity against historical Iris workspace bundles was not independently
+established. The final record reports the historical audit results; local tests
+do not revalidate the stored 67B models.
 
 Local checks:
 
