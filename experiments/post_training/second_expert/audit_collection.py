@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.second_expert.constants import COLLECTION_SIZE, PROMPT_COUNT, SAMPLES_PER_PROMPT
 from experiments.post_training.second_expert.grading import grade_response
 
 
@@ -51,12 +52,12 @@ def main() -> None:
     manifest = json.loads(manifest_bytes)
     complete = json.loads((source / "complete.json").read_text())
     prompts = [json.loads(line) for line in (source / "requests.jsonl").read_text().splitlines()]
-    if complete["requests"] != manifest["requests"] or len(prompts) != 1606:
+    if complete["requests"] != manifest["requests"] or len(prompts) != PROMPT_COUNT:
         raise ValueError("Collection completion count differs")
-    items = [(prompt, sample) for prompt in prompts for sample in range(8)]
+    items = [(prompt, sample) for prompt in prompts for sample in range(SAMPLES_PER_PROMPT)]
     with ThreadPoolExecutor(16) as pool:
         grades = list(pool.map(lambda item: audit_one(source, *item), items))
-    assert len(grades) == 12848
+    assert len(grades) == COLLECTION_SIZE
     selected = {}
     for grade in grades:
         if grade["correct"] and grade["prompt_id"] not in selected:

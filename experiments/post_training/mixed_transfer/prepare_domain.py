@@ -18,6 +18,7 @@ from transformers import AutoTokenizer
 from experiments.post_training.cruxeval_transfer.constants import BATCH_SIZE
 from experiments.post_training.cruxeval_transfer.constants import STUDENT_MODEL as MODEL
 from experiments.post_training.cruxeval_transfer.constants import STUDENT_REVISION as REVISION
+from experiments.post_training.second_expert.constants import COLLECTION_SIZE, PROMPT_COUNT
 
 CONTEXT = 32768
 PAD_TOKEN = 128489
@@ -49,10 +50,10 @@ def main() -> None:
     manifest_text = (source / "manifest.json").read_text()
     manifest = json.loads(manifest_text)
     complete = json.loads((source / "complete.json").read_text())
-    if manifest["requests"] != 12848 or complete["requests"] != 12848:
+    if manifest["requests"] != COLLECTION_SIZE or complete["requests"] != COLLECTION_SIZE:
         raise ValueError("Expected completed eight-sample collection of all 1606 prompts")
     prompt_ids = manifest["prompt_ids"]
-    if len(prompt_ids) != 1606 or len(set(prompt_ids)) != 1606:
+    if len(prompt_ids) != PROMPT_COUNT or len(set(prompt_ids)) != PROMPT_COUNT:
         raise ValueError("Expected 1606 unique prompts")
     if output.exists():
         raise ValueError("Use a fresh output prefix")
@@ -147,7 +148,7 @@ def main() -> None:
             padding_rows = (-len(audits)) % BATCH_SIZE
             for _ in range(padding_rows):
                 stream.write(json.dumps({"input_ids": [PAD_TOKEN] * CONTEXT, "loss_weights": [0] * CONTEXT}) + "\n")
-        if selection is None and Counter(row["task"] for row in audits) != {"MMLUPro": 1606}:
+        if selection is None and Counter(row["task"] for row in audits) != {"MMLUPro": PROMPT_COUNT}:
             raise ValueError("Lost direction coverage")
         for name, rows in (("token-audit.jsonl", audits), ("row-probes.jsonl", probes)):
             (directory / name).write_text("".join(json.dumps(row) + "\n" for row in rows))

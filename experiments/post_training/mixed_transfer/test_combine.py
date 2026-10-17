@@ -4,9 +4,10 @@
 """Combining prepared domains must not train on old batch padding."""
 
 import gzip
+import hashlib
 import json
 
-from experiments.post_training.mixed_transfer.combine import combine_rows
+from experiments.post_training.mixed_transfer.combine import combine_rows, main
 
 
 def test_rebatch_removes_old_padding_and_preserves_supervision():
@@ -33,7 +34,7 @@ def test_rebatch_removes_old_padding_and_preserves_supervision():
     assert [json.loads(line) for line in gzip.decompress(combined).splitlines()] == [first, second]
 
 
-def test_rebatch_adds_only_zero_loss_rows_to_complete_mixed_batch():
+def test_rebatch_adds_only_zero_loss_rows_to_complete_mixed_batch(tmp_path, monkeypatch):
     row = {"input_ids": [1, 2, 3, 4], "loss_weights": [0, 1, 1, 0]}
     old_pad = {"input_ids": [128489] * 4, "loss_weights": [0] * 4}
     compressed = gzip.compress((json.dumps(row) + "\n" + (json.dumps(old_pad) + "\n") * 3).encode())
@@ -50,3 +51,30 @@ def test_rebatch_adds_only_zero_loss_rows_to_complete_mixed_batch():
     assert rows[:2] == [row, row]
     assert rows[2:] == [{"input_ids": [128009] * 4, "loss_weights": [0] * 4}] * 2
     assert sum(sum(value["loss_weights"]) for value in rows) == 4
+
+    arguments = ["combine"]
+    for index in range(2):
+        source = tmp_path / str(index)
+        source.mkdir()
+        audit = {"id": str(index), "task": "domain", "tokens": 4, "supervised_tokens": 2}
+        files = {
+            "train-prebuilt.jsonl.gz": compressed,
+            "token-audit.jsonl": (json.dumps(audit) + "\n").encode(),
+            "row-probes.jsonl": b"",
+        }
+        for name, content in files.items():
+            (source / name).write_bytes(content)
+        source_manifest = manifest | {
+            "student": "fixture",
+            "student_revision": "frozen",
+            "output_hashes": {name: hashlib.sha256(content).hexdigest() for name, content in files.items()},
+        }
+        (source / "manifest.json").write_text(json.dumps(source_manifest))
+        arguments.extend(["--source", str(source)])
+    output = tmp_path / "combined"
+    monkeypatch.setattr("sys.argv", [*arguments, "--output", str(output)])
+    main()
+    report = json.loads((output / "manifest.json").read_text())
+    assert report["batch_size"] == 4
+    assert report["max_sequence_tokens"] == 4
+    assert report["steps_per_epoch"] == 1

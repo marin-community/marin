@@ -25,7 +25,14 @@ from marin.inference.iris import remote_inference
 from marin.inference.types import OpenAIEndpoint
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.second_expert.constants import CANONICAL, CANONICAL_SHA256, SUBSET_SHA256
+from experiments.post_training.cruxeval_transfer.constants import GENERATION_TOKENS
+from experiments.post_training.second_expert.constants import (
+    CANONICAL,
+    CANONICAL_SHA256,
+    PROMPT_COUNT,
+    SAMPLES_PER_PROMPT,
+    SUBSET_SHA256,
+)
 from experiments.post_training.second_expert.grading import grade_response
 
 PROMPTS_SHA256 = "a22cb1dcd6310215efc01d62e1b6572cbc611e8e47b5ea0bdb552e3c334af2c5"
@@ -60,7 +67,7 @@ def request_body(prompt: dict, sample: int, model: str) -> dict:
     return {
         "model": model,
         "messages": prompt["b_request"]["messages"],
-        "max_tokens": 30720,
+        "max_tokens": GENERATION_TOKENS,
         "temperature": 1.0,
         "top_p": 1.0,
         "seed": seed,
@@ -137,7 +144,7 @@ def main() -> None:
         [json.loads(line) for line in canonical_bytes.splitlines() if line],
         subset["custom_ids"],
     )
-    if len(prompts) != 1606 or args.samples != 8:
+    if len(prompts) != PROMPT_COUNT or args.samples != SAMPLES_PER_PROMPT:
         raise ValueError("Frozen collection requires 1606 documents and eight samples each")
     model = load_model_config(args.model_config)
     model = replace(model, serve=replace(model.serve, reasoning_parser=None))

@@ -21,7 +21,8 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.post_training.second_expert.constants import CANONICAL, CANONICAL_SHA256, CAPTURE, SUBSET_SHA256
 
 EVALS = "s3://marin-us-east-02a/marin/evals"
-# Record IDs and HEAD commits from the final issue9984 manifest, not superseded streams.
+# Active snapshots: https://github.com/marin-community/marin/issues/9984#issuecomment-6144923850
+INFRA_MARKERS = ("AgentTimeoutError", "ClientConnectorError", "ClientResponseError", "ServerDisconnectedError")
 RECORDS = {
     "b_mmlu": "20261007-172014-gate-student-rlvr-step92-mmlu-pro-220c",
     "rs_crux": "20261012-020330-gate-mixed-rs-lr1e-06-step727-cruxeval-55eb",
@@ -134,12 +135,7 @@ def main() -> None:
         writer, rows = candidates[0]
         markers = Counter()
         for row in rows:
-            for marker in (
-                "AgentTimeoutError",
-                "ClientConnectorError",
-                "ClientResponseError",
-                "ServerDisconnectedError",
-            ):
+            for marker in INFRA_MARKERS:
                 if marker in str(row.get("output")) or marker in str(row.get("grading")):
                     markers[marker] += 1
         report: dict = {
@@ -181,7 +177,7 @@ def main() -> None:
         report["normalized_infra_marker_rows"] = report.pop("infra_marker_rows")
         report["infra_marker_rows"] = {
             marker: sum(marker in str(row.get("output")) or marker in str(row.get("grading")) for row in rows)
-            for marker in ("AgentTimeoutError", "ClientConnectorError", "ClientResponseError", "ServerDisconnectedError")
+            for marker in INFRA_MARKERS
         }
         if label.endswith("crux"):
             groups = defaultdict(list)
