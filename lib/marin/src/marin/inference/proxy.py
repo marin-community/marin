@@ -10,7 +10,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import Future
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -80,15 +80,13 @@ class InferenceProxy:
         response_fetch_batch_size: int,
         ignored_request_fields: Sequence[str] = (),
         backoff: ExponentialBackoff | None = None,
-        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if max_pending_requests < 1:
             raise ValueError("max_pending_requests must be at least 1")
         if response_fetch_batch_size < 1:
             raise ValueError("response_fetch_batch_size must be at least 1")
         self._broker = broker
-        self._clock = clock
-        self._started_at = clock()
+        self._started_at = time.monotonic()
         self._token_samples: deque[tuple[float, int, int]] = deque()
         self._model = model
         self._request_timeout_seconds = request_timeout_seconds
@@ -157,7 +155,7 @@ class InferenceProxy:
         with self._lock:
             pending = len(self._pending)
             stats = replace(self.stats)
-            now = self._clock()
+            now = time.monotonic()
             while self._token_samples and self._token_samples[0][0] <= now - TOKEN_RATE_WINDOW_SECONDS:
                 self._token_samples.popleft()
             window_prompt = sum(sample[1] for sample in self._token_samples)
@@ -329,7 +327,7 @@ class InferenceProxy:
                     self.stats.responses_with_usage += 1
                     self.stats.prompt_tokens += prompt
                     self.stats.completion_tokens += completion
-                    now = self._clock()
+                    now = time.monotonic()
                     while self._token_samples and self._token_samples[0][0] <= now - TOKEN_RATE_WINDOW_SECONDS:
                         self._token_samples.popleft()
                     self._token_samples.append((now, prompt, completion))
