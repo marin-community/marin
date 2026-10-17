@@ -75,13 +75,18 @@ def spec():
         pytest.param(True, False, False, id="wrapped-weights-without-manifest"),
     ],
 )
-def test_native_restore_preserves_weights_and_applies_pending_router_bias(
+def test_native_restore_preserves_weights_and_stored_router_bias(
     tmp_path, spec, model, wrapped, master, include_manifest
 ):
     mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
     path = tmp_path / "step-12"
     with jax.set_mesh(mesh):
         transformer = Transformer.init(draccus.decode(GrugModelConfig, model), key=jax.random.PRNGKey(7))
+        transformer = eqx.tree_at(
+            lambda tree: tree.stacked_blocks.stacked.mlp.router_bias,
+            transformer,
+            jnp.array([[3.0, -1.0, 2.0, -4.0], [1.0, -2.0, 4.0, -3.0]]),
+        )
         state = {"params": transformer, "pending_qb_betas": jnp.array([[0.0, 1.0, 2.0, 3.0], [0.0, 1.0, 2.0, 3.0]])}
         if master:
             state["master_params"] = transformer
@@ -100,12 +105,7 @@ def test_native_restore_preserves_weights_and_applies_pending_router_bias(
             target_cluster="test",
         )
         restored = restore_model(request, mesh)
-        expected = eqx.tree_at(
-            lambda tree: tree.stacked_blocks.stacked.mlp.router_bias,
-            transformer,
-            jnp.array([[1.5, 0.5, -0.5, -1.5], [1.5, 0.5, -0.5, -1.5]]),
-        )
-        for actual, wanted in zip(jax.tree.leaves(restored), jax.tree.leaves(expected), strict=True):
+        for actual, wanted in zip(jax.tree.leaves(restored), jax.tree.leaves(transformer), strict=True):
             np.testing.assert_array_equal(np.asarray(actual), np.asarray(wanted))
 
 
