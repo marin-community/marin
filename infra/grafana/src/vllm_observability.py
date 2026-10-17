@@ -270,7 +270,7 @@ histogram_scalar_samples AS (
                 THEN CAST(samples.value AS BIGINT) ELSE NULL END AS integer_value,
            CAST(NULL AS VARCHAR) AS producer_epoch,
            CAST(NULL AS BIGINT) AS source_sequence,
-           CAST(NULL AS VARCHAR) AS schema_key,
+           CAST(NULL AS DOUBLE[]) AS schema_key,
            0 AS is_structured, samples.publication_id
     FROM base AS samples
     WHERE samples.name IN ({sql_values(names)})
@@ -652,7 +652,7 @@ WITH base AS MATERIALIZED (
            CAST(json_extract(body_json, '$.sum') AS DOUBLE) AS total,
            json_get(body_json, 'producer_epoch') AS producer_epoch,
            CAST(json_extract(body_json, '$.sequence') AS BIGINT) AS source_sequence,
-           CAST(json_extract(body_json, '$.explicit_bounds') AS VARCHAR) AS schema_key,
+           bounds AS schema_key,
            publication_id
     FROM histogram_structured_candidates
     {_histogram_publication_filter(("body_json",))}
@@ -1395,7 +1395,7 @@ WITH base AS MATERIALIZED (
            CAST(histogram_bounds AS DOUBLE[]) AS bounds,
            CAST(histogram_bins AS BIGINT[]) AS bins,
            histogram_count AS count, histogram_sum AS total,
-           producer_epoch, source_sequence, histogram_bounds AS schema_key,
+           producer_epoch, source_sequence, bounds AS schema_key,
            publication_id
     FROM histogram_structured_candidates
     {_histogram_publication_filter(("count", "total", "schema_key", "histogram_bins"))}

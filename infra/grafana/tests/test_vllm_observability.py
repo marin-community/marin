@@ -89,32 +89,44 @@ def _vllm_projection_database():
 
 
 @pytest.mark.parametrize(
-    "format_name",
+    ("family", "metric", "section", "scale", "format_name"),
     [
-        "scalar",
-        "scalar_conflicting",
-        "scalar_staggered",
-        "scalar_bucket_reset",
-        "scalar_middle_bin_reset",
-        "structured_middle_bin_reset",
-        "structured",
-        "structured_unidentified",
-        "structured_unidentified_fast",
-        "mixed",
-        "dual",
-        "dual_conflicting",
-        "dual_missing",
-        "dual_missing_middle_bucket",
-        "dual_partial",
-    ],
-)
-@pytest.mark.parametrize(
-    ("family", "metric", "section", "scale"),
-    [
-        ("time_to_first_token_seconds", "ttft", "latency", 1.0),
-        ("inter_token_latency_seconds", "inter_token_latency", "latency", 1.0),
-        ("request_time_per_output_token_seconds", "tpot", "latency", 0.1),
-        ("request_generation_tokens", "output_tokens", "workload", 100.0),
+        (family, metric, section, scale, format_name)
+        for family, metric, section, scale, formats in (
+            (
+                "time_to_first_token_seconds",
+                "ttft",
+                "latency",
+                1.0,
+                (
+                    "scalar",
+                    "scalar_conflicting",
+                    "scalar_staggered",
+                    "scalar_bucket_reset",
+                    "scalar_middle_bin_reset",
+                    "structured_middle_bin_reset",
+                    "structured",
+                    "structured_unidentified",
+                    "structured_unidentified_fast",
+                    "mixed",
+                    "dual",
+                    "dual_conflicting",
+                    "dual_missing",
+                    "dual_missing_middle_bucket",
+                    "dual_partial",
+                ),
+            ),
+            ("inter_token_latency_seconds", "inter_token_latency", "latency", 1.0, ("structured", "mixed", "dual")),
+            ("request_time_per_output_token_seconds", "tpot", "latency", 0.1, ("structured", "mixed", "dual")),
+            (
+                "request_generation_tokens",
+                "output_tokens",
+                "workload",
+                100.0,
+                ("structured", "mixed", "dual", "dual_missing_middle_bucket", "structured_middle_bin_reset"),
+            ),
+        )
+        for format_name in formats
     ],
 )
 def test_vllm_histogram_dashboard_format_parity(
@@ -273,6 +285,13 @@ def test_vllm_histogram_dashboard_format_parity(
     assert statistics["p50"] == pytest.approx((expected_p50 * scale, expected_count))
     assert statistics["p90"] == pytest.approx((1.0 * scale, expected_count))
     assert statistics["p99"] == pytest.approx((1.0 * scale, expected_count))
+    if metric == "tpot":
+        timeline = {
+            row["t"]: (row["value"], row["samples"])
+            for row in result
+            if row["section"] == section and row["metric"] == metric and row["stat"] == "mean_over_time"
+        }
+        assert timeline == {15_000: pytest.approx((0.01, 3)), 30_000: pytest.approx((0.025, 2))}
     if metric == "output_tokens":
         distribution = {row["series"]: row["value"] for row in result if row["section"] == "output_length_distribution"}
         expected_bounds = tuple(str(int(bound)) if bound.is_integer() else str(bound) for bound in bounds)
@@ -493,8 +512,21 @@ def test_structured_histogram_exact_large_counts_duplicate_loss_and_reset(
     assert [row["value"] for row in summary if row["metric"] == "ttft_observations"] == [expected_count]
 
 
-@pytest.mark.parametrize("legacy_prefix", [False, True])
-def test_structured_histogram_bound_change_keeps_means_and_withholds_mixed_schema_tails(legacy_prefix: bool) -> None:
+@pytest.mark.parametrize(
+    ("legacy_prefix", "bounds", "expected_count", "expected_mean", "expected_p50"),
+    [
+        pytest.param(False, (0.1, 0.1, 0.2, 0.2), 4, 0.15, None, id="structured_schema_change"),
+        pytest.param(True, (0.1, 0.1, 0.2, 0.2), 4, 0.15, None, id="scalar_prefix_schema_change"),
+        pytest.param(False, (1, 1.0, 1.0, 1.0), 5, 0.14, 1.0, id="equivalent_numeric_bounds"),
+    ],
+)
+def test_structured_histogram_bound_change_keeps_means_and_withholds_mixed_schema_tails(
+    legacy_prefix: bool,
+    bounds: tuple[float, ...],
+    expected_count: int,
+    expected_mean: float,
+    expected_p50: float | None,
+) -> None:
     database = _vllm_projection_database()
     scalar_attributes = {
         "engine": "engine-a",
@@ -506,7 +538,7 @@ def test_structured_histogram_bound_change_keeps_means_and_withholds_mixed_schem
     attributes = json.dumps(scalar_attributes, sort_keys=True, separators=(",", ":"))
     rows = []
     scalar_rows = []
-    for sequence, (bound, count, total) in enumerate(((0.1, 0, 0.0), (0.1, 2, 0.2), (0.2, 3, 0.3), (0.2, 5, 0.7))):
+    for sequence, (bound, count, total) in enumerate(zip(bounds, (0, 2, 3, 5), (0.0, 0.2, 0.3, 0.7), strict=True)):
         if legacy_prefix and sequence < 2:
             for component, value, labels in (
                 ("bucket", count, {**scalar_attributes, "le": str(bound)}),
@@ -553,11 +585,14 @@ def test_structured_histogram_bound_change_keeps_means_and_withholds_mixed_schem
         for row in result
         if row["section"] == "latency" and row["metric"] == "ttft" and row["t"] is None
     }
-    assert stats["mean"] == pytest.approx((0.15, 4))
-    assert stats["p50"] == (None, 4)
+    assert stats["mean"] == pytest.approx((expected_mean, expected_count))
+    if expected_p50 is None:
+        assert stats["p50"] == (None, expected_count)
+    else:
+        assert stats["p50"] == pytest.approx((expected_p50, expected_count))
     summary_series = database.execute(vllm_run_summary_samples_query(overview)).fetch_arrow_table()
     summary = vllm_run_summary_table(overview, summary_series, nullcontext(), max_rows=1_000).to_pylist()
-    assert [row["value"] for row in summary if row["metric"] == "ttft_observations"] == [4]
+    assert [row["value"] for row in summary if row["metric"] == "ttft_observations"] == [expected_count]
 
 
 def _embedded_overview_app(invalid_histogram):

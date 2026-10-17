@@ -178,12 +178,25 @@ def test_histogram_snapshot_publisher_preserves_exact_bins_and_raw_observations(
         sequence=7,
     )
 
-    result = metrics.HistogramSnapshotPublisher(max_records=8, attributes={"metric_source": "vllm"}).publish((snapshot,))
+    generic = replace(
+        snapshot,
+        name="request_duration_seconds",
+        explicit_bounds=(0.1,),
+        bucket_counts=(2, 1),
+        count=3,
+        sum=0.2,
+        attributes={},
+        producer_epoch=None,
+        sequence=None,
+    )
+    result = metrics.HistogramSnapshotPublisher(max_records=8, attributes={"metric_source": "vllm"}).publish(
+        (snapshot, generic)
+    )
     telemetry.histogram("ras_poll_duration_seconds", unit="s").record(0.25)
 
-    assert result.enqueued_records == 1
+    assert result.enqueued_records == 2
     assert result.telemetry_lost_records == 0
-    transport.wait_for(2)
+    transport.wait_for(3)
     structured = transport.record("request_queue_time_seconds", {"engine": "engine-a"})
     assert structured["kind"] == "histogram"
     assert structured["timestamp_ms"] == 1_700_000_000_000
@@ -204,6 +217,11 @@ def test_histogram_snapshot_publisher_preserves_exact_bins_and_raw_observations(
     assert raw["kind"] == "histogram"
     assert raw["value"] == 0.25
     assert "body" not in raw
+    generic_body = transport.record("request_duration_seconds", {})["body"]
+    assert generic_body["count"] == 3
+    assert generic_body["bucket_counts"] == [2, 1]
+    assert "producer_epoch" not in generic_body
+    assert "sequence" not in generic_body
 
 
 @pytest.mark.parametrize(
@@ -233,33 +251,6 @@ def test_invalid_histogram_family_does_not_poison_valid_family(
     assert result.telemetry_lost_records == 1
     assert telemetry.runtime_status().lost_records == 1
     assert transport.wait_for(1)[0]["body"]["count"] == 3
-
-
-def test_histogram_snapshot_publisher_accepts_generic_point_without_publication_identity(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    transport = _transport(monkeypatch)
-    result = metrics.HistogramSnapshotPublisher(max_records=1).publish(
-        (
-            metrics.HistogramSnapshot(
-                name="request_duration_seconds",
-                explicit_bounds=(0.1,),
-                bucket_counts=(2, 1),
-                count=3,
-                sum=0.2,
-                unit="s",
-                attributes={},
-                timestamp_ms=1_700_000_000_000,
-            ),
-        )
-    )
-
-    assert result.enqueued_records == 1
-    body = transport.wait_for(1)[0]["body"]
-    assert body["count"] == 3
-    assert body["bucket_counts"] == [2, 1]
-    assert "producer_epoch" not in body
-    assert "sequence" not in body
 
 
 def test_processor_failure_does_not_hide_successful_scrape(monkeypatch: pytest.MonkeyPatch) -> None:
