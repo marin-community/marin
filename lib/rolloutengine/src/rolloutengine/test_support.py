@@ -19,8 +19,8 @@ from taskcompendium.models import (
 )
 from verifyit.spec import NumericSpec
 
-from rolloutengine.contracts import GradedRollout, ModelRequest, ModelTurn
-from rolloutengine.engine import Model, RolloutEngine
+from rolloutengine.contracts import GradedRollout, Model, ModelRequest, ModelTurn
+from rolloutengine.engine import RolloutEngine
 from rolloutengine.shell import shell_harness
 from rolloutengine.spec import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
 
@@ -72,8 +72,31 @@ def machine_runtime(**overrides) -> MachineRuntimeSpec:
     )
 
 
+def rollout_limits(**overrides) -> RolloutLimits:
+    return RolloutLimits.model_validate(
+        {
+            "max_turns": 3,
+            "max_total_tokens": None,
+            "model_turn_timeout": None,
+            "tool_turn_timeout": None,
+            "total_turn_timeout": None,
+            "attempt_timeout": None,
+            "verifier_timeout": 5,
+            "cleanup_timeout": 5,
+            **overrides,
+        }
+    )
+
+
 def rollout_spec(
-    task: TaskSpec, *, harness=SHELL, machine=None, verifier_machine=None, trace=None, **limits
+    task: TaskSpec,
+    *,
+    harness=SHELL,
+    machine=None,
+    verifier_machine=None,
+    trace=None,
+    judge_connection=None,
+    **limits,
 ) -> TaskRolloutSpec:
     return TaskRolloutSpec.model_validate(
         {
@@ -81,20 +104,9 @@ def rollout_spec(
             "harness": harness,
             "task_machine": machine,
             "verifier_machine": verifier_machine,
+            "judge_connection": judge_connection,
             **({} if trace is None else {"trace": trace}),
-            "limits": RolloutLimits.model_validate(
-                {
-                    "max_turns": 3,
-                    "max_total_tokens": None,
-                    "model_turn_timeout": None,
-                    "tool_turn_timeout": None,
-                    "total_turn_timeout": None,
-                    "attempt_timeout": None,
-                    "verifier_timeout": 5,
-                    "cleanup_timeout": 5,
-                    **limits,
-                }
-            ),
+            "limits": rollout_limits(**limits),
         }
     )
 

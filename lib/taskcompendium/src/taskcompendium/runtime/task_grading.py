@@ -14,7 +14,6 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     GradingAttempt,
     NoGrader,
-    SessionGrader,
     TaskSpec,
     VerifyitGrader,
     require_resolved_environment,
@@ -40,8 +39,6 @@ def grade_task(
     grader = task.grader
     if isinstance(grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
-    if isinstance(grader, SessionGrader):
-        raise TypeError("A session grader runs inside its rollout session")
     if isinstance(grader, VerifyitGrader) and isinstance(verifyit_spec(grader), JudgeSpec):
         return grade_remote_judge_answer(task, attempt, judge_connection)
     if grader.environment is None:

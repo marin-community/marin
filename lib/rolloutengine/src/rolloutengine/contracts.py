@@ -3,6 +3,7 @@
 
 """Public rollout protocols, records, and exceptions."""
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
@@ -83,7 +84,7 @@ class ModelTurn:
     logprobs: tuple[float, ...] | None
     """The log probability of each response token when it was sampled, or ``None`` if the transport gives none."""
     stop_reason: str
-    """Why generation stopped, for example ``"stop"`` or ``"length"``. A ``"length"`` stop ends the turn loop."""
+    """Why generation stopped, for example ``"stop"`` or ``"length"``. A ``"length"`` stop refuses the next ``reply``."""
     text: str = ""
     """The response as plain text. A harness that reads tags in the text, not tool calls, uses it."""
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -97,6 +98,10 @@ class ModelTurn:
         if self.usage is not None:
             return self.usage.prompt_tokens + self.usage.completion_tokens
         return len(self.prompt_token_ids) + len(self.response_token_ids)
+
+
+Model = Callable[[ModelRequest], Awaitable[ModelTurn]]
+"""The policy under rollout: it serves one model request and returns the exact turn."""
 
 
 class GenerationLimitReached(Exception):
@@ -116,32 +121,41 @@ class RolloutFailure:
 
 
 @dataclass(frozen=True)
-class Rollout:
-    """What happened in one attempt: the conversation, the token evidence, the steps, and the run outputs.
+class ConversationRecord:
+    """One conversation of an attempt: from a ``RolloutRecorder.start`` to the next one, or to the end."""
 
-    A ``Transition.reset`` starts a new training record. Thus the rollout holds only the part after the last reset.
-    """
-
-    run_id: str
-    """The ID of the attempt, the same as in its events."""
     messages: tuple[dict[str, Any], ...]
-    """The chat of this training record, through the last model response. The grader reads it."""
+    """The chat of this conversation, through its last model response. The grader reads the last conversation."""
     prompt_token_ids: tuple[int, ...]
-    """The tokens of the first prompt of this training record."""
+    """The tokens of the first prompt of this conversation."""
     response_token_ids: tuple[int, ...]
     """All tokens after the first prompt: each sampled response and the observation tokens between them."""
     loss_mask: tuple[int, ...]
     """One value per response token: 1 for a sampled token, 0 for an observation. All 0 in a messages trace."""
     logprobs: tuple[float, ...] | None
     """The sampling log probability of each response token, 0.0 for observation tokens. None if a turn had none."""
-    stop_reason: str
-    """Why the turn loop ended, for example ``"stop"``, ``"length"``, ``"max_turns"``, or ``"budget_reached"``."""
     steps: tuple["RolloutStep", ...] = ()
-    """One step per model turn of this training record: the turn, the transition, and where its tokens end."""
+    """One step per model turn of this conversation: the turn, the transition, and where its tokens end."""
+
+
+@dataclass(frozen=True)
+class Rollout:
+    """What happened in one attempt: its conversations, with their token evidence and steps, and the run outputs.
+
+    Each ``RolloutRecorder.start`` starts a new conversation, and the rollout keeps all of them. A trainer can use
+    each conversation as a sample, or only the last one.
+    """
+
+    run_id: str
+    """The ID of the attempt, the same as in its events."""
+    conversations: tuple[ConversationRecord, ...]
+    """One record for each conversation that the harness started, in order."""
+    stop_reason: str
+    """Why the attempt ended, for example ``"stop"``, ``"length"``, ``"max_turns"``, or ``"budget_reached"``."""
     metrics: dict[str, Any] = field(default_factory=dict)
     """The last step's metrics, and engine values such as the count of undelivered events."""
     outputs: dict[str, bytes] = field(default_factory=dict)
-    """The files under ``TaskSpec.output_paths``, by path. The engine reads them after the turn loop."""
+    """The files under ``TaskSpec.output_paths``, by path. The engine reads them after the harness ends."""
     failure: RolloutFailure | None = None
     """For an interrupted attempt: the exception type and the operation that failed."""
 
@@ -153,7 +167,7 @@ class GradedRollout:
     rollout: Rollout
     """What happened in the attempt."""
     grade: GradeResult
-    """The verdict of the task's grader, or of the harness for a ``SessionGrader`` task. Unavailable if no response."""
+    """The verdict of the task's grader on the last conversation. Unavailable if no response."""
 
 
 class RolloutOperation(StrEnum):
@@ -168,15 +182,37 @@ class RolloutOperation(StrEnum):
 class RolloutInterrupted(RuntimeError):
     """An attempt that failed during ``operation``, with the rollout so far and the original exception as cause.
 
+    ``PREPARE`` means that the harness failed before its first model turn, and ``ADVANCE`` that it failed after one.
+    """
+
+    def __init__(self, rollout: Rollout, operation: RolloutOperation):
+        self.rollout = rollout
+        self.operation = operation
+        super().__init__(f"Rollout interrupted during {operation}")
+
+
+class GradedRolloutInterrupted(RolloutInterrupted):
+    """An interrupted task attempt, with its grade.
+
     ``grade`` grades the completed turns, because the engine still grades them when the model fails. It is
     unavailable when the attempt stopped before grading.
     """
 
     def __init__(self, rollout: Rollout, operation: RolloutOperation, grade: GradeResult):
-        self.rollout = rollout
-        self.operation = operation
+        super().__init__(rollout, operation)
         self.grade = grade
-        super().__init__(f"Rollout interrupted during {operation}")
+
+
+class RolloutEnded(Exception):
+    """The attempt permits no more model requests. After a failed model request, the model's error is the cause."""
+
+
+class LimitReached(RolloutEnded):
+    """A turn, token, or length limit ended the attempt. A harness lets it propagate, and the attempt ends normally."""
+
+    def __init__(self, stop_reason: str):
+        super().__init__(f"The rollout reached a limit: {stop_reason}")
+        self.stop_reason = stop_reason
 
 
 class RolloutContractError(ValueError):
@@ -185,16 +221,14 @@ class RolloutContractError(ValueError):
 
 @dataclass(frozen=True)
 class Transition:
-    """A harness's answer to one model turn: observations for the next request, a reset, or the end."""
+    """What followed one model turn: observations for the next request, or the end of the harness."""
 
     done: bool
-    """True ends the turn loop after this turn."""
+    """True when the harness ended after this turn."""
     observations: tuple[dict[str, Any], ...] = ()
-    """New messages for the next request, for example tool results. They follow the model's message."""
+    """New messages after the model's message, for example tool results. The last step's never reach the model."""
     token_ids: tuple[int, ...] | None = None
     """Pins the exact tokens of the next prompt. They must start with the tokens served so far."""
-    reset: Prompt | None = None
-    """A new prompt that replaces the chat in a new training record. Skipped on the last turn or at the token budget."""
     metrics: dict[str, Any] = field(default_factory=dict)
     """The step's metrics. ``Rollout.metrics`` starts from the metrics of the last step."""
     data: object = None
@@ -214,7 +248,7 @@ class RolloutEventType(StrEnum):
 
     ATTEMPT_STARTED = "attempt_started"
     MACHINE_READY = "machine_ready"
-    HARNESS_PREPARED = "harness_prepared"
+    CONVERSATION_STARTED = "conversation_started"
     MODEL_TURN_COMPLETED = "model_turn_completed"
     TOOL_CALL_COMPLETED = "tool_call_completed"
     TRANSITION_COMPLETED = "transition_completed"
@@ -236,13 +270,16 @@ class MachineReady:
 
 
 @dataclass(frozen=True)
-class HarnessPrepared:
-    """The harness returned the first request's ``messages`` and ``options``, including its advertised tools."""
+class ConversationStarted:
+    """The harness started a conversation with ``messages`` and ``options``, including its advertised tools.
+
+    ``duration`` is the time from the start of the harness, or from the last model turn, to this request.
+    """
 
     messages: tuple[dict[str, Any], ...]
     options: dict[str, Any]
     duration: float
-    type: RolloutEventType = field(default=RolloutEventType.HARNESS_PREPARED, init=False)
+    type: RolloutEventType = field(default=RolloutEventType.CONVERSATION_STARTED, init=False)
 
 
 @dataclass(frozen=True)
@@ -277,15 +314,14 @@ class ToolCallCompleted:
 
 @dataclass(frozen=True)
 class TransitionCompleted:
-    """The harness handled a turn and returned ``observations``, or a new prompt in ``reset``.
+    """The harness handled a turn: it sent ``observations``, started a new conversation, or ended.
 
-    The engine skips a reset when the turn or token limit ends the rollout.
+    ``duration`` is the time from the model turn to the harness's next request or its end.
     """
 
     turn_index: int
     done: bool
     observations: tuple[dict[str, Any], ...]
-    reset: Prompt | None
     duration: float
     type: RolloutEventType = field(default=RolloutEventType.TRANSITION_COMPLETED, init=False)
 
@@ -317,7 +353,7 @@ class AttemptEnded:
 RolloutEventPayload = (
     AttemptStarted
     | MachineReady
-    | HarnessPrepared
+    | ConversationStarted
     | ModelTurnCompleted
     | ToolCallCompleted
     | TransitionCompleted
@@ -328,7 +364,7 @@ RolloutEventPayload = (
 
 @dataclass(frozen=True)
 class RolloutEvent:
-    """One event of the attempt that ``RolloutEngine.run`` started with ``run_id`` for task ``task_id``."""
+    """One event of the attempt that ``RolloutEngine.run_task`` started with ``run_id`` for task ``task_id``."""
 
     run_id: str
     task_id: str
@@ -339,7 +375,7 @@ class RolloutObserver(Protocol):
     """Receive rollout progress in order, delivered off the rollout's path.
 
     The attempt never waits on delivery, so a slow or failing observer cannot change a rollout. After the
-    attempt releases its resources, ``run`` waits up to ``cleanup_timeout`` for queued events.
+    attempt releases its resources, ``run_task`` waits up to ``cleanup_timeout`` for queued events.
     """
 
     async def on_event(self, event: RolloutEvent) -> None: ...
