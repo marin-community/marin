@@ -258,18 +258,34 @@ def replay_rows(prefix: str) -> tuple[list[str], list[dict], dict]:
         "uri": prefix,
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
         "supervised_tokens": manifest["supervised_tokens"],
+        # A continuation slice (sweep_data/continue_replay.py) holds the frozen rows first; older slices are all base.
+        "base_rows": manifest.get("base_rows", len(lines)),
     }
     return lines, index, info
 
 
-def cut_replay(entries: list[tuple[str, dict]], b_tokens: int) -> tuple[list[tuple[str, dict]], dict]:
+def replay_order(rows: int, base_rows: int) -> list[int]:
+    """The frozen rows in seeded order, then any continuation rows in their own seeded order.
+
+    For a continuation slice the first part equals the frozen slice's order, so every cut the frozen slice reaches is
+    unchanged.
+    """
+    base = list(range(base_rows))
+    random.Random(REPLAY_ORDER_SEED).shuffle(base)
+    extra = list(range(base_rows, rows))
+    random.Random(f"{REPLAY_ORDER_SEED}:continuation").shuffle(extra)
+    return base + extra
+
+
+def cut_replay(
+    entries: list[tuple[str, dict]], b_tokens: int, base_rows: int | None = None
+) -> tuple[list[tuple[str, dict]], dict]:
     """Take the frozen slice in seeded order up to the first prefix whose supervised tokens reach round(B / 4).
 
     Whole rows only: the row that crosses R is kept in full (the overshoot is retained, no boundary-row masking).
     """
     target = round(REPLAY_FRACTION_OF_B * b_tokens)
-    order = list(range(len(entries)))
-    random.Random(REPLAY_ORDER_SEED).shuffle(order)
+    order = replay_order(len(entries), len(entries) if base_rows is None else base_rows)
     cut, supervised = [], 0
     for position in order:
         if supervised >= target:
@@ -386,7 +402,7 @@ def main() -> None:
         b_tokens = None
 
         def replay_for(b: int) -> list[tuple[str, dict]]:
-            cut, cut_info = cut_replay(replay_entries, b)
+            cut, cut_info = cut_replay(replay_entries, b, replay_info["base_rows"])
             if plain is not None and cut_info["rows_sha256"] != plain["replay"].get("rows_sha256"):
                 raise ValueError("Replay rows differ from plain's; rebuild plain with this builder")
             replay_info.update({"slice_supervised_tokens": replay_info["supervised_tokens"]} | cut_info)
