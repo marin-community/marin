@@ -4,7 +4,7 @@
 """Typed readers for evaluation output artifacts and aggregate reports.
 
 Eval steps write backend-native output. :class:`EvalResult` subclasses parse each backend's layout.
-:class:`FineStoreEvalchemyResult` reads current Evalchemy results artifacts;
+:class:`FineStoreEvalchemyResult` reads the current Evalchemy results table;
 :class:`EvalchemyResult` retains the historical result-tree reader. :func:`compile_eval_report`
 merges several typed results.
 """
@@ -13,15 +13,13 @@ import functools
 import json
 import logging
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 
 from pydantic import Field
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from marin.evaluation.evalchemy.client import EVALCHEMY_RESULTS_PREFIX, EVALCHEMY_RESULTS_SUFFIX
 from marin.evaluation.lm_eval_samples import (
     is_scratch_artifact,
-    read_native_evalchemy_artifacts,
+    read_evalchemy_results,
 )
 from marin.execution.artifact import Artifact, result_type_name
 
@@ -74,7 +72,7 @@ class EvalchemyResult(EvalResult):
         # StoragePath.glob reattaches the protocol to each match; a bare fs.glob result drops the
         # gs:// prefix and would reopen as a local path.
         root = StoragePath(self.path)
-        found = sorted((root / f"**/{EVALCHEMY_RESULTS_PREFIX}*{EVALCHEMY_RESULTS_SUFFIX}").glob(), key=str)
+        found = sorted((root / "**/results_*.json").glob(), key=str)
         if root.scheme == "file":
             # fsspec's local glob returns bare paths, while ``relative_to`` compares protocols.
             found = [StoragePath(scheme="file", segments=path.segments, rooted=path.rooted) for path in found]
@@ -100,18 +98,13 @@ class EvalchemyResult(EvalResult):
 
 
 class FineStoreEvalchemyResult(EvalResult):
-    """Per-task metrics from Evalchemy results artifacts stored in FineStore."""
+    """Per-task metrics from Evalchemy's FineStore results table."""
 
     @functools.cached_property
     def _task_metrics(self) -> dict[str, dict[str, float]]:
-        result_payloads = read_native_evalchemy_artifacts(self.path).result_payloads
-        if not result_payloads:
-            raise FileNotFoundError(f"no Evalchemy results artifacts in FineStore archive {self.path}")
-
         metrics: dict[str, dict[str, float]] = {}
-        for name, payload in sorted(result_payloads.items()):
-            task_dir = PurePosixPath(name).parent.parent.name
-            results = json.loads(payload).get("results", {})
+        for task_dir, document in sorted(read_evalchemy_results(self.path).items()):
+            results = document.get("results", {})
             metrics.update(_metrics_for_task_dir(results, task_dir))
         return metrics
 

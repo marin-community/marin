@@ -3,10 +3,11 @@
 A one-command path from "model + eval suite" to recorded results. Pick a registered model or supply a
 catalog-schema model file, then select registered or file-backed evaluations. The launcher sizes a
 serving slice and submits one CPU orchestrator job for the whole launch. Each selected eval runs as
-an independent `StepSpec` with a durable `record.json`. Evaluations share one model server and run
-sequentially by default; `--max-concurrent` allows concurrent evaluators on that server. A suite
+an independent `StepSpec` with a durable `record.json`. Evaluations share one model endpoint and run
+sequentially by default; `--max-concurrent` allows concurrent evaluators on that endpoint. A suite
 fills in as results finish. Each eval has its own record, child
-jobs, logs, and parquet; the launch shares a `group_id`. Evaldash scans those records and step
+jobs, logs, and parquet; the launch shares a `group_id`. `--instances N` starts candidate serving
+workers behind one request broker, each using the selected accelerator. Evaldash scans those records and step
 statuses into its Postgres query index.
 
 Each eval has its own `StepSpec` status and lock under `{records_prefix}/{run_id}/`.
@@ -68,7 +69,8 @@ YAML/JSON file. `--evals` takes a suite name (`smoke`, `core`) or comma-separate
 (`gsm8k,mmlu-smoke`); repeatable `--evalchemy-config` and `--harbor-config` options add evaluator-native
 files; `--platform tpu|gpu` overrides the model's default; `--accelerator` overrides the sizing
 heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
-`--max-concurrent` caps simultaneous evaluators sharing one candidate and optional judge (default 1);
+`--max-concurrent` caps simultaneous evaluators sharing candidate serving and an optional judge (default 1);
+`--instances` sets the candidate worker count (default 1), independently of evaluator concurrency;
 `--seed` overrides the Evalchemy seed for every selected task in that launch and is stored in its record;
 `--judge-model` or `--judge-model-config` selects an optional managed judge for Harbor
 verifiers, and `--judge-accelerator` overrides its slice; the judge must colocate with the candidate;
@@ -176,8 +178,8 @@ mean acceptance length, and draft acceptance rate. The normalized model configur
 record pins the target identity, tokenizer identity, and optional draft identity.
 
 Within its FineStore archive, each evaluator writes individually scored questions to the `samples`
-table using `EvalSample`, the shared schema in `finestore.eval`. Evalchemy writes its native
-aggregate JSON and `--log_samples` JSONL directly as FineStore source artifacts. Harbor preserves
+table using `EvalSample`, the shared schema in `finestore.eval`. Evalchemy writes aggregate result
+documents to the `evalchemy_results` table. Harbor preserves
 its native results and trajectories and writes flattened trajectory steps to the `steps` table; its
 ordinary job tree remains resume state. Load the normalized tables with
 pandas/duckdb, or read rows back with `EvalSample.model_validate`, to zoom into any run.

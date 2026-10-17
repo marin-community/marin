@@ -19,6 +19,7 @@ from rigging.secrets import SecretSpec
 
 from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE
+from marin.evaluation.evalchemy.client import EVALCHEMY_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.inference_metrics import InferenceMetricWindow
 from marin.evaluation.model_config import ModelConfig
@@ -155,6 +156,7 @@ class EvaluationBatch:
     provenance: LaunchProvenance
     submission_cluster: str
     max_concurrent: int
+    instances: int = 1
     judge: HostedJudge | None = None
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
     source_model_config: ModelConfigRef | None = None
@@ -247,6 +249,7 @@ def _record(
         eval=evaluation,
         hardware=HardwareRef(
             task_count=serving.task_count,
+            instances=batch.instances,
             platform=batch.accelerator.platform.value,
             accelerator=batch.accelerator.label,
             region_or_cluster=(batch.accelerator.target_cluster or batch.accelerator.region or _UNCONSTRAINED),
@@ -502,6 +505,19 @@ def run_evaluation_steps(
         capability_origin=batch.capability_origin,
         api_model=batch.api_model,
         priority=batch.priority_band,
+        instances=batch.instances,
+        request_timeout_seconds=max(
+            (
+                float(
+                    evaluation.identity.eval_ref.evalchemy.extra_model_args.get(
+                        "timeout", EVALCHEMY_REQUEST_TIMEOUT_SECONDS
+                    )
+                )
+                for evaluation in batch.evaluations
+                if evaluation.identity.eval_ref.evalchemy is not None
+            ),
+            default=EVALCHEMY_REQUEST_TIMEOUT_SECONDS,
+        ),
     )
     with ExitStack() as stack:
         try:
