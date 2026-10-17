@@ -69,6 +69,22 @@ The declared R2 policy preserves seven-day incomplete-multipart cleanup and the 
 CoreWeave bucket lifecycle configurations apply the same nine expiration prefixes and abort
 incomplete multipart uploads after seven days.
 
+`marin-us-east-08a` is shared scratch storage for every CoreWeave cluster. It is declared as
+`data.stores.coreweave.temp_bucket` in `config/coreweave.yaml`, separately from the region
+mirror set. Permanent east-region artifacts remain in `marin-us-east-02a`; `hero-checkpoints`
+is reserved for hero checkpoints.
+
+Before switching existing deployments, import the existing `marin-us-east-08a` bucket into
+this stack and apply its lifecycle and access policy. Review the preview for bucket
+replacement or deletion. The standard prefixes affect only `tmp/ttl=Nd/` objects; existing
+data stays at its current location. Roll out the CoreWeave task defaults after the bucket
+policy is active. Already running jobs retain their environment.
+
+Installed consumers need a `marin-rigging` release containing both the routing code and its
+bundled `config/coreweave.yaml`. Update MarinSkyRL's exact rigging override and lockfile;
+update Harbor's and Evalchemy's rigging dependency floors and lockfiles. These dependencies
+come from PyPI, so changing their Marin Git pins alone does not update storage routing.
+
 CoreWeave bucket access policies preserve S3 access for principals in the Open Athena organization.
 Only `marin-us-east-02a` denies every principal the `s3:DeleteObject` and
 `s3:DeleteObjectVersion` actions under `marin/grug/hero-*`. The `hero-checkpoints` bucket and

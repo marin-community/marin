@@ -20,6 +20,7 @@ data:
       endpoint_env: CW_S3_ENDPOINT
       key_id_env: CW_KEY_ID
       key_secret_env: CW_KEY_SECRET
+      temp_bucket: { bucket: marin-us-east-08a, store: coreweave, signing_region: US-EAST-08A }
     r2:
       endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
       endpoint_env: R2_S3_ENDPOINT

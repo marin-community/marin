@@ -8,6 +8,7 @@ import os
 
 import pytest
 import rigging.filesystem.cluster_config as fs
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import (
     BucketSpec,
     DataConfig,
@@ -162,17 +163,19 @@ def test_resolved_root_local_fallback(monkeypatch):
 # --- temp-bucket routing ----------------------------------------------------
 
 
-def test_marin_temp_bucket_routes_coreweave_to_bucket_root():
-    """A CoreWeave source prefix yields a TTL temp path at the CW bucket root.
-
-    The CW bucket is recognized via its config-declared ``store: coreweave`` (see
-    :func:`s3_data_buckets`), so it gets a managed ``tmp/ttl=Nd/`` prefix, and the
-    ``marin/`` data subdir is stripped.
-    """
-    cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 3, 7))
-    with use_data_config(cfg):
-        path = marin_temp_bucket(3, "store/x", source_prefix="s3://marin-us-east-02a/marin")
-    assert path == "s3://marin-us-east-02a/tmp/ttl=3d/store/x"
+@pytest.mark.parametrize("cluster", ["marin", "coreweave"])
+@pytest.mark.parametrize("bucket", ["marin-us-east-02a", "marin-us-west-04a", "hero-checkpoints", "marin-us-east-08a"])
+def test_marin_temp_bucket_routes_coreweave_to_shared_scratch(cluster, bucket, monkeypatch):
+    """Source routing works on launchers and workers, with the destination's signing region."""
+    monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
+    monkeypatch.setenv("CW_KEY_ID", "test-key")
+    monkeypatch.setenv("CW_KEY_SECRET", "test-secret")
+    with use_data_config(load_cluster_config(cluster)):
+        path = marin_temp_bucket(3, "store/x", source_prefix=f"s3://{bucket}/marin")
+        filesystem, key = filesystem_for(path)
+    assert path == "s3://marin-us-east-08a/tmp/ttl=3d/store/x"
+    assert key == "marin-us-east-08a/tmp/ttl=3d/store/x"
+    assert filesystem.client_kwargs["region_name"] == "US-EAST-08A"
 
 
 def test_marin_temp_bucket_explicit_source_does_not_probe_ambient_prefix(monkeypatch):
@@ -184,7 +187,7 @@ def test_marin_temp_bucket_explicit_source_does_not_probe_ambient_prefix(monkeyp
     cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 14, 30))
     with use_data_config(cfg):
         path = marin_temp_bucket(30, "curriculum-math", source_prefix="s3://marin-us-east-02a/marin")
-    assert path == "s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math"
+    assert path == "s3://marin-us-east-08a/tmp/ttl=30d/curriculum-math"
 
 
 def test_marin_temp_bucket_routes_r2_to_bucket_root():
@@ -226,7 +229,7 @@ def test_marin_temp_bucket_can_resolve_legacy_data_local_scratch(monkeypatch):
             14,
             "checkpoints/run",
             source_prefix="s3://marin-us-east-02a/marin",
-            use_env_override=False,
+            use_overrides=False,
         )
     assert path == "s3://marin-us-east-02a/tmp/ttl=14d/checkpoints/run"
 

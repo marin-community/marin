@@ -39,7 +39,7 @@ SOURCE_PREFIX = marin_temp_bucket(
     ttl_days=30,
     prefix="curriculum-math-20260924",
     source_prefix="s3://marin-us-east-02a/marin",
-    use_env_override=False,
+    use_overrides=False,
 )
 S3_TRIAL_PREFIX = marin_temp_bucket(
     ttl_days=7,
