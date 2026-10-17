@@ -246,7 +246,7 @@ def launch(
     federated_cluster: str | None,
     priority: str | None,
 ) -> None:
-    """Submit evaluations sharing one inference server for MODEL."""
+    """Submit evaluations against a shared candidate endpoint for MODEL."""
     selected_model = resolve_model_config(model, model_config)
     selected_judge = resolve_judge_model_config(judge_model, judge_model_config)
     resolved_platform = Platform(platform) if platform else default_platform(selected_model)

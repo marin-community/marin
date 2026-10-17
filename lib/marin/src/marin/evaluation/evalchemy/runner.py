@@ -288,7 +288,7 @@ def run_evalchemy(
     *,
     env_vars: Mapping[str, str],
 ) -> EvalchemyOutcome:
-    """Run Evalchemy and validate its results artifacts and normalized samples in FineStore."""
+    """Run Evalchemy and read its result and sample tables from FineStore."""
     if not config.tasks:
         raise ValueError("Evalchemy requires at least one task")
     if "://" not in output_dir:

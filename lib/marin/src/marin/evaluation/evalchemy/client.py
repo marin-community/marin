@@ -8,7 +8,6 @@ Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG``; the parent builds it in
 CLI once (one invocation per task so each carries its own ``num_fewshot``) with lm-eval's
 ``local-completions`` (or ``local-chat-completions``) API model pointed at the served URL. Evalchemy
 writes result documents and normalized sample rows directly to FineStore tables at ``out_path``.
-The parent validates those tables after this client finishes.
 """
 
 from __future__ import annotations

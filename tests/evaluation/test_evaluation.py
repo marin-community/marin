@@ -2303,14 +2303,12 @@ def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
         evaluations=(final_evaluation,),
         priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         max_concurrent=1,
-        instances=8,
     )
 
     paths = _run_test_batch(batch)
 
     assert len(paths) == 1
     assert read_record(paths[0]).status is RunStatus.SUCCEEDED
-    assert read_record(paths[0]).hardware.instances == 8
     assert _step_status(batch, 0) == STATUS_SUCCESS
     assert executed == [final_evaluation.identity.output_dir]
     assert priorities == [job_pb2.PRIORITY_BAND_INTERACTIVE]
