@@ -1,7 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pool v3: drop SWE-smith repos whose clean code ships in mini-swe-agent's tool environment, then top up (task #206).
+"""Pools v3+: drop SWE-smith repos with readable clean copies in the agent's sandbox, then top up (task #206).
+
+v3 (--version 3 --tool-env <#207 probe> --exclude mahmoud/boltons=image_level_clean_copy=...): the repos below.
+v4 (--version 4 --exclude <repo>=image_level_clean_copy=<where> ...): repos whose clean source the base image holds
+outside /testbed, found by image_check.py (PROBE_METHOD): chardet and tomli (vendored by pip/setuptools), inflect
+(vendored by setuptools), dataset (an installed egg). The steps below are the same for every version; seeds carry the
+version number.
+
 
 mini-swe-agent is installed at agent setup into /root/.local/share/uv/tools/mini-swe-agent/, inside the agent's
 sandbox, and its site-packages hold clean copies of some pool repos (found in #207 run swe-net2: GLM read
@@ -33,7 +40,9 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.sft_shootout_pool import decon
 from experiments.post_training.sft_shootout_pool.build_swesmith import MIRROR_NAME, PACKAGES
+from experiments.post_training.sft_shootout_pool.image_check import PROBE_METHOD
 from experiments.post_training.sft_shootout_pool.pool import ALLKIMI, parquet_bytes
+from experiments.post_training.sft_shootout_pool.repo_names import IMPORT_NAMES
 from experiments.post_training.sft_shootout_pool.sample import (
     HELDOUT_FRACTION,
     SEED,
@@ -50,11 +59,8 @@ from experiments.post_training.sft_shootout_pool.swesmith_packages import (
 )
 from experiments.post_training.sft_shootout_pool.swesmith_restore import mirror, restore_payload
 
-VERSION = 3
 REASON = "agent_tool_clean_copy"
-# Image-level copies found by #207's probe: conda depends on boltons, so every conda image holds a clean boltons 23.0.0
-# under /opt/miniconda3/pkgs/ (the mahmoud/boltons task image included).
-IMAGE_LEVEL = {"mahmoud/boltons": "image_level_clean_copy"}
+REPO_LEVEL_REASONS = {"vendored_clean_copy", "agent_tool_clean_copy", "image_level_clean_copy"}
 
 
 def normalize(name: str) -> str:
@@ -78,19 +84,28 @@ def tool_env_repos(repos: set[str], tool_env: dict) -> dict[str, str]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pool", required=True)
-    parser.add_argument("--tool-env", required=True, help="JSON {distributions: [...], top_level: [...]} from #207")
+    parser.add_argument("--version", type=int, required=True)
+    parser.add_argument("--tool-env", help="JSON {distributions: [...], top_level: [...]} from #207 (v3)")
+    parser.add_argument(
+        "--exclude", action="append", default=[], help="repo=reason=where the clean copy lives (repeatable)"
+    )
     args = parser.parse_args()
+    version = args.version
     pool = StoragePath(args.pool)
-    if (pool / f"manifest-v{VERSION - 1}.json").exists():
-        raise ValueError(f"Pool v{VERSION} was already built here")
+    if (pool / f"manifest-v{version - 1}.json").exists():
+        raise ValueError(f"Pool v{version} was already built here")
     previous_bytes = (pool / "manifest.json").read_bytes()
     manifest = json.loads(previous_bytes)
     files = {name: (pool / name).read_bytes() for name in manifest["file_sha256"]}
     for name, data in files.items():
         if hashlib.sha256(data).hexdigest() != manifest["file_sha256"][name]:
-            raise ValueError(f"{name} changed since v{VERSION - 1}")
-    tool_env_bytes = StoragePath(args.tool_env).read_bytes()
-    tool_env = json.loads(tool_env_bytes)
+            raise ValueError(f"{name} changed since v{version - 1}")
+    tool_env_bytes = StoragePath(args.tool_env).read_bytes() if args.tool_env else None
+    tool_env = json.loads(tool_env_bytes) if tool_env_bytes else {"distributions": [], "top_level": []}
+    explicit = {}
+    for entry in args.exclude:
+        repo, reason, where = entry.split("=", 2)
+        explicit[repo] = {"reason": reason, "where": where}
 
     rows = [json.loads(line) for line in files["tasks.jsonl"].decode().splitlines()]
     excluded = [json.loads(line) for line in files["excluded.jsonl"].decode().splitlines()]
@@ -100,14 +115,14 @@ def main() -> None:
     repo_of = {task: upstream_repo(config["repo"]) for task, config in configs.items()}
 
     leaking = tool_env_repos(set(repo_of.values()), tool_env)
-    reasons = {repo: REASON for repo in leaking} | IMAGE_LEVEL
+    reasons = {repo: REASON for repo in leaking} | {repo: item["reason"] for repo, item in explicit.items()}
     removed = [row for row in rows if row["family"] == "swesmith" and row["repo"] in reasons]
     kept = [row for row in rows if row not in removed]
     previously_excluded = {row["task_id"] for row in excluded}
     excluded_repos = (
         SWEBENCH_VERIFIED_REPOS
         | set(reasons)
-        | {row["repo"] for row in excluded if row.get("leak_risk") == "vendored_clean_copy"}
+        | {row["repo"] for row in excluded if row.get("leak_risk") in REPO_LEVEL_REASONS}
     )
     in_pool = {row["task_id"] for row in kept}
     unused: dict[str, list[str]] = {}
@@ -116,7 +131,7 @@ def main() -> None:
             unused.setdefault(repo, []).append(task)
     shortfall = SWESMITH_TASKS - sum(row["family"] == "swesmith" for row in kept)
     allocation = proportional({repo: len(tasks) for repo, tasks in unused.items()}, shortfall)
-    rng = random.Random(f"{SEED}:v3-topup")
+    rng = random.Random(f"{SEED}:v{version}-topup")
     added = sorted(task for repo in sorted(unused) for task in rng.sample(unused[repo], allocation[repo]))
 
     with tempfile.TemporaryDirectory() as temporary:
@@ -147,7 +162,7 @@ def main() -> None:
                     "fixed_sha256": hashlib.sha256(binary).hexdigest(),
                     "restored_files": sorted(restored),
                     "deleted_files": deleted,
-                    "added_in": VERSION,
+                    "added_in": version,
                 }
             )
         files["swesmith-packages.parquet"] = parquet_bytes(
@@ -164,7 +179,7 @@ def main() -> None:
     target = round(HELDOUT_FRACTION * total)
     held = sum(row["family"] == "swesmith" and row["heldout"] for row in kept)
     candidates = sorted(task for task in added if task not in allkimi_tasks)
-    new_heldout = set(random.Random(f"{SEED}:v3-heldout").sample(candidates, max(0, target - held)))
+    new_heldout = set(random.Random(f"{SEED}:v{version}-heldout").sample(candidates, max(0, target - held)))
 
     revision = (
         f"{args.pool.rstrip('/')}/swesmith-packages.parquet@sha256:"
@@ -173,6 +188,7 @@ def main() -> None:
     for row in kept:
         if row["family"] == "swesmith":
             row["package_revision"] = revision
+            row["import_names"] = IMPORT_NAMES[row["repo"]]
     template = next(row for row in kept if row["family"] == "swesmith")
     kept += [
         {
@@ -182,10 +198,11 @@ def main() -> None:
             "repo": repo_of[task],
             "instance_id": configs[task]["instance_id"],
             "leak_risk": None,
+            "import_names": IMPORT_NAMES[repo_of[task]],
             "decon": marks[task],
             "package_source": template["package_source"],
             "package_revision": revision,
-            "added_in": VERSION,
+            "added_in": version,
         }
         for task in added
     ]
@@ -212,35 +229,44 @@ def main() -> None:
     swesmith["excluded_after_build"] = [{"version": 2} | rounds] if isinstance(rounds, dict) else rounds
     swesmith["excluded_after_build"].append(
         {
-            "version": VERSION,
+            "version": version,
             "repos": dict(sorted(reasons.items())),
             "matched_names": leaking,
             "removed": len(removed),
             "removed_heldout": sum(row["heldout"] for row in removed),
         }
     )
-    swesmith["topped_up_in_v3"] = {
+    swesmith[f"topped_up_in_v{version}"] = {
         "shortfall": shortfall,
-        "seed": f"{SEED}:v3-topup",
+        "seed": f"{SEED}:v{version}-topup",
         "allocation": {repo: count for repo, count in allocation.items() if count},
         "added": len(added),
         "added_heldout": len(new_heldout),
-        "heldout_seed": f"{SEED}:v3-heldout",
+        "heldout_seed": f"{SEED}:v{version}-heldout",
         "decon_contaminated": sorted(task for task in added if marks[task]["contaminated"]),
     }
     history = manifest.get("supersedes") or []
-    manifest["version"] = VERSION
+    manifest["version"] = version
     manifest["supersedes"] = [
         *([history] if isinstance(history, dict) else history),
         {
-            "manifest": f"manifest-v{VERSION - 1}.json",
+            "manifest": f"manifest-v{version - 1}.json",
             "sha256": hashlib.sha256(previous_bytes).hexdigest(),
-            "change": "v3: drop repos in mini-swe-agent's tool env, top SWE-smith up to 2,100",
+            "change": f"v{version}: drop repos with clean copies in the agent's sandbox, top SWE-smith up to 2,100",
         },
     ]
-    manifest["inputs"]["mini_swe_agent_tool_env"] = {"sha256": hashlib.sha256(tool_env_bytes).hexdigest()} | tool_env
+    if tool_env_bytes:
+        manifest["inputs"]["mini_swe_agent_tool_env"] = {"sha256": hashlib.sha256(tool_env_bytes).hexdigest()} | tool_env
+    if explicit:
+        manifest.setdefault("clean_copy_probe", {})[f"v{version}"] = {
+            "method": PROBE_METHOD,
+            "evidence": {
+                repo: item | {"removed_tasks": sum(r["repo"] == repo for r in removed)}
+                for repo, item in explicit.items()
+            },
+        }
     manifest["decon"]["contaminated_tasks"] = sorted(
-        set(manifest["decon"]["contaminated_tasks"]) | set(swesmith["topped_up_in_v3"]["decon_contaminated"])
+        set(manifest["decon"]["contaminated_tasks"]) | set(swesmith[f"topped_up_in_v{version}"]["decon_contaminated"])
     )
     manifest["decon"]["near_threshold_tasks"] = {
         task: value
@@ -253,7 +279,7 @@ def main() -> None:
     }
     manifest["file_sha256"] = {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}
 
-    (pool / f"manifest-v{VERSION - 1}.json").write_bytes(previous_bytes)
+    (pool / f"manifest-v{version - 1}.json").write_bytes(previous_bytes)
     for name, data in files.items():
         (pool / name).write_bytes(data)
         if hashlib.sha256((pool / name).read_bytes()).hexdigest() != manifest["file_sha256"][name]:
