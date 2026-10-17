@@ -177,7 +177,18 @@ def main() -> None:
         for part in (0, 1)
     ]
     (work / "summarized.jsonl").write_text("".join(json.dumps(trace) + "\n" for trace in summarized))
-    plain_inputs = [*args.traces, str(work / "summarized.jsonl")]
+    touching = []
+    for trace in traces:
+        synthetic = copy.deepcopy(trace) | {"trial_id": trace["trial_id"] + "-toolenv"}
+        observation = next(
+            m for m in synthetic["messages"] if m["role"] in ("tool", "user") and m is not synthetic["messages"][0]
+        )
+        observation["content"] = "/root/.local/share/uv/tools/mini-swe-agent/lib/python3.12/site-packages/x.py\n" + (
+            observation.get("content") or ""
+        )
+        touching.append(synthetic)
+    (work / "toolenv.jsonl").write_text("".join(json.dumps(trace) + "\n" for trace in touching))
+    plain_inputs = [*args.traces, str(work / "summarized.jsonl"), str(work / "toolenv.jsonl")]
     heldout_by_family = {}
     for row in pool_rows:
         if row["heldout"]:
@@ -222,6 +233,7 @@ def main() -> None:
     plain = build("plain", plain_inputs)
     reports = [check_arm(tokenizer, plain, by_id, heldout)]
     assert reports[0]["dropped"].get("summarized_trial") == len(summarized), "summarized trials were not dropped"
+    assert reports[0]["dropped"].get("touches_agent_tool_env") == len(touching), "tool-env traces were not dropped"
     reports.append(check_arm(tokenizer, build("rs-multi", plain_inputs, plain), by_id, heldout))
     reports.append(check_arm(tokenizer, build("relay", [str(work / "relay.jsonl")], plain), by_id, heldout))
     validation = build("validation", [*plain_inputs, str(work / "heldout.jsonl")])

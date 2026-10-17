@@ -28,6 +28,7 @@ import gzip
 import hashlib
 import json
 import random
+import re
 import tempfile
 from pathlib import Path
 
@@ -56,6 +57,10 @@ from experiments.post_training.sweep_data.select import CONTEXT
 
 POOL_MANIFEST_SHA256 = "ae4347bdec1976e50cd3fd4a377d6200cce7cba6d36de47ed71938600b15f6e2"
 EPOCHS = 3
+# mini-swe-agent's own tool environment, installed in the sandbox at agent setup, holds clean copies of some repos
+# (pool v3 removes those repos); a trace that reads anything there is dropped. Pattern from #207 (chukar): path reads,
+# find/grep listings, 'uv tool dir|list|run' and the tool's own bin/lib all leave one of these strings.
+AGENT_TOOL_ENV = re.compile(r"(?:\.local/share/uv/tools|uv\s+tool\s+(?:dir|list|run)|mini-swe-agent/(?:bin|lib)/)")
 
 
 def load_pool(uri: str) -> dict[str, dict]:
@@ -94,6 +99,8 @@ def candidates(arm: str, traces: list[dict], pool: dict[str, dict], tokenizer) -
             reason = "trace_problems"
         elif not trace["passed"]:
             reason = "not_passed"
+        elif AGENT_TOOL_ENV.search(json.dumps(trace["messages"])):
+            reason = "touches_agent_tool_env"
         if reason is None:
             authors = [m.get("author") for m in trace["messages"] if m["role"] == "assistant"]
             if TEACHER not in authors:
@@ -347,6 +354,9 @@ def main() -> None:
                     for family in sorted({d["family"] for d in dropped if d["family"]})
                 },
                 # One count per summarized trial (each contributes one dropped row per conversation).
+                "agent_tool_env_drops_by_task": dict(
+                    collections.Counter(d["task_id"] for d in dropped if d["reason"] == "touches_agent_tool_env")
+                ),
                 "summarized_trials_by_family": dict(
                     collections.Counter(
                         d["family"] for d in dropped if d["reason"] == "summarized_trial" and d["conversation"] == 0
