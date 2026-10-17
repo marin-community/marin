@@ -1,0 +1,45 @@
+{
+  "canonical_sha256": "ac5acdc984fc2698947e6c818c3595bc5d81d6eb494532a557d3734e787c424f",
+  "subset_sha256": "c12af58d8b7d75acdc421c281f9f0df7c438b9293415761fed07d8a63812f27b",
+  "source_hashes": {
+    "requests.jsonl": "a22cb1dcd6310215efc01d62e1b6572cbc611e8e47b5ea0bdb552e3c334af2c5",
+    "raw-responses.jsonl": "49dbfde55976ebc8a99463a5208421f0434daa6f584f7a18818dcad82583e9eb",
+    "audit.jsonl": "b6bba09c705a8da472ce0f108ec35435281023316d32a4e486b21a1eada599c0"
+  },
+  "dataset_revision": "b189ec765aa7ed75c8acfea42df31fdae71f97be",
+  "model_revision": "fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab",
+  "template_sha256": "fb5b15f09750ee3e180d60b7eb8968c7ff27c3d2472a4b4c6449c7bacbbb45b2",
+  "counts": {
+    "correct": 10328,
+    "usable": 10211
+  },
+  "selected_docs": 1606,
+  "selected_usable": 1359,
+  "held_out_docs": 10426,
+  "groups": 11801,
+  "multi_category_groups": 4,
+  "all_usable_supervised_tokens": 5309368,
+  "selected_supervised_tokens": 729901,
+  "selected_input_tokens": 1067961,
+  "longest_selected_row": 25257,
+  "longest_usable_row": 29212,
+  "selection_status": "materialized; GPU training not authorized",
+  "test_exposed": true,
+  "student": "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92",
+  "student_revision": "fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab",
+  "verification_prefix": "s3://marin-us-east-02a/marin/scratch/karan/mopd2/task162-candidate-verification-v4",
+  "training_rows": 1359,
+  "batch_size": 16,
+  "padding_rows": 1,
+  "steps_per_epoch": 85,
+  "max_sequence_tokens": 32768,
+  "supervised_tokens": 729901,
+  "input_tokens": 1067961,
+  "output_hashes": {
+    "train-prebuilt.jsonl.gz": "b80ac73ba13b7ad67f94e0d6d6ec640d3d3b8442f0adb0e9ed1dd391fa483bfa",
+    "train.jsonl": "e0ee7908a81b12796bc30420fc8bfa62a0430b66e0698c0fb56470a03a032d87",
+    "token-audit.jsonl": "222d5ca58152cde98b3c4231b473b6598c607f248dbb5a27ae10655cf1407ab2",
+    "row-probes.jsonl": "d94683c492dd0d9b28f0da5bfaaa5af3a1ec01b41d5dc60124c2240c5de2b625",
+    "chat_template.jinja": "fb5b15f09750ee3e180d60b7eb8968c7ff27c3d2472a4b4c6449c7bacbbb45b2"
+  }
+}
