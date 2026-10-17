@@ -111,7 +111,7 @@ CHANGELOG = (
     "65b0b9d36b continuation slices (base_rows): frozen rows keep their order, continuation rows follow",
     "c1b656a907 relay manifest records the full usable relay pool per family",
     "8af202e2d3 every training arm writes 3 epoch files, each a seeded permutation (seed recorded per split)",
-    "REPLAYPIN arms' replay pinned to continuation v2 (frozen #202 slice superseded for the arms)",
+    "e39c3ead56 arms' replay pinned to continuation v2 (frozen #202 slice superseded for the arms)",
 )
 # mini-swe-agent's own tool environment, installed in the sandbox at agent setup, holds clean copies of some repos
 # (pool v3 removes those repos); a trace that reads anything there is dropped. Pattern from #207 (chukar): path reads,
