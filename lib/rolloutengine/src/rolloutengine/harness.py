@@ -25,7 +25,8 @@ class HarnessCleanup(Protocol):
     def push(self, name: str, close: Callable[[], Coroutine[Any, Any, None]]) -> None:
         """Run ``close`` when the attempt ends, within ``RolloutLimits.cleanup_timeout``.
 
-        A failure becomes a cleanup error of the attempt and does not change its record or grade.
+        Cleanup failures leave the recorded turns and grade verdict intact; the engine reports them in grade
+        diagnostics.
         """
         ...
 

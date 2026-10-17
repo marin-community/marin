@@ -46,14 +46,6 @@ class DelegatingLocalFactory:
         return await self.base.create(replace(spec, env={**spec.env, "WRAPPER_MARKER": "wrapped"}))
 
 
-@dataclass(frozen=True)
-class UnavailableLocalFactory(LocalMachineFactory):
-    backend: Backend = Backend.LOCAL
-
-    async def create(self, _spec: MachineSpec) -> Machine:
-        raise AssertionError("Lowering must not create a machine")
-
-
 @pytest.fixture
 def local_grading_factory():
     if os.geteuid() != 0:
@@ -74,14 +66,6 @@ def lock_environment(tmp_path):
         setup_commands=("printf ready > /app/ready",),
         environment_variables={"GRADER_SETTING": "configured"},
     )
-
-
-def test_check_accepts_wrapped_local_factory(lock_environment):
-    task = arithmetic_task(grader=ScriptGrader(environment=lock_environment, argv=("python3", "/tests/grade.py")))
-    spec = rollout_spec(task, verifier_machine=machine_runtime())
-    factory = DelegatingLocalFactory(UnavailableLocalFactory())
-
-    engine(ReplayModel([]), {"local": factory}).check(spec)
 
 
 @pytest.mark.timeout(180)

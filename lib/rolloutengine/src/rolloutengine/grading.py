@@ -23,10 +23,7 @@ from rolloutengine.spec import TaskRolloutSpec
 
 
 def judge_connection(spec: TaskRolloutSpec) -> JudgeConnection:
-    """The spec's judge connection, or else one from ``VERIFYIT_JUDGE_BASE_URL`` and ``VERIFYIT_JUDGE_API_KEY``.
-
-    The host judge path of TaskCompendium takes only an explicit connection, so the engine builds it here.
-    """
+    """The spec's judge connection, or else one from ``VERIFYIT_JUDGE_BASE_URL`` and ``VERIFYIT_JUDGE_API_KEY``."""
     if spec.judge_connection is not None:
         return spec.judge_connection
     base_url = os.environ.get(BASE_URL_ENV, "").strip()
