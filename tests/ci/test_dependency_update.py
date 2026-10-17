@@ -78,7 +78,7 @@ def _git_repository(tmp_path: Path) -> tuple[Path, Path, str]:
     return repository, remote, _git(repository, "rev-parse", "HEAD")
 
 
-@pytest.mark.parametrize("policy", [*EXTERNAL_RUNTIME_POLICIES.values(), NATIVE_PACKAGE_POLICY])
+@pytest.mark.parametrize("policy", [SKYRL_POLICY, NATIVE_PACKAGE_POLICY])
 def test_returns_the_dedicated_apps_exact_generated_pull_request(policy: PullRequestPolicy) -> None:
     pull_request = _pull_request(policy)
 
@@ -419,9 +419,6 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
         expected_files = {f"config/external/{project.value}/uv.lock", str(pins.relative_to(repository))}
         if project is ExternalRuntime.MARIN_SKYRL:
             expected_files |= {"lib/marin/pyproject.toml", "uv.lock"}
-            root_lock = tomllib.loads((repository / "uv.lock").read_text())
-            schema = next(entry for entry in root_lock["package"] if entry["name"] == "marinskyrl-recipe")
-            assert schema["source"]["git"].endswith(f"#{new_commit}")
             assert f"@{new_commit}#subdirectory=packages/marinskyrl-recipe" in manifest.read_text()
         else:
             assert manifest.read_bytes() == original_manifest

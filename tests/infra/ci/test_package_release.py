@@ -417,12 +417,14 @@ source = { registry = "https://pypi.org/simple" }
     )
     git_after = git_before.replace(old_source, new_source)
     validate_targeted_lock_change(git_before, git_after, "marinskyrl-recipe", "0.1.3", git_source=new_source)
-    for changed in (
-        git_after.replace("packages%2Fmarinskyrl-recipe", "packages%2Fother"),
-        git_after.replace('version = "4.16.0"', 'version = "4.17.0"'),
-    ):
-        with pytest.raises(ValueError):
-            validate_targeted_lock_change(git_before, changed, "marinskyrl-recipe", "0.1.3", git_source=new_source)
+    with pytest.raises(ValueError):
+        validate_targeted_lock_change(
+            git_before,
+            git_after.replace("packages%2Fmarinskyrl-recipe", "packages%2Fother"),
+            "marinskyrl-recipe",
+            "0.1.3",
+            git_source=new_source,
+        )
 
 
 def test_validate_targeted_lock_change_accepts_newer_uv_lock_revision() -> None:

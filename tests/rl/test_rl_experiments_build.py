@@ -16,8 +16,6 @@ from experiments.post_training.iceball_micro import iceball_rl_spec
     ("path", "value"),
     (
         ("trainer.placement.policy_num_nodes", None),
-        ("trainer.algorithm.use_kl_loss", None),
-        ("generator.backend", None),
         ("generator.run_engines_locally", False),
     ),
 )

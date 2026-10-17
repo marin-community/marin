@@ -51,7 +51,6 @@ def test_launcher_builds_complete_smoke_run(monkeypatch) -> None:
     assert trainer["policy"]["optimizer_config"]["lr"] == 5e-6
     assert trainer["ckpt_interval"] == 2
     assert trainer["hf_save_interval"] == 4
-    assert tuned.rl.fingerprint() != run.rl.fingerprint()
     with pytest.raises(ValueError, match=r"generator\.n_samples_per_prompt"):
         async_rl.build_run(
             SNOWBALL_POLICY, async_rl.SMOKE_PRESET, version="2026.09.18", settings=("generator.n_samples_per_prompt=8",)

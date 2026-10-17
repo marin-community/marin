@@ -151,19 +151,19 @@ def test_recipe_only_lock_update_selects_launch_documents_and_rejects_other_chan
     lock = (
         (tmp_path / "uv.lock").read_text()
         + f"""
-ckage]]
- = "marinskyrl-recipe"
-ion = "0.1.0"
-ce = {{ git = "{repository}?subdirectory=packages%2Fmarinskyrl-recipe#{old}" }}
-ckage]]
- = "marin-core"
-ce = {{ editable = "lib/marin" }}
-ndencies = [{{ name = "marinskyrl-recipe" }}]
-kage.metadata]
-ires-dist = [
-ame = "marinskyrl-recipe", git = "{repository}?subdirectory=packages%2Fmarinskyrl-recipe&rev={old}" }}
-
-
+[[package]]
+name = "marinskyrl-recipe"
+version = "0.1.0"
+source = {{ git = "{repository}?subdirectory=packages%2Fmarinskyrl-recipe#{old}" }}
+[[package]]
+name = "marin-core"
+source = {{ editable = "lib/marin" }}
+dependencies = [{{ name = "marinskyrl-recipe" }}]
+[package.metadata]
+requires-dist = [
+{{ name = "marinskyrl-recipe", git = "{repository}?subdirectory=packages%2Fmarinskyrl-recipe&rev={old}" }}
+]
+"""
     )
     write(tmp_path, "uv.lock", lock)
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
@@ -181,10 +181,16 @@ ame = "marinskyrl-recipe", git = "{repository}?subdirectory=packages%2Fmarinskyr
     assert leg_paths(selection.matrix, "marin") == ["tests/rl/test_rl_launch_documents.py"]
     assert selection.suites == []
     assert len(selection.matrix) == 1
-    write(tmp_path, "uv.lock", lock.replace(old, new).replace('name = "shared"', 'name = "changed-shared"'))
-    broad = select_changed_tests(changed, tmp_path, base_ref=base)
-    assert "shellbox-unit" in broad.suites
-    assert len(broad.matrix) > 1
+    manifest = f'[project]\ndependencies = ["{requirement.replace(old, new)}"]\n'
+    for changed_lock, changed_manifest in (
+        (lock.replace(old, new).replace('name = "shared"', 'name = "changed-shared"'), manifest),
+        (lock.replace(old, new), manifest.replace("[project]", '[project]\ndescription = "unrelated change"')),
+    ):
+        write(tmp_path, "uv.lock", changed_lock)
+        write(tmp_path, "lib/marin/pyproject.toml", changed_manifest)
+        broad = select_changed_tests(changed, tmp_path, base_ref=base)
+        assert "shellbox-unit" in broad.suites
+        assert len(broad.matrix) > 1
 
 
 @pytest.mark.parametrize("select_tests", [select_changed_tests, select_local_tests])
