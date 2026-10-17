@@ -267,7 +267,7 @@ def main() -> None:
             str(work / "replay"),
             "--tokenizer-dir",
             args.tokenizer_dir,
-            "--test-pool",
+            "--test-inputs",
             "--output",
             str(output),
         ]

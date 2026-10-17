@@ -68,14 +68,18 @@ EPOCHS = 3
 # Replay for every arm: R = round(B / 4) supervised tokens, so replay is about 20% of a split (queen, 2026-10-17).
 REPLAY_FRACTION_OF_B = 0.25
 REPLAY_ORDER_SEED = f"{SEED}:replay-order"
+# The arms' replay artifact (queen, 2026-10-17): continuation v2 (task #217), which supersedes the frozen #202 slice for
+# the arms because the projected B reached 99.2% of the frozen slice's ceiling. Its first 1,361 rows are the frozen
+# slice in frozen order, so every cut below 29,626,824 is identical. The LR sweep keeps its own frozen slice.
+REPLAY_URI = "s3://marin-us-east-02a/marin/teacher-traces/mopd2/task217-replay-continuation-v2-20261017"
+REPLAY_MANIFEST_SHA256 = "32e6e20b30498eb6ae01a167d890e6ab84f573a0e7a6668c8f30c268e9d3fff4"
 # Decided before any arm launches (queen, 2026-10-17), recorded in every manifest.
 REPLAY_CONTINGENCY = (
     "if plain's B exceeds 4x the slice's supervised tokens, extend the slice with a seeded continuation of the same "
     "#202 sampler (same partitions, same quotas, next rows in order) as a new artifact version; keep R = round(B / 4), "
-    "never relax it. Pre-built (task #217): s3://marin-us-east-02a/marin/teacher-traces/mopd2/"
-    "task217-replay-continuation-v2-20261017, manifest sha256 "
-    "32e6e20b30498eb6ae01a167d890e6ab84f573a0e7a6668c8f30c268e9d3fff4, "
-    "10,355,114 supervised tokens (B up to 41.4M); the frozen rows come first, so cuts below the old total are unchanged"
+    "never relax it. Applied ahead of the flag (queen, 2026-10-17): the arms use continuation v2 (task #217, "
+    "REPLAY_URI, 10,355,114 supervised tokens, B up to 41.4M); its frozen rows come first, so cuts below the old total "
+    "are unchanged"
 )
 LAUNCH_RULE = (
     "plain's manifest (B) and the replay cut are frozen before any arm launches; any later change to either is a new "
@@ -107,6 +111,7 @@ CHANGELOG = (
     "65b0b9d36b continuation slices (base_rows): frozen rows keep their order, continuation rows follow",
     "c1b656a907 relay manifest records the full usable relay pool per family",
     "8af202e2d3 every training arm writes 3 epoch files, each a seeded permutation (seed recorded per split)",
+    "REPLAYPIN arms' replay pinned to continuation v2 (frozen #202 slice superseded for the arms)",
 )
 # mini-swe-agent's own tool environment, installed in the sandbox at agent setup, holds clean copies of some repos
 # (pool v3 removes those repos); a trace that reads anything there is dropped. Pattern from #207 (chukar): path reads,
@@ -394,13 +399,18 @@ def main() -> None:
     parser.add_argument("--plain", help="built plain arm prefix (required for rs-multi and relay)")
     parser.add_argument("--output", required=True)
     parser.add_argument("--tokenizer-dir", help="local v0 tokenizer files (hash-checked); default: the regional copy")
-    parser.add_argument("--test-pool", action="store_true", help="skip the pool hash checks (local validation only)")
+    parser.add_argument(
+        "--test-inputs", action="store_true", help="skip the pool and replay pins (local validation only)"
+    )
     args = parser.parse_args()
     output = StoragePath(args.output)
     if output.exists():
         raise ValueError("Use a fresh output prefix")
     pool = load_pool(args.pool)
-    if not args.test_pool:
+    if not args.test_inputs:
+        replay_manifest = (StoragePath(args.replay) / "manifest.json").read_bytes()
+        if hashlib.sha256(replay_manifest).hexdigest() != REPLAY_MANIFEST_SHA256:
+            raise ValueError(f"Replay is not the arms' replay artifact; use {REPLAY_URI}")
         pool_manifest = StoragePath(args.pool_manifest).read_bytes()
         if hashlib.sha256(pool_manifest).hexdigest() != POOL_MANIFEST_SHA256:
             raise ValueError("Pool manifest is not pool v5")
@@ -549,8 +559,8 @@ def main() -> None:
             "max_sequence_tokens": CONTEXT,
             "batch_size": BATCH,
             "seed": SEED,
-            "pool_manifest_sha256": None if args.test_pool else POOL_MANIFEST_SHA256,
-            "test_pool": args.test_pool,
+            "pool_manifest_sha256": None if args.test_inputs else POOL_MANIFEST_SHA256,
+            "test_inputs": args.test_inputs,
             "traces": args.traces,
             "candidates": {
                 "kept": len(kept),
