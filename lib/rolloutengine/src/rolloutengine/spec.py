@@ -1,14 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Serializable runtime configuration for one task attempt."""
+"""Serializable choices that run one task: the harness, the machines, the limits, and the trace mode."""
 
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 from shellbox.machine import NetworkPolicy
 from taskcompendium.models import TaskSpec
-from taskcompendium.runtime.shell import ShellToolConfig
+from verifyit.modes.grade_judge import JudgeConnection
 
 
 class TraceMode(StrEnum):
@@ -21,7 +21,7 @@ class TraceMode(StrEnum):
 
 
 TRACE_METRIC = "trace"
-"""``RolloutData.metrics`` key that marks every ``TraceMode.MESSAGES`` record with the mode's value."""
+"""``Rollout.metrics`` key that marks every ``TraceMode.MESSAGES`` record with the mode's value."""
 
 
 class MachineRuntimeSpec(BaseModel):
@@ -40,17 +40,8 @@ class MachineRuntimeSpec(BaseModel):
     cleanup_timeout: float | None = Field(gt=0)
 
 
-class TaskRuntimeSpec(BaseModel):
-    """Machine selections for task execution and for grading."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    task_machine: MachineRuntimeSpec | None
-    verifier_machine: MachineRuntimeSpec | None
-
-
-class TaskSessionSpec(BaseModel):
-    """Session selection, deadlines, and token budget for one attempt.
+class RolloutLimits(BaseModel):
+    """Turn, token, and time limits for one attempt.
 
     ``max_total_tokens`` stops model requests before one whose prompt alone would bring the
     cumulative prompt plus response tokens to the threshold; the last request sent may exceed it
@@ -59,25 +50,31 @@ class TaskSessionSpec(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    task_session: str = Field(min_length=1)
-    shell_tool: ShellToolConfig = ShellToolConfig()
     max_turns: int = Field(gt=0)
+    max_total_tokens: int | None = Field(gt=0)
     model_turn_timeout: float | None = Field(gt=0)
-    command_timeout: float | None = Field(gt=0)
     tool_turn_timeout: float | None = Field(gt=0)
     total_turn_timeout: float | None = Field(gt=0)
     attempt_timeout: float | None = Field(gt=0)
     verifier_timeout: float | None = Field(gt=0)
     cleanup_timeout: float = Field(gt=0)
-    trace: TraceMode = TraceMode.EXACT_TOKENS
-    max_total_tokens: int | None = Field(gt=0)
 
 
-class LoweredTaskSpec(BaseModel):
-    """An unchanged task definition and its selected runtime configuration."""
+class TaskRolloutSpec(BaseModel):
+    """An unchanged task definition and the choices that run it.
+
+    ``harness`` names a harness registered with the engine. A machine selection of ``None``
+    supplies no machine.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     task: TaskSpec
-    runtime: TaskRuntimeSpec
-    session: TaskSessionSpec
+    harness: str = Field(min_length=1)
+    task_machine: MachineRuntimeSpec | None
+    verifier_machine: MachineRuntimeSpec | None
+    judge_connection: JudgeConnection | None = Field(default=None, exclude=True)
+    """The service of a judge grader, which grades on the host. It is never serialized. Without it, the
+    engine reads ``VERIFYIT_JUDGE_BASE_URL`` and ``VERIFYIT_JUDGE_API_KEY``."""
+    limits: RolloutLimits
+    trace: TraceMode = TraceMode.EXACT_TOKENS

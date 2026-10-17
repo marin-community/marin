@@ -16,8 +16,7 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ResourceGroups, ScriptGrader
 from taskcompendium.runtime.resources import inline_resource
 
-from rolloutengine.lowering import lower_task
-from rolloutengine.test_support import TWELVE, ReplayModel, arithmetic_task, engine, lowered, machine_runtime
+from rolloutengine.test_support import TWELVE, ReplayModel, arithmetic_task, engine, machine_runtime, rollout_spec
 
 SCRIPT = b"""
 import os
@@ -77,14 +76,12 @@ def lock_environment(tmp_path):
     )
 
 
-def test_lowering_accepts_wrapped_local_factory(lock_environment):
+def test_check_accepts_wrapped_local_factory(lock_environment):
     task = arithmetic_task(grader=ScriptGrader(environment=lock_environment, argv=("python3", "/tests/grade.py")))
-    spec = lowered(task, verifier_machine=machine_runtime())
+    spec = rollout_spec(task, verifier_machine=machine_runtime())
     factory = DelegatingLocalFactory(UnavailableLocalFactory())
 
-    selected = lower_task(task, spec.runtime, spec.session, factories={"local": factory}, sessions={}, providers={})
-
-    assert selected == spec
+    engine(ReplayModel([]), {"local": factory}).check(spec)
 
 
 @pytest.mark.timeout(180)
@@ -102,8 +99,8 @@ async def test_rollout_grades_answer_in_lock_environment(
         resources = ResourceGroups(verifier=package.resources)
     task = arithmetic_task(grader=grader, resources=resources)
     model = ReplayModel([{"role": "assistant", "content": answer}])
-    result = await engine(model, {"local": local_grading_factory}).run(
-        lowered(task, verifier_machine=machine_runtime(startup_timeout=120), verifier_timeout=150)
+    result = await engine(model, {"local": local_grading_factory}).run_task(
+        rollout_spec(task, verifier_machine=machine_runtime(startup_timeout=120), verifier_timeout=150)
     )
 
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward), result.grade.error
@@ -119,8 +116,8 @@ async def test_wrapped_local_factory_grades_lock_environment(local_grading_facto
     model = ReplayModel([{"role": "assistant", "content": "12"}])
     factory = DelegatingLocalFactory(local_grading_factory)
 
-    result = await engine(model, {"local": factory}).run(
-        lowered(task, verifier_machine=machine_runtime(startup_timeout=120), verifier_timeout=150)
+    result = await engine(model, {"local": factory}).run_task(
+        rollout_spec(task, verifier_machine=machine_runtime(startup_timeout=120), verifier_timeout=150)
     )
 
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0), result.grade.error

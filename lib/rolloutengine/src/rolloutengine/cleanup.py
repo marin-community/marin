@@ -41,18 +41,20 @@ class _Cleanup:
         end = loop.time() + self.timeout
         cancellation = None
         failure = None
-        while not pending.done():
-            remaining = end - loop.time()
-            if remaining <= 0:
+        while True:
+            try:
+                # The action always starts, also when the deadline is shorter than one turn of the event loop.
+                await asyncio.wait((pending,), timeout=max(end - loop.time(), 0))
+            except asyncio.CancelledError as error:
+                # Repeated cancellation cannot extend the cleanup deadline.
+                cancellation = error
+            if pending.done():
+                break
+            if end - loop.time() <= 0:
                 pending.cancel()
                 _retain_task(pending)
                 failure = TimeoutError("Cleanup deadline expired")
                 break
-            try:
-                await asyncio.wait((pending,), timeout=remaining)
-            except asyncio.CancelledError as error:
-                # Repeated cancellation cannot extend the cleanup deadline.
-                cancellation = error
         if failure is None:
             try:
                 pending.result()
