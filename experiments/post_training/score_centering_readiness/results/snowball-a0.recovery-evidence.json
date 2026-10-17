@@ -1,0 +1,32 @@
+{
+  "source_job_terminal_state": "failed",
+  "failure": "Optional UID lookup in diagnostic report construction, after all backend assertions and native update completed",
+  "raw_report_complete_flag": false,
+  "raw_report_sha256": "52661bb3f9e4883307367bf9a6962cfa97fed688f6990ae2553bbdc14b3ff677",
+  "executed_source_commit": "fe6c3a9300129af2126e8f81422f728f4d6eda52",
+  "executed_probe_path": "skyrl-train/skyrl_train/entrypoints/score_centering_readiness.py",
+  "error_line": 479,
+  "durable_driver_log": "s3://marin-us-east-02a/marin/users/romain/score-centering-readiness-01a146a3/sc-readiness-snowball-a0-01a146a3/ray-logs/rank0-g73df9c/session_2026-10-16_23-29-41_456182_889/worker-382c9eccd730c3c26d705dfa7bcaed357bb4ddd1f667f1ef2aa9c564-06000000-14097.err",
+  "driver_log_sha256": "7014cce187b760e747ab4f4943d02739dd415c72c8cb4e41a8b651e4fdad0a7f",
+  "observed": [
+    "All16 timing windows, their applied update statuses and matching-weight/temperature qualifications are in the raw report",
+    "Native step18 admitted32 groups and128 trajectories,128567 response tokens, reported maximum token staleness0",
+    "Native worker status reports one applied update, zero skips, finite positive gradient norm and actual sampled SC loss/mass diagnostics",
+    "Full weight-sync completion is logged at source versions0,17 and18",
+    "The exception identifies the optional UID lookup after the backend assertions"
+  ],
+  "inferred_from_executed_control_flow": [
+    "Update17 passed its one-applied-update, zero-skip and finite positive-gradient assertions",
+    "Identical-token trainer drift had nonzero maximum magnitude",
+    "Stale sampler correct-prefix replay beat its one-token-shift control and returned source tag1",
+    "Native update passed its update/skip/gradient/staleness assertions before the UID lookup",
+    "Total applied updates18:16 saved windows, update17 and native update18"
+  ],
+  "not_retained": [
+    "Numerical magnitude and changed fraction of identical-token Snowball trainer drift",
+    "Numerical stale-prefix replay gap summary",
+    "Update17 sampled-diagnostic values (native update18 values are observed instead)",
+    "Native exact tensor shape, loss-token count, full trainer metrics and timings dictionary"
+  ],
+  "scope": "No claim that the job succeeded or that missing numerical values were recovered. Production candidate2fb64c1c2b5e8692f996942704383be68a242587 is unchanged by the diagnostic writer repair."
+}

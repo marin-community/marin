@@ -1,0 +1,134 @@
+{
+  "source": "Live cw-us-east-02a controller task_attempts plus read-only provider observations",
+  "method": "Runtime counts every started task, including startup and idle execution. Provider bounds include admission/setup through a terminal-or-absent observation, including teardown. They are conservative allocation estimates, not invoices. Unallocated withdrawals have no node assignment and consume zero GPU time.",
+  "jobs": [
+    {
+      "job": "/romain/sc-readiness-qwen-a0-01a146a3",
+      "attempts": 2,
+      "allocated_nodes": 0,
+      "task_states": [
+        "6",
+        "6"
+      ],
+      "task_runtime_h100_hours": 0.0,
+      "provider_allocation_upper_h100_hours": 0.0,
+      "allocation_start_utc": null,
+      "allocation_start_evidence": "No node assignment or started task; unallocated withdrawal",
+      "all_pods_terminal_or_absent_observed_utc": "2026-10-17T00:01:25.656222+00:00",
+      "snapshot": "qwen-a0-provider-stop.txt",
+      "snapshot_sha256": "689f7b7ca3ada74ae4c822dd40062b289cb10de01332d8bd766f4bc54d4c4aa6",
+      "pod_names": [
+        "iris-romain-sc-readiness-qwen-a0-01-7452834f-0-937220b32bfa1cfe",
+        "iris-romain-sc-readiness-qwen-a0-01-c31a2643-0-3b72ef1c8c2302d3"
+      ]
+    },
+    {
+      "job": "/romain/sc-readiness-qwen-a1-01a146a3",
+      "attempts": 2,
+      "allocated_nodes": 0,
+      "task_states": [
+        "6",
+        "6"
+      ],
+      "task_runtime_h100_hours": 0.0,
+      "provider_allocation_upper_h100_hours": 0.0,
+      "allocation_start_utc": null,
+      "allocation_start_evidence": "No node assignment or started task; unallocated withdrawal",
+      "all_pods_terminal_or_absent_observed_utc": "2026-10-17T00:01:25.656222+00:00",
+      "snapshot": "qwen-a1-provider-stop.txt",
+      "snapshot_sha256": "689f7b7ca3ada74ae4c822dd40062b289cb10de01332d8bd766f4bc54d4c4aa6",
+      "pod_names": [
+        "iris-romain-sc-readiness-qwen-a1-01-d2e76673-0-8625ddb6808ed14f",
+        "iris-romain-sc-readiness-qwen-a1-01-51126f9c-0-83747c5260843042"
+      ]
+    },
+    {
+      "job": "/romain/sc-readiness-qwen-a2-01a146a3",
+      "attempts": 2,
+      "allocated_nodes": 2,
+      "task_states": [
+        "5",
+        "11"
+      ],
+      "task_runtime_h100_hours": 1.303071111111111,
+      "provider_allocation_upper_h100_hours": 2.133415977689955,
+      "allocation_start_utc": "2026-10-16T22:27:24+00:00",
+      "allocation_start_evidence": "Admitted condition in qwen-a2-admission.txt",
+      "all_pods_terminal_or_absent_observed_utc": "2026-10-16T22:35:24.018595+00:00",
+      "snapshot": "qwen-a2-provider-stop.txt",
+      "snapshot_sha256": "206fc7a050b5c8a416807a1763f08fe2fe1345b9af9dcef4916597a86b9f1cf6",
+      "pod_names": [
+        "iris-romain-sc-readiness-qwen-a2-01-80ea0beb-0-10261feaa4b84fe9",
+        "iris-romain-sc-readiness-qwen-a2-01-07e30b8d-0-43fff9fa54b1b5a6"
+      ]
+    },
+    {
+      "job": "/romain/sc-readiness-qwen-a3-01a146a3",
+      "attempts": 2,
+      "allocated_nodes": 2,
+      "task_states": [
+        "5",
+        "11"
+      ],
+      "task_runtime_h100_hours": 1.3385244444444444,
+      "provider_allocation_upper_h100_hours": 1.6721321890089247,
+      "allocation_start_utc": "2026-10-16T22:38:09.166685+00:00",
+      "allocation_start_evidence": "Kueue Started event, conservatively one second earlier",
+      "all_pods_terminal_or_absent_observed_utc": "2026-10-16T22:44:25.396428+00:00",
+      "snapshot": "qwen-a3-provider-stop.txt",
+      "snapshot_sha256": "93fd257a4f06f6277fe02e08d57a183a92248248e82e8268dddd4b7501091fad",
+      "pod_names": [
+        "iris-romain-sc-readiness-qwen-a3-01-d9503700-0-96672113cb87feb9",
+        "iris-romain-sc-readiness-qwen-a3-01-51c2a4eb-0-c59c2fe51b6c81b8"
+      ]
+    },
+    {
+      "job": "/romain/sc-readiness-qwen-a4-01a146a3",
+      "attempts": 2,
+      "allocated_nodes": 2,
+      "task_states": [
+        "4",
+        "4"
+      ],
+      "task_runtime_h100_hours": 1.5783866666666666,
+      "provider_allocation_upper_h100_hours": 1.7053196557362875,
+      "allocation_start_utc": "2026-10-16T22:47:49+00:00",
+      "allocation_start_evidence": "Admitted condition in qwen-a4-admission.txt",
+      "all_pods_terminal_or_absent_observed_utc": "2026-10-16T22:54:12.696923+00:00",
+      "snapshot": "qwen-a4-provider-stop.txt",
+      "snapshot_sha256": "959d2cdf6a9b74badcb316b1b45182ca1045ebb2444586e74c6b86c568eebe57",
+      "pod_names": [
+        "iris-romain-sc-readiness-qwen-a4-01-ca6e764c-0-17941eb923a6fec1",
+        "iris-romain-sc-readiness-qwen-a4-01-95328e24-0-7952ada28b59f1ee"
+      ]
+    },
+    {
+      "job": "/romain/sc-readiness-snowball-a0-01a146a3",
+      "attempts": 5,
+      "allocated_nodes": 5,
+      "task_states": [
+        "5",
+        "11",
+        "11",
+        "11",
+        "11"
+      ],
+      "task_runtime_h100_hours": 20.96603111111111,
+      "provider_allocation_upper_h100_hours": 21.962846909628976,
+      "allocation_start_utc": "2026-10-16T23:28:29+00:00",
+      "allocation_start_evidence": "Admitted condition in snowball-admission.txt",
+      "all_pods_terminal_or_absent_observed_utc": "2026-10-17T00:01:25.656222+00:00",
+      "snapshot": "snowball-provider-stop.txt",
+      "snapshot_sha256": "689f7b7ca3ada74ae4c822dd40062b289cb10de01332d8bd766f4bc54d4c4aa6",
+      "pod_names": [
+        "iris-romain-sc-readiness-snowball-a-21e561bf-0-bacfb10877bdbef1",
+        "iris-romain-sc-readiness-snowball-a-a3e69a94-0-7eac09f072f11cdc",
+        "iris-romain-sc-readiness-snowball-a-c3e267a1-0-7e3e18f440c610fd",
+        "iris-romain-sc-readiness-snowball-a-cec00450-0-694ef7cbeebcb03d",
+        "iris-romain-sc-readiness-snowball-a-5177ecbd-0-25f9434f6aa87aeb"
+      ]
+    }
+  ],
+  "total_task_runtime_h100_hours": 25.18601333333333,
+  "total_provider_allocation_upper_h100_hours": 27.473714732064142
+}

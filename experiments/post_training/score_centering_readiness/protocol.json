@@ -1,0 +1,113 @@
+{
+  "candidate": "2fb64c1c2b5e8692f996942704383be68a242587",
+  "cluster": "cw-us-east-02a",
+  "qwen": {
+    "nodes": 2,
+    "h100_per_node": 8,
+    "timeout": 1800,
+    "measured_windows_per_mode": 1,
+    "warmup_windows_per_mode": 1,
+    "responses": 32,
+    "prompt_groups": 8,
+    "priority": "interactive",
+    "diagnostic_source": "fe6c3a9300129af2126e8f81422f728f4d6eda52",
+    "candidate": "2fb64c1c2b5e8692f996942704383be68a242587",
+    "actual_allocated_starts": 3,
+    "successful_job": "/romain/sc-readiness-qwen-a4-01a146a3",
+    "applied_updates": 9
+  },
+  "snowball": {
+    "nodes": 5,
+    "h100_per_node": 8,
+    "timeout": 21600,
+    "pp": 2,
+    "ep": 8,
+    "tp": 1,
+    "cp": 1,
+    "sp": 1,
+    "responses": 128,
+    "prompt_groups": 32,
+    "response_lengths": [
+      64,
+      256,
+      1024,
+      4096
+    ],
+    "warmup_windows_per_mode": 1,
+    "measured_windows_per_mode": 3,
+    "additional_native_task_updates": 1,
+    "total_applied_updates": 18,
+    "memory_measurement": "Torch allocator peaks plus whole-device NVML samples every0.1seconds, uniform across all modes.",
+    "diagnostic_source": "fe6c3a9300129af2126e8f81422f728f4d6eda52",
+    "candidate": "2fb64c1c2b5e8692f996942704383be68a242587",
+    "queue_check_deadline_utc": "2026-10-16T23:55:14.764577+00:00",
+    "queue_policy": "One live submission only. If still unallocated at60min, inspect actual placement/capacity before any next action; no duplicate or observation-timeout restart.",
+    "submission_requested_utc": "2026-10-16T22:55:14.764577+00:00",
+    "terminal_state": "failed after all backend checks, diagnostic UID report export",
+    "saved_timing_windows": 16,
+    "backend_checks_completed": true,
+    "applied_updates": 18,
+    "recovery_evidence": "results/snowball-a0.recovery-evidence.json",
+    "additional_gpu_retry": "none: all backend assertions and native update passed; only optional report export failed"
+  },
+  "modes": [
+    "tis_no_head_telemetry_off",
+    "tis_no_head_telemetry_on",
+    "tis_k128_capture_and_rescore_sc_off",
+    "tis_k128_sc_on"
+  ],
+  "retry_policy": "0 automatic failure/preemption retries for live allocations. Qwen finite amended limit3allocated starts total; now complete. Snowball at most1inspected startup retry; no observation-timeout restarts.",
+  "correctness": [
+    "mixed prompt and response lengths",
+    "right/left padding, holes and fully masked row",
+    "actual logits independent chosen/head normalizer reference",
+    "actual vLLM captured IDs and exact prefix replay",
+    "matching weight TIM and temperatures1.0/0.7",
+    "frozen verified sampler source with later finite applied optimizer updates"
+  ],
+  "scope": "Fixed signed advantages for engineering optimizer qualification. No quality or parameter-gradient-change comparison. Frozen generating weights for matched workload timing; preserve actual applied-update count separately from token policy-step labels.",
+  "measurement": "Record generation, collation, old forward/rescoring, applied optimizer update, total serialized cycle, peak allocated/reserved GPU memory, startup and controller allocation cost. Balanced mode order; first window per mode is warmup; report uncertainty. New sampled diagnostics remain opt-in unless overhead evidence supports1%.",
+  "shutdown": "Verify all owned tasks/attempts and provider pods terminal; no wait_for.py monitor",
+  "diagnostic_source": "fe6c3a9300129af2126e8f81422f728f4d6eda52",
+  "ownership_board_id": 1190,
+  "withdrawals": [
+    {
+      "job": "/romain/sc-readiness-qwen-a0-01a146a3",
+      "reason": "Queued unallocated source permitted1000 default preemption retries; replaced by explicit zero-preemption-budget source. No GPU startup retry was consumed."
+    },
+    {
+      "job": "/romain/sc-readiness-qwen-a1-01a146a3",
+      "reason": "Withdrawn before allocation after sustained full-fleet Batch queue; replace with bounded2-node Interactive startup within explicit4-node goal limit. No GPU startup retry consumed."
+    }
+  ],
+  "actual_startup_retry": {
+    "failed_job": "/romain/sc-readiness-qwen-a2-01a146a3",
+    "replacement_job": "/romain/sc-readiness-qwen-a3-01a146a3",
+    "source": "2e57de12fc4e396750ac85c2a2f645ada1a6a8c0",
+    "reason": "Private environment controls absent in Ray worker; now explicit serialized trainer config. CPU config serialization preflight passes. A2 provider pods absent."
+  },
+  "startup_failures": [
+    {
+      "job": "/romain/sc-readiness-qwen-a2-01a146a3",
+      "reason": "Private environment controls absent from Ray worker; fixed by explicit serialized metadata. No production SC execution.",
+      "controller_h100_hours": 1.303071111111111
+    },
+    {
+      "job": "/romain/sc-readiness-qwen-a3-01a146a3",
+      "reason": "Probe requested min_tokens>0; production probability-convention guard rejected request before generation. Removed min_tokens; preserve ignore_eos stopping behavior.",
+      "controller_h100_hours": 1.3385244444444444
+    }
+  ],
+  "retry_policy_amendment": {
+    "reason": "One additional localized harness-only startup attempt after both concrete setup failures. Original one-retry plan exhausted; finite revised limit is three allocated Qwen starts in total. No new scientific or production feature scope.",
+    "preflight": "probe-requests-preflight.log:32 actual probe requests through production sampling guard and CPU collation, temperatures1.0/0.7, widths0/128, lengths through4096; all pass.",
+    "next_job": "/romain/sc-readiness-qwen-a4-01a146a3",
+    "additional_timeout_seconds": 1800,
+    "additional_nodes": 2,
+    "automatic_failure_retries": 0,
+    "automatic_preemption_retries": 0,
+    "if_failed": "No further GPU launch without reassessment and consultation for expansion.",
+    "diagnostic_source": "fe6c3a9300129af2126e8f81422f728f4d6eda52"
+  },
+  "initial_retry_policy": "0 automatic; at most 1 inspected startup retry per workload; no observation-timeout restart"
+}

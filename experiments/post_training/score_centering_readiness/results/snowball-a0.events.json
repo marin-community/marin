@@ -1,0 +1,30 @@
+{
+  "source_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-readiness-01a146a3/sc-readiness-snowball-a0-01a146a3/ray-logs/rank0-g73df9c/session_2026-10-16_23-29-41_456182_889/worker-382c9eccd730c3c26d705dfa7bcaed357bb4ddd1f667f1ef2aa9c564-06000000-14097.err",
+  "source_sha256": "7014cce187b760e747ab4f4943d02739dd415c72c8cb4e41a8b651e4fdad0a7f",
+  "events": [
+    {
+      "source_line": 770,
+      "event": "2026-10-16 23:37:30.537 | INFO     | skyrl_train.trainer:_log_weight_update_completed:1275 - Policy weights updated: step=0 model_version=0 reason=initial duration_seconds=9.159"
+    },
+    {
+      "source_line": 898,
+      "event": "2026-10-16 23:57:49.200 | INFO     | skyrl_train.trainer:_log_weight_update_completed:1275 - Policy weights updated: step=17 model_version=17 reason=native_qualification duration_seconds=4.727"
+    },
+    {
+      "source_line": 914,
+      "event": "2026-10-16 23:59:02.771 | INFO     | skyrl_train.trainer:_log_rollout_batch_completed:1587 - Rollout batch completed: step=18 groups=32 trajectories=128 response_tokens=128567 staleness_mean=0.000 staleness_max=0 duration_seconds=72.048"
+    },
+    {
+      "source_line": 929,
+      "event": "2026-10-16 23:59:17.307 | INFO     | skyrl_train.trainer:_log_optimizer_step_completed:1293 - Optimizer step completed: step=18 epoch=0 sequences=128 duration_seconds=11.864"
+    },
+    {
+      "source_line": 935,
+      "event": "2026-10-16 23:59:23.973 | INFO     | skyrl_train.trainer:_log_weight_update_completed:1275 - Policy weights updated: step=18 model_version=18 reason=training_step duration_seconds=6.665"
+    },
+    {
+      "source_line": 944,
+      "event": "KeyError: 'uids'"
+    }
+  ]
+}

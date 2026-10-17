@@ -1,0 +1,122 @@
+[
+  {
+    "job_id": "/romain/sc-readiness-qwen-a0-01a146a3",
+    "state": 6,
+    "num_tasks": 2,
+    "submitted_at_ms": 1792187524340,
+    "started_at_ms": 1792187530419,
+    "finished_at_ms": 1792187957617,
+    "priority_band": 3,
+    "res_device_json": {
+      "gpu": {
+        "variant": "H100",
+        "count": 8
+      }
+    },
+    "max_retries_failure": 0,
+    "max_retries_preemption": 1000,
+    "timeout_ms": 3000000,
+    "bundle_id": "a132e2a68ae488bd210412bc9bd1397803f55c52e16600ee7efba88a7b057e77",
+    "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+  },
+  {
+    "job_id": "/romain/sc-readiness-qwen-a1-01a146a3",
+    "state": 6,
+    "num_tasks": 2,
+    "submitted_at_ms": 1792188033994,
+    "started_at_ms": 1792188036087,
+    "finished_at_ms": 1792189394721,
+    "priority_band": 3,
+    "res_device_json": {
+      "gpu": {
+        "variant": "H100",
+        "count": 8
+      }
+    },
+    "max_retries_failure": 0,
+    "max_retries_preemption": 0,
+    "timeout_ms": 3000000,
+    "bundle_id": "bbbffa831d86d97598de0268a01b94ef560662b3eb565c31791ab3659bdb05d8",
+    "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+  },
+  {
+    "job_id": "/romain/sc-readiness-qwen-a2-01a146a3",
+    "state": 5,
+    "num_tasks": 2,
+    "submitted_at_ms": 1792189609442,
+    "started_at_ms": 1792189611831,
+    "finished_at_ms": 1792189947495,
+    "priority_band": 2,
+    "res_device_json": {
+      "gpu": {
+        "variant": "H100",
+        "count": 8
+      }
+    },
+    "max_retries_failure": 0,
+    "max_retries_preemption": 0,
+    "timeout_ms": 1800000,
+    "bundle_id": "73b57043bed4f6e36b90bc871266e07a7e85589cdba71babf89ddc71440427f1",
+    "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+  },
+  {
+    "job_id": "/romain/sc-readiness-qwen-a3-01a146a3",
+    "state": 5,
+    "num_tasks": 2,
+    "submitted_at_ms": 1792190258228,
+    "started_at_ms": 1792190260594,
+    "finished_at_ms": 1792190599149,
+    "priority_band": 2,
+    "res_device_json": {
+      "gpu": {
+        "variant": "H100",
+        "count": 8
+      }
+    },
+    "max_retries_failure": 0,
+    "max_retries_preemption": 0,
+    "timeout_ms": 1800000,
+    "bundle_id": "281d433e533224fada375242e475c4883b2c42d5855048ec19ffeef65286de2f",
+    "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+  },
+  {
+    "job_id": "/romain/sc-readiness-qwen-a4-01a146a3",
+    "state": 4,
+    "num_tasks": 2,
+    "submitted_at_ms": 1792190838558,
+    "started_at_ms": 1792190843020,
+    "finished_at_ms": 1792191235671,
+    "priority_band": 2,
+    "res_device_json": {
+      "gpu": {
+        "variant": "H100",
+        "count": 8
+      }
+    },
+    "max_retries_failure": 0,
+    "max_retries_preemption": 0,
+    "timeout_ms": 1800000,
+    "bundle_id": "40bceea5426f53cb7d8ea55addbcbd423ac81a8241dba76bd860fca4cd0f3d00",
+    "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+  },
+  {
+    "job_id": "/romain/sc-readiness-snowball-a0-01a146a3",
+    "state": 5,
+    "num_tasks": 5,
+    "submitted_at_ms": 1792191325638,
+    "started_at_ms": 1792191332245,
+    "finished_at_ms": 1792195206756,
+    "priority_band": 3,
+    "res_device_json": {
+      "gpu": {
+        "variant": "H100",
+        "count": 8
+      }
+    },
+    "max_retries_failure": 0,
+    "max_retries_preemption": 0,
+    "timeout_ms": 21600000,
+    "bundle_id": "33ecef69c75665f5aab44156fd238ece7c7ea503de610f169e172d13c2e8c674",
+    "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+  }
+]

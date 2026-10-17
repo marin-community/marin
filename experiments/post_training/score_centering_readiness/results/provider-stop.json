@@ -1,0 +1,24 @@
+{
+  "observed_at": "2026-10-17T00:08:36.787597+00:00",
+  "context": "marin-gpu_US-EAST-02A",
+  "namespace": "iris",
+  "requested_pod_names": [
+    "iris-romain-sc-readiness-qwen-a0-01-7452834f-0-937220b32bfa1cfe",
+    "iris-romain-sc-readiness-qwen-a0-01-c31a2643-0-3b72ef1c8c2302d3",
+    "iris-romain-sc-readiness-qwen-a1-01-d2e76673-0-8625ddb6808ed14f",
+    "iris-romain-sc-readiness-qwen-a1-01-51126f9c-0-83747c5260843042",
+    "iris-romain-sc-readiness-qwen-a2-01-80ea0beb-0-10261feaa4b84fe9",
+    "iris-romain-sc-readiness-qwen-a2-01-07e30b8d-0-43fff9fa54b1b5a6",
+    "iris-romain-sc-readiness-qwen-a3-01-d9503700-0-96672113cb87feb9",
+    "iris-romain-sc-readiness-qwen-a3-01-51c2a4eb-0-c59c2fe51b6c81b8",
+    "iris-romain-sc-readiness-qwen-a4-01-ca6e764c-0-17941eb923a6fec1",
+    "iris-romain-sc-readiness-qwen-a4-01-95328e24-0-7952ada28b59f1ee",
+    "iris-romain-sc-readiness-snowball-a-21e561bf-0-bacfb10877bdbef1",
+    "iris-romain-sc-readiness-snowball-a-a3e69a94-0-7eac09f072f11cdc",
+    "iris-romain-sc-readiness-snowball-a-c3e267a1-0-7e3e18f440c610fd",
+    "iris-romain-sc-readiness-snowball-a-cec00450-0-694ef7cbeebcb03d",
+    "iris-romain-sc-readiness-snowball-a-5177ecbd-0-25f9434f6aa87aeb"
+  ],
+  "present_pods": [],
+  "all_terminal_or_absent": true
+}
