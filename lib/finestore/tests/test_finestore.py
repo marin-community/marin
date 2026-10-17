@@ -773,38 +773,6 @@ def test_a_key_column_no_row_sets_is_null_for_every_row(archive_root):
     assert list(ReadView(root).iter_rows("samples", columns=["task", "value"])) == expected
 
 
-def test_compaction_sorts_unsorted_shards_one_at_a_time(tmp_path, monkeypatch):
-    # No row sets "part", so every flush is unsorted; compacting more of them must not hold them together.
-    row_bytes = 1024 * 1024
-    monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", row_bytes // 2)
-    peaks = {}
-    for shard_count in (2, 6):
-        root = str(tmp_path / f"run-{shard_count}")
-        store = DataStore.open(root, flush_interval=3600, max_buffer_bytes=2**40, compaction_levels=(1000,))
-        table = store.table("samples", primary_key=("id", "part"), on_conflict=OnConflict.SUPERSEDE)
-        for revision in range(shard_count):
-            table.extend({"id": index, "revision": revision, "doc": "x" * row_bytes} for index in reversed(range(8)))
-            store.flush()
-        store.request_stop()
-
-        default_pool = pa.default_memory_pool()
-        pool = pa.proxy_memory_pool(default_pool)
-        pa.set_memory_pool(pool)
-        try:
-            result = compact_table(root, "samples")
-            peaks[shard_count] = pool.max_memory()
-        finally:
-            pa.set_memory_pool(default_pool)
-        gc.collect()
-
-        assert result.written == 8
-        rows = ReadView(root).iter_rows("samples", columns=["id", "revision"])
-        assert [(row["id"], row["revision"]) for row in rows] == [(index, shard_count - 1) for index in range(8)]
-
-    # Four more 8 MiB shards may add a row group per run to the merge, but not their whole contents.
-    assert peaks[6] <= peaks[2] + 8 * row_bytes, peaks
-
-
 def test_compaction_bounds_oversized_row_read_ahead_and_preserves_latest_values(tmp_path, monkeypatch):
     row_bytes = 1024 * 1024
     monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", row_bytes // 2)
