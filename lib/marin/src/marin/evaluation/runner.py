@@ -5,6 +5,7 @@
 
 import logging
 from collections.abc import Callable, Mapping
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from functools import partial
@@ -386,38 +387,6 @@ def _session_tails(session: RemoteInferenceSession, role: str) -> dict[str, tupl
     return {_job_role(role, index): _job_tail(handle) for index, handle in enumerate(session.jobs)}
 
 
-def _record_unstarted(
-    batch: EvaluationBatch,
-    evaluations: tuple[Evaluation, ...],
-    error: Exception,
-    jobs: dict[str, str],
-    tails: dict[str, tuple[str, ...]],
-    paths: list[str],
-) -> None:
-    message = f"{type(error).__name__}: {error}"
-    for evaluation in evaluations:
-        paths.append(
-            _record(
-                batch,
-                evaluation.identity,
-                RunStatus.INFRA_FAILED,
-                message,
-                {},
-                jobs,
-                tails,
-            )
-        )
-
-
-@dataclass(frozen=True)
-class _EvaluationExecution:
-    record_path: str
-    failure: str | None
-    inference_failure: Exception | None
-    jobs: dict[str, str]
-    log_tails: dict[str, tuple[str, ...]]
-
-
 def run_evaluation(
     executor: EvalExecutor,
     session: RemoteInferenceSession,
@@ -461,7 +430,7 @@ def _run_one_evaluation(
     orchestrator_job_id: str,
     env_vars: Mapping[str, str],
     judge: RemoteInferenceSession | None,
-) -> _EvaluationExecution:
+) -> str:
     jobs = {_ORCHESTRATOR_ROLE: orchestrator_job_id}
     jobs.update(_session_job_ids(session, _INFERENCE_ROLE))
     if judge is not None:
@@ -479,7 +448,7 @@ def _run_one_evaluation(
         session.check_alive()
         if judge is not None:
             judge.check_alive()
-        if session.metrics_url is not None:
+        if session.metrics_url is not None and batch.max_concurrent == 1:
             try:
                 metric_session = _local_endpoint_session(session)
                 metric_window = InferenceMetricWindow.start(
@@ -624,8 +593,12 @@ def run_evaluation_step(
     return {"record_path": path}
 
 
-def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
-    """Serve a model for a batch and write one record per evaluation."""
+def run_evaluation_steps(
+    batch: EvaluationBatch,
+    build_steps: Callable[[EvaluationStep], tuple[StepSpec, ...]],
+    _output_path: str,
+) -> None:
+    """Run pending evaluation steps against shared candidate and optional judge sessions."""
     configure_coreweave_s3()
     if not batch.evaluations:
         raise ValueError("an evaluation batch requires at least one evaluation")

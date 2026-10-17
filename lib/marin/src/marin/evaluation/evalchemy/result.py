@@ -99,10 +99,6 @@ class FineStoreEvalchemyResult(EvalResult):
 
     @functools.cached_property
     def _task_metrics(self) -> dict[str, dict[str, float]]:
-        result_payloads = read_native_evalchemy_artifacts(self.path).result_payloads
-        if not result_payloads:
-            raise FileNotFoundError(f"no Evalchemy results artifacts in FineStore archive {self.path}")
-
         metrics: dict[str, dict[str, float]] = {}
         for task_dir, document in sorted(read_evalchemy_results(self.path).items()):
             results = document.get("results", {})

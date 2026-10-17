@@ -27,8 +27,7 @@ from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_REQUIREMENT,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
-from marin.evaluation.lm_eval_samples import rebuild_lm_eval_samples, summarize_native_eval_samples
-from marin.evaluation.metric_selection import REPEAT_MEAN_SUFFIX, declared_metric
+from marin.evaluation.lm_eval_samples import summarize_native_eval_samples
 from marin.evaluation.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
     EvalTaskRef,
@@ -235,7 +234,7 @@ def _run_evalchemy_child(
     output_dir: str,
     env_vars: Mapping[str, str],
     *,
-    inference_sessions: tuple[RemoteInferenceSession, ...],
+    inference_sessions: tuple[RemoteInferenceSession, ...] = (),
 ) -> str:
     judge_env: dict[str, str] = {}
     if config.judge is not None:
@@ -306,13 +305,13 @@ def _run_evalchemy_child(
     return eval_path
 
 
-def _run_evalchemy_once(
+def run_evalchemy(
     model: RunningModel,
     config: EvalchemyRunConfig,
     output_dir: str,
     *,
     env_vars: Mapping[str, str],
-    inference_sessions: tuple[RemoteInferenceSession, ...],
+    inference_sessions: tuple[RemoteInferenceSession, ...] = (),
 ) -> EvalchemyOutcome:
     """Run one Evalchemy attempt and validate and normalize its FineStore artifacts."""
     if not config.tasks:
@@ -320,6 +319,11 @@ def _run_evalchemy_once(
     if "://" not in output_dir:
         raise ValueError(f"Evalchemy output_dir {output_dir!r} is not an object-store path")
     eval_job = _run_evalchemy_child(model, config, output_dir, env_vars, inference_sessions=inference_sessions)
+    return read_evalchemy_outcome(config, output_dir, eval_job)
+
+
+def read_evalchemy_outcome(config: EvalchemyRunConfig, output_dir: str, eval_job: str) -> EvalchemyOutcome:
+    """Validate and normalize saved Evalchemy outputs without repeating inference."""
     try:
         result = FineStoreEvalchemyResult(path=output_dir)
         metrics = result.task_metrics()
@@ -394,7 +398,7 @@ class EvalchemyExecutor:
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
         try:
-            outcome = _run_evalchemy_once(
+            outcome = run_evalchemy(
                 session.model,
                 self.config,
                 output_dir,
@@ -409,32 +413,10 @@ class EvalchemyExecutor:
                 jobs=exc.jobs,
                 log_tails=exc.log_tails,
             ) from exc
-        metrics = outcome.result.task_metrics()
-        _apply_recovered_metrics(metrics, outcome.recovered_metrics)
-        coverage = _coverage_with_aggregate_counts(outcome.coverage, metrics)
-        canonical_metrics = dict(outcome.canonical_metrics)
-        _apply_recovered_canonical_metrics(canonical_metrics, outcome.recovered_metrics, outcome.tasks)
-        if not metrics:
-            infrastructure_failures = sum(
-                entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for entry in coverage.values()
-            )
-            if not infrastructure_failures:
-                raise EvaluationError(
-                    f"eval finished but no task metrics were readable under {output_dir!r}",
-                    status=RunStatus.ARTIFACT_FAILED,
-                    jobs=outcome.jobs,
-                    coverage=coverage,
-                )
-            raise EvaluationError(
-                f"eval finished with no successful inference responses under {output_dir!r}",
-                status=RunStatus.INFRA_FAILED,
-                jobs=outcome.jobs,
-                coverage=coverage,
-            )
         return EvaluationOutcome(
             metrics=outcome.metrics,
             canonical_metrics=outcome.canonical_metrics,
             tasks=outcome.tasks,
             jobs=outcome.jobs,
-            coverage=coverage,
+            coverage=outcome.coverage,
         )

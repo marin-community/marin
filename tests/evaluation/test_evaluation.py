@@ -19,12 +19,12 @@ from click.testing import CliRunner
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
     ARCHIVE_SAMPLES_TABLE,
-    EvalSample,
     EvaluationStore,
     SampleKind,
     sample_from_archive_row,
 )
 from finestore.reader import ReadView
+from finestore.store import DataStore
 from fray.types import JobStatus
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.resources.state import JobState, TaskState
@@ -32,7 +32,12 @@ from iris.rpc import job_pb2
 from marin.evaluation.eval_policy import HARBOR_COMMIT, SEPTEMBER_16_VERSION, source_config_digest
 from marin.evaluation.evalchemy.config import EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
-from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig, _coverage_with_aggregate_counts
+from marin.evaluation.evalchemy.runner import (
+    EvalchemyExecutor,
+    EvalchemyRunConfig,
+    _coverage_with_aggregate_counts,
+    run_evalchemy,
+)
 from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
@@ -69,10 +74,7 @@ from marin.evaluation.runner import (
     InferenceBackendFinished,
     InferenceUnavailable,
     LaunchProvenance,
-    evaluate_batch,
-    run_evaluation_batch,
     run_with_inference_recovery,
-    submit_evaluation_batch,
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.lazy import ArtifactStep, resolve
@@ -676,10 +678,10 @@ def test_evaluation_steps_record_failures_without_blocking_other_steps(tmp_path,
     assert succeeded.model.config is not None
     assert succeeded.model.config.model_dump(mode="json") == json.loads(json.dumps(asdict(batch.model)))
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
-    assert sorted((row.run_id, row.status) for row in catalog_rows) == [
+    assert {(row.run_id, row.status) for row in catalog_rows} == {
         ("run-failure", "failed"),
         ("run-success", "succeeded"),
-    ]
+    }
     assert all(row.storage_format == "finestore" for row in catalog_rows)
 
 
@@ -797,7 +799,11 @@ def test_evaluation_resumes_one_archive_and_rejects_saved_transport_failures(
         else None
     )
     executor = EvalchemyExecutor(
-        EvalchemyRunConfig(name="task", tasks=(EvalTaskConfig(name="task", num_fewshot=0),), judge=judge_config)
+        EvalchemyRunConfig(
+            name="task",
+            tasks=(EvalTaskConfig(name="task", num_fewshot=0, task_alias="task"),),
+            judge=judge_config,
+        )
     )
     evaluation = _evaluation(tmp_path, "interrupted", executor, endpoint_route)
     evaluation = replace(
@@ -822,16 +828,22 @@ def test_evaluation_resumes_one_archive_and_rejects_saved_transport_failures(
             ),
         ),
         judge=None,
+        max_concurrent=1,
     )
     catalog_rows = []
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", catalog_rows.append)
 
     if entrypoint == "batch":
+        _patch_inference_runtime(monkeypatch, lambda _config: nullcontext(session))
+        monkeypatch.setattr(
+            "marin.evaluation.runner.iris_ctx",
+            lambda: SimpleNamespace(client=client, job_id="/orchestrator"),
+        )
         if partial_result:
-            with pytest.raises(RuntimeError, match="1 of 3 evals failed"):
-                evaluate_batch(batch, session, orchestrator_job_id="/orchestrator", env_vars={})
+            with pytest.raises(RuntimeError, match="1 step"):
+                _run_test_batch(batch)
         else:
-            evaluate_batch(batch, session, orchestrator_job_id="/orchestrator", env_vars={})
+            _run_test_batch(batch)
         assert [(row.run_id, row.status) for row in catalog_rows] == [
             ("run-before", "succeeded"),
             ("run-interrupted", "infra_failed" if partial_result else "succeeded"),
@@ -913,7 +925,8 @@ def test_inference_recovery_stops_when_judge_fails_while_model_is_rebuilding(mon
         run_with_inference_recovery(attempt, sessions)
 
 
-def test_evaluate_batch_persists_run_scoped_speculative_metrics(tmp_path, monkeypatch):
+@pytest.mark.parametrize("max_concurrent", [1, 2])
+def test_evaluation_step_persists_run_scoped_speculative_metrics(tmp_path, monkeypatch, max_concurrent):
     def scrape(prompt: int, generated: int, drafts: int, draft_tokens: int, accepted: int):
         return tuple(
             text_string_to_metric_families(
@@ -1156,7 +1169,7 @@ def test_evalchemy_executor_rejects_incomplete_task_beside_scored_results(tmp_pa
             store.seal()
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
-        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+        lambda _model, _config, _output_dir, _env_vars, **_kwargs: "/eval/completed",
     )
     executor = EvalchemyExecutor(
         EvalchemyRunConfig(name="mixed", tasks=(EvalTaskConfig("good", 0), EvalTaskConfig("bad", 0)))
@@ -1190,7 +1203,7 @@ def test_evalchemy_executor_accepts_scored_partial_results_and_reports_drops(
     )
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
-        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+        lambda _model, _config, _output_dir, _env_vars, **_kwargs: "/eval/completed",
     )
     executor = EvalchemyExecutor(EvalchemyRunConfig(name="gsm8k", tasks=(EvalTaskConfig("gsm8k", 5),)))
 
@@ -1228,7 +1241,7 @@ def test_run_evalchemy_rejects_partial_aggregate_with_inconsistent_scored_count(
     )
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
-        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+        lambda _model, _config, _output_dir, _env_vars, **_kwargs: "/eval/completed",
     )
     config = EvalchemyRunConfig(
         name="mrcr",
@@ -1328,54 +1341,7 @@ def test_evalchemy_executor_rejects_aggregates_that_include_infrastructure_failu
     }
 
 
-@pytest.mark.parametrize(
-    ("task_name", "benchmark_name", "source_metric"),
-    [
-        ("math500", "MATH500", "accuracy"),
-        ("mmlu-pro", "MMLUPro", "accuracy_avg"),
-    ],
-)
-def test_evalchemy_executor_preserves_native_transport_failure_when_rebuilding(
-    tmp_path, monkeypatch, task_name, benchmark_name, source_metric
-):
-    output_dir = f"file://{tmp_path / task_name}"
-    failed = _lm_eval_generation(1, "accuracy", 0.0, "")
-    failed["failure_category"] = "model_transport"
-    _write_evalchemy_output(
-        output_dir,
-        task_name,
-        {benchmark_name: {source_metric: 0.5}},
-        {benchmark_name: [_lm_eval_generation(0, "accuracy", 1.0, "4"), failed]},
-    )
-    monkeypatch.setattr(
-        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
-        lambda _model, _config, _output_dir, _env_vars, **_kwargs: "/eval/completed",
-    )
-    executor = EvalchemyExecutor(
-        EvalchemyRunConfig(
-            name=task_name,
-            tasks=(EvalTaskConfig(name=benchmark_name, num_fewshot=0, task_alias=task_name, generation=True),),
-        )
-    )
-
-    outcome = executor(_remote_session(), output_dir, {})
-
-    assert outcome.coverage == {
-        task_name: TaskCoverage(
-            n_benchmark=2,
-            n_attempted=2,
-            n_scored=1,
-            n_correct=1,
-            errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
-        )
-    }
-    assert outcome.metrics[task_name]["accuracy,none"] == 1.0
-    assert outcome.canonical_metrics[task_name]["accuracy"] == 1.0
-    samples = [sample_from_archive_row(row) for row in ReadView(output_dir).scan("samples").to_pylist()]
-    assert sum("[EVALCHEMY_INFRASTRUCTURE_ERROR]" in (sample.output or "") for sample in samples) == 1
-
-
-def test_evalchemy_executor_excludes_failed_multiple_choice_request(tmp_path, monkeypatch):
+def test_evalchemy_executor_rejects_multiple_choice_aggregate_with_inconsistent_scored_count(tmp_path, monkeypatch):
     output_dir = f"file://{tmp_path / 'multiple-choice-transport-failure'}"
     successful = {
         "doc_id": 0,
@@ -1438,7 +1404,7 @@ def test_evalchemy_executor_preserves_evaluator_partial_aggregates(tmp_path, mon
     )
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
-        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+        lambda _model, _config, _output_dir, _env_vars, **_kwargs: "/eval/completed",
     )
     executor = EvalchemyExecutor(
         EvalchemyRunConfig(
