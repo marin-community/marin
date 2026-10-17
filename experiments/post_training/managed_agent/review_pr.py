@@ -127,14 +127,14 @@ def lead_instructions(pull_request: PullRequest, reviews: list[dict[str, Any]]) 
     )
 
 
-def glm_model(relay_job: str) -> ChatModel:
+def glm_model(relay_job: str, reasoning_effort: str) -> ChatModel:
     client = openai.AsyncOpenAI(
         base_url=resolve_glm_base_url(relay_job),
         api_key=os.environ[GLM_TOKEN_ENV],
         timeout=GLM_REQUEST_TIMEOUT,
         max_retries=GLM_REQUEST_ATTEMPTS,
     )
-    return ChatModel(client, GLM_MODEL, max_tokens=32_768, reasoning_effort="medium")
+    return ChatModel(client, GLM_MODEL, max_tokens=32_768, reasoning_effort=reasoning_effort)
 
 
 class ProgressLog:
@@ -186,23 +186,28 @@ async def _run_attempts(
     return [result(by_id[outcome.id], outcome) async for outcome in manager.run(specs)]
 
 
-def _run_shard(items: Iterator[dict[str, Any]], limits: RolloutLimits) -> Iterator[dict[str, Any]]:
+def _run_shard(
+    items: Iterator[dict[str, Any]], limits: RolloutLimits, reasoning_effort: str
+) -> Iterator[dict[str, Any]]:
     attempts = list(items)
     # A reshard to more shards than items leaves some shards empty.
     if not attempts:
         return
     worker = zephyr_worker_ctx()
-    model = glm_model(worker.get_shared(RELAY_JOB_KEY))
+    model = glm_model(worker.get_shared(RELAY_JOB_KEY), reasoning_effort)
     yield from asyncio.run(_run_attempts(attempts, worker.get_shared(PULL_REQUEST_KEY), model, limits))
 
 
 def run_reviews(items: Iterator[dict[str, Any]], _shard: ShardInfo) -> Iterator[dict[str, Any]]:
-    """A Zephyr shard of reviews: one ManagedAgent runs all of them at the same time."""
-    return _run_shard(items, _limits(zephyr_worker_ctx().get_shared(REVIEW_TURNS_KEY)))
+    """A Zephyr shard of reviews: one ManagedAgent runs all of them at the same time.
+
+    A reviewer reasons less than the lead: with more reasoning, a final answer can use up the token budget.
+    """
+    return _run_shard(items, _limits(zephyr_worker_ctx().get_shared(REVIEW_TURNS_KEY)), "low")
 
 
 def run_lead_review(items: Iterator[dict[str, Any]], _shard: ShardInfo) -> Iterator[dict[str, Any]]:
-    return _run_shard(items, LEAD_LIMITS)
+    return _run_shard(items, LEAD_LIMITS, "medium")
 
 
 def main() -> None:
@@ -235,6 +240,7 @@ def main() -> None:
     )
     for review in reviews:
         logger.info("%s", json.dumps({key: value for key, value in review.items() if key != "answer"}))
+        logger.info("%s answer:\n%s", review["id"], review["answer"] or "(no answer)")
 
     lead_item = {"id": "lead-review", "focus": "all", "instructions": lead_instructions(pull_request, reviews)}
     lead_pipeline = Dataset.from_list([lead_item]).map_shard(run_lead_review)
