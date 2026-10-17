@@ -1398,7 +1398,7 @@ WITH base AS MATERIALIZED (
            producer_epoch, source_sequence, bounds AS schema_key,
            publication_id
     FROM histogram_structured_candidates
-    {_histogram_publication_filter(("count", "total", "schema_key", "histogram_bins"))}
+    {_histogram_publication_filter(("count", "total", "histogram_bounds", "histogram_bins"))}
 ), {_histogram_component_ctes(_SUMMARY_HISTOGRAM_NAMES)}, {_histogram_delta_ctes(overview.start_ms)},
 histogram_increments AS (
     SELECT *, source_family || '_' || component AS name

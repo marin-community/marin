@@ -513,16 +513,18 @@ def test_structured_histogram_exact_large_counts_duplicate_loss_and_reset(
 
 
 @pytest.mark.parametrize(
-    ("legacy_prefix", "bounds", "expected_count", "expected_mean", "expected_p50"),
+    ("legacy_prefix", "bounds", "duplicate_last", "expected_count", "expected_mean", "expected_p50"),
     [
-        pytest.param(False, (0.1, 0.1, 0.2, 0.2), 4, 0.15, None, id="structured_schema_change"),
-        pytest.param(True, (0.1, 0.1, 0.2, 0.2), 4, 0.15, None, id="scalar_prefix_schema_change"),
-        pytest.param(False, (1, 1.0, 1.0, 1.0), 5, 0.14, 1.0, id="equivalent_numeric_bounds"),
+        pytest.param(False, (0.1, 0.1, 0.2, 0.2), False, 4, 0.15, None, id="structured_schema_change"),
+        pytest.param(True, (0.1, 0.1, 0.2, 0.2), False, 4, 0.15, None, id="scalar_prefix_schema_change"),
+        pytest.param(False, (1, 1.0, 1.0, 1.0), False, 5, 0.14, 1.0, id="equivalent_numeric_bounds"),
+        pytest.param(False, (1, 1.0, 1.0, 1.0), True, 3, 0.1, 1.0, id="conflicting_numeric_copy"),
     ],
 )
 def test_structured_histogram_bound_change_keeps_means_and_withholds_mixed_schema_tails(
     legacy_prefix: bool,
     bounds: tuple[float, ...],
+    duplicate_last: bool,
     expected_count: int,
     expected_mean: float,
     expected_p50: float | None,
@@ -561,6 +563,9 @@ def test_structured_histogram_bound_change_keeps_means_and_withholds_mixed_schem
             "sequence": sequence,
         }
         rows.append((json.dumps(body), attributes, sequence * 15_000, sequence))
+        if duplicate_last and sequence == len(bounds) - 1:
+            conflicting = {**body, "explicit_bounds": [int(bound)]}
+            rows.append((json.dumps(conflicting), attributes, sequence * 15_000, sequence))
     database.executemany(
         """INSERT INTO "telemetry_v1.marinskyrl"
            (cluster, service, job_id, name, kind, value, body_json,
