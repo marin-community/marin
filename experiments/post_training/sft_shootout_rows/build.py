@@ -129,7 +129,19 @@ def load_pool(uri: str) -> dict[str, dict]:
     return {row["task_id"]: row for row in rows}
 
 
+# Runs that must never feed training rows, with the reason (#207).
+DENIED_RUNS = {
+    "generation/relay/swe-relay1": (
+        "ran before the relay fix: v0 answered mini-swe 'Tool call error' turns that GLM should repair"
+    ),
+}
+
+
 def load_traces(uris: list[str]) -> list[dict]:
+    for uri in uris:
+        for run, reason in DENIED_RUNS.items():
+            if f"/{run}/" in uri:
+                raise ValueError(f"{uri} is a denied run: {reason}")
     traces = []
     for uri in uris:
         traces += [json.loads(line) | {"source": uri} for line in StoragePath(uri).read_text().splitlines()]
