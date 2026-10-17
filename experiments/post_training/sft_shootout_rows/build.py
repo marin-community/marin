@@ -55,7 +55,8 @@ from experiments.post_training.sweep_data.prepare_agentic import (
 from experiments.post_training.sweep_data.render import training_row
 from experiments.post_training.sweep_data.select import CONTEXT
 
-POOL_MANIFEST_SHA256 = "ae4347bdec1976e50cd3fd4a377d6200cce7cba6d36de47ed71938600b15f6e2"
+# Pool v4 (supersedes v2 ae4347bd...; see the pool README for the versions).
+POOL_MANIFEST_SHA256 = "755e874cc1daa93a10a2b73dd154805ba081206d966d11eb9a018ec16f22fe86"
 EPOCHS = 3
 # mini-swe-agent's own tool environment, installed in the sandbox at agent setup, holds clean copies of some repos
 # (pool v3 removes those repos); a trace that reads anything there is dropped. Pattern from #207 (chukar): path reads,
@@ -112,6 +113,9 @@ def candidates(arm: str, traces: list[dict], pool: dict[str, dict], tokenizer) -
             reason = "trace_problems"
         elif not trace["passed"]:
             reason = "not_passed"
+        elif trace.get("exception"):
+            # A trial that still passed after a harness exception (e.g. AgentTimeoutError) stops mid-task.
+            reason = "harness_exception"
         elif AGENT_TOOL_ENV.search(json.dumps(trace["messages"])):
             reason = "touches_agent_tool_env"
         elif (pattern := library_copy_pattern(task.get("import_names") or [])) and pattern.search(
