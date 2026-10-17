@@ -168,7 +168,11 @@ def served_student() -> Iterator[Backend]:
     model = replace(load_model_config(STUDENT_CONFIG), revision=STUDENT_REVISION)
     accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster=CLUSTER)
     accelerator = replace(accelerator, geometry=serving_geometry(resolved_serve_config(model), accelerator))
-    config = inference_config_for_model(model, accelerator, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT)
+    # Iris defaults GPU jobs to NCCL_DEBUG=INFO, which floods the log forwarder; this vLLM path gets no
+    # NCCL_DEBUG_SUBSYS (no gpu extra), so WARN here is the whole setting.
+    config = inference_config_for_model(
+        model, accelerator, env_vars={"NCCL_DEBUG": "WARN"}, priority=job_pb2.PRIORITY_BAND_INHERIT
+    )
     with remote_inference(config) as session:
         session.wait_until_ready()
         endpoint = session.model.endpoint
