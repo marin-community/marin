@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = "==3.12.*"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -1413,7 +1413,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=96786f1a4624206c499e7a315854a9de8788a869" }]
+requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=7b46ecbbbd03ccb5cfea26f9482039d0d0a5529b" }]
 
 [[package]]
 name = "marin-finelog"
@@ -1634,7 +1634,7 @@ schema = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=96786f1a4624206c499e7a315854a9de8788a869#96786f1a4624206c499e7a315854a9de8788a869" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=7b46ecbbbd03ccb5cfea26f9482039d0d0a5529b#7b46ecbbbd03ccb5cfea26f9482039d0d0a5529b" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
