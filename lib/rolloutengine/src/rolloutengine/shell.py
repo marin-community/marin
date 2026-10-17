@@ -25,7 +25,6 @@ from taskcompendium.models import (
     FunctionCall,
     FunctionDefinition,
     ProviderRequirement,
-    SessionGrader,
     TaskSpec,
 )
 from taskcompendium.runtime.shell import BoundShellTool, ShellToolConfig, resolve_shell_tool, run_shell_call
@@ -36,9 +35,9 @@ from taskcompendium.submission import (
     submission_instruction,
 )
 
-from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, Prompt, ToolCallCompleted, Transition
-from rolloutengine.harness import Episode, Harness, HarnessContext
-from rolloutengine.spec import TaskRolloutSpec
+from rolloutengine.contracts import LENGTH_STOP_REASON, EventSink, ModelTurn, Prompt, ToolCallCompleted, Transition
+from rolloutengine.harness import Harness, HarnessContext, RolloutRecorder
+from rolloutengine.spec import RolloutLimits
 
 UNKNOWN_TOOL_ERROR = "Unknown tool"
 DEFAULT_SHELL_TOOL = ShellToolConfig()
@@ -100,7 +99,7 @@ def task_prompt(
         {"type": "function", "function": function.model_dump(exclude_none=True)}
         for function in (*task.final_tools, *task.interaction_tools)
     ]
-    if not isinstance(task.grader, SessionGrader) and task.answer_type in CONVERSATION_ANSWERS:
+    if task.answer_type in CONVERSATION_ANSWERS:
         require_submission_compatibility(task)
         instruction = submission_instruction(answer_format)
         if instruction:
@@ -163,8 +162,8 @@ def _provider_tools(
 
 
 @dataclass(frozen=True)
-class _ShellOptions:
-    """The shell harness's configuration, read by its check and by each episode."""
+class _ShellHarness:
+    """The shell harness's configuration, and its loop for each attempt."""
 
     command_timeout: float | None
     shell_tool: ShellToolConfig
@@ -174,14 +173,11 @@ class _ShellOptions:
         if self.command_timeout is not None and not (math.isfinite(self.command_timeout) and self.command_timeout > 0):
             raise ValueError(f"The command timeout must be a positive, finite number: {self.command_timeout!r}")
 
-    def check(self, spec: TaskRolloutSpec) -> None:
-        task = spec.task
+    def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
         if task.answer_type == AnswerType.STATE:
             raise NotImplementedError("The shell harness does not capture state answers")
         shell_tool = resolve_shell_tool(task, self.shell_tool)
-        if shell_tool is not None and spec.task_machine is None:
-            raise ValueError("Shell tools require a task machine")
-        turn_limit = spec.limits.tool_turn_timeout
+        turn_limit = limits.tool_turn_timeout
         if self.command_timeout is not None and turn_limit is not None and self.command_timeout >= turn_limit:
             raise ValueError("The command timeout must be less than the tool-turn timeout")
         provider_tools = _provider_tools(task, shell_tool, self.tools)
@@ -193,8 +189,30 @@ class _ShellOptions:
             if tool != provider_tools[tool.name].definition:
                 raise ValueError(f"Interaction tool {tool.name!r} differs from its provider's definition")
 
-    def open(self, context: HarnessContext) -> Episode:
-        return _ShellEpisode(context, self)
+    async def run(self, context: HarnessContext, recorder: RolloutRecorder) -> None:
+        task, machine = context.task, context.machine
+        shell_tool = resolve_shell_tool(task, self.shell_tool)
+        provider_tools = _provider_tools(task, shell_tool, self.tools)
+        if shell_tool is not None and machine is None:
+            raise ValueError("Shell tools require a task machine")
+        sessions: dict[str, ToolProviderSession] = {}
+        tools: dict[str, ToolProviderSession] = {}
+        if machine is not None and shell_tool is not None:
+            tools[shell_tool.definition.name] = _ShellToolSession(machine, shell_tool, self.command_timeout)
+        for name, bound in provider_tools.items():
+            if bound.requirement_name not in sessions:
+                session = await bound.provider.open(ToolContext(machine, bound.requirement))
+                context.cleanup.push("tool_provider_close", session.close)
+                sessions[bound.requirement_name] = session
+            tools[name] = sessions[bound.requirement_name]
+        definitions = tuple(tool.definition for tool in provider_tools.values())
+        turn = await recorder.start(task_prompt(task, shell_tool, definitions))
+        while True:
+            transition = await _call_tools(task, machine, tools, context.events, turn)
+            if transition.done:
+                recorder.record(observations=transition.observations, metrics=transition.metrics)
+                return
+            turn = await recorder.reply(transition.observations)
 
 
 def shell_harness(
@@ -202,7 +220,7 @@ def shell_harness(
     command_timeout: float | None,
     shell_tool: ShellToolConfig = DEFAULT_SHELL_TOOL,
     tools: Mapping[str, ToolProvider] = NO_TOOLS,
-) -> Harness[Episode]:
+) -> Harness:
     """Serve a shell tool on the task machine and host tools from ``tools``, and end on a final response.
 
     ``shell_tool`` names the shell interface for tasks that declare the shell capability without
@@ -210,8 +228,7 @@ def shell_harness(
     returns an observation and the model can continue. ``tools`` maps
     ``ProviderRequirement.action_interface`` to the provider that serves it.
     """
-    options = _ShellOptions(command_timeout, shell_tool, tools)
-    return Harness(options.open, options.check)
+    return _ShellHarness(command_timeout, shell_tool, tools)
 
 
 class _ShellToolSession:
@@ -230,72 +247,49 @@ class _ShellToolSession:
         pass
 
 
-class _ShellEpisode:
-    """Dispatch each tool call to the shell or a provider session by name."""
-
-    def __init__(self, context: HarnessContext, options: _ShellOptions):
-        self.task = context.spec.task
-        self.machine = context.machine
-        self.events = context.events
-        self.command_timeout = options.command_timeout
-        self.shell_tool = resolve_shell_tool(self.task, options.shell_tool)
-        self.provider_tools = _provider_tools(self.task, self.shell_tool, options.tools)
-        self.provider_sessions: dict[str, ToolProviderSession] = {}
-        self.tools: dict[str, ToolProviderSession] = {}
-
-    async def prepare(self) -> Prompt:
-        if self.machine is not None and self.shell_tool is not None:
-            shell = _ShellToolSession(self.machine, self.shell_tool, self.command_timeout)
-            self.tools[self.shell_tool.definition.name] = shell
-        for name, bound in self.provider_tools.items():
-            if bound.requirement_name not in self.provider_sessions:
-                self.provider_sessions[bound.requirement_name] = await bound.provider.open(
-                    ToolContext(self.machine, bound.requirement)
-                )
-            self.tools[name] = self.provider_sessions[bound.requirement_name]
-        definitions = tuple(tool.definition for tool in self.provider_tools.values())
-        return task_prompt(self.task, self.shell_tool, definitions)
-
-    async def advance(self, turn: ModelTurn) -> Transition:
-        try:
-            message = assistant_message(turn.message)
-        except (TypeError, ValueError):
-            return Transition(done=True, metrics={"invalid_assistant_message": 1.0})
-        if (
-            (self.machine is None and not self.tools)
-            or not isinstance(message, AssistantToolCalls)
-            or turn.stop_reason == LENGTH_STOP_REASON
-        ):
+async def _call_tools(
+    task: TaskSpec,
+    machine: Machine | None,
+    tools: Mapping[str, ToolProviderSession],
+    events: EventSink,
+    turn: ModelTurn,
+) -> Transition:
+    """Dispatch each tool call of ``turn`` to the shell or a provider session by name."""
+    try:
+        message = assistant_message(turn.message)
+    except (TypeError, ValueError):
+        return Transition(done=True, metrics={"invalid_assistant_message": 1.0})
+    if (
+        (machine is None and not tools)
+        or not isinstance(message, AssistantToolCalls)
+        or turn.stop_reason == LENGTH_STOP_REASON
+    ):
+        return Transition(done=True)
+    observations = []
+    final_tools = {function.name for function in task.final_tools}
+    for call in message.calls:
+        answer_call = isinstance(task.answer_format, AnswerCall) and call.name == ANSWER_CALL_NAME
+        if call.name in final_tools or answer_call:
             return Transition(done=True)
-        observations = []
-        final_tools = {function.name for function in self.task.final_tools}
-        for call in message.calls:
-            answer_call = isinstance(self.task.answer_format, AnswerCall) and call.name == ANSWER_CALL_NAME
-            if call.name in final_tools or answer_call:
-                return Transition(done=True)
-            started = time.monotonic()
-            if not isinstance(call.arguments, dict):
-                result = ToolCallResult(json.dumps({"error": TOOL_ARGUMENTS_OBJECT_ERROR}))
-            elif call.name not in self.tools:
-                result = ToolCallResult(json.dumps({"error": f"{UNKNOWN_TOOL_ERROR}: {call.name}"}))
-            else:
-                result = await self.tools[call.name].call(call.name, call.arguments)
-            self.events.emit(
-                ToolCallCompleted(
-                    call.call_id, call.name, len(result.content.encode()), result.done, time.monotonic() - started
-                ),
-            )
-            observations.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call.call_id,
-                    "content": result.content,
-                }
-            )
-            if result.done:
-                return Transition(done=True, observations=tuple(observations))
-        return Transition(done=False, observations=tuple(observations))
-
-    async def close(self) -> None:
-        for provider in self.provider_sessions.values():
-            await provider.close()
+        started = time.monotonic()
+        if not isinstance(call.arguments, dict):
+            result = ToolCallResult(json.dumps({"error": TOOL_ARGUMENTS_OBJECT_ERROR}))
+        elif call.name not in tools:
+            result = ToolCallResult(json.dumps({"error": f"{UNKNOWN_TOOL_ERROR}: {call.name}"}))
+        else:
+            result = await tools[call.name].call(call.name, call.arguments)
+        events.emit(
+            ToolCallCompleted(
+                call.call_id, call.name, len(result.content.encode()), result.done, time.monotonic() - started
+            ),
+        )
+        observations.append(
+            {
+                "role": "tool",
+                "tool_call_id": call.call_id,
+                "content": result.content,
+            }
+        )
+        if result.done:
+            return Transition(done=True, observations=tuple(observations))
+    return Transition(done=False, observations=tuple(observations))

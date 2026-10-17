@@ -22,7 +22,6 @@ from taskcompendium.models import (
     GradingAttempt,
     NoGrader,
     ScriptGrader,
-    SessionGrader,
     TaskSpec,
     TextMessage,
     VerifyitGrader,
@@ -150,7 +149,7 @@ async def _control_checks(
 ) -> VerificationReport:
     require_resolved_environment(task.environment_requirements)
     grader = task.grader
-    if isinstance(grader, NoGrader | SessionGrader):
+    if isinstance(grader, NoGrader):
         return VerificationReport(
             [
                 CheckResult(

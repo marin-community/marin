@@ -8,6 +8,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field
 from shellbox.machine import NetworkPolicy
 from taskcompendium.models import TaskSpec
+from verifyit.modes.grade_judge import JudgeConnection
 
 
 class TraceMode(StrEnum):
@@ -72,5 +73,8 @@ class TaskRolloutSpec(BaseModel):
     harness: str = Field(min_length=1)
     task_machine: MachineRuntimeSpec | None
     verifier_machine: MachineRuntimeSpec | None
+    judge_connection: JudgeConnection | None = Field(default=None, exclude=True)
+    """The service of a judge grader, which grades on the host. It is never serialized. Without it, the
+    engine reads ``VERIFYIT_JUDGE_BASE_URL`` and ``VERIFYIT_JUDGE_API_KEY``."""
     limits: RolloutLimits
     trace: TraceMode = TraceMode.EXACT_TOKENS

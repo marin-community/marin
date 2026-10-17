@@ -142,5 +142,5 @@ async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(
     assert len(machines) == 2
     assert (machines[1].root / "testbed/value.txt").read_text() == f"{answer}\n"
     assert all(machine.closed for machine in machines)
-    assert result.rollout.loss_mask == (1, 0, 0, 1)
+    assert result.rollout.conversations[-1].loss_mask == (1, 0, 0, 1)
     assert all("eval_script" not in json.dumps(request.messages) for request in model.requests)
