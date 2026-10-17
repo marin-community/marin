@@ -2,14 +2,35 @@
  "Cog-Creators/Red-DiscordBot": [
   "redbot"
  ],
+ "HIPS/autograd": [
+  "autograd"
+ ],
+ "Instagram/MonkeyType": [
+  "monkeytype"
+ ],
  "Knio/dominate": [
   "dominate"
+ ],
+ "Masterminds/squirrel": [
+  "!masterminds/squirrel"
+ ],
+ "Mimino666/langdetect": [
+  "langdetect"
+ ],
+ "Project-MONAI/MONAI": [
+  "monai"
  ],
  "PyCQA/flake8": [
   "flake8"
  ],
+ "RoaringBitmap/roaring": [
+  "!roaring!bitmap/roaring"
+ ],
  "Suor/funcy": [
   "funcy"
+ ],
+ "adrienverge/yamllint": [
+  "yamllint"
  ],
  "agronholm/exceptiongroup": [
   "exceptiongroup"
@@ -17,20 +38,65 @@
  "agronholm/typeguard": [
   "typeguard"
  ],
+ "aio-libs/async-timeout": [
+  "async_timeout"
+ ],
+ "alanjds/drf-nested-routers": [
+  "rest_framework_nested"
+ ],
+ "alecthomas/voluptuous": [
+  "voluptuous"
+ ],
+ "allegro/bigcache": [
+  "allegro/bigcache"
+ ],
+ "amueller/word_cloud": [
+  "wordcloud"
+ ],
  "andialbrecht/sqlparse": [
   "sqlparse"
  ],
  "ariga/atlas": [
   "ariga/atlas"
  ],
+ "arp242/goatcounter": [
+  "arp242/goatcounter"
+ ],
+ "arrow-py/arrow": [
+  "arrow"
+ ],
+ "benoitc/gunicorn": [
+  "gunicorn"
+ ],
+ "bits-and-blooms/bitset": [
+  "bits-and-blooms/bitset"
+ ],
+ "blevesearch/bleve": [
+  "blevesearch/bleve"
+ ],
+ "borntyping/python-colorlog": [
+  "colorlog"
+ ],
  "bottlepy/bottle": [
   "bottle"
+ ],
+ "buriy/python-readability": [
+  "readability"
+ ],
+ "burnash/gspread": [
+  "gspread"
+ ],
+ "bytedance/sonic": [
+  "bytedance/sonic"
  ],
  "c-bata/go-prompt": [
   "c-bata/go-prompt"
  ],
  "caarlos0/env": [
   "caarlos0/env"
+ ],
+ "caddyserver/caddy": [
+  "caddyserver/caddy"
  ],
  "cantools/cantools": [
   "cantools"
@@ -41,8 +107,90 @@
  "cknd/stackprinter": [
   "stackprinter"
  ],
+ "cloudpipe/cloudpickle": [
+  "cloudpickle"
+ ],
+ "conan-io/conan": [
+  "conans",
+  "conan"
+ ],
+ "cookiecutter/cookiecutter": [
+  "cookiecutter"
+ ],
+ "cool-RR/PySnooper": [
+  "pysnooper"
+ ],
+ "dask/dask": [
+  "dask"
+ ],
+ "datamade/usaddress": [
+  "usaddress"
+ ],
+ "davidhalter/parso": [
+  "parso"
+ ],
+ "dbader/schedule": [
+  "schedule"
+ ],
+ "django-money/django-money": [
+  "djmoney"
+ ],
+ "django/channels": [
+  "channels"
+ ],
+ "django/daphne": [
+  "daphne"
+ ],
+ "encode/starlette": [
+  "starlette"
+ ],
+ "erikrose/parsimonious": [
+  "parsimonious"
+ ],
+ "facebookresearch/fvcore": [
+  "fvcore"
+ ],
+ "facebookresearch/hydra": [
+  "hydra"
+ ],
+ "facelessuser/soupsieve": [
+  "soupsieve"
+ ],
+ "gawel/pyquery": [
+  "pyquery"
+ ],
+ "getmoto/moto": [
+  "moto"
+ ],
+ "getnikola/nikola": [
+  "nikola"
+ ],
+ "go-chi/chi": [
+  "go-chi/chi"
+ ],
+ "go-critic/go-critic": [
+  "go-critic/go-critic"
+ ],
  "google/textfsm": [
   "textfsm"
+ ],
+ "gookit/color": [
+  "gookit/color"
+ ],
+ "gosuri/uiprogress": [
+  "gosuri/uiprogress"
+ ],
+ "graphql-python/graphene": [
+  "graphene"
+ ],
+ "gruns/furl": [
+  "furl"
+ ],
+ "gruns/icecream": [
+  "icecream"
+ ],
+ "gweis/isodate": [
+  "isodate"
  ],
  "hjson/hjson-go": [
   "hjson/hjson-go"
@@ -50,20 +198,50 @@
  "hukkin/tomli": [
   "tomli"
  ],
+ "hypermodeinc/ristretto": [
+  "hypermodeinc/ristretto"
+ ],
+ "iterative/dvc": [
+  "dvc"
+ ],
  "jaraco/inflect": [
   "inflect"
+ ],
+ "jawah/charset_normalizer": [
+  "charset_normalizer"
  ],
  "jd/tenacity": [
   "tenacity"
  ],
+ "john-kurkowski/tldextract": [
+  "tldextract"
+ ],
  "joke2k/faker": [
   "faker"
+ ],
+ "jsvine/pdfplumber": [
+  "pdfplumber"
+ ],
+ "kayak/pypika": [
+  "pypika"
  ],
  "keleshev/schema": [
   "schema"
  ],
+ "kennethreitz/records": [
+  "records"
+ ],
+ "kurtmckee/feedparser": [
+  "feedparser"
+ ],
  "lepture/mistune": [
   "mistune"
+ ],
+ "life4/textdistance": [
+  "textdistance"
+ ],
+ "lincolnloop/python-qrcode": [
+  "qrcode"
  ],
  "luozhouyang/python-string-similarity": [
   "strsimilarity"
@@ -74,14 +252,56 @@
  "mahmoud/boltons": [
   "boltons"
  ],
+ "mahmoud/glom": [
+  "glom"
+ ],
+ "markedjs/marked": [
+  "marked"
+ ],
+ "marshmallow-code/apispec": [
+  "apispec"
+ ],
+ "marshmallow-code/marshmallow": [
+  "marshmallow"
+ ],
  "marshmallow-code/webargs": [
   "webargs"
+ ],
+ "martinblech/xmltodict": [
+  "xmltodict"
  ],
  "matthewwithanm/python-markdownify": [
   "markdownify"
  ],
+ "mewwts/addict": [
+  "addict"
+ ],
+ "mido/mido": [
+  "mido"
+ ],
+ "modin-project/modin": [
+  "modin"
+ ],
+ "mozilla/bleach": [
+  "bleach"
+ ],
+ "mozillazg/python-pinyin": [
+  "pypinyin"
+ ],
+ "msiemens/tinydb": [
+  "tinydb"
+ ],
  "oauthlib/oauthlib": [
   "oauthlib"
+ ],
+ "pallets/click": [
+  "click"
+ ],
+ "pallets/jinja": [
+  "jinja2"
+ ],
+ "pallets/markupsafe": [
+  "markupsafe"
  ],
  "pandas-dev/pandas": [
   "pandas"
@@ -92,26 +312,143 @@
  "pdfminer/pdfminer.six": [
   "pdfminer"
  ],
+ "pexpect/ptyprocess": [
+  "ptyprocess"
+ ],
+ "pndurette/gTTS": [
+  "gtts"
+ ],
+ "prettytable/prettytable": [
+  "prettytable"
+ ],
  "pudo/dataset": [
   "dataset"
+ ],
+ "pwaller/pyfiglet": [
+  "pyfiglet"
+ ],
+ "pyasn1/pyasn1": [
+  "pyasn1"
+ ],
+ "pyca/pyopenssl": [
+  "OpenSSL"
+ ],
+ "pydantic/pydantic": [
+  "pydantic"
+ ],
+ "pydata/patsy": [
+  "patsy"
+ ],
+ "pydicom/pydicom": [
+  "pydicom"
  ],
  "pygments/pygments": [
   "pygments"
  ],
+ "pylint-dev/astroid": [
+  "astroid"
+ ],
+ "pyparsing/pyparsing": [
+  "pyparsing"
+ ],
  "pytest-dev/iniconfig": [
   "iniconfig"
+ ],
+ "python-hyper/h11": [
+  "h11"
+ ],
+ "python-jsonschema/jsonschema": [
+  "jsonschema"
  ],
  "python-openxml/python-docx": [
   "docx"
  ],
+ "python-trio/trio": [
+  "trio"
+ ],
+ "python/mypy": [
+  "mypy"
+ ],
  "pyupio/safety": [
   "safety"
+ ],
+ "pyutils/line_profiler": [
+  "line_profiler"
+ ],
+ "r1chardj0n3s/parse": [
+  "parse"
  ],
  "rsalmei/alive-progress": [
   "alive_progress"
  ],
+ "rubik/radon": [
+  "radon"
+ ],
+ "rustedpy/result": [
+  "result"
+ ],
+ "scanny/python-pptx": [
+  "pptx"
+ ],
+ "scrapy/scrapy": [
+  "scrapy"
+ ],
  "seatgeek/thefuzz": [
   "thefuzz",
   "fuzzywuzzy"
+ ],
+ "seperman/deepdiff": [
+  "deepdiff"
+ ],
+ "sloria/environs": [
+  "environs"
+ ],
+ "spulec/freezegun": [
+  "freezegun"
+ ],
+ "sqlfluff/sqlfluff": [
+  "sqlfluff"
+ ],
+ "stanfordnlp/dspy": [
+  "dspy"
+ ],
+ "stanfordnlp/string2string": [
+  "string2string"
+ ],
+ "sunpy/sunpy": [
+  "sunpy"
+ ],
+ "termcolor/termcolor": [
+  "termcolor"
+ ],
+ "tezos-reward-distributor-organization/tezos-reward-distributor": [
+  "tezos-reward-distributor"
+ ],
+ "theskumar/python-dotenv": [
+  "dotenv"
+ ],
+ "tkrajina/gpxpy": [
+  "gpxpy"
+ ],
+ "tobymao/sqlglot": [
+  "sqlglot"
+ ],
+ "tornadoweb/tornado": [
+  "tornado"
+ ],
+ "tox-dev/pipdeptree": [
+  "pipdeptree"
+ ],
+ "tweepy/tweepy": [
+  "tweepy"
+ ],
+ "un33k/python-slugify": [
+  "slugify"
+ ],
+ "vi3k6i5/flashtext": [
+  "flashtext"
+ ],
+ "weaveworks/grafanalib": [
+  "grafanalib"
  ]
 }
