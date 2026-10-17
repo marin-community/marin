@@ -41,6 +41,7 @@ from zephyr.coordinator import (
     _get_stage_description,
     _read_coordinator_result,
     _try_read_coordinator_result,
+    thread_cap_environment,
 )
 from zephyr.dataset import Dataset
 from zephyr.plan import PhysicalPlan, compute_plan
@@ -390,6 +391,7 @@ class ZephyrContext:
             count=1,
             resources=self.coordinator_resources,
             actor_config=ActorConfig(max_concurrency=100),
+            environment=thread_cap_environment(self.coordinator_resources.cpu),
         )
         try:
             coordinator = coordinator_group.wait_ready(count=1)[0]
