@@ -16,7 +16,7 @@ for root in sys.argv[1:]:
     root = root.rstrip("/")
     for kind in sorted(str(path).rstrip("/") for path in P(root).ls() if path.isdir()):
         for run in sorted(str(path).rstrip("/") for path in P(kind).ls() if path.isdir()):
-            rounds = [f"{run}/round-1", f"{run}/round-2"] if "-relay" in kind else [run]
+            rounds = [f"{run}/round-{r}" for r in range(1, 6)] if "-relay" in kind else [run]
             for prefix in rounds:
                 if "/generation/" in prefix or P(f"{prefix}/_SUCCESS").exists():
                     print("RUN", prefix)
