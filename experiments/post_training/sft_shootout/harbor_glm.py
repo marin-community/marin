@@ -271,6 +271,7 @@ def main() -> None:
         "--tasks", required=True, help="Folder of Harbor task folders (local or remote), or a pool packages .parquet."
     )
     parser.add_argument("--task-names", nargs="*", help="Restrict to these task folder names.")
+    parser.add_argument("--task-list", help="JSON file (local or remote) whose 'tasks' are the task folder names to run.")
     parser.add_argument("--output", required=True, help="Remote prefix for the job folder and request log.")
     parser.add_argument("--name", required=True)
     parser.add_argument("--n-attempts", type=int, default=1)
@@ -286,6 +287,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     args.task_source = args.tasks
+    if args.task_list:
+        args.task_names = json.loads(StoragePath(args.task_list).read_text())["tasks"]
     work = Path(tempfile.mkdtemp(prefix="glm-harbor-"))
     if args.tasks.endswith(".parquet"):
         extract_packages(args.tasks, args.task_names, work / "tasks")

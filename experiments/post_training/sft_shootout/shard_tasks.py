@@ -5,30 +5,37 @@
 
 Each shard is one ``harbor_glm.py`` job with its own output prefix, so a failed job loses only its
 shard. Shards are contiguous slices of the sorted task ids. Writes ``<out-dir>/<family>-shard-NN.json``
-with the manifest's sha256, the shard's tasks and their held-out flags.
+with the manifest's sha256, the shard's tasks and their held-out flags. Paths may be remote; each
+shard file is a ``harbor_glm.py --task-list``. ``--added-in`` keeps only tasks a pool version added.
 
     python -m experiments.post_training.sft_shootout.shard_tasks --family tmax \
-      --manifest pool/tasks.jsonl --shard-size 100 --out-dir experiments/post_training/sft_shootout/full_run
+      --manifest s3://.../pool/tasks.jsonl --shard-size 100 --out-dir s3://.../traces/shards
 """
 
 import argparse
 import hashlib
 import json
-from pathlib import Path
+
+from rigging.filesystem.storage_path import StoragePath
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--family", choices=["tmax", "swesmith"], required=True)
-    parser.add_argument("--manifest", type=Path, required=True, help="The #206 pool tasks.jsonl.")
+    parser.add_argument("--manifest", required=True, help="The #206 pool tasks.jsonl.")
     parser.add_argument("--shard-size", type=int, default=100)
-    parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--out-dir", required=True)
+    parser.add_argument("--prefix", default=None, help="Shard file name prefix (default: the family).")
+    parser.add_argument("--added-in", type=int, nargs="*", help="Keep only tasks with these added_in versions.")
     args = parser.parse_args()
 
-    rows = [json.loads(line) for line in args.manifest.read_text().splitlines()]
-    rows = sorted((row for row in rows if row["family"] == args.family), key=lambda row: row["task_id"])
-    digest = hashlib.sha256(args.manifest.read_bytes()).hexdigest()
-    args.out_dir.mkdir(parents=True, exist_ok=True)
+    text = StoragePath(args.manifest).read_text()
+    rows = [json.loads(line) for line in text.splitlines()]
+    rows = [row for row in rows if row["family"] == args.family]
+    if args.added_in:
+        rows = [row for row in rows if row.get("added_in") in args.added_in]
+    rows = sorted(rows, key=lambda row: row["task_id"])
+    digest = hashlib.sha256(text.encode()).hexdigest()
     shards = [rows[i : i + args.shard_size] for i in range(0, len(rows), args.shard_size)]
     for index, shard in enumerate(shards):
         record = {
@@ -40,7 +47,8 @@ def main() -> None:
             "tasks": [row["task_id"] for row in shard],
             "heldout": [row["task_id"] for row in shard if row["heldout"]],
         }
-        (args.out_dir / f"{args.family}-shard-{index:02d}.json").write_text(json.dumps(record, indent=2) + "\n")
+        name = f"{args.prefix or args.family}-shard-{index:02d}.json"
+        StoragePath(f"{args.out_dir.rstrip('/')}/{name}").write_text(json.dumps(record, indent=2) + "\n")
     print(json.dumps({"family": args.family, "tasks": len(rows), "shards": len(shards), "manifest_sha256": digest}))
 
 
