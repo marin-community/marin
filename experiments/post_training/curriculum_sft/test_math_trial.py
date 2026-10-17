@@ -47,7 +47,7 @@ def test_curriculum_sft_uses_solved_chat_and_builtin_hf_save():
 def test_curriculum_sft_reuses_existing_generation_with_short_lived_outputs():
     trained = build_math_trial("2026.09.25.11", learning_rate=5e-5, warmup=0, data="glm")["train"]
     source_prefix = "s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math-20260924"
-    output_prefix = "s3://marin-us-east-02a/tmp/ttl=7d/curriculum-math-20260924"
+    output_prefix = "s3://marin-us-east-08a/tmp/ttl=7d/curriculum-math-20260924"
 
     for capability_id, staged in zip(CURRICULUM_IDS, trained.deps[:-1], strict=True):
         assert staged.path(S3_TRIAL_PREFIX) == prefix_join(

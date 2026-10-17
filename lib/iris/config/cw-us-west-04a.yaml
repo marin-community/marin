@@ -108,6 +108,7 @@ defaults:
       milliseconds: 300000
   task_env:
     MARIN_PREFIX: s3://marin-us-west-04a/marin
+    MARIN_TEMP_PREFIX: s3://marin-us-east-08a
     # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
     # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls
     # back to the host ethernet PF that carries the node IP. The exact PF name
