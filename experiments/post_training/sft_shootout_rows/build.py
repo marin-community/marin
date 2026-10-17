@@ -347,6 +347,23 @@ def main() -> None:
         (out / index_name).write_text("".join(json.dumps(item) + "\n" for item in index))
         (out / "selection.jsonl").write_text("".join(json.dumps(item) + "\n" for item in selection))
         (out / "dropped.jsonl").write_text("".join(json.dumps(item) + "\n" for item in dropped))
+        attempted: dict[str, set[str]] = collections.defaultdict(set)
+        for trace in traces:
+            task = pool.get(trace.get("task_id"))
+            if task is not None and task["heldout"] == (args.arm == "validation") and task["family"] == trace["family"]:
+                attempted[trace["family"]].add(trace["task_id"])
+        eligible: dict[str, set[str]] = collections.defaultdict(set)
+        for attempt in attempts:
+            eligible[attempt.family].add(attempt.task_id)
+        eligibility = {
+            family: {
+                "tasks_attempted": len(tasks),
+                "tasks_eligible": len(eligible[family] & tasks),
+                "rate": len(eligible[family] & tasks) / len(tasks) if tasks else None,
+                "note": "eligible = at least one passing attempt that fits 32,768 tokens and survives every drop rule",
+            }
+            for family, tasks in sorted(attempted.items())
+        }
         heldout_rows = sum(1 for item in index if item.get("task_id") and pool[item["task_id"]]["heldout"])
         agentic_rows = sum(1 for item in index if item.get("task_id"))
         if args.arm == "validation" and heldout_rows != agentic_rows:
@@ -387,6 +404,7 @@ def main() -> None:
                     )
                 ),
             },
+            "eligibility": eligibility,
             "B_supervised_tokens": b_tokens,
             "task_slots": sorted({item["task_id"] for item in selection}) if args.arm == "plain" else None,
             "splits": splits,
