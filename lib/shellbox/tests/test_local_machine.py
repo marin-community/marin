@@ -15,7 +15,14 @@ from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path, PurePosixPath
 
 import pytest
-from shellbox.backends.local.machine import NPROC_HEADROOM, LocalMachine, LocalMachineFactory, SandboxUnavailable
+from shellbox.backends.local.machine import (
+    NPROC_HEADROOM,
+    LocalMachine,
+    LocalMachineFactory,
+    SandboxUnavailable,
+    SystemDirectories,
+    _submounts,
+)
 from shellbox.backends.local.python_environment import (
     PythonEnvironment,
     UvError,
@@ -342,6 +349,98 @@ def test_an_archive_extracted_at_the_root_stays_in_its_machine(tmp_path, factory
 def test_host_system_directories_are_read_only(factory):
     script = "touch /usr/shellbox-test 2>/dev/null || echo refused; touch /etc/shellbox-test 2>/dev/null || echo refused"
     assert run_command(factory, Command(("sh", "-c", script))).stdout == b"refused\nrefused\n"
+
+
+@pytest.fixture
+def copy_on_write_factory() -> LocalMachineFactory:
+    return make_factory(system_directories=SystemDirectories.COPY_ON_WRITE)
+
+
+# Copy-on-write keeps file permissions, so only a root command may write the root-owned system directories.
+root_commands = pytest.mark.skipif(os.geteuid() != 0, reason="Writing root-owned system directories needs root")
+
+
+@root_commands
+def test_copy_on_write_system_directories_keep_each_machines_writes_to_itself(copy_on_write_factory):
+    name = f"shellbox-test-{uuid.uuid4().hex}"
+    paths = (f"/opt/{name}/file", f"/usr/local/bin/{name}", f"/etc/{name}")
+    write = f"mkdir /opt/{name} && " + " && ".join(f'echo "$1" > {path}' for path in paths)
+    read = "cat " + " ".join(paths)
+
+    async def scenario() -> tuple[list[bytes], list[Path]]:
+        machines = await asyncio.gather(copy_on_write_factory.create(SPEC), copy_on_write_factory.create(SPEC))
+        try:
+            for machine, label in zip(machines, "ab", strict=True):
+                written = await machine.run(Command(("sh", "-c", write, "sh", label)))
+                assert written.exit_code == 0, written.stderr
+            results = await asyncio.gather(*(machine.run(Command(("sh", "-c", read))) for machine in machines))
+            return [result.stdout for result in results], [machine.layers for machine in machines]
+        finally:
+            await asyncio.gather(*(machine.close() for machine in machines))
+
+    outputs, layers = asyncio.run(scenario())
+    assert outputs == [b"a\n" * len(paths), b"b\n" * len(paths)]
+    assert not any(Path(path).exists() for path in (f"/opt/{name}", *paths[1:]))
+    assert not any(layer.exists() for layer in layers)
+
+
+@root_commands
+def test_copy_on_write_transfers_see_the_machines_own_system_directories(tmp_path, copy_on_write_factory):
+    name = f"shellbox-test-{uuid.uuid4().hex}"
+    source = tmp_path / "source"
+    (source / "nested").mkdir(parents=True)
+    (source / "nested/data.txt").write_text("from directory")
+    single = tmp_path / "single.txt"
+    single.write_text("from file")
+    downloaded = tmp_path / "downloaded"
+
+    async def scenario(machine: LocalMachine) -> Result:
+        await machine.upload(source, f"/opt/{name}/tree")
+        await machine.upload(single, f"/usr/local/share/{name}/single.txt")
+        read = await machine.run(
+            Command(("cat", "tree/nested/data.txt", f"/usr/local/share/{name}/single.txt"), cwd=f"/opt/{name}")
+        )
+        await machine.run(Command(("sh", "-c", f"echo changed > /opt/{name}/tree/nested/data.txt")))
+        await machine.download(f"/opt/{name}/tree", downloaded / "tree")
+        await machine.download(f"/usr/local/share/{name}/single.txt", downloaded / "single.txt")
+        await machine.download("/etc/passwd", downloaded / "passwd")
+        with pytest.raises(RuntimeError, match="No such file"):
+            await machine.download(f"/opt/{name}/missing", downloaded / "missing")
+        with pytest.raises(UnsupportedMachineSpec):
+            await machine.upload(single, f"/sys/{name}")
+        return read
+
+    read = on_machine(copy_on_write_factory, SPEC, scenario)
+    assert (read.exit_code, read.stdout) == (0, b"from directoryfrom file"), read.stderr
+    assert (downloaded / "tree/nested/data.txt").read_text() == "changed\n"
+    assert (downloaded / "single.txt").read_text() == "from file"
+    assert (downloaded / "passwd").read_bytes() == Path("/etc/passwd").read_bytes()
+    assert not Path(f"/opt/{name}").exists() and not Path(f"/usr/local/share/{name}").exists()
+
+
+@root_commands
+def test_a_copy_on_write_machine_may_work_in_a_system_directory(copy_on_write_factory):
+    workdir = f"/opt/shellbox-test-{uuid.uuid4().hex}/work"
+    spec = MachineSpec(HostImage(), workdir=workdir)
+    result = run_command(copy_on_write_factory, Command(("sh", "-c", "pwd && touch made && ls")), spec)
+    assert (result.exit_code, result.stdout) == (0, f"{workdir}\nmade\n".encode()), result.stderr
+    assert not Path(workdir).parent.exists()
+
+
+def test_files_mounted_inside_overlaid_directories_are_found_parents_first():
+    # A container runtime mounts files such as /etc/resolv.conf over the image; an overlay of /etc hides them.
+    mountinfo = "\n".join(
+        [
+            "21 1 0:31 / / rw,relatime - overlay overlay rw",
+            "22 21 9:127 /pods/resolv.conf /etc/resolv.conf rw - xfs /dev/md127 rw",
+            "23 21 9:127 /pods/host /etc/host\\040name rw - xfs /dev/md127 rw",
+            "24 21 0:40 / /usr/lib/modules ro - tmpfs tmpfs rw",
+            "25 21 0:41 / /usr ro - tmpfs tmpfs rw",
+            "26 21 0:42 / /usrlocal/data rw - tmpfs tmpfs rw",
+            "27 21 9:127 /pods/app /app rw - xfs /dev/md127 rw",
+        ]
+    )
+    assert _submounts(mountinfo, ("/etc", "/usr")) == ("/etc/host name", "/etc/resolv.conf", "/usr/lib/modules")
 
 
 @pytest.mark.parametrize(
