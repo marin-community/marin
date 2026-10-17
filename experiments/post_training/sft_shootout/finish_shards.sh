@@ -26,6 +26,7 @@ while [ ${#pending[@]} -gt 0 ]; do
     esac
   done
   pending=("${left[@]}")
+  echo "PENDING $(date -u +%H:%M) ${pending[*]}"
   [ ${#pending[@]} -gt 0 ] && sleep 600
 done
 echo "ALL_REBUILT $out"
