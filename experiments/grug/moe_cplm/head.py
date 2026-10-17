@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Target-only Copy-Paste Language Model loss (arXiv:2610.19247, equations 1–7).
+"""Target-only Copy-Paste Language Model loss (arXiv:2610.19247, equations 1-7).
 
 Query tiles bound score storage and are rematerialized in the backward pass.
 Arithmetic remains quadratic in sequence length. These functions operate on
@@ -105,9 +105,7 @@ def copy_paste_nll(
     queries = jnp.einsum("bsd,dh->bsh", hidden, query_weight, preferred_element_type=jnp.float32)
     keys = jnp.einsum("bsd,dh->bsh", hidden, key_weight, preferred_element_type=jnp.float32)
     copy_logit = jnp.sum(hidden.astype(jnp.float32) * copy_weight.astype(jnp.float32), -1)
-    sink_logp, target_logp = copy_log_probabilities(
-        queries, keys, sink, tokens, labels, segments, query_tile=query_tile
-    )
+    sink_logp, target_logp = copy_log_probabilities(queries, keys, sink, tokens, labels, segments, query_tile=query_tile)
     return mixture_nll(native_nll, log_partition, copy_logit, sink_logp, target_logp)
 
 
@@ -140,6 +138,15 @@ def fused_copy_paste_nll(
     target_logit = jnp.sum(flat_hidden.astype(jnp.float32) * target_weight.astype(jnp.float32), -1)
     log_partition = (native_nll + target_logit).reshape(batch, length)
     return copy_paste_nll(
-        hidden, query_weight, key_weight, copy_weight, sink, tokens, labels, segments,
-        native_nll.reshape(batch, length), log_partition, query_tile=query_tile,
+        hidden,
+        query_weight,
+        key_weight,
+        copy_weight,
+        sink,
+        tokens,
+        labels,
+        segments,
+        native_nll.reshape(batch, length),
+        log_partition,
+        query_tile=query_tile,
     )

@@ -58,8 +58,12 @@ def example():
 def test_tiled_loss_matches_dense_mixture_values_and_gradients(example, tile):
     params, tokens, labels, segments = example
     weights = jnp.linspace(0, 1, tokens.size).reshape(tokens.shape)
-    actual = lambda p: tiled_loss(p, tokens, labels, segments, tile)
-    expected = lambda p: dense_reference(p, tokens, labels, segments)
+    def actual(p):
+        return tiled_loss(p, tokens, labels, segments, tile)
+
+    def expected(p):
+        return dense_reference(p, tokens, labels, segments)
+
     np.testing.assert_allclose(jax.jit(actual)(params), jax.jit(expected)(params), atol=3e-6, rtol=3e-6)
     actual_grad = jax.jit(jax.grad(lambda p: jnp.mean(actual(p) * weights)))(params)
     expected_grad = jax.jit(jax.grad(lambda p: jnp.mean(expected(p) * weights)))(params)
@@ -82,8 +86,9 @@ def test_copy_head_excludes_future_and_other_documents(example):
 def test_disabled_gate_recovers_native_loss_and_zero_weights_give_zero_gradients(example):
     params, tokens, labels, segments = example
     native = jnp.linspace(0, 10, tokens.size).reshape(tokens.shape)
-    disabled = mixture_nll(native, jnp.full_like(native, 1e10), jnp.zeros_like(native),
-                           jnp.zeros_like(native), jnp.zeros_like(native))
+    disabled = mixture_nll(
+        native, jnp.full_like(native, 1e10), jnp.zeros_like(native), jnp.zeros_like(native), jnp.zeros_like(native)
+    )
     np.testing.assert_array_equal(disabled, native)
     gradients = jax.grad(lambda p: jnp.sum(tiled_loss(p, tokens, labels, segments, 4) * 0))(params)
     for grad in gradients:
