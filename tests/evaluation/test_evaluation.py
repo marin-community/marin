@@ -552,6 +552,7 @@ def _write_evalchemy_output(
     samples: dict[str, list[dict]],
     *,
     scored_counts: Mapping[str, int] | None = None,
+    failure_category: str | None = None,
 ) -> None:
     sample_counts = {task: max((int(row["doc_id"]) for row in rows), default=-1) + 1 for task, rows in samples.items()}
     benchmark_metadata = {}
@@ -591,12 +592,16 @@ def _write_evalchemy_output(
                         "benchmark_metadata": benchmark_metadata,
                         "canonical_results": canonical_results,
                         "task_outcomes": {
-                            task: {"status": "succeeded", "scored_count": (scored_counts or {}).get(task, count)}
+                            task: {
+                                "status": "failed" if failure_category else "succeeded",
+                                "scored_count": (scored_counts or {}).get(task, count),
+                                "failure": {"category": failure_category},
+                            }
                             for task, count in sample_counts.items()
                         },
                     }
                 ),
-                "scored": True,
+                "scored": failure_category is None,
             }
         )
         for task, rows in samples.items():
@@ -959,6 +964,37 @@ def test_evalchemy_executor_rejects_incomplete_task_beside_scored_results(tmp_pa
 
     assert exc_info.value.status is RunStatus.ARTIFACT_FAILED
     assert exc_info.value.jobs == {"eval": "/eval/completed"}
+
+
+def test_evalchemy_executor_accepts_scored_partial_results_and_reports_drops(tmp_path, monkeypatch):
+    output_dir = f"file://{tmp_path / 'partial'}"
+    marker = f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}] request timed out"
+    samples = [_lm_eval_generation(i, "exact_match", 1.0, "4") for i in range(9)]
+    samples.append(_lm_eval_generation(9, "exact_match", 0.0, marker))
+    _write_evalchemy_output(
+        output_dir,
+        "gsm8k_5shot",
+        {"gsm8k": {"exact_match,none": 1.0}},
+        {"gsm8k": samples},
+        scored_counts={"gsm8k": 9},
+        failure_category="AgentTimeoutError",
+    )
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
+        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+    )
+    executor = EvalchemyExecutor(EvalchemyRunConfig(name="gsm8k", tasks=(EvalTaskConfig("gsm8k", 5),)))
+
+    outcome = executor(_remote_session(), output_dir, {})
+
+    assert outcome.metrics == {"gsm8k_5shot": {"exact_match,none": 1.0}}
+    assert outcome.coverage["gsm8k_5shot"] == TaskCoverage(
+        n_benchmark=10,
+        n_attempted=10,
+        n_scored=9,
+        n_correct=9,
+        errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
+    )
 
 
 def test_aggregate_coverage_keeps_the_full_benchmark_extent():

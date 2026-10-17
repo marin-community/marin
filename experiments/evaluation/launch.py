@@ -42,6 +42,8 @@ from marin.evaluation.records import (
     EvalRef,
     ModelConfigRef,
     ModelRef,
+    RunStatus,
+    list_records,
 )
 from marin.evaluation.runner import (
     EndpointRoute,
@@ -83,6 +85,38 @@ _SERVE_THROUGHPUT_FIELDS = {"max_num_batched_tokens", "max_num_seqs", "gpu_memor
 _EVALCHEMY_THROUGHPUT_FIELDS = {"num_concurrent"}
 
 logger = logging.getLogger(__name__)
+
+
+def _model_identity(model: ModelRef) -> dict:
+    return model.model_copy(update={"source_config": model.source_config or model.config}).model_dump(
+        mode="json",
+        exclude={
+            "config_digest": True,
+            "config": {"serve": _SERVE_THROUGHPUT_FIELDS},
+            "source_config": {"serve": _SERVE_THROUGHPUT_FIELDS},
+        },
+    )
+
+
+def _evaluation_identity(evaluation: EvalRef) -> dict:
+    excluded = {"tasks": {"__all__": {"benchmark"}}}
+    if evaluation.evalchemy is not None:
+        excluded.update({"source_digest": True, "evalchemy": _EVALCHEMY_THROUGHPUT_FIELDS})
+    return evaluation.model_dump(mode="json", exclude=excluded)
+
+
+def _same_evaluation(prior: EvalRef, current: EvalRef) -> bool:
+    before, after = _evaluation_identity(prior), _evaluation_identity(current)
+    if (
+        current.evalchemy is not None
+        and current.source_digest is not None
+        and current.source_digest == prior.source_digest
+    ):
+        # Completed group tasks expand into benchmark leaves in the record. An unchanged launch
+        # configuration establishes the original task selection; compare the remaining controls.
+        before.pop("tasks")
+        after.pop("tasks")
+    return before == after
 
 
 @dataclass(frozen=True)
@@ -335,22 +369,9 @@ def build_evaluation_batch(
         cache_key = json.dumps(
             {
                 "pipeline": spec.cache_key or group_id,
-                "model": model_ref.model_dump(
-                    mode="json",
-                    exclude={
-                        "config": {"serve": _SERVE_THROUGHPUT_FIELDS},
-                        "source_config": {"serve": _SERVE_THROUGHPUT_FIELDS},
-                    },
-                ),
-                "evaluation": definition.record_ref.model_dump(
-                    mode="json",
-                    exclude=(
-                        {"source_digest": True, "evalchemy": _EVALCHEMY_THROUGHPUT_FIELDS}
-                        if definition.record_ref.evalchemy is not None
-                        else None
-                    ),
-                ),
-                "runtime": definition.runtime_descriptor,
+                "model": _model_identity(model_ref),
+                "evaluation": _evaluation_identity(definition.record_ref),
+                "runtime": definition.runtime_descriptor if spec.cache_key is not None else None,
                 "judge": (
                     ModelConfigRef.model_validate(asdict(judge.model)).model_dump(mode="json")
                     if judge is not None
@@ -418,7 +439,47 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
         git_sha=_git_sha(),
         launch_host=socket.gethostname(),
     )
-    return build_evaluation_batch(spec, provenance, _launch_user())
+    batch = build_evaluation_batch(spec, provenance, _launch_user())
+    if spec.run_id is None:
+        return batch
+    if batch.records_prefix.startswith("s3://"):
+        configure_coreweave_s3()
+    model = _model_identity(
+        ModelRef(
+            name=batch.model.name,
+            location=batch.model.location,
+            backend=batch.model.serve.backend.value,
+            config=ModelConfigRef.model_validate(asdict(batch.model)),
+            source_config=batch.source_model_config,
+        )
+    )
+    judge = None if batch.judge is None else ModelConfigRef.model_validate(asdict(batch.judge.model))
+    records = sorted(
+        (
+            record
+            for record in list_records(batch.records_prefix)
+            if record.group_id == batch.group_id
+            and record.version == batch.version
+            and _model_identity(record.model) == model
+            and (record.judge.model.source_config or record.judge.model.config if record.judge is not None else None)
+            == judge
+        ),
+        key=lambda record: (record.status is RunStatus.SUCCEEDED, record.created_at),
+        reverse=True,
+    )
+    evaluations = []
+    for evaluation in batch.evaluations:
+        prior = next(
+            (record for record in records if _same_evaluation(record.evaluation, evaluation.identity.eval_ref)),
+            None,
+        )
+        if prior is not None:
+            evaluation = replace(
+                evaluation,
+                identity=replace(evaluation.identity, run_id=prior.run_id, output_dir=prior.results_path),
+            )
+        evaluations.append(evaluation)
+    return replace(batch, evaluations=tuple(evaluations))
 
 
 def run_evaluation_group(batch: EvaluationBatch) -> None:

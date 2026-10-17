@@ -11,9 +11,11 @@ from types import SimpleNamespace
 import pytest
 from click.testing import CliRunner
 from marin.evaluation.hardware import Platform
-from marin.evaluation.runner import EvaluationBatch
+from marin.evaluation.records import RunStatus
+from marin.evaluation.runner import EvaluationBatch, _record
 from marin.execution.step_runner import StepRunner
 
+import experiments.evaluation.launch as launch_module
 from experiments.evaluation.cli import cli
 from experiments.evaluation.evals import EvalchemyDefinition
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, prepare_evaluation_batch
@@ -58,7 +60,9 @@ def _command(tmp_path: Path) -> list[str]:
 
 
 @pytest.mark.parametrize("explicit_run_id", [True, False])
-def test_relaunch_reuses_completed_steps_and_preserves_partial_archive(tmp_path, submitted_batches, explicit_run_id):
+def test_relaunch_reuses_completed_steps_and_preserves_partial_archive(
+    tmp_path, submitted_batches, explicit_run_id, monkeypatch
+):
     runner = CliRunner()
     command = _command(tmp_path)
     if not explicit_run_id:
@@ -67,19 +71,37 @@ def test_relaunch_reuses_completed_steps_and_preserves_partial_archive(tmp_path,
     first = runner.invoke(cli, command)
     assert first.exit_code == 0, first.output
     batch = submitted_batches[-1]
+    # Records from earlier launches can have IDs derived from a different runtime revision.
+    batch = replace(
+        batch,
+        evaluations=tuple(
+            replace(
+                evaluation,
+                identity=replace(
+                    evaluation.identity,
+                    run_id=f"saved-eval-{index}",
+                    output_dir=str(tmp_path / f"saved-eval-{index}" / "results"),
+                ),
+            )
+            for index, evaluation in enumerate(batch.evaluations)
+        ),
+    )
     executed = []
 
     def execute(evaluation, _output_path):
         executed.append(evaluation.identity.run_id)
-        return {"finished": evaluation.identity.run_id}
+        path = _record(batch, evaluation.identity, RunStatus.SUCCEEDED, None, {}, {}, {})
+        return {"record_path": path}
 
     steps = build_evaluation_steps(batch, execute)
     StepRunner().run(steps[:1])
     pending = batch.evaluations[1]
+    _record(batch, pending.identity, RunStatus.ARTIFACT_FAILED, "interrupted", {}, {}, {})
     partial = Path(pending.identity.output_dir) / "saved-request.json"
     partial.parent.mkdir(parents=True)
     partial.write_text('{"response":"already generated"}')
     executed.clear()
+    monkeypatch.setattr(launch_module, "EVALCHEMY", replace(launch_module.EVALCHEMY, commit="a" * 40))
 
     second = runner.invoke(cli, [*command, "--run-id", batch.group_id, "--instances", "8", "--max-concurrent", "8"])
     assert second.exit_code == 0, second.output

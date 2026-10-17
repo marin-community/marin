@@ -325,11 +325,14 @@ and keeps unfinished evals in their existing FineStore archives. Evalchemy resto
 requests from those archives even when the inference URL or request concurrency changes.
 A batch with every step completed starts no servers.
 
-Model, scoring, or evaluator-runtime changes produce distinct evaluation steps under the run ID.
+Model or scoring-setting changes produce distinct evaluation steps under the run ID.
 Serving instance counts, evaluator concurrency, GPU memory utilization, and scheduling budgets
-preserve step identity. Evalchemy independently checks the model, generation protocol, implementation,
-and installed dependencies before restoring partial requests. Changing its code or dependencies
-can invalidate partial checkpoints; use a new run ID for those changes.
+preserve step identity. Evaluator code and dependency updates also preserve CLI evaluation identity
+and existing archive paths. Evalchemy validates logical model, task, prompt, generation, and judge
+settings and each saved request's inputs; code and dependency versions remain provenance.
+Isolated request failures retain valid aggregate scores and explicit item coverage. Marin accepts
+at least 90% scored coverage when infrastructure failures occur; missing results or inconsistent
+scored counts still fail validation.
 
 ### Harbor credentials
 

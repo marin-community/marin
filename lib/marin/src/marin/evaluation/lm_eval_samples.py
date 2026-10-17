@@ -588,7 +588,11 @@ def _evalchemy_contract_summary(
         outcomes = result.get("task_outcomes", {})
         for leaf, outcome in outcomes.items():
             count = outcome.get(SCORED_COUNT_METRIC)
-            if outcome.get("status") == "succeeded" and isinstance(count, int) and not isinstance(count, bool):
+            if (
+                (outcome.get("status") == "succeeded" or _has_partial_evalchemy_scores(result))
+                and isinstance(count, int)
+                and not isinstance(count, bool)
+            ):
                 if count < 0:
                     raise ValueError(f"{directory}/{leaf}: scored_count must be non-negative")
                 scored_counts[_task_key(directory, leaf, len(benchmarks.get(directory, outcomes)))] = count
@@ -788,6 +792,21 @@ def _is_native_evalchemy_source(name: str) -> bool:
     return len(relative.parts) == 3 and relative.parts[1] == EVALCHEMY_NATIVE_SOURCE_DIR
 
 
+def _has_partial_evalchemy_scores(document: dict) -> bool:
+    results = document.get("results", {})
+    outcomes = document.get("task_outcomes", {})
+    if not results or not outcomes:
+        return False
+    for task, outcome in outcomes.items():
+        if not results.get(task) or not outcome.get("scored_count", 0):
+            return False
+        if outcome.get("status") == "succeeded":
+            continue
+        if outcome.get("failure", {}).get("category") not in {"model_transport", "AgentTimeoutError"}:
+            return False
+    return True
+
+
 def read_evalchemy_results(out_path: str, *, expected_prefixes: Sequence[str] = ()) -> dict[str, dict]:
     """Read evaluator-owned result documents keyed by their task-config prefix."""
     rows = list(ReadView(out_path).iter_rows(EVALCHEMY_RESULTS_TABLE))
@@ -796,10 +815,17 @@ def read_evalchemy_results(out_path: str, *, expected_prefixes: Sequence[str] = 
     missing = sorted(set(expected_prefixes) - {row["source_prefix"] for row in rows})
     if missing:
         raise FileNotFoundError(f"archive at {out_path!r} contains no Evalchemy results for {missing}")
-    unscored = sorted(row["source_prefix"] for row in rows if not row["scored"])
+    documents = {row["source_prefix"]: json.loads(row["document"]) for row in rows}
+    # A completion flag also reflects dropped requests. Valid partial aggregates must reach the
+    # sample coverage checks rather than being rejected as if no scoring happened.
+    unscored = sorted(
+        row["source_prefix"]
+        for row in rows
+        if not row["scored"] and not _has_partial_evalchemy_scores(documents[row["source_prefix"]])
+    )
     if unscored:
         raise ValueError(f"Evalchemy recorded unscored results for {unscored} in {out_path!r}")
-    return {row["source_prefix"]: json.loads(row["document"]) for row in rows}
+    return documents
 
 
 def summarize_native_eval_samples(
