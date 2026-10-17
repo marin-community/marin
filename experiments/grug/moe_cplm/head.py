@@ -106,5 +106,3 @@ def copy_paste_nll(
     copy_logit = jnp.sum(hidden.astype(jnp.float32) * copy_weight.astype(jnp.float32), -1)
     sink_logp, target_logp = copy_log_probabilities(queries, keys, sink, tokens, labels, segments, query_tile=query_tile)
     return mixture_nll(native_nll, log_partition, copy_logit, sink_logp, target_logp)
-
-
