@@ -92,6 +92,9 @@ def main() -> None:
     parser.add_argument(
         "--exclude-task", action="append", default=[], help="task=reason=evidence, either family (repeatable)"
     )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="print the SWE-smith removals and replacement draw; write nothing"
+    )
     args = parser.parse_args()
     version = args.version
     pool = StoragePath(args.pool)
@@ -152,6 +155,24 @@ def main() -> None:
     allocation = proportional({repo: len(tasks) for repo, tasks in unused.items()}, shortfall)
     rng = random.Random(f"{SEED}:v{version}-topup")
     added = sorted(task for repo in sorted(unused) for task in rng.sample(unused[repo], allocation[repo]))
+    if args.dry_run:
+        # The draw depends only on SWE-smith state and the seed, so the final run reproduces this list.
+        print(
+            "TOPUP_DRY_RUN "
+            + json.dumps(
+                {
+                    "version": version,
+                    "removed": sorted(row["task_id"] for row in removed),
+                    "removed_heldout": sorted(row["task_id"] for row in removed if row["heldout"]),
+                    "shortfall": shortfall,
+                    "allocation": {r: c for r, c in allocation.items() if c},
+                    "added": added,
+                    "added_repos": {task: repo_of[task] for task in added},
+                }
+            ),
+            flush=True,
+        )
+        return
 
     with tempfile.TemporaryDirectory() as temporary:
         work = Path(temporary)
