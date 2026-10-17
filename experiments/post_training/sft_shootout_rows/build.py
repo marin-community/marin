@@ -350,6 +350,8 @@ def write_split(path: Path, entries: list[tuple[str, dict]], seed: str) -> tuple
     return index, {
         "rows": len(index),
         "padding_rows": padding,
+        # Rows the trainer reads per epoch of this file (a multiple of 16); the consumer sets its block size from it.
+        "padded_rows": len(index) + padding,
         "steps": (len(index) + padding) // BATCH,
         "supervised_tokens": dict(supervised),
         "context_tokens": dict(context),
