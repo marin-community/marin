@@ -44,9 +44,10 @@ class MachineRuntimeSpec(BaseModel):
 class RolloutLimits(BaseModel):
     """Turn, token, and time limits for one attempt.
 
-    ``max_total_tokens`` stops model requests before one whose prompt alone would bring the
-    cumulative prompt plus response tokens to the threshold; the last request sent may exceed it
-    by its new observation and response tokens. ``None`` sets no threshold.
+    ``max_total_tokens`` stops model requests when the tokens spent, plus the known part of the next
+    prompt, reach the threshold. The known part is the last request's prompt and response. The new
+    observations of a request are not in that count, so the last request sent can exceed the threshold
+    by its observation and response tokens. ``None`` sets no threshold.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)

@@ -77,7 +77,8 @@ class RolloutRecorder(Protocol):
     ) -> ModelTurn:
         """Send ``observations`` after the model's last message, and return the next turn.
 
-        ``token_ids`` pins the exact tokens of the next prompt. They must start with the tokens served so far.
+        ``token_ids`` pins the exact tokens of the next prompt. They must start with the tokens served so far:
+        under ``TraceMode.EXACT_TOKENS``, other tokens break the token contract before the request is sent.
         """
         ...
 
@@ -93,7 +94,7 @@ class RolloutRecorder(Protocol):
         ``data`` is for the trainer, for example a reward, and the engine does not read it. A turn with
         recorded observations ends the conversation's turns: ``reply`` refuses it. After ``LimitReached`` or a
         failed model request, the harness can still add data and metrics, for example a final reward, to the
-        step of the last turn until it returns.
+        step of the last turn until the record is final. If no turn exists, ``record`` raises the refusal again.
         """
         ...
 

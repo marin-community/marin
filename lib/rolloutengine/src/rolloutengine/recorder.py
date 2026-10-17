@@ -215,6 +215,13 @@ class _Recorder:
             raise RuntimeError("A turn has recorded final observations, so the harness cannot reply to it")
         if self.stop_reason == LENGTH_STOP_REASON or self.budget_reached or self.turns >= self.limits.max_turns:
             self._stop_at_limit(observations, token_ids)
+        served = conversation.trace.prefix
+        if token_ids is not None and self.mode == TraceMode.EXACT_TOKENS and token_ids[: len(served)] != served:
+            # The harness pinned the wrong tokens, so no model sees this request. As at a limit, the refused
+            # request ends the last turn's step, so that a later record adds to that step.
+            self._end_step(done=False, observations=observations, token_ids=token_ids, waited=self._waited())
+            self.model_error = RolloutContractError("Pinned prompt tokens must start with the tokens served so far")
+            raise RolloutEnded("The pinned prompt broke the token contract") from self.model_error
         request = _Request(observations, token_ids, None, self._waited())
         return await self._send(request, conversation.request(observations, token_ids))
 
@@ -260,7 +267,11 @@ class _Recorder:
             record = self.earlier[-1]
             self.earlier[-1] = replace(record, steps=(*record.steps[:-1], added(record.steps[-1])))
         else:
-            raise RuntimeError("A harness records step data only after a model turn")
+            # Without a turn there is no step. The refusal stays the outcome, also for a harness that records
+            # a final reward in its handler of the refusal.
+            refusal = self._refusal()
+            assert refusal is not None
+            raise refusal
 
     async def _enter(self) -> None:
         refusal = self._refusal()

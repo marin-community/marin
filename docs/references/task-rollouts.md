@@ -139,7 +139,8 @@ The recorder applies these rules:
   cause. The harness lets both propagate. For a token-contract violation, the engine then raises
   `RolloutContractError`. A harness that catches a refusal and asks again gets the same refusal, until a turn
   or attempt deadline stops it. After a refusal, `record(data=..., metrics=...)` still adds to the step of the
-  last turn until `run` returns, for example to attach a final reward.
+  last turn until the record is final, for example to attach a final reward. If no turn exists, `record` raises
+  the refusal again, so the refusal stays the outcome of the attempt.
 - The record is final when `run` returns or raises, or when a turn deadline expires. The recorder then cancels
   a model call that is still open, for example in an agent's HTTP handler, and ignores its result. Thus the
   grader and the returned rollout see the same record.
@@ -444,8 +445,8 @@ If the model callable sets `ModelTurn.usage` (`TokenUsage(prompt_tokens, complet
 charges those counts. Otherwise it charges `len(prompt_token_ids) + len(response_token_ids)`.
 Without a new conversation, the next prompt holds at least the previous request's prompt and response.
 After each response, the recorder refuses the next request when the tokens spent plus that request's count reach
-`max_total_tokens`, so it never sends a request whose prompt alone reaches the budget. The last request sent may
-exceed it by its new observation and response tokens.
+`max_total_tokens`. The new observations of the next request are not in that count, so the last request sent
+can exceed the budget by its observation and response tokens.
 The harness handles the last response; its next request raises `LimitReached`, and the engine grades with
 `stop_reason="budget_reached"`. The budget takes precedence when that request also uses the last permitted turn.
 With a budget set, a turn that reports neither `usage` nor prompt token IDs, which `TraceMode.MESSAGES` allows,
@@ -546,7 +547,8 @@ earlier served tokens, which the next prompt must keep unchanged, and the index 
 they end. The transport tokenizes only the messages after that index and appends their tokens.
 If `Prompt.token_ids` or the `token_ids` of `reply` is set, `ModelRequest.prompt_token_ids` carries that exact
 prompt to the model transport, and the request has no continuation. The returned turn must report the same
-prompt tokens.
+prompt tokens. Under `TraceMode.EXACT_TOKENS`, the pinned tokens of a `reply` must start with the served
+tokens. If they do not, the recorder sends no request, and the engine raises `RolloutContractError`.
 `ModelTurn.prompt_token_ids` contains the exact prompt sent to inference. `response_token_ids` contains the sampled response.
 Optional log probabilities align with response tokens.
 A continuation prompt preserves the full served prefix, including earlier response tokens.

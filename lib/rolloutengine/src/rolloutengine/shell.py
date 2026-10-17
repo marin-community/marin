@@ -266,7 +266,7 @@ async def _call_tools(
     for call in message.calls:
         answer_call = isinstance(task.answer_format, AnswerCall) and call.name == ANSWER_CALL_NAME
         if call.name in final_tools or answer_call:
-            return Transition(done=True)
+            return Transition(done=True, observations=tuple(observations))
         started = time.monotonic()
         if not isinstance(call.arguments, dict):
             result = ToolCallResult(json.dumps({"error": TOOL_ARGUMENTS_OBJECT_ERROR}))

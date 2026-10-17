@@ -3478,6 +3478,71 @@ async def test_a_harness_records_a_final_reward_after_the_recorder_refuses_a_req
     assert rollout.metrics["score"] == 1.0
 
 
+async def test_recording_after_a_failed_first_request_raises_the_refusal_again():
+    class RecordsAfterAFailedFirstRequest:
+        def check(self, task, limits):
+            pass
+
+        async def run(self, context, recorder):
+            try:
+                await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+            except RolloutEnded:
+                # Without a turn there is no step for the reward, and the refusal stays the outcome.
+                with pytest.raises(RolloutEnded):
+                    recorder.record(data="final")
+                raise
+
+    class FailingModel(ReplayModel):
+        async def complete(self, request):
+            raise ConnectionError("inference server unavailable")
+
+    with pytest.raises(GradedRolloutInterrupted) as caught:
+        await engine(FailingModel([]), harnesses={"fixture": RecordsAfterAFailedFirstRequest()}).run_task(
+            rollout_spec(arithmetic_task(), harness="fixture")
+        )
+    assert caught.value.operation == RolloutOperation.MODEL
+    assert isinstance(caught.value.__cause__, ConnectionError)
+
+
+async def test_a_pinned_prompt_that_does_not_start_with_the_served_tokens_is_not_sent():
+    recorded = []
+
+    class PinsOtherTokens:
+        def check(self, task, limits):
+            pass
+
+        async def run(self, context, recorder):
+            await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+            try:
+                await recorder.reply(({"role": "user", "content": "Again."},), token_ids=(1, 2, 3))
+            except RolloutEnded:
+                # The refused request ended the turn's step, so the step still takes data.
+                recorder.record(data="final")
+                recorded.append(True)
+                raise
+
+    model = ReplayModel([{"role": "assistant", "content": "12"}, {"role": "assistant", "content": "12"}])
+    with pytest.raises(RolloutContractError, match="must start with the tokens served so far"):
+        await engine(model, harnesses={"fixture": PinsOtherTokens()}).run_task(
+            rollout_spec(arithmetic_task(), harness="fixture")
+        )
+    assert (len(model.requests), recorded) == (1, [True])
+
+
+async def test_a_final_call_keeps_the_observations_of_the_calls_before_it():
+    task = file_task(final_tools=(FunctionDefinition(name="finish", parameters={"type": "object"}),))
+    write = shell_call("echo 12 > /workspace/answer")["tool_calls"][0]
+    finish = {"id": "finish", "type": "function", "function": {"name": "finish", "arguments": "{}"}}
+    model = ReplayModel([{"role": "assistant", "content": "", "tool_calls": [write, finish]}])
+    record = await engine(model, {"local": RecordingShellSimFactory()}).run_task(
+        rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
+    [step] = record.rollout.conversations[-1].steps
+    [observation] = step.transition.observations
+    assert (step.transition.done, observation["tool_call_id"]) == (True, "write")
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+
+
 async def test_a_grading_failure_after_a_model_failure_keeps_the_model_failure():
     class FailingModel(ReplayModel):
         async def complete(self, request):
