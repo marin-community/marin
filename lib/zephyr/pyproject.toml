@@ -30,7 +30,7 @@ dependencies = [
 [dependency-groups]
 test = [
     # tests/iris starts a LocalCluster, which embeds the native log server.
-    "marin-finelog-server>=0.2.54.dev35409391246",
+    "marin-iris[controller]",
     "pytest>=8.3.2",
     "pytest-timeout",
     "pytest-xdist",
