@@ -8,17 +8,19 @@
 #   plain: k attempts per task                          -> <out>/shard-NN
 #   relay: round 1 is 2 attempts per task; each later   -> <out>/shard-NN/round-R
 #          round is 1 attempt for every non-held-out task with fewer than 4 relay episodes (a pass with
-#          a GLM turn) and fewer than 5 runs (relay_followup.py), up to round MAX_ROUND (default 4).
-#          A lane stops before its next round once <out>/STOP exists (the family's relay target is met).
+#          a GLM turn) and fewer than MAX_RUNS runs (default 5; relay_followup.py), up to round MAX_ROUND
+#          (default 4). Before each new round, a lane stops once <out>/STOP exists (the family's relay target
+#          is met) and moves to its next shard once <out>/shard-NN/STOP exists (that shard's target is met).
 #
 # Needs GLM_BULK_TOKEN and DAYTONA_API_KEY in the environment.
 #   bash experiments/post_training/sft_shootout/run_lane.sh <plain|relay> <family> <agent> <k> <concurrency> \
 #     <tasks parquet> <package revision> <shards dir> <out> <shard numbers...>
-set -u
+set -uo pipefail
 mode=$1 family=$2 agent=$3 k=$4 concurrency=$5 tasks=$6 revision=$7 shards=$8 out=$9
 shift 9
 dir=experiments/post_training/sft_shootout
 max_round=${MAX_ROUND:-4}
+max_runs=${MAX_RUNS:-5}
 
 exists() {  # <remote path>
   uv run python -c "import sys; from rigging.filesystem.storage_path import StoragePath; sys.exit(not StoragePath('$1').exists())"
@@ -49,10 +51,11 @@ for i in "$@"; do
       continue
     fi
     if exists "$out/STOP"; then echo "STOP marker: $out/STOP"; break 2; fi
+    if exists "$out/shard-$i/STOP"; then echo "STOP marker: $out/shard-$i/STOP"; break; fi
     if [ "$r" = 1 ]; then
       generate "$shard" "$family-relay-$i-r1" 2 "$round" --relay || { echo "SHARD_FAILED $i round-1"; break; }
     else
-      remaining=$(uv run python $dir/relay_followup.py --shard "$shard" --rounds "${rounds[@]}" --need 4 --max-runs 5 \
+      remaining=$(uv run python $dir/relay_followup.py --shard "$shard" --rounds "${rounds[@]}" --need 4 --max-runs "$max_runs" \
         --out "$round-tasks.json" | tail -1) || { echo "SHARD_FAILED $i followup $r"; break; }
       echo "shard $i: $remaining tasks for round $r"
       [ "$remaining" -gt 0 ] || break

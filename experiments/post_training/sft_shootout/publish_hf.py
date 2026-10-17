@@ -9,11 +9,13 @@
         converts each run's rebuilt.jsonl to one parquet file (config "attempts" for plain runs, "relay" for
         relay rounds), drops the excluded tasks, tags held-out tasks from the shard files, and counts capability
         tokens in every row (scrub_run.count_tokens). Any token stops the script before anything is uploaded.
-        With --upload (needs HF_TOKEN in the env, never printed) it adds the files, the run provenance
-        and README.md to the repo in one commit; files already there are replaced by the same path.
+        With --upload (needs HF_TOKEN in the env, never printed) it adds the files and the run provenance to
+        the repo in one commit, merges the runs into runs.json and regenerates README.md (hf_README.md plus a
+        section built from runs.json and the pool manifest); files already there are replaced by the same path.
 """
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -30,6 +32,8 @@ from scrub_run import count_tokens  # noqa: E402
 
 REPO = "open-athena/GLM-5.3-tmax-swesmith-k8-traces-2026.10"
 README = Path(__file__).parent / "hf_README.md"
+CONSTRAINTS = Path(__file__).parent / "harbor_agents" / "mini-swe-agent-2.1.0-constraints.txt"
+POOL_MANIFEST = "s3://marin-us-east-02a/marin/experiments/sft-shootout/pool/manifest.json"
 # Pool v5 drops these TMax tasks (broken verifiers 000601, 001780; verifier hangs 000441, 001986); the running
 # TMax lanes still run them, so they are dropped here. The 7 SWE-smith removals were never sharded.
 EXCLUDED = {"task_000601_e01cc3c2", "task_001780_dcd2e021", "task_000441_9c3e397f", "task_001986_dd88e877"}
@@ -116,8 +120,37 @@ def convert(prefix: str) -> tuple[str, bytes, dict]:
     }
     tokens += count_tokens(json.dumps(provenance))
     name = f"{'relay' if round_ else 'attempts'}/{family}/shard-{shard}" + (f"-round-{round_}" if round_ else "")
-    summary = {"file": f"data/{name}.parquet", "rows": len(rows), "excluded_rows": dropped, "capability_tokens": tokens}
+    summary = {
+        "file": f"data/{name}.parquet",
+        "run": relative,
+        "family": family,
+        "config": "relay" if round_ else "attempts",
+        "package_revision": config["args"].get("package_revision"),
+        "rows": len(rows),
+        "passed": sum(1 for row in rows if row["passed"]),
+        "excluded_rows": dropped,
+        "capability_tokens": tokens,
+    }
     return name, buffer.getvalue(), {"summary": summary, "provenance": provenance}
+
+
+def readme(runs: dict[str, dict], manifest_sha256: str) -> str:
+    lines = [
+        README.read_text().rstrip(),
+        "",
+        "## Runs in this repo",
+        "",
+        f"- Pool v5 `manifest.json` sha256: `{manifest_sha256}`.",
+        f"- mini-swe-agent 2.1.0 dependency pins: `provenance/{CONSTRAINTS.name}` "
+        f"(sha256 `{hashlib.sha256(CONSTRAINTS.read_bytes()).hexdigest()}`).",
+    ]
+    for family in sorted({run["family"] for run in runs.values()}):
+        revisions = sorted({run["package_revision"] for run in runs.values() if run["family"] == family})
+        lines.append(f"- {family} task package revisions: {', '.join(f'`{r}`' for r in revisions)}.")
+    lines += ["", "| Config | Family | Run | Rows | Passed |", "|---|---|---|---|---|"]
+    for file, run in sorted(runs.items(), key=lambda item: (item[1]["config"], item[0])):
+        lines.append(f"| {run['config']} | {run['family']} | `{run['run']}` | {run['rows']:,} | {run['passed']:,} |")
+    return "\n".join(lines) + "\n"
 
 
 def main() -> None:
@@ -143,7 +176,16 @@ def main() -> None:
 
     api = HfApi(token=os.environ["HF_TOKEN"])
     api.create_repo(REPO, repo_type="dataset", private=False, exist_ok=True)
-    operations = [CommitOperationAdd("README.md", README.read_bytes())]
+    runs = {}
+    if api.file_exists(REPO, "runs.json", repo_type="dataset"):
+        runs = json.loads(Path(api.hf_hub_download(REPO, "runs.json", repo_type="dataset")).read_text())
+    runs.update({info["summary"]["file"]: info["summary"] for _, _, info in converted})
+    manifest_sha256 = hashlib.sha256(StoragePath(POOL_MANIFEST).read_bytes()).hexdigest()
+    operations = [
+        CommitOperationAdd("README.md", readme(runs, manifest_sha256).encode()),
+        CommitOperationAdd("runs.json", json.dumps(dict(sorted(runs.items())), indent=1).encode()),
+        CommitOperationAdd(f"provenance/{CONSTRAINTS.name}", CONSTRAINTS.read_bytes()),
+    ]
     for name, data, info in converted:
         operations.append(CommitOperationAdd(f"data/{name}.parquet", data))
         operations.append(CommitOperationAdd(f"provenance/{name}.json", json.dumps(info["provenance"], indent=2).encode()))

@@ -59,6 +59,7 @@ One row is one conversation with the model. A trial usually has one conversation
 - **Harbor**: pin `016dd78b`. Each family runs under its eval-campaign Harbor policy: `tb2-recovery.yaml` for TMax and `swebench-verified.yaml` for SWE-smith. These set the retries, timeouts, verifier and agent settings.
 - **SWE-smith input window**: 30,000 tokens at generation (the policy says 32,768). This keeps every trajectory within 32,768 tokens in the student's chat template.
 - **Max output tokens per turn**: 8,192 in plain runs; 16,384 in relay runs.
+- **mini-swe-agent**: version 2.1.0 with pinned dependencies (`provenance/mini-swe-agent-2.1.0-constraints.txt`, Python 3.12).
 - **TMax**: the policy's Terminus-2 settings are unchanged.
 - **Agent network (SWE-smith)**: during the agent phase, a sandbox can reach only the model endpoint's host. Setup and the verifier follow the task policy. Terminus-2 runs outside the sandbox.
 
@@ -75,10 +76,14 @@ One row is one conversation with the model. A trial usually has one conversation
   - `format_error`: the student's reply cannot be parsed. GLM writes one repair turn, then the student continues.
   - `context_budget`: the conversation passes 75% of the input window, counted with the student tokenizer (22,500 tokens for SWE-smith). GLM finishes the trial.
   - `completion_claim`: the student says it is done. Its reply is withheld and GLM finishes the trial.
-- **Rounds**: round 1 runs 2 attempts per task. Later rounds run 1 attempt for each non-held-out task that has fewer than 4 passing episodes with GLM turns and fewer than 5 runs.
+- **Rounds**: round 1 runs 2 attempts per task (2 runs). Each later round runs 1 attempt for every non-held-out task with fewer than 4 relay episodes (passing trials with at least one GLM turn) and fewer than the run cap. A trial that raised before any GLM reply does not count as a run.
+  - SWE-smith: up to 7 runs per task (rounds 1-6). Shards 00 and 01 ran rounds 1-4 under a 5-run cap first.
+  - TMax: 2 rounds per shard. Shard 00 also has rounds 3-4 and shard 01 has round 3, run before the 2-round limit.
+  - A shard stops early when its relay tokens reach 1.1 times its plain-run tokens.
 
 ## Notes
 
 - **Earlier reasoning in TMax**: Terminus-2 does not resend earlier reasoning to the model, because `interleaved_thinking` is off (Harbor `016dd78b`, `src/harbor/agents/terminus_2/terminus_2.py:415`). At generation, GLM saw only its current turn's reasoning. The rows restore the reasoning of every turn.
 - **Endpoint URLs**: the model endpoint was a capability URL, one per shard. Agent commands in the SWE-smith sandboxes could read it (from the command line in early runs, from environment variables later). Every published file was scanned for capability tokens by decoding them, and every token found was removed. Each endpoint was unregistered when its shard ended; an unregistered endpoint answers 404.
+- **SWE-smith relay shard 00, round 3**: from about 08:29 UTC on 2026-10-17, the relay proxy failed with HTTP 500 on most requests, and those requests were not logged. 85 of 97 trials raised (mini-swe-agent exited with code 1); 65 of them have no rows here. The other 32 trials have rows; failed ones carry `exception = NonZeroAgentExitCodeError`. Raised trials without a GLM reply do not count as runs, so those tasks got their run back in later rounds. Later runs log proxy failures and fail a run when over 20% of its trials raise without a reply.
 - **Rebuild problems**: rows with a non-empty `problems` list are kept so that per-trial counts stay complete. Filter on `problems == []` for training.
