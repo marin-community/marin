@@ -25,39 +25,32 @@ AgentRun = Callable[[HarnessContext, AgentCompletion], Coroutine[Any, Any, None]
 """An agent: it gets the attempt's context and a completion function, and sends one prompt at a time."""
 
 
-def _check_task_tools(task: TaskSpec, limits: RolloutLimits) -> None:
-    """Reject the tools that a task's own prompt advertises, because the agent does not get them.
-
-    A shell binding is exempt: the agent uses its own shell.
-    """
-    advertised = task_prompt(task, None, ()).options.get("tools", ())
-    tools = [tool["function"]["name"] for tool in advertised if tool["function"]["name"] not in task.tool_bindings]
-    tools.extend(requirement.action_interface for requirement in task.environment_requirements.tool_providers.values())
-    if tools:
-        raise NotImplementedError(f"The agent harness does not give these task tools to the agent: {tools}")
-
-
-def agent_harness(run: AgentRun, *, check: Callable[[TaskSpec, RolloutLimits], None] = _check_task_tools) -> Harness:
+def agent_harness(run: AgentRun) -> Harness:
     """A harness for an agent that owns its prompts and tool loop.
 
     Each completion call sends one prompt and returns the exact ``ModelTurn``, also from tasks that the agent
     does not await, such as HTTP handlers. A prompt that extends the last prompt with the model's message,
     under the same options, is a reply; any other prompt starts a new conversation. The last prompt again gets
     the same turn. One model request can be open at a time. When the attempt ends, calls wait until the
-    cleanup, after grading; the cleanup then cancels the agent. The default ``check`` rejects tools that the
-    agent does not get, such as an answer tool or a tool provider. The task rollout reference gives the rules
-    for cancelled calls and for the shutdown of the agent.
+    cleanup, after grading; the cleanup then cancels the agent. ``check`` rejects tools that the agent does
+    not get, such as an answer tool or a tool provider. The task rollout reference gives the rules for
+    cancelled calls and for the shutdown of the agent.
     """
-    return _AgentHarness(run, check)
+    return _AgentHarness(run)
 
 
 @dataclass(frozen=True)
 class _AgentHarness:
     agent: AgentRun
-    check_task: Callable[[TaskSpec, RolloutLimits], None]
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
-        self.check_task(task, limits)
+        # The agent does not get the tools that the task's own prompt advertises. A shell binding is exempt,
+        # because the agent uses its own shell.
+        advertised = task_prompt(task, None, ()).options.get("tools", ())
+        tools = [tool["function"]["name"] for tool in advertised if tool["function"]["name"] not in task.tool_bindings]
+        tools.extend(provider.action_interface for provider in task.environment_requirements.tool_providers.values())
+        if tools:
+            raise NotImplementedError(f"The agent harness does not give these task tools to the agent: {tools}")
 
     async def run(self, context: HarnessContext, recorder: RolloutRecorder) -> None:
         completions = _Completions(recorder)
