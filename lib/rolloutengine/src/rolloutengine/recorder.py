@@ -408,7 +408,8 @@ class _Recorder:
         conversations = list(self.earlier)
         if self.conversation is not None:
             conversations.append(self.conversation.record(self._incomplete()))
-        steps = conversations[-1].steps if conversations else ()
+        # The metrics of the last step, also when a new conversation failed before its first turn.
+        steps = next((record.steps for record in reversed(conversations) if record.steps), ())
         metrics = dict(steps[-1].transition.metrics) if steps else {}
         if self.mode == TraceMode.MESSAGES:
             metrics[TRACE_METRIC] = TraceMode.MESSAGES.value

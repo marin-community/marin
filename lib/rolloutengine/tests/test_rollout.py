@@ -2478,7 +2478,6 @@ async def test_attempts_without_a_run_id_keep_their_events_apart():
     results = [await runner.run_task(rollout_spec(arithmetic_task())) for _ in range(2)]
     run_ids = [event.run_id for event in observer.events]
     assert len(set(run_ids)) == 2
-    # Each rollout carries the ID of its events, so a caller can match them.
     assert [result.rollout.run_id for result in results] == list(dict.fromkeys(run_ids))
 
 
@@ -3424,6 +3423,7 @@ class StartsTwice:
 
     async def run(self, context, recorder):
         await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+        recorder.record(metrics={"score": 1.0})
         await recorder.start(Prompt(({"role": "user", "content": "Start again."},), {}))
 
 
@@ -3442,6 +3442,7 @@ async def test_a_model_failure_in_a_new_conversation_grades_the_earlier_one():
     assert (caught.value.grade.status, caught.value.grade.reward) == (Outcome.GRADED, 1.0)
     first, failed = caught.value.rollout.conversations
     assert (len(first.steps), failed.steps) == (1, ())
+    assert caught.value.rollout.metrics == {"score": 1.0}
 
 
 async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one():
@@ -3457,3 +3458,4 @@ async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one()
     assert (record.rollout.stop_reason, record.grade.status, record.grade.reward) == ("length", Outcome.GRADED, 1.0)
     first, unserved = record.rollout.conversations
     assert (len(first.steps), unserved.steps, unserved.prompt_token_ids) == (1, (), (70, 71))
+    assert record.rollout.metrics == {"score": 1.0}
