@@ -3,12 +3,14 @@
 
 """Request budgets and concurrency behaviour on the simulated S3 backend."""
 
+import hashlib
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from finestore.compaction import CompactionResult, compact_table
 from finestore.reader import ReadView
-from finestore.store import DataStore
+from finestore.store import DataStore, OnConflict
 from finestore.testing.simulated_s3 import Request, SimulatedConditionalObject, simulated_s3
 from rigging.filesystem.conditional_object import ConditionalWriteError
 from rigging.filesystem.storage_path import StoragePath
@@ -63,6 +65,45 @@ def test_read_view_costs_two_requests(simulated_bucket):
     # HEAD and the manifest it names.
     delta = fs.log.delta(before)
     assert delta.total() <= 2, dict(delta.requests)
+
+
+@pytest.mark.parametrize("payload_bytes", [0, 16 * 1024])
+def test_small_compaction_fetches_shards_concurrently_once_and_preserves_latest_rows(
+    simulated_bucket, monkeypatch, payload_bytes
+):
+    fs = simulated_bucket
+    store = DataStore.open(ROOT, writer_id="w1", flush_interval=3600, compaction_levels=(1000,))
+    table = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
+    for revision in range(17):
+        rows = [
+            {"id": index, "revision": revision, "payload": hashlib.shake_256(str(index).encode()).digest(payload_bytes)}
+            for index in range(8)
+        ]
+        table.extend(rows)
+        store.flush()
+    store.request_stop()
+    inputs = ReadView(ROOT).list_shards("samples")
+    assert len(inputs) == 17
+
+    concurrent_paths = {shard.path for shard in inputs[:2]}
+    barrier = threading.Barrier(2)
+    cat_file = fs.cat_file
+
+    def read(path, **kwargs):
+        if path in concurrent_paths:
+            barrier.wait(timeout=5)
+        return cat_file(path, **kwargs)
+
+    monkeypatch.setattr(fs, "cat_file", read)
+    before = fs.log.snapshot()
+    result = compact_table(ROOT, "samples")
+    delta = fs.log.delta(before)
+
+    assert result == CompactionResult(written=8, superseded=128)
+    # Two snapshot GETs, table metadata, one GET per input, and three publication writes.
+    assert delta.total() <= len(inputs) + 6, dict(delta.requests)
+    assert delta.requests[Request.HEAD] == 0
+    assert list(ReadView(ROOT).iter_rows("samples", columns=["id", "revision", "payload"])) == rows
 
 
 def test_listing_a_simulated_bucket_returns_reopenable_s3_paths(simulated_bucket):
