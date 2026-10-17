@@ -6395,7 +6395,7 @@ requires-dist = [
     { name = "marin-levanter", extras = ["serve"], editable = "lib/levanter" },
     { name = "marin-rigging", extras = ["prometheus"], editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
-    { name = "marinskyrl-recipe", git = "https://github.com/marin-community/MarinSkyRL.git?subdirectory=packages%2Fmarinskyrl-recipe&rev=37cdc0b604fd4c60a8261798da3061b08a99bb84" },
+    { name = "marinskyrl-recipe", git = "https://github.com/marin-community/MarinSkyRL.git?subdirectory=packages%2Fmarinskyrl-recipe&rev=8b07adf11a232709856d0f1300456818ac01765e" },
     { name = "markdownify", specifier = ">=0.14.1" },
     { name = "mcp", specifier = ">=2" },
     { name = "msgspec", specifier = ">=0.18.0" },
@@ -7876,7 +7876,7 @@ test = [
 [[package]]
 name = "marinskyrl-recipe"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?subdirectory=packages%2Fmarinskyrl-recipe&rev=37cdc0b604fd4c60a8261798da3061b08a99bb84#37cdc0b604fd4c60a8261798da3061b08a99bb84" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?subdirectory=packages%2Fmarinskyrl-recipe&rev=8b07adf11a232709856d0f1300456818ac01765e#8b07adf11a232709856d0f1300456818ac01765e" }
 dependencies = [
     { name = "pydantic" },
 ]
