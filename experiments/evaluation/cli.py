@@ -205,6 +205,9 @@ def cli() -> None:
     help="Human version label for this launch, e.g. '2026.07.20' or 'rl-fix-sweep'.",
 )
 @click.option("--description", default=None, help="Free-text note on why this launch was run.")
+@click.option(
+    "--run-id", default=None, help="Stable launch ID; repeat the command with this ID to reuse completed evals."
+)
 @click.option("--no-wait", is_flag=True, help="Submit and return without waiting for results.")
 @click.option("--dry-run", is_flag=True, help="Print the resolved plan without submitting.")
 @click.option(
@@ -240,6 +243,7 @@ def launch(
     seed: int | None,
     version: str | None,
     description: str | None,
+    run_id: str | None,
     no_wait: bool,
     dry_run: bool,
     records_prefix: str | None,
@@ -288,6 +292,7 @@ def launch(
         judge_accelerator=judge_accelerator,
         version=version,
         description=description,
+        run_id=run_id,
     )
     try:
         batch = prepare_evaluation_batch(spec)

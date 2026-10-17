@@ -77,9 +77,9 @@ class BenchmarkMetricRef(BaseModel):
 
 
 class BenchmarkMetadataRef(BaseModel):
-    """The benchmark protocol emitted by an evaluation harness."""
+    """The benchmark protocol, retaining evaluator-owned metadata beyond the shared fields."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     schema_version: Literal[1]
     task: str

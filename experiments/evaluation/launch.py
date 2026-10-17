@@ -9,6 +9,7 @@ import getpass
 import json
 import logging
 import os
+import re
 import socket
 import subprocess
 import uuid
@@ -106,6 +107,7 @@ class LaunchSpec:
     description: str | None = None
     cache_key: str | None = None
     """Reuse evaluation records for this key and the same resolved configuration."""
+    run_id: str | None = None
 
 
 def _git_sha() -> str:
@@ -123,11 +125,9 @@ def _launch_user() -> str:
     return os.environ.get("MARIN_EVAL_USER") or getpass.getuser()
 
 
-def _run_id(model_name: str, eval_key: str, cache_key: str | None) -> str:
-    if cache_key is not None:
-        return f"pipeline-{model_name}-{eval_key}-{uuid.uuid5(uuid.NAMESPACE_URL, cache_key).hex}"
-    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{stamp}-{model_name}-{eval_key}-{uuid.uuid4().hex}"
+def _run_id(model_name: str, eval_key: str, cache_key: str, group_id: str | None) -> str:
+    prefix = group_id if group_id is not None else f"pipeline-{model_name}"
+    return f"{prefix}-{eval_key}-{uuid.uuid5(uuid.NAMESPACE_URL, cache_key).hex}"
 
 
 def _group_id(model_name: str, cache_key: str | None) -> str:
@@ -277,6 +277,11 @@ def build_evaluation_batch(
     user: str,
 ) -> EvaluationBatch:
     """Resolve experiment names into one configurable evaluation batch."""
+    if spec.run_id is not None:
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", spec.run_id) is None:
+            raise ValueError("--run-id must contain only letters, digits, dots, underscores, and hyphens")
+        if spec.cache_key is not None:
+            raise ValueError("--run-id and pipeline cache_key cannot be combined")
     if spec.max_concurrent < 1:
         raise ValueError("max_concurrent must be at least 1")
     if spec.instances < 1:
@@ -314,7 +319,7 @@ def build_evaluation_batch(
     if judge is not None and any(isinstance(definition.executor, EvalchemyExecutor) for _, definition in definitions):
         raise ValueError("--judge-model serves Harbor verifiers only; remove it or drop the Evalchemy evaluations")
     records_prefix = records_prefix_for(accelerator, spec)
-    group_id = _group_id(model.name, spec.cache_key)
+    group_id = spec.run_id or _group_id(model.name, spec.cache_key)
     created_at = datetime.now(UTC).isoformat()
     secret_env: dict[str, SecretSpec] = {}
     for _, definition in definitions:
@@ -325,26 +330,41 @@ def build_evaluation_batch(
 
     evaluations: list[Evaluation] = []
     for eval_key, definition in definitions:
-        cache_key = (
-            json.dumps(
-                {
-                    "pipeline": spec.cache_key,
-                    "model": model_ref.model_dump(mode="json"),
-                    "evaluation": definition.record_ref.model_dump(mode="json"),
-                    "runtime": definition.runtime_descriptor,
-                    "judge": (
-                        ModelConfigRef.model_validate(asdict(judge.model)).model_dump(mode="json")
-                        if judge is not None
+        cache_key = json.dumps(
+            {
+                "pipeline": spec.cache_key or group_id,
+                "model": model_ref.model_dump(
+                    mode="json",
+                    exclude=(
+                        {
+                            "config": {"serve": {"max_num_batched_tokens", "max_num_seqs", "gpu_memory_utilization"}},
+                            "source_config": {
+                                "serve": {"max_num_batched_tokens", "max_num_seqs", "gpu_memory_utilization"}
+                            },
+                        }
+                        if spec.cache_key is None
                         else None
                     ),
-                    "policy": spec.version,
-                },
-                sort_keys=True,
-            )
-            if spec.cache_key is not None
-            else None
+                ),
+                "evaluation": definition.record_ref.model_dump(
+                    mode="json",
+                    exclude=(
+                        {"source_digest": True, "evalchemy": {"num_concurrent"}}
+                        if spec.cache_key is None and definition.record_ref.evalchemy is not None
+                        else None
+                    ),
+                ),
+                "runtime": definition.runtime_descriptor,
+                "judge": (
+                    ModelConfigRef.model_validate(asdict(judge.model)).model_dump(mode="json")
+                    if judge is not None
+                    else None
+                ),
+                "policy": spec.version,
+            },
+            sort_keys=True,
         )
-        run_id = _run_id(model.name, eval_key, cache_key)
+        run_id = _run_id(model.name, eval_key, cache_key, group_id if spec.cache_key is None else None)
         evaluations.append(
             Evaluation(
                 identity=EvaluationIdentity(

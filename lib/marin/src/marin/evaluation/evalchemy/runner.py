@@ -41,7 +41,7 @@ from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_NUM_CONCURRENT = 16
+DEFAULT_NUM_CONCURRENT = 64
 LOG_TAIL_LINES = 100
 _EVAL_CLIENT_SCRIPT = "lib/marin/src/marin/evaluation/evalchemy/client.py"
 _EVAL_JOB_ROLE = "eval"
@@ -294,6 +294,11 @@ def run_evalchemy(
     if "://" not in output_dir:
         raise ValueError(f"Evalchemy output_dir {output_dir!r} is not an object-store path")
     eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
+    return read_evalchemy_outcome(config, output_dir, eval_job)
+
+
+def read_evalchemy_outcome(config: EvalchemyRunConfig, output_dir: str, eval_job: str) -> EvalchemyOutcome:
+    """Validate and normalize saved Evalchemy outputs without repeating inference."""
     try:
         result = FineStoreEvalchemyResult(path=output_dir)
         metrics = result.task_metrics()

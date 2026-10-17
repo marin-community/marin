@@ -824,11 +824,19 @@ def test_export_uses_evaluator_metadata_for_chat_native_task(tmp_path):
     results = tmp_path / "run" / "results"
     directory = results / "math500" / "model"
     directory.mkdir(parents=True)
+    contract = _result_contract("MATH500", "accuracy", "accuracy", 1.0, n_benchmark=500, n_attempted=10)
+    source_metadata = {
+        "source": {"dataset": "HuggingFaceH4/MATH-500", "split": "test", "revision": None},
+        "reducers": [{"name": "mean", "accuracy_key": "accuracy", "selected_trial": None}],
+        "prompt_length": {"distinct_prompt_count": 500, "longest_prompt_tokens": 2048},
+        "requires_judge": False,
+    }
+    contract["benchmark_metadata"]["MATH500"].update(source_metadata)
     (directory / "results_20260807.json").write_text(
         json.dumps(
             {
                 "results": {"MATH500": {"accuracy": 1.0}},
-                **_result_contract("MATH500", "accuracy", "accuracy", 1.0, n_benchmark=500, n_attempted=10),
+                **contract,
             }
         )
     )
@@ -836,14 +844,19 @@ def test_export_uses_evaluator_metadata_for_chat_native_task(tmp_path):
     row["accuracy"] = row.pop("exact_match")
     (directory / "samples_MATH500_20260807.jsonl").write_text(json.dumps(row) + "\n")
 
-    [coverage] = export_lm_eval_samples(
+    exported = export_lm_eval_samples(
         str(results),
         tasks=(EvalTaskRef(name="MATH500", num_fewshot=0, task_alias="math500"),),
-    ).coverage.values()
+    )
+    [coverage] = exported.coverage.values()
 
     assert coverage.n_benchmark == 500
     assert coverage.n_attempted == 10
     assert coverage.n_scored == 1
+    benchmark = exported.tasks[0].benchmark
+    assert benchmark is not None
+    persisted = benchmark.model_dump(mode="json")
+    assert {key: persisted[key] for key in source_metadata} == source_metadata
 
 
 def test_export_records_aggregate_only_benchmark_metadata(tmp_path):

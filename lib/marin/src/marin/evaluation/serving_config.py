@@ -37,7 +37,9 @@ logger = logging.getLogger(__name__)
 
 ENDPOINT_READY_TIMEOUT_SECONDS = 2400
 _BROKER_DEADLINE_MARGIN_SECONDS = 60
-EVAL_SERVE_MAX_NUM_BATCHED_TOKENS = 512
+EVAL_SERVE_MAX_NUM_BATCHED_TOKENS = {Platform.GPU: 4096, Platform.TPU: 512}
+_EVAL_WORKER_MAX_IN_FLIGHT = 64
+_EVAL_PROXY_MIN_PENDING_REQUESTS = 256
 DEFAULT_SERVE_CPU = 8.0
 _HF_CONFIG_FILENAME = "config.json"
 _MAX_POSITION_EMBEDDINGS_KEY = "max_position_embeddings"
@@ -210,7 +212,7 @@ def _vllm_engine_config(
         max_num_batched_tokens=(
             serve.max_num_batched_tokens
             if serve.max_num_batched_tokens is not None
-            else EVAL_SERVE_MAX_NUM_BATCHED_TOKENS
+            else EVAL_SERVE_MAX_NUM_BATCHED_TOKENS[platform]
         ),
         max_num_seqs=serve.max_num_seqs,
         extra_args=(*extra_args, *_QUIET_VLLM_ARGS),
@@ -250,9 +252,11 @@ def inference_config_for_model(
         # Keep downstream deadlines beyond the evaluator budget, with time to relay the response.
         broker = BrokerConfig(
             worker=InferenceWorkerConfig(
+                max_in_flight=_EVAL_WORKER_MAX_IN_FLIGHT,
                 request_timeout_seconds=EVALCHEMY_REQUEST_TIMEOUT_SECONDS + _BROKER_DEADLINE_MARGIN_SECONDS,
             ),
             proxy=InferenceProxyConfig(
+                max_pending_requests=max(_EVAL_PROXY_MIN_PENDING_REQUESTS, instances * _EVAL_WORKER_MAX_IN_FLIGHT),
                 request_timeout_seconds=EVALCHEMY_REQUEST_TIMEOUT_SECONDS + 3 * _BROKER_DEADLINE_MARGIN_SECONDS,
                 readiness_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
             ),

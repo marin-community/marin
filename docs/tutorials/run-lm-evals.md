@@ -276,6 +276,8 @@ documents how to register a Hugging Face model or object-store checkpoint.
   it preserves Iris priority inheritance.
 - `--version` and `--description` attach run metadata.
 - `--records-prefix` changes the result store.
+- `--run-id` names a launch that can be resumed by repeating the command with the same ID and
+  records prefix. Without it, the launcher creates a new ID and prints it after submission.
 
 Run eight evaluators against eight one-H100 Qwen3-8B workers on RNO2A:
 
@@ -284,22 +286,42 @@ uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b --platform gpu --accelerator H100x1 \
   --instances 8 --max-concurrent 8 --federated_cluster cw-rno2a \
   --evals core --records-prefix s3://marin-us-east-02a/tmp/ttl=7d/evals/qwen3-8b \
-  --no-wait
+  --run-id qwen3-8b-full --no-wait
 ```
 
 `--max-concurrent 8` starts up to eight evaluation jobs against the candidate broker endpoint.
 Each Evalchemy evaluator bounds its active evaluation items through
-`extra_model_args.num_concurrent` in its YAML configuration (default 16). Eight evaluators at that
-default can have up to 128 active items. Each broker worker allows 16 concurrent HTTP requests;
-the proxy allows 256 outstanding requests, including requests already running on workers.
+`extra_model_args.num_concurrent` in its YAML configuration (default 64). Eight evaluators at that
+default can have up to 512 active items. Each evaluation broker worker allows 64 concurrent HTTP
+requests; the proxy allows `max(256, 64 * instances)` outstanding requests (512 for eight instances),
+including requests already running on workers.
+GPU evaluation servers schedule up to 4,096 tokens across requests per iteration by default;
+TPU servers use 512.
+Set `serve.max_num_batched_tokens` in the model configuration to override that budget.
 Items can make multiple requests, so these counts measure different stages of execution.
 Brokered sessions do not provide server-wide inference metrics. Results and
 samples under the example's temporary prefix expire after seven days.
 
+Brokered endpoints serve an HTML status page at `/status` (beside `/v1`, not under it).
+It refreshes every five seconds and shows proxy capacity, broker queue and lease counts,
+response errors, timeouts, rejections, and registered workers. Queue wait measures submission
+to the first worker lease, excluding inference time. Worker registration is not a health check.
+Requests wait asynchronously for inference, so the proxy's configured outstanding-request limit
+does not depend on the web server's thread-pool size.
+
 Each selected evaluation runs as its own step against shared inference. An evaluation failure gets
 a record for that eval; other steps continue. A server startup failure marks every pending eval as
-an infrastructure failure. On restart, completed steps are skipped. A fully completed group starts
-no servers.
+an infrastructure failure. To relaunch after a cancellation or failure, repeat the command above
+with the same `--run-id`. The launcher derives the same eval identities, skips completed steps,
+and keeps unfinished evals in their existing FineStore archives. Evalchemy restores completed
+requests from those archives even when the inference URL or request concurrency changes.
+A batch with every step completed starts no servers.
+
+Model, scoring, or evaluator-runtime changes produce distinct evaluation steps under the run ID.
+Serving instance counts, evaluator concurrency, GPU memory utilization, and scheduling budgets
+preserve step identity. Evalchemy independently checks the model, generation protocol, implementation,
+and installed dependencies before restoring partial requests. Changing its code or dependencies
+can invalidate partial checkpoints; use a new run ID for those changes.
 
 ### Harbor credentials
 
