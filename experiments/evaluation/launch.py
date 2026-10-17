@@ -81,8 +81,8 @@ DEFAULT_EVAL_CONCURRENCY = 1
 _ORCHESTRATOR_CPU = 4.0
 _ORCHESTRATOR_MEMORY = "16g"
 _ORCHESTRATOR_DISK = "16g"
-_SERVE_THROUGHPUT_FIELDS = {"max_num_batched_tokens", "max_num_seqs", "gpu_memory_utilization"}
-_EVALCHEMY_THROUGHPUT_FIELDS = {"num_concurrent"}
+_SERVE_THROUGHPUT_FIELDS = frozenset({"max_num_batched_tokens", "max_num_seqs", "gpu_memory_utilization"})
+_EVALCHEMY_THROUGHPUT_FIELDS = frozenset({"num_concurrent"})
 
 logger = logging.getLogger(__name__)
 
