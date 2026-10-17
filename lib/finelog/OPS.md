@@ -560,10 +560,12 @@ Interpret the pair as follows:
 - Rows absent from both Finelog stores and the container runtime: the task did
   not emit the expected output or its runtime logs are already unavailable.
 
-The forwarder gives every live namespace one batch-sized turn per round and
-starts another round immediately while work remains. A large telemetry backlog
-therefore does not monopolize forwarding ahead of new log rows. Hub or network
-failures get three attempts, then leave the affected cursor in place and yield to
+The forwarder gives every live namespace one batch-sized turn per round, runs
+up to four namespace turns concurrently, and starts another round immediately
+while work remains. A log turn reads up to one million rows; other tables read
+up to 200,000. Requests retain their byte limit, and log chunks ship serially
+to preserve order. Independent tables can overlap their durable hub writes.
+Hub or network failures get three attempts, then leave the affected cursor in place and yield to
 the next namespace. The same batch is retried on the next sweep; exhaustion does
 not discard it.
 

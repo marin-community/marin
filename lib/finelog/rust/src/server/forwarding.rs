@@ -12,7 +12,8 @@
 //! generic [`WriteRows`] path, one Arrow batch per round trip.
 //!
 //! After waiting [`FORWARD_INTERVAL`], it lists the live namespaces and gives each one
-//! batch-sized forwarding turn. It immediately repeats while any namespace has more
+//! batch-sized forwarding turn, with bounded concurrency across namespaces. It
+//! immediately repeats while any namespace has more
 //! settled rows, so a busy stats table cannot delay the next `log` turn while the
 //! forwarder still drains at full speed. A per-`(target, namespace)` cursor records
 //! progress, and a namespace the hub lacks is created there first with [`RegisterTable`].
@@ -34,7 +35,8 @@
 //! - A new legacy cursor seeds at its current tip, preserving the historical behavior
 //!   used when a node-local version-0 store is rebuilt from its archive. A new
 //!   object-native cursor starts at the beginning of the live object state.
-//! - It materializes at most [`FORWARD_BATCH_ROWS`] rows per read, and packs them into
+//! - It materializes at most [`FORWARD_LOG_BATCH_ROWS`] log rows or
+//!   [`FORWARD_BATCH_ROWS`] other rows per read, and packs them into
 //!   requests of at most [`FORWARD_BATCH_BYTES`] unless one row alone exceeds the limit.
 //! - It advances a namespace's cursor after the hub acks the batch or permanently
 //!   rejects malformed content. A crash or retryable rejection re-forwards it
@@ -110,6 +112,14 @@ const FORWARD_READ_TIMEOUT: Duration = Duration::from_secs(60);
 /// scan. Byte chunking still bounds each request, and this stays below the store's
 /// million-row write limit.
 const FORWARD_BATCH_ROWS: i64 = 200_000;
+
+/// Dense log backlogs amortize each sweep's scan and durable acknowledgement over
+/// more rows. Requests retain the byte cap and log chunks still ship serially.
+const FORWARD_LOG_BATCH_ROWS: i64 = 1_000_000;
+
+/// Independent tables can share the hub's flush window instead of waiting for
+/// every other table's durable acknowledgement before starting their next turn.
+const FORWARD_NAMESPACE_CONCURRENCY: usize = 4;
 
 /// Maximum number of ordered segment ranges one forwarding scan intentionally spans.
 /// Sparse relay tables can seal thousands of tiny L0s while the hub is unavailable;
@@ -481,13 +491,34 @@ where
                 return ForwardTurn::Wait;
             }
         };
+        let turns = namespaces
+            .into_iter()
+            .map(|(name, schema, _stats, _policy)| {
+                let mut namespace_stop = stop.clone();
+                async move {
+                    let mut namespace_progress = Progress::new();
+                    if *namespace_stop.borrow() {
+                        return (ForwardTurn::Wait, namespace_progress);
+                    }
+                    let turn = self
+                        .forward_namespace(
+                            &name,
+                            &schema,
+                            &mut namespace_progress,
+                            &mut namespace_stop,
+                        )
+                        .await;
+                    (turn, namespace_progress)
+                }
+            });
+        let mut turns =
+            futures::stream::iter(turns).buffer_unordered(FORWARD_NAMESPACE_CONCURRENCY);
         let mut turn = ForwardTurn::Wait;
-        for (name, schema, _stats, _policy) in namespaces {
-            if *stop.borrow() {
-                break;
-            }
-            if self.forward_namespace(&name, &schema, progress, stop).await == ForwardTurn::MoreRows
-            {
+        while let Some((namespace_turn, namespace_progress)) = turns.next().await {
+            progress.batches += namespace_progress.batches;
+            progress.skipped_seqs += namespace_progress.skipped_seqs;
+            progress.pending.merge(namespace_progress.pending);
+            if namespace_turn == ForwardTurn::MoreRows {
                 turn = ForwardTurn::MoreRows;
             }
         }
@@ -888,7 +919,7 @@ where
         }
     }
 
-    /// Up to [`FORWARD_BATCH_ROWS`] locally-written rows of `name` in `(cursor, persisted]`
+    /// One bounded batch of locally-written rows of `name` in `(cursor, persisted]`
     /// as a batch ready to ship (its `seq` column dropped, its origin column stamped),
     /// alongside the seqs those rows carry. When eviction has already archived the rows
     /// just above `cursor`, `resume_at` names the seq to resume from instead.
@@ -942,7 +973,12 @@ where
             // Segments predating the column store NULL, which is a local row.
             sql.push_str(" AND (cluster IS NULL OR cluster = '')");
         }
-        sql.push_str(&format!(" ORDER BY seq LIMIT {FORWARD_BATCH_ROWS}"));
+        let batch_rows = if name == LOG_NAMESPACE_NAME {
+            FORWARD_LOG_BATCH_ROWS
+        } else {
+            FORWARD_BATCH_ROWS
+        };
+        sql.push_str(&format!(" ORDER BY seq LIMIT {batch_rows}"));
 
         let providers = vec![RegisteredProvider {
             name: name.to_string(),
@@ -979,7 +1015,7 @@ where
         let row_count = rows.as_ref().map_or(0, |(batch, _)| batch.num_rows());
         let complete_window = rows
             .as_ref()
-            .is_none_or(|(batch, _)| batch.num_rows() < FORWARD_BATCH_ROWS as usize);
+            .is_none_or(|(batch, _)| batch.num_rows() < batch_rows as usize);
         let total = read_started.elapsed();
         let log_read = || {
             tracing::info!(

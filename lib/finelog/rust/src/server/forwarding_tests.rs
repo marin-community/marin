@@ -1170,6 +1170,70 @@ async fn a_busy_namespace_yields_before_the_next_namespace_is_forwarded() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn independent_namespaces_overlap_their_durable_hub_writes() {
+    let fx = Fixture::new("concurrent-namespaces").await;
+    for namespace in ["events", "metrics"] {
+        write_id_rows(&fx.source, namespace, 3).await;
+        fx.forward_from_start(namespace).await;
+    }
+
+    let forwarder = fx.forwarder(PRIV_A);
+    let mut progress = Progress::new();
+    let (_stop_tx, mut stop) = watch::channel(false);
+    forwarder.forward_round(&mut progress, &mut stop).await;
+
+    for namespace in ["events", "metrics"] {
+        assert_eq!(fx.cursor(namespace), Some(fx.tip(namespace)));
+        assert_eq!(
+            hub_column(fx.target_store(), namespace, "id").await,
+            vec![Some("0".into()), Some("1".into()), Some("2".into())]
+        );
+    }
+    assert!(
+        fx.target_requests.max_in_flight() >= 2,
+        "independent namespaces must overlap at the hub's durable-ack boundary"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_dense_log_backlog_passes_the_table_batch_limit_in_order() {
+    let fx = Fixture::new("dense-logs").await;
+    let lines: Vec<String> = (0..=FORWARD_BATCH_ROWS)
+        .map(|row| row.to_string())
+        .collect();
+    let borrowed: Vec<&str> = lines.iter().map(String::as_str).collect();
+    push(&fx.source_client, "/user/job/0:0", &borrowed).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+
+    let forwarder = fx.forwarder(PRIV_A);
+    let schema = fx.source.get_table_schema(LOG_NAMESPACE_NAME).unwrap();
+    let mut progress = Progress::new();
+    let (_stop_tx, mut stop) = watch::channel(false);
+    forwarder
+        .forward_namespace(LOG_NAMESPACE_NAME, &schema, &mut progress, &mut stop)
+        .await;
+
+    assert_eq!(
+        fx.cursor(LOG_NAMESPACE_NAME),
+        Some(fx.tip(LOG_NAMESPACE_NAME))
+    );
+    assert_eq!(
+        scalar_i64(fx.target_store(), "SELECT count(*) FROM \"log\"").await,
+        lines.len() as i64
+    );
+    assert_eq!(
+        scalar_i64(
+            fx.target_store(),
+            "SELECT count(*) FROM (SELECT data, row_number() OVER (ORDER BY seq) - 1 AS expected \
+             FROM \"log\") WHERE CAST(data AS BIGINT) <> expected"
+        )
+        .await,
+        0,
+        "source sequence order must survive the larger log read"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn relay_status_reaches_the_hub_outside_the_row_path() {
     let fx = Fixture::new("relay-status").await;
     let forwarder = fx.forwarder(PRIV_A);
@@ -1223,7 +1287,15 @@ async fn telemetry_sized_chunks_are_delivered_concurrently_without_loss() {
     .await;
     fx.forward_from_start("telemetry").await;
 
-    fx.drain(PRIV_A, "telemetry").await;
+    let forwarder = fx.forwarder(PRIV_A);
+    let schema = fx.source.get_table_schema("telemetry").unwrap();
+    let mut progress = Progress::new();
+    let (_stop_tx, mut stop) = watch::channel(false);
+    forwarder
+        .forward_namespace("telemetry", &schema, &mut progress, &mut stop)
+        .await;
+
+    assert_eq!(fx.cursor("telemetry"), Some(fx.tip("telemetry")));
 
     let stats = fx.target_store().list_namespaces_with_stats().unwrap();
     let telemetry = stats
