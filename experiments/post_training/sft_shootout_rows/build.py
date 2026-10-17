@@ -63,6 +63,16 @@ EPOCHS = 3
 # Replay for every arm: R = round(B / 4) supervised tokens, so replay is about 20% of a split (queen, 2026-10-17).
 REPLAY_FRACTION_OF_B = 0.25
 REPLAY_ORDER_SEED = f"{SEED}:replay-order"
+# Decided before any arm launches (queen, 2026-10-17), recorded in every manifest.
+REPLAY_CONTINGENCY = (
+    "if plain's B exceeds 4x the slice's supervised tokens, extend the slice with a seeded continuation of the same "
+    "#202 sampler (same partitions, same quotas, next rows in order) as a new artifact version; keep R = round(B / 4), "
+    "never relax it"
+)
+LAUNCH_RULE = (
+    "plain's manifest (B) and the replay cut are frozen before any arm launches; any later change to either is a new "
+    "artifact version with a new name, never an edit"
+)
 LIMITATION = "results are for trajectories that fit 32,768 tokens in v0's chat template; longer passes are dropped"
 # Queen's decision 2026-10-17 (option a): keep one multi-turn row per trace, as the community recipes under test do.
 FAMILY_NOTES = {
@@ -267,11 +277,15 @@ def cut_replay(entries: list[tuple[str, dict]], b_tokens: int) -> tuple[list[tup
         cut.append(entries[position])
         supervised += entries[position][1]["supervised_tokens"]
     if supervised < target:
-        raise ValueError(f"Replay slice holds {supervised} supervised tokens, short of R = {target}")
+        raise ValueError(
+            f"Replay slice holds {supervised} supervised tokens, short of R = {target}; {REPLAY_CONTINGENCY}"
+        )
     if len(cut) > len(entries):
         raise ValueError("Replay cut holds more rows than the slice")
     return cut, {
         "rule": "whole rows, first seeded prefix reaching R; overshoot retained, no boundary-row masking",
+        "contingency": REPLAY_CONTINGENCY,
+        "launch_rule": LAUNCH_RULE,
         "order_seed": REPLAY_ORDER_SEED,
         "target_supervised_tokens": target,
         "supervised_tokens": supervised,
