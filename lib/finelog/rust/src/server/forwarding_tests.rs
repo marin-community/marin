@@ -652,7 +652,7 @@ fn chunk_by_bytes_splits_and_pairs_each_chunk_with_its_last_seq() {
 }
 
 #[test]
-fn chunk_by_bytes_shrinks_an_estimate_that_encodes_over_budget() {
+fn chunk_by_bytes_splits_empty_strings_with_ipc_overhead() {
     let batch = RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![Field::new(
             "data",
@@ -664,14 +664,6 @@ fn chunk_by_bytes_shrinks_an_estimate_that_encodes_over_budget() {
     .unwrap();
     let seqs = Int64Array::from_iter_values(1..=1_000);
     let max_bytes = 1_024;
-    let per_row = batch.get_array_memory_size() / batch.num_rows();
-    let estimated_rows = (max_bytes / per_row).max(1);
-    let estimated_ipc = encode_ipc(&batch.schema(), &[batch.slice(0, estimated_rows)]).unwrap();
-    assert!(
-        estimated_ipc.len() > max_bytes,
-        "the fixture must exercise an estimate that needs correction"
-    );
-
     let chunks = chunk_by_bytes(&batch, &seqs, max_bytes).unwrap();
 
     assert!(chunks.len() > 1);
@@ -718,7 +710,7 @@ fn chunk_by_bytes_preserves_uneven_rows_and_isolates_oversized_rows() {
 }
 
 #[test]
-fn chunk_by_bytes_fills_requests_across_a_row_width_transition() {
+fn chunk_by_bytes_bounds_requests_across_a_row_width_transition() {
     let wide = "x".repeat(100);
     let values: Vec<&str> = std::iter::repeat_n("x", 100_000)
         .chain(std::iter::repeat_n(wide.as_str(), 100_000))
@@ -735,8 +727,8 @@ fn chunk_by_bytes_fills_requests_across_a_row_width_transition() {
     let seqs = Int64Array::from_iter_values(1..=values.len() as i64);
     let max_bytes = 1_500_000;
     let chunks = chunk_by_bytes(&batch, &seqs, max_bytes).unwrap();
-    // These rows need eight requests. Discarding a known fitting prefix at
-    // the width transition produced twelve, with four almost-empty requests.
+    // Split each half independently so a narrow prefix does not force the
+    // wider suffix into repeated small requests.
     assert!(chunks.len() <= 9, "underfilled chunks add serial hub waits");
     let mut restored = Vec::new();
     for (ipc, last_seq) in chunks {
