@@ -7,8 +7,13 @@ heads, 5 KV heads, head_dim 128, bf16. Each mask (sliding window 2048, global ca
 implementation. TFLOP/s counts only the FLOPs the mask needs: 2 matmuls forward and 5 backward (QK^T recompute,
 dP, dV, dQ, dK) over the allowed (query, key) pairs.
 
+With ``--sweep``, the script instead times a grid of tile sizes, warps and stages for one of the AMD Pallas-Triton
+flash kernels in ``levanter.grug.attention._amd_pallas_triton_flash`` (forward, dQ or dK/dV, chosen by
+``--sweep-part``), keeping the defaults for the other two. ``--block-q``, ``--block-k``, ``--num-warps`` and
+``--num-stages`` replace that part's default values for one axis of the grid.
+
     python lib/levanter/scripts/bench/bench_grug_attention.py --impl reference xla_flash gpu_pallas_triton_flash
-    python lib/levanter/scripts/bench/bench_grug_attention.py --impl gpu_pallas_triton_flash --sweep
+    python lib/levanter/scripts/bench/bench_grug_attention.py --sweep --sweep-part dkv --block-q 64 128 --num-stages 1
 """
 
 import argparse
@@ -27,6 +32,16 @@ WARMUP_SECONDS = 1.0
 WINDOWS = 10
 WINDOW_SECONDS = 0.2
 
+# Default sweep grid per kernel; each axis can be replaced from the command line.
+_FWD_AND_DQ_GRID = {"block_q": (64, 128, 256), "block_k": (32, 64, 128), "num_warps": (4, 8), "num_stages": (1, 2)}
+SWEEP_GRIDS = {
+    "fwd": _FWD_AND_DQ_GRID,
+    "dq": _FWD_AND_DQ_GRID,
+    "dkv": {"block_q": (32, 64, 128), "block_k": (32, 64, 128), "num_warps": (4, 8), "num_stages": (1, 2)},
+}
+# Suffix of each kernel's fields in TritonFlashBlockSizes.
+SWEEP_FIELD_SUFFIXES = {"fwd": "", "dq": "_dq", "dkv": "_dkv"}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -38,9 +53,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window", type=int, default=2048)
     parser.add_argument("--impl", nargs="+", default=["reference", "xla_flash", "gpu_pallas_triton_flash"])
     parser.add_argument("--sweep", action="store_true", help="Sweep Triton tile sizes instead of comparing impls.")
-    parser.add_argument("--sweep-part", choices=["fwd", "dq", "dkv"], default="fwd")
+    parser.add_argument("--sweep-part", choices=list(SWEEP_GRIDS), default="fwd")
+    for axis in SWEEP_GRIDS["fwd"]:
+        parser.add_argument(
+            f"--{axis.replace('_', '-')}", type=int, nargs="+", help="--sweep values; default depends on --sweep-part"
+        )
     parser.add_argument("--masks", nargs="+", choices=["window", "causal"], default=["window", "causal"])
     return parser.parse_args()
+
+
+def sweep_overrides(args: argparse.Namespace) -> list[dict[str, int]]:
+    """The TritonFlashBlockSizes overrides for every point of the swept kernel's grid."""
+    axes = {axis: getattr(args, axis) or values for axis, values in SWEEP_GRIDS[args.sweep_part].items()}
+    suffix = SWEEP_FIELD_SUFFIXES[args.sweep_part]
+    return [
+        {f"{axis}{suffix}": value for axis, value in zip(axes, point, strict=True)}
+        for point in itertools.product(*axes.values())
+    ]
 
 
 def median_seconds(fn, *args) -> float:
@@ -130,21 +159,7 @@ def compare(args) -> None:
 def sweep(args) -> None:
     """Time each tile/launch config for one kernel; the other kernels keep their defaults."""
     q, k, v, cot = inputs(args)
-    if args.sweep_part == "fwd":
-        grid = [
-            dict(block_q=bq, block_k=bk, num_warps=w, num_stages=s)
-            for bq, bk, w, s in itertools.product([64, 128, 256], [32, 64, 128], [4, 8], [1, 2])
-        ]
-    elif args.sweep_part == "dq":
-        grid = [
-            dict(block_q_dq=bq, block_k_dq=bk, num_warps_dq=w, num_stages_dq=s)
-            for bq, bk, w, s in itertools.product([64, 128, 256], [32, 64, 128], [4, 8], [1, 2])
-        ]
-    else:
-        grid = [
-            dict(block_q_dkv=bq, block_k_dkv=bk, num_warps_dkv=w, num_stages_dkv=s)
-            for bq, bk, w, s in itertools.product([32, 64, 128], [32, 64, 128], [4, 8], [1, 2])
-        ]
+    grid = sweep_overrides(args)
     for mask_name in args.masks:
         window = args.window if mask_name == "window" else None
         mask = AttentionMask.causal(sliding_window=window)
