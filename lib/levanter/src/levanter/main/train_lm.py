@@ -37,6 +37,7 @@ from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_act
 from levanter.models.loss import next_token_loss_weight
 from levanter.metrics import Metric, ReductionType
 from levanter.optim.config import AdamConfig, OptimizerConfig
+from levanter.plateau import PlateauDroppingConfig, PlateauTrainer
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
 from levanter.training_control import TrainingDashboard
@@ -66,6 +67,8 @@ class TrainLmConfig:
     # TODO: atm you have to at least specify a levanter model config with the same type as the hf checkpoint
 
     z_loss_weight: float = 0.0
+    plateau_dropping: PlateauDroppingConfig | None = None
+    """If set, drop tokens whose training loss has plateaued from the loss (see levanter.plateau)."""
 
     hf_save_path: Optional[str] = None
     hf_upload: Optional[str] = None
@@ -215,14 +218,20 @@ def main(config: TrainLmConfig):
     levanter.trainer.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    loss_function = functools.partial(lm_training_loss, logsumexp_weight=config.z_loss_weight)
+    if config.plateau_dropping is None:
+        loss_function = functools.partial(lm_training_loss, logsumexp_weight=config.z_loss_weight)
+        trainer = Trainer(config.trainer, optimizer, loss_function)
+    elif config.z_loss_weight:
+        raise ValueError("Plateau dropping measures plain cross-entropy; set z_loss_weight to 0")
+    else:
+        trainer = PlateauTrainer(config.trainer, optimizer, config.plateau_dropping)
 
     # Using the trainer as a context manager does 3 things:
     # 1. Sets the device mesh
     # 2. Sets the axis mapping (for fsdp)
     # 3. Sets the global metrics tracker
     with (
-        Trainer(config.trainer, optimizer, loss_function) as trainer,
+        trainer,
         TrainingDashboard(config, trainer.request_checkpoint, config.trainer.id or "unknown"),
     ):
         # randomness in jax is tightly controlled by "keys" which are the states of the random number generators
