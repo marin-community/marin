@@ -145,6 +145,13 @@ def _expert_mlp_quack_wgrad_backward(res, dy):
     return dx, dw13_il, dw2, output_dot_cotangent
 
 
+def _swiglu_expert_mlp_quack_wgrads(x_dispatch, d_gu, h, dy, cu):
+    """``(dw13_il, dw2)`` of the gated expert MLP from the bf16 rows, ``d gu``, ``h`` and ``dy``."""
+    return quack_grouped_wgrad(x_dispatch, d_gu, cu, **_QUACK_WGRAD_KW), quack_grouped_wgrad(
+        h, dy, cu, **_QUACK_WGRAD_KW
+    )
+
+
 _QUACK_RELU2 = "relu_sq"
 
 

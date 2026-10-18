@@ -424,7 +424,10 @@ class MoEExpertMlp(eqx.Module):
         report_capacity_overflow: bool = False,
         overlap: MoeOverlapWork | None = None,
         report_assignment_keep: bool = False,
+        ragged_expert_mxfp8: bool = False,
+        ragged_expert_mxfp8_dispatch: bool = False,
     ) -> Float[Array, "T O"] | tuple[Any, ...]:
+        """See ``moe_mlp`` for ``ragged_expert_mxfp8`` and ``ragged_expert_mxfp8_dispatch``."""
         w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         return moe_mlp(
             x,
@@ -445,6 +448,8 @@ class MoEExpertMlp(eqx.Module):
             fp8_dispatch=self.fp8_dispatch,
             expert_remat=self.expert_remat,
             overlap=overlap,
+            ragged_expert_mxfp8=ragged_expert_mxfp8,
+            ragged_expert_mxfp8_dispatch=ragged_expert_mxfp8_dispatch,
         )
 
 
@@ -508,7 +513,7 @@ def moe_mlp(
     fixed pooled-wave implementation. `fp8_dispatch` sends that implementation's
     dispatched activations as block-scaled FP8 (combine and backward stay bf16). `expert_mxfp8_sim` runs
     that implementation's expert GEMMs on simulated MXFP8 operands (`levanter.grug.mxfp8`).
-    `ragged_expert_mxfp8` (``ragged_all_to_all``, ungated ReLU^2 on SM100) runs the expert MLP's activation-path
+    `ragged_expert_mxfp8` (``ragged_all_to_all``, ungated ReLU^2 or gated SwiGLU on SM100) runs the expert MLP's activation-path
     GEMMs block-scaled on QuACK (the weight gradients stay bf16); `ragged_expert_mxfp8_dispatch` also sends the
     dispatched rows as MXFP8 bytes instead of quantizing them on arrival.
     `ragged_expert_chunks` splits `ragged_all_to_all`'s local experts into that many sequential

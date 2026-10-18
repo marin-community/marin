@@ -3,9 +3,11 @@
 
 """MXFP8 (e4m3 values, one e8m0 scale per 32 contraction elements) grouped GEMMs on QuACK's SM100 kernels.
 
-The expert MLP's activation-path GEMMs run block-scaled. Quantization rides in producers: the ReLU^2 up-projection
-writes its postactivation as e4m3 plus scales from its epilogue, the ReLU^2 backward GEMM writes ``d pre`` the same
-way, and token rows are quantized by the XLA fusion that produces them (before the dispatch transport).
+The expert MLP's activation-path GEMMs run block-scaled. Quantization rides in producers: the ReLU^2 (or SwiGLU)
+up-projection writes its postactivation as e4m3 plus scales from its epilogue, the ReLU^2 backward GEMM writes
+``d pre`` the same way, and token rows are quantized by the XLA fusion that produces them (before the dispatch
+transport). The gated SwiGLU backward runs the SwiGLU derivative in XLA, as the bf16 gated path does, and quantizes
+``d gate/up`` with the Pallas row quantizer.
 
 Scale layout. QuACK reads scales in the blocked ``(L, rm, rk, 32, 4, 4)`` layout, one contiguous 512-byte atom per
 128 rows x 4 scale columns. For a varlen-m operand (rows grouped by expert) the scales live in one row-padded
@@ -25,8 +27,9 @@ import cutlass
 import cutlass.cute as cute
 import cutlass.jax as cjax
 from cutlass import Float32
-from quack.activation import act_fn_map, dact_fn_map
+from quack.activation import act_fn_map, dact_fn_map, gate_fn_map
 from quack.epilogue.frontend import gemm_epilogue
+from quack.epilogue.math import pack, unpack
 from quack.epilogue.ops import ColVecReduce, Scalar, TileStore
 from quack.epilogue.quantize_out import BlockScaleFactorStore
 from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
@@ -35,6 +38,7 @@ from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
 from levanter.grug.mxfp8_pallas import quantize_cols, quantize_rows, quantize_rows_cols
 from levanter.grug.mxfp8 import MX_BLOCK, mx_dequantize_rows, mx_quantize_cols, mx_quantize_rows, mx_unpack_rows
+from levanter.grug._moe.common import _swiglu_gate_up_backward, _unpack_pairs_u32
 from levanter.grug._moe.quack_moe_cute import _ACC, _QUACK_USE_PDL, _max_active_clusters, _mint_epilogue_gemm
 
 SCALE_TILE_ROWS = 128
@@ -308,6 +312,104 @@ def relu2_expert_mlp_mxfp8_backward_input(res, dy):
     if x.dtype == jnp.uint8:
         x = mx_dequantize_rows(*mx_unpack_rows(x, w_up.shape[1]), dtype)
     return dx, output_dot, (x, d_pre, post, dy, cu)
+
+
+def _swiglu_quant_epilogue():
+    act = gate_fn_map["swiglu"]
+
+    # acc_pair: the accumulator pairs adjacent (gate, up) columns of the interleaved weights, so the postact is half
+    # the GEMM's N; its scale vectors span 2 * 32 accumulator columns (``BlockScaleFactorStore(output=...)``).
+    @gemm_epilogue(
+        outputs=(TileStore("postact", gated=True, quant=BlockScaleFactorStore("postact_sf", output="postact")),),
+        extra_ops=(Scalar("sfd_norm_const"),),
+        mode="acc_pair",
+    )
+    def swiglu_quant_epi(acc):
+        gate, up = unpack(acc)
+        return {"D": pack(gate, up), "postact": act(gate, up)}
+
+    return swiglu_quant_epi
+
+
+@cute_launcher_factory
+def _build_swiglu_launcher(*, max_active_clusters, max_swizzle):
+    gemm_type = _mint_epilogue_gemm(_swiglu_quant_epilogue(), kind_sig=(), paired_acc=True)
+
+    @cute.jit
+    def launcher(stream, mA, mB, mSFA, mSFB, mCuSeqlens, mD, mPostAct, mPostActSF):
+        gemm = _gemm(gemm_type, cutlass.Float8E4M3FN)
+        epi_args = gemm_type.EpilogueArguments(postact=mPostAct, postact_sf=mPostActSF, sfd_norm_const=Float32(1.0))
+        scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
+        varlen_args = make_varlen_args(mCuSeqlens, None, None)
+        gemm(mA, mB, mD, None, epi_args, scheduler_args, varlen_args, stream, mSFA, mSFB)
+
+    return launcher
+
+
+def mxfp8_swiglu_grouped_gemm(a, a_scales, b, b_scales, cu_seqlens, *, max_swizzle=8):
+    """Block-scaled ``gu = a @ b`` over interleaved gate/up weights ``b[E, K, 2N]`` (``[g0, u0, g1, u1, ...]``,
+    quantized along ``K`` in place, ``mx_weights(b, "n")``) with ``silu(g) * u`` quantized in the epilogue.
+
+    Returns ``(gu bf16 [M, 2N] interleaved, h e4m3 [M, N], h scales)``, the scales in the varlen-m layout."""
+    rows, cols = a.shape[0], b.shape[2]
+    if cols % (2 * MX_BLOCK):
+        raise ValueError(f"gate/up width {cols} must divide {2 * MX_BLOCK}")
+    launcher = _build_swiglu_launcher(max_active_clusters=_max_active_clusters(MXFP8_CLUSTER), max_swizzle=max_swizzle)
+    call = cutlass_call(
+        launcher,
+        output_shape_dtype=(
+            jax.ShapeDtypeStruct((rows, cols), jnp.bfloat16),
+            jax.ShapeDtypeStruct((rows, cols // 2), jnp.float8_e4m3fn),
+            jax.ShapeDtypeStruct(
+                varlen_output_scale_shape(rows, cols // 2, cu_seqlens.shape[0] - 1), jnp.float8_e8m0fnu
+            ),
+        ),
+        input_spec=(_ROWS_SPEC, _WEIGHT_SPECS["n"], _SCALE_SPEC, _SCALE_SPEC, _INDEX_SPEC),
+        output_spec=(_OUT_SPEC, _ROWS_SPEC, _SCALE_SPEC),
+        use_static_tensors=False,
+    )
+    return call(a, b, a_scales, b_scales, cu_seqlens.astype(jnp.int32))
+
+
+def _dispatched_rows(x: jax.Array, width: int) -> tuple[jax.Array, jax.Array]:
+    """e4m3 values and per-row exponents of the dispatched rows: ``mx_pack_rows`` bytes or bf16 rows."""
+    if x.dtype == jnp.uint8:
+        return mx_unpack_rows(x, width)
+    return quantize_rows(x)
+
+
+def swiglu_expert_mlp_mxfp8_fwd(x, w13_il, w_down, cu):
+    """``(silu(x W_gate) * x W_up) W_down`` with MXFP8 operands; ``w13_il`` is the interleaved gate/up bank
+    ``[E, H, 2I]`` (``_interleave_gate_up``). ``x`` is ``mx_pack_rows`` bytes or bf16 rows.
+
+    Same contract as ``_expert_mlp_quack_wgrad_fwd``: rows past ``cu[-1]`` are unspecified. The residuals keep
+    ``gu`` (bf16) for the SwiGLU backward and no copy of ``h``: the weight gradient recomputes it from ``gu``."""
+    values, exponents = _dispatched_rows(x, w13_il.shape[1])
+    gu, h, h_scales = mxfp8_swiglu_grouped_gemm(values, padded_scale_rows(exponents, cu), *mx_weights(w13_il, "n"), cu)
+    y = mxfp8_grouped_gemm(h, h_scales, *mx_weights(w_down, "n"), cu, b_major="n")
+    return y, (x, w13_il, w_down, gu, cu)
+
+
+def swiglu_expert_mlp_mxfp8_backward_input(res, dy):
+    """``(dx, <y, dy>, wgrad_args)`` of ``swiglu_expert_mlp_mxfp8_fwd``.
+
+    ``dh = dy W_down^T`` and ``dx = d gu W13^T`` run block-scaled against the weights quantized in their stored
+    layout along the contraction axis (no transposed copies). ``wgrad_args`` feed the bf16
+    ``swiglu_expert_mlp_mxfp8_wgrads``: the bf16 rows, ``d gu``, ``h`` recomputed from ``gu`` and ``dy``."""
+    x, w13_il, w_down, gu, cu = res
+    dy_values, dy_exponents = quantize_rows(dy)
+    dh = mxfp8_grouped_gemm(dy_values, padded_scale_rows(dy_exponents, cu), *mx_weights(w_down, "k"), cu, b_major="k")
+    gate, up = _unpack_pairs_u32(gu)
+    h = jax.nn.silu(gate.astype(jnp.float32)) * up.astype(jnp.float32)
+    output_dot = jnp.sum(dh.astype(jnp.float32) * h, axis=-1)
+    d_gu = _swiglu_gate_up_backward(gu, dh)
+    d_gu_values, d_gu_exponents = quantize_rows(d_gu)
+    dx = mxfp8_grouped_gemm(
+        d_gu_values, padded_scale_rows(d_gu_exponents, cu), *mx_weights(w13_il, "k"), cu, b_major="k"
+    )
+    if x.dtype == jnp.uint8:
+        x = mx_dequantize_rows(*mx_unpack_rows(x, w13_il.shape[1]), dy.dtype)
+    return dx, output_dot, (x, d_gu, h.astype(dy.dtype), dy, cu)
 
 
 @cute_launcher_factory

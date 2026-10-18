@@ -342,6 +342,45 @@ class _CuteRelu2Mxfp8ExpertMlp:
         return dx, output_dot, wgrad_args, _relu2_expert_mlp_quack_wgrads
 
 
+@dataclasses.dataclass(frozen=True)
+class _CuteSwigluMxfp8ExpertMlp:
+    """``_CuteExpertMlp`` with MXFP8 operands in the four activation-path GEMMs (QuACK block-scaled SM100).
+
+    The rows arrive as ``mx_pack_rows`` bytes (``_ExpertLayout.mxfp8_dispatch``) or as bf16 rows quantized here.
+    SwiGLU and the quantization of ``h`` are fused into the gate/up GEMM's epilogue; the SwiGLU backward runs in
+    XLA and ``d gu`` is quantized by the Pallas row quantizer. The weight gradients stay bf16
+    (``swiglu_expert_mlp_mxfp8_backward_input``).
+    """
+
+    def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        del physical_group_sizes
+        from levanter.grug._moe.quack_mxfp8 import swiglu_expert_mlp_mxfp8_fwd  # noqa: PLC0415
+
+        w13_interleaved = _interleave_gate_up(moe_w13_local, moe_w2_local.shape[1])
+        cumulative_group_sizes = jnp.concatenate(
+            [jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)]
+        )
+        return swiglu_expert_mlp_mxfp8_fwd(x_dispatch, w13_interleaved, moe_w2_local, cumulative_group_sizes)
+
+    def backward(self, residuals, cotangent):
+        dx, output_dot, wgrad_args, wgrad = self.backward_parts(residuals, cotangent)
+        dw13, dw2 = wgrad(*wgrad_args)
+        return dx, dw13, dw2, output_dot
+
+    def backward_parts(self, residuals, cotangent):
+        from levanter.grug._moe.quack_mxfp8 import swiglu_expert_mlp_mxfp8_backward_input  # noqa: PLC0415
+
+        dx, output_dot, wgrad_args = swiglu_expert_mlp_mxfp8_backward_input(residuals, cotangent)
+        return dx, output_dot, wgrad_args, _swiglu_mxfp8_wgrads
+
+
+def _swiglu_mxfp8_wgrads(x_dispatch, d_gu, h, dy, cu):
+    from levanter.grug._moe.sonic_cute import _swiglu_expert_mlp_quack_wgrads  # noqa: PLC0415
+
+    dw13_interleaved, dw2 = _swiglu_expert_mlp_quack_wgrads(x_dispatch, d_gu, h, dy, cu)
+    return _deinterleave_gate_up(dw13_interleaved), dw2
+
+
 @functools.cache
 def _quack_grouped_gemm_available() -> bool:
     if jax.default_backend() != "gpu":
@@ -384,6 +423,16 @@ def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], *, ungat
     if not ungated and activation_fn is jax.nn.silu and _quack_grouped_gemm_available():
         return _CuteExpertMlp()
     return _RaggedDotExpertMlp(activation_fn)
+
+
+def _mxfp8_expert_mlp(expert_mlp: _ExpertMlp) -> _ExpertMlp:
+    """The MXFP8 variant of a QuACK expert MLP: ungated ReLU^2 or gated SwiGLU. Anything else (the portable
+    ``ragged_dot`` fallback, another activation, serial pairs) has no MXFP8 kernel and raises."""
+    if type(expert_mlp) is _CuteRelu2ExpertMlp:
+        return _CuteRelu2Mxfp8ExpertMlp()
+    if type(expert_mlp) is _CuteExpertMlp:
+        return _CuteSwigluMxfp8ExpertMlp()
+    raise ValueError(f"mxfp8 experts need ungated ReLU^2 or gated SwiGLU on QuACK's SM100 kernels, got {expert_mlp}")
 
 
 def _unpermute_from_global_expert(
@@ -982,9 +1031,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             raise ValueError("serial_pair needs experts that write the width they read (x + y1)")
         expert_mlp = _SerialPairExpertMlp(expert_mlp)
     if mxfp8:
-        if type(expert_mlp) is not _CuteRelu2ExpertMlp:
-            raise ValueError(f"mxfp8 experts need ungated ReLU^2 on QuACK's SM100 kernels, got {expert_mlp}")
-        expert_mlp = _CuteRelu2Mxfp8ExpertMlp()
+        expert_mlp = _mxfp8_expert_mlp(expert_mlp)
     layout = _ExpertLayout(
         tokens_per_shard=tokens_per_shard,
         topk=topk,

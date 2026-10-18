@@ -294,9 +294,9 @@ class Fp8Recipe(StrEnum):
     """``MXFP8_SIM`` on the dense projection GEMMs only; the routed experts stay bf16 (the ragged EP backend has no
     simulated-MXFP8 expert path)."""
     MXFP8_EXPERTS = "mxfp8_experts"
-    """Real MXFP8 routed experts on the ``ragged_all_to_all`` backend (QuACK block-scaled GEMMs, SM100): rows are
-    dispatched as e4m3 with e8m0 scales and the four activation-path expert GEMMs run block-scaled; the expert weight
-    gradients and every dense projection stay bf16."""
+    """Real MXFP8 routed experts (ungated ReLU^2 or gated SwiGLU) on the ``ragged_all_to_all`` backend (QuACK
+    block-scaled GEMMs, SM100): rows are dispatched as e4m3 with e8m0 scales and the four activation-path expert
+    GEMMs run block-scaled; the expert weight gradients and every dense projection stay bf16."""
     MXFP8_DENSE = "mxfp8_dense"
     """Real MXFP8 dense projections (every ``_proj``: attention/KDA, the fused router-latent-shared projection with
     router columns excluded, the latent and shared-expert down projections) on QuACK block-scaled GEMMs, all three
@@ -3740,8 +3740,8 @@ def _run_expert_bank(
             expert_serial_pair=cfg.moe_serial_pair,
             ragged_overlap_weight_grads=cfg.moe_overlap_weight_grads,
         )
-    if cfg.fp8_recipe != Fp8Recipe.NONE:
-        raise ValueError("fp8_recipe supports ungated ReLU^2 expert banks only")
+    if cfg.fp8_recipe == Fp8Recipe.MXFP8_SIM:
+        raise ValueError("fp8_recipe=mxfp8_sim simulates ungated ReLU^2 expert banks only")
     return em(
         routed_input,
         selected,
@@ -3750,6 +3750,8 @@ def _run_expert_bank(
         report_capacity_overflow=True,
         overlap=overlap,
         report_assignment_keep=cfg.moe_drop_renorm,
+        ragged_expert_mxfp8=cfg.fp8_recipe in (Fp8Recipe.MXFP8_EXPERTS, Fp8Recipe.MXFP8),
+        ragged_expert_mxfp8_dispatch=cfg.moe_mxfp8_dispatch,
     )
 
 

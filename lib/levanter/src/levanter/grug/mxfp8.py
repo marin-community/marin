@@ -15,6 +15,7 @@ import functools
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 
@@ -159,3 +160,59 @@ def _mx_batched_bwd(res, g):
 
 
 mx_batched.defvjp(_mx_batched_fwd, _mx_batched_bwd)
+
+
+def _ragged(x: jax.Array, w: jax.Array, group_sizes: jax.Array) -> jax.Array:
+    return jax.lax.ragged_dot(x, w, group_sizes, preferred_element_type=jnp.float32)
+
+
+def _swiglu_pairs(gu: jax.Array) -> jax.Array:
+    gu = gu.astype(jnp.float32)
+    return jax.nn.silu(gu[:, 0::2]) * gu[:, 1::2]
+
+
+@jax.custom_vjp
+def mx_swiglu_experts(x: jax.Array, w13_il: jax.Array, w_down: jax.Array, group_sizes: jax.Array) -> jax.Array:
+    """Simulated MXFP8 gated SwiGLU experts, ``(silu(x W_g) * x W_u) W_down`` per row group, with the numerics of
+    the QuACK MXFP8 gated expert MLP (``quack_mxfp8.swiglu_expert_mlp_mxfp8_fwd``), its reference.
+
+    ``w13_il`` is the interleaved ``[E, H, 2I]`` gate/up bank (``[g0, u0, g1, u1, ...]``), which decides the
+    32-blocks of the input-gradient GEMM's contraction. The four activation-path GEMMs quantize both operands along
+    their contraction axis; ``gu`` is kept in ``x.dtype`` and ``h`` is quantized from the f32 accumulator, as the
+    kernel's epilogue does. The weight gradients are unquantized, as in the kernel path."""
+    return _mx_swiglu_experts_fwd(x, w13_il, w_down, group_sizes)[0]
+
+
+def _mx_swiglu_experts_fwd(x, w13_il, w_down, group_sizes):
+    gu = _ragged(mx_quantize_dequantize(x, -1), mx_quantize_dequantize(w13_il, 1), group_sizes).astype(x.dtype)
+    h = mx_quantize_dequantize(_swiglu_pairs(gu), -1)
+    y = _ragged(h, mx_quantize_dequantize(w_down, 1), group_sizes).astype(x.dtype)
+    return y, (x, w13_il, w_down, gu, group_sizes)
+
+
+def _mx_swiglu_experts_bwd(res, dy):
+    x, w13_il, w_down, gu, group_sizes = res
+    dtype = x.dtype
+    dh = _ragged(
+        mx_quantize_dequantize(dy, -1), jnp.swapaxes(mx_quantize_dequantize(w_down, 2), 1, 2), group_sizes
+    ).astype(dtype)
+    gate, up = gu[:, 0::2], gu[:, 1::2]
+    sg = jax.nn.sigmoid(gate)
+    silu = gate * sg
+    d_gu = jnp.stack([dh * up * (sg + silu * (1.0 - sg)), dh * silu], axis=-1).reshape(gu.shape).astype(dtype)
+    dx = _ragged(
+        mx_quantize_dequantize(d_gu, -1), jnp.swapaxes(mx_quantize_dequantize(w13_il, 2), 1, 2), group_sizes
+    ).astype(dtype)
+    h = _swiglu_pairs(gu).astype(dtype)
+    dw13 = _ragged_wgrad(x, d_gu, w13_il, group_sizes)
+    dw_down = _ragged_wgrad(h, dy, w_down, group_sizes)
+    return dx, dw13, dw_down, np.zeros(group_sizes.shape, dtype=jax.dtypes.float0)
+
+
+def _ragged_wgrad(a: jax.Array, g: jax.Array, w: jax.Array, group_sizes: jax.Array) -> jax.Array:
+    """Per-group ``a^T g`` (the weight gradient of ``ragged_dot(a, w)``), f32-accumulated, in ``w.dtype``."""
+    _, pullback = jax.vjp(lambda b: _ragged(a.astype(jnp.float32), b, group_sizes), w.astype(jnp.float32))
+    return pullback(g.astype(jnp.float32))[0].astype(w.dtype)
+
+
+mx_swiglu_experts.defvjp(_mx_swiglu_experts_fwd, _mx_swiglu_experts_bwd)
