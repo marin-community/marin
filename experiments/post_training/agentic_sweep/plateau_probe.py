@@ -243,7 +243,7 @@ def submit(config: PlateauProbeConfig) -> None:
         environment=create_environment(extras=["gpu"], env_vars=environment),
         timeout=Duration.from_seconds(80 * 60),
         max_retries_failure=0,
-        max_retries_preemption=0,
+        max_retries_preemption=3,
     )
     current_client().submit(request, adopt_existing=False).wait(raise_on_failure=True)
 
