@@ -44,6 +44,7 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    MegatronGeometry,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRun,
@@ -80,17 +81,6 @@ WANDB_PROJECT = f"marin-{EXPERIMENT_NAME}"
 SEED = 17
 MARIN_TOKENIZER = "marin-community/marin-tokenizer"
 MARIN_TOKENIZER_REVISION = "a5ca45f"
-
-
-@dataclass(frozen=True)
-class MegatronGeometry:
-    """Megatron parallelism for a policy or reference model."""
-
-    tensor_model_parallel_size: int
-    pipeline_model_parallel_size: int
-    context_parallel_size: int
-    expert_model_parallel_size: int
-    expert_tensor_parallel_size: int
 
 
 @dataclass(frozen=True)

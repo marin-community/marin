@@ -21,6 +21,7 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    MegatronGeometry,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRuntime,
@@ -32,6 +33,7 @@ from marin.rl.skyrl import (
     run_skyrl,
     skyrl_step,
     skyrl_temporary_run_path,
+    validate_megatron_geometry,
 )
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
@@ -601,26 +603,14 @@ def test_megatron_microbatch_mismatch_fails_before_launch() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    ("role", "geometry", "separate_reference"),
-    [
-        ("policy", {"pipeline_model_parallel_size": 3}, False),
-        ("ref", {"context_parallel_size": 3}, False),
-        ("policy", {"pipeline_model_parallel_size": 2, "expert_model_parallel_size": 8}, False),
-        ("ref", {"expert_model_parallel_size": 8}, True),
-    ],
-    ids=["policy-model-parallel", "reference-model-parallel", "snowball-expert-parallel", "separate-reference-experts"],
-)
-def test_megatron_geometry_mismatch_fails_before_launch(
-    role: str, geometry: dict[str, int], separate_reference: bool
-) -> None:
-    # Incompatible model and expert groups must be rejected before allocating workers.
-    base = _spec()
-    plan = base.topology.role_plan
-    if separate_reference:
-        plan = dataclasses.replace(plan, colocate_all=False, policy_num_nodes=2, reference_num_nodes=1)
-    topology = dataclasses.replace(base.topology, num_nodes=4 if separate_reference else 1, role_plan=plan)
-    recipe = yaml.safe_load(_config_yaml(strategy="megatron"))
-    recipe["trainer"][role] = {"megatron_config": geometry}
-    with pytest.raises(ValueError, match=rf"Megatron {role} has 4 GPUs.*divisible"):
-        dataclasses.replace(base, topology=topology, config_yaml=yaml.safe_dump(recipe))
+def test_megatron_geometry_rejects_incomplete_expert_groups() -> None:
+    geometry = MegatronGeometry(1, 2, 1, 8, 1)
+    with pytest.raises(
+        ValueError, match=r"Megatron policy has 8 GPUs.*TP=1, PP=2, CP=1, EP=8.*data-parallel size by EP"
+    ):
+        validate_megatron_geometry(geometry, role="policy", num_gpus=8)
+
+
+def test_megatron_geometry_accepts_complete_expert_groups() -> None:
+    # A separate reference role with DP8 can form the same EP8 groups as the policy.
+    validate_megatron_geometry(MegatronGeometry(1, 2, 1, 8, 1), role="ref", num_gpus=16)

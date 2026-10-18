@@ -11,7 +11,7 @@ import sys
 import tempfile
 import uuid
 from collections import deque
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
@@ -46,6 +46,34 @@ def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
     """Return the lifecycle-managed storage path for a SkyRL run."""
     temporary_root = marin_temp_bucket(ttl_days=ttl_days, source_prefix=output_path)
     return str(StoragePath(temporary_root) / _TEMPORARY_OUTPUT_PREFIX / StoragePath(output_path).key)
+
+
+@dataclass(frozen=True)
+class MegatronGeometry:
+    """Megatron parallelism for a policy or reference model."""
+
+    tensor_model_parallel_size: int
+    pipeline_model_parallel_size: int
+    context_parallel_size: int
+    expert_model_parallel_size: int
+    expert_tensor_parallel_size: int
+
+
+def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpus: int) -> None:
+    """Require a role's GPUs to form complete Megatron model and expert groups."""
+    tp = geometry.tensor_model_parallel_size
+    pp = geometry.pipeline_model_parallel_size
+    cp = geometry.context_parallel_size
+    ep = geometry.expert_model_parallel_size
+    sizes = f"TP={tp}, PP={pp}, CP={cp}, EP={ep}"
+    if any(not isinstance(size, int) or isinstance(size, bool) or size <= 0 for size in (tp, pp, cp, ep)):
+        raise ValueError(f"Megatron {role} has {num_gpus} GPUs with {sizes}; parallel sizes must be positive integers")
+    model_parallel = tp * pp * cp
+    if num_gpus % model_parallel or (num_gpus // model_parallel) % ep:
+        raise ValueError(
+            f"Megatron {role} has {num_gpus} GPUs but requires {sizes}; "
+            "GPUs must be divisible by TP*PP*CP and data-parallel size by EP"
+        )
 
 
 @dataclass(frozen=True)
@@ -564,27 +592,13 @@ def _validate_skyrl_recipe(
         raise ValueError("Megatron requires equal micro_forward_batch_size_per_gpu and micro_train_batch_size_per_gpu")
     plan = topology.role_plan
     for role, nodes in (("policy", plan.policy_num_nodes), ("ref", plan.reference_num_nodes or plan.policy_num_nodes)):
-        dimensions: list[int] = []
-        for key in (
-            "tensor_model_parallel_size",
-            "pipeline_model_parallel_size",
-            "context_parallel_size",
-            "expert_model_parallel_size",
-        ):
-            value = _declared_config_value(config, f"trainer.{role}.megatron_config.{key}")
-            if value is _MISSING_CONFIG_VALUE:
-                value = 1
-            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-                raise ValueError(f"Megatron {role} {key} must be a positive integer; got {value!r}")
-            dimensions.append(value)
-        tp, pp, cp, ep = dimensions
-        gpus = nodes * plan.policy_num_gpus_per_node
-        model_parallel = tp * pp * cp
-        if gpus % model_parallel or (gpus // model_parallel) % ep:
-            raise ValueError(
-                f"Megatron {role} has {gpus} GPUs but requires TP={tp}, PP={pp}, CP={cp}, EP={ep}; "
-                "GPUs must be divisible by TP*PP*CP and data-parallel size by EP"
-            )
+        dimensions: dict[str, int] = {}
+        for dimension in fields(MegatronGeometry):
+            value = _declared_config_value(config, f"trainer.{role}.megatron_config.{dimension.name}")
+            dimensions[dimension.name] = 1 if value is _MISSING_CONFIG_VALUE else cast(int, value)
+        validate_megatron_geometry(
+            MegatronGeometry(**dimensions), role=role, num_gpus=nodes * plan.policy_num_gpus_per_node
+        )
     _validate_skyrl_backend_constraints(config, topology)
 
 
