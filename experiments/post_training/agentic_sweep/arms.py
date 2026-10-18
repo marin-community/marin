@@ -259,7 +259,9 @@ def arm_settings(
     )
 
 
-def run_training(config: TrainLmOnPodConfig, cache_paths: list[str], keys: list[list[str]]) -> None:
+def run_training(
+    config: TrainLmOnPodConfig, cache_paths: list[str], keys: list[list[str]], preemption_retries: int = 0
+) -> None:
     if not os.environ.get("WANDB_API_KEY"):
         raise ValueError("A nonempty W&B key is required before requesting GPUs")
     verify_caches(cache_paths, keys)
@@ -274,7 +276,8 @@ def run_training(config: TrainLmOnPodConfig, cache_paths: list[str], keys: list[
         environment=create_environment(extras=["gpu"], env_vars=environment),
         timeout=Duration.from_seconds(12 * 60 * 60),
         max_retries_failure=0,
-        max_retries_preemption=0,
+        # A retry restarts from the job's --resume-checkpoint (or from scratch), never from a mid-epoch checkpoint.
+        max_retries_preemption=preemption_retries,
     )
     current_client().submit(request, adopt_existing=False).wait(raise_on_failure=True)
 
@@ -289,6 +292,7 @@ def pipeline(
     plateau: bool,
     keys: list[list[str]] | None = None,
     resume_checkpoint: str | None = None,
+    preemption_retries: int = 0,
 ) -> dict[str, ArtifactStep | list[ArtifactStep]]:
     if manifest["student_revision"] != REVISION or manifest["student_model"] != MODEL:
         raise ValueError("The arm was built for a different parent")
@@ -374,7 +378,9 @@ def pipeline(
             cast(WandbConfig, config.trainer.tracker),
             entity="marin-community",
             name=name,
-            resume="never",
+            # A resumed run (and a preemption retry of it) logs to its own W&B run, so its steps never collide
+            # with the interrupted run's.
+            resume="never" if resume_checkpoint is None else "allow",
             replicate_path=ctx.output_path,
             mode="online",
             save_code=False,
@@ -383,7 +389,7 @@ def pipeline(
             config,
             trainer=replace(
                 config.trainer,
-                id=name + "-20261018",
+                id=name + "-20261018" + (f"-from{start_step}" if resume_checkpoint is not None else ""),
                 seed=42,
                 load_checkpoint=resume_checkpoint is not None,
                 load_checkpoint_path=resume_checkpoint,
@@ -400,7 +406,7 @@ def pipeline(
         assert keys is not None, "Training needs the verified row keys"
         train_data = cast(TrainLmConfig, config.train_config).data
         paths = [cast(DatasetComponent, component).cache_dir for component in train_data.components.values()]
-        run_training(config, cast(list[str], paths), keys)
+        run_training(config, cast(list[str], paths), keys, preemption_retries)
 
     trained = ArtifactStep(
         name=spec.name,
@@ -424,6 +430,7 @@ def main() -> None:
     parser.add_argument("--plateau", action="store_true")
     parser.add_argument("--only", choices=("cache", "train"), default="cache")
     parser.add_argument("--resume-checkpoint")
+    parser.add_argument("--preemption-retries", type=int, default=0)
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     manifest_bytes = (StoragePath(args.arm_data) / "manifest.json").read_bytes()
@@ -449,6 +456,7 @@ def main() -> None:
         args.plateau,
         keys,
         args.resume_checkpoint,
+        args.preemption_retries,
     )
     info = get_job_info()
     assert info is not None and info.controller_address is not None
