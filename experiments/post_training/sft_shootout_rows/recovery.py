@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Recovery rows (task #225): plain's trajectories with masked synthetic failed attempts before some teacher turns.
+"""Recovery rows: plain's trajectories with masked synthetic failed attempts before some teacher turns.
 
 A reconstruction of Marianna's recovery SFT (marianna13/grug-sft-mix-v4-40M-think) for the shootout. A fixed, seeded
 20% of each family's plain rows get 1 or 2 injection points. An injection point is a teacher turn other than the
@@ -296,7 +296,7 @@ def build_recovery(chosen: dict, kept: dict, tokenizer, swe_mode: str, seed: str
     }
 
 
-# Context-handoff rows (off by default; rule set by the queen on 2026-10-18 so the switch needs no design round).
+# Context-handoff rows, off by default. The rule is fixed here so that turning the switch on changes no other choice.
 HANDOFF_SHARE = 0.13
 ECHOED_HISTORY = re.compile(r"record at message \d+ adds an assistant message with no logged reply")
 HANDOFF_KINDS = (

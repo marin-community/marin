@@ -3,10 +3,11 @@
 
 """Local end-to-end check of the arm builder on dry-run generation traces.
 
-Builds plain, RS-multi and relay from local trace files with a test pool and a two-row stand-in replay slice, then
-re-reads every row independently of the builder: decodes the trained tokens of each row and checks that each trained
-span is exactly one teacher (glm) assistant turn as the template renders it, that student (v0) turns carry no loss,
-that no weight sits past a row's content or on padding rows, and that no held-out task appears.
+Builds plain, RS-multi, relay, recovery and validation from local trace files with a test pool and a two-row
+stand-in replay slice, then re-reads every row independently of the builder: decodes the trained tokens of each row
+and checks that each trained span is exactly one teacher (glm) assistant turn as the template renders it, that
+student (v0) turns carry no loss, that no weight sits past a row's content or on padding rows, and that no held-out
+task appears.
 
 Synthetic summarized trials (n_conversations 2) check that they are dropped. The relay input is synthetic: a copy
 of a plain trace whose first assistant turns are relabelled as v0, which exercises the per-author mask without a live

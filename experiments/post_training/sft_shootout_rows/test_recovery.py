@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from experiments.post_training.sft_shootout_rows import recovery
+from experiments.post_training.sft_shootout_rows import build, recovery
 from experiments.post_training.sft_shootout_rows.arms import Attempt
 from experiments.post_training.sft_shootout_rows.traces import INJECTED, render_trace
 from experiments.post_training.sweep_data.prepare_agentic import STUDENT_MODEL, STUDENT_REVISION
@@ -157,10 +157,10 @@ def test_selection_is_an_exact_seeded_fraction_per_family():
     assert chosen == recovery.selected_rows(trials, "seed") and chosen != recovery.selected_rows(trials, "other")
 
 
-def test_a_row_over_the_context_keeps_its_plain_rendering(tokenizer, monkeypatch):
-    rows = {}
-    chosen = {}
-    for index in range(5):
+def tmax_rows(tokenizer, count: int = 5) -> tuple[dict, dict]:
+    """`count` plain TMax rows as build_recovery takes them: ({trial: (Attempt, rendering, trace)}, {task: Attempt})."""
+    rows, chosen = {}, {}
+    for index in range(count):
         trace = tmax_trace() | {"trial_id": f"trial-{index}"}
         rendered = render_trace(tokenizer, trace["messages"], trace["tools"])
         attempt = Attempt(
@@ -175,6 +175,11 @@ def test_a_row_over_the_context_keeps_its_plain_rendering(tokenizer, monkeypatch
         )
         rows[trace["trial_id"]] = (attempt, rendered, trace)
         chosen[attempt.task_id] = attempt
+    return rows, chosen
+
+
+def test_a_row_over_the_context_keeps_its_plain_rendering(tokenizer, monkeypatch):
+    rows, chosen = tmax_rows(tokenizer)
     # One selected row (round(0.2 * 5)); a context one token over the plain row cannot hold any injection.
     monkeypatch.setattr(recovery, "CONTEXT", len(next(iter(rows.values()))[1].ids) + 1)
     recovered = {}
@@ -193,22 +198,7 @@ def test_smaller_plans_shrink_one_attempt_at_a_time_then_drop_the_last_point():
 
 
 def test_a_row_whose_full_injection_is_over_the_context_takes_a_smaller_one(tokenizer, monkeypatch):
-    rows, chosen = {}, {}
-    for index in range(5):
-        trace = tmax_trace() | {"trial_id": f"trial-{index}"}
-        rendered = render_trace(tokenizer, trace["messages"], trace["tools"])
-        attempt = Attempt(
-            task_id=f"task-{index}",
-            family="tmax",
-            trial_id=trace["trial_id"],
-            sample=0,
-            retry=0,
-            supervised=rendered.supervised,
-            context=len(rendered.ids),
-            authors=rendered.authors,
-        )
-        rows[trace["trial_id"]] = (attempt, rendered, trace)
-        chosen[attempt.task_id] = attempt
+    rows, chosen = tmax_rows(tokenizer)
     (trial,) = recovery.selected_rows({"tmax": sorted(rows)}, "seed")
     trace = rows[trial][2]
     plan = recovery.plan_injections(random.Random(f"seed:{trial}"), "tmax", trace["messages"])
@@ -274,3 +264,35 @@ def test_handoff_cap_and_budget_rule():
     clean = [attempt(100 + i, f"clean-{i}", 250) for i in range(20)]
     dropped = recovery.hold_budget(clean, added=1300, seed="s")
     assert sum(a.supervised for a in dropped) >= 1300 > sum(a.supervised for a in dropped[:-1])
+
+
+def test_handoff_rows_hold_b_by_dropping_clean_tmax_rows(tokenizer):
+    rows, chosen = tmax_rows(tokenizer, count=10)
+    summarized = {
+        "trial_id": "summarized",
+        "task_id": "handoff-task",
+        "family": "tmax",
+        "relay": False,
+        "passed": True,
+        "problems": [],
+        "sample": 0,
+        "retry": 0,
+        "tools": None,
+        "n_conversations": 2,
+        "conversation": 1,
+        "messages": [
+            {"role": "user", "content": "Task"},
+            {"role": "assistant", "content": "earlier turn"},
+            {"role": "user", "content": "You are picking up work from a previous AI agent."},
+            {"role": "assistant", "author": "glm", "content": "What did the previous agent leave unfinished?"},
+        ],
+    }
+    pool = {"handoff-task": {"heldout": False, "family": "tmax", "import_names": []}}
+    plain = {"task_slots": sorted(chosen), "B_supervised_tokens": sum(a.supervised for a in chosen.values())}
+    kept = dict(rows)
+    handoff, removed, stats = build.handoff_rows([summarized], pool, tokenizer, kept, chosen, {}, plain, "seed")
+    assert [a.trial_id for a in handoff] == ["summarized#conversation-1"] and handoff[0].trial_id in kept
+    dropped = [a for a in chosen.values() if a.trial_id in removed]
+    assert stats["supervised_tokens_dropped"] == sum(a.supervised for a in dropped) >= handoff[0].supervised
+    assert stats["B_minus_plain_B"] == handoff[0].supervised - stats["supervised_tokens_dropped"] <= 0
+    assert stats["kinds"] == {"questions": 1} and stats["tasks_outside_plain_slots"] == 1

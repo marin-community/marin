@@ -4,8 +4,8 @@
 """Build one arm's Levanter SFT rows from canonical generation traces.
 
 Inputs: one or more rebuild_traces.py outputs (one row per conversation of a Harbor trial attempt), the pool task
-table, the LR-sweep replay slice (sweep_data), and for RS-multi and relay the plain arm's built prefix (it fixes the
-task slots and B).
+table, the LR-sweep replay slice (sweep_data), and for RS-multi, relay and recovery the plain arm's built prefix (it
+fixes the task slots, B and, for recovery, the trajectories).
 
 Rows follow the LR-sweep set: input_ids padded to 32,768 with pad id 128001, loss_weights shifted so weight i scores
 token i + 1, zero-loss padding rows to a multiple of 16, nothing truncated. Replay is a prefix of the replay slice in
@@ -15,9 +15,9 @@ rows (checked by hash against plain's manifest).
 Training order: the trainer reads rows in file order (mixture block 16, one block per batch) and concatenates the
 epoch files in order without shuffling. So each epoch file is its own seeded permutation of that epoch's rows (seed
 '<SEED>:<arm>:epoch-<e>:<pool manifest sha256>', recorded per split), with zero-loss padding rows at the end to a
-multiple of 16. Plain and relay repeat the same rows in each epoch; RS-multi picks new attempts per epoch.
+multiple of 16. Plain, relay and recovery repeat the same rows in each epoch; RS-multi picks new attempts per epoch.
 
-Outputs under --output: train-epoch-<e>-prebuilt.jsonl.gz for e in 0..2 (plain, RS-multi, relay) or
+Outputs under --output: train-epoch-<e>-prebuilt.jsonl.gz for e in 0..2 (plain, RS-multi, relay, recovery) or
 validation-<family>-prebuilt.jsonl.gz (validation: the shared set for all arms, GLM's first passing trace per
 held-out task, no replay), train-index.jsonl (with epoch) or validation-index.jsonl (row -> source),
 selection.jsonl (task or slot -> chosen trial),
@@ -595,6 +595,49 @@ def build_rows(
     return ArmRows(selection, index, splits, b_tokens)
 
 
+def handoff_rows(
+    traces: list[dict],
+    pool: dict[str, dict],
+    tokenizer,
+    kept: dict[str, Candidate],
+    chosen: dict[str, Attempt],
+    recovered: dict[str, RenderedTrace],
+    plain: dict,
+    seed: str,
+) -> tuple[list[Attempt], set[str], dict]:
+    """Context-handoff rows for the recovery arm, and the clean TMax rows dropped to hold B; adds them to `kept`.
+
+    Returns (handoff attempts, dropped trial ids, manifest stats).
+    """
+    handoff_kept, handoff_dropped = candidates(
+        "recovery", recovery.handoff_traces(traces), pool, tokenizer, allow_summarized=True
+    )
+    kept.update(handoff_kept)
+    tmax_rows = sum(a.family == "tmax" for a in chosen.values())
+    handoff = recovery.plan_handoff([c.attempt for c in handoff_kept.values()], tmax_rows, seed)
+    added = sum(a.supervised for a in handoff)
+    clean = [a for a in chosen.values() if a.family == "tmax" and a.trial_id not in recovered]
+    dropped_clean = recovery.hold_budget(clean, added, seed)
+    removed = sum(a.supervised for a in dropped_clean)
+    stats = {
+        "rule": (
+            "conversations 1+ of passing summarized TMax plain trials (any pool task), seeded order, at most "
+            f"{recovery.HANDOFF_SHARE:.0%} of plain's TMax rows; clean TMax rows dropped in seeded order until "
+            "they cover the handoff rows' supervised tokens"
+        ),
+        "candidates": len(handoff_kept),
+        "candidate_drops": dict(collections.Counter(d["reason"].split(":")[0] for d in handoff_dropped)),
+        "rows": len(handoff),
+        "kinds": dict(collections.Counter(recovery.handoff_kind(kept[a.trial_id].trace["messages"]) for a in handoff)),
+        "supervised_tokens_added": added,
+        "clean_tmax_rows_dropped": len(dropped_clean),
+        "supervised_tokens_dropped": removed,
+        "B_minus_plain_B": added - removed,
+        "tasks_outside_plain_slots": len({a.task_id for a in handoff} - set(plain["task_slots"])),
+    }
+    return handoff, {a.trial_id for a in dropped_clean}, stats
+
+
 def build_recovery_rows(
     args: argparse.Namespace,
     traces: list[dict],
@@ -622,35 +665,8 @@ def build_recovery_rows(
     stats = recovery.build_recovery(chosen, kept, tokenizer, args.recovery_swe_mode, seed, recovered)
     handoff, removed = [], set()
     if args.recovery_handoff:
-        handoff_kept, handoff_dropped = candidates(
-            "recovery", recovery.handoff_traces(traces), pool, tokenizer, allow_summarized=True
-        )
-        kept.update(handoff_kept)
-        tmax_rows = sum(a.family == "tmax" for a in chosen.values())
-        handoff = recovery.plan_handoff([c.attempt for c in handoff_kept.values()], tmax_rows, seed)
-        added = sum(a.supervised for a in handoff)
-        clean = [a for a in chosen.values() if a.family == "tmax" and a.trial_id not in recovered]
-        dropped_clean = recovery.hold_budget(clean, added, seed)
-        removed = {a.trial_id for a in dropped_clean}
-        b_tokens += added - sum(a.supervised for a in dropped_clean)
-        stats["handoff"] = {
-            "rule": (
-                "conversations 1+ of passing summarized TMax plain trials (any pool task), seeded order, at most "
-                f"{recovery.HANDOFF_SHARE:.0%} of plain's TMax rows; clean TMax rows dropped in seeded order until "
-                "they cover the handoff rows' supervised tokens"
-            ),
-            "candidates": len(handoff_kept),
-            "candidate_drops": dict(collections.Counter(d["reason"].split(":")[0] for d in handoff_dropped)),
-            "rows": len(handoff),
-            "kinds": dict(
-                collections.Counter(recovery.handoff_kind(kept[a.trial_id].trace["messages"]) for a in handoff)
-            ),
-            "supervised_tokens_added": added,
-            "clean_tmax_rows_dropped": len(dropped_clean),
-            "supervised_tokens_dropped": sum(a.supervised for a in dropped_clean),
-            "B_minus_plain_B": b_tokens - plain["B_supervised_tokens"],
-            "tasks_outside_plain_slots": len({a.task_id for a in handoff} - set(plain["task_slots"])),
-        }
+        handoff, removed, stats["handoff"] = handoff_rows(traces, pool, tokenizer, kept, chosen, recovered, plain, seed)
+        b_tokens += stats["handoff"]["B_minus_plain_B"]
         selection += [{"task_id": a.task_id, "trial_id": a.trial_id, "handoff": True} for a in handoff]
         selection = [item for item in selection if item["trial_id"] not in removed]
 
