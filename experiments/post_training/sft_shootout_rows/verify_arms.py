@@ -19,27 +19,31 @@ import gzip
 import hashlib
 import json
 import sys
+from typing import NamedTuple
 
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.sweep_data.prepare_agentic import PAD_TOKEN
+from experiments.post_training.sft_shootout_rows.build import EPOCHS
+from experiments.post_training.sweep_data.prepare_agentic import BATCH, PAD_TOKEN, read_component
 from experiments.post_training.sweep_data.select import CONTEXT
 
-EPOCHS = 3
+
+class ArmCheck(NamedTuple):
+    manifest: dict
+    index: list[dict]
+    # Per epoch: {"replay": Counter of row hashes, "agentic": Counter of row hashes, "supervised": per-family tokens}.
+    epochs: dict[int, dict]
+    report: dict
 
 
-def check_prefix(uri: str) -> tuple[dict, list[dict], dict]:
+def check_prefix(uri: str) -> ArmCheck:
+    """Check one production prefix against its own manifest; raise on any mismatch."""
     root = StoragePath(uri)
     if not (root / "_SUCCESS").exists():
         raise ValueError(f"{uri}: no _SUCCESS marker")
     if (root / "DRY_RUN_NOT_FOR_TRAINING").exists():
         raise ValueError(f"{uri}: carries a dry-run marker")
-    manifest = json.loads((root / "manifest.json").read_text())
-    files = {}
-    for name, digest in manifest["output_hashes"].items():
-        files[name] = (root / name).read_bytes()
-        if hashlib.sha256(files[name]).hexdigest() != digest:
-            raise ValueError(f"{uri}/{name}: hash differs from the manifest")
+    manifest, _, files = read_component(root)
     index = [json.loads(line) for line in files["train-index.jsonl"].decode().splitlines()]
     heldout = {task for tasks in manifest["heldout_task_ids"].values() for task in tasks}
     leaked = sorted({item["task_id"] for item in index if item.get("task_id") in heldout})
@@ -53,9 +57,9 @@ def check_prefix(uri: str) -> tuple[dict, list[dict], dict]:
             raise ValueError(f"{uri}: epoch {epoch} rows_sha256 differs")
         lines = data.decode().splitlines()
         entries = [item for item in index if item["epoch"] == epoch]
-        if len(lines) != split["padded_rows"] or split["padded_rows"] % 16 or len(entries) != split["rows"]:
+        if len(lines) != split["padded_rows"] or split["padded_rows"] % BATCH or len(entries) != split["rows"]:
             raise ValueError(f"{uri}: epoch {epoch} row counts differ")
-        if split["steps"] * 16 != split["padded_rows"]:
+        if split["steps"] * BATCH != split["padded_rows"]:
             raise ValueError(f"{uri}: epoch {epoch} steps differ")
         supervised, context = collections.Counter(), collections.Counter()
         replay = collections.Counter()
@@ -97,30 +101,30 @@ def check_prefix(uri: str) -> tuple[dict, list[dict], dict]:
         },
         "heldout_rows": 0,
     }
-    return manifest, index, epochs | {"report": report}
+    return ArmCheck(manifest, index, epochs, report)
 
 
 def main() -> None:
-    plain_manifest, plain_index, plain = check_prefix(sys.argv[1])
+    plain_manifest, plain_index, plain, plain_report = check_prefix(sys.argv[1])
     if plain_manifest["arm"] != "plain":
         raise ValueError("The first prefix must be plain")
     if not (plain[0]["agentic"] == plain[1]["agentic"] == plain[2]["agentic"]):
         raise ValueError("Plain epoch files do not hold the same agentic rows")
     orders = [
-        [item.get("trial_id") or item.get("byte_offset") for item in plain_index if item["epoch"] == e] for e in range(3)
+        [item.get("trial_id") or item.get("byte_offset") for item in plain_index if item["epoch"] == e]
+        for e in range(EPOCHS)
     ]
     if len({tuple(order) for order in orders}) != EPOCHS:
         raise ValueError("Plain epochs share an order")
-    reports = [plain["report"] | {"epochs_same_rows_different_order": True}]
+    reports = [plain_report | {"epochs_same_rows_different_order": True}]
     b = plain_manifest["B_supervised_tokens"]
     for uri in sys.argv[2:]:
-        manifest, index, arm = check_prefix(uri)
+        manifest, index, arm, report = check_prefix(uri)
         if manifest["replay"]["rows_sha256"] != plain_manifest["replay"]["rows_sha256"]:
             raise ValueError(f"{uri}: replay cut differs from plain's")
         for epoch in range(EPOCHS):
             if arm[epoch]["replay"] != plain[0]["replay"]:
                 raise ValueError(f"{uri}: epoch {epoch} replay rows differ from plain's")
-        report = arm["report"]
         if manifest["arm"] == "rs-multi":
             slots = set(plain_manifest["task_slots"])
             if {item["task_id"] for item in index if item.get("task_id")} - slots:

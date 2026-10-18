@@ -8,7 +8,7 @@ TMax 1,914, SWE-smith 1,995). Relay parity is the projected relay pool (every us
 subsample to B) over the projected plain B, per family and in total.
 
 Flags (printed as FLAG lines and listed in the section):
-- projected B above 29,626,824 (4 x the frozen replay slice; continuation v2 would be needed),
+- projected B above 41,420,456 (4 x the arms' replay slice, continuation v2: R = B/4 could not be met),
 - relay parity below 1.0 (meaningful once a family's follow-up rounds are done),
 - a drop reason outside KNOWN_DROPS, or any capability-token drop.
 
@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 POOL_NOT_HELD_OUT = {"tmax": 1914, "swesmith": 1995}
-REPLAY_CEILING_B = 4 * 7_406_706
+REPLAY_CEILING_B = 4 * 10_355_114  # supervised tokens of continuation v2 (build.REPLAY_URI)
 KNOWN_DROPS = {
     "not_passed",
     "heldout_task",
@@ -47,12 +47,35 @@ def fmt(value: float) -> str:
     return f"{value:,.0f}"
 
 
+def health_flags(summary: dict, projected_b: dict[str, float], projected_relay: dict[str, float]) -> list[str]:
+    """FLAG lines: replay ceiling, relay below parity per family, unknown drop reasons, capability-token drops."""
+    flags = []
+    total_b = sum(projected_b.values())
+    if total_b > REPLAY_CEILING_B:
+        flags.append(
+            f"projected B {fmt(total_b)} exceeds {fmt(REPLAY_CEILING_B)}: the replay slice cannot reach R = B/4"
+        )
+    for family in sorted(projected_b):
+        if projected_b[family] and projected_relay[family] < projected_b[family]:
+            flags.append(
+                f"{family} relay pool projects to {projected_relay[family] / projected_b[family]:.2f} of B "
+                "(below parity; check whether its follow-up rounds are done)"
+            )
+    for arm, data in summary["arms"].items():
+        for family, drops in data["candidates"]["dropped_by_family"].items():
+            for reason, count in drops.items():
+                if reason not in KNOWN_DROPS:
+                    flags.append(f"new drop reason in {arm}/{family}: {reason} ({count})")
+                if reason == "contains_proxy_capability_token" and count:
+                    flags.append(f"capability token drops in {arm}/{family}: {count}")
+    return flags
+
+
 def main() -> None:
     log, table, label = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
     line = next(line for line in log.read_text().splitlines() if "PROGRESS_SUMMARY " in line)
     summary = json.loads(line.split("PROGRESS_SUMMARY ", 1)[1])
     plain, rs, relay = (summary["arms"][arm] for arm in ("plain", "rs-multi", "relay"))
-    flags = []
     families = sorted(POOL_NOT_HELD_OUT)
     out = [f"## {label} ({datetime.date.today().isoformat()})", ""]
     out.append(f"Finished shards ({len(summary['shards'])}): " + ", ".join(f"`{s}`" for s in summary["shards"]) + ".")
@@ -128,21 +151,7 @@ def main() -> None:
         )
         + f". At the projected B, R = {fmt(total_b / 4)}.",
     ]
-    if total_b > REPLAY_CEILING_B:
-        flags.append(f"projected B {fmt(total_b)} exceeds {fmt(REPLAY_CEILING_B)}: replay continuation v2 needed")
-    for family in families:
-        if projected_b[family] and projected_relay[family] < projected_b[family]:
-            flags.append(
-                f"{family} relay pool projects to {projected_relay[family] / projected_b[family]:.2f} of B "
-                "(below parity; check whether its follow-up rounds are done)"
-            )
-    for arm, data in summary["arms"].items():
-        for family, drops in data["candidates"]["dropped_by_family"].items():
-            for reason, count in drops.items():
-                if reason not in KNOWN_DROPS:
-                    flags.append(f"new drop reason in {arm}/{family}: {reason} ({count})")
-                if reason == "contains_proxy_capability_token" and count:
-                    flags.append(f"capability token drops in {arm}/{family}: {count}")
+    flags = health_flags(summary, projected_b, projected_relay)
     out += ["", "Flags: " + ("; ".join(flags) if flags else "none") + ".", ""]
     with table.open("a") as stream:
         stream.write("\n".join(out) + "\n")

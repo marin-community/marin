@@ -19,7 +19,6 @@ import re
 import subprocess
 import sys
 
-import fsspec
 from rigging.filesystem.storage_path import StoragePath
 
 ARMS = ("plain", "rs-multi", "relay")
@@ -31,12 +30,10 @@ SHARD_PATH = re.compile(r"/[a-z]+(?:-relay)?/shard-[0-9a-z]+/(?:round-[0-9]+/)?r
 
 
 def finished_shards(root: str) -> list[str]:
-    fs, path = fsspec.core.url_to_fs(root)
-    protocol = root.split("://", 1)[0] + "://"
     found = []
-    for rebuilt in sorted(fs.glob(f"{path.rstrip('/')}/**/rebuilt.jsonl")):
-        if SHARD_PATH.search(rebuilt) and fs.exists(rebuilt.rsplit("/", 1)[0] + "/_SUCCESS"):
-            found.append(protocol + rebuilt)
+    for rebuilt in sorted(StoragePath(f"{root.rstrip('/')}/**/rebuilt.jsonl").glob(), key=str):
+        if SHARD_PATH.search(str(rebuilt)) and (rebuilt.parent / "_SUCCESS").exists():
+            found.append(str(rebuilt))
     return found
 
 

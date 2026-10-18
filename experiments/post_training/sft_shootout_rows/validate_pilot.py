@@ -24,11 +24,10 @@ import tempfile
 import time
 from pathlib import Path
 
-from huggingface_hub import hf_hub_download
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.sft_shootout_rows.validate_local import check_arm
-from experiments.post_training.sweep_data.prepare_agentic import STUDENT_MODEL, STUDENT_REVISION, load_tokenizer
+from experiments.post_training.sweep_data.prepare_agentic import audit_hashes, load_tokenizer
 
 
 def main() -> None:
@@ -45,10 +44,8 @@ def main() -> None:
     args = parser.parse_args()
     with tempfile.TemporaryDirectory() as temporary:
         work = Path(temporary)
-        audit = hf_hub_download(STUDENT_MODEL, "provenance/campaign3/audit.json", revision=STUDENT_REVISION)
-        expected = {name: entry["sha256"] for name, entry in json.loads(Path(audit).read_text())["files"].items()}
         (work / "tokenizer").mkdir()
-        tokenizer = load_tokenizer(work / "tokenizer", expected)
+        tokenizer = load_tokenizer(work / "tokenizer", audit_hashes())
         local_traces = []
         for index, uri in enumerate(args.traces):
             path = work / f"traces-{index}.jsonl"
