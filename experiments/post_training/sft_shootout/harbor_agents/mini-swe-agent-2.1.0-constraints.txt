@@ -1,0 +1,267 @@
+# mini-swe-agent 2.1.0 and its dependencies, pinned for #207/#212 generation (Python 3.12, x86_64 Linux).
+# Regenerate: echo "mini-swe-agent==2.1.0" | uv pip compile - --python-version 3.12 --python-platform x86_64-manylinux_2_28 --no-header
+aiohappyeyeballs==2.7.1
+    # via aiohttp
+aiohttp==3.14.5
+    # via
+    #   fsspec
+    #   litellm
+aiosignal==1.4.0
+    # via aiohttp
+annotated-doc==0.0.5
+    # via typer
+annotated-types==0.8.0
+    # via pydantic
+anyio==4.15.1
+    # via
+    #   httpx
+    #   openai
+attrs==26.1.0
+    # via
+    #   aiohttp
+    #   jsonschema
+    #   referencing
+boto3==1.43.114
+    # via litellm
+botocore==1.43.114
+    # via
+    #   boto3
+    #   s3transfer
+certifi==2026.7.22
+    # via
+    #   httpcore
+    #   httpx
+    #   requests
+charset-normalizer==3.5.2
+    # via requests
+click==8.5.0
+    # via
+    #   --override (workspace)
+    #   huggingface-hub
+    #   litellm
+datasets==4.8.5
+    # via
+    #   --override (workspace)
+    #   mini-swe-agent
+dill==0.4.1
+    # via
+    #   datasets
+    #   multiprocess
+distro==1.9.0
+    # via openai
+fastuuid==0.14.0
+    # via litellm
+filelock==3.32.7
+    # via
+    #   datasets
+    #   huggingface-hub
+    #   litellm
+frozenlist==1.8.0
+    # via
+    #   aiohttp
+    #   aiosignal
+fsspec==2026.2.0
+    # via
+    #   datasets
+    #   huggingface-hub
+h11==0.16.0
+    # via httpcore
+h2==4.4.1
+    # via httpx
+hf-xet==1.7.0
+    # via huggingface-hub
+hpack==4.2.0
+    # via h2
+httpcore==1.0.9
+    # via httpx
+httpx==0.28.1
+    # via
+    #   datasets
+    #   huggingface-hub
+    #   litellm
+    #   openai
+huggingface-hub==1.33.0
+    # via
+    #   datasets
+    #   litellm
+    #   tokenizers
+hyperframe==6.1.0
+    # via h2
+idna==3.20
+    # via
+    #   anyio
+    #   httpx
+    #   requests
+    #   yarl
+importlib-metadata==8.9.0
+    # via litellm
+jinja2==3.1.6
+    # via
+    #   litellm
+    #   mini-swe-agent
+jiter==0.17.0
+    # via openai
+jmespath==1.1.0
+    # via
+    #   boto3
+    #   botocore
+jsonschema==4.26.0
+    # via litellm
+jsonschema-specifications==2025.9.1
+    # via jsonschema
+linkify-it-py==2.2.0
+    # via markdown-it-py
+litellm==1.105.1
+    # via
+    #   --override (workspace)
+    #   mini-swe-agent
+markdown-it-py==4.2.0
+    # via
+    #   mdit-py-plugins
+    #   rich
+    #   textual
+markupsafe==3.0.4
+    # via jinja2
+mdit-py-plugins==0.6.1
+    # via textual
+mdurl==0.1.2
+    # via markdown-it-py
+mini-swe-agent==2.1.0
+multidict==7.1.0
+    # via
+    #   aiohttp
+    #   yarl
+multiprocess==0.70.19
+    # via datasets
+numpy==2.5.4
+    # via
+    #   datasets
+    #   pandas
+openai==2.54.0
+    # via
+    #   litellm
+    #   mini-swe-agent
+packaging==26.3
+    # via
+    #   datasets
+    #   huggingface-hub
+    #   litellm
+pandas==3.0.6
+    # via datasets
+platformdirs==4.13.3
+    # via
+    #   mini-swe-agent
+    #   textual
+prompt-toolkit==3.0.53
+    # via mini-swe-agent
+propcache==0.5.4
+    # via
+    #   aiohttp
+    #   yarl
+pyarrow==26.0.0
+    # via datasets
+pydantic==2.14.1
+    # via
+    #   litellm
+    #   mini-swe-agent
+    #   openai
+    #   pydantic-settings
+pydantic-core==2.50.1
+    # via pydantic
+pydantic-settings==2.16.0
+    # via litellm
+pygments==2.21.0
+    # via
+    #   rich
+    #   textual
+python-dateutil==2.9.0.post0
+    # via
+    #   botocore
+    #   pandas
+python-dotenv==1.2.4
+    # via
+    #   --override (workspace)
+    #   litellm
+    #   mini-swe-agent
+    #   pydantic-settings
+pyyaml==6.0.3
+    # via
+    #   datasets
+    #   huggingface-hub
+    #   litellm
+    #   mini-swe-agent
+referencing==0.37.0
+    # via
+    #   jsonschema
+    #   jsonschema-specifications
+regex==2026.9.29
+    # via tiktoken
+requests==2.34.2
+    # via
+    #   datasets
+    #   mini-swe-agent
+    #   tiktoken
+rich==15.0.0
+    # via
+    #   --override (workspace)
+    #   mini-swe-agent
+    #   textual
+    #   typer
+rpds-py==2026.9.1
+    # via
+    #   jsonschema
+    #   referencing
+s3transfer==0.19.2
+    # via boto3
+shellingham==1.5.4
+    # via typer
+six==1.17.0
+    # via python-dateutil
+sniffio==1.3.1
+    # via openai
+tenacity==9.2.1
+    # via mini-swe-agent
+textual==8.2.8
+    # via mini-swe-agent
+tiktoken==0.14.0
+    # via
+    #   --override (workspace)
+    #   litellm
+tokenizers==0.23.3
+    # via litellm
+tqdm==4.70.1
+    # via
+    #   datasets
+    #   huggingface-hub
+    #   openai
+typer==0.27.3
+    # via mini-swe-agent
+typing-extensions==4.16.0
+    # via
+    #   aiohttp
+    #   aiosignal
+    #   anyio
+    #   huggingface-hub
+    #   openai
+    #   pydantic
+    #   pydantic-core
+    #   pydantic-settings
+    #   referencing
+    #   textual
+    #   typing-inspection
+typing-inspection==0.4.4
+    # via
+    #   pydantic
+    #   pydantic-settings
+urllib3==2.8.0
+    # via
+    #   botocore
+    #   requests
+wcwidth==0.9.2
+    # via prompt-toolkit
+xxhash==4.0.1
+    # via datasets
+yarl==1.25.1
+    # via aiohttp
+zipp==4.1.1
+    # via importlib-metadata
