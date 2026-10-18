@@ -17,6 +17,7 @@ use crate::server::test_support::{
     client, disk_store, serve, serve_rejecting, serve_schema_conflict, serve_unavailable,
     serve_with_outage, stats_client, RequestStats, TestTransport, PRIV_A, PRIV_UNTRUSTED, PUB_A,
 };
+use crate::store::ipc::decode_one_record_batch;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{Column, Schema};
 use crate::store::store::LOG_NAMESPACE_NAME;
@@ -651,7 +652,7 @@ fn chunk_by_bytes_splits_and_pairs_each_chunk_with_its_last_seq() {
 }
 
 #[test]
-fn chunk_by_bytes_shrinks_an_estimate_that_encodes_over_budget() {
+fn chunk_by_bytes_splits_empty_strings_with_ipc_overhead() {
     let batch = RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![Field::new(
             "data",
@@ -663,19 +664,86 @@ fn chunk_by_bytes_shrinks_an_estimate_that_encodes_over_budget() {
     .unwrap();
     let seqs = Int64Array::from_iter_values(1..=1_000);
     let max_bytes = 1_024;
-    let per_row = batch.get_array_memory_size() / batch.num_rows();
-    let estimated_rows = (max_bytes / per_row).max(1);
-    let estimated_ipc = encode_ipc(&batch.schema(), &[batch.slice(0, estimated_rows)]).unwrap();
-    assert!(
-        estimated_ipc.len() > max_bytes,
-        "the fixture must exercise an estimate that needs correction"
-    );
-
     let chunks = chunk_by_bytes(&batch, &seqs, max_bytes).unwrap();
 
     assert!(chunks.len() > 1);
     assert!(chunks.iter().all(|(ipc, _)| ipc.len() <= max_bytes));
     assert_eq!(chunks.last().unwrap().1, 1_000);
+}
+
+#[test]
+fn chunk_by_bytes_preserves_uneven_rows_and_isolates_oversized_rows() {
+    let values: Vec<String> = (0..1_000)
+        .map(|row| {
+            let width = if row % 41 == 0 { 20_000 } else { row % 997 };
+            format!("{row}:{}", "x".repeat(width))
+        })
+        .collect();
+    let batch = RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![Field::new(
+            "data",
+            DataType::Utf8,
+            false,
+        )])),
+        vec![Arc::new(StringArray::from(
+            values.iter().map(String::as_str).collect::<Vec<_>>(),
+        ))],
+    )
+    .unwrap();
+    let seqs = Int64Array::from_iter_values(1..=values.len() as i64);
+    let max_bytes = 16 * 1024;
+    let chunks = chunk_by_bytes(&batch, &seqs, max_bytes).unwrap();
+    let mut restored = Vec::new();
+    for (ipc, last_seq) in chunks {
+        let decoded = decode_one_record_batch(&ipc).unwrap();
+        assert!(ipc.len() <= max_bytes || decoded.num_rows() == 1);
+        restored.extend(
+            decoded
+                .column(0)
+                .as_string::<i32>()
+                .iter()
+                .map(|value| value.unwrap().to_owned()),
+        );
+        assert_eq!(last_seq, restored.len() as i64);
+    }
+    assert_eq!(restored, values);
+}
+
+#[test]
+fn chunk_by_bytes_bounds_requests_across_a_row_width_transition() {
+    let wide = "x".repeat(100);
+    let values: Vec<&str> = std::iter::repeat_n("x", 100_000)
+        .chain(std::iter::repeat_n(wide.as_str(), 100_000))
+        .collect();
+    let batch = RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![Field::new(
+            "data",
+            DataType::Utf8,
+            false,
+        )])),
+        vec![Arc::new(StringArray::from(values.clone()))],
+    )
+    .unwrap();
+    let seqs = Int64Array::from_iter_values(1..=values.len() as i64);
+    let max_bytes = 1_500_000;
+    let chunks = chunk_by_bytes(&batch, &seqs, max_bytes).unwrap();
+    // Split each half independently so a narrow prefix does not force the
+    // wider suffix into repeated small requests.
+    assert!(chunks.len() <= 9, "underfilled chunks add serial hub waits");
+    let mut restored = Vec::new();
+    for (ipc, last_seq) in chunks {
+        assert!(ipc.len() <= max_bytes);
+        let decoded = decode_one_record_batch(&ipc).unwrap();
+        restored.extend(
+            decoded
+                .column(0)
+                .as_string::<i32>()
+                .iter()
+                .map(|value| value.unwrap().to_owned()),
+        );
+        assert_eq!(last_seq, restored.len() as i64);
+    }
+    assert_eq!(restored, values);
 }
 
 #[test]
@@ -1170,6 +1238,70 @@ async fn a_busy_namespace_yields_before_the_next_namespace_is_forwarded() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn independent_namespaces_overlap_their_durable_hub_writes() {
+    let fx = Fixture::new("concurrent-namespaces").await;
+    for namespace in ["events", "metrics"] {
+        write_id_rows(&fx.source, namespace, 3).await;
+        fx.forward_from_start(namespace).await;
+    }
+
+    let forwarder = fx.forwarder(PRIV_A);
+    let mut progress = Progress::new();
+    let (_stop_tx, mut stop) = watch::channel(false);
+    forwarder.forward_round(&mut progress, &mut stop).await;
+
+    for namespace in ["events", "metrics"] {
+        assert_eq!(fx.cursor(namespace), Some(fx.tip(namespace)));
+        assert_eq!(
+            hub_column(fx.target_store(), namespace, "id").await,
+            vec![Some("0".into()), Some("1".into()), Some("2".into())]
+        );
+    }
+    assert!(
+        fx.target_requests.max_in_flight() >= 2,
+        "independent namespaces must overlap at the hub's durable-ack boundary"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_dense_log_backlog_passes_the_table_batch_limit_in_order() {
+    let fx = Fixture::new("dense-logs").await;
+    let lines: Vec<String> = (0..=FORWARD_BATCH_ROWS)
+        .map(|row| row.to_string())
+        .collect();
+    let borrowed: Vec<&str> = lines.iter().map(String::as_str).collect();
+    push(&fx.source_client, "/user/job/0:0", &borrowed).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+
+    let forwarder = fx.forwarder(PRIV_A);
+    let schema = fx.source.get_table_schema(LOG_NAMESPACE_NAME).unwrap();
+    let mut progress = Progress::new();
+    let (_stop_tx, mut stop) = watch::channel(false);
+    forwarder
+        .forward_namespace(LOG_NAMESPACE_NAME, &schema, &mut progress, &mut stop)
+        .await;
+
+    assert_eq!(
+        fx.cursor(LOG_NAMESPACE_NAME),
+        Some(fx.tip(LOG_NAMESPACE_NAME))
+    );
+    assert_eq!(
+        scalar_i64(fx.target_store(), "SELECT count(*) FROM \"log\"").await,
+        lines.len() as i64
+    );
+    assert_eq!(
+        scalar_i64(
+            fx.target_store(),
+            "SELECT count(*) FROM (SELECT data, row_number() OVER (ORDER BY seq) - 1 AS expected \
+             FROM \"log\") WHERE CAST(data AS BIGINT) <> expected"
+        )
+        .await,
+        0,
+        "source sequence order must survive the larger log read"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn relay_status_reaches_the_hub_outside_the_row_path() {
     let fx = Fixture::new("relay-status").await;
     let forwarder = fx.forwarder(PRIV_A);
@@ -1223,7 +1355,15 @@ async fn telemetry_sized_chunks_are_delivered_concurrently_without_loss() {
     .await;
     fx.forward_from_start("telemetry").await;
 
-    fx.drain(PRIV_A, "telemetry").await;
+    let forwarder = fx.forwarder(PRIV_A);
+    let schema = fx.source.get_table_schema("telemetry").unwrap();
+    let mut progress = Progress::new();
+    let (_stop_tx, mut stop) = watch::channel(false);
+    forwarder
+        .forward_namespace("telemetry", &schema, &mut progress, &mut stop)
+        .await;
+
+    assert_eq!(fx.cursor("telemetry"), Some(fx.tip("telemetry")));
 
     let stats = fx.target_store().list_namespaces_with_stats().unwrap();
     let telemetry = stats
