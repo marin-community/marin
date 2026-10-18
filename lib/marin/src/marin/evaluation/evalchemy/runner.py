@@ -27,7 +27,7 @@ from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_REQUIREMENT,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
-from marin.evaluation.lm_eval_samples import rebuild_lm_eval_samples, summarize_native_eval_samples
+from marin.evaluation.lm_eval_samples import summarize_native_eval_samples
 from marin.evaluation.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
     EvalTaskRef,
@@ -41,7 +41,7 @@ from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_NUM_CONCURRENT = 16
+DEFAULT_NUM_CONCURRENT = 64
 LOG_TAIL_LINES = 100
 _EVAL_CLIENT_SCRIPT = "lib/marin/src/marin/evaluation/evalchemy/client.py"
 _EVAL_JOB_ROLE = "eval"
@@ -288,12 +288,17 @@ def run_evalchemy(
     *,
     env_vars: Mapping[str, str],
 ) -> EvalchemyOutcome:
-    """Run Evalchemy and validate its results artifacts and normalized samples in FineStore."""
+    """Run Evalchemy and read its result and sample tables from FineStore."""
     if not config.tasks:
         raise ValueError("Evalchemy requires at least one task")
     if "://" not in output_dir:
         raise ValueError(f"Evalchemy output_dir {output_dir!r} is not an object-store path")
     eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
+    return read_evalchemy_outcome(config, output_dir, eval_job)
+
+
+def read_evalchemy_outcome(config: EvalchemyRunConfig, output_dir: str, eval_job: str) -> EvalchemyOutcome:
+    """Validate and normalize saved Evalchemy outputs without repeating inference."""
     try:
         result = FineStoreEvalchemyResult(path=output_dir)
         metrics = result.task_metrics()
@@ -301,16 +306,7 @@ def run_evalchemy(
             output_dir,
             tasks=config.tasks,
         )
-        rebuild_lm_eval_samples(
-            output_dir,
-            tasks=summary.tasks,
-            writer_id=f"marin-evalchemy-samples-{uuid.uuid4().hex}",
-        )
         normalize_rollouts(output_dir, writer_id=f"marin-evalchemy-rollouts-{uuid.uuid4().hex}")
-        summary = summarize_native_eval_samples(
-            output_dir,
-            tasks=config.tasks,
-        )
     except Exception as exc:
         raise EvalPipelineError(
             str(exc),
