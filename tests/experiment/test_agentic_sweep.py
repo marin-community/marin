@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 from dataclasses import replace
 from types import SimpleNamespace
@@ -119,7 +122,7 @@ def test_unequal_assistant_masks_use_global_token_mean_and_gradient():
 
 
 def test_epoch_statistics_weight_tokens_without_validation(tmp_path):
-    tracker = EpochTracker(str(tmp_path), steps_per_epoch=4, tokens_per_epoch=10)
+    tracker = EpochTracker(str(tmp_path), [4], [10])
     for step, (tokens, loss) in enumerate([(1, 2.0), (2, 3.0), (3, 4.0), (4, 5.0)]):
         tracker.log({"train/loss_sum": tokens * loss, "train/supervised_tokens": tokens}, step=step)
     rows = [json.loads(line) for line in (tmp_path / "epoch-metrics.jsonl").read_text().splitlines()]
@@ -196,7 +199,7 @@ def test_epoch_checkpoints_offline_validation_and_final_export(tmp_path, monkeyp
             load_checkpoint=False,
             tracker=(
                 WandbConfig(mode="offline", project="sweep-integration", save_code=False),
-                EpochTrackerConfig(str(tmp_path), 4, 56),
+                EpochTrackerConfig(str(tmp_path), [4] * 3, [56] * 3),
                 JsonLoggerConfig(),
                 JsonFileTrackerConfig(output_path=str(tmp_path)),
             ),
@@ -211,7 +214,7 @@ def test_epoch_checkpoints_offline_validation_and_final_export(tmp_path, monkeyp
             log_xla_hlo=False,
             distributed=DistributedConfig(initialize_jax_distributed=False),
         ),
-        adapter=SweepExportsConfig(validation, 4, 8),
+        adapter=SweepExportsConfig(validation, [4] * 3, 8),
         hf_save_path=str(tmp_path / "hf"),
     )
     main(config)
@@ -274,7 +277,7 @@ def test_epoch_checkpoints_offline_validation_and_final_export(tmp_path, monkeyp
                 load_checkpoint_path=str(checkpoint_path / "step-3"),
                 tracker=(
                     WandbConfig(mode="offline", project="sweep-integration", save_code=False),
-                    EpochTrackerConfig(str(resumed_path), 4, 56, start_step=4),
+                    EpochTrackerConfig(str(resumed_path), [4] * 3, [56] * 3, start_step=4),
                     JsonLoggerConfig(),
                 ),
                 checkpointer=replace(config.trainer.checkpointer, base_path=str(resumed_path / "checkpoints")),

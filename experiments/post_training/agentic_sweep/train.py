@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Prepare or run one authorized Snowball v0 learning-rate sweep member."""
 
 import argparse
@@ -339,7 +342,12 @@ def pipeline(
             per_device_eval_parallelism=2,
             tracker=(
                 wandb,
-                EpochTrackerConfig(ctx.output_path, steps_per_epoch, report["supervised_tokens"], start_step),
+                EpochTrackerConfig(
+                    ctx.output_path,
+                    [steps_per_epoch] * EPOCHS,
+                    [report["supervised_tokens"]] * EPOCHS,
+                    start_step=start_step,
+                ),
                 JsonLoggerConfig(),
             ),
             checkpointer=replace(config.trainer.checkpointer, keep=[], save_interval=None),
@@ -350,7 +358,7 @@ def pipeline(
                 config,
                 trainer=trainer,
                 data_seed=42,
-                adapter=SweepExportsConfig(validation, steps_per_epoch, CONTEXT),
+                adapter=SweepExportsConfig(validation, [steps_per_epoch] * EPOCHS, CONTEXT),
             ),
             env_vars={"WANDB_MODE": "online", **GPU_LOG_ENV},
         )

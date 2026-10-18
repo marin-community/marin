@@ -1,9 +1,13 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Exact epoch accounting and exports for the fixed-batch SFT sweep."""
 
+import bisect
+import itertools
 import json
-import logging
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 import jax
@@ -15,59 +19,70 @@ from levanter.tracker import log
 from levanter.tracker.tracker import NoopTracker, TrackerConfig
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-logger = logging.getLogger(__name__)
-
 PLATEAU_TOTALS = ("plateau_kept_tokens", "plateau_kept_loss_sum", "plateau_dropped_tokens", "plateau_dropped_loss_sum")
+TOTALS = ("loss_sum", "supervised_tokens", "context_tokens", *PLATEAU_TOTALS)
 
 
 class EpochTracker(NoopTracker):
+    """Writes one row per epoch to epoch-metrics.jsonl and fails if an epoch's tokens differ from the manifest.
+
+    ``epoch_updates[e]`` is the number of updates in epoch e + 1. ``supervised_tokens[e]`` and, when given,
+    ``context_tokens[e]`` are that epoch's manifest totals; the trained totals must match them within 0.1%.
+    """
+
     name = "epoch_accounting"
 
-    def __init__(self, output_path: str, steps_per_epoch: int, tokens_per_epoch: int, start_step: int = 0):
-        if start_step % steps_per_epoch:
-            raise ValueError("Epoch accounting can resume only at an epoch boundary")
+    def __init__(
+        self,
+        output_path: str,
+        epoch_updates: Sequence[int],
+        supervised_tokens: Sequence[int],
+        context_tokens: Sequence[int] | None = None,
+        start_step: int = 0,
+    ):
+        if len(supervised_tokens) != len(epoch_updates) or (
+            context_tokens is not None and len(context_tokens) != len(epoch_updates)
+        ):
+            raise ValueError("Every epoch needs its update count and token totals")
         self.output_path = output_path
-        self.steps_per_epoch = steps_per_epoch
-        self.tokens_per_epoch = tokens_per_epoch
+        self.epoch_ends = list(itertools.accumulate(epoch_updates))
+        if start_step and start_step not in self.epoch_ends:
+            raise ValueError("Epoch accounting can resume only at an epoch boundary")
+        self.supervised_tokens = list(supervised_tokens)
+        self.context_tokens = None if context_tokens is None else list(context_tokens)
         self.next_token_step = start_step
-        self.loss_sum = 0.0
-        self.token_sum = 0.0
-        self.plateau_sums = dict.fromkeys(PLATEAU_TOTALS, 0.0)
+        self.sums = dict.fromkeys(TOTALS, 0.0)
         self.epoch_rows: dict[int, dict[str, Any]] = {}
         self.published_epochs: set[int] = set()
 
     def log(self, metrics: Mapping[str, Any], *, step: int | None, commit: bool | None = None):
         if step is None:
             return
-        epoch = (step + 1) // self.steps_per_epoch
-        boundary = (step + 1) % self.steps_per_epoch == 0
+        boundary = step + 1 in self.epoch_ends
+        epoch = bisect.bisect_right(self.epoch_ends, step + 1)
         if "train/supervised_tokens" in metrics:
             if step != self.next_token_step:
                 raise ValueError(f"Missing or duplicated training statistics: {step} != {self.next_token_step}")
             self.next_token_step += 1
-            self.loss_sum += float(metrics["train/loss_sum"])
-            self.token_sum += float(metrics["train/supervised_tokens"])
-            for name in PLATEAU_TOTALS:
-                self.plateau_sums[name] += float(metrics.get(f"train/{name}", 0.0))
+            for name in TOTALS:
+                self.sums[name] += float(metrics.get(f"train/{name}", 0.0))
             if boundary:
-                difference = self.token_sum - self.tokens_per_epoch
-                if abs(difference) > 0.001 * self.tokens_per_epoch:
-                    logger.warning(
-                        "Window supervised tokens differ from manifest: actual=%s expected=%s",
-                        self.token_sum,
-                        self.tokens_per_epoch,
-                    )
-                self.epoch_rows.setdefault(epoch, {}).update(
-                    train_loss=self.loss_sum / self.token_sum,
-                    supervised_tokens=int(self.token_sum),
-                    manifest_supervised_tokens=self.tokens_per_epoch,
-                    supervised_token_difference=int(difference),
+                row = self.epoch_rows.setdefault(epoch, {})
+                row.update(
+                    train_loss=self.sums["loss_sum"] / self.sums["supervised_tokens"],
+                    **token_check(
+                        "supervised_tokens", self.sums["supervised_tokens"], self.supervised_tokens[epoch - 1]
+                    ),
                 )
+                if self.context_tokens is not None:
+                    if "train/context_tokens" not in metrics:
+                        raise ValueError("Context-token accounting needs the context_tokens training metric")
+                    row.update(
+                        token_check("context_tokens", self.sums["context_tokens"], self.context_tokens[epoch - 1])
+                    )
                 if "train/plateau_kept_tokens" in metrics:
-                    self.epoch_rows[epoch].update(plateau_epoch_row(self.plateau_sums, self.token_sum))
-                self.loss_sum = 0.0
-                self.token_sum = 0.0
-                self.plateau_sums = dict.fromkeys(PLATEAU_TOTALS, 0.0)
+                    row.update(plateau_epoch_row(self.sums, self.sums["supervised_tokens"]))
+                self.sums = dict.fromkeys(TOTALS, 0.0)
         row = self.epoch_rows.get(epoch, {})
         if boundary and epoch not in self.published_epochs and "train_loss" in row:
             row.update(epoch=epoch, completed_updates=step + 1, checkpoint_step=step)
@@ -78,6 +93,18 @@ class EpochTracker(NoopTracker):
                 StoragePath(prefix_join(self.output_path, "epoch-metrics.jsonl")).write_text(text)
             self.published_epochs.add(epoch)
             log({f"epoch/{key}": value for key, value in row.items()}, step=step, commit=commit)
+
+
+def token_check(name: str, actual: float, expected: int) -> dict[str, int]:
+    """The epoch's trained token total next to the manifest's; more than 0.1% apart is an error."""
+    difference = actual - expected
+    if abs(difference) > 0.001 * expected:
+        raise ValueError(f"Epoch {name} differ from the manifest: trained {actual}, manifest {expected}")
+    return {
+        name: int(actual),
+        f"manifest_{name}": expected,
+        f"{name.removesuffix('_tokens')}_token_difference": int(difference),
+    }
 
 
 def plateau_epoch_row(sums: Mapping[str, float], supervised_tokens: float) -> dict[str, float]:
@@ -96,43 +123,51 @@ def plateau_epoch_row(sums: Mapping[str, float], supervised_tokens: float) -> di
 @dataclass
 class EpochTrackerConfig(TrackerConfig):
     output_path: str
-    steps_per_epoch: int
-    tokens_per_epoch: int
+    epoch_updates: list[int]
+    supervised_tokens: list[int]
+    context_tokens: list[int] | None = None
     start_step: int = 0
 
     def init(self, run_id: str | None) -> EpochTracker:
         return EpochTracker(
-            self.output_path,
-            self.steps_per_epoch,
-            self.tokens_per_epoch,
-            self.start_step,
+            self.output_path, self.epoch_updates, self.supervised_tokens, self.context_tokens, self.start_step
         )
 
 
 @AdaptorConfig.register_subclass("agentic_sweep_full")
 @dataclass(frozen=True)
 class SweepExportsConfig(NoAdaptorConfig):
-    validation_data: LmDataConfig
-    steps_per_epoch: int
+    """A permanent checkpoint at every epoch end; HF exports after the epochs in ``export_epochs`` and at the end.
+
+    ``validation_data`` is read by the offline validation job, not during training.
+    """
+
+    validation_data: LmDataConfig | None
+    epoch_updates: list[int]
     sequence_length: int
+    export_epochs: list[int] = field(default_factory=list)
 
     def install_export_hooks(self, *, trainer, converter, tokenizer, export) -> None:
         if converter is None or export.hf_save_path is None:
             raise ValueError("The sweep requires an HF converter and export path")
         if trainer.config.microbatch_size != trainer.config.train_batch_size:
             raise ValueError("The sweep forbids separately normalized microbatch accumulation")
-        if self.steps_per_epoch < 4:
+        if min(self.epoch_updates) < 4:
             raise ValueError("Sweep epochs must have at least four batches")
         total_steps = trainer.config.num_train_steps
+        epoch_ends = list(itertools.accumulate(self.epoch_updates))
+        if epoch_ends[-1] != total_steps:
+            raise ValueError(f"Epochs hold {epoch_ends[-1]} updates but the run trains {total_steps}")
+        exports = {epoch_ends[epoch - 1] for epoch in self.export_epochs} | {total_steps}
         last_exported = -1
 
         def epoch_hook(info, force=False):
             nonlocal last_exported
             del force
             completed = info.next_step
-            if completed + 1 <= total_steps and (completed + 1) % self.steps_per_epoch == 0:
+            if completed + 1 in epoch_ends:
                 trainer.request_checkpoint(CheckpointRetention.PERMANENT)
-            if completed != total_steps or completed == last_exported:
+            if completed not in exports or completed == last_exported:
                 return
             converter.save_pretrained(
                 info.eval_model,

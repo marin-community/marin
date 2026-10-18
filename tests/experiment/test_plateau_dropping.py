@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 import tempfile
 from dataclasses import replace
@@ -74,7 +77,10 @@ def _config(tmp_path, tokenizer_path) -> TrainLmConfig:
             per_device_parallelism=2,
             num_train_steps=EPOCHS * STEPS_PER_EPOCH,
             load_checkpoint=False,
-            tracker=(EpochTrackerConfig(str(tmp_path), STEPS_PER_EPOCH, supervised), JsonLoggerConfig()),
+            tracker=(
+                EpochTrackerConfig(str(tmp_path), [STEPS_PER_EPOCH] * EPOCHS, [supervised] * EPOCHS),
+                JsonLoggerConfig(),
+            ),
             checkpointer=CheckpointerConfig(
                 base_path=str(tmp_path / "checkpoints"),
                 append_run_id_to_base_path=False,
@@ -86,7 +92,7 @@ def _config(tmp_path, tokenizer_path) -> TrainLmConfig:
             log_xla_hlo=False,
             distributed=DistributedConfig(initialize_jax_distributed=False),
         ),
-        adapter=SweepExportsConfig(validation, STEPS_PER_EPOCH, 16),
+        adapter=SweepExportsConfig(validation, [STEPS_PER_EPOCH] * EPOCHS, 16),
         hf_save_path=str(tmp_path / "hf"),
         plateau_dropping=PlateauDroppingConfig(),
     )
@@ -97,7 +103,7 @@ def _epoch_rows(path):
 
 
 def test_plateau_epoch_statistics(tmp_path):
-    tracker = EpochTracker(str(tmp_path), steps_per_epoch=2, tokens_per_epoch=10)
+    tracker = EpochTracker(str(tmp_path), [2], [10])
     for step, (kept, kept_loss, dropped, dropped_loss) in enumerate([(4, 4.0, 1, 0.1), (3, 3.0, 2, 0.2)]):
         tracker.log(
             {
@@ -149,7 +155,12 @@ def test_plateau_dropping_rises_over_epochs_and_resume_reproduces_the_mask(tmp_p
             load_checkpoint=True,
             load_checkpoint_path=str(run_path / "checkpoints" / f"step-{resume_at - 1}"),
             tracker=(
-                EpochTrackerConfig(str(resumed_path), STEPS_PER_EPOCH, rows[0]["manifest_supervised_tokens"], resume_at),
+                EpochTrackerConfig(
+                    str(resumed_path),
+                    [STEPS_PER_EPOCH] * EPOCHS,
+                    [rows[0]["manifest_supervised_tokens"]] * EPOCHS,
+                    start_step=resume_at,
+                ),
                 JsonLoggerConfig(),
             ),
         ),
@@ -265,7 +276,7 @@ def _check_context_parallel_plateau():
                         load_checkpoint=resume_from is not None,
                         load_checkpoint_path=resume_from,
                         tracker=(
-                            (EpochTrackerConfig(str(output), steps_per_epoch, supervised),)
+                            (EpochTrackerConfig(str(output), [steps_per_epoch] * epochs, [supervised] * epochs),)
                             if resume_from is None
                             else (JsonLoggerConfig(),)
                         ),

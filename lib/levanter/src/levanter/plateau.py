@@ -1,3 +1,6 @@
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Plateau dropping: remove a token from the training loss once its loss has stopped changing.
 
 Reconstructed from Harshit Varma's write-up (marin issue #10028 and gist hrshtv/76c17ac7).
@@ -11,7 +14,6 @@ Rows are identified by a hash of their ``input_ids`` and ``loss_weights``, so th
 depend on how the loader orders rows, and survives per-epoch permutations and resume.
 """
 
-import functools
 import hashlib
 import io
 import logging
@@ -22,7 +24,7 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
-from haliax import NamedArray
+from haliax import NamedArray, NamedOrNumeric
 from jax.experimental import multihost_utils
 
 import levanter.tracker
@@ -31,7 +33,7 @@ from levanter.checkpoint import is_checkpoint_path
 from levanter.metrics import Metric, ReductionType
 from levanter.models.lm_model import LmExample, LmHeadModel, split_activations
 from levanter.models.loss import maybe_fused_next_token_loss, next_token_loss_weight
-from levanter.trainer import Trainer
+from levanter.trainer import S, Trainer
 from levanter.tracker import capture_time
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -74,7 +76,7 @@ def plateau_mask(config: PlateauDroppingConfig, history: PlateauHistory, current
     return stable & (history.visits >= config.min_visits - 1)
 
 
-def token_cross_entropy(model: LmHeadModel, example: LmExample, *, key=None) -> tuple[NamedArray, jax.Array]:
+def token_cross_entropy(model: LmHeadModel, example: LmExample, *, key=None) -> tuple[NamedArray, NamedOrNumeric]:
     """Next-token cross-entropy at every position (the last is 0), and the model's aux loss."""
     activations, aux_loss = split_activations(model.activations(example.tokens, example.attn_mask, key=key))
     token_loss = maybe_fused_next_token_loss(
@@ -228,13 +230,9 @@ class PlateauTrainer(Trainer):
     update count. A resumed run refuses to start without the file for its restored count.
     """
 
-    def __init__(self, config, optimizer, plateau: PlateauDroppingConfig, *, add_default_hooks: bool = True):
-        super().__init__(
-            config,
-            optimizer,
-            functools.partial(plateau_training_loss, config=plateau),
-            add_default_hooks=add_default_hooks,
-        )
+    def __init__(self, config, optimizer, loss_fn, *, add_default_hooks: bool = True):
+        """``loss_fn`` is ``plateau_training_loss`` with its config bound, optionally wrapped to add metrics."""
+        super().__init__(config, optimizer, loss_fn, add_default_hooks=add_default_hooks)
         if config.microbatch_size is not None and config.microbatch_size != config.train_batch_size:
             raise ValueError("Plateau dropping normalizes over the global batch; microbatches are not supported")
         self.plateau = PlateauState()
@@ -258,7 +256,9 @@ class PlateauTrainer(Trainer):
                 self._plateau_saved_updates = updates
                 logger.info("Loaded plateau history for %d rows from %s", len(self.plateau.rows), path)
                 return
-        raise FileNotFoundError(f"Resuming at {updates} updates requires plateau-updates-{updates}.npz in {directories}")
+        raise FileNotFoundError(
+            f"Resuming at {updates} updates requires plateau-updates-{updates}.npz in {directories}"
+        )
 
     def _save_plateau_state(self, updates: int) -> None:
         """Write the history next to the checkpoint directories, once per saved update count."""
@@ -270,11 +270,11 @@ class PlateauTrainer(Trainer):
                 self.plateau_file(directory, updates).write_bytes(data)
         self._plateau_saved_updates = updates
 
-    def training_steps(self, state, train_loader):
+    def training_steps(self, state: S, train_loader) -> typing.Iterator[StepInfo[S]]:
         self.load_plateau_state(int(state.step))
         return super().training_steps(state, train_loader)
 
-    def train_step(self, state, *batch, **batch_kwargs) -> StepInfo:
+    def train_step(self, state: S, *batch, **batch_kwargs) -> StepInfo[S]:
         (example,) = batch
         input_ids = _host(example.tokens.array)
         loss_weights = _host(example.loss_weight.array)
@@ -283,8 +283,14 @@ class PlateauTrainer(Trainer):
 
         hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks)
         with capture_time() as step_time:
-            step_fn = self._jit_train_step_fn if hooks_this_time else self._jit_train_step_fn_no_hook
-            result = step_fn(state, (example, history), batch_kwargs)
+            if hooks_this_time:
+                result = self._maybe_save_jaxpr(
+                    "train_step", self._jit_train_step_fn, state, (example, history), batch_kwargs
+                )
+            else:
+                result = self._maybe_save_jaxpr(
+                    "train_step_hooks", self._jit_train_step_fn_no_hook, state, (example, history), batch_kwargs
+                )
             loss = result.loss.item()
         if self.config.crash_on_nan and jnp.isnan(loss):
             raise RuntimeError("Loss is NaN")
