@@ -52,8 +52,10 @@ distinct from the iris controller's signing key; the hub stores its public key.
 
 The forwarder (`rust/src/server/forwarding.rs`) forwards **every table**, not just
 logs. Each round it lists the live namespaces and gives each one a batch-sized turn,
-then immediately starts another round while any namespace remains backlogged. Per
-namespace, it reads the rows past a durable per-`(target, namespace)` cursor
+with up to four namespace turns in flight, then immediately starts another round
+while any namespace remains backlogged. Log reads hold up to one million rows;
+other table reads hold up to 200,000. Per namespace, it reads the rows past a
+durable per-`(target, namespace)` cursor
 (`forward_state` in the catalog) and ships them through the generic `RegisterTable` +
 `WriteRows` (Arrow IPC) path — a namespace the hub lacks is created there first. Rows
 forwarded from the legacy `telemetry_v1` root can route to service-specific namespaces;
