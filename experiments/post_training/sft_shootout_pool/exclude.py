@@ -22,7 +22,17 @@ import json
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.sft_shootout_pool.pool import parquet_bytes
+from experiments.post_training.sft_shootout_pool.pool_io import (
+    MANIFEST,
+    SWESMITH_PACKAGES,
+    jsonl_bytes,
+    kept_manifest,
+    parquet_bytes,
+    read_jsonl,
+    read_pool,
+    swesmith_revision,
+    write_pool,
+)
 
 EXCLUDED_REPOS = {"agronholm/typeguard": "vendored_clean_copy"}
 EXCLUDED_TASKS = {"swesmith-01094": "broken_verifier"}
@@ -33,16 +43,11 @@ def main() -> None:
     parser.add_argument("--pool", required=True)
     args = parser.parse_args()
     pool = StoragePath(args.pool)
-    if (pool / "manifest-v1.json").exists():
+    if (pool / kept_manifest(1)).exists():
         raise ValueError("Exclusions were already applied to this pool")
-    previous_bytes = (pool / "manifest.json").read_bytes()
-    manifest = json.loads(previous_bytes)
-    files = {name: (pool / name).read_bytes() for name in manifest["file_sha256"]}
-    for name, data in files.items():
-        if hashlib.sha256(data).hexdigest() != manifest["file_sha256"][name]:
-            raise ValueError(f"{name} changed since the build")
+    previous_bytes, manifest, files = read_pool(pool, "the build")
 
-    rows = [json.loads(line) for line in files["tasks.jsonl"].decode().splitlines()]
+    rows = read_jsonl(files["tasks.jsonl"])
     removed = {}
     for row in rows:
         reason = EXCLUDED_TASKS.get(row["task_id"]) or EXCLUDED_REPOS.get(row["repo"])
@@ -53,29 +58,22 @@ def main() -> None:
     kept = [row for row in rows if row["task_id"] not in removed]
 
     packages = [
-        row
-        for row in pq.read_table(io.BytesIO(files["swesmith-packages.parquet"])).to_pylist()
-        if row["path"] not in removed
+        row for row in pq.read_table(io.BytesIO(files[SWESMITH_PACKAGES])).to_pylist() if row["path"] not in removed
     ]
-    files["swesmith-packages.parquet"] = parquet_bytes(packages)
-    revision = (
-        f"{args.pool.rstrip('/')}/swesmith-packages.parquet@sha256:"
-        f"{hashlib.sha256(files['swesmith-packages.parquet']).hexdigest()}"
-    )
+    files[SWESMITH_PACKAGES] = parquet_bytes(packages)
+    revision = swesmith_revision(args.pool, files)
     for row in kept:
         if row["family"] == "swesmith":
             row["package_revision"] = revision
-    records = [json.loads(line) for line in files["swesmith-packages.jsonl"].decode().splitlines()]
-    files["swesmith-packages.jsonl"] = "".join(
-        json.dumps(record) + "\n" for record in records if record["task_id"] not in removed
-    ).encode()
-    files["tasks.jsonl"] = "".join(json.dumps(row) + "\n" for row in kept).encode()
-    excluded = [json.loads(line) for line in files["excluded.jsonl"].decode().splitlines()]
+    records = read_jsonl(files["swesmith-packages.jsonl"])
+    files["swesmith-packages.jsonl"] = jsonl_bytes([record for record in records if record["task_id"] not in removed])
+    files["tasks.jsonl"] = jsonl_bytes(kept)
+    excluded = read_jsonl(files["excluded.jsonl"])
     excluded += [
         {"task_id": task, "family": row["family"], "repo": row["repo"], "heldout": row["heldout"], "leak_risk": reason}
         for task, (row, reason) in sorted(removed.items())
     ]
-    files["excluded.jsonl"] = "".join(json.dumps(row) + "\n" for row in excluded).encode()
+    files["excluded.jsonl"] = jsonl_bytes(excluded)
 
     swesmith = manifest["families"]["swesmith"]
     swesmith["pool_tasks"] = sum(row["family"] == "swesmith" for row in kept)
@@ -88,7 +86,7 @@ def main() -> None:
         "removed_heldout": sum(row["heldout"] for row, _ in removed.values()),
     }
     manifest["supersedes"] = {
-        "manifest": "manifest-v1.json",
+        "manifest": kept_manifest(1),
         "sha256": hashlib.sha256(previous_bytes).hexdigest(),
         "change": "post-build exclusions, no resampling",
     }
@@ -97,17 +95,13 @@ def main() -> None:
     }
     manifest["file_sha256"] = {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}
 
-    (pool / "manifest-v1.json").write_bytes(previous_bytes)
-    for name, data in files.items():
-        (pool / name).write_bytes(data)
-        if hashlib.sha256((pool / name).read_bytes()).hexdigest() != manifest["file_sha256"][name]:
-            raise ValueError(f"Upload hash mismatch: {name}")
-    (pool / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
+    (pool / kept_manifest(1)).write_bytes(previous_bytes)
+    write_pool(pool, files, manifest)
     print(
         "POOL_EXCLUDED "
         + json.dumps(
             {
-                "manifest_sha256": hashlib.sha256((pool / "manifest.json").read_bytes()).hexdigest(),
+                "manifest_sha256": hashlib.sha256((pool / MANIFEST).read_bytes()).hexdigest(),
                 "families": {
                     f: {k: v for k, v in s.items() if k != "repo_allocation"} for f, s in manifest["families"].items()
                 },

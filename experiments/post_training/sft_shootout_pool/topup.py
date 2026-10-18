@@ -17,12 +17,15 @@ environment is removed (leak_risk=agent_tool_clean_copy), and so is mahmoud/bolt
 package cache in every conda image (leak_risk=image_level_clean_copy). The SWE-smith family is then topped back up to
 SWESMITH_TASKS from DCAgent packages in the remaining repos: the shortfall is allocated across those repos in
 proportion to their unused packages (largest remainder) and drawn at random within each repo, seed
-'<SEED>:v3-topup'. No model's pass/fail is used. Added tasks get fixed packages (#10212) and are decontaminated like
-the build. Held-out tasks still in the pool stay held out; the set is topped up to round(5%) from added tasks that are
-not in allkimi's kimi_trials.txt. v2's remaining tasks are unchanged, so samples drawn from v2 stay valid.
+'<SEED>:v<version>-topup'. No model's pass/fail is used. Added tasks get fixed packages (#10212) and are
+decontaminated like the build. Held-out tasks still in the pool stay held out; the set is topped up to round(5%) from
+added tasks that are not in allkimi's kimi_trials.txt. The remaining tasks of v<version - 1> keep their packages, so
+samples drawn from v<version - 1> stay valid.
 
 Usage:
-    python -m experiments.post_training.sft_shootout_pool.topup --pool <prefix> --tool-env <packages.json>
+    python -m experiments.post_training.sft_shootout_pool.topup --pool <prefix> --version <N> [--tool-env <json>]
+        [--exclude <repo>=<reason>=<where> ...] [--exclude-task <task>=<reason>=<evidence> ...]
+        [--staged <tasks.parquet>] [--dry-run]
 """
 
 import argparse
@@ -34,15 +37,26 @@ import re
 import tempfile
 from collections import Counter
 from pathlib import Path
+from typing import NamedTuple
 
 import pyarrow.parquet as pq
-from huggingface_hub import hf_hub_download
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.sft_shootout_pool import decon
-from experiments.post_training.sft_shootout_pool.build_swesmith import MIRROR_NAME, PACKAGES
+from experiments.post_training.sft_shootout_pool.build_swesmith import fix_package, upstream_packages
 from experiments.post_training.sft_shootout_pool.image_check import PROBE_METHOD
-from experiments.post_training.sft_shootout_pool.pool import ALLKIMI, parquet_bytes
+from experiments.post_training.sft_shootout_pool.pool import allkimi_trials, trial_tasks
+from experiments.post_training.sft_shootout_pool.pool_io import (
+    MANIFEST,
+    SWESMITH_PACKAGES,
+    jsonl_bytes,
+    kept_manifest,
+    parquet_bytes,
+    read_jsonl,
+    read_pool,
+    swesmith_revision,
+    write_pool,
+)
 from experiments.post_training.sft_shootout_pool.repo_names import IMPORT_NAMES
 from experiments.post_training.sft_shootout_pool.sample import (
     HELDOUT_FRACTION,
@@ -50,15 +64,8 @@ from experiments.post_training.sft_shootout_pool.sample import (
     SWEBENCH_VERIFIED_REPOS,
     SWESMITH_TASKS,
     proportional,
-    upstream_repo,
 )
-from experiments.post_training.sft_shootout_pool.swesmith_packages import (
-    fixed_package,
-    instance_id,
-    read_package,
-    write_package,
-)
-from experiments.post_training.sft_shootout_pool.swesmith_restore import mirror, restore_payload
+from experiments.post_training.sft_shootout_pool.swesmith_packages import read_package
 
 REASON = "agent_tool_clean_copy"
 REPO_LEVEL_REASONS = {"vendored_clean_copy", "agent_tool_clean_copy", "image_level_clean_copy"}
@@ -80,6 +87,112 @@ def tool_env_repos(repos: set[str], tool_env: dict) -> dict[str, str]:
                 matched[repo] = candidate
                 break
     return matched
+
+
+def parse_entries(entries: list[str], detail: str) -> dict[str, dict[str, str]]:
+    """{key: {"reason": reason, detail: value}} from repeated 'key=reason=value' arguments."""
+    parsed = {}
+    for entry in entries:
+        key, reason, value = entry.split("=", 2)
+        parsed[key] = {"reason": reason, detail: value}
+    return parsed
+
+
+class AddedPackages(NamedTuple):
+    # The new swesmith-packages.parquet: kept packages, then added ones, each sorted by task.
+    parquet: bytes
+    # Restore records of the kept tasks, then the added ones.
+    records: list[dict]
+    # Decon marks of the added tasks.
+    marks: dict[str, dict]
+
+
+def build_added(
+    files: dict[str, bytes],
+    in_pool: set[str],
+    added: list[str],
+    upstream: dict[str, bytes],
+    staged_uri: str | None,
+    version: int,
+) -> AddedPackages:
+    """Build fixed packages for the added tasks (or take them from `staged_uri`) and decontaminate them."""
+    with tempfile.TemporaryDirectory() as temporary:
+        work = Path(temporary)
+        packages = {row["path"]: row for row in pq.read_table(io.BytesIO(files[SWESMITH_PACKAGES])).to_pylist()}
+        packages = {task: row for task, row in packages.items() if task in in_pool}
+        records = [record for record in read_jsonl(files["swesmith-packages.jsonl"]) if record["task_id"] in in_pool]
+        mirrors = work / "mirrors"
+        mirrors.mkdir()
+        new_rows = []
+        staged = {}
+        if staged_uri:
+            staged = {
+                row["path"]: row["task_binary"]
+                for row in pq.read_table(io.BytesIO(StoragePath(staged_uri).read_bytes())).to_pylist()
+            }
+            if set(staged) != set(added):
+                raise ValueError(f"Staged packages {sorted(staged)} differ from the draw {added}")
+        for task in added:
+            fixed = fix_package(upstream[task], mirrors, staged.get(task))
+            if task in staged and read_package(fixed.binary)["tests/config.json"] != fixed.upstream["tests/config.json"]:
+                raise ValueError(f"Staged package for {task} is not built from its upstream package")
+            new_rows.append({"path": task, "task_binary": fixed.binary})
+            records.append({"task_id": task} | fixed.record | {"added_in": version})
+        parquet = parquet_bytes(
+            [packages[task] for task in sorted(packages)] + sorted(new_rows, key=lambda row: row["path"])
+        )
+        added_parquet = work / "added.parquet"
+        added_parquet.write_bytes(parquet_bytes(new_rows))
+        evals = decon.eval_documents(work)
+        marks = decon.run(decon.swesmith_documents(added_parquet, set(added)), evals, work / "decon")
+    return AddedPackages(parquet, records, marks)
+
+
+def top_up_tmax_heldout(
+    kept: list[dict], tmax_removed: list[dict], task_exclusions: dict, manifest: dict, version: int
+) -> None:
+    """Record removed TMax tasks in the manifest and top TMax held-out back up to round(5%), in place.
+
+    TMax-SFT-16.5K has no spare environments, so removed TMax tasks are not replaced; held-out is topped back up to
+    round(5%) of the remaining TMax tasks from non-held-out ones if needed.
+    """
+    tmax_rows = [row for row in kept if row["family"] == "tmax"]
+    tmax_target = round(HELDOUT_FRACTION * len(tmax_rows))
+    tmax_held = sum(row["heldout"] for row in tmax_rows)
+    tmax_pool = sorted(row["task_id"] for row in tmax_rows if not row["heldout"])
+    tmax_rng = random.Random(f"{SEED}:v{version}-heldout-tmax")
+    tmax_new = set(tmax_rng.sample(tmax_pool, max(0, tmax_target - tmax_held)))
+    for row in tmax_rows:
+        if row["task_id"] in tmax_new:
+            row["heldout"] = True
+            row["heldout_added_in"] = version
+    tmax = manifest["families"]["tmax"]
+    tmax["pool_tasks"] = len(tmax_rows)
+    tmax["heldout_tasks"] = sum(row["heldout"] for row in tmax_rows)
+    tmax.setdefault("excluded_after_build", []).append(
+        {
+            "version": version,
+            "tasks": {row["task_id"]: task_exclusions[row["task_id"]] for row in tmax_removed},
+            "removed": len(tmax_removed),
+            "removed_heldout": sum(row["heldout"] for row in tmax_removed),
+            "replaced": 0,
+            "heldout_added": sorted(tmax_new),
+        }
+    )
+
+
+def merge_decon(manifest: dict, kept: list[dict], added: list[str], marks: dict, contaminated: list[str]) -> None:
+    """Add the added tasks' decon results to the manifest and drop near-threshold entries for removed tasks."""
+    manifest["decon"]["contaminated_tasks"] = sorted(set(manifest["decon"]["contaminated_tasks"]) | set(contaminated))
+    manifest["decon"]["near_threshold_tasks"] = {
+        task: value
+        for task, value in manifest["decon"]["near_threshold_tasks"].items()
+        if task in {row["task_id"] for row in kept}
+    } | {
+        task: round(marks[task]["max_overlap"], 3)
+        for task in added
+        if not marks[task]["contaminated"] and marks[task]["max_overlap"] >= 0.2
+    }
 
 
 def main() -> None:
@@ -105,31 +218,18 @@ def main() -> None:
     args = parser.parse_args()
     version = args.version
     pool = StoragePath(args.pool)
-    if (pool / f"manifest-v{version - 1}.json").exists():
+    if (pool / kept_manifest(version - 1)).exists():
         raise ValueError(f"Pool v{version} was already built here")
-    previous_bytes = (pool / "manifest.json").read_bytes()
-    manifest = json.loads(previous_bytes)
-    files = {name: (pool / name).read_bytes() for name in manifest["file_sha256"]}
-    for name, data in files.items():
-        if hashlib.sha256(data).hexdigest() != manifest["file_sha256"][name]:
-            raise ValueError(f"{name} changed since v{version - 1}")
+    previous_bytes, manifest, files = read_pool(pool, f"v{version - 1}")
     tool_env_bytes = StoragePath(args.tool_env).read_bytes() if args.tool_env else None
     tool_env = json.loads(tool_env_bytes) if tool_env_bytes else {"distributions": [], "top_level": []}
-    explicit = {}
-    for entry in args.exclude:
-        repo, reason, where = entry.split("=", 2)
-        explicit[repo] = {"reason": reason, "where": where}
-    task_exclusions = {}
-    for entry in args.exclude_task:
-        task, reason, evidence = entry.split("=", 2)
-        task_exclusions[task] = {"reason": reason, "evidence": evidence}
+    explicit = parse_entries(args.exclude, "where")
+    task_exclusions = parse_entries(args.exclude_task, "evidence")
 
-    rows = [json.loads(line) for line in files["tasks.jsonl"].decode().splitlines()]
-    excluded = [json.loads(line) for line in files["excluded.jsonl"].decode().splitlines()]
-    source = Path(hf_hub_download(PACKAGES[0], "tasks.parquet", repo_type="dataset", revision=PACKAGES[1]))
-    upstream = {row["path"]: row["task_binary"] for row in pq.read_table(source).to_pylist()}
-    configs = {task: json.loads(read_package(binary)["tests/config.json"]) for task, binary in upstream.items()}
-    repo_of = {task: upstream_repo(config["repo"]) for task, config in configs.items()}
+    rows = read_jsonl(files["tasks.jsonl"])
+    excluded = read_jsonl(files["excluded.jsonl"])
+    upstream = upstream_packages()
+    configs, repo_of = upstream.configs, upstream.repo_of
 
     leaking = tool_env_repos(set(repo_of.values()), tool_env)
     reasons = {repo: REASON for repo in leaking} | {repo: item["reason"] for repo, item in explicit.items()}
@@ -181,67 +281,18 @@ def main() -> None:
         )
         return
 
-    with tempfile.TemporaryDirectory() as temporary:
-        work = Path(temporary)
-        packages = {
-            row["path"]: row for row in pq.read_table(io.BytesIO(files["swesmith-packages.parquet"])).to_pylist()
-        }
-        packages = {task: row for task, row in packages.items() if task in in_pool}
-        records = [
-            json.loads(line)
-            for line in files["swesmith-packages.jsonl"].decode().splitlines()
-            if json.loads(line)["task_id"] in in_pool
-        ]
-        mirrors = work / "mirrors"
-        mirrors.mkdir()
-        new_rows = []
-        staged = {}
-        if args.staged:
-            staged = {
-                row["path"]: row["task_binary"]
-                for row in pq.read_table(io.BytesIO(StoragePath(args.staged).read_bytes())).to_pylist()
-            }
-            if set(staged) != set(added):
-                raise ValueError(f"Staged packages {sorted(staged)} differ from the draw {added}")
-        for task in added:
-            package = read_package(upstream[task])
-            instance = instance_id(package)
-            restored, deleted = restore_payload(mirror(MIRROR_NAME.match(instance)[1], mirrors), instance)
-            binary = staged.get(task) or write_package(fixed_package(package, restored, deleted))
-            if task in staged and read_package(binary)["tests/config.json"] != package["tests/config.json"]:
-                raise ValueError(f"Staged package for {task} is not built from its upstream package")
-            new_rows.append({"path": task, "task_binary": binary})
-            records.append(
-                {
-                    "task_id": task,
-                    "instance_id": instance,
-                    "upstream_sha256": hashlib.sha256(upstream[task]).hexdigest(),
-                    "fixed_sha256": hashlib.sha256(binary).hexdigest(),
-                    "restored_files": sorted(restored),
-                    "deleted_files": deleted,
-                    "added_in": version,
-                }
-            )
-        files["swesmith-packages.parquet"] = parquet_bytes(
-            [packages[task] for task in sorted(packages)] + sorted(new_rows, key=lambda row: row["path"])
-        )
-        added_parquet = work / "added.parquet"
-        added_parquet.write_bytes(parquet_bytes(new_rows))
-        evals = decon.eval_documents(work)
-        marks = decon.run(decon.swesmith_documents(added_parquet, set(added)), evals, work / "decon")
+    built = build_added(files, in_pool, added, upstream.binaries, args.staged, version)
+    files[SWESMITH_PACKAGES] = built.parquet
+    records, marks = built.records, built.marks
 
-    allkimi_bytes = Path(hf_hub_download(ALLKIMI[0], ALLKIMI[2], repo_type="dataset", revision=ALLKIMI[1])).read_bytes()
-    allkimi_tasks = {line.strip().rsplit("__", 1)[0] for line in allkimi_bytes.decode().splitlines() if line.strip()}
+    allkimi_tasks = trial_tasks(allkimi_trials())
     total = sum(row["family"] == "swesmith" for row in kept) + len(added)
     target = round(HELDOUT_FRACTION * total)
     held = sum(row["family"] == "swesmith" and row["heldout"] for row in kept)
     candidates = sorted(task for task in added if task not in allkimi_tasks)
     new_heldout = set(random.Random(f"{SEED}:v{version}-heldout").sample(candidates, max(0, target - held)))
 
-    revision = (
-        f"{args.pool.rstrip('/')}/swesmith-packages.parquet@sha256:"
-        f"{hashlib.sha256(files['swesmith-packages.parquet']).hexdigest()}"
-    )
+    revision = swesmith_revision(args.pool, files)
     for row in kept:
         if row["family"] == "swesmith":
             row["package_revision"] = revision
@@ -275,38 +326,14 @@ def main() -> None:
         }
         for row in removed
     ]
-    files["tasks.jsonl"] = "".join(json.dumps(row) + "\n" for row in kept).encode()
-    files["excluded.jsonl"] = "".join(json.dumps(row) + "\n" for row in excluded).encode()
-    files["swesmith-packages.jsonl"] = "".join(json.dumps(record) + "\n" for record in records).encode()
+    files["tasks.jsonl"] = jsonl_bytes(kept)
+    files["excluded.jsonl"] = jsonl_bytes(excluded)
+    files["swesmith-packages.jsonl"] = jsonl_bytes(records)
 
     swesmith = manifest["families"]["swesmith"]
     tmax_removed = [row for row in removed if row["family"] == "tmax"]
     if tmax_removed:
-        # TMax-SFT-16.5K has no spare environments, so removed TMax tasks are not replaced; held-out is topped back up
-        # to round(5%) of the remaining TMax tasks from non-held-out ones if needed.
-        tmax_rows = [row for row in kept if row["family"] == "tmax"]
-        tmax_target = round(HELDOUT_FRACTION * len(tmax_rows))
-        tmax_held = sum(row["heldout"] for row in tmax_rows)
-        tmax_pool = sorted(row["task_id"] for row in tmax_rows if not row["heldout"])
-        tmax_rng = random.Random(f"{SEED}:v{version}-heldout-tmax")
-        tmax_new = set(tmax_rng.sample(tmax_pool, max(0, tmax_target - tmax_held)))
-        for row in tmax_rows:
-            if row["task_id"] in tmax_new:
-                row["heldout"] = True
-                row["heldout_added_in"] = version
-        tmax = manifest["families"]["tmax"]
-        tmax["pool_tasks"] = len(tmax_rows)
-        tmax["heldout_tasks"] = sum(row["heldout"] for row in tmax_rows)
-        tmax.setdefault("excluded_after_build", []).append(
-            {
-                "version": version,
-                "tasks": {row["task_id"]: task_exclusions[row["task_id"]] for row in tmax_removed},
-                "removed": len(tmax_removed),
-                "removed_heldout": sum(row["heldout"] for row in tmax_removed),
-                "replaced": 0,
-                "heldout_added": sorted(tmax_new),
-            }
-        )
+        top_up_tmax_heldout(kept, tmax_removed, task_exclusions, manifest, version)
     swesmith_task_exclusions = {
         row["task_id"]: task_exclusions[row["task_id"]]
         for row in removed
@@ -344,7 +371,7 @@ def main() -> None:
     manifest["supersedes"] = [
         *([history] if isinstance(history, dict) else history),
         {
-            "manifest": f"manifest-v{version - 1}.json",
+            "manifest": kept_manifest(version - 1),
             "sha256": hashlib.sha256(previous_bytes).hexdigest(),
             "change": f"v{version}: drop {len(removed)} tasks ({removal_summary}), top SWE-smith up to 2,100",
         },
@@ -359,31 +386,16 @@ def main() -> None:
                 for repo, item in explicit.items()
             },
         }
-    manifest["decon"]["contaminated_tasks"] = sorted(
-        set(manifest["decon"]["contaminated_tasks"]) | set(swesmith[f"topped_up_in_v{version}"]["decon_contaminated"])
-    )
-    manifest["decon"]["near_threshold_tasks"] = {
-        task: value
-        for task, value in manifest["decon"]["near_threshold_tasks"].items()
-        if task in {row["task_id"] for row in kept}
-    } | {
-        task: round(marks[task]["max_overlap"], 3)
-        for task in added
-        if not marks[task]["contaminated"] and marks[task]["max_overlap"] >= 0.2
-    }
+    merge_decon(manifest, kept, added, marks, swesmith[f"topped_up_in_v{version}"]["decon_contaminated"])
     manifest["file_sha256"] = {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}
 
-    (pool / f"manifest-v{version - 1}.json").write_bytes(previous_bytes)
-    for name, data in files.items():
-        (pool / name).write_bytes(data)
-        if hashlib.sha256((pool / name).read_bytes()).hexdigest() != manifest["file_sha256"][name]:
-            raise ValueError(f"Upload hash mismatch: {name}")
-    (pool / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
+    (pool / kept_manifest(version - 1)).write_bytes(previous_bytes)
+    write_pool(pool, files, manifest)
     print(
-        "POOL_V3 "
+        f"POOL_V{version} "
         + json.dumps(
             {
-                "manifest_sha256": hashlib.sha256((pool / "manifest.json").read_bytes()).hexdigest(),
+                "manifest_sha256": hashlib.sha256((pool / MANIFEST).read_bytes()).hexdigest(),
                 "leaking_repos": leaking,
                 "removed": len(removed),
                 "swesmith": {

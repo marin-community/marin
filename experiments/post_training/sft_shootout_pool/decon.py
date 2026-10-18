@@ -19,7 +19,6 @@ at least 2 matched features).
 import io
 import json
 import subprocess
-import tarfile
 import zipfile
 from pathlib import Path
 
@@ -31,6 +30,8 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.datakit.decon import NGramConfig, decon_to_parquet
 from marin.datakit.normalize import NormalizedData
+
+from experiments.post_training.sft_shootout_pool.swesmith_packages import read_package
 
 SWEBENCH_VERIFIED = ("princeton-nlp/SWE-bench_Verified", "c104f840cc67f8b6eec6f759ebc8b2693d585d4a")
 TERMINAL_BENCH_21 = ("harbor-framework/terminal-bench-2-1", "c5ee500c185224c97cd6caff7866a990a0057f41")
@@ -114,8 +115,7 @@ def swesmith_documents(packages: Path, tasks: set[str]) -> list[dict]:
     for row in pq.read_table(packages).to_pylist():
         if row["path"] not in tasks:
             continue
-        with tarfile.open(fileobj=io.BytesIO(row["task_binary"]), mode="r:*") as archive:
-            files = {m.name: archive.extractfile(m).read() for m in archive.getmembers() if m.isfile()}
+        files = read_package(row["task_binary"])
         tests = [
             f"{name}\n{text}"
             for name in sorted(files)

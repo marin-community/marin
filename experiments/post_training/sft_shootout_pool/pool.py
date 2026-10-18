@@ -26,28 +26,22 @@ import subprocess
 import tarfile
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.sft_shootout_pool import decon
-from experiments.post_training.sft_shootout_pool.build_swesmith import MIRROR_NAME, PACKAGES
-from experiments.post_training.sft_shootout_pool.sample import (
-    SEED,
-    SWEBENCH_VERIFIED_REPOS,
-    heldout,
-    sample_swesmith,
-    upstream_repo,
+from experiments.post_training.sft_shootout_pool.build_swesmith import PACKAGES, fix_package, upstream_packages
+from experiments.post_training.sft_shootout_pool.pool_io import (
+    MANIFEST,
+    SWESMITH_PACKAGES,
+    jsonl_bytes,
+    parquet_bytes,
+    swesmith_revision,
+    write_pool,
 )
-from experiments.post_training.sft_shootout_pool.swesmith_packages import (
-    fixed_package,
-    instance_id,
-    read_package,
-    write_package,
-)
-from experiments.post_training.sft_shootout_pool.swesmith_restore import mirror, restore_payload
+from experiments.post_training.sft_shootout_pool.sample import SEED, SWEBENCH_VERIFIED_REPOS, heldout, sample_swesmith
 from experiments.post_training.sft_shootout_pool.tmax_harbor import CONVERTER, TMAX_REVISION, convert
 
 TMAX_ENVS = ("allenai/TMax-SFT-16.5K", "848e218270672080a92a94791c028ee43ae33387", "tasks.zip")
@@ -69,11 +63,39 @@ def folder_tarball(folder: Path) -> bytes:
     return buffer.getvalue()
 
 
-def parquet_bytes(rows: list[dict]) -> bytes:
-    buffer = io.BytesIO()
-    schema = pa.schema([pa.field("path", pa.string()), pa.field("task_binary", pa.binary())])
-    pq.write_table(pa.Table.from_pylist(rows, schema=schema), buffer)
-    return buffer.getvalue()
+def allkimi_trials() -> bytes:
+    """Download allkimi's pinned kimi_trials.txt."""
+    return Path(hf_hub_download(ALLKIMI[0], ALLKIMI[2], repo_type="dataset", revision=ALLKIMI[1])).read_bytes()
+
+
+def trial_tasks(trials: bytes) -> set[str]:
+    """Task ids with at least one trial in kimi_trials.txt (one '<task>__<trial>' per line)."""
+    return {line.strip().rsplit("__", 1)[0] for line in trials.decode().splitlines() if line.strip()}
+
+
+class TmaxConversion(NamedTuple):
+    # convert()'s report: converted, failed, excluded and visible-asset task lists, counts and the converter pin.
+    report: dict
+    tasks: list[str]
+    rows: list[dict]
+    # The converted Harbor task folders, one per task.
+    folders: Path
+
+
+def convert_tmax(work: Path) -> TmaxConversion:
+    """Convert the pinned TMax environments to Harbor tasks under `work` with the pinned hamishivi/tmax converter."""
+    tasks_zip = Path(hf_hub_download(TMAX_ENVS[0], TMAX_ENVS[2], repo_type="dataset", revision=TMAX_ENVS[1]))
+    tmax_repo = work / "tmax"
+    subprocess.run(["git", "clone", "-q", "https://github.com/hamishivi/tmax.git", str(tmax_repo)], check=True)
+    subprocess.run(["git", "-C", str(tmax_repo), "checkout", "-q", TMAX_REVISION], check=True)
+    converted = work / "tmax-harbor"
+    converted.mkdir()
+    conversion = convert(tasks_zip, tmax_repo, converted)
+    if conversion["failed"]:
+        raise ValueError(f"TMax conversion failed for {conversion['failed'][:5]}")
+    tasks = sorted(conversion["converted"])
+    rows = [{"path": task, "task_binary": folder_tarball(converted / task)} for task in tasks]
+    return TmaxConversion(conversion, tasks, rows, converted)
 
 
 def main() -> None:
@@ -82,57 +104,32 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     output = StoragePath(args.output)
-    if (output / "manifest.json").exists():
+    if (output / MANIFEST).exists():
         raise ValueError("The pool prefix already holds a manifest; use a fresh prefix")
     carried_bytes = StoragePath(args.heldout).read_bytes()
     carried = json.loads(carried_bytes)
 
     with tempfile.TemporaryDirectory() as temporary:
         work = Path(temporary)
-        # TMax
-        tasks_zip = Path(hf_hub_download(TMAX_ENVS[0], TMAX_ENVS[2], repo_type="dataset", revision=TMAX_ENVS[1]))
-        tmax_repo = work / "tmax"
-        subprocess.run(["git", "clone", "-q", "https://github.com/hamishivi/tmax.git", str(tmax_repo)], check=True)
-        subprocess.run(["git", "-C", str(tmax_repo), "checkout", "-q", TMAX_REVISION], check=True)
-        converted = work / "tmax-harbor"
-        converted.mkdir()
-        conversion = convert(tasks_zip, tmax_repo, converted)
-        if conversion["failed"]:
-            raise ValueError(f"TMax conversion failed for {conversion['failed'][:5]}")
-        tmax_tasks = sorted(conversion["converted"])
-        tmax_rows = [{"path": task, "task_binary": folder_tarball(converted / task)} for task in tmax_tasks]
+        tmax = convert_tmax(work)
+        conversion, tmax_tasks, converted = tmax.report, tmax.tasks, tmax.folders
 
         # SWE-smith
-        source = Path(hf_hub_download(PACKAGES[0], "tasks.parquet", repo_type="dataset", revision=PACKAGES[1]))
-        upstream = {row["path"]: row["task_binary"] for row in pq.read_table(source).to_pylist()}
-        configs = {task: json.loads(read_package(binary)["tests/config.json"]) for task, binary in upstream.items()}
-        repo_of = {task: upstream_repo(config["repo"]) for task, config in configs.items()}
-        swesmith_tasks, allocation, verified_dropped = sample_swesmith(repo_of, set(carried["swesmith"]))
+        upstream = upstream_packages()
+        configs, repo_of = upstream.configs, upstream.repo_of
+        sample = sample_swesmith(repo_of, set(carried["swesmith"]))
+        swesmith_tasks = sample.tasks
         mirrors = work / "mirrors"
         mirrors.mkdir()
         swesmith_rows, package_records = [], []
         for task in swesmith_tasks:
-            package = read_package(upstream[task])
-            instance = instance_id(package)
-            files, deleted = restore_payload(mirror(MIRROR_NAME.match(instance)[1], mirrors), instance)
-            binary = write_package(fixed_package(package, files, deleted))
-            swesmith_rows.append({"path": task, "task_binary": binary})
-            package_records.append(
-                {
-                    "task_id": task,
-                    "instance_id": instance,
-                    "upstream_sha256": hashlib.sha256(upstream[task]).hexdigest(),
-                    "fixed_sha256": hashlib.sha256(binary).hexdigest(),
-                    "restored_files": sorted(files),
-                    "deleted_files": deleted,
-                }
-            )
+            fixed = fix_package(upstream.binaries[task], mirrors)
+            swesmith_rows.append({"path": task, "task_binary": fixed.binary})
+            package_records.append({"task_id": task} | fixed.record)
 
         # Held-out
-        allkimi_bytes = Path(
-            hf_hub_download(ALLKIMI[0], ALLKIMI[2], repo_type="dataset", revision=ALLKIMI[1])
-        ).read_bytes()
-        allkimi_tasks = {line.strip().rsplit("__", 1)[0] for line in allkimi_bytes.decode().splitlines() if line.strip()}
+        allkimi_bytes = allkimi_trials()
+        allkimi_tasks = trial_tasks(allkimi_bytes)
         tmax_heldout = set(heldout(tmax_tasks, set(carried["tmax"]), set()))
         swesmith_heldout = set(heldout(swesmith_tasks, set(carried["swesmith"]), allkimi_tasks))
 
@@ -147,14 +144,11 @@ def main() -> None:
 
         tmax_revision = TMAX_REVISION_STRING
         files = {
-            "tmax-packages.parquet": parquet_bytes(tmax_rows),
-            "swesmith-packages.parquet": swesmith_parquet.read_bytes(),
-            "swesmith-packages.jsonl": "".join(json.dumps(record) + "\n" for record in package_records).encode(),
+            "tmax-packages.parquet": parquet_bytes(tmax.rows),
+            SWESMITH_PACKAGES: swesmith_parquet.read_bytes(),
+            "swesmith-packages.jsonl": jsonl_bytes(package_records),
         }
-        swesmith_revision = (
-            f"{args.output.rstrip('/')}/swesmith-packages.parquet@sha256:"
-            f"{hashlib.sha256(files['swesmith-packages.parquet']).hexdigest()}"
-        )
+        swesmith_package_revision = swesmith_revision(args.output, files)
         rows = []
         for task in tmax_tasks:
             rows.append(
@@ -181,15 +175,15 @@ def main() -> None:
                     "leak_risk": None,
                     "decon": marks[task],
                     "package_source": f"{PACKAGES[0]}@{PACKAGES[1]} rebuilt for #10212",
-                    "package_revision": swesmith_revision,
+                    "package_revision": swesmith_package_revision,
                 }
             )
         excluded = [
             {"task_id": task, "family": "tmax", "leak_risk": "hidden_verifier_assets"}
             for task in conversion["excluded_hidden_verifier_assets"]
         ]
-        files["tasks.jsonl"] = "".join(json.dumps(row) + "\n" for row in rows).encode()
-        files["excluded.jsonl"] = "".join(json.dumps(row) + "\n" for row in excluded).encode()
+        files["tasks.jsonl"] = jsonl_bytes(rows)
+        files["excluded.jsonl"] = jsonl_bytes(excluded)
         contaminated = [row["task_id"] for row in rows if row["decon"]["contaminated"]]
         manifest = {
             "task": 206,
@@ -208,11 +202,11 @@ def main() -> None:
                 "swesmith": {
                     "pool_tasks": len(swesmith_tasks),
                     "heldout_tasks": len(swesmith_heldout),
-                    "source_packages": len(upstream),
-                    "swebench_verified_repo_packages_dropped": verified_dropped,
+                    "source_packages": len(upstream.binaries),
+                    "swebench_verified_repo_packages_dropped": sample.verified_dropped,
                     "swebench_verified_repos": sorted(SWEBENCH_VERIFIED_REPOS),
-                    "repo_allocation": allocation,
-                    "package_revision": swesmith_revision,
+                    "repo_allocation": sample.allocation,
+                    "package_revision": swesmith_package_revision,
                 },
             },
             "inputs": {
@@ -258,11 +252,7 @@ def main() -> None:
             "file_sha256": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()},
         }
         output.mkdirs()
-        for name, data in files.items():
-            (output / name).write_bytes(data)
-            if hashlib.sha256((output / name).read_bytes()).hexdigest() != manifest["file_sha256"][name]:
-                raise ValueError(f"Upload hash mismatch: {name}")
-        (output / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
+        write_pool(output, files, manifest)
         summary = {key: value for key, value in manifest.items() if key not in ("inputs", "selection")}
         summary["families"]["swesmith"].pop("repo_allocation")
         print("POOL_BUILT " + json.dumps(summary), flush=True)

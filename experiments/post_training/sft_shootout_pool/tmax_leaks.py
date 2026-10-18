@@ -38,14 +38,3 @@ def answer_paths(archive: zipfile.ZipFile) -> dict[str, dict[str, list[str]]]:
         hidden = [path for path in paths if path not in description and path.rsplit("/", 1)[-1] not in description]
         found[task] = {"hidden": hidden, "visible": [path for path in paths if path not in hidden]}
     return found
-
-
-def references_hidden_asset(row: dict, hidden: list[str]) -> bool:
-    """True when any bash tool call in a tmax-sft trajectory mentions one of its task's hidden answer paths."""
-    commands = " ".join(
-        str(call["function"]["arguments"])
-        for message in row["messages"]
-        if message["role"] == "assistant"
-        for call in message["tool_calls"] or []
-    )
-    return any(path in commands for path in hidden)

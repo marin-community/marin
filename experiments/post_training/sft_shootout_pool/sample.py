@@ -15,6 +15,7 @@ v0 carries a graft of that SFT.
 
 import random
 import re
+from typing import NamedTuple
 
 SEED = 20261016
 SWESMITH_TASKS = 2100
@@ -57,8 +58,15 @@ def proportional(counts: dict[str, int], total: int) -> dict[str, int]:
     return allocation
 
 
-def sample_swesmith(repo_of: dict[str, str], forced: set[str]) -> tuple[list[str], dict[str, int], int]:
-    """Return (sampled task ids, per-repo allocation, Verified-repo drops) from {task: upstream 'owner/name'}."""
+class SwesmithSample(NamedTuple):
+    tasks: list[str]
+    allocation: dict[str, int]
+    # Packages dropped because their repo is a SWE-bench Verified repo.
+    verified_dropped: int
+
+
+def sample_swesmith(repo_of: dict[str, str], forced: set[str]) -> SwesmithSample:
+    """Draw the SWE-smith pool tasks from {task: upstream 'owner/name'}."""
     if not forced <= set(repo_of):
         raise ValueError(f"Forced tasks missing from the packages: {sorted(forced - set(repo_of))[:5]}")
     kept = {task: repo for task, repo in repo_of.items() if repo not in SWEBENCH_VERIFIED_REPOS}
@@ -76,7 +84,7 @@ def sample_swesmith(repo_of: dict[str, str], forced: set[str]) -> tuple[list[str
             raise ValueError(f"{repo}: {len(pinned)} forced tasks exceed its allocation {allocation[repo]}")
         rest = [task for task in by_repo[repo] if task not in forced]
         sampled += pinned + rng.sample(rest, allocation[repo] - len(pinned))
-    return sorted(sampled), allocation, len(repo_of) - len(kept)
+    return SwesmithSample(sorted(sampled), allocation, len(repo_of) - len(kept))
 
 
 def heldout(pool: list[str], carried: set[str], excluded: set[str]) -> list[str]:
