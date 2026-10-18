@@ -81,4 +81,4 @@ goes stale on the next commit.
 
 - Path: `experiments/grug/moe_cplm`. Origin: Fast Track Belay `358283f7`, TPU execution `aef63f29`, portable CPLM loss PR #10230.
 - Purpose: fixed B16×8192 d512 Belay+CPLM on TPU v4-32, EP1 dropless. Status: active; native port completed 400 updates at 417400 sustained tokens/s with zero drops and unchanged losses.
-- Diff: [PR #10260](https://github.com/marin-community/marin/pull/10260/files).
+- Diff: [CI variant report](https://marin-community.github.io/marin/grug-diffs/pr-10260/moe_cplm/index.html), [PR #10260](https://github.com/marin-community/marin/pull/10260/files).
