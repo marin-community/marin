@@ -76,3 +76,9 @@ goes stale on the next commit.
 - Status: deleted
 - Purpose: historical head-to-head comparison.
 - Superseded by: 8d752a775 — template-first workflow centered on `experiments/grug/base/`.
+
+## Belay+CPLM TPU baseline
+
+- Path: `experiments/grug/moe_cplm`. Origin: Fast Track Belay `358283f7`, TPU execution `aef63f29`, portable CPLM loss PR #10230.
+- Purpose: fixed B16×8192 d512 Belay+CPLM on TPU v4-32, EP1 dropless. Status: active; native-port accelerator validation pending.
+- Diff: [branch comparison](https://github.com/marin-community/marin/compare/ladderclimb_v1_batch14...WhenWen:marin:codex/belay-cplm-tpu-baseline).

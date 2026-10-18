@@ -3,6 +3,9 @@
 
 """Histogram counts and distributed router thresholds against NumPy oracles."""
 
+from functools import partial
+from unittest.mock import patch
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -10,6 +13,7 @@ import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
+from experiments.grug.fast_track import qb_balancing
 from experiments.grug.fast_track.qb_balancing import factorized_expert_histogram, local_expert_histogram, qb_beta_hist
 
 
@@ -33,7 +37,7 @@ def test_grouped_histogram_counts(bins, concentrated):
 
 
 @pytest.mark.timeout(600)
-@pytest.mark.parametrize("histogram_method", ["flat", "two-stage"])
+@pytest.mark.parametrize("histogram_method", ["reference", "two-stage"])
 @pytest.mark.parametrize("local_tokens", [8192, 32768])
 @pytest.mark.parametrize("constant", [False, True])
 def test_qb_thresholds_on_tpu_v4(constant, local_tokens, histogram_method):
@@ -61,7 +65,8 @@ def test_qb_thresholds_on_tpu_v4(constant, local_tokens, histogram_method):
         expected.append(lo + crossing * width + width * (cumulative[crossing] - rank) / max(counts[crossing], 1))
     del indices
     mesh = Mesh(np.asarray(devices), ("batch",), axis_types=(AxisType.Explicit,))
-    with jax.set_mesh(mesh):
+    quantile = partial(qb_balancing.bincount_upper_quantile, histogram_method=histogram_method)
+    with jax.set_mesh(mesh), patch.object(qb_balancing, "bincount_upper_quantile", quantile):
         sharded = jax.device_put(margins, NamedSharding(mesh, P("batch", None)))
         actual, actual_lo, actual_hi = jax.jit(
             lambda x: qb_beta_hist(
@@ -70,7 +75,6 @@ def test_qb_thresholds_on_tpu_v4(constant, local_tokens, histogram_method):
                 target_share=jnp.asarray(share),
                 num_experts=experts,
                 n_bins=bins,
-                histogram_method=histogram_method,
                 batch_axes=("batch",),
             )
         )(sharded)

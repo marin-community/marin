@@ -38,9 +38,7 @@ def local_head(hidden, head, qw, kw, gw, sink, tokens, labels, segments, *, tile
             dtype=jnp.float32,
             logit_soft_cap=10.0,
             implementation="pallas_tpu",
-            # TPU v4 has 16 MiB VMEM. The forward kernel buffers four V
-            # subtiles and full H: d768/B8192 spills with V512 (16.75 MiB).
-            # Smaller vocabulary tiles preserve the exact softmax objective.
+            # Qualified d512 forward tiles fit TPU v4 VMEM.
             block_sizes=BlockSizes(b_block_size=1024, h_block_size=128, v_block_size=512),
         )
         target = jnp.take(head, labels.reshape(-1), axis=1).T
