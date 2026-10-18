@@ -27,6 +27,7 @@ from pathlib import Path
 from huggingface_hub import hf_hub_download
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.sft_shootout_rows.recovery import handoff_traces
 from experiments.post_training.sft_shootout_rows.validate_local import check_arm
 from experiments.post_training.sweep_data.prepare_agentic import STUDENT_MODEL, STUDENT_REVISION, load_tokenizer
 
@@ -39,6 +40,7 @@ def main() -> None:
     parser.add_argument("--pool-manifest", required=True)
     parser.add_argument("--replay", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--recovery-handoff", action="store_true", help="pass --recovery-handoff to the recovery arm")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory() as temporary:
         work = Path(temporary)
@@ -55,10 +57,13 @@ def main() -> None:
         heldout = {row["task_id"] for row in pool_rows if row["heldout"]}
         by_id = {}
         for path in local_traces:
-            for line in Path(path).read_text().splitlines():
-                trace = json.loads(line)
+            traces = [json.loads(line) for line in Path(path).read_text().splitlines()]
+            for trace in traces:
                 if trace.get("conversation", 0) == 0:
                     by_id.setdefault(trace["trial_id"], trace)
+            # Recovery handoff rows are conversations 1+ of summarized trials, under their own ids.
+            for trace in handoff_traces(traces):
+                by_id.setdefault(trace["trial_id"], trace)
         plain = None
         for arm in args.arms:
             out = work / arm
@@ -79,8 +84,10 @@ def main() -> None:
                 "--output",
                 str(out),
             ]
-            if arm in ("rs-multi", "relay"):
+            if arm in ("rs-multi", "relay", "recovery"):
                 command += ["--plain", str(plain)]
+            if arm == "recovery" and args.recovery_handoff:
+                command.append("--recovery-handoff")
             started = time.monotonic()
             subprocess.run(command, check=True)
             build_seconds = round(time.monotonic() - started, 1)

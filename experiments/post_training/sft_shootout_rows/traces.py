@@ -7,13 +7,18 @@ A trace row is one Harbor trial attempt: messages in order, every assistant turn
 and relay trigger, reasoning restored from the proxy's full reply as reasoning_content. Rendering uses v0's chat
 template; reasoning goes into <|start_think|>...<|end_think|>. The template's generation blocks give one contiguous
 span per assistant turn; a turn is trained only if its author is the teacher (glm). v0's turns stay in the sequence
-as context with zero loss, which is what the relay arm needs; plain and RS rows have glm turns only.
+as context with zero loss, which is what the relay arm needs; plain and RS rows have glm turns only. Recovery rows
+add injected failed attempts, also zero loss.
 """
 
 from dataclasses import dataclass
 
 TEACHER = "glm"
 STUDENT = "v0"
+# Synthetic failed attempts in recovery rows (recovery.py): context, never trained.
+INJECTED = "injected"
+# Earlier turns a Terminus-2 summarizer call echoes back (no author in the trace): context in handoff rows.
+HISTORY = "history"
 TEMPLATE_KEYS = ("role", "content", "reasoning_content", "tool_calls", "tool_call_id", "name")
 
 
@@ -34,7 +39,7 @@ def template_messages(messages: list[dict]) -> tuple[list[dict], list[str]]:
     for message in messages:
         if message["role"] == "assistant":
             author = message.get("author")
-            if author not in (TEACHER, STUDENT):
+            if author not in (TEACHER, STUDENT, INJECTED, HISTORY):
                 raise ValueError(f"Assistant turn without a known author: {author!r}")
             authors.append(author)
         converted.append({key: message[key] for key in TEMPLATE_KEYS if message.get(key) is not None})
