@@ -97,6 +97,9 @@ storage:
 # iris-controller-env Secret, which task pods do not mount. Rotate with
 # `iris cluster init-keys --rotate`.
 auth:
+  principal_directory:
+    - env:IRIS_PRINCIPAL_DIRECTORY
+    - gcp-secret://projects/hai-gcp-models/secrets/iris-principal-directory/versions/latest
   signing_key:
     - env:IRIS_SIGNING_KEY
     - gcp-secret://projects/748532799086/secrets/iris-cw-rno2a-signing-key/versions/1
@@ -113,6 +116,7 @@ auth:
   # *@openathena.ai covers human operators. Machine submitters are admitted
   # explicitly; github-iris runs CI workloads through the marin hub.
   allowed_submitters:
+    - principal:human-080
     - "*@openathena.ai"
     - github-iris@hai-gcp-models.iam.gserviceaccount.com
     - contractor@hai-gcp-models.iam.gserviceaccount.com

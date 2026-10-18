@@ -32,12 +32,12 @@ from functools import partial
 from pathlib import Path
 
 import sqlalchemy
-from marina.db import database_from_env, engine_for
+from marina.jobs import job_engine
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from echo import repository_identity, schema, search_config
-from echo.sync import github_repository
+from .. import repository_identity, schema, search_config  # noqa: TID252 -- immutable revision namespace
+from . import github_repository
 
 MARINMIRROR_URL = os.environ.get("MARINMIRROR_URL", "https://marinmirror.exe.xyz")
 MARINMIRROR_TOKEN_ENV = "MARINMIRROR_TOKEN"
@@ -45,8 +45,6 @@ SOURCES = ("github", "discord")
 BATCH = 400
 # Session advisory lock so overlapping executions don't duplicate repository work.
 SYNC_LOCK_KEY = 0x6563686F  # "echo"
-# The app's name, and so the name of its Postgres schema.
-APP_NAME = "echo"
 
 MIRRORED_CHUNK_COLUMNS = tuple(column.name for column in schema.chunks.columns if column.computed is None)
 
@@ -67,20 +65,6 @@ def download_corpus(dest: Path, expected_sha: str, token: str) -> None:
             digest.update(block)
     if digest.hexdigest() != expected_sha:
         raise RuntimeError(f"corpus sha256 mismatch: got {digest.hexdigest()}, manifest says {expected_sha}")
-
-
-def make_engine() -> sqlalchemy.Engine:
-    """An engine on Echo's schema, from the same environment the kernel reads.
-
-    ``CLOUDSQL_CONNECTION``/``PGDATABASE``/``PGUSER`` name the Cloud SQL instance the job
-    reaches with IAM authentication as its own service account (no password);
-    ``MARINA_DATABASE_URL`` names a plain URL for a local run. Either way the connections
-    search Echo's schema first, so this writes the tables the API reads.
-    """
-    database = database_from_env(os.environ)
-    if database is None:
-        raise SystemExit("no database configured: set MARINA_DATABASE_URL or CLOUDSQL_CONNECTION")
-    return engine_for(database, APP_NAME)
 
 
 def decode_embedding(blob: bytes | None) -> list[float] | None:
@@ -281,7 +265,7 @@ def run_all(engine: sqlalchemy.Engine, token: str, now: datetime | None = None) 
 def main() -> int:
     override = os.environ.get("ECHO_REPOSITORY_TARGET")
     target = repository_identity.configured_repository_target(override) if override else None
-    engine = make_engine()
+    engine = job_engine()
     try:
         if target is not None:
             return run(engine, os.environ[MARINMIRROR_TOKEN_ENV], target)
