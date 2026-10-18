@@ -260,7 +260,7 @@ def main(argv=None):
     run_name = args.run_name
     args.output.mkdir(parents=True, exist_ok=True)
     if args.logging_check:
-        if os.environ.get("IRIS_JOB_ID"):
+        if os.environ.get("IRIS_TASK_ID"):
             raise ValueError("Run the logging check once on the remote submit host before Iris submission")
         tracker = WandbConfig(
             entity=args.wandb_entity,

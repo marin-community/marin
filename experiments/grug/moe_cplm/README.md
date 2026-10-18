@@ -26,15 +26,17 @@ and Muon TPU fallback preserve the measured execution path.
 
 The logical optimizer batch is fixed at 16×8192; gradient accumulation is 1.
 The MuonH/Adam recipe and learning-rate schedule remain 10980 updates, seed 0.
-The tokenizer SHA256 identities and July training/validation cache locations
-are checked in. These existing caches are in `us-central2`; provision access
+The [tokenizer SHA256 identities](tokenizer_identity.json) and
+[July training/validation cache locations and weights](july_data.json) are checked in.
+The tokenizer is `meta-llama/Meta-Llama-3.1-8B`; obtain its three tokenizer JSON
+files from an authorized Hugging Face snapshot and verify the recorded hashes. These existing caches are in `us-central2`; provision access
 before launching. This recipe intentionally pins regional cached inputs instead
 of rebuilding or transferring the data. Supply the matching local tokenizer
 folder on each worker; the entry point verifies all three tokenizer files.
 
 ## Run
 
-Use the repository TPU environment (`uv sync --extra tpu`) and an already
+Use the repository TPU environment (`uv sync --package marin-levanter --extra tpu`) and an already
 configured TPU v4-32 distributed job, with one process per host. Iris/Levanter
 handles distributed initialization. Supply online W&B credentials through the
 job environment. Queue and task time limits are left to the caller; use Iris's
@@ -43,7 +45,7 @@ default preemption retry policy.
 Run the non-training tracker check once on the remote submit host, outside Iris:
 
 ```bash
-uv run python -m experiments.grug.moe_cplm.train_belay \
+uv run --package marin-levanter --extra tpu python -m experiments.grug.moe_cplm.train_belay \
   --tokenizer /path/to/frozen-tokenizer --output /path/to/results \
   --checkpoint-path gs://marin-us-central2/PROJECT/checkpoints \
   --artifact-root gs://marin-us-central2/PROJECT/results \
@@ -51,7 +53,24 @@ uv run python -m experiments.grug.moe_cplm.train_belay \
   --logging-check
 ```
 
-Use the same command on the TPU workers with `--calibration` in place of
+For Iris, stage the matching tokenizer under `tokenizer/` in the workspace and
+submit the worker command from the repository root. The CLI infers four
+co-scheduled hosts from v4-32:
+
+```bash
+iris --cluster marin job run --enable-extra-resources --tpu v4-32 \
+  --cpu 4 --memory 48GB --disk 5GB --region us-central2 \
+  --sync-package marin-levanter --extra tpu \
+  -e WANDB_API_KEY "$WANDB_API_KEY" -e JAX_PLATFORMS tpu,cpu -- \
+  python -m experiments.grug.moe_cplm.train_belay \
+  --tokenizer tokenizer --output /tmp/belay-results \
+  --checkpoint-path gs://marin-us-central2/PROJECT/checkpoints \
+  --artifact-root gs://marin-us-central2/PROJECT/results \
+  --run-name belay-cplm-d512 --wandb-entity ENTITY --wandb-project PROJECT \
+  --calibration
+```
+
+Use the worker command with `--calibration` in place of
 `--logging-check` for 400 updates without evaluation or checkpoint writes.
 Omit both flags for the full 10980-update schedule, with checkpointing and
 validation every 1000 updates. Validation retains logical batch 256 and 2048
@@ -96,7 +115,9 @@ in these calibrations, and they do not establish later schedule throughput.
 [First optimized run](https://wandb.ai/marin-community/auto-understanding-arch/runs/mfu-ep1-hist-v2-a0ca4b4ede)
 and [fresh repeat](https://wandb.ai/marin-community/auto-understanding-arch/runs/mfu-ep1-hist-repeat-v1-e40981c4c8)
 contain the unsmoothed loss curves. Raw logs, profiles, failed attempts and
-source hashes are indexed in [the performance issue](https://github.com/WhenWen/astra-d8-research/issues/236).
+source hashes are indexed in the
+[frozen run report](https://github.com/WhenWen/astra-d8-research/blob/beb6192b/research/belay-mfu-native-ep-result.md)
+and [protocol](https://github.com/WhenWen/astra-d8-research/blob/116c07c1/research/belay-mfu-protocol.md), linked from [the performance issue](https://github.com/WhenWen/astra-d8-research/issues/236).
 The independent native-port TPU calibration is pending; these rows do not
 attribute the historical measurements to the port's new commit.
 
