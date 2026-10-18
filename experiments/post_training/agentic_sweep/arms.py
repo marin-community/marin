@@ -456,7 +456,8 @@ def main() -> None:
         context = IrisContext.from_job_info(info, client=client)
         with iris_ctx_scope(context), set_current_client(FrayIrisClient.from_iris_client(client)):
             if args.only == "cache":
-                results = run(cast(list[ArtifactStep], artifacts["caches"]), max_concurrent=1)
+                results = run(*cast(list[ArtifactStep], artifacts["caches"]), max_concurrent=1)
+                verify_caches([prefix_join(result.path, "train") for result in results], keys)
                 print(json.dumps({"completed": "cache", "outputs": [result.path for result in results]}), flush=True)
                 return
             result = run(cast(ArtifactStep, artifacts["train"]), max_concurrent=1)[0]
