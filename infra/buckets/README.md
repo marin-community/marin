@@ -4,11 +4,12 @@ This Pulumi project owns the shared Marin buckets and their complete lifecycle p
 GCS, CoreWeave AI Object Storage, and Cloudflare R2. The `marin-buckets` stack is operated
 manually because its provider credentials are not available to CI.
 
-Bucket names, stores, locations, and endpoints come from the reviewed `data:` blocks in
+Active bucket names, stores, locations, and endpoints come from the reviewed `data:` blocks in
 [`config/marin.yaml`](../../config/marin.yaml) and
 [`config/coreweave.yaml`](../../config/coreweave.yaml). The implementation is the shared
 [`DataBuckets`](../pulumi/src/iac/buckets/__init__.py) component. GCS bucket IAM remains in the
-`marin-iac/marin` stack with the other project grants.
+`marin-iac/marin` stack with the other project grants. The existing R2 bucket remains
+declared in `infra/buckets/__main__.py` independently of runtime storage routing.
 
 ## Credentials
 

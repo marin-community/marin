@@ -3,7 +3,7 @@
 #
 # Prerequisites:
 #   - ~/.kube/coreweave-iris kubeconfig exists
-#   - R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY set (for S3-backed tests)
+#   - CW_KEY_ID / CW_KEY_SECRET set (for S3-backed tests)
 #
 # Usage:
 #   ./scripts/iris/run_smoke_cw.sh
@@ -49,13 +49,11 @@ fi
 echo "Controller healthy at ${IRIS_CONTROLLER_URL}"
 
 # --- S3 env setup ---
-if [ -n "${R2_ACCESS_KEY_ID:-}" ] && [ -n "${R2_SECRET_ACCESS_KEY:-}" ]; then
-    export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
-    export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
-    export AWS_ENDPOINT_URL="https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"
-    export FSSPEC_S3="{\"endpoint_url\": \"${AWS_ENDPOINT_URL}\"}"
-    export MARIN_CI_S3_PREFIX="s3://marin-na/tmp/ttl=3d/ci"
-fi
+export AWS_ACCESS_KEY_ID="${CW_KEY_ID:?CW_KEY_ID must be set}"
+export AWS_SECRET_ACCESS_KEY="${CW_KEY_SECRET:?CW_KEY_SECRET must be set}"
+export AWS_ENDPOINT_URL="https://cwobject.com"
+export FSSPEC_S3='{"endpoint_url": "https://cwobject.com", "client_kwargs": {"region_name": "auto"}, "config_kwargs": {"s3": {"addressing_style": "virtual"}}}'
+export MARIN_CI_S3_PREFIX="s3://marin-us-east-08a/tmp/ttl=3d/ci"
 
 export WANDB_MODE=disabled
 export JAX_TRACEBACK_FILTERING=off

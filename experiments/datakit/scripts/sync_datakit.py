@@ -16,8 +16,8 @@ only the normalize output, ``raw`` syncs only the download leaves, ``all``
 syncs both. Per-scope shard markers and step-status are namespaced so
 different scopes never collide on cache state.
 
-Typical use is GCS -> R2 (e.g. ``gs://marin-us-central1`` to
-``s3://marin-na/marin``); the reverse works too.
+Typical use is GCS -> CoreWeave (e.g. ``gs://marin-us-central1`` to
+``s3://marin-us-east-02a/marin``); the reverse works too.
 
 For each source, this script builds a single :class:`StepSpec`. The step's
 ``fn`` runs a Zephyr pipeline that:
@@ -39,10 +39,7 @@ For each source, this script builds a single :class:`StepSpec`. The step's
   ``.tmp.<uuid>`` key at the destination and publishes it via
   :func:`rigging.filesystem.atomic.atomic_rename` (the per-file copies fan out across
   ``copy_threads`` threads), then Zephyr writes the per-shard JSONL — that
-  output IS the resume marker. When the destination is ``s3://``, the dst
-  ``S3FileSystem`` is constructed with ``fixed_upload_size=True`` so R2
-  accepts the multipart upload (AWS S3 accepts uniform-size parts too, so
-  the flag is harmless there).
+  output IS the resume marker.
 * After all shards complete, copies the leaf's root ``.executor_status``
   marker as a single follow-up op. Its presence on dst is what whole-source
   skip keys off — re-runs of an already-synced source short-circuit before
@@ -54,24 +51,22 @@ For each source, this script builds a single :class:`StepSpec`. The step's
 
 Per-shard JSONL and per-source executor status all live under
 ``status_prefix`` (default ``gs://marin-us-central1/data/datakit/sync``)
-namespaced by a hash of ``(src_prefix, dest_prefix)`` so to-R2 and from-R2
-runs of the same source don't share markers (their fingerprints aren't
-comparable anyway — GCS ETag vs R2 ETag are different schemes for the same
+namespaced by a hash of ``(src_prefix, dest_prefix)`` so runs in opposite directions
+don't share markers (their fingerprints aren't
+comparable anyway — GCS ETag vs S3 ETag are different schemes for the same
 bytes). The status prefix is the permanent record of what has been copied;
 there's no TTL to worry about.
 
 Usage::
 
-    AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \\
-    AWS_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com \\
+    CW_KEY_ID=... CW_KEY_SECRET=... \\
     uv run python experiments/datakit/scripts/sync_datakit.py \\
         --src-prefix gs://marin-us-central1 \\
-        --dest-prefix s3://marin-na/marin
+        --dest-prefix s3://marin-us-east-02a/marin
 """
 
 import argparse
 import logging
-import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import StrEnum
@@ -83,7 +78,8 @@ from marin.execution.step_spec import StepSpec
 from marin.execution.step_status import STATUS_SUCCESS, StatusFile, StepAlreadyDone, step_lock
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.cluster_config import marin_prefix
-from rigging.filesystem.factory import url_to_fs as _rigging_url_to_fs
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -247,13 +243,8 @@ def _copy_shard(
     is safe — fsspec funnels async ops onto a single dedicated event loop,
     and synchronous APIs are reentrant.
     """
-    src_fs, _ = _url_to_fs(src_dir)
-    # ``fixed_upload_size=True`` (set inside ``_open_kwargs_for`` for s3 dests)
-    # is required for Cloudflare R2's multipart PUT and harmless on AWS S3.
-    # It only matters for the write through ``dst_fs.open(..., "wb")``; the
-    # ``fs.mv`` inside atomic_rename is a single ``CopyObject`` and can use
-    # any S3 client config.
-    dst_fs, _ = _url_to_fs(dst_dir, **_open_kwargs_for(dst_dir))
+    src_fs, _ = url_to_fs(src_dir)
+    dst_fs, _ = url_to_fs(dst_dir)
     src_base = src_dir.rstrip("/")
     dst_base = dst_dir.rstrip("/")
 
@@ -294,7 +285,7 @@ def _list_relative_files(src_dir: str) -> list[tuple[str, str]]:
       last step (see ``_finalize_executor_status``) so its presence on dst
       cleanly signals "this leaf is fully synced".
     """
-    src_fs, _ = _url_to_fs(src_dir)
+    src_fs, _ = url_to_fs(src_dir)
     stripped_root = src_fs._strip_protocol(src_dir).rstrip("/")
     entries: list[tuple[str, str]] = []
     skipped_tmp = 0
@@ -328,59 +319,6 @@ def _executor_status_path(dir_path: str) -> str:
     return f"{dir_path.rstrip('/')}/{_EXECUTOR_STATUS_FILENAME}"
 
 
-def _open_kwargs_for(path: str) -> dict:
-    """Constructor kwargs for the fs at ``path`` — ``fixed_upload_size=True`` for s3 dests."""
-    return {"fixed_upload_size": True} if path.startswith("s3://") else {}
-
-
-# R2 data buckets whose filesystem must be built with *explicit* R2 endpoint +
-# credentials from ``R2_*`` env vars, rather than the process-global S3 config.
-# This is what lets a single process copy R2 -> CoreWeave: the CW side uses the
-# ambient S3 config (the cluster default, e.g. cwlota) and the R2 side is pinned
-# to its own client via constructor kwargs, so the two never clobber each other
-# (fsspec caches filesystems by their kwargs). Set ``R2_KEY_ID``,
-# ``R2_KEY_SECRET``, ``R2_S3_ENDPOINT`` in the job env.
-_R2_BUCKETS = frozenset({"marin-na"})
-
-
-def _s3_creds_kwargs(path: str) -> dict:
-    """Explicit R2 endpoint+creds for an ``s3://marin-na/...`` path, else ``{}``.
-
-    Returns empty for any non-R2 path so it keeps using the ambient S3 config
-    (the cluster's default object store). Only activates when the ``R2_*`` env
-    vars are present, so the script still works unchanged in single-backend runs.
-    """
-    if not path.startswith("s3://"):
-        return {}
-    bucket = path[len("s3://") :].split("/", 1)[0]
-    if bucket in _R2_BUCKETS and os.environ.get("R2_S3_ENDPOINT"):
-        # ``endpoint_url`` must be a *top-level* s3fs kwarg, not inside
-        # ``client_kwargs``: fsspec shallow-merges the ambient ``FSSPEC_S3`` config
-        # (which carries the cluster's top-level ``endpoint_url``, e.g. cwlota) with
-        # ours. A top-level key overrides it; putting it in ``client_kwargs`` instead
-        # leaves the ambient top-level endpoint in place and s3fs then passes
-        # ``endpoint_url`` to ``create_client`` twice.
-        return {
-            "key": os.environ["R2_KEY_ID"],
-            "secret": os.environ["R2_KEY_SECRET"],
-            "endpoint_url": os.environ["R2_S3_ENDPOINT"],
-            "client_kwargs": {"region_name": "auto"},
-        }
-    return {}
-
-
-def _url_to_fs(path: str, **extra):
-    """``url_to_fs`` with per-bucket R2 creds injected (see :func:`_s3_creds_kwargs`).
-
-    Goes through rigging's ``url_to_fs`` rather than raw fsspec so every S3
-    filesystem (both the R2 source and the CoreWeave dest) gets finite
-    ``connect_timeout``/``read_timeout`` + bounded retries. Without them a wedged
-    R2/CoreWeave socket (e.g. a hung ``CompleteMultipartUpload``) blocks
-    ``fsspec.asyn.sync`` forever and the copy thread never returns (#6487).
-    """
-    return _rigging_url_to_fs(path, **_s3_creds_kwargs(path), **extra)
-
-
 def _finalize_executor_status(src_dir: str, dst_dir: str) -> None:
     """Copy ``.executor_status`` from ``src_dir`` to ``dst_dir`` as a single op.
 
@@ -390,11 +328,11 @@ def _finalize_executor_status(src_dir: str, dst_dir: str) -> None:
     """
     src = _executor_status_path(src_dir)
     dst = _executor_status_path(dst_dir)
-    src_fs, _ = _url_to_fs(src)
+    src_fs, _ = url_to_fs(src)
     if not src_fs.exists(src):
         logger.warning("source has no %s — not finalizing %s", _EXECUTOR_STATUS_FILENAME, dst_dir)
         return
-    dst_fs, _ = _url_to_fs(dst, **_open_kwargs_for(dst))
+    dst_fs, _ = url_to_fs(dst)
     _copy_one(src_fs, dst_fs, src, dst)
     logger.info("Finalized %s", dst)
 
@@ -419,7 +357,7 @@ def _remove_tmp_orphans(dst_dir: str) -> None:
     them around would make a byte-for-byte src/dst comparison fail despite
     the real data matching.
     """
-    dst_fs, _ = _url_to_fs(dst_dir)
+    dst_fs, _ = url_to_fs(dst_dir)
     if not dst_fs.exists(dst_dir):
         return
     orphans = [full for full in dst_fs.find(dst_dir) if _ATOMIC_RENAME_TMP_RE.search(full)]
@@ -528,13 +466,13 @@ def sync_source_step(
     canonically against ``marin_prefix()``, then re-anchored to both
     ``src_prefix`` and ``dest_prefix`` so the same relative-under-prefix
     layout is preserved on either side. Pick the direction by what you pass:
-    ``src_prefix=gs://…`` + ``dest_prefix=s3://…`` pushes to R2, the swap
+    ``src_prefix=gs://…`` + ``dest_prefix=s3://…`` pushes to CoreWeave, the swap
     pulls back.
 
     Args:
         source: The DatakitSource to copy.
         src_prefix: Source root to read from (e.g. ``gs://marin-us-central1``).
-        dest_prefix: Destination root to write to (e.g. ``s3://marin-na/marin``).
+        dest_prefix: Destination root to write to (e.g. ``s3://marin-us-east-02a/marin``).
         scope: Which subset of ``source``'s paths to sync (default: NORMALIZED).
         files_per_shard: Files per Zephyr shard (default 64). The shard
             boundaries are deterministic; ``Dataset.from_list`` preserves
@@ -565,8 +503,6 @@ def sync_source_step(
 
     safe = _safe_name(source.name)
     status_root = status_prefix.rstrip("/")
-    # Encode the direction so to-R2 and from-R2 of the same source can't
-    # collide on shard markers or step status.
     direction_key = format(deterministic_hash((src_prefix.rstrip("/"), dest_prefix.rstrip("/"))), "016x")
 
     def _run(output_path: str) -> None:
@@ -585,7 +521,7 @@ def sync_source_step(
                 job_name=f"sync-{safe}",
             )
 
-    # No deps: the source data already exists in ``src_prefix`` (R2 or GCS) and
+    # No deps: the source data already exists in ``src_prefix`` (CoreWeave or GCS) and
     # we want to *copy* it, not re-execute the upstream download leaves. Listing
     # them as ``deps`` would make StepRunner re-materialize each leaf at
     # ``dest_prefix`` from its original origin (Amazon S3, HF, etc.) before
@@ -625,7 +561,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dest-prefix",
         required=True,
-        help="Destination root to write to, e.g. 's3://marin-na/marin'.",
+        help="Destination root to write to, e.g. 's3://marin-us-east-02a/marin'.",
     )
     parser.add_argument(
         "--source",
@@ -709,6 +645,7 @@ def _source_already_synced(
 def main() -> None:
     args = _parse_args()
     configure_logging()
+    configure_coreweave_s3()
     # Boto's credential resolver and config provider log at INFO on every
     # request; with ~5 S3 API calls per file x thousands of files, that's
     # tens of thousands of log lines per shard. The information ("credentials

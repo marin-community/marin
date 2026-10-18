@@ -190,14 +190,6 @@ def test_marin_temp_bucket_explicit_source_does_not_probe_ambient_prefix(monkeyp
     assert path == "s3://marin-us-east-08a/tmp/ttl=30d/curriculum-math"
 
 
-def test_marin_temp_bucket_routes_r2_to_bucket_root():
-    """An R2 source prefix yields a TTL temp path at the R2 bucket root (unchanged)."""
-    cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 3, 7))
-    with use_data_config(cfg):
-        path = marin_temp_bucket(1, source_prefix="s3://marin-na/marin")
-    assert path == "s3://marin-na/tmp/ttl=1d"
-
-
 def test_marin_temp_bucket_unknown_s3_bucket_falls_back(monkeypatch):
     """An unrecognized S3 bucket has no lifecycle rules, so it gets the flat non-TTL path."""
     monkeypatch.setenv("MARIN_PREFIX", "s3://random-bucket/marin")
