@@ -562,6 +562,29 @@ def _validate_skyrl_recipe(
     forward_batch = _declared_config_value(config, "trainer.micro_forward_batch_size_per_gpu")
     if forward_batch is not _MISSING_CONFIG_VALUE and forward_batch != topology.role_plan.micro_train_batch_size_per_gpu:
         raise ValueError("Megatron requires equal micro_forward_batch_size_per_gpu and micro_train_batch_size_per_gpu")
+    plan = topology.role_plan
+    for role, nodes in (("policy", plan.policy_num_nodes), ("ref", plan.reference_num_nodes or plan.policy_num_nodes)):
+        dimensions: list[int] = []
+        for key in (
+            "tensor_model_parallel_size",
+            "pipeline_model_parallel_size",
+            "context_parallel_size",
+            "expert_model_parallel_size",
+        ):
+            value = _declared_config_value(config, f"trainer.{role}.megatron_config.{key}")
+            if value is _MISSING_CONFIG_VALUE:
+                value = 1
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"Megatron {role} {key} must be a positive integer; got {value!r}")
+            dimensions.append(value)
+        tp, pp, cp, ep = dimensions
+        gpus = nodes * plan.policy_num_gpus_per_node
+        model_parallel = tp * pp * cp
+        if gpus % model_parallel or (gpus // model_parallel) % ep:
+            raise ValueError(
+                f"Megatron {role} has {gpus} GPUs but requires TP={tp}, PP={pp}, CP={cp}, EP={ep}; "
+                "GPUs must be divisible by TP*PP*CP and data-parallel size by EP"
+            )
     _validate_skyrl_backend_constraints(config, topology)
 
 

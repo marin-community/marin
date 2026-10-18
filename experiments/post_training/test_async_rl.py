@@ -95,14 +95,11 @@ def test_launcher_composes_pinned_rollout_buffer_config(preset, training_type, s
 
 
 @pytest.mark.timeout(180)
-@pytest.mark.parametrize("scale,valid", [("smoke", False), ("snowball-smoke", True)])
-def test_snowball_curriculum_smoke_composes_separate_reference_allocation(scale, valid, tmp_path, monkeypatch) -> None:
+def test_snowball_curriculum_smoke_composes_separate_reference_allocation(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
-    if not valid:
-        with pytest.raises(ValueError, match=r"snowball, scale smoke: policy has 8 GPUs.*PP=2.*EP=8"):
-            build_arms(specs=(ARMS["naive"],), scale=scale, policy=SNOWBALL_POLICY, version="2026.10.15")
-        return
-    step = build_arms(specs=(ARMS["naive"],), scale=scale, policy=SNOWBALL_POLICY, version="2026.10.15")["naive"].rl
+    step = build_arms(specs=(ARMS["naive"],), scale="snowball-smoke", policy=SNOWBALL_POLICY, version="2026.10.15")[
+        "naive"
+    ].rl
     launch = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
     path = tmp_path / "curriculum.yaml"
     path.write_text(launch.launch_config_yaml)

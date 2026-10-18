@@ -716,24 +716,6 @@ def build_arms(
     version: str | None = None,
 ) -> dict[str, CurriculumArm]:
     preset = SCALES[scale]
-    plan = preset.role_plan
-    policy_gpus = plan.policy_num_nodes * plan.policy_num_gpus_per_node
-    reference_gpus = (plan.reference_num_nodes or plan.policy_num_nodes) * plan.policy_num_gpus_per_node
-    geometries = [("policy", policy.megatron, policy_gpus), ("reference", policy.megatron, reference_gpus)]
-    if preset.trainer_tuning is not None:
-        geometries.append(("tuned policy", preset.trainer_tuning.policy_megatron, policy_gpus))
-    for role, geometry, gpus in geometries:
-        model_parallel = (
-            geometry.tensor_model_parallel_size * geometry.pipeline_model_parallel_size * geometry.context_parallel_size
-        )
-        experts = geometry.expert_model_parallel_size
-        if model_parallel <= 0 or experts <= 0 or gpus % model_parallel or (gpus // model_parallel) % experts:
-            raise ValueError(
-                f"Policy {policy.label}, scale {scale}: {role} has {gpus} GPUs but requires "
-                f"TP={geometry.tensor_model_parallel_size}, PP={geometry.pipeline_model_parallel_size}, "
-                f"CP={geometry.context_parallel_size}, EP={experts}; GPUs must be divisible by TP*PP*CP "
-                "and data-parallel size by EP"
-            )
     pool = pool_step(POOL_ARTIFACT_NAME, version or resolve_version(POOL_ARTIFACT_NAME, None))
     if policy.adopted_model is not None:
         model = policy.adopted_model

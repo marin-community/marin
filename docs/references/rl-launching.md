@@ -150,7 +150,7 @@ rejected during graph construction.
 The preflight requires positive role dimensions, checks batch divisibility, and requires an explicit
 forward microbatch size to equal the training microbatch size. It checks local engine placement,
 rejects unsupported transport settings and separate critic roles, and requires an explicit KL-loss
-setting. Curriculum arm construction also checks policy and reference Megatron parallelism against
+setting. For every launcher, preflight checks policy and reference Megatron parallelism against
 the GPUs assigned to each role.
 
 ## Artifact and runtime boundaries

@@ -599,3 +599,28 @@ def test_megatron_microbatch_mismatch_fails_before_launch() -> None:
         topology=dataclasses.replace(base.topology, role_plan=plan),
         config_yaml=yaml.safe_dump(recipe),
     )
+
+
+@pytest.mark.parametrize(
+    ("role", "geometry", "separate_reference"),
+    [
+        ("policy", {"pipeline_model_parallel_size": 3}, False),
+        ("ref", {"context_parallel_size": 3}, False),
+        ("policy", {"pipeline_model_parallel_size": 2, "expert_model_parallel_size": 8}, False),
+        ("ref", {"expert_model_parallel_size": 8}, True),
+    ],
+    ids=["policy-model-parallel", "reference-model-parallel", "snowball-expert-parallel", "separate-reference-experts"],
+)
+def test_megatron_geometry_mismatch_fails_before_launch(
+    role: str, geometry: dict[str, int], separate_reference: bool
+) -> None:
+    # Incompatible model and expert groups must be rejected before allocating workers.
+    base = _spec()
+    plan = base.topology.role_plan
+    if separate_reference:
+        plan = dataclasses.replace(plan, colocate_all=False, policy_num_nodes=2, reference_num_nodes=1)
+    topology = dataclasses.replace(base.topology, num_nodes=4 if separate_reference else 1, role_plan=plan)
+    recipe = yaml.safe_load(_config_yaml(strategy="megatron"))
+    recipe["trainer"][role] = {"megatron_config": geometry}
+    with pytest.raises(ValueError, match=rf"Megatron {role} has 4 GPUs.*divisible"):
+        dataclasses.replace(base, topology=topology, config_yaml=yaml.safe_dump(recipe))
