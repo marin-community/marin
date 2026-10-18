@@ -1,5 +1,5 @@
 # Stage 1 repository setup and stratified structural retention, equal row counts.
-# Fresh optimizer from .49 step 12; prior validation tasks retained unchanged.
+# Fresh optimizer from .32 step 14; prior validation tasks retained unchanged.
 # OOM recovery: EP32 across 128 policy GPUs; retain PP2, TP1 and the context budget.
 ---
 schema_version: 1
@@ -20,11 +20,11 @@ inputs:
   data_kind: parquet
   model:
     chat_template:
-    identity: users/benfeuer/models/smartie-run49-step12@2026.10.18.1
-    local_path: "/tmp/marinskyrl/models/smartie-run49-step12"
-    tokenizer_revision: b159204442ef156bd06303afcc8b7e07385a8216
-    tokenizer_uri: open-athena/Snowball-Smartie-RL-2026.10.17.49-step12
-    uri: s3://marin-us-east-02a/marin/users/benfeuer/models/smartie-run49-step12/2026.10.18.1/hf
+    identity: users/benfeuer/models/smartie-run32-step14@2026.10.18.1
+    local_path: "/tmp/marinskyrl/models/smartie-run32-step14"
+    tokenizer_revision: 6783e9743478bd25a9ce03ab3460e84d6a9814b0
+    tokenizer_uri: open-athena/Snowball-Smartie-RL-2026.10.15.32-step14
+    uri: s3://marin-us-east-02a/marin/users/benfeuer/models/smartie-run32-step14/2026.10.18.1/hf
   train_data:
   - identity: users/benfeuer/datasets/smartie-stage1-structural@2026.10.18.1
     kind: directory
@@ -624,7 +624,7 @@ skyrl:
       type: harbor_evaluation
       daytona_api_key_env: DAYTONA_EVAL_API_KEY
     - expected_tasks: 663
-      initial_model_uri: "s3://marin-us-east-02a/marin/users/benfeuer/models/smartie-run49-step12/2026.10.18.1/hf"
+      initial_model_uri: "s3://marin-us-east-02a/marin/users/benfeuer/models/smartie-run32-step14/2026.10.18.1/hf"
       minimum_scored_tasks: 630
       type: best_checkpoint
     evaluation_runner: training
