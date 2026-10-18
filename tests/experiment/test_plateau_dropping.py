@@ -1,5 +1,7 @@
 import json
+import tempfile
 from dataclasses import replace
+from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
@@ -11,11 +13,13 @@ from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.main.train_lm import TrainLmConfig, main
 from levanter.models.llama import LlamaConfig
+from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig
 from levanter.plateau import PlateauDroppingConfig, PlateauState
 from levanter.testing.cpu_devices import run_on_cpu_devices
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 from safetensors.numpy import load_file
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
@@ -191,12 +195,6 @@ def test_plateau_dropping_under_context_parallel_snowball_mesh():
 
 def _check_context_parallel_plateau():
     """Tiny Snowball on 8 CPU devices: 2-way context parallel and 4-way expert, against no context axis."""
-    import tempfile
-    from pathlib import Path
-
-    from levanter.models.snowball import SnowballConfig
-    from levanter.utils.mesh import MeshConfig
-
     steps_per_epoch, epochs = 4, 6
     rows = []
     for index in range(32):
