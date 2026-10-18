@@ -183,18 +183,20 @@ def served_student() -> Backend:
     base_url = os.environ[STUDENT_URL_ENV].rstrip("/")
     while True:
         try:
-            if httpx.get(f"{base_url}/models", timeout=30).status_code == 200:
+            response = httpx.get(f"{base_url}/models", timeout=30)
+            if response.status_code == 200:
                 break
         except httpx.HTTPError:
             pass
         logger.info("waiting for v0 to serve")
         time.sleep(STUDENT_POLL_S)
+    (served,) = response.json()["data"]
     model = load_model_config(STUDENT_CONFIG)
-    logger.info("v0 is serving")
+    logger.info("v0 is serving %s", served["id"])
     return Backend(
         author=Author.STUDENT,
         base_url=base_url,
-        model=model.model_id,
+        model=served["id"],
         tokenizer=load_tokenizer(model.tokenizer or model.location, STUDENT_REVISION),
         headers={},
         # The URL names the endpoint, not a host: while Iris moves a preempted v0 the proxy answers with a gateway
@@ -308,6 +310,8 @@ def main() -> None:
     parser.add_argument("--package-revision", required=True, help="Source and revision of the task packages, for provenance.")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # httpx logs every request URL at INFO, and the student's URL is a capability URL.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     if args.skip_if_done and StoragePath(f"{args.output.rstrip('/')}/{SUCCESS_MARKER}").exists():
         logger.info("%s already holds a finished run; skipping", args.output)
