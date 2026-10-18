@@ -1,3 +1,5 @@
+import tempfile
+
 import haliax as hax
 import jax
 import jax.numpy as jnp
@@ -5,10 +7,16 @@ import numpy as np
 from haliax import Axis
 from levanter.models.snowball import SnowballConfig
 from levanter.testing.cpu_devices import run_on_cpu_devices
-from levanter.trainer import TrainerConfig
+from tokenizers import Tokenizer, models
+from transformers import PreTrainedTokenizerFast
 
-from experiments.post_training.agentic_sweep.plateau_probe import plateau_share, scorer, summarize
-from experiments.post_training.agentic_sweep.validate import OFFLINE_MESH
+from experiments.post_training.agentic_sweep.plateau_probe import (
+    PlateauProbeConfig,
+    load_model,
+    plateau_share,
+    scorer,
+    summarize,
+)
 
 
 def test_plateau_share_needs_both_changes_below_the_threshold():
@@ -30,7 +38,7 @@ def test_summary_groups_rows_and_splits_learned_from_stuck():
     assert summary["train-tmax"]["dropped_stuck_0.1"] == 0.5
 
 
-def test_scorer_runs_on_the_offline_mesh():
+def test_hf_model_loads_and_scores_on_the_offline_mesh():
     run_on_cpu_devices(
         "import runpy; runpy.run_path('tests/experiment/test_plateau_probe.py')['_check_scorer']()",
         device_count=8,
@@ -38,28 +46,42 @@ def test_scorer_runs_on_the_offline_mesh():
 
 
 def _check_scorer():
-    trainer = TrainerConfig(mesh=OFFLINE_MESH, use_explicit_mesh_axes=True, per_device_eval_parallelism=1)
-    config = SnowballConfig(
-        vocab_size=32,
-        hidden_dim=16,
-        intermediate_dim=32,
-        shared_expert_intermediate_dim=32,
-        num_experts=8,
-        num_experts_per_token=1,
-        num_layers=1,
-        num_heads=2,
-        num_kv_heads=2,
-        head_dim=8,
-        max_seq_len=16,
-        sliding_window=4,
-        attention_implementation="reference",
-    )
-    batch, position = Axis("batch", 8), Axis("position", 16)
-    with trainer.use_device_mesh(), hax.axis_mapping(trainer.compute_axis_mapping):
-        model = config.build(Axis("vocab", 32), key=jax.random.PRNGKey(0))
-        tokens = hax.shard(
-            hax.named(jnp.broadcast_to(jnp.arange(16) % 32, (8, 16)).astype(jnp.int32), (batch, position))
+    trainer = PlateauProbeConfig(output_path="unused").trainer
+    batch, position, vocab = Axis("batch", 8), Axis("position", 16), Axis("vocab", 32)
+    with tempfile.TemporaryDirectory() as hf_path:
+        PreTrainedTokenizerFast(
+            tokenizer_object=Tokenizer(
+                models.WordLevel({"<pad>": 0, "<eos>": 1, **{f"t{i}": i for i in range(2, 32)}}, unk_token="<pad>")
+            ),
+            pad_token="<pad>",
+            eos_token="<eos>",
+        ).save_pretrained(hf_path)
+        config = SnowballConfig(
+            vocab_size=32,
+            hidden_dim=16,
+            intermediate_dim=32,
+            shared_expert_intermediate_dim=32,
+            num_experts=8,
+            num_experts_per_token=1,
+            num_layers=1,
+            num_heads=2,
+            num_kv_heads=2,
+            head_dim=8,
+            max_seq_len=16,
+            sliding_window=4,
+            attention_implementation="reference",
+            tokenizer=hf_path,
         )
-        losses = np.asarray(jax.device_get(scorer(trainer)(model, tokens).array))
+        converter = config.hf_checkpoint_converter(hf_path)
+        with trainer.use_device_mesh(), hax.axis_mapping(trainer.compute_axis_mapping):
+            built = config.build(vocab, key=jax.random.PRNGKey(0))
+            converter.save_pretrained(built, hf_path, save_tokenizer=False, save_reference_code=False)
+            model = load_model("hf", hf_path, converter, config, trainer, vocab)
+            tokens = hax.shard(
+                hax.named(jnp.broadcast_to(jnp.arange(16) % 32, (8, 16)).astype(jnp.int32), (batch, position))
+            )
+            losses = np.asarray(jax.device_get(scorer(trainer)(model, tokens).array))
+            reference = np.asarray(jax.device_get(scorer(trainer)(built, tokens).array))
     assert losses.shape == (8, 16)
     assert np.isfinite(losses).all() and (losses[:, :-1] > 0).all() and (losses[:, -1] == 0).all()
+    np.testing.assert_allclose(losses, reference, rtol=2e-2, atol=2e-2)

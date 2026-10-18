@@ -71,6 +71,7 @@ class PlateauProbeConfig:
         default_factory=lambda: TrainerConfig(
             id="plateau-probe",
             mesh=OFFLINE_MESH,
+            use_explicit_mesh_axes=True,
             per_device_eval_parallelism=1,
             tracker=JsonLoggerConfig(),
             log_jaxprs=False,
@@ -161,6 +162,21 @@ def scorer(trainer: TrainerConfig):
     return score
 
 
+def load_model(kind: str, path: str, converter, model_config, trainer: TrainerConfig, vocab: Axis):
+    """Load an HF export or a native Levanter checkpoint, sharded for scoring. Call under the trainer's mesh."""
+    if kind == "hf":
+        return converter.load_pretrained(
+            model_config.model_type,
+            ref=path,
+            config=model_config,
+            axis_mapping=trainer.parameter_axis_mapping,
+            dtype=trainer.mp.compute_dtype,
+        )
+    return load_levanter_checkpoint(
+        model_config, path, Vocab=vocab, axis_mapping=trainer.parameter_axis_mapping, key=jax.random.PRNGKey(0)
+    )
+
+
 def probe(config: PlateauProbeConfig) -> dict:
     initialize(config)
     trainer = config.trainer
@@ -177,22 +193,7 @@ def probe(config: PlateauProbeConfig) -> dict:
 
         score = scorer(trainer)
         for label, kind, path in MODELS:
-            if kind == "hf":
-                model = converter.load_pretrained(
-                    model_config.model_type,
-                    ref=path,
-                    config=model_config,
-                    axis_mapping=trainer.parameter_axis_mapping,
-                    dtype=trainer.mp.compute_dtype,
-                )
-            else:
-                model = load_levanter_checkpoint(
-                    model_config,
-                    path,
-                    Vocab=vocab,
-                    axis_mapping=trainer.parameter_axis_mapping,
-                    key=jax.random.PRNGKey(0),
-                )
+            model = load_model(kind, path, converter, model_config, trainer, vocab)
             losses[label] = []
             for start in range(0, len(rows), BATCH):
                 batch = rows[start : start + BATCH]
