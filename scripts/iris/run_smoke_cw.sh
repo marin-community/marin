@@ -52,7 +52,7 @@ echo "Controller healthy at ${IRIS_CONTROLLER_URL}"
 export AWS_ACCESS_KEY_ID="${CW_KEY_ID:?CW_KEY_ID must be set}"
 export AWS_SECRET_ACCESS_KEY="${CW_KEY_SECRET:?CW_KEY_SECRET must be set}"
 export AWS_ENDPOINT_URL="https://cwobject.com"
-export FSSPEC_S3='{"endpoint_url": "https://cwobject.com", "client_kwargs": {"region_name": "auto"}, "config_kwargs": {"s3": {"addressing_style": "virtual"}}}'
+export FSSPEC_S3="{\"endpoint_url\": \"${AWS_ENDPOINT_URL}\", \"client_kwargs\": {\"region_name\": \"auto\"}, \"config_kwargs\": {\"s3\": {\"addressing_style\": \"virtual\"}}}"
 export MARIN_CI_S3_PREFIX="s3://marin-us-east-08a/tmp/ttl=3d/ci"
 
 export WANDB_MODE=disabled

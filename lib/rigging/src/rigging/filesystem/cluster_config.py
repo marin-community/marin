@@ -315,8 +315,8 @@ def _parse_bucket_spec(value: object) -> BucketSpec:
 def _parse_store_config(name: object, value: object) -> StoreConfig:
     """Normalize one ``data.stores`` YAML entry into a :class:`StoreConfig`.
 
-    Every field is required: a backend whose endpoint or credential variables were
-    optional would fail at the first request instead of at config load.
+    Endpoint and credential-variable fields are required so missing connection
+    settings fail at config load. Shared scratch storage is optional.
     """
     required = ("endpoint", "endpoint_env", "key_id_env", "key_secret_env")
     if not isinstance(value, Mapping) or any(field not in value for field in required):
