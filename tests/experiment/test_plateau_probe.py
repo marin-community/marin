@@ -47,6 +47,8 @@ def test_hf_model_loads_and_scores_on_the_offline_mesh():
 
 def _check_scorer():
     trainer = PlateauProbeConfig(output_path="unused").trainer
+    # The H100 flash-attention kernel rejects float32 queries.
+    assert trainer.mp.compute_dtype == jnp.bfloat16
     batch, position, vocab = Axis("batch", 8), Axis("position", 16), Axis("vocab", 32)
     with tempfile.TemporaryDirectory() as hf_path:
         PreTrainedTokenizerFast(
