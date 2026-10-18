@@ -582,8 +582,7 @@ class JaggedArrayStore:
             for index in indices:
                 if index >= num_rows or index < 0:
                     raise IndexError("Index out of bounds")
-                offsets = self.offsets[index : index + 2].read()
-                offsets_futs.append(offsets)
+                offsets_futs.append(self.offsets[index : index + 2].read())
 
         offsets = await asyncio.gather(*[fut for fut in offsets_futs])
         offsets = [

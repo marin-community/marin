@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """CPU smoke run of plateau dropping on a slice of the #202 sweep rows with a tiny Llama.
 
 The rows are the real prepared rows (same tokens and assistant masks), cut down to fit a CPU:
@@ -132,7 +135,10 @@ def run(args) -> list[dict]:
             per_device_parallelism=BATCH_SIZE,
             num_train_steps=args.epochs * steps_per_epoch,
             load_checkpoint=False,
-            tracker=(EpochTrackerConfig(str(output), steps_per_epoch, supervised), JsonLoggerConfig()),
+            tracker=(
+                EpochTrackerConfig(str(output), [steps_per_epoch] * args.epochs, [supervised] * args.epochs),
+                JsonLoggerConfig(),
+            ),
             checkpointer=CheckpointerConfig(
                 base_path=str(output / "checkpoints"), append_run_id_to_base_path=False, keep=[], save_interval=None
             ),
@@ -141,7 +147,7 @@ def run(args) -> list[dict]:
             log_xla_hlo=False,
             distributed=DistributedConfig(initialize_jax_distributed=False),
         ),
-        adapter=SweepExportsConfig(validation, steps_per_epoch, args.length),
+        adapter=SweepExportsConfig(validation, [steps_per_epoch] * args.epochs, args.length),
         hf_save_path=str(output / "hf"),
         data_seed=42,
         plateau_dropping=PlateauDroppingConfig(),

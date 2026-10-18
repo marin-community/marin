@@ -37,7 +37,7 @@ from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_act
 from levanter.models.loss import next_token_loss_weight
 from levanter.metrics import Metric, ReductionType
 from levanter.optim.config import AdamConfig, OptimizerConfig
-from levanter.plateau import PlateauDroppingConfig, PlateauTrainer
+from levanter.plateau import PlateauDroppingConfig, PlateauTrainer, plateau_training_loss
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
 from levanter.training_control import TrainingDashboard
@@ -69,6 +69,8 @@ class TrainLmConfig:
     z_loss_weight: float = 0.0
     plateau_dropping: PlateauDroppingConfig | None = None
     """If set, drop tokens whose training loss has plateaued from the loss (see levanter.plateau)."""
+    context_pad_token_id: int | None = None
+    """If set, log ``context_tokens``: per row, the positions up to its last token that is not this padding id."""
 
     hf_save_path: Optional[str] = None
     hf_upload: Optional[str] = None
@@ -164,6 +166,19 @@ def lm_training_loss(model: LmHeadModel, example: LmExample, *, logsumexp_weight
     }
 
 
+def counting_context_tokens(loss_function, pad_token_id: int):
+    """Add a ``context_tokens`` metric to a training loss: per row, the positions up to its last non-padding token."""
+
+    def loss_with_context(model: LmHeadModel, example: LmExample, *args, **kwargs):
+        loss, metrics = loss_function(model, example, *args, **kwargs)
+        position = example.tokens.resolve_axis(model.Pos.name)
+        filled = hax.where(example.tokens != pad_token_id, hax.arange(position) + 1, 0)
+        context = hax.sum(hax.max(filled, axis=position)).scalar()
+        return loss, {**metrics, "context_tokens": Metric.from_value(context, ReductionType.SUM)}
+
+    return loss_with_context
+
+
 def main(config: TrainLmConfig):
     tokenizer = config.data.the_tokenizer
 
@@ -220,11 +235,16 @@ def main(config: TrainLmConfig):
 
     if config.plateau_dropping is None:
         loss_function = functools.partial(lm_training_loss, logsumexp_weight=config.z_loss_weight)
-        trainer = Trainer(config.trainer, optimizer, loss_function)
     elif config.z_loss_weight:
         raise ValueError("Plateau dropping measures plain cross-entropy; set z_loss_weight to 0")
     else:
-        trainer = PlateauTrainer(config.trainer, optimizer, config.plateau_dropping)
+        loss_function = functools.partial(plateau_training_loss, config=config.plateau_dropping)
+    if config.context_pad_token_id is not None:
+        loss_function = counting_context_tokens(loss_function, config.context_pad_token_id)
+    if config.plateau_dropping is None:
+        trainer = Trainer(config.trainer, optimizer, loss_function)
+    else:
+        trainer = PlateauTrainer(config.trainer, optimizer, loss_function)
 
     # Using the trainer as a context manager does 3 things:
     # 1. Sets the device mesh
