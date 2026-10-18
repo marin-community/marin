@@ -4775,14 +4775,24 @@ def _scan_history_layer(
         return jax.lax.dynamic_update_index_in_dim(buffer, jnp.where(boundary, new, old), slot, axis=0)
 
     sources = roll(history.sources, history.partial) if probes is None else history.sources
-    logits = roll(history.logits, _attn_res_source_logits(history.partial, queries, eps))
+    plain_sum = layer.attn.cfg.attn_res_plain_sum
+    if plain_sum:
+        logits = history.logits
+    else:
+        logits = roll(history.logits, _attn_res_source_logits(history.partial, queries, eps))
     partial = jnp.where(boundary, jnp.zeros_like(history.partial), history.partial)
     valid = jnp.arange(num_sources) < schedule.num_extra + jnp.minimum(block + 1, schedule.block_cap)
     gate_weights: list[jax.Array] = []
+    completed_sum = None
+    if plain_sum:
+        # attn_res_plain_sum: both gates read the completed sources' plain sum (computed once) plus the partial.
+        unit_weights = jnp.broadcast_to(valid[:, None, None].astype(jnp.float32), sources.shape[:3])
+        src = sources if probes is None else jax.lax.stop_gradient(sources)
+        completed_sum = _weighted_sources(unit_weights, src)
     two_phase = layer.attn.cfg.attn_res_two_phase
     # Phase 1 (two_phase): the attention and MLP gates' mixes of the completed sources in one pass over them.
     inter = None
-    if two_phase:
+    if two_phase and not plain_sum:
         gate_logits_2 = jax.lax.dynamic_slice_in_dim(logits, 2 * layer_index, 2, axis=1)  # [N, 2, B, S]
         gate_logits_2 = jnp.where(valid[:, None, None, None], gate_logits_2, -jnp.inf)
         lse = jax.nn.logsumexp(gate_logits_2, axis=0)  # [2, B, S]
@@ -4813,8 +4823,21 @@ def _scan_history_layer(
         mean_weights = jax.lax.stop_gradient(jnp.mean(weights, axis=tuple(range(1, weights.ndim))))
         return reshard(mixed.astype(sources.dtype), _batch_spec()), jnp.mean(jnp.square(total)), mean_weights
 
+    def plain_sum_mix(p: jax.Array):
+        """The completed sources' plain sum plus the partial (zero right after a block boundary)."""
+        assert completed_sum is not None
+        mixed = completed_sum + p.astype(jnp.float32)
+        if probes is not None:
+            mixed = mixed + probes[len(gate_weights)]
+            gate_weights.append(unit_weights)
+        counted = jnp.concatenate([valid, jnp.ones((1,), bool)]).astype(jnp.float32)
+        mean_weights = counted / jnp.sum(counted)
+        return reshard(mixed.astype(sources.dtype), _batch_spec()), jnp.zeros((), jnp.float32), mean_weights
+
     def mix(p: jax.Array | None, gate_index: jax.Array, attn_gate: bool):
         assert p is not None
+        if plain_sum:
+            return plain_sum_mix(p)
         j = calls[0]
         calls[0] += 1
         if two_phase and j < 2:  # the attention gate, then the MLP gate (``_attn_res_sublayers``' order)
