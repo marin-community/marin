@@ -138,3 +138,14 @@ def test_mask_turns_zeroes_untrained_turns(tokenizer):
 def test_patch_refuses_an_unknown_template():
     with pytest.raises(ValueError):
         every_turn_thinks("{{ messages }}")
+
+
+def test_developer_messages_merge_into_the_system_message_as_vllm_does(tokenizer):
+    messages = [
+        {"role": "system", "content": "Be brief."},
+        {"role": "developer", "content": "Answer in French."},
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Bonjour", "reasoning_content": "Greet."},
+    ]
+    rendered = render(tokenizer, every_turn_thinks(tokenizer.chat_template), messages)
+    assert rendered.text.startswith("<|im_start|>system\nBe brief.\n\nAnswer in French.<|im_end|>\n<|im_start|>user\nHi")

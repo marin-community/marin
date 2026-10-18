@@ -60,7 +60,22 @@ def every_turn_thinks(native: str) -> str:
 
 
 def served_messages(messages: list[dict]) -> list[dict]:
-    """Messages as vLLM hands them to the template: tool-call arguments parsed to objects, empty tool_calls dropped."""
+    """Messages as vLLM 0.25.1 hands them to a Qwen3 template.
+
+    Tool-call arguments are parsed to objects and empty tool_calls dropped (chat_utils._postprocess_messages). The
+    template has no developer role, so developer messages become system messages and every system message is merged
+    into one at position 0, joined by a blank line (renderers/hf.py _convert_developer_to_system and
+    _consolidate_system_messages, applied only when a developer message is present).
+    """
+    if any(message["role"] == "developer" for message in messages):
+        system, rest = [], []
+        for message in messages:
+            if message["role"] in ("developer", "system"):
+                if message.get("content"):
+                    system.append(message["content"])
+            else:
+                rest.append(message)
+        messages = [{"role": "system", "content": "\n\n".join(system)}, *rest]
     converted = []
     for message in messages:
         message = dict(message)

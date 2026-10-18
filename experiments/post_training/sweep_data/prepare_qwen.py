@@ -13,9 +13,9 @@ Sources:
 - TMax and Kimi SWE-smith rows: the pinned HF datasets #202 read, keyed by trajectory name.
 - Replay rows: re-read from their recorded HF file and position, checked against the recorded sha256 of the raw
   bytes, and passed through DataKit's row_to_chat_doc as #202 did. Harmony analysis becomes reasoning_content,
-  commentary and final text become content, function calls become tool_calls; a developer message is rendered as a
-  system message (Qwen's template has no developer role). Assistant turns the source's train_turns marks untrained
-  stay masked.
+  commentary and final text become content, function calls become tool_calls; developer messages are merged into
+  the system message as vLLM 0.25.1 does for a template without a developer role. Assistant turns the source's
+  train_turns marks untrained stay masked.
 
 Writes the #202 file set: train-prebuilt.jsonl.gz, validation-{tmax,swesmith}-prebuilt.jsonl.gz, train-index.jsonl,
 token-audit.jsonl, row-probes.jsonl, heldout-ids.json, replay-rows.jsonl and manifest.json (with a v0 vs Qwen diff).
@@ -138,8 +138,9 @@ def harmony_to_messages(messages: list[Message]) -> tuple[list[dict], collection
             if role == Role.TOOL:
                 converted.append({"role": "tool", "content": text})
             elif role == Role.DEVELOPER:
-                notes["developer_as_system"] += 1
-                converted.append({"role": "system", "content": text})
+                # qwen_render.served_messages turns it into system content, as vLLM does for this template.
+                notes["developer_messages"] += 1
+                converted.append({"role": "developer", "content": text})
             else:
                 converted.append({"role": role.value, "content": text})
     return converted, notes
@@ -427,7 +428,8 @@ def main() -> None:
                 "swesmith": "inline <think> moved to reasoning_content as in #202; terminus-2 JSON content verbatim",
                 "replay": (
                     "DataKit row_to_chat_doc as in #202; Harmony analysis -> reasoning_content (parts joined by a "
-                    "blank line), commentary and final -> content, function calls -> tool_calls, developer -> system"
+                    "blank line), commentary and final -> content, function calls -> tool_calls; developer and system "
+                    "messages merged into one system message, as vLLM does for a template without a developer role"
                 ),
             },
             "test_exposed": False,
