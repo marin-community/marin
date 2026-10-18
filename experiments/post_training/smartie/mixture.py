@@ -3,10 +3,12 @@
 
 """Assemble admitted real tasks and disjoint structural tasks without changing payloads."""
 
+import base64
 import hashlib
 import json
 import math
-from collections import Counter
+import random
+from collections import Counter, defaultdict
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -16,6 +18,28 @@ import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.spec import LoweredTaskSpec
+
+
+def structural_sample(rows: list[dict], count: int, seed: int) -> tuple[list[dict], dict[str, int]]:
+    """Sample without replacement, allocating family counts by largest remainder."""
+    families = defaultdict(list)
+    for row in rows:
+        task = json.loads(row["lowered_task_spec"])["task"]
+        resource = next(r for r in task["resources"]["verifier"] if r["path"] == "config.json")
+        config = json.loads(base64.b64decode(resource["source"]["content_base64"]))
+        families[config["extras"]["family"]].append(row)
+    if not 0 < count <= len(rows):
+        raise ValueError("Structural sample exceeds available training tasks")
+    allocations = {name: count * len(group) // len(rows) for name, group in families.items()}
+    remainders = sorted(families, key=lambda name: (-(count * len(families[name]) % len(rows)), name))
+    for name in remainders[: count - sum(allocations.values())]:
+        allocations[name] += 1
+    selected = []
+    rng = random.Random(seed)
+    for name in sorted(families):
+        group = sorted(families[name], key=lambda row: json.loads(row["lowered_task_spec"])["task"]["id"])
+        selected.extend(rng.sample(group, allocations[name]))
+    return selected, dict(sorted(allocations.items()))
 
 
 def build_mixture(
