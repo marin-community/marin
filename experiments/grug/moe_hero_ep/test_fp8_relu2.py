@@ -78,9 +78,10 @@ def test_mxfp8_dense_shared_experts_stay_within_mxfp8_error_of_bf16(ungated):
     if jax.default_backend() != "gpu" or float(jax.devices()[0].compute_capability) < 10.0:
         pytest.skip("MXFP8 projections require an SM100 GPU")
     activation = ActivationFunctionEnum.relu2 if ungated else ActivationFunctionEnum.silu
-    experts = _shared_experts(ungated=ungated)
-    x = _activations()
-    dy = jax.random.normal(jax.random.key(2), x.shape).astype(jnp.bfloat16)
+    with set_mesh(_mesh()):
+        experts = _shared_experts(ungated=ungated)
+        x = _activations()
+        dy = jax.random.normal(jax.random.key(2), x.shape).astype(jnp.bfloat16)
 
     def run(recipe):
         cfg = _config(recipe)
