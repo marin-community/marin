@@ -74,18 +74,8 @@ def plateau_mask(config: PlateauDroppingConfig, history: PlateauHistory, current
     return stable & (history.visits >= config.min_visits - 1)
 
 
-def plateau_training_loss(
-    model: LmHeadModel,
-    example: LmExample,
-    history: PlateauHistory | None = None,
-    *,
-    config: PlateauDroppingConfig,
-    key=None,
-):
-    """Supervised-token mean over kept tokens, plus totals for the epoch statistics.
-
-    Without ``history`` (evaluation) every supervised token is kept, which is plain SFT.
-    """
+def token_cross_entropy(model: LmHeadModel, example: LmExample, *, key=None) -> tuple[NamedArray, jax.Array]:
+    """Next-token cross-entropy at every position (the last is 0), and the model's aux loss."""
     activations, aux_loss = split_activations(model.activations(example.tokens, example.attn_mask, key=key))
     token_loss = maybe_fused_next_token_loss(
         model.Pos,
@@ -98,6 +88,22 @@ def plateau_training_loss(
         reduction=None,
         dtype=jnp.float32,
     )
+    return token_loss, aux_loss
+
+
+def plateau_training_loss(
+    model: LmHeadModel,
+    example: LmExample,
+    history: PlateauHistory | None = None,
+    *,
+    config: PlateauDroppingConfig,
+    key=None,
+):
+    """Supervised-token mean over kept tokens, plus totals for the epoch statistics.
+
+    Without ``history`` (evaluation) every supervised token is kept, which is plain SFT.
+    """
+    token_loss, aux_loss = token_cross_entropy(model, example, key=key)
     position = example.tokens.resolve_axis(model.Pos.name)
     weights = hax.broadcast_axis(next_token_loss_weight(position, example.loss_weight), example.tokens.axes)
     weights = weights.astype(jnp.float32)
@@ -311,4 +317,5 @@ __all__ = [
     "plateau_mask",
     "plateau_training_loss",
     "row_key",
+    "token_cross_entropy",
 ]
