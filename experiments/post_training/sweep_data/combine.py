@@ -19,19 +19,15 @@ from pathlib import Path
 
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.sweep_data.prepare_agentic import BATCH, PAD_TOKEN
+from experiments.post_training.sweep_data.prepare_agentic import (
+    BATCH,
+    PAD_TOKEN,
+    output_hashes,
+    read_component,
+    upload_checked,
+    write_prebuilt,
+)
 from experiments.post_training.sweep_data.select import CONTEXT, SEED
-
-
-def read_component(root: StoragePath, names: tuple[str, ...]) -> tuple[dict, bytes, dict[str, bytes]]:
-    manifest_bytes = (root / "manifest.json").read_bytes()
-    manifest = json.loads(manifest_bytes)
-    files = {}
-    for name in names:
-        files[name] = (root / name).read_bytes()
-        if hashlib.sha256(files[name]).hexdigest() != manifest["output_hashes"][name]:
-            raise ValueError(f"{root}/{name} changed since it was prepared")
-    return manifest, manifest_bytes, files
 
 
 def real_rows(compressed: bytes, rows: int, padding: int) -> list[str]:
@@ -93,7 +89,8 @@ def main() -> None:
         out = Path(temporary)
         supervised_by_family = Counter()
         context_by_family = Counter()
-        with gzip.open(out / "train-prebuilt.jsonl.gz", "wt", compresslevel=6) as stream:
+
+        def checked_rows():
             for position in order:
                 row = json.loads(rows[position])
                 weights, ids = row["loss_weights"], row["input_ids"]
@@ -104,12 +101,10 @@ def main() -> None:
                     raise ValueError("Row supervision differs from its index entry")
                 supervised_by_family[family] += sum(weights)
                 context_by_family[family] += index[position]["context_tokens"]
-                stream.write(rows[position] + "\n")
-            empty = json.dumps(
-                {"input_ids": [PAD_TOKEN] * CONTEXT, "loss_weights": [0] * CONTEXT}, separators=(",", ":")
-            )
-            for _ in range(padding):
-                stream.write(empty + "\n")
+                yield rows[position]
+
+        if write_prebuilt(out / "train-prebuilt.jsonl.gz", checked_rows()) != (len(rows), padding):
+            raise ValueError("Written row count differs")
         (out / "train-index.jsonl").write_text(
             "".join(json.dumps({"row": row} | index[position]) + "\n" for row, position in enumerate(order))
         )
@@ -183,18 +178,9 @@ def main() -> None:
                 "train-index.jsonl: row -> family, task/partition, trajectory or source position, token counts"
             ),
             "test_exposed": False,
-            "output_hashes": {
-                path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(out.iterdir())
-            },
+            "output_hashes": output_hashes(out),
         }
-        (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-        output.mkdirs()
-        for path in sorted(out.iterdir(), key=lambda path: path.name == "manifest.json"):
-            (output / path.name).write_bytes(path.read_bytes())
-            if path.name != "manifest.json":
-                uploaded = hashlib.sha256((output / path.name).read_bytes()).hexdigest()
-                if uploaded != manifest["output_hashes"][path.name]:
-                    raise ValueError(f"Upload hash mismatch: {path.name}")
+        upload_checked(out, output, manifest)
         manifest_hash = hashlib.sha256((output / "manifest.json").read_bytes()).hexdigest()
         print(
             "SWEEP_DATA_PREPARED "

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Find TMax environments whose image holds verifier assets the agent can read (issue #10212's leak class).
+"""Find TMax environments whose image holds verifier assets the agent can read.
 
 A TMax environment is built from container.def/setup.sh; test_final_state.py runs inside the same container.
 An "answer path" is a path created by the build whose name suggests a verifier asset (truth, expected, oracle,

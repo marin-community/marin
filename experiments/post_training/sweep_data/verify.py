@@ -16,11 +16,17 @@ from collections import Counter
 
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.sweep_data.prepare_agentic import BATCH, read_component
+
 
 def check_rows(data: bytes, rows: int, padding: int, context: int, pad: int, index: list[dict] | None) -> Counter:
+    """Check one prebuilt file's rows and padding; return its supervised tokens.
+
+    The count is keyed by each row's family from `index`, or under "all" when `index` is None.
+    """
     supervised = Counter()
     lines = gzip.decompress(data).decode().splitlines()
-    if len(lines) != rows + padding or (rows + padding) % 16:
+    if len(lines) != rows + padding or (rows + padding) % BATCH:
         raise ValueError(f"Expected {rows} + {padding} rows, found {len(lines)}")
     for number, line in enumerate(lines):
         row = json.loads(line)
@@ -47,13 +53,7 @@ def check_rows(data: bytes, rows: int, padding: int, context: int, pad: int, ind
 
 def main() -> None:
     root = StoragePath(sys.argv[1])
-    manifest_bytes = (root / "manifest.json").read_bytes()
-    manifest = json.loads(manifest_bytes)
-    files = {}
-    for name, digest in manifest["output_hashes"].items():
-        files[name] = (root / name).read_bytes()
-        if hashlib.sha256(files[name]).hexdigest() != digest:
-            raise ValueError(f"Hash mismatch: {name}")
+    manifest, manifest_bytes, files = read_component(root)
     context, pad = manifest["max_sequence_tokens"], manifest["pad_token_id"]
     index = [json.loads(line) for line in files["train-index.jsonl"].decode().splitlines()]
     if len(index) != manifest["training_rows"]:
@@ -66,7 +66,7 @@ def main() -> None:
         or sum(supervised.values()) != manifest["supervised_tokens"]
     ):
         raise ValueError("Per-family supervised tokens differ from the manifest")
-    if manifest["steps_per_epoch"] * 16 != manifest["training_rows"] + manifest["padding_rows"]:
+    if manifest["steps_per_epoch"] * BATCH != manifest["training_rows"] + manifest["padding_rows"]:
         raise ValueError("steps_per_epoch inconsistent")
     validation = {}
     for family, name in manifest["validation_files"].items():

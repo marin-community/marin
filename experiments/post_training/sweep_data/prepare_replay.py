@@ -22,7 +22,6 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import fsspec
 import msgspec
 import pyarrow.parquet as pq
 from huggingface_hub import HfFileSystem
@@ -32,15 +31,15 @@ from marin.datakit.download.nemotron_sft_v3 import NEMOTRON_SFT_V3_REPOSITORIES,
 from marin.datakit.sft_sources import NEMOTRON_SFT_V3_TOKEN_COUNTS_B
 from openai_harmony import Message
 from rigging.filesystem.storage_path import StoragePath
-from transformers import AutoTokenizer
 
 from experiments.post_training.sweep_data.prepare_agentic import (
     BATCH,
     PAD_TOKEN,
     STUDENT_MODEL,
-    STUDENT_REGIONAL_COPY,
     STUDENT_REVISION,
-    TOKENIZER_FILES,
+    load_tokenizer,
+    output_hashes,
+    upload_checked,
     verify_rows,
     write_rows,
 )
@@ -56,6 +55,13 @@ LINE_CHUNK = 1 << 20
 # A line longer than this cannot fit 32,768 tokens. Some source files hold one huge malformed line; capping
 # both the skipped span and the taken line keeps such a line from attracting most draws or being read in full.
 MAX_LINE_BYTES = 4 << 20
+
+
+def quotas_for(target: int) -> dict[str, int]:
+    """Supervised-token quota per partition: `target` split in proportion to NEMOTRON_SFT_V3_TOKEN_COUNTS_B, min 1."""
+    weights = {name: size for name, size in NEMOTRON_SFT_V3_TOKEN_COUNTS_B.items() if name not in EXCLUDED}
+    total = sum(weights.values())
+    return {name: max(1, round(target * size / total)) for name, size in sorted(weights.items())}
 
 
 def partition_files(fs: HfFileSystem, name: str) -> tuple[str, str, list[tuple[str, int]]]:
@@ -263,19 +269,12 @@ def main() -> None:
     if agentic["student_revision"] != STUDENT_REVISION:
         raise ValueError("Agentic data was prepared for another student")
     target = round(REPLAY_FRACTION_OF_B * agentic["supervised_tokens"])
-    weights = {name: size for name, size in NEMOTRON_SFT_V3_TOKEN_COUNTS_B.items() if name not in EXCLUDED}
-    total = sum(weights.values())
-    quotas = {name: max(1, round(target * size / total)) for name, size in sorted(weights.items())}
+    quotas = quotas_for(target)
 
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         (directory / "tokenizer").mkdir()
-        for name in TOKENIZER_FILES:
-            data = fsspec.open(f"{STUDENT_REGIONAL_COPY}/{name}", "rb").open().read()
-            if hashlib.sha256(data).hexdigest() != agentic["tokenizer_files_sha256"][name]:
-                raise ValueError(f"Regional tokenizer file differs: {name}")
-            (directory / "tokenizer" / name).write_bytes(data)
-        tokenizer = AutoTokenizer.from_pretrained(directory / "tokenizer")
+        tokenizer = load_tokenizer(directory / "tokenizer", agentic["tokenizer_files_sha256"])
         fs = HfFileSystem()
 
         def run(name: str) -> tuple[str, list[dict], dict]:
@@ -349,19 +348,9 @@ def main() -> None:
                 "assistant turns only (template generation blocks), minus assistant turns the source's train_turns "
                 "marks untrained; loss_weights[i] scores input_ids[i + 1]"
             ),
-            "output_hashes": {
-                path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(out.iterdir())
-            },
+            "output_hashes": output_hashes(out),
         }
-        (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-        output.mkdirs()
-        for path in sorted(out.iterdir(), key=lambda path: path.name == "manifest.json"):
-            (output / path.name).write_bytes(path.read_bytes())
-            if (
-                path.name != "manifest.json"
-                and hashlib.sha256((output / path.name).read_bytes()).hexdigest() != manifest["output_hashes"][path.name]
-            ):
-                raise ValueError(f"Upload hash mismatch: {path.name}")
+        upload_checked(out, output, manifest)
         print(
             "REPLAY_PREPARED " + json.dumps({k: v for k, v in manifest.items() if k not in ("partitions",)}), flush=True
         )

@@ -21,6 +21,7 @@ Order of operations, all with fixed seeds:
 import collections
 import random
 import re
+from typing import NotRequired, TypedDict
 
 from experiments.post_training.sweep_data.render import kimi_messages, render, tmax_messages
 from experiments.post_training.sweep_data.tmax_leaks import references_hidden_asset
@@ -45,6 +46,33 @@ SWEBENCH_VERIFIED_REPOS = frozenset(
         "sympy/sympy",
     }
 )
+
+
+class TrainingRecord(TypedDict):
+    """One rendered trajectory: token ids and the per-token assistant mask, plus its identity."""
+
+    family: str
+    task: str
+    trajectory: str
+    ids: list[int]
+    mask: list[int]
+    repo: NotRequired[str]  # SWE-smith rows only
+    position: NotRequired[dict]  # replay rows only: source file, position and raw-bytes sha256
+
+
+class Selection(TypedDict):
+    """What select() returns: per-family train/validation records, held-out ids and selection counts."""
+
+    allkimi_overlap: dict[str, int]
+    tmax_source_tasks: int
+    train: dict[str, list[TrainingRecord]]
+    validation: dict[str, list[TrainingRecord]]
+    heldout: dict[str, list[str]]
+    dropped: dict[str, int]
+    swesmith_allocation: dict[str, int]
+    eligible_tasks: dict[str, int]
+
+
 SWESMITH_INSTANCE = re.compile(r"\b([A-Za-z0-9_.-]+?)__([A-Za-z0-9_.-]+?)\.([0-9a-f]{8})\b")
 
 
@@ -73,7 +101,7 @@ def kimi_repo(row: dict) -> str | None:
     return repos.pop() if len(repos) == 1 else None
 
 
-def rendered(tokenizer, family: str, row: dict) -> dict:
+def rendered(tokenizer, family: str, row: dict) -> TrainingRecord:
     if family == "tmax":
         messages, tools = tmax_messages(row)
         task, trajectory = row["metadata"]["task"], row["metadata"]["trial_name"]
@@ -102,10 +130,10 @@ def select(
     kimi_rows: list[dict],
     allkimi_trials: frozenset[str],
     tmax_hidden: dict[str, list[str]],
-) -> dict:
+) -> Selection:
     rng = random.Random(SEED)
     dropped = collections.Counter()
-    records = {"tmax": [], "swesmith": []}
+    records: dict[str, list[TrainingRecord]] = {"tmax": [], "swesmith": []}
     for row in tmax_rows:
         if references_hidden_asset(row, tmax_hidden.get(row["metadata"]["task"], [])):
             dropped["tmax_references_hidden_verifier_asset"] += 1

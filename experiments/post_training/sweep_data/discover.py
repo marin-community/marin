@@ -8,30 +8,30 @@ import json
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-import fsspec
 from marin.datakit.sft_sources import all_sft_sources
+from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 
-V0_COPY = "s3://marin-us-east-02a/marin/weight-merging/campaign3-20261011/dare-linear-02/model"
+from experiments.post_training.sweep_data.prepare_agentic import STUDENT_REGIONAL_COPY
 
 
-def sha256(path: str) -> tuple[str, str, int]:
+def name_digest_size(path: StoragePath) -> tuple[str, str, int]:
+    """Stream one file; return its basename, sha256 hex digest and size in bytes."""
     digest = hashlib.sha256()
     size = 0
-    with fsspec.open(path, "rb") as stream:
+    with path.open("rb") as stream:
         while chunk := stream.read(64 * 1024 * 1024):
             digest.update(chunk)
             size += len(chunk)
-    return path.rsplit("/", 1)[1], digest.hexdigest(), size
+    return path.name, digest.hexdigest(), size
 
 
 def main() -> None:
     expected = json.loads(sys.argv[1])
-    fs, _ = fsspec.core.url_to_fs(V0_COPY)
-    names = sorted("s3://" + p for p in fs.ls(V0_COPY, detail=False))
-    print("V0_COPY_FILES " + json.dumps([n.rsplit("/", 1)[1] for n in names]), flush=True)
+    paths = sorted(StoragePath(STUDENT_REGIONAL_COPY).ls(), key=str)
+    print("V0_COPY_FILES " + json.dumps([path.name for path in paths]), flush=True)
     with ThreadPoolExecutor(8) as pool:
-        hashes = {name: (digest, size) for name, digest, size in pool.map(sha256, names)}
+        hashes = {name: (digest, size) for name, digest, size in pool.map(name_digest_size, paths)}
     report = {
         name: {"sha256": digest, "bytes": size, "matches_hf": expected.get(name) == digest}
         for name, (digest, size) in hashes.items()
@@ -43,12 +43,8 @@ def main() -> None:
         path = source.chat_normalized.output_path
         files = []
         if StoragePath(path).exists():
-            files = [
-                (p, s)
-                for p, s in (
-                    (f["name"], f["size"]) for f in fsspec.core.url_to_fs(path)[0].find(path, detail=True).values()
-                )
-            ]
+            fs, root = url_to_fs(path)
+            files = [(f["name"], f["size"]) for f in fs.find(root, detail=True).values()]
         print(
             "V3_SOURCE "
             + json.dumps(
