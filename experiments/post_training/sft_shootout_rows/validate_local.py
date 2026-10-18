@@ -371,9 +371,27 @@ def main() -> None:
     reports.append(check_arm(tokenizer, rs_multi, by_id, heldout))
     relay_arm = build("relay", [str(work / "relay.jsonl")], plain)
     reports.append(check_arm(tokenizer, relay_arm, by_id, heldout))
-    for prefix in (rs_multi, relay_arm):
+    recovery_arm = build("recovery", plain_inputs, plain)
+    reports.append(check_arm(tokenizer, recovery_arm, by_id, heldout))
+    recovery_manifest = json.loads((recovery_arm / "manifest.json").read_text())
+    plain_index = [json.loads(line) for line in (plain / "train-index.jsonl").read_text().splitlines()]
+    recovery_index = [json.loads(line) for line in (recovery_arm / "train-index.jsonl").read_text().splitlines()]
+    supervised = {(i["trial_id"], i["epoch"]): i["supervised_tokens"] for i in plain_index if i.get("trial_id")}
+    injected = [i for i in recovery_index if i.get("injected")]
+    # The stand-in inputs hold one row per family, so round(0.2 * 1) = 0 rows are selected; test_recovery covers
+    # injection itself and the dry build covers real rows. Here: the index agrees with the manifest.
+    families = recovery_manifest["recovery"]["families"].values()
+    assert len(injected) == 3 * sum(family["injected"] for family in families), "injected rows differ from manifest"
+    assert all(
+        supervised[(i["trial_id"], i["epoch"])] == i["supervised_tokens"] for i in recovery_index if i.get("trial_id")
+    )
+    assert (
+        recovery_manifest["B_supervised_tokens"]
+        == json.loads((plain / "manifest.json").read_text())["B_supervised_tokens"]
+    )
+    for prefix in (rs_multi, relay_arm, recovery_arm):
         assert replay_used(prefix)[0] == plain_replay[0], f"{prefix.name} replay rows differ from plain's"
-    for prefix in (plain, rs_multi, relay_arm):
+    for prefix in (plain, rs_multi, relay_arm, recovery_arm):
         manifest = json.loads((prefix / "manifest.json").read_text())
         epochs = [manifest["splits"][f"epoch-{e}"] for e in range(3)]
         assert all(split["padded_rows"] % 16 == 0 for split in epochs), f"{prefix.name}: epoch not padded to 16"

@@ -31,6 +31,7 @@ Usage:
 import argparse
 import base64
 import collections
+import dataclasses
 import gzip
 import hashlib
 import json
@@ -43,6 +44,7 @@ from typing import Any, Literal, NamedTuple, get_args
 from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoTokenizer
 
+from experiments.post_training.sft_shootout_rows import recovery
 from experiments.post_training.sft_shootout_rows.arms import (
     SEED,
     Attempt,
@@ -50,7 +52,7 @@ from experiments.post_training.sft_shootout_rows.arms import (
     relay_subsample,
     rs_multi_epochs,
 )
-from experiments.post_training.sft_shootout_rows.traces import TEACHER, RenderedTrace, render_trace
+from experiments.post_training.sft_shootout_rows.traces import HISTORY, TEACHER, RenderedTrace, render_trace
 from experiments.post_training.sweep_data.prepare_agentic import (
     BATCH,
     PAD_TOKEN,
@@ -120,6 +122,8 @@ CHANGELOG = (
     "e39c3ead56 arms' replay pinned to continuation v2 (frozen #202 slice superseded for the arms)",
     "PRODUCTION production fields: rows_sha256 per split, builder commit and source hashes, trace file identities, "
     "token gate over the inputs, held-out ids, _SUCCESS marker (task #234)",
+    "RECOVERY recovery arm: plain's rows with masked failed attempts before teacher turns of 20% of rows; a row "
+    "over the context takes a smaller injection (task #225)",
 )
 # The generation proxy's capability URL carries a secret JWT (three base64url segments starting 'eyJ', payload
 # aud == 'iris-proxy'); a trace that printed it (e.g. GLM running 'env') must never become a training row. Tokens are
@@ -164,7 +168,7 @@ def library_copy_pattern(import_names: list[str]) -> re.Pattern | None:
 AGENT_TOOL_ENV = re.compile(r"(?:\.local/share/uv/tools|uv\s+tool\s+(?:dir|list|run)|mini-swe-agent/(?:bin|lib)/)")
 
 
-Arm = Literal["plain", "rs-multi", "relay", "validation"]
+Arm = Literal["plain", "rs-multi", "relay", "recovery", "validation"]
 
 
 def load_pool(uri: str) -> dict[str, dict]:
@@ -227,9 +231,13 @@ class Candidate(NamedTuple):
 
 
 def candidates(
-    arm: Arm, traces: list[dict], pool: dict[str, dict], tokenizer
+    arm: Arm, traces: list[dict], pool: dict[str, dict], tokenizer, allow_summarized: bool = False
 ) -> tuple[dict[str, Candidate], list[dict]]:
-    """Render every attempt the arm may use; return ({trial_id: Candidate}, dropped records)."""
+    """Render every attempt the arm may use; return ({trial_id: Candidate}, dropped records).
+
+    allow_summarized (recovery handoff rows only) keeps the conversations of a summarized trial, whose echoed history
+    turns are tagged HISTORY by recovery.handoff_traces.
+    """
     kept, dropped = {}, []
     for trace in traces:
         reason = None
@@ -242,7 +250,7 @@ def candidates(
             reason = "family_mismatch"
         elif trace["relay"] != (arm == "relay"):  # validation, like plain, uses plain GLM runs
             reason = "relay_run" if trace["relay"] else "plain_run"
-        elif trace.get("n_conversations", 1) > 1:
+        elif trace.get("n_conversations", 1) > 1 and not allow_summarized:
             # Terminus-2 summarized this trial's history: the trial does not fit one 32k row.
             reason = "summarized_trial"
         elif trace["problems"]:
@@ -264,7 +272,7 @@ def candidates(
             authors = [m.get("author") for m in trace["messages"] if m["role"] == "assistant"]
             if TEACHER not in authors:
                 reason = "no_teacher_turn"
-            elif arm != "relay" and set(authors) != {TEACHER}:
+            elif arm != "relay" and set(authors) - ({HISTORY} if allow_summarized else set()) != {TEACHER}:
                 reason = "student_turn_in_plain_run"
         if reason is None:
             try:
@@ -431,7 +439,18 @@ def parse_args() -> argparse.Namespace:
         "--pool-manifest", required=True, help="pool manifest.json (hash-checked against POOL_MANIFEST_SHA256)"
     )
     parser.add_argument("--replay", required=True, help="replay slice prefix (sweep_data)")
-    parser.add_argument("--plain", help="built plain arm prefix (required for rs-multi and relay)")
+    parser.add_argument("--plain", help="built plain arm prefix (required for rs-multi, relay and recovery)")
+    parser.add_argument(
+        "--recovery-swe-mode",
+        choices=(recovery.HARNESS_FAITHFUL, recovery.WITH_FAILED_REPLY),
+        default=recovery.HARNESS_FAITHFUL,
+        help="SWE-smith injections: error messages only, as mini-swe-agent sends them (default), or with failed replies",
+    )
+    parser.add_argument(
+        "--recovery-handoff",
+        action="store_true",
+        help="also add context-handoff rows from summarized TMax trials (off by default; see recovery.py)",
+    )
     parser.add_argument("--output", required=True)
     parser.add_argument("--tokenizer-dir", help="local v0 tokenizer files (hash-checked); default: the regional copy")
     parser.add_argument(
@@ -574,6 +593,87 @@ def build_rows(
     rows = [entry(kept[a.trial_id]) for a in chosen_episodes] + replay.cut(b_tokens)
     index = write_epochs(out, "relay", lambda epoch: rows, splits)
     return ArmRows(selection, index, splits, b_tokens)
+
+
+def build_recovery_rows(
+    args: argparse.Namespace,
+    traces: list[dict],
+    pool: dict[str, dict],
+    tokenizer,
+    kept: dict[str, Candidate],
+    attempts: list[Attempt],
+    plain: dict,
+    replay: Replay,
+    out: Path,
+) -> tuple[ArmRows, dict]:
+    """Plain's rows with masked failed attempts injected (recovery.py); optionally with context-handoff rows."""
+    chosen = first_passing(attempts)
+    plain_selection = [
+        json.loads(line) for line in (StoragePath(args.plain) / "selection.jsonl").read_text().splitlines()
+    ]
+    if {(s["task_id"], s["trial_id"]) for s in plain_selection} != {(t, a.trial_id) for t, a in chosen.items()}:
+        raise ValueError("Recovery's trajectories differ from plain's selection; build both from the same traces")
+    b_tokens = sum(a.supervised for a in chosen.values())
+    if b_tokens != plain["B_supervised_tokens"]:
+        raise ValueError("Recovery B differs from plain's")
+    selection = [{"task_id": task, "trial_id": a.trial_id, "sample": a.sample} for task, a in sorted(chosen.items())]
+    seed = f"{SEED}:recovery:{POOL_MANIFEST_SHA256}"
+    recovered: dict[str, RenderedTrace] = {}
+    stats = recovery.build_recovery(chosen, kept, tokenizer, args.recovery_swe_mode, seed, recovered)
+    handoff, removed = [], set()
+    if args.recovery_handoff:
+        handoff_kept, handoff_dropped = candidates(
+            "recovery", recovery.handoff_traces(traces), pool, tokenizer, allow_summarized=True
+        )
+        kept.update(handoff_kept)
+        tmax_rows = sum(a.family == "tmax" for a in chosen.values())
+        handoff = recovery.plan_handoff([c.attempt for c in handoff_kept.values()], tmax_rows, seed)
+        added = sum(a.supervised for a in handoff)
+        clean = [a for a in chosen.values() if a.family == "tmax" and a.trial_id not in recovered]
+        dropped_clean = recovery.hold_budget(clean, added, seed)
+        removed = {a.trial_id for a in dropped_clean}
+        b_tokens += added - sum(a.supervised for a in dropped_clean)
+        stats["handoff"] = {
+            "rule": (
+                "conversations 1+ of passing summarized TMax plain trials (any pool task), seeded order, at most "
+                f"{recovery.HANDOFF_SHARE:.0%} of plain's TMax rows; clean TMax rows dropped in seeded order until "
+                "they cover the handoff rows' supervised tokens"
+            ),
+            "candidates": len(handoff_kept),
+            "candidate_drops": dict(collections.Counter(d["reason"].split(":")[0] for d in handoff_dropped)),
+            "rows": len(handoff),
+            "kinds": dict(
+                collections.Counter(recovery.handoff_kind(kept[a.trial_id].trace["messages"]) for a in handoff)
+            ),
+            "supervised_tokens_added": added,
+            "clean_tmax_rows_dropped": len(dropped_clean),
+            "supervised_tokens_dropped": sum(a.supervised for a in dropped_clean),
+            "B_minus_plain_B": b_tokens - plain["B_supervised_tokens"],
+            "tasks_outside_plain_slots": len({a.task_id for a in handoff} - set(plain["task_slots"])),
+        }
+        selection += [{"task_id": a.task_id, "trial_id": a.trial_id, "handoff": True} for a in handoff]
+        selection = [item for item in selection if item["trial_id"] not in removed]
+
+    def recovery_entry(attempt: Attempt, extra: dict) -> tuple[str, dict]:
+        candidate = kept[attempt.trial_id]
+        if attempt.trial_id in recovered:
+            rendered = recovered[attempt.trial_id]
+            candidate = Candidate(dataclasses.replace(attempt, context=len(rendered.ids)), rendered, candidate.trace)
+            extra = extra | {"plain_context_tokens": attempt.context}
+        line, item = entry(candidate)
+        return line, item | extra
+
+    rows = [
+        recovery_entry(a, {"injected": a.trial_id in recovered})
+        for _, a in sorted(chosen.items())
+        if a.trial_id not in removed
+    ]
+    rows += [recovery_entry(a, {"handoff": recovery.handoff_kind(kept[a.trial_id].trace["messages"])}) for a in handoff]
+    # Replay is cut at plain's B so its rows hash-match plain's, with or without handoff rows.
+    rows += replay.cut(plain["B_supervised_tokens"])
+    splits: dict = {}
+    index = write_epochs(out, "recovery", lambda epoch: rows, splits)
+    return ArmRows(selection, index, splits, b_tokens), stats
 
 
 def eligibility(arm: Arm, traces: list[dict], pool: dict[str, dict], attempts: list[Attempt]) -> dict:
@@ -738,9 +838,16 @@ def build_manifest(
                 "without replacement until a task's passes are used, then refilled"
             ),
             "relay": f"passing relay episodes with >=1 GLM turn, seeded order '{SEED}:relay', whole episodes to B",
+            "recovery": (
+                "plain's trajectories (same selection, same B); a seeded 20% of each family's rows get 1-2 "
+                "injection points with 1-3 masked failed attempts each (recovery.py)"
+            ),
             "validation": "first passing GLM attempt per held-out pool task, one file per family, no replay",
         }[args.arm],
-        "loss_mask": "assistant turns authored by glm; v0 turns, prompts and tool output are context",
+        "loss_mask": (
+            "assistant turns authored by glm; v0 turns, injected failed attempts, harness error messages, prompts and "
+            "tool output are context"
+        ),
         "heldout_rows": heldout_rows(args.arm, rows.index, pool),
         "output_hashes": output_hashes(out),
     }
@@ -773,8 +880,8 @@ def main() -> None:
     if not args.test_inputs:
         check_pins(args)
     plain = json.loads((StoragePath(args.plain) / "manifest.json").read_text()) if args.plain else None
-    if args.arm in ("rs-multi", "relay") and plain is None:
-        raise ValueError("--plain is required for rs-multi and relay")
+    if args.arm in ("rs-multi", "relay", "recovery") and plain is None:
+        raise ValueError("--plain is required for rs-multi, relay and recovery")
 
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
@@ -787,13 +894,19 @@ def main() -> None:
         replay = Replay(args.replay, plain)
         out = directory / "out"
         out.mkdir()
-        rows = build_rows(args.arm, kept, attempts, plain, replay, out)
+        recovery_stats = None
+        if args.arm == "recovery":
+            rows, recovery_stats = build_recovery_rows(args, traces, pool, tokenizer, kept, attempts, plain, replay, out)
+        else:
+            rows = build_rows(args.arm, kept, attempts, plain, replay, out)
         index_name = "validation-index.jsonl" if args.arm == "validation" else "train-index.jsonl"
         (out / index_name).write_text("".join(json.dumps(item) + "\n" for item in rows.index))
         (out / "selection.jsonl").write_text("".join(json.dumps(item) + "\n" for item in rows.selection))
         (out / "dropped.jsonl").write_text("".join(json.dumps(item) + "\n" for item in dropped))
         eligible = eligibility(args.arm, traces, pool, attempts)
         manifest = build_manifest(args, pool, kept, dropped, attempts, trace_files, gate, eligible, rows, replay, out)
+        if recovery_stats is not None:
+            manifest["recovery"] = recovery_stats
         upload(out, output, manifest, production=not args.test_inputs)
         print(
             "ARM_BUILT " + json.dumps({k: v for k, v in manifest.items() if k not in ("task_slots", "traces")}),
