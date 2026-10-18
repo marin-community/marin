@@ -1,0 +1,739 @@
+# Stage 1 repository setup and stratified structural retention, equal row counts.
+# Fresh optimizer from .49 step 12; prior validation tasks retained unchanged.
+# OOM recovery: EP32 across 128 policy GPUs; retain PP2, TP1 and the context budget.
+---
+schema_version: 1
+run:
+  id: users/benfeuer/models/snowball-smartie-2026.10.18.54
+  attempt_id: stage1-structural-54
+  seed: 42
+  mode: train
+  submission: wait
+  export_hf: false
+runtime:
+  launcher_commit: a5f80f872eaec5ef3975aac1ce3d6577a81b028f
+  profile: megatron
+  task_env:
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    NCCL_DEBUG: WARN
+inputs:
+  data_kind: parquet
+  model:
+    chat_template:
+    identity: users/benfeuer/models/smartie-run49-step12@2026.10.18.1
+    local_path: "/tmp/marinskyrl/models/smartie-run49-step12"
+    tokenizer_revision: b159204442ef156bd06303afcc8b7e07385a8216
+    tokenizer_uri: open-athena/Snowball-Smartie-RL-2026.10.17.49-step12
+    uri: s3://marin-us-east-02a/marin/users/benfeuer/models/smartie-run49-step12/2026.10.18.1/hf
+  train_data:
+  - identity: users/benfeuer/datasets/smartie-stage1-structural@2026.10.18.1
+    kind: directory
+    uri: s3://marin-us-east-02a/marin/users/benfeuer/datasets/smartie-stage1-structural/2026.10.18.1
+    relative_path: train.parquet
+  validation_data:
+  - identity: users/benfeuer/datasets/smartie-stage1-structural@2026.10.18.1
+    kind: directory
+    uri: s3://marin-us-east-02a/marin/users/benfeuer/datasets/smartie-stage1-structural/2026.10.18.1
+    relative_path: validation.parquet
+iris:
+  cluster: cw-rno2a
+  cluster_config: lib/iris/config/cw-rno2a.yaml
+  job_name: snowball-smartie-2026.10.18.54
+  allocation:
+    cpu: 48.0
+    disk: 21745Gi
+    gpu_variant: H100
+    gpus_per_node: 8
+    memory: 1800GB
+    num_nodes: 22
+  max_retries: 0
+  priority: interactive
+  timeout: 0
+  target_cluster: cw-rno2a
+  parent_cluster_config: lib/iris/config/marin.yaml
+artifacts:
+  attempts_root: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/${run.id}/attempts/${run.attempt_id}
+  checkpoint_root: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/${run.id}/checkpoints
+  export_root: s3://marin-us-east-02a/marin/${run.id}/exports
+  resolved_config_uri: s3://marin-us-east-02a/marin/${run.id}/resolved-launch.yaml
+  terminal_manifest_uri: s3://marin-us-east-02a/marin/${run.id}/terminal.json
+  resume_checkpoint_count: 10
+ray:
+  spill_dir: "/tmp/skyrl-ray-spill"
+  rendezvous_dir: "${artifacts.attempts_root}/rendezvous"
+  log_dir: "${artifacts.attempts_root}/ray-logs"
+skyrl:
+  entrypoint: taskcompendium
+  context_budget:
+    request_window_tokens: 65536
+    max_new_tokens_per_turn: 32768
+    max_turns: 999999
+    generated_budget_fraction: 0.5
+    overlong_cache_fraction: 0.5
+  trainer:
+    strategy: megatron
+    seed: 42
+    flash_attn: true
+    gradient_checkpointing: true
+    gradient_checkpointing_use_reentrant: false
+    offload_optimizer_during_rollouts: true
+    algorithm:
+      # Harbor attempts allow 3000 seconds plus one retry and cleanup.
+      # Keep admission above twice that attempt limit (6000 seconds).
+      group_admission:
+        stall_timeout: 7200
+      advantage_estimator: rloo_n
+      advantage_batch_normalize: false
+      eps_clip_low: 0.2
+      eps_clip_high: 0.2
+      use_entropy_loss: false
+      use_kl_loss: false
+      use_kl_in_reward: false
+      loss_reduction: token_mean
+      group_advantage_min_size: 4
+      dynamic_sampling:
+        type:
+      policy_loss_type: regular
+      off_policy_correction: tis
+      think_token_weight: 1.0
+    epochs: 4
+    max_steps: 20
+    update_epochs_per_batch: 1
+    train_batch_size: 512
+    policy_mini_batch_size: 512
+    eval_batch_size: 100
+    micro_forward_batch_size_per_gpu: 1
+    micro_train_batch_size_per_gpu: 1
+    use_sample_packing: false
+    eval_before_train: true
+    eval_interval: 2
+    eval_drain_timeout_seconds: 300
+    ckpt_interval: 2
+    max_ckpts_to_keep: 10
+    resume_mode: none
+    logger: wandb
+    project_name: snowball-smartie-rl
+    policy:
+      optimizer_config:
+        optimizer: AdamW
+        lr: 4.0e-06
+        weight_decay: 0.0
+        max_grad_norm: 0.5
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 2
+        context_parallel_size: 1
+        expert_model_parallel_size: 32
+        expert_tensor_parallel_size: 1
+        ddp_config:
+          overlap_grad_reduce: false
+          overlap_param_gather: false
+          grad_reduce_in_fp32: false
+        logprob_chunk_size: 256
+        transformer_config_kwargs:
+          recompute_granularity: full
+          recompute_method: uniform
+          recompute_modules:
+          - core_attn
+          recompute_num_layers: 1
+        optimizer_checkpoint_sharding_type: dp_reshardable
+    ref:
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 2
+        context_parallel_size: 1
+        expert_model_parallel_size: 32
+        expert_tensor_parallel_size: 1
+        logprob_chunk_size: 256
+        transformer_config_kwargs: {}
+    placement:
+      colocate_all: false
+      colocate_policy_ref: true
+      policy_num_nodes: 16
+      policy_num_gpus_per_node: 8
+      ref_num_nodes: 16
+      ref_num_gpus_per_node: 8
+      policy_strict_spread_pg: true
+    debug_mode: distributed
+    restore_dataloader_state: true
+    hf_save_interval: -1
+    rollout_buffer:
+      max_staleness_steps: 2
+      batch_policy: full_batch
+      max_in_flight: 512
+    callbacks:
+    - save_steps: 2
+      type: checkpoint
+    - eval_before_train: true
+      eval_on_train_end: true
+      eval_steps: 2
+      type: evaluation
+    - cohorts:
+      - job:
+          agents:
+          - kwargs:
+              max_turns: 32
+              model_info:
+                max_input_tokens: 32768
+                max_output_tokens: 8192
+              temperature: 1.0
+            name: terminus-2
+            override_setup_timeout_sec: 360
+            override_timeout_sec: 600
+          environment:
+            delete: true
+            type: daytona
+          n_attempts: 1
+          n_concurrent_trials: 30
+          retry:
+            include_exceptions:
+            - APIConnectionError
+            - APITimeoutError
+            - SandboxBuildFailedError
+            - ContainerRegistryThrottledError
+            - DaytonaProcessError
+            max_retries: 1
+          tasks:
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-simple-python-161
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-live-irrelevance-103-3-0
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-live-irrelevance-781-290-0
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-simple-java-73
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-multiple-147
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-live-multiple-538-152-0
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-parallel-7
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-live-irrelevance-511-151-0
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-parallel-multiple-13
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-live-multiple-179-75-1
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-live-multiple-591-157-12
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-irrelevance-154
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-parallel-147
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-simple-javascript-7
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-live-irrelevance-600-193-2
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-simple-python-2
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-live-multiple-236-106-2
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-live-multiple-685-164-1
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-parallel-84
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-live-multiple-13-4-5
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-live-simple-248-130-0
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-simple-python-149
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-simple-python-14
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-simple-python-296
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-multiple-105
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-live-multiple-350-133-14
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-live-multiple-337-133-1
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-live-multiple-48-18-3
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-live-irrelevance-698-227-1
+            source: bfcl_parity
+          - git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/bfcl_parity/bfcl-irrelevance-53
+            source: bfcl_parity
+          trial_attempt_timeout_sec: 1800
+          verifier:
+            override_timeout_sec: 300
+        name: bfcl_parity
+        reward_key: reward
+      - job:
+          agents:
+          - kwargs:
+              max_turns: 32
+              model_info:
+                max_input_tokens: 32768
+                max_output_tokens: 8192
+              temperature: 1.0
+            name: terminus-2
+            override_setup_timeout_sec: 360
+            override_timeout_sec: 600
+          environment:
+            delete: true
+            type: daytona
+          n_attempts: 1
+          n_concurrent_trials: 30
+          retry:
+            include_exceptions:
+            - APIConnectionError
+            - APITimeoutError
+            - SandboxBuildFailedError
+            - ContainerRegistryThrottledError
+            - DaytonaProcessError
+            max_retries: 1
+          tasks:
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/django__django-12419
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/django__django-11951
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/django__django-14007
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/django__django-15629
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/sphinx-doc__sphinx-10673
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/sympy__sympy-22080
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/django__django-11790
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/sphinx-doc__sphinx-7889
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/django__django-13513
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/sphinx-doc__sphinx-8721
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/sphinx-doc__sphinx-7462
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/matplotlib__matplotlib-23476
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/sphinx-doc__sphinx-8548
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/django__django-13363
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/sphinx-doc__sphinx-9461
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/sympy__sympy-15976
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/django__django-13658
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/django__django-11066
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/matplotlib__matplotlib-24637
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/scikit-learn__scikit-learn-13142
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/django__django-14034
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/django__django-12708
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/django__django-15569
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/psf__requests-2931
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/django__django-11555
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/django__django-12741
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/django__django-12193
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/django__django-16485
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/django__django-12143
+            source: swebench-verified
+          - git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+            git_url: https://github.com/laude-institute/harbor-datasets.git
+            path: datasets/swebench-verified/scikit-learn__scikit-learn-14087
+            source: swebench-verified
+          trial_attempt_timeout_sec: 1800
+          verifier:
+            override_timeout_sec: 300
+        name: swebench-verified
+        reward_key: reward
+      - job:
+          agents:
+          - kwargs:
+              max_turns: 32
+              model_info:
+                max_input_tokens: 32768
+                max_output_tokens: 8192
+              temperature: 1.0
+            name: terminus-2
+            override_setup_timeout_sec: 360
+            override_timeout_sec: 600
+          environment:
+            delete: true
+            type: daytona
+          n_attempts: 1
+          n_concurrent_trials: 30
+          retry:
+            include_exceptions:
+            - APIConnectionError
+            - APITimeoutError
+            - SandboxBuildFailedError
+            - ContainerRegistryThrottledError
+            - DaytonaProcessError
+            max_retries: 1
+          tasks:
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: malicious-package-forensics
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: book-portfolio-analysis
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: industrial-kiln-controller
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: iris-dataset-classification
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: task-xxe-exploit
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: protein-sequence
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: reverse-engineer-stack-vm
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: cryptographic-protocol-verifier
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: mtls-cert-rotation
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: symlink-chain-traversal
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: monorepo-changelog-cli
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: raft-log-repair-concurrent-access
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: vimscript-vim-quine
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: systemd-log-monitoring
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: ekf-localization
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: api-endpoint-permission-canonicalizer
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: grpc-plant-position-server
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: pandas-numpy-data-analysis
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: hydra-debug-slurm-mode
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: grid-pathfinding
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: competitive-programming-solver
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: todos-api
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: etl_checkpoint_resume_bug
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: iot-device-registration-server
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: reproducibility-and-envsetup
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: mlflow-register
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: application-debug
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: acl-permissions-inheritance
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: maven-slf4j-conflict
+            source: openthoughts-tblite
+          - git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+            git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+            path: schedule-vacation
+            source: openthoughts-tblite
+          trial_attempt_timeout_sec: 1800
+          verifier:
+            override_timeout_sec: 300
+        name: openthoughts-tblite
+        reward_key: reward
+      minimum_coverage: 0.9
+      timeout: 10800
+      type: harbor_evaluation
+      daytona_api_key_env: DAYTONA_EVAL_API_KEY
+    - expected_tasks: 663
+      initial_model_uri: "s3://marin-us-east-02a/marin/users/benfeuer/models/smartie-run49-step12/2026.10.18.1/hf"
+      minimum_scored_tasks: 630
+      type: best_checkpoint
+    evaluation_runner: training
+    tracker_commit_each_step: true
+    export_hf_artifact: false
+  generator:
+    backend: vllm
+    model_dtype: bfloat16
+    vllm_attention_backend: FLASH_ATTN
+    inference_engine_tensor_parallel_size: 1
+    inference_engine_data_parallel_size: 4
+    inference_engine_expert_parallel_size: 4
+    num_inference_engines: 12
+    n_samples_per_prompt: 16
+    eval_n_samples_per_prompt: 1
+    gpu_memory_utilization: 0.8
+    max_num_seqs: 16
+    max_num_batched_tokens: 16384
+    enable_prefix_caching: true
+    enable_chunked_prefill: true
+    enforce_eager: false
+    run_engines_locally: true
+    weight_sync_backend: nccl
+    enable_http_endpoint: true
+    sampling_params:
+      temperature: 1.0
+      top_p: 1.0
+      top_k: -1
+      logprobs: 0
+    engine_init_kwargs:
+      enable_return_routed_experts: true
+      enable_auto_tools: true
+      tool_parser: hermes
+      moe_backend: triton
+      logprobs_mode: processed_logprobs
+      generation_config: vllm
+      validate_rollout_logprob_sampling: true
+    model_loading: stage_local
+    inference_engine_pipeline_parallel_size: 1
+    weight_sync_transport: broadcast
+    weight_sync_pause:
+      mode: keep
+      clear_cache: true
+  environment:
+    task_sessions:
+      daytona:
+        api_key_env: DAYTONA_RL_API_KEY
+        ttl_minutes: 60
+  terminal_bench:
+    harbor:
+      n_concurrent_trials: 256
+      environment_type: daytona
+      daytona_api_key_env: DAYTONA_RL_API_KEY
+      eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY
+      # Harbor owns the agent deadline; keep the outer full-trial loop unbounded.
+      # The pinned runtime preserves an explicit null override.
+      eval_timeout_override_sec: null
+      max_retries: 1
+      enable_reward_shaping: false
+    installed_agent:
+      agent:
+        name: mini-swe-agent
+        override_setup_timeout_sec: 300
+        kwargs:
+          version: 2.1.0
+          max_turns: 32
+          temperature: 1.0
+      setup_timeout: 300
+      run_timeout: 1800
+      cleanup_timeout: 120
+      service_startup_timeout: 60
+      service_shutdown_timeout: 60
+      trial_reward_key: reward
+      # Identical snapshot names must be ready in both RL and eval organizations.
+      environment_snapshots:
+        registry:ghcr.io/penfever/smartie-grader@sha256:18552401c9f77776b3f2e01c6afc682a998600659ed03f9f701c8a5a5a8e2bbb: smartie-stage1-18552401c9f7
+        registry:aweaiteam/calibforge:scientific-computing_20260610_111702_007_20260620_203601_460312: shellbox-fed0babcbe94cdf9979ea5084a3ce9680e6f6de5
+        registry:aweaiteam/calibforge:security_20260617_210354_003_20260620_203601_462195: shellbox-fed0babcbe94cdf9979ea5084a3ce9680e6f6de5
+        registry:aweaiteam/calibforge:software-engineering_20260601_053159_003_20260620_203601_462324: shellbox-fed0babcbe94cdf9979ea5084a3ce9680e6f6de5
+        registry:aweaiteam/calibforge:software-engineering_20260601_053159_024_20260620_203601_462476: shellbox-fed0babcbe94cdf9979ea5084a3ce9680e6f6de5
+        registry:aweaiteam/calibforge:software-engineering_20260604_002443_021_20260620_203601_462923: shellbox-fed0babcbe94cdf9979ea5084a3ce9680e6f6de5
+        registry:aweaiteam/calibforge:software-engineering_20260606_172606_022_20260620_203601_464482: shellbox-fed0babcbe94cdf9979ea5084a3ce9680e6f6de5
+        registry:aweaiteam/calibforge:software-engineering_20260610_111702_001_20260620_203601_464942: shellbox-fed0babcbe94cdf9979ea5084a3ce9680e6f6de5
+        registry:aweaiteam/calibforge:software-engineering_20260610_111702_024_20260620_203601_465149: shellbox-fed0babcbe94cdf9979ea5084a3ce9680e6f6de5
+        registry:aweaiteam/calibforge:software-engineering_20260611_112034_024_20260620_203601_465421: shellbox-fed0babcbe94cdf9979ea5084a3ce9680e6f6de5
+        registry:aweaiteam/calibforge:software-engineering_20260611_210349_023_20260620_203601_465714: shellbox-fed0babcbe94cdf9979ea5084a3ce9680e6f6de5
+        registry:aweaiteam/calibforge:software-engineering_20260612_191200_012_20260620_203601_465749: shellbox-fed0babcbe94cdf9979ea5084a3ce9680e6f6de5
+        registry:aweaiteam/calibforge:software-engineering_20260617_210354_011_20260620_203601_466669: shellbox-fed0babcbe94cdf9979ea5084a3ce9680e6f6de5
+        registry:aweaiteam/calibforge:software-engineering_20260617_210354_023_20260620_203601_466727: shellbox-fed0babcbe94cdf9979ea5084a3ce9680e6f6de5
+        registry:aweaiteam/calibforge:software-engineering_20260617_210354_024_20260620_203601_466734: shellbox-fed0babcbe94cdf9979ea5084a3ce9680e6f6de5
+        registry:aweaiteam/calibforge:system-administration_20260613_152233_008_20260620_203601_468514: shellbox-fed0babcbe94cdf9979ea5084a3ce9680e6f6de5
+        registry:aweaiteam/calibforge:system-administration_20260617_210354_001_20260620_203601_468861: shellbox-fed0babcbe94cdf9979ea5084a3ce9680e6f6de5
+        dockerfile:94b3144691520506828d41ce0db459220fa406661932c434b5907ba6aa4a291b: shellbox-75e5a58879f7f3091f54def3753ff9eb61dfc88f
+        dockerfile:999388bc8a74a8177f42161ef9ec654e6432f0c625a1ee70b5f155c795ac75af: shellbox-188d39e4857991360c60f3d9a39f7e0a0100a91f
+        dockerfile:d00f263bdee3f80b95c193ae9ad0ba5693c2cff4356640bbfde31f645bd29b78: shellbox-70e243e30c33a2629c844d855079deaa76c04f4c
+        dockerfile:80dd9646b7c276959ae5741d81ad0c16a0a3611d52ee8b70d20b7fae889469a3: shellbox-f102cfeeaee9fa8764d4b4b3260125b8346086e8
+        dockerfile:6de2aec2994a14a754859baeb508ed1ec5536c4bce9aa82fff970e84f4c1934c: shellbox-1c6a9df962e7d0d4ecf4aba43b8ce5c8121a7b8a
+        dockerfile:9c8a40988a0e1685fc6a26fe486e17051abdb260481660abfb7435f6a1c8a77d: shellbox-c2fdca7ec15c01e85fe27487ca6d1af0783fa855
+  data:
+    kind: parquet
+    train_data: []
+    val_data: []
+    shuffle: true
+  trajectory_runner:
+    max_concurrent_tasks: 512
+    rollout_workers:
+      num_workers: 4
+      cpus_per_worker: 8
+      executor_threads: 256
+      progress_timeout_seconds: 21600
+      cancellation_timeout_seconds: 120
+      start_interval_seconds: 2.0
