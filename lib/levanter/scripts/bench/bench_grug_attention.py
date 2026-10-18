@@ -21,7 +21,7 @@ import jax
 import jax.numpy as jnp
 
 from levanter.grug.attention import AttentionMask, attention
-from levanter.grug.attention._pallas_triton_flash import TritonFlashBlockSizes, pallas_triton_flash_attention
+from levanter.grug.attention._amd_pallas_triton_flash import TritonFlashBlockSizes, pallas_triton_flash_attention
 
 WARMUP_SECONDS = 1.0
 WINDOWS = 10
