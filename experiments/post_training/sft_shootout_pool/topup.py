@@ -326,7 +326,6 @@ def main() -> None:
         }
         for row in removed
     ]
-    files["tasks.jsonl"] = jsonl_bytes(kept)
     files["excluded.jsonl"] = jsonl_bytes(excluded)
     files["swesmith-packages.jsonl"] = jsonl_bytes(records)
 
@@ -334,6 +333,8 @@ def main() -> None:
     tmax_removed = [row for row in removed if row["family"] == "tmax"]
     if tmax_removed:
         top_up_tmax_heldout(kept, tmax_removed, task_exclusions, manifest, version)
+    # Written after the top-up so held-out flags it sets reach tasks.jsonl, not only the manifest counts.
+    files["tasks.jsonl"] = jsonl_bytes(kept)
     swesmith_task_exclusions = {
         row["task_id"]: task_exclusions[row["task_id"]]
         for row in removed
