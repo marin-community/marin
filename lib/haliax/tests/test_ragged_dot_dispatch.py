@@ -33,8 +33,18 @@ def _accelerator_implementation() -> Literal["megablox", "triton"]:
 
 
 def test_accelerator_implementation_value_and_gradients_match_xla():
+    _assert_value_and_gradients_match_xla(_accelerator_implementation())
+
+
+@pytest.mark.parametrize("implementation", ["triton_group_grid", "triton_tile_map"])
+def test_explicit_triton_family_value_and_gradients_match_xla(implementation):
+    if _accelerator_implementation() != "triton":
+        pytest.skip("requires the GPU Pallas Triton backend")
+    _assert_value_and_gradients_match_xla(implementation)
+
+
+def _assert_value_and_gradients_match_xla(implementation):
     lhs, rhs, group_sizes = _inputs()
-    implementation = _accelerator_implementation()
 
     def loss(lhs, rhs, implementation):
         return jnp.sum(ragged_dot(lhs, rhs, group_sizes, implementation=implementation) ** 2)
@@ -78,8 +88,11 @@ def test_gpu_auto_selects_triton_instead_of_xla(monkeypatch):
     expected = jnp.full((lhs.shape[0], rhs.shape[2]), 17.0, dtype=lhs.dtype)
     monkeypatch.setattr(ragged_dot_module.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(ragged_dot_module, "_has_pallas_triton", True)
+    monkeypatch.setattr(
+        ragged_dot_module, "_triton_kernel_family", lambda: ragged_dot_module.TritonKernelFamily.TILE_MAP
+    )
 
-    def triton_result(lhs, rhs, group_sizes):
+    def triton_result(lhs, rhs, group_sizes, family):
         return jnp.full((lhs.shape[0], rhs.shape[2]), expected[0, 0], dtype=lhs.dtype)
 
     def unexpected_xla(*args):
@@ -91,6 +104,30 @@ def test_gpu_auto_selects_triton_instead_of_xla(monkeypatch):
     auto_out = ragged_dot(lhs, rhs, group_sizes, implementation="auto")
 
     assert jnp.array_equal(auto_out, expected)
+
+
+@pytest.mark.parametrize(
+    ("implementation", "family"),
+    [
+        ("triton_group_grid", ragged_dot_module.TritonKernelFamily.GROUP_GRID),
+        ("triton_tile_map", ragged_dot_module.TritonKernelFamily.TILE_MAP),
+    ],
+)
+def test_explicit_triton_family_overrides_the_gpu_default(monkeypatch, implementation, family):
+    lhs, rhs, group_sizes = _inputs()
+    other = next(f for f in ragged_dot_module.TritonKernelFamily if f != family)
+    monkeypatch.setattr(ragged_dot_module, "_triton_kernel_family", lambda: other)
+    families = []
+
+    def triton_impl(lhs, rhs, group_sizes, family):
+        families.append(family)
+        return jnp.zeros((lhs.shape[0], rhs.shape[2]), lhs.dtype)
+
+    monkeypatch.setattr(ragged_dot_module, "_ragged_dot_triton_impl", triton_impl)
+
+    ragged_dot(lhs, rhs, group_sizes, implementation=implementation)
+
+    assert families == [family]
 
 
 def test_triton_default_block_sizes_use_blackwell_n_tile(monkeypatch):
@@ -107,15 +144,17 @@ def test_triton_default_block_sizes_keep_non_blackwell_n_tile(monkeypatch):
 
 def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
     lhs, rhs, group_sizes = _inputs()
+    family = ragged_dot_module.TritonKernelFamily.GROUP_GRID
     calls = []
 
     def fake_triton_pallas_call(
         lhs,
         rhs,
         group_sizes,
+        family,
         ragged_dot_dimension_numbers=ragged_dot_module._DEFAULT_DIM_NUMS,
     ):
-        calls.append(ragged_dot_dimension_numbers)
+        calls.append((family, ragged_dot_dimension_numbers))
         return jax.lax.ragged_dot_general(
             lhs=lhs,
             rhs=rhs,
@@ -127,7 +166,7 @@ def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
     monkeypatch.setattr(ragged_dot_module, "_triton_pallas_call", fake_triton_pallas_call)
 
     def triton_loss(lhs, rhs):
-        return jnp.sum(ragged_dot_module._ragged_dot_triton_impl(lhs, rhs, group_sizes))
+        return jnp.sum(ragged_dot_module._ragged_dot_triton_impl(lhs, rhs, group_sizes, family))
 
     def xla_loss(lhs, rhs):
         return jnp.sum(ragged_dot(lhs, rhs, group_sizes, implementation="xla"))
@@ -142,9 +181,9 @@ def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
     assert jnp.allclose(triton_grads[0], xla_grads[0], rtol=1e-5, atol=1e-5)
     assert jnp.allclose(triton_grads[1], xla_grads[1], rtol=1e-5, atol=1e-5)
     assert calls == [
-        ragged_dot_module._DEFAULT_DIM_NUMS,
-        ragged_dot_module._DLHS_DIM_NUMS,
-        ragged_dot_module._DRHS_DIM_NUMS,
+        (family, ragged_dot_module._DEFAULT_DIM_NUMS),
+        (family, ragged_dot_module._DLHS_DIM_NUMS),
+        (family, ragged_dot_module._DRHS_DIM_NUMS),
     ]
 
 
