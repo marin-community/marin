@@ -1543,6 +1543,69 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize(("expert_mxfp8", "max_relative"), [(False, 2e-2), (True, 0.1)], ids=["bf16", "mxfp8"])
+def test_ragged_ungated_relu2_experts_match_dense_value_and_gradients_on_gpu(expert_mxfp8, max_relative):
+    mesh = _make_ep_mesh_or_none()
+    if mesh is None or jax.devices()[0].platform != "gpu":
+        pytest.skip("requires an even number of >=2 GPUs (ragged_all_to_all is not implemented on XLA:CPU)")
+    if expert_mxfp8 and float(jax.devices()[0].compute_capability) < 10.0:
+        pytest.skip("MXFP8 experts require SM100")
+    tokens, hidden_dim, width, topk = len(jax.devices()) * 64, 256, 384, 2
+    num_experts = 2 * mesh.shape["expert"]
+    keys = jax.random.split(jax.random.key(31), 6)
+    x = jax.random.normal(keys[0], (tokens, hidden_dim)).astype(jnp.bfloat16)
+    selected_experts = jax.random.randint(keys[1], (tokens, topk), 0, num_experts).astype(jnp.int32)
+    combine_weights = jax.nn.softmax(jax.random.normal(keys[2], (tokens, topk)), axis=-1).astype(jnp.bfloat16)
+    w_up = (jax.random.normal(keys[3], (num_experts, hidden_dim, width)) * hidden_dim**-0.5).astype(jnp.bfloat16)
+    w_down = (jax.random.normal(keys[4], (num_experts, width, hidden_dim)) * width**-0.5).astype(jnp.bfloat16)
+    cotangent = jax.random.normal(keys[5], (tokens, hidden_dim)).astype(jnp.bfloat16)
+
+    def dense_output(x, w_up, w_down):
+        x, w_up, w_down = (a.astype(jnp.float32) for a in (x, w_up, w_down))
+        pre = jnp.einsum("th,tkhi->tki", x, w_up[selected_experts])
+        expert_output = jnp.einsum("tki,tkih->tkh", jnp.square(jax.nn.relu(pre)), w_down[selected_experts])
+        return jnp.einsum("tkh,tk->th", expert_output, combine_weights.astype(jnp.float32))
+
+    def backend_output(x, w_up, w_down):
+        return moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up,
+            w_down,
+            activation=ActivationFunctionEnum.relu2,
+            implementation="ragged_all_to_all",
+            mesh=mesh,
+            capacity_factor=4.0,
+            expert_mxfp8=expert_mxfp8,
+        )
+
+    def value_and_gradients(fn):
+        return jax.jit(
+            lambda *a: (
+                fn(*a),
+                *jax.grad(lambda *b: jnp.sum(fn(*b).astype(jnp.float32) * cotangent), argnums=(0, 1, 2))(*a),
+            )
+        )
+
+    expected = value_and_gradients(dense_output)(x, w_up, w_down)
+    batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+    expert_sharding = NamedSharding(mesh, P("expert", None, None))
+    selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
+    combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
+    cotangent = jax.sharding.reshard(cotangent, batch_sharding)
+    with jax.set_mesh(mesh):
+        actual = value_and_gradients(backend_output)(
+            jax.sharding.reshard(x, batch_sharding),
+            jax.sharding.reshard(w_up, expert_sharding),
+            jax.sharding.reshard(w_down, expert_sharding),
+        )
+    for name, got, want in zip(("y", "dx", "dw_up", "dw_down"), actual, expected, strict=True):
+        got, want = np.asarray(got, np.float32), np.asarray(want, np.float32)
+        relative = float(np.linalg.norm(got - want) / np.linalg.norm(want))
+        assert relative < max_relative, f"{name}: relative L2 error {relative:.3e}"
+
+
 @pytest.mark.parametrize(
     "token_valid",
     [[True] * 16, [True, False, True, True] * 4],
@@ -1864,8 +1927,8 @@ def _force_routing_weight_gradient(
     monkeypatch.setattr(
         ep_ragged_all_to_all,
         "_select_expert_mlp",
-        lambda activation_fn, dtype: dataclasses.replace(
-            select_expert_mlp(activation_fn, dtype), routing_weight_gradient=routing_weight_gradient
+        lambda activation_fn, dtype, **kwargs: dataclasses.replace(
+            select_expert_mlp(activation_fn, dtype, **kwargs), routing_weight_gradient=routing_weight_gradient
         ),
     )
 

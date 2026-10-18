@@ -49,6 +49,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
+from experiments.grug.moe_hero_ep.model import Fp8Recipe
 from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
     GrugEvalConfig,
@@ -133,6 +134,9 @@ def build_diagnostic_run(
     num_experts: int | None = None,
     num_experts_per_token: int | None = None,
     intermediate_dim: int | None = None,
+    shared_expert_intermediate_dim: int | None = None,
+    fp8_recipe: Fp8Recipe = Fp8Recipe.NONE,
+    ungated_relu2: bool = False,
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
     max_seq_len: int | None = None,
@@ -202,6 +206,7 @@ def build_diagnostic_run(
             ("num_experts", num_experts),
             ("num_experts_per_token", num_experts_per_token),
             ("intermediate_dim", intermediate_dim),
+            ("shared_expert_intermediate_dim", shared_expert_intermediate_dim),
             ("capacity_factor", capacity_factor),
             ("latent_dim", latent_dim),
             ("max_seq_len", max_seq_len),
@@ -215,8 +220,7 @@ def build_diagnostic_run(
         if eval_every > 0:
             raise ValueError("the v16384 data source has no validation sets; pass eval_every=0")
         overrides["vocab_size"] = V16384_VOCAB_SIZE
-    if overrides:
-        model = dataclasses.replace(model, **overrides)
+    model = dataclasses.replace(model, **overrides, fp8_recipe=fp8_recipe, ungated_relu2=ungated_relu2)
     model = with_transport_remat_mode(model)
     if batch_size is None:
         batch_size = hero_rack_batch_size(model.max_seq_len)
@@ -460,6 +464,25 @@ def build_diagnostic_run(
     help="Override the routed expert width.",
 )
 @click.option(
+    "--shared-expert-intermediate-dim",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Override each shared expert's width.",
+)
+@click.option(
+    "--fp8-recipe",
+    type=click.Choice([recipe.value for recipe in Fp8Recipe]),
+    default=Fp8Recipe.NONE.value,
+    show_default=True,
+    help="MXFP8 projections: routed experts, dense projections, or both.",
+)
+@click.option(
+    "--ungated-relu2/--no-ungated-relu2",
+    default=False,
+    show_default=True,
+    help="Ungated ReLU^2 routed and shared experts (set 1.5x widths for equal parameters).",
+)
+@click.option(
     "--batch-size",
     type=click.IntRange(min=1),
     default=None,
@@ -617,6 +640,9 @@ def main(
     num_experts: int | None,
     num_experts_per_token: int | None,
     intermediate_dim: int | None,
+    shared_expert_intermediate_dim: int | None,
+    fp8_recipe: str,
+    ungated_relu2: bool,
     capacity_factor: float | None,
     latent_dim: int | None,
     moe_implementation: str | None,
@@ -651,6 +677,9 @@ def main(
         num_experts=num_experts,
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
+        shared_expert_intermediate_dim=shared_expert_intermediate_dim,
+        fp8_recipe=Fp8Recipe(fp8_recipe),
+        ungated_relu2=ungated_relu2,
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,
         max_seq_len=seq_len,

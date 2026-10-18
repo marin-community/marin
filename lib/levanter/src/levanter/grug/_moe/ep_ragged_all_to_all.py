@@ -32,6 +32,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
+from levanter.utils.activation import ActivationFunctionEnum
 from levanter.grug._moe.common import (
     _assignment_validity,
     _deinterleave_gate_up,
@@ -144,9 +145,12 @@ class _RaggedDotExpertMlp:
         active = (jnp.arange(x_dispatch.shape[0]) < jnp.sum(active_group_sizes))[:, None]
         x_dispatch = jnp.where(active, x_dispatch, 0)
         w13_out = ragged_dot(x_dispatch, moe_w13_local, physical_group_sizes)
-        moe_dim = moe_w2_local.shape[1]
-        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out = ragged_dot(self.activation_fn(gate) * up, moe_w2_local, physical_group_sizes)
+        if _is_ungated(moe_w13_local, moe_w2_local):
+            hidden = self.activation_fn(w13_out)
+        else:
+            gate, up = jnp.split(w13_out, [moe_w2_local.shape[1]], axis=-1)
+            hidden = self.activation_fn(gate) * up
+        out = ragged_dot(hidden, moe_w2_local, physical_group_sizes)
         return jnp.where(active, out, 0)
 
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
@@ -212,6 +216,115 @@ class _CuteExpertMlp:
         return dx, _deinterleave_gate_up(dw13_interleaved), dw2, output_dot_cotangent
 
 
+def _is_ungated(moe_w13_local: Float[Array, "E H I2"], moe_w2_local: Float[Array, "E I H"]) -> bool:
+    """An ungated expert bank stores ``W_up`` alone, ``[E, H, I]``; a gated one stores gate and up, ``[E, H, 2I]``."""
+    return moe_w13_local.shape[-1] == moe_w2_local.shape[1]
+
+
+def _cumulative_group_sizes(active_group_sizes: Int[Array, "Echunk"]) -> Int[Array, "Echunk+1"]:
+    return jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)])
+
+
+@dataclasses.dataclass(frozen=True)
+class _CuteRelu2ExpertMlp:
+    """Ungated ``relu(x W_up)^2 W_down`` on QuACK's SM100 grouped GEMMs.
+
+    ReLU^2 is fused into the up-projection's epilogue and its backward into the ``d post`` GEMM's epilogue, which
+    also emits the row dot ``<y, dy>``. Like ``_CuteExpertMlp`` it takes the active sizes and leaves trailing rows
+    unspecified.
+    """
+
+    routing_weight_gradient: _RoutingWeightGradient
+
+    def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        del physical_group_sizes
+        from levanter.grug._moe.sonic_cute import _relu2_expert_mlp_quack_fwd  # noqa: PLC0415
+
+        return _relu2_expert_mlp_quack_fwd(
+            x_dispatch, moe_w13_local, moe_w2_local, _cumulative_group_sizes(active_group_sizes)
+        )
+
+    def apply(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        out, residuals = self.forward(
+            x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes
+        )
+        return out, residuals[3]
+
+    def backward(self, residuals, cotangent):
+        from levanter.grug._moe.sonic_cute import _relu2_expert_mlp_quack_backward  # noqa: PLC0415
+
+        return _relu2_expert_mlp_quack_backward(residuals, cotangent)
+
+
+@dataclasses.dataclass(frozen=True)
+class _CuteRelu2Mxfp8ExpertMlp:
+    """``_CuteRelu2ExpertMlp`` with MXFP8 operands in the three activation-path GEMMs (QuACK block-scaled SM100).
+
+    The bf16 dispatched rows are quantized here; ReLU^2 and the quantization of ``post`` are fused into the
+    up-projection's epilogue, and dReLU^2 with the quantization of ``d pre`` into the ``d post`` GEMM's. The
+    weights are quantized in their stored layout. The weight gradients stay bf16.
+    """
+
+    routing_weight_gradient: _RoutingWeightGradient
+
+    def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        del physical_group_sizes
+        from levanter.grug._moe.quack_mxfp8 import relu2_expert_mlp_mxfp8_fwd  # noqa: PLC0415
+
+        return relu2_expert_mlp_mxfp8_fwd(
+            x_dispatch, moe_w13_local, moe_w2_local, _cumulative_group_sizes(active_group_sizes)
+        )
+
+    def apply(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        out, residuals = self.forward(
+            x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes
+        )
+        return out, residuals[3]
+
+    def backward(self, residuals, cotangent):
+        from levanter.grug._moe.quack_mxfp8 import relu2_expert_mlp_mxfp8_backward_input  # noqa: PLC0415
+        from levanter.grug._moe.sonic_cute import _relu2_expert_mlp_quack_wgrads  # noqa: PLC0415
+
+        dx, output_dot, wgrad_args = relu2_expert_mlp_mxfp8_backward_input(residuals, cotangent)
+        dw_up, dw_down = _relu2_expert_mlp_quack_wgrads(*wgrad_args)
+        return dx, dw_up, dw_down, output_dot
+
+
+@dataclasses.dataclass(frozen=True)
+class _CuteSwigluMxfp8ExpertMlp:
+    """``_CuteExpertMlp`` with MXFP8 operands in the four activation-path GEMMs (QuACK block-scaled SM100).
+
+    The bf16 dispatched rows are quantized here. SwiGLU and the quantization of ``h`` are fused into the gate/up
+    GEMM's epilogue; the SwiGLU backward runs in XLA and ``d gu`` is quantized by the Pallas row quantizer. The
+    weights are quantized in their stored layout. The weight gradients stay bf16.
+    """
+
+    routing_weight_gradient: _RoutingWeightGradient
+
+    def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        del physical_group_sizes
+        from levanter.grug._moe.quack_mxfp8 import swiglu_expert_mlp_mxfp8_fwd  # noqa: PLC0415
+
+        w13_interleaved = _interleave_gate_up(moe_w13_local, moe_w2_local.shape[1])
+        return swiglu_expert_mlp_mxfp8_fwd(
+            x_dispatch, w13_interleaved, moe_w2_local, _cumulative_group_sizes(active_group_sizes)
+        )
+
+    def apply(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        out, residuals = self.forward(
+            x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes
+        )
+        return out, residuals[3]
+
+    def backward(self, residuals, cotangent):
+        from levanter.grug._moe.quack_mxfp8 import swiglu_expert_mlp_mxfp8_backward_input  # noqa: PLC0415
+        from levanter.grug._moe.sonic_cute import _swiglu_expert_mlp_quack_wgrads  # noqa: PLC0415
+
+        dx, output_dot, wgrad_args = swiglu_expert_mlp_mxfp8_backward_input(residuals, cotangent)
+        dw13_interleaved, dw2 = _swiglu_expert_mlp_quack_wgrads(*wgrad_args)
+        return dx, _deinterleave_gate_up(dw13_interleaved), dw2, output_dot
+
+
 @functools.cache
 def _quack_grouped_gemm_available() -> bool:
     if jax.default_backend() != "gpu":
@@ -238,10 +351,15 @@ def _quack_grouped_gemm_available() -> bool:
     return True
 
 
-def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], dtype: jnp.dtype) -> _ExpertMlp:
+_RELU2_FN = ActivationFunctionEnum.relu2.to_jax_fn()
+
+
+def _select_expert_mlp(
+    activation_fn: Callable[[jax.Array], jax.Array], dtype: jnp.dtype, *, ungated: bool, mxfp8: bool
+) -> _ExpertMlp:
     """Pick the fastest expert-MLP kernel this process can actually run, and its routing-weight gradient.
 
-    QuACK's kernel fuses SwiGLU, so it only applies to SiLU. Everything else -- another
+    QuACK's kernels fuse SwiGLU for gated SiLU experts and ReLU^2 for ungated ReLU^2 experts. Everything else -- another
     activation, a non-SM100 GPU, a TPU or CPU, or a build without the GPU extra -- runs the
     portable `ragged_dot` path, which computes the same function.
 
@@ -259,11 +377,23 @@ def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], dtype: j
     ``y`` for the row dot, so the expert-side gradient would save it only the returned ``[TK, H]``
     buffer and the return transport. It takes the exact gradient, which holds for every weight and
     dtype.
+    ``mxfp8`` selects the MXFP8 variant of the QuACK kernel (block-scaled e4m3 operands in the activation-path
+    GEMMs, bf16 weight gradients) and raises where there is none.
     """
-    if activation_fn is jax.nn.silu and _quack_grouped_gemm_available():
-        if dtype == jnp.float16:
-            return _CuteExpertMlp(routing_weight_gradient=_RoutingWeightGradient.EXACT)
-        return _CuteExpertMlp(routing_weight_gradient=_RoutingWeightGradient.EXPERT_SIDE)
+    gradient = _RoutingWeightGradient.EXACT if dtype == jnp.float16 else _RoutingWeightGradient.EXPERT_SIDE
+    quack_kernel = None
+    if _quack_grouped_gemm_available():
+        if ungated and activation_fn is _RELU2_FN:
+            quack_kernel = _CuteRelu2Mxfp8ExpertMlp if mxfp8 else _CuteRelu2ExpertMlp
+        elif not ungated and activation_fn is jax.nn.silu:
+            quack_kernel = _CuteSwigluMxfp8ExpertMlp if mxfp8 else _CuteExpertMlp
+    if quack_kernel is not None:
+        return quack_kernel(routing_weight_gradient=gradient)
+    if mxfp8:
+        raise ValueError(
+            "MXFP8 experts need QuACK's SM100 kernels and gated SiLU or ungated ReLU^2 experts; "
+            f"got activation={activation_fn}, ungated={ungated}"
+        )
     return _RaggedDotExpertMlp(activation_fn, routing_weight_gradient=_RoutingWeightGradient.EXACT)
 
 
@@ -734,6 +864,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     num_experts: int,
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
+    mxfp8: bool,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -807,7 +938,9 @@ def _moe_mlp_ep_ragged_a2a_local(
         ep_size=ep_size,
         chunk_experts=chunk_experts,
         chunk_capacity=chunk_capacity,
-        expert_mlp=_select_expert_mlp(activation_fn, x_local.dtype),
+        expert_mlp=_select_expert_mlp(
+            activation_fn, x_local.dtype, ungated=_is_ungated(moe_w13_local, moe_w2_local), mxfp8=mxfp8
+        ),
     )
     # A dropped or padding assignment gets weight zero, so the combine never reads its unwritten
     # row, and the `where` discards any gradient for it.

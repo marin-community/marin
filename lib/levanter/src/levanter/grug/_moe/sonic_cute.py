@@ -36,6 +36,8 @@ from levanter.grug._moe.common import (
     _zero_inactive_grouped_rows,
 )
 from levanter.grug._moe.quack_moe_cute import (
+    quack_act_grouped_gemm,
+    quack_dact_grouped_gemm,
     quack_gated_grouped_gemm,
     quack_grouped_dswiglu_gemm,
     quack_grouped_gemm,
@@ -146,6 +148,61 @@ def _expert_mlp_quack_wgrad_backward(res, dy):
     dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k", **_QUACK_GROUPED_KW)
     dw13_il = quack_grouped_wgrad(x_dispatch, d_gu, cu, **_QUACK_WGRAD_KW)
     return dx, dw13_il, dw2, output_dot_cotangent
+
+
+def _swiglu_expert_mlp_quack_wgrads(x_dispatch, d_gu, h, dy, cu):
+    """``(dw13_il, dw2)`` of the gated expert MLP from the bf16 rows, ``d gu``, ``h`` and ``dy``."""
+    return quack_grouped_wgrad(x_dispatch, d_gu, cu, **_QUACK_WGRAD_KW), quack_grouped_wgrad(
+        h, dy, cu, **_QUACK_WGRAD_KW
+    )
+
+
+_QUACK_RELU2 = "relu_sq"
+
+
+def _relu2_expert_mlp_quack_fwd(x_dispatch, w_up, w_down, cu):
+    """Ungated ReLU^2 expert MLP forward, ``relu(x W_up)^2 W_down``, plus the backward's residuals.
+
+    ReLU^2 is fused into the up-projection's epilogue, which also stores the preactivation for
+    the backward. Rows past ``cu[-1]`` are unspecified in the output, and every grouped GEMM
+    bounds its reads by ``cu``.
+    """
+    pre, post = quack_act_grouped_gemm(x_dispatch, w_up, cu, activation=_QUACK_RELU2, **_QUACK_GATED_KW)
+    y = quack_grouped_gemm(post, w_down, cu, b_major="n", **_QUACK_GROUPED_KW)
+    return y, (x_dispatch, w_up, w_down, pre, cu)
+
+
+def _relu2_expert_mlp_quack_backward(res, dy):
+    """The backward of ``_relu2_expert_mlp_quack_fwd``, plus each row's ``<y, dy>``.
+
+    The ReLU^2 backward is fused into the epilogue of ``d post = dy W_down^T``: it reads the saved
+    preactivation and emits ``d pre``, the recomputed ``post`` for ``dW_down``, and the fp32 row dot
+    ``<post, d post> = <y, dy>``, so neither ``post`` nor ``y`` is saved. Rows past ``cu[-1]`` are
+    unspecified in every row-indexed output.
+
+    Returns ``(dx, dw_up, dw_down, output_dot_cotangent)``.
+    """
+    dx, output_dot_cotangent, wgrad_args = _relu2_expert_mlp_quack_backward_input(res, dy)
+    dw_up, dw_down = _relu2_expert_mlp_quack_wgrads(*wgrad_args)
+    return dx, dw_up, dw_down, output_dot_cotangent
+
+
+def _relu2_expert_mlp_quack_backward_input(res, dy):
+    """The input half of ``_relu2_expert_mlp_quack_backward``: ``(dx, <y, dy>, wgrad_args)``, where
+    ``_relu2_expert_mlp_quack_wgrads(*wgrad_args)`` gives ``(dw_up, dw_down)``."""
+    x_dispatch, w_up, w_down, pre, cu = res
+    d_pre, post, output_dot_cotangent = quack_dact_grouped_gemm(
+        dy, w_down, pre, cu, activation=_QUACK_RELU2, **_QUACK_GATED_KW
+    )
+    dx = quack_grouped_gemm(d_pre, w_up, cu, b_major="k", **_QUACK_GROUPED_KW)
+    return dx, output_dot_cotangent, (x_dispatch, d_pre, post, dy, cu)
+
+
+def _relu2_expert_mlp_quack_wgrads(x_dispatch, d_pre, post, dy, cu):
+    """``(dw_up, dw_down)`` of ``_relu2_expert_mlp_quack_backward``."""
+    return quack_grouped_wgrad(x_dispatch, d_pre, cu, **_QUACK_WGRAD_KW), quack_grouped_wgrad(
+        post, dy, cu, **_QUACK_WGRAD_KW
+    )
 
 
 def _moe_mlp_local_sonic_cute(

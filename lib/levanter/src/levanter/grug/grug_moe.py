@@ -350,9 +350,12 @@ class QBRoutedMoE(eqx.Module):
 
 
 class MoEExpertMlp(eqx.Module):
-    """Expert MLP weights for routed MoE calls."""
+    """Expert MLP weights for routed MoE calls.
 
-    w_gate: jax.Array
+    ``w_gate=None`` makes the bank ungated: ``activation(x @ w_up) @ w_down``.
+    """
+
+    w_gate: jax.Array | None
     w_up: jax.Array
     w_down: jax.Array
     implementation: MoeImplementation = eqx.field(static=True)
@@ -412,8 +415,9 @@ class MoEExpertMlp(eqx.Module):
         token_valid: Bool[Array, "T"] | None = None,
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
+        mxfp8: bool = False,
     ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
-        w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
+        w_gate_up = self.w_up if self.w_gate is None else jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         return moe_mlp(
             x,
             selected_experts,
@@ -429,6 +433,7 @@ class MoEExpertMlp(eqx.Module):
             report_capacity_overflow=report_capacity_overflow,
             expert_chunks=self.expert_chunks,
             num_expert_waves=self.num_expert_waves,
+            expert_mxfp8=mxfp8,
         )
 
 
@@ -449,6 +454,7 @@ def moe_mlp(
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
     num_expert_waves: int = 1,
+    expert_mxfp8: bool = False,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -482,6 +488,12 @@ def moe_mlp(
     `pooled_transport_capacity_factor` sets the sender capacity for each
     destination pool. `num_expert_waves` sets the static wave count for the
     fixed pooled-wave implementation.
+
+    ``w_up_gate`` of width ``I`` (``w_down``'s contraction width) instead of ``2 * I`` is an ungated bank,
+    ``activation(x @ w_up) @ w_down``; only the ``ragged_all_to_all`` backend runs it.
+
+    `expert_mxfp8` runs the ``ragged_all_to_all`` expert MLP on QuACK's MXFP8 block-scaled SM100 kernels
+    (gated SiLU or ungated ReLU^2 experts; weight gradients stay bf16).
     """
     resolved_implementation = resolve_moe_implementation(implementation)
 
@@ -531,6 +543,14 @@ def moe_mlp(
 
     has_expert_axis = _mesh_has_axis(mesh, "expert")
     expert_axis_size = _mesh_axis_size(mesh, "expert")
+    ungated = w_up_gate.shape[-1] == w_down.shape[1]
+    if (ungated or expert_mxfp8) and not (
+        resolved_implementation == "ragged_all_to_all" and has_expert_axis and expert_axis_size > 1
+    ):
+        raise ValueError(
+            "ungated experts and expert_mxfp8 run only on the expert-parallel ragged_all_to_all backend; "
+            f"got implementation={resolved_implementation!r}, expert axis size={expert_axis_size}"
+        )
 
     if mesh is None or mesh.empty:
         out, dropped = _moe_mlp_local(
@@ -578,7 +598,7 @@ def moe_mlp(
         elif resolved_implementation == "ring_gather_combine":
             shard_local_fn = partial(_moe_mlp_ep_ring_local, make_dispatch_combine=_gather_dispatch_combine)
         elif resolved_implementation == "ragged_all_to_all":
-            shard_local_fn = _moe_mlp_ep_ragged_a2a_local
+            shard_local_fn = partial(_moe_mlp_ep_ragged_a2a_local, mxfp8=expert_mxfp8)
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local
         elif resolved_implementation == "fixed_pooled_wave_all_to_all":

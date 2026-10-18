@@ -8,6 +8,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+import itertools
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal
@@ -218,6 +219,23 @@ def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = Non
     return default
 
 
+class Fp8Recipe(StrEnum):
+    """Which projections run with MXFP8 (e4m3, one power-of-two scale per 32 elements) operands on QuACK's
+    block-scaled SM100 GEMMs. The router, attention gate, GatedNorms and LM head always stay in high precision."""
+
+    NONE = "none"
+    MXFP8_EXPERTS = "mxfp8_experts"
+    """Routed experts only (activation-path GEMMs; the expert weight gradients stay bf16)."""
+    MXFP8_DENSE = "mxfp8_dense"
+    """Dense projections only: attention q/k/v/o, shared experts, and the LatentMoE down/up projections."""
+    MXFP8 = "mxfp8"
+    """Both."""
+
+
+_EXPERT_FP8 = (Fp8Recipe.MXFP8_EXPERTS, Fp8Recipe.MXFP8)
+_DENSE_FP8 = (Fp8Recipe.MXFP8_DENSE, Fp8Recipe.MXFP8)
+
+
 class QbEstimator(StrEnum):
     """How the QB router estimates each expert's threshold beta (the (1-K/E) upper quantile of the
     logit margins ``score - alpha``).
@@ -282,6 +300,11 @@ class GrugModelConfig:
     releases its HBM between forward and backward."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
+    fp8_recipe: Fp8Recipe = Fp8Recipe.NONE
+    ungated_relu2: bool = False
+    """Routed and shared experts are ungated ``relu(x @ W_up)^2 @ W_down`` (no gate projection). At equal
+    parameters, their widths are 1.5x the gated SwiGLU widths. Routed experts need the ``ragged_all_to_all``
+    backend."""
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -462,6 +485,22 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
+def _proj(cfg: GrugModelConfig, x: jax.Array, w: jax.Array, out_sharding: P | None = None) -> jax.Array:
+    """``x[..., k] @ w[k, n]`` under ``cfg.fp8_recipe``."""
+    if cfg.fp8_recipe in _DENSE_FP8:
+        # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
+        from levanter.grug._moe.quack_mxfp8 import mx_linear  # noqa: PLC0415
+
+        return mx_linear(x, w, out_sharding)
+    return jnp.einsum("...k,kn->...n", x, w, out_sharding=out_sharding)
+
+
+def _proj_parts(cfg: GrugModelConfig, x: jax.Array, weights: tuple[jax.Array, ...]) -> tuple[jax.Array, ...]:
+    """``_proj(cfg, x, w)`` for every ``w`` of ``weights``, as one projection onto their concatenation."""
+    fused = _proj(cfg, x, jnp.concatenate(weights, axis=1))
+    return tuple(jnp.split(fused, list(itertools.accumulate(w.shape[1] for w in weights[:-1])), axis=-1))
+
+
 def _apply_rotary_embedding_fused(
     q: Float[Array, "B S H D"],
     k: Float[Array, "B S H D"],
@@ -573,9 +612,13 @@ class CausalSelfAttention(eqx.Module):
         # stay in it, the attention output returns to it, and `w_o` writes it.
         residual_seq_axis = _sequence_axis_of(x)
 
-        q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
-        k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
-        v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
+        if self.cfg.fp8_recipe in _DENSE_FP8:
+            # One MXFP8 projection quantizes x once for all three.
+            q_flat, k_flat, v_flat = _proj_parts(self.cfg, x, (self.w_q, self.w_k, self.w_v))
+        else:
+            q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
+            k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
+            v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
         # SConv: depthwise causal conv after the K projection. segment_ids (packed-document
         # boundaries) come from the mask so the conv never mixes across a document boundary.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
@@ -700,7 +743,7 @@ class CausalSelfAttention(eqx.Module):
             (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
             out_sharding=P(_BATCH_AXES, residual_seq_axis, "model"),
         )
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=P(_BATCH_AXES, residual_seq_axis, None))
+        return _proj(self.cfg, attn_out, self.w_o, out_sharding=P(_BATCH_AXES, residual_seq_axis, None))
 
 
 class RMSNorm(eqx.Module):
@@ -747,7 +790,10 @@ class GatedNorm(eqx.Module):
 
 
 class DenseMLP(eqx.Module):
-    w_gate: jax.Array
+    """``activation(x @ w_gate) * (x @ w_up) @ w_down``, or ungated ``activation(x @ w_up) @ w_down`` when
+    ``w_gate`` is None."""
+
+    w_gate: jax.Array | None
     w_up: jax.Array
     w_down: jax.Array
 
@@ -780,13 +826,42 @@ class DenseMLP(eqx.Module):
         # Flattening sequence shards requires an all-to-all when a device owns multiple
         # batch rows; restoring the residual layout exchanges them back.
         x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
-        gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_token_spec())
+        if self.w_gate is None:
+            hidden = activation_fn(up)
+        else:
+            hidden = activation_fn(jnp.einsum("td,dm->tm", x_flat, self.w_gate)) * up
+        out_flat = jnp.einsum("tm,md->td", hidden, self.w_down, out_sharding=_token_spec())
         # Reshard after the reshape so the shared-expert output carries the same sharding as the
         # routed MoE output (MoEMLP reshards its routed result identically). See `_activation_spec`
         # for why the unflattened tensor cannot keep the fused token tuple.
         return reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(x))
+
+
+def _shared_experts_fused(
+    cfg: GrugModelConfig,
+    shared: tuple[DenseMLP, ...],
+    x: Float[Array, "B S D"],
+    activation: ActivationFunctionEnum,
+) -> Float[Array, "B S D"]:
+    """The sum of the shared experts as two projections: one onto every expert's gate/up columns, and one from
+    their concatenated hidden activations through the stacked ``w_down``. Same function as summing each
+    ``DenseMLP``; under an MXFP8 dense ``fp8_recipe`` it quantizes ``x`` and the hidden activations once."""
+    activation_fn = activation.to_jax_fn()
+    b, s, _ = x.shape
+    x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
+    in_weights = tuple(w for e in shared for w in ((e.w_up,) if e.w_gate is None else (e.w_gate, e.w_up)))
+    parts = iter(_proj_parts(cfg, x_flat, in_weights))
+    hidden = []
+    for expert in shared:
+        if expert.w_gate is None:
+            hidden.append(activation_fn(next(parts)))
+        else:
+            gate = next(parts)
+            hidden.append(activation_fn(gate) * next(parts))
+    w_down = jnp.concatenate([expert.w_down for expert in shared], axis=0)
+    out_flat = _proj(cfg, jnp.concatenate(hidden, axis=-1), w_down, out_sharding=_token_spec())
+    return reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(x))
 
 
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
@@ -985,7 +1060,7 @@ class MoEMLP(eqx.Module):
         # own projection keeps `hidden_dim`.
         expert_width = cfg.latent_dim if cfg.latent_dim is not None else d
         latent = cfg.latent_dim
-        return MoEMLP(
+        mlp = MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
             w_latent_down=(
@@ -1006,7 +1081,7 @@ class MoEMLP(eqx.Module):
                 initializer_std=cfg.initializer_std,
                 key=k_expert,
                 implementation=cfg.moe_implementation,
-                activation=ActivationFunctionEnum.silu,
+                activation=ActivationFunctionEnum.relu2 if cfg.ungated_relu2 else ActivationFunctionEnum.silu,
                 capacity_factor=cfg.capacity_factor,
                 pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
                 expert_chunks=cfg.expert_chunks,
@@ -1015,6 +1090,9 @@ class MoEMLP(eqx.Module):
             ),
             cfg=cfg,
         )
+        if cfg.ungated_relu2:
+            mlp = eqx.tree_at(lambda m: m.expert_mlp.w_gate, mlp, None, is_leaf=lambda x: x is None)
+        return mlp
 
     @named_call
     def __call__(
@@ -1104,12 +1182,7 @@ class MoEMLP(eqx.Module):
         # token, and the shared experts in the enclosing block never see this path.
         routed_input = x_flat
         if self.w_latent_down is not None and self.latent_norm is not None:
-            routed_input = jnp.einsum(
-                "td,dl->tl",
-                x_flat,
-                self.w_latent_down.astype(x_flat.dtype),
-                out_sharding=_token_spec(),
-            )
+            routed_input = _proj(self.cfg, x_flat, self.w_latent_down.astype(x_flat.dtype), out_sharding=_token_spec())
             # Keep the expert input scale independent of the down-projection initialization.
             routed_input = self.latent_norm(routed_input)
         moe_out = self.expert_mlp(
@@ -1119,6 +1192,7 @@ class MoEMLP(eqx.Module):
             token_valid=token_valid_flat,
             mesh=get_abstract_mesh(),
             report_capacity_overflow=self.cfg.report_capacity_overflow,
+            mxfp8=self.cfg.fp8_recipe in _EXPERT_FP8,
         )
         if self.cfg.report_capacity_overflow:
             routed_flat, capacity_overflow = moe_out
@@ -1141,11 +1215,8 @@ class MoEMLP(eqx.Module):
         # Expand after the combine: `expert_mlp` already returns the weight-summed expert output,
         # which is the vector the paper's W_up acts on.
         if self.w_latent_up is not None:
-            routed_flat = jnp.einsum(
-                "tl,ld->td",
-                routed_flat,
-                self.w_latent_up.astype(routed_flat.dtype),
-                out_sharding=_token_spec(),
+            routed_flat = _proj(
+                self.cfg, routed_flat, self.w_latent_up.astype(routed_flat.dtype), out_sharding=_token_spec()
             )
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
@@ -1178,6 +1249,8 @@ class Block(eqx.Module):
             shared = tuple(
                 DenseMLP.init(cfg.hidden_dim, per_expert_dim, cfg.initializer_std, key=key) for key in shared_keys
             )
+            if cfg.ungated_relu2:
+                shared = tuple(eqx.tree_at(lambda e: e.w_gate, e, None, is_leaf=lambda x: x is None) for e in shared)
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
@@ -1218,8 +1291,13 @@ class Block(eqx.Module):
         token_valid = token_validity_from_attention_mask(mask, batch_size=x.shape[0], sequence_length=x.shape[1])
         mlp_out, router_stats = self.mlp(mlp_in, token_valid)
         if self.shared is not None:
-            for shared_expert in self.shared:
-                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
+            cfg = self.attn.cfg
+            activation = ActivationFunctionEnum.relu2 if cfg.ungated_relu2 else ActivationFunctionEnum.silu
+            if cfg.fp8_recipe in _DENSE_FP8:
+                mlp_out = mlp_out + _shared_experts_fused(cfg, self.shared, mlp_in, activation)
+            else:
+                for shared_expert in self.shared:
+                    mlp_out = mlp_out + shared_expert(mlp_in, activation=activation)
         if self.sconv_mlp is not None:
             mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
         x = x + mlp_out
