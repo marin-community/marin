@@ -18,7 +18,7 @@ Usage:
 import json
 import sys
 
-import fsspec
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.sft_shootout_rows.build import has_capability_token
 
@@ -28,15 +28,13 @@ PATTERNS = ("rebuilt*.jsonl", "requests*.jsonl")
 def expand(uri: str) -> list[str]:
     if uri.endswith(".jsonl"):
         return [uri]
-    fs, root = fsspec.core.url_to_fs(uri)
-    protocol = uri.split("://", 1)[0] + "://" if "://" in uri else ""
-    found = sorted({path for pattern in PATTERNS for path in fs.glob(f"{root.rstrip('/')}/**/{pattern}")})
-    return [protocol + path for path in found]
+    root = StoragePath(uri)
+    return sorted({str(path) for pattern in PATTERNS for path in (root / f"**/{pattern}").glob()})
 
 
 def scan(uri: str) -> dict:
     hits, lines = [], 0
-    with fsspec.open(uri, "rt") as stream:
+    with StoragePath(uri).open("rt") as stream:
         for number, line in enumerate(stream):
             lines += 1
             if not has_capability_token(line):

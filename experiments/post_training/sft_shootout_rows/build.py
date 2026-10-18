@@ -38,8 +38,8 @@ import random
 import re
 import tempfile
 from pathlib import Path
+from typing import Any, Literal, NamedTuple, get_args
 
-from huggingface_hub import hf_hub_download
 from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoTokenizer
 
@@ -50,23 +50,28 @@ from experiments.post_training.sft_shootout_rows.arms import (
     relay_subsample,
     rs_multi_epochs,
 )
-from experiments.post_training.sft_shootout_rows.traces import TEACHER, render_trace
+from experiments.post_training.sft_shootout_rows.traces import TEACHER, RenderedTrace, render_trace
 from experiments.post_training.sweep_data.prepare_agentic import (
     BATCH,
     PAD_TOKEN,
     STUDENT_MODEL,
     STUDENT_REVISION,
     TOKENIZER_FILES,
+    audit_hashes,
     load_tokenizer,
+    output_hashes,
+    read_component,
+    write_prebuilt,
 )
+from experiments.post_training.sweep_data.prepare_replay import REPLAY_FRACTION_OF_B
 from experiments.post_training.sweep_data.render import training_row
 from experiments.post_training.sweep_data.select import CONTEXT
 
-# Pool v5, the frozen pool (supersedes v4 755e874c...; see the pool README for the versions).
+# Pool v5, the frozen pool.
 POOL_MANIFEST_SHA256 = "7f3d6f7dbef1ed80d302f251540c72a5c548edb871fd0afed729653d7b6def68"
 EPOCHS = 3
-# Replay for every arm: R = round(B / 4) supervised tokens, so replay is about 20% of a split (decided 2026-10-17).
-REPLAY_FRACTION_OF_B = 0.25
+# Replay for every arm: R = round(B / 4) supervised tokens (REPLAY_FRACTION_OF_B), so replay is about 20% of a split
+# (decided 2026-10-17).
 REPLAY_ORDER_SEED = f"{SEED}:replay-order"
 # The arms' replay artifact (decided 2026-10-17): continuation v2 (sweep_data.continue_replay), which supersedes the
 # frozen slice for the arms because the projected B reached 99.2% of the frozen slice's ceiling. Its first 1,361 rows
@@ -87,7 +92,7 @@ LAUNCH_RULE = (
     "artifact version with a new name, never an edit"
 )
 LIMITATION = "results are for trajectories that fit 32,768 tokens in v0's chat template; longer passes are dropped"
-# Queen's decision 2026-10-17 (option a): keep one multi-turn row per trace, as the community recipes under test do.
+# Decided 2026-10-17: keep one multi-turn row per trace, as the community recipes under test do.
 FAMILY_NOTES = {
     "tmax": (
         "Terminus-2 rows carry earlier turns' reasoning in context, which the harness does not resend at inference; "
@@ -116,9 +121,6 @@ CHANGELOG = (
     "PRODUCTION production fields: rows_sha256 per split, builder commit and source hashes, trace file identities, "
     "token gate over the inputs, held-out ids, _SUCCESS marker (task #234)",
 )
-# mini-swe-agent's own tool environment, installed in the sandbox at agent setup, holds clean copies of some repos
-# (pool v3 removes those repos); a trace that reads anything there is dropped. Pattern from the generation pilot: path
-# reads, find/grep listings, 'uv tool dir|list|run' and the tool's own bin/lib all leave one of these strings.
 # The generation proxy's capability URL carries a secret JWT (three base64url segments starting 'eyJ', payload
 # aud == 'iris-proxy'); a trace that printed it (e.g. GLM running 'env') must never become a training row. Tokens are
 # decoded, not pattern-matched, because task content holds legitimate JWT fixtures (oauthlib tests); line breaks and
@@ -156,7 +158,13 @@ def library_copy_pattern(import_names: list[str]) -> re.Pattern | None:
     return re.compile(LIBRARY_LOCATION + rf"(?:{names})(?:/|\.py\b|-[0-9]|@)")
 
 
+# mini-swe-agent's own tool environment, installed in the sandbox at agent setup, holds clean copies of some repos
+# (pool v3 removes those repos); a trace that reads anything there is dropped. Pattern from the generation pilot: path
+# reads, find/grep listings, 'uv tool dir|list|run' and the tool's own bin/lib all leave one of these strings.
 AGENT_TOOL_ENV = re.compile(r"(?:\.local/share/uv/tools|uv\s+tool\s+(?:dir|list|run)|mini-swe-agent/(?:bin|lib)/)")
+
+
+Arm = Literal["plain", "rs-multi", "relay", "validation"]
 
 
 def load_pool(uri: str) -> dict[str, dict]:
@@ -210,8 +218,18 @@ def trace_file_info(uri: str, data: bytes, rows: list[dict]) -> dict:
     return info
 
 
-def candidates(arm: str, traces: list[dict], pool: dict[str, dict], tokenizer) -> tuple[dict, list[dict]]:
-    """Render every attempt the arm may use; return ({trial_id: (Attempt, rendered)}, dropped records)."""
+class Candidate(NamedTuple):
+    """One attempt the arm may use: its selection record, its rendering and its source trace."""
+
+    attempt: Attempt
+    rendered: RenderedTrace
+    trace: dict
+
+
+def candidates(
+    arm: Arm, traces: list[dict], pool: dict[str, dict], tokenizer
+) -> tuple[dict[str, Candidate], list[dict]]:
+    """Render every attempt the arm may use; return ({trial_id: Candidate}, dropped records)."""
     kept, dropped = {}, []
     for trace in traces:
         reason = None
@@ -277,19 +295,14 @@ def candidates(arm: str, traces: list[dict], pool: dict[str, dict], tokenizer) -
             context=len(rendered.ids),
             authors=rendered.authors,
         )
-        kept[trace["trial_id"]] = (attempt, rendered, trace)
+        kept[trace["trial_id"]] = Candidate(attempt, rendered, trace)
     return kept, dropped
 
 
 def replay_rows(prefix: str) -> tuple[list[str], list[dict], dict]:
-    root = StoragePath(prefix)
-    manifest_bytes = (root / "manifest.json").read_bytes()
-    manifest = json.loads(manifest_bytes)
-    files = {}
-    for name in ("replay-prebuilt.jsonl.gz", "replay-rows.jsonl"):
-        files[name] = (root / name).read_bytes()
-        if hashlib.sha256(files[name]).hexdigest() != manifest["output_hashes"][name]:
-            raise ValueError(f"Replay file changed: {name}")
+    manifest, manifest_bytes, files = read_component(
+        StoragePath(prefix), ("replay-prebuilt.jsonl.gz", "replay-rows.jsonl")
+    )
     lines = gzip.decompress(files["replay-prebuilt.jsonl.gz"]).decode().splitlines()[: manifest["rows"]]
     index = []
     for line in files["replay-rows.jsonl"].decode().splitlines():
@@ -323,7 +336,7 @@ def replay_order(rows: int, base_rows: int) -> list[int]:
 def cut_replay(
     entries: list[tuple[str, dict]], b_tokens: int, base_rows: int | None = None
 ) -> tuple[list[tuple[str, dict]], dict]:
-    """Take the frozen slice in seeded order up to the first prefix whose supervised tokens reach round(B / 4).
+    """Take the replay slice in replay_order up to the first prefix whose supervised tokens reach round(B / 4).
 
     Whole rows only: the row that crosses R is kept in full (the overshoot is retained, no boundary-row masking).
     """
@@ -373,16 +386,8 @@ def write_split(path: Path, entries: list[tuple[str, dict]], seed: str) -> tuple
     """Shuffle (row json, index entry) pairs with `seed`, write rows plus zero-loss padding, re-read and check."""
     order = list(range(len(entries)))
     random.Random(seed).shuffle(order)
-    padding = -len(entries) % BATCH
-    index = []
-    with gzip.open(path, "wt", compresslevel=6) as stream:
-        for row_number, position in enumerate(order):
-            line, entry = entries[position]
-            stream.write(line + "\n")
-            index.append({"row": row_number} | entry)
-        empty = json.dumps({"input_ids": [PAD_TOKEN] * CONTEXT, "loss_weights": [0] * CONTEXT}, separators=(",", ":"))
-        for _ in range(padding):
-            stream.write(empty + "\n")
+    index = [{"row": row_number} | entries[position][1] for row_number, position in enumerate(order)]
+    _, padding = write_prebuilt(path, (entries[position][0] for position in order))
     supervised = collections.Counter()
     context = collections.Counter()
     digest = hashlib.sha256()
@@ -417,9 +422,9 @@ def write_split(path: Path, entries: list[tuple[str, dict]], seed: str) -> tuple
     }
 
 
-def main() -> None:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--arm", choices=("plain", "rs-multi", "relay", "validation"), required=True)
+    parser.add_argument("--arm", choices=get_args(Arm), required=True)
     parser.add_argument("--traces", nargs="+", required=True)
     parser.add_argument("--pool", required=True, help="pool tasks.jsonl")
     parser.add_argument(
@@ -436,298 +441,360 @@ def main() -> None:
     args = parser.parse_args()
     if not args.test_inputs and not args.builder_commit:
         raise ValueError("--builder-commit is required unless --test-inputs")
+    return args
+
+
+def check_pins(args: argparse.Namespace) -> None:
+    """Production builds only: the replay artifact, the pool manifest and tasks.jsonl must match their pins."""
+    replay_manifest = (StoragePath(args.replay) / "manifest.json").read_bytes()
+    if hashlib.sha256(replay_manifest).hexdigest() != REPLAY_MANIFEST_SHA256:
+        raise ValueError(f"Replay is not the arms' replay artifact; use {REPLAY_URI}")
+    pool_manifest = StoragePath(args.pool_manifest).read_bytes()
+    if hashlib.sha256(pool_manifest).hexdigest() != POOL_MANIFEST_SHA256:
+        raise ValueError("Pool manifest is not pool v5")
+    pool_hash = hashlib.sha256(StoragePath(args.pool).read_bytes()).hexdigest()
+    if pool_hash != json.loads(pool_manifest)["file_sha256"]["tasks.jsonl"]:
+        raise ValueError("tasks.jsonl does not match the pool manifest")
+
+
+def v0_tokenizer(tokenizer_dir: str | None, directory: Path):
+    """v0's tokenizer from local files or the regional copy, each file checked against the campaign-3 audit."""
+    expected = audit_hashes()
+    if tokenizer_dir:
+        for name in TOKENIZER_FILES:
+            if hashlib.sha256((Path(tokenizer_dir) / name).read_bytes()).hexdigest() != expected[name]:
+                raise ValueError(f"Local tokenizer file differs from the audit: {name}")
+        return AutoTokenizer.from_pretrained(tokenizer_dir)
+    (directory / "tokenizer").mkdir()
+    return load_tokenizer(directory / "tokenizer", expected)
+
+
+def token_gate(trace_files: list[dict]) -> dict:
+    """The publication gate's criterion over the exact input files; refuse to build on any hit."""
+    gate = {
+        "criterion": "check_tokens.scan: has_capability_token (decoded JWT, aud == iris-proxy) on every raw line",
+        "files": len(trace_files),
+        "lines": sum(info["rows"] for info in trace_files),
+        "hits": sum(info["token_hits"] for info in trace_files),
+    }
+    if gate["hits"]:
+        raise ValueError(f"Capability tokens in the input traces: {gate}")
+    return gate
+
+
+def entry(candidate: Candidate) -> tuple[str, dict]:
+    """A candidate's row line and its index entry."""
+    attempt, rendered, trace = candidate
+    line = json.dumps(training_row(rendered.ids, rendered.mask, CONTEXT, PAD_TOKEN), separators=(",", ":"))
+    return line, {
+        "family": attempt.family,
+        "task_id": attempt.task_id,
+        "trial_id": attempt.trial_id,
+        "trial_name": trace.get("trial_name"),
+        "sample": attempt.sample,
+        "retry": attempt.retry,
+        "run": trace.get("run"),
+        "turns": dict(collections.Counter(attempt.authors)),
+        "supervised_tokens": attempt.supervised,
+        "context_tokens": attempt.context,
+    }
+
+
+class Replay:
+    """The replay slice's rows; `cut` takes the arm's R = round(B / 4) prefix and records it in `info`."""
+
+    def __init__(self, prefix: str, plain: dict | None):
+        lines, index, self.info = replay_rows(prefix)
+        self.entries = list(zip(lines, index, strict=True))
+        self.plain = plain
+
+    def cut(self, b_tokens: int) -> list[tuple[str, dict]]:
+        cut, cut_info = cut_replay(self.entries, b_tokens, self.info["base_rows"])
+        if self.plain is not None and cut_info["rows_sha256"] != self.plain["replay"].get("rows_sha256"):
+            raise ValueError("Replay rows differ from plain's; rebuild plain with this builder")
+        self.info.update({"slice_supervised_tokens": self.info["supervised_tokens"]} | cut_info)
+        return cut
+
+
+class ArmRows(NamedTuple):
+    selection: list[dict]
+    index: list[dict]
+    splits: dict
+    b_tokens: int | None
+
+
+def build_rows(
+    arm: Arm, kept: dict[str, Candidate], attempts: list[Attempt], plain: dict | None, replay: Replay, out: Path
+) -> ArmRows:
+    """Select the arm's attempts and write its split files into `out`."""
+    splits: dict = {}
+    if arm == "plain":
+        chosen = first_passing(attempts)
+        selection = [{"task_id": task, "trial_id": a.trial_id, "sample": a.sample} for task, a in sorted(chosen.items())]
+        b_tokens = sum(a.supervised for a in chosen.values())
+        rows = [entry(kept[a.trial_id]) for _, a in sorted(chosen.items())] + replay.cut(b_tokens)
+        index = write_epochs(out, "plain", lambda epoch: rows, splits)
+        return ArmRows(selection, index, splits, b_tokens)
+    if arm == "validation":
+        # One fixed set for every arm: GLM's first passing trace per held-out task, per family, no replay.
+        chosen = first_passing(attempts)
+        selection = [{"task_id": task, "trial_id": a.trial_id, "sample": a.sample} for task, a in sorted(chosen.items())]
+        index = []
+        for family in sorted({a.family for a in chosen.values()}):
+            rows = [entry(kept[a.trial_id]) for _, a in sorted(chosen.items()) if a.family == family]
+            family_index, splits[f"validation-{family}"] = write_split(
+                out / f"validation-{family}-prebuilt.jsonl.gz", rows, f"{SEED}:validation:{family}"
+            )
+            index += [{"split": f"validation-{family}"} | item for item in family_index]
+        return ArmRows(selection, index, splits, None)
+    if plain is None:
+        raise ValueError("--plain is required for rs-multi and relay")
+    b_tokens = plain["B_supervised_tokens"]
+    if arm == "rs-multi":
+        tasks = sorted(plain["task_slots"])
+        missing = [task for task in tasks if not any(a.task_id == task for a in attempts)]
+        if missing:
+            raise ValueError(f"Plain task slots without RS candidates: {missing[:5]}")
+        plan = rs_multi_epochs([a for a in attempts if a.task_id in set(tasks)], tasks, EPOCHS)
+        replay_cut = replay.cut(b_tokens)
+        selection = [
+            {"epoch": epoch, "task_id": task, "trial_id": a.trial_id, "sample": a.sample}
+            for epoch, chosen in enumerate(plan)
+            for task, a in sorted(chosen.items())
+        ]
+        index = write_epochs(
+            out,
+            "rs-multi",
+            lambda epoch: [entry(kept[a.trial_id]) for _, a in sorted(plan[epoch].items())] + replay_cut,
+            splits,
+        )
+        return ArmRows(selection, index, splits, b_tokens)
+    chosen_episodes, _ = relay_subsample(attempts, b_tokens)
+    selection = [{"trial_id": a.trial_id, "task_id": a.task_id, "sample": a.sample} for a in chosen_episodes]
+    rows = [entry(kept[a.trial_id]) for a in chosen_episodes] + replay.cut(b_tokens)
+    index = write_epochs(out, "relay", lambda epoch: rows, splits)
+    return ArmRows(selection, index, splits, b_tokens)
+
+
+def eligibility(arm: Arm, traces: list[dict], pool: dict[str, dict], attempts: list[Attempt]) -> dict:
+    """Per family: tasks the arm's own run type attempted, and how many have a usable attempt."""
+    attempted: dict[str, set[str]] = collections.defaultdict(set)
+    for trace in traces:
+        task = pool.get(trace.get("task_id"))
+        if (
+            task is not None
+            and task["heldout"] == (arm == "validation")
+            and task["family"] == trace["family"]
+            and trace["relay"] == (arm == "relay")
+        ):
+            attempted[trace["family"]].add(trace["task_id"])
+    eligible: dict[str, set[str]] = collections.defaultdict(set)
+    for attempt in attempts:
+        eligible[attempt.family].add(attempt.task_id)
+    return {
+        family: {
+            "tasks_attempted": len(tasks),
+            "tasks_eligible": len(eligible[family] & tasks),
+            "rate": len(eligible[family] & tasks) / len(tasks) if tasks else None,
+            "note": "eligible = at least one passing attempt that fits 32,768 tokens and survives every drop rule",
+        }
+        for family, tasks in sorted(attempted.items())
+    }
+
+
+def heldout_rows(arm: Arm, index: list[dict], pool: dict[str, dict]) -> int:
+    """Count index rows from held-out tasks; validation must be all held out, training none."""
+    heldout = sum(1 for item in index if item.get("task_id") and pool[item["task_id"]]["heldout"])
+    agentic = sum(1 for item in index if item.get("task_id"))
+    if arm == "validation" and heldout != agentic:
+        raise ValueError("Validation rows must all come from held-out tasks")
+    if arm != "validation" and heldout:
+        raise ValueError(f"{heldout} rows come from held-out tasks")
+    return heldout
+
+
+def candidate_counts(kept: dict[str, Candidate], dropped: list[dict]) -> dict:
+    return {
+        "kept": len(kept),
+        "dropped": dict(collections.Counter(d["reason"].split(":")[0] for d in dropped)),
+        "dropped_by_family": {
+            family: dict(collections.Counter(d["reason"].split(":")[0] for d in dropped if d["family"] == family))
+            for family in sorted({d["family"] for d in dropped if d["family"]})
+        },
+        # One count per summarized trial (each contributes one dropped row per conversation).
+        "kept_with_scrubbed_proxy_url": sum(
+            1 for candidate in kept.values() if SCRUBBED_PROXY_URL.search(json.dumps(candidate.trace["messages"]))
+        ),
+        "library_copy_drops_by_task": dict(
+            collections.Counter(d["task_id"] for d in dropped if d["reason"] == "touches_library_copy_of_repo")
+        ),
+        "agent_tool_env_drops_by_task": dict(
+            collections.Counter(d["task_id"] for d in dropped if d["reason"] == "touches_agent_tool_env")
+        ),
+        "summarized_trials_by_family": dict(
+            collections.Counter(
+                d["family"] for d in dropped if d["reason"] == "summarized_trial" and d["conversation"] == 0
+            )
+        ),
+    }
+
+
+def relay_pool(attempts: list[Attempt]) -> dict:
+    """Every usable relay episode before the subsample to B, so parity with plain can be read off directly."""
+    pool_by_family: dict[str, dict] = {}
+    for attempt in attempts:
+        family = pool_by_family.setdefault(attempt.family, {"episodes": 0, "supervised_tokens": 0, "tasks": set()})
+        family["episodes"] += 1
+        family["supervised_tokens"] += attempt.supervised
+        family["tasks"].add(attempt.task_id)
+    return {
+        family: {"episodes": v["episodes"], "supervised_tokens": v["supervised_tokens"], "tasks": len(v["tasks"])}
+        for family, v in sorted(pool_by_family.items())
+    }
+
+
+def build_manifest(
+    args: argparse.Namespace,
+    pool: dict[str, dict],
+    kept: dict[str, Candidate],
+    dropped: list[dict],
+    attempts: list[Attempt],
+    trace_files: list[dict],
+    gate: dict,
+    eligible: dict,
+    rows: ArmRows,
+    replay: Replay,
+    out: Path,
+) -> dict[str, Any]:
+    splits, b_tokens = rows.splits, rows.b_tokens
+    manifest = {
+        "task": 211,
+        "arm": args.arm,
+        "student_model": STUDENT_MODEL,
+        "student_revision": STUDENT_REVISION,
+        "pad_token_id": PAD_TOKEN,
+        "max_sequence_tokens": CONTEXT,
+        "batch_size": BATCH,
+        "seed": SEED,
+        "pool_manifest_sha256": None if args.test_inputs else POOL_MANIFEST_SHA256,
+        "test_inputs": args.test_inputs,
+        "traces": args.traces,
+        "builder_commit": args.builder_commit,
+        "builder_sources_sha256": {
+            f"{path.parent.name}/{path.name}": hashlib.sha256(path.read_bytes()).hexdigest()
+            for directory in (Path(__file__).parent, Path(training_row.__code__.co_filename).parent)
+            for path in sorted(directory.glob("*.py"))
+        },
+        "trace_files": trace_files,
+        "token_gate": gate,
+        "heldout_task_ids": {
+            family: sorted(task for task, row in pool.items() if row["heldout"] and row["family"] == family)
+            for family in sorted({row["family"] for row in pool.values()})
+        },
+        "rows_sha256_definition": (
+            "splits[<split>].rows_sha256 = sha256 of the decompressed split file's bytes: every line including "
+            "the zero-loss padding rows, each followed by a newline; replay.rows_sha256 hashes the replay cut in "
+            "replay order (before the epoch permutation)"
+        ),
+        "candidates": candidate_counts(kept, dropped),
+        "eligibility": eligible,
+        "limitation": LIMITATION,
+        "family_notes": {family: FAMILY_NOTES[family] for family in sorted(eligible) if family in FAMILY_NOTES},
+        "over_context_by_family": {
+            family: reasons.get("over_context", 0)
+            for family, reasons in sorted(
+                {
+                    family: dict(collections.Counter(d["reason"] for d in dropped if d["family"] == family))
+                    for family in {d["family"] for d in dropped if d["family"]}
+                }.items()
+            )
+        },
+        "builder_changelog": list(CHANGELOG),
+        "B_supervised_tokens": b_tokens,
+        "task_slots": sorted({item["task_id"] for item in rows.selection}) if args.arm == "plain" else None,
+        "splits": splits,
+        "replay": (
+            None
+            if args.arm == "validation"
+            else (
+                replay.info
+                | {
+                    "note": (
+                        "seeded prefix of the replay slice cut at R = round(B / 4) with plain's B, same rows in "
+                        "every arm; share_of_supervised is the achieved share of each split's supervised tokens"
+                    ),
+                    "share_of_supervised": {
+                        name: s["supervised_tokens"].get("replay", 0) / s["supervised_total"]
+                        for name, s in splits.items()
+                    },
+                    "ratio_to_B": replay.info["supervised_tokens"] / b_tokens if b_tokens else None,
+                }
+            )
+        ),
+        "selection_rule": {
+            "plain": "first passing attempt per eligible task by sample index",
+            "rs-multi": (
+                f"plain's task slots; per epoch (seed '{SEED}:rs-multi:<epoch>') one passing attempt per slot, "
+                "without replacement until a task's passes are used, then refilled"
+            ),
+            "relay": f"passing relay episodes with >=1 GLM turn, seeded order '{SEED}:relay', whole episodes to B",
+            "validation": "first passing GLM attempt per held-out pool task, one file per family, no replay",
+        }[args.arm],
+        "loss_mask": "assistant turns authored by glm; v0 turns, prompts and tool output are context",
+        "heldout_rows": heldout_rows(args.arm, rows.index, pool),
+        "output_hashes": output_hashes(out),
+    }
+    if args.arm == "relay":
+        manifest["relay_supervised_tokens"] = splits["epoch-0"]["supervised_total"] - replay.info["supervised_tokens"]
+        manifest["relay_pool"] = relay_pool(attempts)
+    return manifest
+
+
+def upload(out: Path, output: StoragePath, manifest: dict, production: bool) -> None:
+    """Write manifest.json into `out`, copy every file (manifest last) re-hashing each, then _SUCCESS if production."""
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
+    output.mkdirs()
+    for path in sorted(out.iterdir(), key=lambda path: path.name == "manifest.json"):
+        (output / path.name).write_bytes(path.read_bytes())
+        if path.name != "manifest.json":
+            if hashlib.sha256((output / path.name).read_bytes()).hexdigest() != manifest["output_hashes"][path.name]:
+                raise ValueError(f"Upload hash mismatch: {path.name}")
+    if production:
+        # Written last: a prefix without _SUCCESS is incomplete and must not be read.
+        (output / "_SUCCESS").write_text("")
+
+
+def main() -> None:
+    args = parse_args()
     output = StoragePath(args.output)
     if output.exists():
         raise ValueError("Use a fresh output prefix")
     pool = load_pool(args.pool)
     if not args.test_inputs:
-        replay_manifest = (StoragePath(args.replay) / "manifest.json").read_bytes()
-        if hashlib.sha256(replay_manifest).hexdigest() != REPLAY_MANIFEST_SHA256:
-            raise ValueError(f"Replay is not the arms' replay artifact; use {REPLAY_URI}")
-        pool_manifest = StoragePath(args.pool_manifest).read_bytes()
-        if hashlib.sha256(pool_manifest).hexdigest() != POOL_MANIFEST_SHA256:
-            raise ValueError("Pool manifest is not pool v5")
-        pool_hash = hashlib.sha256(StoragePath(args.pool).read_bytes()).hexdigest()
-        if pool_hash != json.loads(pool_manifest)["file_sha256"]["tasks.jsonl"]:
-            raise ValueError("tasks.jsonl does not match the pool manifest")
+        check_pins(args)
     plain = json.loads((StoragePath(args.plain) / "manifest.json").read_text()) if args.plain else None
     if args.arm in ("rs-multi", "relay") and plain is None:
         raise ValueError("--plain is required for rs-multi and relay")
 
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
-        audit = hf_hub_download(STUDENT_MODEL, "provenance/campaign3/audit.json", revision=STUDENT_REVISION)
-        expected = {name: entry["sha256"] for name, entry in json.loads(Path(audit).read_text())["files"].items()}
-        if args.tokenizer_dir:
-            for name in TOKENIZER_FILES:
-                if hashlib.sha256((Path(args.tokenizer_dir) / name).read_bytes()).hexdigest() != expected[name]:
-                    raise ValueError(f"Local tokenizer file differs from the audit: {name}")
-            tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir)
-        else:
-            (directory / "tokenizer").mkdir()
-            tokenizer = load_tokenizer(directory / "tokenizer", expected)
+        tokenizer = v0_tokenizer(args.tokenizer_dir, directory)
         trace_files: list[dict] = []
         traces = load_traces(args.traces, trace_files)
-        # The publication gate's criterion (check_tokens.scan: has_capability_token on every raw line) over the exact
-        # input files; refuse to build on any hit.
-        token_gate = {
-            "criterion": "check_tokens.scan: has_capability_token (decoded JWT, aud == iris-proxy) on every raw line",
-            "files": len(trace_files),
-            "lines": sum(info["rows"] for info in trace_files),
-            "hits": sum(info["token_hits"] for info in trace_files),
-        }
-        if token_gate["hits"]:
-            raise ValueError(f"Capability tokens in the input traces: {token_gate}")
+        gate = token_gate(trace_files)
         kept, dropped = candidates(args.arm, traces, pool, tokenizer)
-        attempts = [attempt for attempt, _, _ in kept.values()]
-        replay_lines, replay_index, replay_info = replay_rows(args.replay)
-        replay_entries = list(zip(replay_lines, replay_index, strict=True))
-        b_tokens = None
-
-        def replay_for(b: int) -> list[tuple[str, dict]]:
-            cut, cut_info = cut_replay(replay_entries, b, replay_info["base_rows"])
-            if plain is not None and cut_info["rows_sha256"] != plain["replay"].get("rows_sha256"):
-                raise ValueError("Replay rows differ from plain's; rebuild plain with this builder")
-            replay_info.update({"slice_supervised_tokens": replay_info["supervised_tokens"]} | cut_info)
-            return cut
-
-        def entry(attempt: Attempt, extra: dict) -> tuple[str, dict]:
-            _, rendered, trace = kept[attempt.trial_id]
-            line = json.dumps(training_row(rendered.ids, rendered.mask, CONTEXT, PAD_TOKEN), separators=(",", ":"))
-            return (
-                line,
-                {
-                    "family": attempt.family,
-                    "task_id": attempt.task_id,
-                    "trial_id": attempt.trial_id,
-                    "trial_name": trace.get("trial_name"),
-                    "sample": attempt.sample,
-                    "retry": attempt.retry,
-                    "run": trace.get("run"),
-                    "turns": dict(collections.Counter(attempt.authors)),
-                    "supervised_tokens": attempt.supervised,
-                    "context_tokens": attempt.context,
-                }
-                | extra,
-            )
-
+        attempts = [candidate.attempt for candidate in kept.values()]
+        replay = Replay(args.replay, plain)
         out = directory / "out"
         out.mkdir()
-        selection = []
-        splits = {}
-        if args.arm == "plain":
-            chosen = first_passing(attempts)
-            selection = [
-                {"task_id": task, "trial_id": a.trial_id, "sample": a.sample} for task, a in sorted(chosen.items())
-            ]
-            b_tokens = sum(a.supervised for a in chosen.values())
-            rows = [entry(a, {}) for _, a in sorted(chosen.items())] + replay_for(b_tokens)
-            index = write_epochs(out, "plain", lambda epoch: rows, splits)
-        elif args.arm == "rs-multi":
-            tasks = sorted(plain["task_slots"])
-            missing = [task for task in tasks if not any(a.task_id == task for a in attempts)]
-            if missing:
-                raise ValueError(f"Plain task slots without RS candidates: {missing[:5]}")
-            plan = rs_multi_epochs([a for a in attempts if a.task_id in set(tasks)], tasks, EPOCHS)
-            b_tokens = plain["B_supervised_tokens"]
-            replay = replay_for(b_tokens)
-            for epoch, chosen in enumerate(plan):
-                selection += [
-                    {"epoch": epoch, "task_id": task, "trial_id": a.trial_id, "sample": a.sample}
-                    for task, a in sorted(chosen.items())
-                ]
-            index = write_epochs(
-                out,
-                "rs-multi",
-                lambda epoch: [entry(a, {}) for _, a in sorted(plan[epoch].items())] + replay,
-                splits,
-            )
-        elif args.arm == "validation":
-            # One fixed set for every arm: GLM's first passing trace per held-out task, per family, no replay.
-            chosen = first_passing(attempts)
-            selection = [
-                {"task_id": task, "trial_id": a.trial_id, "sample": a.sample} for task, a in sorted(chosen.items())
-            ]
-            index = []
-            for family in sorted({a.family for a in chosen.values()}):
-                rows = [entry(a, {}) for _, a in sorted(chosen.items()) if a.family == family]
-                family_index, splits[f"validation-{family}"] = write_split(
-                    out / f"validation-{family}-prebuilt.jsonl.gz", rows, f"{SEED}:validation:{family}"
-                )
-                index += [{"split": f"validation-{family}"} | item for item in family_index]
-        else:
-            b_tokens = plain["B_supervised_tokens"]
-            chosen_episodes, _ = relay_subsample(attempts, b_tokens)
-            selection = [{"trial_id": a.trial_id, "task_id": a.task_id, "sample": a.sample} for a in chosen_episodes]
-            rows = [entry(a, {}) for a in chosen_episodes] + replay_for(b_tokens)
-            index = write_epochs(out, "relay", lambda epoch: rows, splits)
-
+        rows = build_rows(args.arm, kept, attempts, plain, replay, out)
         index_name = "validation-index.jsonl" if args.arm == "validation" else "train-index.jsonl"
-        (out / index_name).write_text("".join(json.dumps(item) + "\n" for item in index))
-        (out / "selection.jsonl").write_text("".join(json.dumps(item) + "\n" for item in selection))
+        (out / index_name).write_text("".join(json.dumps(item) + "\n" for item in rows.index))
+        (out / "selection.jsonl").write_text("".join(json.dumps(item) + "\n" for item in rows.selection))
         (out / "dropped.jsonl").write_text("".join(json.dumps(item) + "\n" for item in dropped))
-        attempted: dict[str, set[str]] = collections.defaultdict(set)
-        for trace in traces:
-            task = pool.get(trace.get("task_id"))
-            if (
-                task is not None
-                and task["heldout"] == (args.arm == "validation")
-                and task["family"] == trace["family"]
-                and trace["relay"] == (args.arm == "relay")
-            ):
-                attempted[trace["family"]].add(trace["task_id"])
-        eligible: dict[str, set[str]] = collections.defaultdict(set)
-        for attempt in attempts:
-            eligible[attempt.family].add(attempt.task_id)
-        eligibility = {
-            family: {
-                "tasks_attempted": len(tasks),
-                "tasks_eligible": len(eligible[family] & tasks),
-                "rate": len(eligible[family] & tasks) / len(tasks) if tasks else None,
-                "note": "eligible = at least one passing attempt that fits 32,768 tokens and survives every drop rule",
-            }
-            for family, tasks in sorted(attempted.items())
-        }
-        heldout_rows = sum(1 for item in index if item.get("task_id") and pool[item["task_id"]]["heldout"])
-        agentic_rows = sum(1 for item in index if item.get("task_id"))
-        if args.arm == "validation" and heldout_rows != agentic_rows:
-            raise ValueError("Validation rows must all come from held-out tasks")
-        if args.arm != "validation" and heldout_rows:
-            raise ValueError(f"{heldout_rows} rows come from held-out tasks")
-        manifest = {
-            "task": 211,
-            "arm": args.arm,
-            "student_model": STUDENT_MODEL,
-            "student_revision": STUDENT_REVISION,
-            "pad_token_id": PAD_TOKEN,
-            "max_sequence_tokens": CONTEXT,
-            "batch_size": BATCH,
-            "seed": SEED,
-            "pool_manifest_sha256": None if args.test_inputs else POOL_MANIFEST_SHA256,
-            "test_inputs": args.test_inputs,
-            "traces": args.traces,
-            "builder_commit": args.builder_commit,
-            "builder_sources_sha256": {
-                f"{path.parent.name}/{path.name}": hashlib.sha256(path.read_bytes()).hexdigest()
-                for directory in (Path(__file__).parent, Path(training_row.__code__.co_filename).parent)
-                for path in sorted(directory.glob("*.py"))
-            },
-            "trace_files": trace_files,
-            "token_gate": token_gate,
-            "heldout_task_ids": {
-                family: sorted(task for task, row in pool.items() if row["heldout"] and row["family"] == family)
-                for family in sorted({row["family"] for row in pool.values()})
-            },
-            "rows_sha256_definition": (
-                "splits[<split>].rows_sha256 = sha256 of the decompressed split file's bytes: every line including "
-                "the zero-loss padding rows, each followed by a newline; replay.rows_sha256 hashes the replay cut in "
-                "replay order (before the epoch permutation)"
-            ),
-            "candidates": {
-                "kept": len(kept),
-                "dropped": dict(collections.Counter(d["reason"].split(":")[0] for d in dropped)),
-                "dropped_by_family": {
-                    family: dict(
-                        collections.Counter(d["reason"].split(":")[0] for d in dropped if d["family"] == family)
-                    )
-                    for family in sorted({d["family"] for d in dropped if d["family"]})
-                },
-                # One count per summarized trial (each contributes one dropped row per conversation).
-                "kept_with_scrubbed_proxy_url": sum(
-                    1 for _, _, trace in kept.values() if SCRUBBED_PROXY_URL.search(json.dumps(trace["messages"]))
-                ),
-                "library_copy_drops_by_task": dict(
-                    collections.Counter(d["task_id"] for d in dropped if d["reason"] == "touches_library_copy_of_repo")
-                ),
-                "agent_tool_env_drops_by_task": dict(
-                    collections.Counter(d["task_id"] for d in dropped if d["reason"] == "touches_agent_tool_env")
-                ),
-                "summarized_trials_by_family": dict(
-                    collections.Counter(
-                        d["family"] for d in dropped if d["reason"] == "summarized_trial" and d["conversation"] == 0
-                    )
-                ),
-            },
-            "eligibility": eligibility,
-            "limitation": LIMITATION,
-            "family_notes": {family: FAMILY_NOTES[family] for family in sorted(eligibility) if family in FAMILY_NOTES},
-            "over_context_by_family": {
-                family: reasons.get("over_context", 0)
-                for family, reasons in sorted(
-                    {
-                        family: dict(collections.Counter(d["reason"] for d in dropped if d["family"] == family))
-                        for family in {d["family"] for d in dropped if d["family"]}
-                    }.items()
-                )
-            },
-            "builder_changelog": list(CHANGELOG),
-            "B_supervised_tokens": b_tokens,
-            "task_slots": sorted({item["task_id"] for item in selection}) if args.arm == "plain" else None,
-            "splits": splits,
-            "replay": (
-                None
-                if args.arm == "validation"
-                else (
-                    replay_info
-                    | {
-                        "note": (
-                            "seeded prefix of the frozen slice cut at R = round(B / 4) with plain's B, same rows in "
-                            "every arm; share_of_supervised is the achieved share of each split's supervised tokens"
-                        ),
-                        "share_of_supervised": {
-                            name: s["supervised_tokens"].get("replay", 0) / s["supervised_total"]
-                            for name, s in splits.items()
-                        },
-                        "ratio_to_B": replay_info["supervised_tokens"] / b_tokens if b_tokens else None,
-                    }
-                )
-            ),
-            "selection_rule": {
-                "plain": "first passing attempt per eligible task by sample index",
-                "rs-multi": (
-                    f"plain's task slots; per epoch (seed '{SEED}:rs-multi:<epoch>') one passing attempt per slot, "
-                    "without replacement until a task's passes are used, then refilled"
-                ),
-                "relay": f"passing relay episodes with >=1 GLM turn, seeded order '{SEED}:relay', whole episodes to B",
-                "validation": "first passing GLM attempt per held-out pool task, one file per family, no replay",
-            }[args.arm],
-            "loss_mask": "assistant turns authored by glm; v0 turns, prompts and tool output are context",
-            "heldout_rows": heldout_rows,
-            "output_hashes": {
-                path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(out.iterdir())
-            },
-        }
-        if args.arm == "relay":
-            manifest["relay_supervised_tokens"] = (
-                splits["epoch-0"]["supervised_total"] - replay_info["supervised_tokens"]
-            )
-            # Every usable relay episode before the subsample to B, so parity with plain can be read off directly.
-            pool_by_family: dict[str, dict] = {}
-            for attempt in attempts:
-                family = pool_by_family.setdefault(
-                    attempt.family, {"episodes": 0, "supervised_tokens": 0, "tasks": set()}
-                )
-                family["episodes"] += 1
-                family["supervised_tokens"] += attempt.supervised
-                family["tasks"].add(attempt.task_id)
-            manifest["relay_pool"] = {
-                family: {
-                    "episodes": v["episodes"],
-                    "supervised_tokens": v["supervised_tokens"],
-                    "tasks": len(v["tasks"]),
-                }
-                for family, v in sorted(pool_by_family.items())
-            }
-        (out / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
-        output.mkdirs()
-        for path in sorted(out.iterdir(), key=lambda path: path.name == "manifest.json"):
-            (output / path.name).write_bytes(path.read_bytes())
-            if path.name != "manifest.json":
-                if hashlib.sha256((output / path.name).read_bytes()).hexdigest() != manifest["output_hashes"][path.name]:
-                    raise ValueError(f"Upload hash mismatch: {path.name}")
-        if not args.test_inputs:
-            # Written last: a prefix without _SUCCESS is incomplete and must not be read.
-            (output / "_SUCCESS").write_text("")
+        eligible = eligibility(args.arm, traces, pool, attempts)
+        manifest = build_manifest(args, pool, kept, dropped, attempts, trace_files, gate, eligible, rows, replay, out)
+        upload(out, output, manifest, production=not args.test_inputs)
         print(
             "ARM_BUILT " + json.dumps({k: v for k, v in manifest.items() if k not in ("task_slots", "traces")}),
             flush=True,

@@ -12,6 +12,8 @@ as context with zero loss, which is what the relay arm needs; plain and RS rows 
 
 from dataclasses import dataclass
 
+from experiments.post_training.sweep_data.render import render
+
 TEACHER = "glm"
 STUDENT = "v0"
 TEMPLATE_KEYS = ("role", "content", "reasoning_content", "tool_calls", "tool_call_id", "name")
@@ -56,15 +58,7 @@ def assistant_spans(mask: list[int]) -> list[tuple[int, int]]:
 def render_trace(tokenizer, messages: list[dict], tools: list[dict] | None) -> RenderedTrace:
     """Render with v0's template; train teacher turns only. Raises if spans and assistant turns do not align."""
     converted, authors = template_messages(messages)
-    encoded = tokenizer.apply_chat_template(
-        converted,
-        tools=tools or None,
-        tokenize=True,
-        return_dict=True,
-        return_assistant_tokens_mask=True,
-        enable_thinking=True,
-    )
-    ids, mask = list(encoded["input_ids"]), list(encoded["assistant_masks"])
+    ids, mask = render(tokenizer, converted, tools)
     spans = assistant_spans(mask)
     if len(spans) != len(authors):
         raise ValueError(f"{len(spans)} assistant spans for {len(authors)} assistant turns")

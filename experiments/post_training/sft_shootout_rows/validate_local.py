@@ -29,10 +29,12 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 from transformers import AutoTokenizer
 
 from experiments.post_training.sft_shootout_rows.arms import SEED
+from experiments.post_training.sft_shootout_rows.build import candidates
 from experiments.post_training.sft_shootout_rows.traces import STUDENT, TEACHER, template_messages
 from experiments.post_training.sweep_data.prepare_agentic import PAD_TOKEN
 from experiments.post_training.sweep_data.render import training_row
@@ -160,30 +162,43 @@ def check_arm(tokenizer, prefix: Path, traces: dict[str, dict], heldout: set[str
     }
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--traces", nargs="+", required=True)
-    parser.add_argument("--pool", required=True)
-    parser.add_argument("--tokenizer-dir", required=True)
-    parser.add_argument("--work", type=Path, required=True)
-    parser.add_argument("--add-to-pool", nargs="*", default=[], help="task_id:family pairs added as non-held-out")
-    args = parser.parse_args()
-    work = args.work
-    work.mkdir(parents=True)
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir)
-    pool_rows = [json.loads(line) for line in Path(args.pool).read_text().splitlines()]
+class Fixtures(NamedTuple):
+    """Synthetic trace files written next to the real ones, and the traces each check needs."""
+
+    plain_inputs: list[str]
+    relay: list[dict]
+    summarized: list[dict]
+    touching: list[dict]
+    secret: list[dict]
+    library: list[dict]
+    held: list[dict]
+
+
+def write_pool(pool: str, add_to_pool: list[str], work: Path) -> list[dict]:
+    """The test pool: the real pool plus library-copy test tasks and any --add-to-pool tasks, written to work."""
+    pool_rows = [json.loads(line) for line in Path(pool).read_text().splitlines()]
     for family in ("tmax", "swesmith"):
         pool_rows.append(
             {"task_id": f"test-library-{family}", "family": family, "heldout": False, "import_names": ["demopkg"]}
         )
-    for pair in args.add_to_pool:
+    for pair in add_to_pool:
         task, family = pair.split(":")
         pool_rows.append({"task_id": task, "family": family, "heldout": False})
     (work / "pool.jsonl").write_text("".join(json.dumps(row) + "\n" for row in pool_rows))
-    heldout = {row["task_id"] for row in pool_rows if row["heldout"]}
-    stand_in_replay(tokenizer, work / "replay")
+    return pool_rows
 
-    traces = [json.loads(line) for path in args.traces for line in Path(path).read_text().splitlines()]
+
+def write_jsonl(path: Path, rows: list[dict]) -> str:
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    return str(path)
+
+
+def write_fixtures(trace_paths: list[str], traces: list[dict], pool_rows: list[dict], work: Path) -> Fixtures:
+    """Write the synthetic relay, summarized, tool-env, secret, library-copy and held-out trace files.
+
+    The secret traces go in their own file (secret.jsonl), outside plain_inputs: the builder's token gate refuses any
+    input file that holds a capability token, before the per-trace drop rule runs.
+    """
     relay = []
     for trace in traces:
         synthetic = copy.deepcopy(trace) | {
@@ -198,14 +213,13 @@ def main() -> None:
             # A v0 turn that is only think markup appears in every teacher span; the student check must ignore it.
             assistant[0]["content"] = "<|end_think|>"
         relay.append(synthetic)
-    (work / "relay.jsonl").write_text("".join(json.dumps(trace) + "\n" for trace in relay))
+    write_jsonl(work / "relay.jsonl", relay)
     summarized = [
         copy.deepcopy(trace)
         | {"trial_id": trace["trial_id"] + "-summarized", "conversation": part, "n_conversations": 2}
         for trace in traces
         for part in (0, 1)
     ]
-    (work / "summarized.jsonl").write_text("".join(json.dumps(trace) + "\n" for trace in summarized))
     touching = []
     for trace in traces:
         synthetic = copy.deepcopy(trace) | {"trial_id": trace["trial_id"] + "-toolenv"}
@@ -216,6 +230,7 @@ def main() -> None:
             observation.get("content") or ""
         )
         touching.append(synthetic)
+    secret = []
     for trace in traces:
         synthetic = copy.deepcopy(trace) | {"trial_id": trace["trial_id"] + "-secret"}
         observations = [m for m in synthetic["messages"][1:] if m["role"] in ("tool", "user")]
@@ -224,8 +239,8 @@ def main() -> None:
             f"OPENAI_API_BASE=https://iris.oa.dev/proxy/t/cluster=cw-us-east-02a/{fake}/glm-harbor.test-0000/v1\n"
             + (observations[0].get("content") or "")
         )
-        touching.append(synthetic)
-    (work / "toolenv.jsonl").write_text("".join(json.dumps(trace) + "\n" for trace in touching))
+        secret.append(synthetic)
+    write_jsonl(work / "secret.jsonl", secret)
     library = []
     for trace in traces:
         synthetic = copy.deepcopy(trace) | {
@@ -238,12 +253,11 @@ def main() -> None:
             + (observations[0].get("content") or "")
         )
         library.append(synthetic)
-    (work / "library.jsonl").write_text("".join(json.dumps(trace) + "\n" for trace in library))
     plain_inputs = [
-        *args.traces,
-        str(work / "summarized.jsonl"),
-        str(work / "toolenv.jsonl"),
-        str(work / "library.jsonl"),
+        *trace_paths,
+        write_jsonl(work / "summarized.jsonl", summarized),
+        write_jsonl(work / "toolenv.jsonl", touching),
+        write_jsonl(work / "library.jsonl", library),
     ]
     heldout_by_family = {}
     for row in pool_rows:
@@ -255,10 +269,31 @@ def main() -> None:
         for trace in traces
         if trace["family"] in heldout_by_family
     ]
-    (work / "heldout.jsonl").write_text("".join(json.dumps(trace) + "\n" for trace in held))
-    by_id = {trace["trial_id"]: trace for trace in traces + relay + held}
+    write_jsonl(work / "heldout.jsonl", held)
+    return Fixtures(plain_inputs, relay, summarized, touching, secret, library, held)
 
-    def build(arm: str, trace_files: list[str], plain: Path | None = None) -> Path:
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--traces", nargs="+", required=True)
+    parser.add_argument("--pool", required=True)
+    parser.add_argument("--tokenizer-dir", required=True)
+    parser.add_argument("--work", type=Path, required=True)
+    parser.add_argument("--add-to-pool", nargs="*", default=[], help="task_id:family pairs added as non-held-out")
+    args = parser.parse_args()
+    work = args.work
+    work.mkdir(parents=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_dir)
+    pool_rows = write_pool(args.pool, args.add_to_pool, work)
+    heldout = {row["task_id"] for row in pool_rows if row["heldout"]}
+    stand_in_replay(tokenizer, work / "replay")
+    traces = [json.loads(line) for path in args.traces for line in Path(path).read_text().splitlines()]
+    fixtures = write_fixtures(args.traces, traces, pool_rows, work)
+    plain_inputs = fixtures.plain_inputs
+    by_id = {trace["trial_id"]: trace for trace in traces + fixtures.relay + fixtures.held}
+
+    def build(arm: str, trace_files: list[str], plain: Path | None = None, refusal: str | None = None) -> Path:
+        """Run the builder; with `refusal`, expect it to fail with that message instead."""
         output = work / arm
         arm = arm.split("-with-")[0]
         command = [
@@ -283,7 +318,11 @@ def main() -> None:
         ]
         if plain:
             command += ["--plain", str(plain)]
-        subprocess.run(command, check=True)
+        if refusal is None:
+            subprocess.run(command, check=True)
+        else:
+            result = subprocess.run(command, capture_output=True, text=True)
+            assert result.returncode != 0 and refusal in result.stderr, f"{arm} build did not refuse: {refusal}"
         return output
 
     replay_index = [json.loads(line) for line in (work / "replay" / "replay-rows.jsonl").read_text().splitlines()]
@@ -314,12 +353,20 @@ def main() -> None:
     plain = build("plain", plain_inputs)
     reports = [check_arm(tokenizer, plain, by_id, heldout)]
     plain_replay = replay_used(plain)
-    assert reports[0]["dropped"].get("summarized_trial") == len(summarized), "summarized trials were not dropped"
-    assert reports[0]["dropped"].get("touches_agent_tool_env") == len(touching) // 2, "tool-env traces were not dropped"
-    proxy_drops = reports[0]["dropped"].get("contains_proxy_capability_token")
-    assert proxy_drops == len(touching) // 2, "capability-token traces were not dropped"
+    assert reports[0]["dropped"].get("summarized_trial") == len(
+        fixtures.summarized
+    ), "summarized trials were not dropped"
+    assert reports[0]["dropped"].get("touches_agent_tool_env") == len(
+        fixtures.touching
+    ), "tool-env traces were not dropped"
+    # The token gate refuses an input file holding a capability token; the drop rule behind it is checked directly.
+    build("plain-with-secret-input", [*plain_inputs, str(work / "secret.jsonl")], refusal="Capability tokens")
+    pool = {row["task_id"]: row for row in pool_rows}
+    _, secret_dropped = candidates("plain", fixtures.secret, pool, tokenizer)
+    proxy_drops = sum(1 for d in secret_dropped if d["reason"] == "contains_proxy_capability_token")
+    assert proxy_drops == len(fixtures.secret), "capability-token traces were not dropped"
     library_drops = reports[0]["dropped"].get("touches_library_copy_of_repo", 0)
-    assert library_drops == len(library), "library-copy traces were not dropped"
+    assert library_drops == len(fixtures.library), "library-copy traces were not dropped"
     rs_multi = build("rs-multi", plain_inputs, plain)
     reports.append(check_arm(tokenizer, rs_multi, by_id, heldout))
     relay_arm = build("relay", [str(work / "relay.jsonl")], plain)
@@ -344,7 +391,7 @@ def main() -> None:
     reports.append(check_arm(tokenizer, validation, by_id, heldout))
     mixed = build("plain-with-heldout-input", [*plain_inputs, str(work / "heldout.jsonl")])
     mixed_dropped = json.loads((mixed / "manifest.json").read_text())["candidates"]["dropped"]
-    assert mixed_dropped.get("heldout_task") == len(held), "held-out traces were not dropped from training"
+    assert mixed_dropped.get("heldout_task") == len(fixtures.held), "held-out traces were not dropped from training"
     print("LOCAL_VALIDATION " + json.dumps(reports), flush=True)
 
 
