@@ -28,8 +28,7 @@ from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environmen
 from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
-from rigging.log_setup import configure_logging_if_unset
-from rigging.timing import log_time
+from rigging.log_setup import configure_logging
 
 from marin.execution.artifact import (
     FINGERPRINT_KEY,
@@ -204,7 +203,10 @@ class StepRunner:
         Submit at most ``max_concurrent`` steps (default 8). Keep other ready
         steps in graph order so newly ready dependents can use the next slot.
         """
-        configure_logging_if_unset()
+        # Make step progress visible by default. Idempotent and non-clobbering:
+        # skipped when the driver (or a wrapping app) already installed handlers.
+        if not logging.getLogger().handlers:
+            configure_logging(level=logging.INFO)
 
         # A non-primary Iris task loses the per-step lock race and never enters the
         # step; warn before doing any work in case an SPMD launch was intended (#7080).
@@ -322,9 +324,7 @@ class StepRunner:
 
         scheduled: set[str] = set()
         for raw_step in steps:
-            with log_time("execution/expand"):
-                expanded = _expand_unseen(raw_step, scheduled, is_built, pruned)
-            for step in expanded:
+            for step in _expand_unseen(raw_step, scheduled, is_built, pruned):
                 path_to_name[step.output_path] = step.name_with_hash
 
                 _harvest()
