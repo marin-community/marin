@@ -253,11 +253,21 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
     )
     with pytest.raises(ValueError, match="core role plan exceeds the allocated topology"):
         SkyRLTopology(num_nodes=5, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+    topology = SkyRLTopology(num_nodes=7, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+    recipe = yaml.safe_load(_config_yaml(strategy="megatron"))
+    recipe["trainer"]["algorithm"]["use_kl_loss"] = True
+    recipe["trainer"]["policy"] = {
+        "megatron_config": {"pipeline_model_parallel_size": 2, "expert_model_parallel_size": 8}
+    }
+    recipe["trainer"]["ref"] = {"megatron_config": {"pipeline_model_parallel_size": 2, "expert_model_parallel_size": 16}}
+    with pytest.raises(ValueError, match=r"Megatron ref has 16 GPUs.*data-parallel size by EP"):
+        dataclasses.replace(_spec(), topology=topology, config_yaml=yaml.safe_dump(recipe))
+    recipe["trainer"]["ref"]["megatron_config"]["expert_model_parallel_size"] = 8
     spec = dataclasses.replace(
         _spec(),
-        config_yaml=_config_yaml(strategy="megatron").replace("use_kl_loss: false", "use_kl_loss: true"),
+        config_yaml=yaml.safe_dump(recipe),
         runtime=SkyRLRuntime(),
-        topology=SkyRLTopology(num_nodes=7, gpus_per_node=8, gpu_variant="H100", role_plan=plan),
+        topology=topology,
     )
     step = skyrl_step(spec, _execution())
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
