@@ -80,6 +80,8 @@ _METADATA_TASK_COUNT = "task_count"
 _METADATA_MAX_MODEL_LEN = "max_model_len"
 _METADATA_STREAMING = "streaming"
 _MARIN_SERVE_KIND = "marin-serve"
+BACKEND_PORT_NAME = "backend"
+DASHBOARD_PORT_NAME = "http"
 _CAPABILITY_TTL = Duration.from_hours(24 * 7)
 
 
@@ -187,7 +189,7 @@ class IrisServiceConfig:
     timeout_hours: float = 24.0
     # Covers both the Iris proxy and dashboard upstream client for long generations.
     controller_proxy_timeout_seconds: float = 12 * 60 * 60
-    port_name: str | None = "http"
+    port_name: str | None = DASHBOARD_PORT_NAME
 
     def __post_init__(self) -> None:
         RemoteInferenceConfig(
@@ -273,7 +275,9 @@ def _prepared_local_inference(
 ) -> Iterator[LocalInferenceSession]:
     resolved_model, num_chips = _resolved_model(model, iris)
     resolved_engine = _resolved_engine(engine, iris)
-    with local_inference(resolved_model, resolved_engine, num_chips=num_chips) as session:
+    with local_inference(
+        resolved_model, resolved_engine, port=iris_ctx().get_port(BACKEND_PORT_NAME), num_chips=num_chips
+    ) as session:
         yield session
 
 
@@ -508,7 +512,10 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
         revision=model.revision,
         tokenizer_revision=model.effective_tokenizer_revision,
     )
-    backend = VllmBackend(cast(VllmEngineConfig, _resolved_engine(service.engine, service.iris)))
+    backend = VllmBackend(
+        cast(VllmEngineConfig, _resolved_engine(service.engine, service.iris)),
+        port=iris_ctx().get_port(BACKEND_PORT_NAME),
+    )
     with iris_vllm_launch(
         pipeline_parallel_size=geometry.pipeline_parallel_size,
         tensor_parallel_size=geometry.tensor_parallel_size,
@@ -630,6 +637,7 @@ def _start_direct_inference(
             max_retries_preemption=iris.max_retries_preemption,
             max_task_failures=iris.max_retries_failure,
             priority=iris.priority,
+            ports=(BACKEND_PORT_NAME,),
         )
     )
     try:
@@ -731,6 +739,7 @@ def _submit_broker_workers(
                     max_retries_preemption=broker.max_retries_preemption,
                     max_task_failures=broker.max_retries_failure,
                     priority=iris.priority,
+                    ports=(BACKEND_PORT_NAME,),
                 )
             )
         )

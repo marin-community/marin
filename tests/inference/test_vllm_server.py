@@ -19,7 +19,9 @@ from pathlib import Path
 
 import marin.inference.vllm_server as vllm_server
 import pytest
-from marin.inference.config import VllmCompilationCacheMode
+import requests
+from marin.inference.config import ServedModelConfig, VllmCompilationCacheMode, VllmEngineConfig
+from marin.inference.serve import local_inference
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
@@ -537,6 +539,42 @@ def test_serves_when_startup_succeeds():
     with _environment(_FakeLauncher("serve")) as environment:
         _wait_until_ready(environment)
         assert environment.model_id == "fake-model"
+
+
+@pytest.mark.parametrize("port", [None, 0])
+def test_local_inference_serves_on_an_automatically_assigned_port(monkeypatch, port):
+    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _config: _FakeLauncher("serve"))
+    model = ServedModelConfig(weights="fake-model", api_model="fake-model", chat_template_content="{{ messages }}")
+    engine = VllmEngineConfig(
+        compilation_cache=VllmCompilationCacheMode.CALLER_MANAGED,
+        startup_timeout_seconds=2,
+    )
+    with local_inference(model, engine, port=port) as session:
+        response = requests.get(session.model.endpoint.url("models"), timeout=5)
+        response.raise_for_status()
+        assert response.json()["data"] == [{"id": "fake-model"}]
+
+
+def test_environment_rejects_another_model_on_its_port(tmp_path):
+    port = _free_port()
+    incumbent = VllmEnvironment(
+        vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
+        port=port,
+        launcher=_FakeLauncher("serve"),
+        compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
+    )
+    with incumbent:
+        challenger = VllmEnvironment(
+            vllm_server.InferenceModelConfig(name="requested-model", path=None, engine_kwargs={}),
+            port=port,
+            launcher=_FakeLauncher("hang", str(tmp_path / "starts")),
+            compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
+            expected_model_id="requested-model",
+            wait_for_ready=False,
+        )
+        with pytest.raises(RuntimeError, match="requested-model"):
+            with challenger:
+                _wait_until_ready(challenger)
 
 
 def test_streamer_fault_fails_while_parent_is_still_running(tmp_path):

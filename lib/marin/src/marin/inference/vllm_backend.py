@@ -124,7 +124,7 @@ class VllmBackend:
     ) -> Iterator[VllmEnvironment]:
         """Start vLLM without imposing HTTP readiness on the caller."""
         chat_template_content = _resolved_chat_template(spec)
-        resolved_port = _reserve_localhost_port(self.host) if self.port is None else self.port
+        resolved_port = self.port or _reserve_localhost_port(self.host)
         model = self._model_config(spec)
         launcher = _with_subprocess_env(vllm_launcher(self.config), subprocess_env)
         with _chat_template_argument(chat_template_content) as chat_template_args:
@@ -137,6 +137,7 @@ class VllmBackend:
                 launcher=launcher,
                 compilation_cache_mode=self.config.compilation_cache,
                 extra_metric_families=self.config.extra_metric_families,
+                expected_model_id=spec.api_model,
                 wait_for_ready=False,
             ) as environment:
                 yield environment
