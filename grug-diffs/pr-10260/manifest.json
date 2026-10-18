@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "moe_cplm"
+  ],
+  "base_sha": "358283f7da684d156d8bca095669cf8c023ef2f3",
+  "head_sha": "30e7700f0e5b1e82e4fe2a6ebdc57cff174ff5bb",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "base",
+      "distance_score": 2157,
+      "report_relpath": "moe_cplm/index.html",
+      "status_counts": {
+        "added": 5,
+        "changed": 1,
+        "removed": 3,
+        "unchanged": 0
+      },
+      "variant": "moe_cplm"
+    }
+  ]
+}
