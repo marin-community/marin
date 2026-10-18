@@ -258,8 +258,13 @@ def test_verification_rejects_changed_files_replay_and_cache_order(tmp_path):
     with pytest.raises(ValueError, match="output hash"):
         verify_arm(str(rs_multi), str(plain), _manifest(rs_multi), 3)
 
+    # A recovery arm passes; an unknown arm is refused.
+    changed = _write_arm(tmp_path / "rows", "recovery", [list(range(56))])
+    verify_arm(str(changed), str(plain), _manifest(changed), 1)
+    with pytest.raises(ValueError, match="Not a training arm"):
+        arm_epochs({**_manifest(changed), "arm": "dryrun"}, 1)
+
     # A file whose rows differ from rows_sha256.
-    changed = _write_arm(tmp_path / "rows", "relay", [list(range(56))])
     _rewrite(changed, 0, list(reversed(_lines(changed, 0))), fix_rows_sha=False)
     with pytest.raises(ValueError, match="rows_sha256"):
         verify_arm(str(changed), str(plain), _manifest(changed), 1)

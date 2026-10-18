@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Train one SFT shootout arm (plain, RS-multi or relay) on the row builder's per-epoch files (task #235).
+"""Train one SFT shootout arm (plain, RS-multi, recovery or relay) on the row builder's per-epoch files (task #235).
 
 Epoch k trains exactly the builder's ``train-epoch-<k>-prebuilt.jsonl.gz``, in file order. Each epoch file gets its
 own Levanter cache, and the training mixture has one stage per epoch that draws only from that epoch's cache, with
@@ -71,7 +71,7 @@ from experiments.post_training.agentic_sweep.train import (
 )
 from experiments.sft.launcher import HFModel, SFTSpec
 
-ARMS = ("plain", "rs-multi", "relay")
+ARMS = ("plain", "rs-multi", "recovery", "relay")
 VERSION = "2026.10.18.1"
 EXPORT_EPOCHS = [2]
 EXEMPLAR = {"input_ids": np.zeros(0, dtype=np.int32), "loss_weights": np.zeros(0, dtype=np.float32)}
