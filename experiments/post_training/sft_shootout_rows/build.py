@@ -112,6 +112,8 @@ CHANGELOG = (
     "c1b656a907 relay manifest records the full usable relay pool per family",
     "8af202e2d3 every training arm writes 3 epoch files, each a seeded permutation (seed recorded per split)",
     "e39c3ead56 arms' replay pinned to continuation v2 (frozen #202 slice superseded for the arms)",
+    "PRODUCTION production fields: rows_sha256 per split, builder commit and source hashes, trace file identities, "
+    "token gate over the inputs, held-out ids, _SUCCESS marker (task #234)",
 )
 # mini-swe-agent's own tool environment, installed in the sandbox at agent setup, holds clean copies of some repos
 # (pool v3 removes those repos); a trace that reads anything there is dropped. Pattern from #207 (chukar): path reads,
@@ -169,18 +171,42 @@ DENIED_RUNS = {
 }
 
 
-def load_traces(uris: list[str]) -> list[dict]:
+def load_traces(uris: list[str], files: list[dict] | None = None) -> list[dict]:
     for uri in uris:
         for run, reason in DENIED_RUNS.items():
             if f"/{run}/" in uri:
                 raise ValueError(f"{uri} is a denied run: {reason}")
     traces = []
     for uri in uris:
-        traces += [json.loads(line) | {"source": uri} for line in StoragePath(uri).read_text().splitlines()]
+        data = StoragePath(uri).read_bytes()
+        rows = [json.loads(line) | {"source": uri} for line in data.decode().splitlines()]
+        traces += rows
+        if files is not None:
+            files.append(trace_file_info(uri, data, rows))
     keys = [(trace["trial_id"], trace.get("conversation", 0)) for trace in traces]
     if len(set(keys)) != len(keys):
         raise ValueError("A (trial id, conversation) pair appears twice across the trace files")
     return traces
+
+
+def trace_file_info(uri: str, data: bytes, rows: list[dict]) -> dict:
+    """A trace file's identity: content hash, row count, and the generation run's Harbor commit and policy."""
+    info = {
+        "uri": uri,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "rows": len(rows),
+        "token_hits": sum(has_capability_token(line) for line in data.decode().splitlines()),
+    }
+    run = StoragePath(uri.rsplit("/", 1)[0])
+    for name, keys in (("lock.json", ("harbor", "git_commit_hash")), ("driver_config.json", ("policy",))):
+        try:
+            value = json.loads((run / name).read_text())
+        except FileNotFoundError:
+            continue
+        for key in keys:
+            value = value.get(key) if isinstance(value, dict) else None
+        info["harbor_commit" if name == "lock.json" else "policy"] = value
+    return info
 
 
 def candidates(arm: str, traces: list[dict], pool: dict[str, dict], tokenizer) -> tuple[dict, list[dict]]:
@@ -358,8 +384,10 @@ def write_split(path: Path, entries: list[tuple[str, dict]], seed: str) -> tuple
             stream.write(empty + "\n")
     supervised = collections.Counter()
     context = collections.Counter()
+    digest = hashlib.sha256()
     with gzip.open(path, "rt") as stream:
         for row_number, line in enumerate(stream):
+            digest.update(line.encode())
             row = json.loads(line)
             if len(row["input_ids"]) != CONTEXT or len(row["loss_weights"]) != CONTEXT:
                 raise ValueError(f"Bad row shape at {row_number}")
@@ -380,6 +408,7 @@ def write_split(path: Path, entries: list[tuple[str, dict]], seed: str) -> tuple
         # Rows the trainer reads per epoch of this file (a multiple of 16); the consumer sets its block size from it.
         "padded_rows": len(index) + padding,
         "permutation_seed": seed,
+        "rows_sha256": digest.hexdigest(),
         "steps": (len(index) + padding) // BATCH,
         "supervised_tokens": dict(supervised),
         "context_tokens": dict(context),
@@ -402,7 +431,10 @@ def main() -> None:
     parser.add_argument(
         "--test-inputs", action="store_true", help="skip the pool and replay pins (local validation only)"
     )
+    parser.add_argument("--builder-commit", help="git commit of this builder (required for a production build)")
     args = parser.parse_args()
+    if not args.test_inputs and not args.builder_commit:
+        raise ValueError("--builder-commit is required unless --test-inputs")
     output = StoragePath(args.output)
     if output.exists():
         raise ValueError("Use a fresh output prefix")
@@ -433,7 +465,18 @@ def main() -> None:
         else:
             (directory / "tokenizer").mkdir()
             tokenizer = load_tokenizer(directory / "tokenizer", expected)
-        traces = load_traces(args.traces)
+        trace_files: list[dict] = []
+        traces = load_traces(args.traces, trace_files)
+        # The publication gate's criterion (check_tokens.scan: has_capability_token on every raw line) over the exact
+        # input files; refuse to build on any hit.
+        token_gate = {
+            "criterion": "check_tokens.scan: has_capability_token (decoded JWT, aud == iris-proxy) on every raw line",
+            "files": len(trace_files),
+            "lines": sum(info["rows"] for info in trace_files),
+            "hits": sum(info["token_hits"] for info in trace_files),
+        }
+        if token_gate["hits"]:
+            raise ValueError(f"Capability tokens in the input traces: {token_gate}")
         kept, dropped = candidates(args.arm, traces, pool, tokenizer)
         attempts = [attempt for attempt, _, _ in kept.values()]
         replay_lines, replay_index, replay_info = replay_rows(args.replay)
@@ -562,6 +605,23 @@ def main() -> None:
             "pool_manifest_sha256": None if args.test_inputs else POOL_MANIFEST_SHA256,
             "test_inputs": args.test_inputs,
             "traces": args.traces,
+            "builder_commit": args.builder_commit,
+            "builder_sources_sha256": {
+                f"{path.parent.name}/{path.name}": hashlib.sha256(path.read_bytes()).hexdigest()
+                for directory in (Path(__file__).parent, Path(training_row.__code__.co_filename).parent)
+                for path in sorted(directory.glob("*.py"))
+            },
+            "trace_files": trace_files,
+            "token_gate": token_gate,
+            "heldout_task_ids": {
+                family: sorted(task for task, row in pool.items() if row["heldout"] and row["family"] == family)
+                for family in sorted({row["family"] for row in pool.values()})
+            },
+            "rows_sha256_definition": (
+                "splits[<split>].rows_sha256 = sha256 of the decompressed split file's bytes: every line including "
+                "the zero-loss padding rows, each followed by a newline; replay.rows_sha256 hashes the replay cut in "
+                "replay order (before the epoch permutation)"
+            ),
             "candidates": {
                 "kept": len(kept),
                 "dropped": dict(collections.Counter(d["reason"].split(":")[0] for d in dropped)),
@@ -664,6 +724,9 @@ def main() -> None:
             if path.name != "manifest.json":
                 if hashlib.sha256((output / path.name).read_bytes()).hexdigest() != manifest["output_hashes"][path.name]:
                     raise ValueError(f"Upload hash mismatch: {path.name}")
+        if not args.test_inputs:
+            # Written last: a prefix without _SUCCESS is incomplete and must not be read.
+            (output / "_SUCCESS").write_text("")
         print(
             "ARM_BUILT " + json.dumps({k: v for k, v in manifest.items() if k not in ("task_slots", "traces")}),
             flush=True,
