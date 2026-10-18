@@ -116,10 +116,23 @@ in these calibrations, and they do not establish later schedule throughput.
 and [fresh repeat](https://wandb.ai/marin-community/auto-understanding-arch/runs/mfu-ep1-hist-repeat-v1-e40981c4c8)
 contain the unsmoothed loss curves. Raw logs, profiles, failed attempts and
 source hashes are indexed in the
-[frozen run report](https://github.com/WhenWen/astra-d8-research/blob/beb6192b/research/belay-mfu-native-ep-result.md)
+[frozen run report](https://github.com/WhenWen/astra-d8-research/blob/4792fab7/research/belay-mfu-native-ep-result.md)
 and [protocol](https://github.com/WhenWen/astra-d8-research/blob/116c07c1/research/belay-mfu-protocol.md), linked from [the performance issue](https://github.com/WhenWen/astra-d8-research/issues/236).
-The independent native-port TPU calibration is pending; these rows do not
-attribute the historical measurements to the port's new commit.
+The native CLI was independently validated at Marin commit
+`1c4e1b3347b6da17ebe979c88d18cd89639885cc`. Its four TPU hosts completed 400
+updates at **417400 sustained tokens/s** (424171 median step tokens/s), with
+5.7162% useful MFU and zero dropped assignments. The drained window took
+94.20593262 seconds. All 400 training losses exactly match the original
+optimized harness, ending at NLL 4.25661278. This verifies the port's calibration
+path; the full-schedule and evaluation limitations above still apply.
+
+The [native W&B curve](https://wandb.ai/marin-community/auto-understanding-arch/runs/upstream-native-v2-fcda5d913e534635a7e99856da23cea1)
+and artifacts under
+`gs://marin-us-central2/kaiyuew/belay-mfu/upstream-native-v2/fcda5d913e534635a7e99856da23cea1/`
+preserve the measured source separately from the historical rows. Raw metrics
+SHA256 is `84a958ad11a7fd6e27e780f6f46a27ff3d7c9a219ef626450481d63f944d48c6`.
+The first-batch preflight passed with all gradients finite and nonzero gradients
+for all four copy-head parameters, before any optimizer updates.
 
 Run non-training numerical tests with:
 
