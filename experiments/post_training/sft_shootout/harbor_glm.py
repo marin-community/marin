@@ -9,8 +9,8 @@ calls the model from inside the Daytona sandbox. The driver therefore runs ``glm
 Harbor, registers it as an Iris link endpoint, and gives the agents its capability URL. Harbor runs
 from the campaign-pinned isolated project ``config/external/harbor`` with agent settings copied
 from the campaign policies, through the ``harbor_agents/trial_agents.py`` subclasses that tag every
-request with a trial id. With ``--relay`` the driver also serves v0 with the policy's serving config
-(an 8xH100 vLLM job in this cluster) and the proxy routes per ``relay.py``.
+request with a trial id. With ``--relay`` the proxy also routes to v0 per ``relay.py``; v0 runs as its
+own root job (``serve_student.py``, possibly in another cluster) reached through ``STUDENT_BASE_URL``.
 
 Outputs under ``--output``: Harbor's job folder, ``requests.jsonl`` (the canonical trace), and
 ``driver_config.json``. Submit to the GLM relay's cluster (cw-us-east-02a):
@@ -45,6 +45,7 @@ from urllib.parse import urlparse
 from dataclasses import replace
 from pathlib import Path
 
+import httpx
 import pyarrow.parquet as pq
 import uvicorn
 import yaml
@@ -61,10 +62,9 @@ from marin.evaluation.harbor.agent_context import (
 )
 from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
 from marin.evaluation.model_config import load_model_config
-from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.evaluation.serving_config import inference_config_for_model, resolved_serve_config
+from marin.inference.config import RemoteInferenceConfig
 from marin.inference.dashboard_server import bind_serving_socket
-from marin.inference.iris import remote_inference
 from rigging.connect import capability_path
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
@@ -95,6 +95,10 @@ STUDENT_CONFIG = Path(
     "open-athena-Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12.yaml"
 )
 STUDENT_REVISION = "4eeb756b404db25bc04e4daf49dfb9817bceb741"
+# The relay student's OpenAI base URL: a capability URL (a bearer credential) for serve_student.py's endpoint,
+# passed only through the environment.
+STUDENT_URL_ENV = "STUDENT_BASE_URL"
+STUDENT_POLL_S = 120
 
 # Each family runs under its eval-campaign Harbor policy: retry list, verifier timeout, agent timeouts
 # and agent kwargs come from the YAML, and model_info is reconciled the way the eval launcher does it.
@@ -162,30 +166,41 @@ def capability_endpoint(app: Starlette, name: str) -> Iterator[str]:
         yield (minted.capability_url or f"{CAPABILITY_ORIGIN}{capability_path(endpoint_name, minted.token)}").rstrip("/")
 
 
-@contextlib.contextmanager
-def served_student() -> Iterator[Backend]:
-    """Serve v0 exactly as the eval policy does (8xH100 vLLM in this cluster) for the run's lifetime."""
+def student_inference_config(cluster: str) -> RemoteInferenceConfig:
+    """v0 served exactly as the eval policy does: 8xH100 vLLM in ``cluster`` (see serve_student.py)."""
     model = replace(load_model_config(STUDENT_CONFIG), revision=STUDENT_REVISION)
-    accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster=CLUSTER)
+    accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster=cluster)
     accelerator = replace(accelerator, geometry=serving_geometry(resolved_serve_config(model), accelerator))
     # Iris defaults GPU jobs to NCCL_DEBUG=INFO, which floods the log forwarder; this vLLM path gets no
     # NCCL_DEBUG_SUBSYS (no gpu extra), so WARN here is the whole setting.
-    config = inference_config_for_model(
+    return inference_config_for_model(
         model, accelerator, env_vars={"NCCL_DEBUG": "WARN"}, priority=job_pb2.PRIORITY_BAND_INHERIT
     )
-    with remote_inference(config) as session:
-        session.wait_until_ready()
-        endpoint = session.model.endpoint
-        logger.info("v0 is serving %s at %s", endpoint.model, endpoint.base_url)
-        yield Backend(
-            author=Author.STUDENT,
-            base_url=endpoint.base_url.rstrip("/"),
-            model=endpoint.model,
-            tokenizer=load_tokenizer(model.tokenizer or model.location, STUDENT_REVISION),
-            headers={},
-            # A preempted v0 task comes back on another host; the proxy re-resolves the endpoint instead of failing.
-            resolve=lambda: f"{iris_ctx().client.resolve_endpoint(session.endpoint_name).rstrip('/')}{OPENAI_API_SUFFIX}",
-        )
+
+
+def served_student() -> Backend:
+    """v0 behind the capability URL in ``STUDENT_BASE_URL`` (serve_student.py), once it answers."""
+    base_url = os.environ[STUDENT_URL_ENV].rstrip("/")
+    while True:
+        try:
+            if httpx.get(f"{base_url}/models", timeout=30).status_code == 200:
+                break
+        except httpx.HTTPError:
+            pass
+        logger.info("waiting for v0 to serve")
+        time.sleep(STUDENT_POLL_S)
+    model = load_model_config(STUDENT_CONFIG)
+    logger.info("v0 is serving")
+    return Backend(
+        author=Author.STUDENT,
+        base_url=base_url,
+        model=model.model_id,
+        tokenizer=load_tokenizer(model.tokenizer or model.location, STUDENT_REVISION),
+        headers={},
+        # The URL names the endpoint, not a host: while Iris moves a preempted v0 the proxy answers with a gateway
+        # error, and the same URL works again once v0 re-registers.
+        resolve=lambda: base_url,
+    )
 
 
 def extract_packages(parquet: str, names: list[str] | None, dest: Path) -> None:
@@ -332,7 +347,7 @@ def main() -> None:
             )
             relay = None
             if args.relay:
-                relay = RelayPolicy(student=stack.enter_context(served_student()), budget_tokens=int(window * args.budget_fraction))
+                relay = RelayPolicy(student=served_student(), budget_tokens=int(window * args.budget_fraction))
             app = build_proxy(teacher, window, RequestLog(work / "requests.jsonl"), relay)
             capability = stack.enter_context(capability_endpoint(app, args.name))
             if urlparse(capability).hostname != AGENT_DOMAIN_ALLOW_LIST:
@@ -397,6 +412,7 @@ def main() -> None:
         if not args.relay
         else {
             "student": f"{STUDENT_CONFIG}@{STUDENT_REVISION}",
+            "student_serving": "serve_student.py root job, reached through its capability URL",
             "budget_fraction": args.budget_fraction,
             "budget_tokens": int(window * args.budget_fraction),
             "budget_counted_with": "student tokenizer",

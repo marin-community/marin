@@ -49,6 +49,9 @@ UNLOGGED_REQUEST_KEYS = frozenset({"messages", "tools"})
 # reschedules on another host) before the proxy gives up on it.
 RESOLVE_WINDOW_S = 1200
 RESOLVE_INTERVAL_S = 30
+# What an Iris capability URL answers while its endpoint is unregistered or its cluster unreachable (a v0 being
+# moved after a preemption); a backend with ``resolve`` retries these like a refused connection.
+GATEWAY_STATUSES = frozenset({404, 502, 503, 504})
 
 
 @dataclass(frozen=True)
@@ -163,7 +166,12 @@ def build_proxy(
                 response = await client.post(
                     f"{url}/chat/completions", json={**body, "model": backend.model}, headers=backend.headers
                 )
-                return response, time.monotonic() - started
+                if (
+                    response.status_code not in GATEWAY_STATUSES
+                    or backend.resolve is None
+                    or time.monotonic() - started > RESOLVE_WINDOW_S
+                ):
+                    return response, time.monotonic() - started
             except httpx.ConnectError:
                 if backend.resolve is None or time.monotonic() - started > RESOLVE_WINDOW_S:
                     raise
