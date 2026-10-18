@@ -31,6 +31,7 @@ from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.distributed import DistributedConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.fast_track import model, qb_balancing, train
 from experiments.grug.fast_track.column_sharded_embedding import column_sharded_embedding
@@ -140,25 +141,37 @@ def build_config(*, data_path: Path, output: Path, checkpoint_path: str,
 
 
 class MetricsFileHandler(logging.FileHandler):
-    """Retain the native incremental loss log locally on process zero."""
+    """Retain partial native loss logs in regional storage during training."""
 
-    def emit(self, record):
-        super().emit(record)
+    def __init__(self,path,destination):
+        super().__init__(path)
+        self.destination=StoragePath(destination)
+        self.last_upload=0.
+
+    def upload(self):
         self.flush()
+        self.destination.write_bytes(Path(self.baseFilename).read_bytes())
+        self.last_upload=time.monotonic()
+
+    def emit(self,record):
+        super().emit(record)
+        if time.monotonic()-self.last_upload>=60:
+            self.upload()
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-config', type=Path, default=DATA)
     parser.add_argument('--tokenizer', required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--checkpoint-path', required=True)
+    parser.add_argument('--artifact-root', required=True)
     parser.add_argument('--run-name', required=True)
     parser.add_argument('--wandb-entity', required=True)
     parser.add_argument('--wandb-project', required=True)
     parser.add_argument('--calibration', action='store_true')
     parser.add_argument('--logging-check', action='store_true')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     run_name = args.run_name
     args.output.mkdir(parents=True, exist_ok=True)
     if args.logging_check:
@@ -182,6 +195,9 @@ def main():
     identity=broadcast_one_to_all(np.frombuffer(uuid.uuid4().bytes,dtype=np.uint8).copy())
     attempt=bytes(identity).hex()
     run_name=f'{args.run_name}-{attempt}'
+    args.output=args.output/attempt
+    args.output.mkdir(parents=True,exist_ok=False)
+    artifact_root=args.artifact_root.rstrip('/')+'/'+attempt
     identities=json.loads(Path(__file__).with_name('tokenizer_identity.json').read_text())
     for name,expected in identities.items():
         if hashlib.sha256((Path(args.tokenizer)/name).read_bytes()).hexdigest()!=expected:
@@ -191,6 +207,7 @@ def main():
         wandb_entity=args.wandb_entity, wandb_project=args.wandb_project,
         calibration=args.calibration, tokenizer_path=args.tokenizer)
     config.trainer.trainer.distributed=replace(config.trainer.trainer.distributed,initialize_jax_distributed=False)
+    handlers=[]
     initialize = config.trainer.trainer.initialize
 
     def checked_initialize():
@@ -198,7 +215,8 @@ def main():
         if len(jax.devices()) != 16 or any(d.device_kind != 'TPU v4' for d in jax.devices()):
             raise ValueError('This baseline requires TPU v4-32 (16 physical chips)')
         if jax.process_index() == 0:
-            handler = MetricsFileHandler(args.output/'native-metrics.jsonl')
+            handler = MetricsFileHandler(args.output/'native-metrics.jsonl',artifact_root+'/native-metrics.jsonl')
+            handlers.append(handler)
             handler.setFormatter(logging.Formatter('%(message)s'))
             logging.getLogger('levanter.json_logger').addHandler(handler)
             (args.output/'resolved-config.json').write_text(json.dumps(asdict(config),default=str,indent=2))
@@ -270,8 +288,15 @@ def main():
             return result
         run.lower=native.lower
         return run
-    with execution(), patch.object(train,'TaggedEvaluator',bounded_evaluator), patch.object(train,'_flat_train_step',flat_step):
-        train._run_grug_local(config)
+    try:
+        with execution(), patch.object(train,'TaggedEvaluator',bounded_evaluator), patch.object(train,'_flat_train_step',flat_step):
+            train._run_grug_local(config)
+    finally:
+        for handler in handlers:
+            handler.upload()
+        if jax.process_index()==0:
+            for path in args.output.glob('*.json'):
+                StoragePath(artifact_root+'/'+path.name).write_bytes(path.read_bytes())
 
 
 if __name__ == '__main__':
