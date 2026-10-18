@@ -23,6 +23,7 @@ from pathlib import Path
 
 import haliax as hax
 import jax
+import jmp
 import jax.numpy as jnp
 import numpy as np
 from fray.current_client import current_client, set_current_client
@@ -72,6 +73,8 @@ class PlateauProbeConfig:
             id="plateau-probe",
             mesh=OFFLINE_MESH,
             use_explicit_mesh_axes=True,
+            # The sweep's training precision; the H100 attention kernel accepts only bf16 or fp16.
+            mp=jmp.get_policy("p=f32,c=bfloat16"),
             per_device_eval_parallelism=1,
             tracker=JsonLoggerConfig(),
             log_jaxprs=False,
