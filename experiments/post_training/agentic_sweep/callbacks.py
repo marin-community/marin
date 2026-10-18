@@ -17,6 +17,8 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 logger = logging.getLogger(__name__)
 
+PLATEAU_TOTALS = ("plateau_kept_tokens", "plateau_kept_loss_sum", "plateau_dropped_tokens", "plateau_dropped_loss_sum")
+
 
 class EpochTracker(NoopTracker):
     name = "epoch_accounting"
@@ -30,6 +32,7 @@ class EpochTracker(NoopTracker):
         self.next_token_step = start_step
         self.loss_sum = 0.0
         self.token_sum = 0.0
+        self.plateau_sums = dict.fromkeys(PLATEAU_TOTALS, 0.0)
         self.epoch_rows: dict[int, dict[str, Any]] = {}
         self.published_epochs: set[int] = set()
 
@@ -44,6 +47,8 @@ class EpochTracker(NoopTracker):
             self.next_token_step += 1
             self.loss_sum += float(metrics["train/loss_sum"])
             self.token_sum += float(metrics["train/supervised_tokens"])
+            for name in PLATEAU_TOTALS:
+                self.plateau_sums[name] += float(metrics.get(f"train/{name}", 0.0))
             if boundary:
                 difference = self.token_sum - self.tokens_per_epoch
                 if abs(difference) > 0.001 * self.tokens_per_epoch:
@@ -58,8 +63,11 @@ class EpochTracker(NoopTracker):
                     manifest_supervised_tokens=self.tokens_per_epoch,
                     supervised_token_difference=int(difference),
                 )
+                if "train/plateau_kept_tokens" in metrics:
+                    self.epoch_rows[epoch].update(plateau_epoch_row(self.plateau_sums, self.token_sum))
                 self.loss_sum = 0.0
                 self.token_sum = 0.0
+                self.plateau_sums = dict.fromkeys(PLATEAU_TOTALS, 0.0)
         row = self.epoch_rows.get(epoch, {})
         if boundary and epoch not in self.published_epochs and "train_loss" in row:
             row.update(epoch=epoch, completed_updates=step + 1, checkpoint_step=step)
@@ -70,6 +78,18 @@ class EpochTracker(NoopTracker):
                 StoragePath(prefix_join(self.output_path, "epoch-metrics.jsonl")).write_text(text)
             self.published_epochs.add(epoch)
             log({f"epoch/{key}": value for key, value in row.items()}, step=step, commit=commit)
+
+
+def plateau_epoch_row(sums: Mapping[str, float], supervised_tokens: float) -> dict[str, float]:
+    """Share of supervised tokens dropped in the epoch, and the mean loss on kept and dropped tokens."""
+    kept, dropped = sums["plateau_kept_tokens"], sums["plateau_dropped_tokens"]
+    return {
+        "plateau_kept_tokens": int(kept),
+        "plateau_dropped_tokens": int(dropped),
+        "plateau_dropped_fraction": dropped / supervised_tokens,
+        "plateau_kept_loss": sums["plateau_kept_loss_sum"] / kept if kept else float("nan"),
+        "plateau_dropped_loss": sums["plateau_dropped_loss_sum"] / dropped if dropped else float("nan"),
+    }
 
 
 @TrackerConfig.register_subclass("agentic_sweep_epochs")
