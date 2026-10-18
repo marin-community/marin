@@ -11,7 +11,7 @@ array-stacked. The transform orthogonalizes each Muon leaf:
   zero-padding the leading axis so it divides the shard count.
 - 4D expert stacks ``[layers, experts, fan_in, fan_out]``: reshaped to a matrix stack and
   distributed over the intra-rack batch axes without gathering the matrix dimensions, using QuACK's
-  symmetric GEMM for ``X @ X.T``.
+  symmetric GEMM on GPU and batched XLA products on TPU.
 
 With a mesh, same-shaped matrices of different leaves are orthogonalized together
 (``_bucketed_newton_schulz``): Newton-Schulz acts on each matrix independently, so one batched call
@@ -518,7 +518,9 @@ def _newtonschulz_batched_syrk(
     eps: float,
     coefficient_type: CoefficientType,
 ) -> jax.Array:
-    """Run batched Newton-Schulz with QuACK symmetric products (X @ X.T)."""
+    """Run batched Newton-Schulz, using QuACK symmetric products on GPU."""
+    if jax.default_backend() != "gpu":
+        return jax.vmap(lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type))(X)
     quack_symmetric_gemm = import_module("levanter.grug._moe.quack_symmetric_cute").quack_symmetric_gemm
 
     orig_dtype = X.dtype

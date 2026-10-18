@@ -857,6 +857,8 @@ class GrugModelConfig:
     """Form the erase gate ``2 sigmoid(z)`` (``kda_erase_gate``) inside the fused kernels from its bf16 logits."""
     kda_state_grads: StateGrads = StateGrads.XLA
     """Where the fused KDA state pass's backward forms its per-chunk cotangents (``StateGrads``; same math)."""
+    kda_xla_scan_impl: str = "parallel"
+    """XLA scan implementation; see ``chunk_kda``."""
     # Block Attention Residuals (Kimi, arXiv 2603.15031): each sublayer's input is a per-token softmax
     # attention over the residual-block history (the embedding, completed block sums and the running
     # partial), scored by a learned per-sublayer pseudo-query against the RMS-normalized sources.
@@ -883,9 +885,10 @@ class GrugModelConfig:
     """Initialize the LatentMoE projections semi-orthogonal (``_latent_proj_init``); pairs with the optimizer's
     ``latent_proj_update`` of ``frozen`` or ``stiefel``."""
     attn_res_remat_attention: bool = False
-    """Rematerialize the attention branch inside each AttnRes layer's backward, so its residuals (incl.
-    the ``[B, H, S, W]`` Inkling bias) are never alive during the MLP backward. Costs one extra
-    attention forward per layer; needed for memory at d1280."""
+    """Recompute attention in AttnRes backward to keep its residuals out of MLP backward.
+    Costs an extra forward; needed for d1280 memory."""
+    attn_res_remat_attention_save_all: bool = False
+    """Save intermediates when attention checkpointing is enabled (diagnostic)."""
     value_embeds: "ValueEmbeds" = dataclasses.field(default_factory=lambda: ValueEmbeds.NONE)
     kda_value_embeds: "ValueEmbeds" = dataclasses.field(default_factory=lambda: ValueEmbeds.NONE)
     """``value_embeds`` for the KDA layers: each gets its own ``[V, N*h]`` table mixed into its delta-rule values,
@@ -1790,6 +1793,8 @@ class GrugModelConfig:
             raise ValueError("local_mixer=kda requires attn_res (KDA layers run in the unrolled AttnRes loop)")
         if self.kda_chunk_size not in KDA_CHUNK_TILES:
             raise ValueError(f"kda_chunk_size must be one of {list(KDA_CHUNK_TILES)}, got {self.kda_chunk_size}")
+        if self.kda_xla_scan_impl not in ("parallel", "parallel_stacked", "parallel_stacked_split"):
+            raise ValueError(f"Unknown KDA XLA scan: {self.kda_xla_scan_impl!r}")
         if self.kda_onchip_decay_gate and (
             self.kda_decay_per_head
             or self.kda_dd_rope
@@ -3273,25 +3278,23 @@ def _kda_rotate_qk(q, k, rate, segment_ids):
 
 
 class KdaKernelOptions(NamedTuple):
-    """Static options of the KDA kernel call (``_kda_kernel``)."""
-
     chunk_size: int  # fused (GPU) kernels' chunk length, see KDA_CHUNK_TILES
     save_chunk_states: bool
     state_grads: StateGrads
+    xla_scan_impl: str
 
 
 def _kda_kernel_rotating(q, k, v, g, beta, extras: dict[str, jax.Array], *, options: KdaKernelOptions):
-    """``_kda_kernel`` after rotating q and k by ``extras["rot_rate"]`` (``kda_dd_rope``)."""
     extras = dict(extras)
     q, k = _kda_rotate_qk(q, k, extras.pop("rot_rate"), extras.get("segment_ids"))
     return _kda_kernel(q, k, v, g, beta, extras, options=options)
 
 
 def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, options: KdaKernelOptions):
-    """KDA on the model layout ``(B, S, H, d)``: the fused Pallas kernels on GPU, else the XLA ``chunk_kda``
-    (heads-first layout, ``KDA_CHUNK_SIZE``). ``extras`` optionally holds ``segment_ids``, the erase gate
-    ``erase`` or its logits ``erase_logits``, and ``gate_p`` / ``gate_bias`` (``kda_onchip_decay_gate``:
-    ``g`` is then the gate pre-activation of ``-KDA_MIN_LOG_DECAY * sigmoid(gate_p * (g + gate_bias))``)."""
+    """Run KDA on ``(B, S, H, d)`` using fused GPU kernels or the selected XLA scan.
+
+    ``extras`` supplies document IDs, erase gates/logits and decay-gate parameters.
+    """
     segment_ids = extras.get("segment_ids")
     gate = (extras["gate_p"], extras["gate_bias"]) if "gate_p" in extras else None
     gate_fn = GateFn(GateKind.SIGMOID, KDA_MIN_LOG_DECAY)
@@ -3322,7 +3325,9 @@ def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, options: KdaK
     q, k, v, g, beta = (jnp.swapaxes(x, 1, 2) for x in (q, k, v, g, beta))
     seg = None if segment_ids is None else segment_ids[:, None, :]  # same documents for every head
     erase = None if erase is None else jnp.swapaxes(erase, 1, 2)
-    out = chunk_kda(q, k, v, g, beta, chunk_size=KDA_CHUNK_SIZE, segment_ids=seg, erase=erase)[0]
+    out = chunk_kda(
+        q, k, v, g, beta, chunk_size=KDA_CHUNK_SIZE, segment_ids=seg, erase=erase, scan_impl=options.xla_scan_impl
+    )[0]
     return jnp.swapaxes(out, 1, 2)
 
 
@@ -3636,7 +3641,9 @@ class KimiDeltaAttention(eqx.Module):
             kernel_fn = _kda_kernel_paired
         else:
             kernel_fn = _kda_kernel
-        options = KdaKernelOptions(cfg.kda_chunk_size, cfg.kda_save_chunk_states, cfg.kda_state_grads)
+        options = KdaKernelOptions(
+            cfg.kda_chunk_size, cfg.kda_save_chunk_states, cfg.kda_state_grads, cfg.kda_xla_scan_impl
+        )
         run = functools.partial(kernel_fn, options=options)
         args = (q, k, v, g, beta, extras)
         in_specs = (spec4,) * 4 + (spec3, extra_specs)
@@ -4493,7 +4500,7 @@ class MoEMLP(eqx.Module):
                 out_specs=P(_BATCH_AXES, None),
             )(table, flat_ids)
         # Sigmoid combine weights on unbiased logits for selected experts.
-        unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
+        unbiased_topk = _selected_router_logits(router_logits, selected_experts)
         renorm_sum = self.cfg.routing_renorm_sum if self.routing_sum is None else self.routing_sum.astype(jnp.float32)
         if self.cfg.router_combine == RouterCombine.SOFTMAX_RENORM:
             combine_weights_f = renorm_sum * jax.nn.softmax(unbiased_topk, axis=-1)
@@ -6267,11 +6274,14 @@ def _soft_capped(logits: jax.Array, cap: float | tuple[float, float, float] | No
     return cap * jnp.tanh(logits / cap)
 
 
-def _small_top_k(x: Float[Array, "T E"], k: int) -> tuple[Float[Array, "T k"], Int[Array, "T k"]]:
-    """``jax.lax.top_k`` over the last axis as ``k`` unrolled max/argmax passes (values stop-gradient).
+def _selected_router_logits(logits: Float[Array, "T E"], selected: Int[Array, "T K"]) -> Float[Array, "T K"]:
+    return jnp.take_along_axis(logits, selected, axis=-1)
 
-    On GPU, XLA lowers ``lax.top_k`` to a full sort: for the router (k = 9 of 384, 65k tokens per H100)
-    that is 1.12 ms against 0.35 ms here. Ties resolve to the lowest index, as in ``lax.top_k``.
+
+def _small_top_k(x: Float[Array, "T E"], k: int) -> tuple[Float[Array, "T k"], Int[Array, "T k"]]:
+    """Top-k via k max/argmax passes, with stopped gradients and lowest-index ties.
+
+    For k=9 of 384, 65k tokens/H100, XLA's full sort takes 1.12 ms versus 0.35 ms here.
     """
     x = jax.lax.stop_gradient(x)
     iota = jax.lax.broadcasted_iota(jnp.int32, x.shape, x.ndim - 1)
@@ -6575,7 +6585,8 @@ def _attn_res_layer(
     attn_in = h
     attn_branch = type(layer).attn_branch
     if cfg.attn_res_remat_attention:
-        attn_branch = eqx.filter_checkpoint(attn_branch, policy=None)
+        policy = jax.checkpoint_policies.everything_saveable if cfg.attn_res_remat_attention_save_all else None
+        attn_branch = eqx.filter_checkpoint(attn_branch, policy=policy)
     physical = layer_index % cfg.num_layers
     kda_ablation = (physical in cfg.kda_no_decay_layers, physical in cfg.kda_no_beta_layers)
     v_stream = None
