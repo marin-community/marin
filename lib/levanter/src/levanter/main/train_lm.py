@@ -34,6 +34,8 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
+from levanter.models.loss import next_token_loss_weight
+from levanter.metrics import Metric, ReductionType
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
@@ -147,6 +149,18 @@ def _load_lm_model_from_configured_source(
     return model
 
 
+def lm_training_loss(model: LmHeadModel, example: LmExample, *, logsumexp_weight: float = 0.0, key=None):
+    """Return the LM objective and token totals for weighted training-loss reporting."""
+    loss = model.compute_next_token_loss(example, key=key, logsumexp_weight=logsumexp_weight)
+    position = example.tokens.resolve_axis(model.Pos.name)
+    weights = next_token_loss_weight(position, example.loss_weight)
+    count = hax.sum(hax.broadcast_axis(weights, example.tokens.axes)).scalar()
+    return loss, {
+        "loss_sum": Metric.from_value(loss.scalar() * count, ReductionType.SUM),
+        "supervised_tokens": Metric.from_value(count, ReductionType.SUM),
+    }
+
+
 def main(config: TrainLmConfig):
     tokenizer = config.data.the_tokenizer
 
@@ -201,8 +215,7 @@ def main(config: TrainLmConfig):
     levanter.trainer.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
-        return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
+    loss_function = functools.partial(lm_training_loss, logsumexp_weight=config.z_loss_weight)
 
     # Using the trainer as a context manager does 3 things:
     # 1. Sets the device mesh
