@@ -5,10 +5,10 @@
 
 from __future__ import annotations
 
-import heapq
 import logging
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Generator, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, closing
 from dataclasses import dataclass
 from functools import partial
@@ -25,7 +25,8 @@ from rigging.timing import retry_with_backoff
 from finestore import shard_writer
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
 from finestore.layout import BlobTables, CommitToken, FineStoreLayout, KeyRange, Shard, SystemColumns
-from finestore.reader import ReadView, _BoundedReadAheadHandler, iter_shard_row_groups, shard_schema
+from finestore.merge import key_values, merge_sorted_runs, sorted_by_key
+from finestore.reader import ReadView, _BoundedReadAheadHandler, _CachedReadHandler, iter_shard_row_groups, shard_schema
 from finestore.shard_writer import ShardWriter
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,8 @@ _COMPACTIONS_ABANDONED = telemetry.counter("finestore_compactions_abandoned", un
 _COMPACTION_INPUT_BYTES = telemetry.counter("finestore_compaction_input_bytes", unit="By")
 _CLOSE_COMPACTION_MAX_ATTEMPTS = 3
 _COMPACTION_FILE_READ_AHEAD_BYTES = 1024 * 1024
+_COMPACTION_PREFETCH_BYTES = 16 * 1024 * 1024
+_COMPACTION_PREFETCH_WORKERS = 16
 COMPACTION_TARGET_BYTES = 400 * 1024 * 1024
 
 
@@ -55,52 +58,63 @@ class CompactionResult:
     superseded: int = 0
 
 
-def _sorted_buffer(
-    pending: dict[tuple, tuple[tuple[int, int, int], pa.Table]], sort_keys: list[tuple[str, str]]
-) -> pa.Table:
-    return pa.concat_tables([row for _, row in pending.values()], promote_options="none").sort_by(sort_keys)
+def _sorted_run(
+    shard: Shard, unified: pa.Schema, pa_fs: PyFileSystem, primary_key: tuple[str, ...]
+) -> Generator[pa.Table, None, None]:
+    """Yield one shard's rows in primary-key order, a row group at a time when the shard is sorted."""
+    with closing(iter_shard_row_groups(shard, unified, pa_fs)) as groups:
+        yield from groups if shard.primary_key_sorted else sorted_by_key(groups, primary_key)
 
 
-def _first_key(group: pa.Table, primary_key: tuple[str, ...]) -> tuple:
-    values = (group[name][0].as_py() for name in primary_key)
-    return tuple((value is None, value) for value in values)
+def _write_output_shards(
+    layout: FineStoreLayout,
+    table: str,
+    generation: int,
+    unified: pa.Schema,
+    primary_key: tuple[str, ...],
+    groups: Iterator[pa.Table],
+    target_bytes: int,
+) -> list[Shard]:
+    """Write key-ordered row groups into shards near ``target_bytes`` decoded bytes.
 
-
-def _compaction_groups(
-    groups: Iterator[pa.Table], primary_key: tuple[str, ...], target_bytes: int
-) -> Iterator[tuple[pa.Table, int]]:
-    """Yield sorted rows and the count of superseded rows for each accumulator flush.
-
-    A key may recur in a later output shard; read paths resolve those versions.
+    A shard always takes at least one row group, so a single oversized group still lands.
     """
-    pending: dict[tuple, tuple[tuple[int, int, int], pa.Table]] = {}
-    pending_bytes = superseded = 0
-    sort_keys = [(key, "ascending") for key in primary_key]
-    for group in groups:
-        if pending and pending_bytes + group.nbytes > target_bytes:
-            yield _sorted_buffer(pending, sort_keys), superseded
-            pending = {}
-            pending_bytes = superseded = 0
-        key_columns = [group.column(group.schema.get_field_index(name)) for name in primary_key]
-        commits = group.column(group.schema.get_field_index(SystemColumns.COMMIT))
-        sequences = group.column(group.schema.get_field_index(SystemColumns.SEQUENCE))
-        generations = group.column(group.schema.get_field_index(SystemColumns.GENERATION))
-        for index in range(group.num_rows):
-            key = tuple(column[index].as_py() for column in key_columns)
-            version = (commits[index].as_py(), sequences[index].as_py() or 0, generations[index].as_py())
-            previous = pending.get(key)
-            if previous is not None and version <= previous[0]:
-                superseded += 1
-                continue
-            # Copy the winner so the pending-byte count tracks retained Arrow data.
-            row = group.take(pa.array([index], type=pa.int64()))
-            if previous is not None:
-                pending_bytes -= previous[1].nbytes
-                superseded += 1
-            pending[key] = (version, row)
-            pending_bytes += row.nbytes
-    if pending:
-        yield _sorted_buffer(pending, sort_keys), superseded
+    outputs: list[Shard] = []
+    group = next(groups, None)
+    while group is not None:
+        path = layout.shard_path(table, _COMPACTOR, generation, 0, uuid.uuid4().hex[:8])
+        first = last = group
+        rows = decoded_bytes = 0
+        min_seq: int | None = None
+        max_seq: int | None = None
+        with ShardWriter(path, unified) as writer:
+            while group is not None and (rows == 0 or decoded_bytes + group.nbytes <= target_bytes):
+                writer.write_table(group)
+                sequences = pc.fill_null(group[SystemColumns.SEQUENCE], 0)
+                low, high = pc.min(sequences).as_py(), pc.max(sequences).as_py()
+                min_seq = low if min_seq is None else min(min_seq, low)
+                max_seq = high if max_seq is None else max(max_seq, high)
+                rows += group.num_rows
+                decoded_bytes += group.nbytes
+                last = group
+                group = next(groups, None)
+        bounds = KeyRange.of([key_values(first, 0, primary_key), key_values(last, last.num_rows - 1, primary_key)])
+        outputs.append(
+            Shard(
+                path=path,
+                writer=_COMPACTOR,
+                generation=generation,
+                rows=rows,
+                min_seq=min_seq,
+                max_seq=max_seq,
+                size_bytes=writer.result.size_bytes,
+                content_sha256=writer.result.content_sha256,
+                primary_key_sorted=True,
+                min_key=None if bounds is None else bounds.lowest,
+                max_key=None if bounds is None else bounds.highest,
+            )
+        )
+    return outputs
 
 
 def compact_table(
@@ -201,52 +215,27 @@ def _compact_shards(
     )
 
     fs, _ = factory.url_to_fs(root)
-    pa_fs = PyFileSystem(_BoundedReadAheadHandler(fs, _COMPACTION_FILE_READ_AHEAD_BYTES))
+    if input_bytes <= _COMPACTION_PREFETCH_BYTES:
+        # Small compactions otherwise reopen each shard for its schema, footer, and rows.
+        # Keep every compressed input in one bounded cache and overlap the initial GETs.
+        handler = _CachedReadHandler(fs, shards, _COMPACTION_PREFETCH_BYTES)
+        with ThreadPoolExecutor(max_workers=min(len(shards), _COMPACTION_PREFETCH_WORKERS)) as pool:
+            list(pool.map(handler.prefetch, (shard.path for shard in shards)))
+        pa_fs = PyFileSystem(handler)
+    else:
+        pa_fs = PyFileSystem(_BoundedReadAheadHandler(fs, _COMPACTION_FILE_READ_AHEAD_BYTES))
     unified = pa.unify_schemas([shard_schema(shard.path, pa_fs) for shard in shards], promote_options="permissive")
     if SystemColumns.COMMIT not in unified.names:
         unified = unified.append(pa.field(SystemColumns.COMMIT, pa.int64()))
     if SystemColumns.GENERATION not in unified.names:
         unified = unified.append(pa.field(SystemColumns.GENERATION, pa.int32()))
 
-    written = 0
-    superseded = 0
-    outputs: list[Shard] = []
     with ExitStack() as stack:
-        inputs = sorted(
-            shards,
-            key=lambda shard: (shard.commit_sequence, shard.generation),
-            reverse=True,
-        )
-        streams = [stack.enter_context(closing(iter_shard_row_groups(shard, unified, pa_fs))) for shard in inputs]
-        # First-key order is a best-effort deduplication heuristic for unsorted input shards.
-        groups = heapq.merge(*streams, key=lambda group: _first_key(group, primary_key))
-        for batch, dropped in _compaction_groups(groups, primary_key, target_bytes):
-            output_path = layout.shard_path(table, _COMPACTOR, next_generation, 0, uuid.uuid4().hex[:8])
-            with ShardWriter(output_path, unified) as writer:
-                rows = (batch.slice(index, 1) for index in range(batch.num_rows))
-                for row_group in shard_writer.table_row_groups(table, rows):
-                    writer.write_table(row_group)
-            sequences = pc.fill_null(batch[SystemColumns.SEQUENCE], 0)
-            # The batch is sorted by primary key, so its first and last rows bound every key.
-            edge_rows = batch.select(list(primary_key)).take([0, batch.num_rows - 1]).to_pylist()
-            bounds = KeyRange.of(tuple(row[column] for column in primary_key) for row in edge_rows)
-            outputs.append(
-                Shard(
-                    path=output_path,
-                    writer=_COMPACTOR,
-                    generation=next_generation,
-                    rows=batch.num_rows,
-                    min_seq=pc.min(sequences).as_py(),
-                    max_seq=pc.max(sequences).as_py(),
-                    size_bytes=writer.result.size_bytes,
-                    content_sha256=writer.result.content_sha256,
-                    primary_key_sorted=True,
-                    min_key=None if bounds is None else bounds.lowest,
-                    max_key=None if bounds is None else bounds.highest,
-                )
-            )
-            written += batch.num_rows
-            superseded += dropped
+        runs = [stack.enter_context(closing(_sorted_run(shard, unified, pa_fs, primary_key))) for shard in shards]
+        groups = shard_writer.table_row_groups(table, merge_sorted_runs(runs, primary_key))
+        outputs = _write_output_shards(layout, table, next_generation, unified, primary_key, groups, target_bytes)
+    written = sum(shard.rows for shard in outputs)
+    superseded = input_rows - written
 
     if not outputs:
         raise ValueError(f"FineStore table {table!r} has {len(shards)} non-empty shard descriptors but no rows")
