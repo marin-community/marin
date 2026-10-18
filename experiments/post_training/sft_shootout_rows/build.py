@@ -470,7 +470,9 @@ def main() -> None:
 
         def entry(attempt: Attempt, extra: dict) -> tuple[str, dict]:
             _, rendered, trace = kept[attempt.trial_id]
-            rendered = recovered.get(attempt.trial_id, rendered)
+            if attempt.trial_id in recovered:
+                rendered = recovered[attempt.trial_id]
+                extra = extra | {"plain_context_tokens": attempt.context}
             line = json.dumps(training_row(rendered.ids, rendered.mask, CONTEXT, PAD_TOKEN), separators=(",", ":"))
             return (
                 line,
@@ -483,8 +485,8 @@ def main() -> None:
                     "retry": attempt.retry,
                     "run": trace.get("run"),
                     "turns": dict(collections.Counter(attempt.authors)),
-                    "supervised_tokens": attempt.supervised,
-                    "context_tokens": attempt.context,
+                    "supervised_tokens": rendered.supervised,
+                    "context_tokens": len(rendered.ids),
                 }
                 | extra,
             )
