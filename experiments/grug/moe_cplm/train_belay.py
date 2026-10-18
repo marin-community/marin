@@ -21,13 +21,14 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import wandb
-from jax.experimental.multihost_utils import process_allgather, sync_global_devices
+from jax.experimental.multihost_utils import broadcast_one_to_all, process_allgather, sync_global_devices
 from fray.cluster import ResourceConfig
 from jax.sharding import PartitionSpec as P
 from levanter.data.text.datasets import BlockShuffleConfig, DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
 from levanter.data.text.examples import grug_lm_example_from_named
 from levanter.models.lm_model import LmExample
 from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.distributed import DistributedConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 
@@ -158,10 +159,7 @@ def main():
     parser.add_argument('--calibration', action='store_true')
     parser.add_argument('--logging-check', action='store_true')
     args = parser.parse_args()
-    # Each distributed process uses the same attempt suffix, while fresh Iris
-    # attempts get distinct curves and checkpoints. No checkpoint resume is claimed.
-    attempt = os.environ.get('IRIS_ATTEMPT_UID', args.run_name)
-    run_name = f'{args.run_name}-{attempt}'
+    run_name = args.run_name
     args.output.mkdir(parents=True, exist_ok=True)
     if args.logging_check:
         tracker = WandbConfig(entity=args.wandb_entity, project=args.wandb_project,
@@ -174,6 +172,16 @@ def main():
     flag = '--xla_allow_excess_precision=false'
     if flag not in os.environ.get('XLA_FLAGS','').split():
         os.environ['XLA_FLAGS'] = os.environ.get('XLA_FLAGS','')+' '+flag
+    # Iris task-attempt IDs differ by host. Broadcast one fresh process-group
+    # identity before constructing tracker and checkpoint paths.
+    jax_settings=json.loads(RECIPE.read_text())['trainer']['trainer']['jax_config']
+    jax_settings['jax_enable_pgle']=False
+    for name,value in jax_settings.items():
+        jax.config.update(name,value)
+    DistributedConfig().initialize()
+    identity=broadcast_one_to_all(np.frombuffer(uuid.uuid4().bytes,dtype=np.uint8).copy())
+    attempt=bytes(identity).hex()
+    run_name=f'{args.run_name}-{attempt}'
     identities=json.loads(Path(__file__).with_name('tokenizer_identity.json').read_text())
     for name,expected in identities.items():
         if hashlib.sha256((Path(args.tokenizer)/name).read_bytes()).hexdigest()!=expected:
@@ -182,6 +190,7 @@ def main():
         checkpoint_path=args.checkpoint_path+'/'+attempt, run_name=run_name,
         wandb_entity=args.wandb_entity, wandb_project=args.wandb_project,
         calibration=args.calibration, tokenizer_path=args.tokenizer)
+    config.trainer.trainer.distributed=replace(config.trainer.trainer.distributed,initialize_jax_distributed=False)
     initialize = config.trainer.trainer.initialize
 
     def checked_initialize():
@@ -235,7 +244,7 @@ def main():
                 if jax.process_index()==0:
                     if wandb.run is None or wandb.run.offline or wandb.run.disabled:
                         raise RuntimeError('Online W&B must initialize before optimizer updates')
-                    wandb.config.update({'seed':0,'restored_checkpoint':None,'iris_attempt_uid':attempt})
+                    wandb.config.update({'seed':0,'restored_checkpoint':None,'process_group_id':attempt,'iris_attempt_uid':os.environ.get('IRIS_ATTEMPT_UID')})
                     (args.output/'tracking.json').write_text(json.dumps({'url':wandb.run.url,'resumed':False}))
                 loss,finite,norms=jax.device_get(preflight(leaves,batch,**kwargs))
                 if not (bool(finite) and np.isfinite(loss) and np.all(norms>0)):
