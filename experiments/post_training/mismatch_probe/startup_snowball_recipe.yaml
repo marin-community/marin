@@ -1,0 +1,76 @@
+entrypoint: standard
+context_budget:
+  request_window_tokens: 2048
+  max_new_tokens_per_turn: 512
+  max_turns: 1
+environment:
+  env_class: gsm8k
+trainer:
+  placement:
+    policy_strict_spread_pg: true
+    overlap_init: true
+  strategy: megatron
+  flash_attn: false
+  use_sample_packing: false
+  gradient_checkpointing: true
+  offload_optimizer_during_rollouts: false
+  epochs: 50
+  max_steps: 0
+  update_epochs_per_batch: 1
+  micro_forward_batch_size_per_gpu: 1
+  ckpt_interval: -1
+  hf_save_interval: -1
+  eval_before_train: false
+  eval_interval: -1
+  resume_mode: none
+  logger: console
+  project_name: marin-mismatch-probe
+  algorithm:
+    advantage_estimator: grpo
+    use_kl_loss: false
+    use_kl_in_reward: false
+    batch_invariant: false
+  policy:
+    grug_query_bias_update_mode: frozen
+    optimizer_config:
+      optimizer: AdamW
+      lr: 0.0
+      weight_decay: 0.01
+      max_grad_norm: 1.0
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 2
+      context_parallel_size: 1
+      expert_model_parallel_size: 8
+      expert_tensor_parallel_size: 1
+  ref:
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 2
+      context_parallel_size: 1
+      expert_model_parallel_size: 8
+      expert_tensor_parallel_size: 1
+generator:
+  backend: vllm
+  model_dtype: bfloat16
+  vllm_attention_backend: FLASH_ATTN
+  run_engines_locally: true
+  weight_sync_backend: nccl
+  gpu_memory_utilization: 0.75
+  chat_template:
+    source: file
+    name_or_path: /tmp/marinskyrl/model_metadata/2b00011dc69414c122ea8f25b63e9ecb7649a539922d5129e9b9c6510eecc3dd/chat_template.jinja
+  engine_init_kwargs:
+    moe_backend: triton
+  trajectory_retention:
+    enabled: false
+    sample_fraction: 1.0
+    required: true
+  weight_sync_transport: expert_block
+  expert_block_sync:
+    timeout_seconds: 600
+    verify: false
+data:
+  kind: parquet
+  train_data: []
+  val_data: []

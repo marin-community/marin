@@ -12,4 +12,4 @@ required-environments = ["sys_platform == 'linux'"]
 override-dependencies = ["marin-rigging[secrets,prometheus]>=0.2.144.dev37540375919"]
 
 [tool.uv.sources]
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "main" }
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "atqamar/startup-oct18-expert-block-pair" }
