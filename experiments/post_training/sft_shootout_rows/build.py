@@ -528,10 +528,8 @@ def main() -> None:
                     "recovery", recovery.handoff_traces(traces), pool, tokenizer, allow_summarized=True
                 )
                 kept.update(handoff_kept)
-                slots = {task for task, a in chosen.items() if a.family == "tmax"}
-                handoff = recovery.plan_handoff(
-                    [a for a, _, _ in handoff_kept.values()], slots, len(slots), recovery_seed
-                )
+                tmax_rows = sum(a.family == "tmax" for a in chosen.values())
+                handoff = recovery.plan_handoff([a for a, _, _ in handoff_kept.values()], tmax_rows, recovery_seed)
                 added = sum(a.supervised for a in handoff)
                 clean = [a for a in chosen.values() if a.family == "tmax" and a.trial_id not in recovered]
                 dropped_clean = recovery.hold_budget(clean, added, recovery_seed)
@@ -539,7 +537,7 @@ def main() -> None:
                 b_tokens += added - sum(a.supervised for a in dropped_clean)
                 recovery_stats["handoff"] = {
                     "rule": (
-                        "conversations 1+ of passing summarized TMax plain trials on plain's TMax task slots, seeded "
+                        "conversations 1+ of passing summarized TMax plain trials (any pool task), seeded "
                         f"order, at most {recovery.HANDOFF_SHARE:.0%} of plain's TMax rows; clean TMax rows dropped in "
                         "seeded order until they cover the handoff rows' supervised tokens"
                     ),
@@ -553,6 +551,7 @@ def main() -> None:
                     "clean_tmax_rows_dropped": len(dropped_clean),
                     "supervised_tokens_dropped": sum(a.supervised for a in dropped_clean),
                     "B_minus_plain_B": b_tokens - plain["B_supervised_tokens"],
+                    "tasks_outside_plain_slots": len({a.task_id for a in handoff} - set(plain["task_slots"])),
                 }
                 selection += [{"task_id": a.task_id, "trial_id": a.trial_id, "handoff": True} for a in handoff]
                 selection = [item for item in selection if item["trial_id"] not in removed]

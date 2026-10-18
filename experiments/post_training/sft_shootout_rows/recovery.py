@@ -326,10 +326,13 @@ def seeded(items: list, seed: str) -> list:
     return order
 
 
-def plan_handoff(candidates: list, task_slots: set[str], family_rows: int, seed: str) -> list:
-    """Handoff rows from plain's TMax task slots, in seeded order, up to HANDOFF_SHARE of the family's rows."""
-    eligible = [attempt for attempt in candidates if attempt.task_id in task_slots]
-    return seeded(eligible, f"{seed}:handoff")[: round(HANDOFF_SHARE * family_rows)]
+def plan_handoff(candidates: list, family_rows: int, seed: str) -> list:
+    """Handoff rows in seeded order, up to HANDOFF_SHARE of the family's rows.
+
+    Not limited to plain's task slots: a task with a passing summarized trial has, in the dry build, no other passing
+    trajectory that fits 32k, so it is never one of plain's slots, and such a limit would leave no handoff row.
+    """
+    return seeded(candidates, f"{seed}:handoff")[: round(HANDOFF_SHARE * family_rows)]
 
 
 def hold_budget(clean: list, added: int, seed: str) -> list:

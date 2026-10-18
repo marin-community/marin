@@ -223,8 +223,8 @@ def test_handoff_cap_and_budget_rule():
         )
 
     candidates = [attempt(i, f"task-{i % 30}", 100) for i in range(40)]
-    chosen = recovery.plan_handoff(candidates, {f"task-{i}" for i in range(20)}, family_rows=100, seed="s")
-    assert len(chosen) == 13 and all(a.task_id in {f"task-{i}" for i in range(20)} for a in chosen)
+    chosen = recovery.plan_handoff(candidates, family_rows=100, seed="s")
+    assert len(chosen) == 13 and chosen == recovery.plan_handoff(list(reversed(candidates)), family_rows=100, seed="s")
     clean = [attempt(100 + i, f"clean-{i}", 250) for i in range(20)]
     dropped = recovery.hold_budget(clean, added=1300, seed="s")
     assert sum(a.supervised for a in dropped) >= 1300 > sum(a.supervised for a in dropped[:-1])
