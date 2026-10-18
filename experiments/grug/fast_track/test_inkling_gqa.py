@@ -141,3 +141,22 @@ def test_model_with_gqa_inkling_on_every_layer_is_causal(overrides):
         logits, logits_changed = logits_fn(model, tokens), logits_fn(model, changed)
     np.testing.assert_allclose(np.asarray(logits_changed[:, : cut + 1]), np.asarray(logits[:, : cut + 1]), atol=1e-6)
     assert not np.allclose(np.asarray(logits_changed[:, cut + 1 :]), np.asarray(logits[:, cut + 1 :]))
+
+
+def test_layer_carry_offload_keeps_the_loss_and_gradients():
+    """The plain layer scan with its carry under the offload remat policy computes the same loss and gradients."""
+    overrides = dict(
+        local_mixer=LocalMixer.SLIDING_WINDOW, attn_res=False, moe_implementation="fixed_pooled_wave_all_to_all"
+    )
+    tokens = jax.random.randint(jax.random.PRNGKey(1), (2, t._SEQ), 0, t._VOCAB)
+    results = []
+    for offload in (False, True):
+        mesh, model = t._model(layer_carry_offload=offload, **overrides)
+        loss_fn = eqx.filter_value_and_grad(lambda m, x: m.next_token_loss(x, jnp.ones(x.shape, jnp.float32)))
+        with jax.set_mesh(mesh):
+            loss, grads = eqx.filter_jit(loss_fn)(model, tokens)
+        results.append((float(loss), [np.asarray(g) for g in jax.tree.leaves(eqx.filter(grads, eqx.is_inexact_array))]))
+    (loss, grads), (offload_loss, offload_grads) = results
+    np.testing.assert_allclose(offload_loss, loss, rtol=1e-6)
+    for g, og in zip(grads, offload_grads, strict=True):
+        np.testing.assert_allclose(og, g, rtol=1e-5, atol=1e-7)

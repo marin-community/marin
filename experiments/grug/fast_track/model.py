@@ -29,6 +29,7 @@ from haliax import Axis
 from haliax.jax_utils import named_call
 from haliax.nn import ArrayStacked
 from jax import core, random
+from jax.ad_checkpoint import checkpoint_name
 from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
 
@@ -885,6 +886,10 @@ class GrugModelConfig:
     attn_res_fused_source_grads: bool = False
     """``scan_layers`` backward: update the AttnRes source cotangents with one Pallas kernel per layer instead of
     XLA's fusion, which re-reads every token's gate cotangent once per source (``attn_res_source_grads``)."""
+    layer_carry_offload: bool = False
+    """Without ``attn_res`` (the plain layer scan, every layer rematerialized): keep each layer's input, the
+    residual-stream carry, in pinned host memory for the backward instead of HBM, as the GB200 hero does
+    (``moe_hero_ep`` ``offload_carry`` remat mode; ~39 GiB per GPU at hero width). Same math."""
     scan_layers: bool = False
     """Run the AttnRes layer stack as a ``jax.lax.scan`` over ``global_every``-layer units on a fixed-shape
     history (``_AttnResHistory``), each layer rematerialized in the backward, instead of unrolling every layer.
@@ -1010,6 +1015,8 @@ class GrugModelConfig:
             len(self.moe_k_layers) != self.num_layers or max(self.moe_k_layers) > self.num_experts_per_token
         ):
             raise ValueError("moe_k_layers needs one count per layer, each <= num_experts_per_token")
+        if self.layer_carry_offload and self.attn_res:
+            raise ValueError("layer_carry_offload offloads the plain layer scan's carry (attn_res=false)")
         if self.scan_save_routed_output and not self.scan_layers:
             raise ValueError("scan_save_routed_output saves the routed output across the scan_layers backward")
         if self.moe_shared_placement != SharedExpertPlacement.FUSED and self.fp8_recipe in _DENSE_FP8_SIM:
@@ -5188,6 +5195,19 @@ def _strip_unread_weights(stats: dict[str, jax.Array], schedule: _BlockSchedule,
         stats[name] = jnp.concatenate([weights[:filled], weights[num_sources:]]) if has_partial else weights[:filled]
 
 
+# The plain layer scan's per-layer residual-stream input, named so a remat policy can offload it
+# (``layer_carry_offload``).
+LAYER_CARRY_REMAT_NAME = "grug_layer_carry"
+
+
+def _carry_named_block(
+    layer: "Block", x: Float[Array, "B S D"], mask: AttentionMask, use_long: jax.Array
+) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    """One plain-scan layer whose input carries ``LAYER_CARRY_REMAT_NAME``: a remat policy acts on named
+    intermediates, not on the checkpoint's arguments, so every use of the input reads it through the name."""
+    return layer(checkpoint_name(x, LAYER_CARRY_REMAT_NAME), mask, use_long, use_long)
+
+
 class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: LearnedRMSNorm
@@ -5532,12 +5552,20 @@ class Transformer(eqx.Module):
                 use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
                 lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
                 layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
-                return eqx.filter_checkpoint(layer, policy=None)(
-                    carry_hidden,
-                    layer_mask,
-                    use_long,
-                    use_long,
+                return eqx.filter_checkpoint(_carry_named_block, policy=carry_policy)(
+                    layer, carry_hidden, layer_mask, use_long
                 )
+
+            carry_policy = (
+                jax.checkpoint_policies.save_and_offload_only_these_names(
+                    names_which_can_be_saved=[],
+                    names_which_can_be_offloaded=[LAYER_CARRY_REMAT_NAME],
+                    offload_src="device",
+                    offload_dst="pinned_host",
+                )
+                if cfg.layer_carry_offload
+                else None
+            )
 
             hidden, stacked_router_stats = jax.lax.scan(
                 _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
