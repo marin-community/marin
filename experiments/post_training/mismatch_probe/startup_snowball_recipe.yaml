@@ -61,6 +61,7 @@ generator:
     source: file
     name_or_path: /tmp/marinskyrl/model_metadata/2b00011dc69414c122ea8f25b63e9ecb7649a539922d5129e9b9c6510eecc3dd/chat_template.jinja
   engine_init_kwargs:
+    load_format: dummy
     moe_backend: triton
   trajectory_retention:
     enabled: false
