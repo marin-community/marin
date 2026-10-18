@@ -64,7 +64,6 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
-from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.fast_track.attention_rows_probe import attention_rows_probe
 from experiments.grug.fast_track.byte_targets import token_byte_table
 from experiments.grug.fast_track.fact_probe import (
@@ -3184,6 +3183,10 @@ def _run_grug_local_with_memory_report(config: GrugRunConfig) -> None:
 
 def run_grug(config: GrugRunConfig) -> None:
     """Dispatch grug training through Fray jobs."""
+    # Orchestration brings in optional tokenization dependencies; direct TPU workers
+    # only need the training loop.
+    from experiments.grug.dispatch import dispatch_grug_training_run  # noqa: PLC0415
+
     trainer = config.trainer.trainer
     if trainer.id is None:
         raise ValueError("trainer.id must be set before dispatching grug training.")

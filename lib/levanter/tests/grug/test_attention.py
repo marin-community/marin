@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -16,6 +17,74 @@ from levanter.grug.attention import (
     token_validity_from_attention_mask,
 )
 from levanter.grug.attention._inkling_relpos import band_to_compact, compact_to_band, dense_rel_bias
+from levanter.grug.attention._core import blocked_inkling_attention
+
+
+@pytest.mark.parametrize("causal", [False, True])
+@pytest.mark.parametrize("window", [None, 37])
+@pytest.mark.parametrize("segments", [0, 1, 2])
+def test_structured_mask_query_tiles(causal, window, segments):
+    mask = AttentionMask(is_causal=causal, sliding_window=window)
+    if segments:
+        q_ids = (jnp.arange(256) // 73).at[-19:].set(-1)
+        k_ids = (jnp.arange(384) // 73).at[-17:].set(-1)
+        if segments == 2:
+            q_ids = jnp.stack((q_ids, q_ids // 2))
+            k_ids = jnp.stack((k_ids, k_ids // 2))
+        mask = mask.with_segment_ids(q_ids, k_ids)
+    reference = mask.materialize_mask(256, 384)
+    compute = eqx.filter_jit(lambda mask, start: mask.materialize_mask(64, 384, query_offset=start))
+    for offset in (0, 64, 192):
+        actual = compute(mask, jnp.asarray(offset, jnp.int32))
+        if reference is None:
+            assert actual is None
+        else:
+            np.testing.assert_array_equal(actual, reference[..., offset : offset + 64, :])
+
+
+@pytest.mark.parametrize("dense_mask", [False, True])
+@pytest.mark.parametrize(
+    "block_size,precision", [(128, None), (256, None), (64, "highest"), (128, "highest"), (256, "highest")]
+)
+def test_blocked_inkling_matches_reference_values_and_gradients(dense_mask, block_size, precision):
+    q, k, v = _make_qkv(batch=1, q_len=256, k_len=256, q_heads=2, kv_heads=1)
+    v = jax.random.normal(jax.random.key(4), (*v.shape[:-1], 12))
+    # A document boundary inside the second query tile catches tile-relative
+    # causal indices and loss of packed-document masking.
+    segments = jnp.asarray([[0] * 173 + [1] * 83])
+    mask = AttentionMask.causal(sliding_window=80).with_segment_ids(segments)
+    if dense_mask:
+        mask = mask.materialize_mask(256, 256)
+    states = jax.random.normal(jax.random.key(1), (1, 2, 256, 4)) * 0.1
+    bank = jax.random.normal(jax.random.key(2), (4, 128)) * 0.1
+    band = inkling_rel_bias(states, bank)
+    weights = jax.random.normal(jax.random.key(3), (*q.shape[:-1], v.shape[-1]))
+
+    def loss(q, k, v, band, *, blocked):
+        output = (
+            blocked_inkling_attention(q, k, v, mask, band, block_size=block_size)
+            if blocked
+            else reference_attention(q, k, v, mask, logits_dtype=jnp.float32, rel_bias=band)
+        )
+        return jnp.sum(output * weights), output
+
+    compute = jax.jit(jax.value_and_grad(loss, argnums=(0, 1, 2, 3), has_aux=True), static_argnames="blocked")
+    # Highest precision isolates indexing/transpose parity across tile shapes;
+    # TPU default matmul precision introduces tile-dependent float32 rounding.
+    # Keep the production 128-row path covered at default precision as well.
+    with jax.default_matmul_precision(precision):
+        (value, output), grads = compute(q, k, v, band, blocked=True)
+        (expected_value, expected_output), expected_grads = compute(q, k, v, band, blocked=False)
+    np.testing.assert_allclose(value, expected_value, atol=1e-4, rtol=1e-4)
+    for actual, expected in zip((output, *grads), (expected_output, *expected_grads), strict=True):
+        difference = np.abs(np.asarray(actual) - np.asarray(expected))
+        np.testing.assert_allclose(
+            actual,
+            expected,
+            atol=1e-4,
+            rtol=1e-4,
+            err_msg=f"max error {difference.max()}, mean error {difference.mean()}",
+        )
 
 
 def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 4, kv_heads: int = 2):

@@ -32,6 +32,7 @@ References: Kimi Linear tech report (arXiv 2510.26692), Gated Delta Networks
 (arXiv 2406.06484), and flash-linear-attention ``fla/ops/kda/naive.py``.
 """
 
+from functools import partial
 from typing import NamedTuple
 
 import jax
@@ -261,6 +262,8 @@ def chunk_kda(
     The ``"pallas_interpret"`` variants run the same kernels in the Pallas interpreter
     (CPU tests). The XLA path (``"xla"`` / ``"parallel"``, or ``"sequential"``) stays the
     default so the function runs on any backend.
+    ``"parallel_stacked"`` retains the reference pairwise composition order but
+    replaces padded scan interleaving with stack/reshape, tuned for TPU v4.
     """
     mm_dtype = matmul_dtype
 
@@ -339,7 +342,7 @@ def chunk_kda(
             mm,
             scan_unroll,
         )
-    elif scan_impl in ("parallel", "pallas", "pallas_interpret"):
+    elif scan_impl in ("parallel", "parallel_stacked", "parallel_stacked_split", "pallas", "pallas_interpret"):
         if prep_impl == "xla":
             prep = _chunk_prep_xla(qc, kc, ec, vc, gc, bc, mm, mm_dtype, c, masks)
         elif prep_impl in ("pallas", "pallas_interpret"):
@@ -358,13 +361,14 @@ def chunk_kda(
             )
         else:
             raise ValueError(f"prep_impl must be 'xla', 'pallas' or 'pallas_interpret', got {prep_impl!r}")
-        if scan_impl == "parallel":
-            out, state = _parallel_chunk_recurrence(prep, state, mm, lead, dk, dv)
+        if scan_impl in ("parallel", "parallel_stacked", "parallel_stacked_split"):
+            out, state = _parallel_chunk_recurrence(prep, state, mm, lead, dk, dv, scan_impl=scan_impl)
         else:
             out, state = _pallas_chunk_recurrence(prep, state, interpret=scan_impl == "pallas_interpret")
     else:
         raise ValueError(
-            f"scan_impl must be 'sequential', 'parallel', 'pallas' or 'pallas_interpret', got {scan_impl!r}"
+            "scan_impl must be 'sequential', 'parallel', 'parallel_stacked', 'parallel_stacked_split', 'pallas' or "
+            f"'pallas_interpret', got {scan_impl!r}"
         )
 
     out = out.reshape(*lead, n_chunks * c, dv)
@@ -555,7 +559,69 @@ def _chunk_prep_pallas(
     return ChunkPrep(*(x.reshape(*lead, *x.shape[1:]) for x in prep))
 
 
-def _parallel_chunk_recurrence(prep: ChunkPrep, state, mm, lead, dk, dv):
+def _compose_affine(left, right):
+    ml, cl = left
+    mr, cr = right
+    return jnp.einsum("...ij,...jk->...ik", mr, ml), jnp.einsum("...ij,...jm->...im", mr, cl) + cr
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(1, 2))
+def _scan_stride_slice(x, start, stop):
+    return x[..., start:stop:2, :, :]
+
+
+def _scan_stride_slice_fwd(x, start, stop):
+    # Retain only the input length in a zero-storage residual's static shape.
+    return _scan_stride_slice(x, start, stop), jnp.zeros((x.shape[-3], 0), dtype=x.dtype)
+
+
+def _scan_stride_slice_bwd(start, _stop, residual, cotangent):
+    n = residual.shape[0]
+    k = cotangent.shape[-3]
+    shape = (*cotangent.shape[:-3], n, *cotangent.shape[-2:])
+    if k == 0:
+        return (jnp.zeros(shape, dtype=cotangent.dtype),)
+    # Rebuild one slice's padding without combining distinct gradient branches.
+    joined = jnp.stack((cotangent, jnp.zeros_like(cotangent)), axis=-3)
+    joined = joined.reshape(*cotangent.shape[:-3], 2 * k, *cotangent.shape[-2:])
+    prefix = jnp.zeros((*cotangent.shape[:-3], start, *cotangent.shape[-2:]), dtype=cotangent.dtype)
+    joined = jnp.concatenate((prefix, joined), axis=-3)[..., :n, :, :]
+    tail = n - joined.shape[-3]
+    if tail:
+        zeros = jnp.zeros((*cotangent.shape[:-3], tail, *cotangent.shape[-2:]), dtype=cotangent.dtype)
+        joined = jnp.concatenate((joined, zeros), axis=-3)
+    return (joined,)
+
+
+_scan_stride_slice.defvjp(_scan_stride_slice_fwd, _scan_stride_slice_bwd)
+
+
+def _stacked_affine_scan(elems, *, split_vjp=False):
+    """Keep the reference pairwise scan order while interleaving without padded addition."""
+    n = elems[0].shape[-3]
+    if n < 2:
+        return elems
+    if split_vjp:
+        paired_evens = tuple(_scan_stride_slice(x, 0, -1) for x in elems)
+        odds = tuple(_scan_stride_slice(x, 1, None) for x in elems)
+        tail_evens = tuple(_scan_stride_slice(x, 2, None) for x in elems)
+    else:
+        paired_evens = tuple(x[..., :-1:2, :, :] for x in elems)
+        odds = tuple(x[..., 1::2, :, :] for x in elems)
+        tail_evens = tuple(x[..., 2::2, :, :] for x in elems)
+    odd = _stacked_affine_scan(_compose_affine(paired_evens, odds), split_vjp=split_vjp)
+    left = tuple(x[..., :-1, :, :] for x in odd) if n % 2 == 0 else odd
+    even = _compose_affine(left, tail_evens)
+    even = tuple(jnp.concatenate((x[..., :1, :, :], y), axis=-3) for x, y in zip(elems, even, strict=True))
+    result = []
+    for a, b in zip(even, odd, strict=True):
+        paired = jnp.stack((a[..., : n // 2, :, :], b), axis=-3)
+        paired = paired.reshape(*a.shape[:-3], 2 * (n // 2), *a.shape[-2:])
+        result.append(jnp.concatenate((paired, a[..., -1:, :, :]), axis=-3) if n % 2 else paired)
+    return tuple(result)
+
+
+def _parallel_chunk_recurrence(prep: ChunkPrep, state, mm, lead, dk, dv, *, scan_impl):
     """Chunk-parallel inter-chunk recurrence via a log-depth associative scan.
 
     The cross-chunk state update is *linear* in ``S``:
@@ -576,14 +642,11 @@ def _parallel_chunk_recurrence(prep: ChunkPrep, state, mm, lead, dk, dv):
     c0 = c_mat[..., 0, :, :] + jnp.einsum("...de,...ef->...df", m_mat[..., 0, :, :], state)
     c_mat = c_mat.at[..., 0, :, :].set(c0)
 
-    def combine(left, right):
-        m_l, c_l = left
-        m_r, c_r = right
-        m = jnp.einsum("...ij,...jk->...ik", m_r, m_l)
-        c = jnp.einsum("...ij,...jm->...im", m_r, c_l) + c_r
-        return m, c
-
-    _, s_incl = lax.associative_scan(combine, (m_mat, c_mat), axis=-3)  # S_0..S_{n-1}
+    _, s_incl = (
+        _stacked_affine_scan((m_mat, c_mat), split_vjp=scan_impl == "parallel_stacked_split")
+        if scan_impl in ("parallel_stacked", "parallel_stacked_split")
+        else lax.associative_scan(_compose_affine, (m_mat, c_mat), axis=-3)
+    )  # S_0..S_{n-1}
 
     # State entering each chunk: [S_init, S_0, ..., S_{n-2}].
     s_init = jnp.broadcast_to(state[..., None, :, :], (*lead, 1, dk, dv))

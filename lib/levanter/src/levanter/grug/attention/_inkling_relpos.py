@@ -25,6 +25,7 @@ for ``0 <= delta < rel_extent`` and ``i-delta`` in-mask (else 0). ``P`` is recon
 softmax LSE the forward kernel returns, so no ``[S,S]`` matrix is materialized.
 """
 
+import jax
 import jax.numpy as jnp
 from jax.sharding import PartitionSpec
 from jaxtyping import Array, Bool, Float, Int
@@ -96,10 +97,12 @@ def inkling_rel_bias(
     return band.reshape(b, h, s, rel_bias_band_width(rel_extent))
 
 
-def dense_rel_bias(band: Float[Array, "B H Q W"], q_len: int, k_len: int) -> Float[Array, "B H Q K"]:
-    """Expand a banded bias to the dense ``[B,H,Q,K]`` additive logit term (reference path)."""
+def dense_rel_bias(
+    band: Float[Array, "B H Q W"], q_len: int, k_len: int, *, query_offset: int | jax.Array = 0
+) -> Float[Array, "B H Q K"]:
+    """Expand a query slice's band to dense logits, starting at absolute ``query_offset``."""
     rel_extent = rel_extent_of_band(band)
-    i_idx = jnp.arange(q_len)[:, None]
+    i_idx = (jnp.arange(q_len) + query_offset)[:, None]
     j_idx = jnp.arange(k_len)[None, :]
     column = j_idx - (i_idx // REL_BIAS_BLOCK) * REL_BIAS_BLOCK + rel_extent  # [Q, K]
     valid = (column >= 0) & (column < band.shape[-1])
