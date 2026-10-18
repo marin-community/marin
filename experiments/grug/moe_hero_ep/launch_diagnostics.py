@@ -6,12 +6,15 @@
 import dataclasses
 import os
 from datetime import timedelta
+from enum import StrEnum
 
 import click
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig
+from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.grug.sharding import _compact_grug_mesh_shape
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
@@ -62,6 +65,37 @@ DEFAULT_HERO_STEPS = 25
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 # The hero has no tensor parallelism.
 HERO_MODEL_AXIS_SIZE = 1
+# The 16k-vocab Belay data: one shuffled flat cache tokenized with hero-bpe-v16384.
+V16384_CACHE_DIR = "s3://marin-us-east-02a/marin/datakit/hero_tok/v16384_shuf/train"
+V16384_TOKENIZER = "hero-bpe-v16384"
+V16384_VOCAB_SIZE = 16384
+
+
+class DataSource(StrEnum):
+    """Training data and tokenizer for a diagnostic."""
+
+    HARRIER = "harrier"
+    """The hero's Harrier 2026.08.18 mixture with the 128k Marin tokenizer."""
+    V16384 = "v16384"
+    """The Belay 16k-vocab cache; the model's vocabulary shrinks to match."""
+
+
+def v16384_data_config() -> LmDataConfig:
+    return LmDataConfig(
+        tokenizer=V16384_TOKENIZER,
+        cache_dir=None,
+        components={
+            "train": DatasetComponent(
+                source=None,
+                cache_dir=V16384_CACHE_DIR,
+                format=TextLmDatasetFormat(),
+                tags=["train"],
+                flat_cache=True,
+            )
+        },
+        train_weights={"train": 1.0},
+        auto_build_caches=False,
+    )
 
 
 def validated_batch_axis_size(
@@ -121,6 +155,7 @@ def build_diagnostic_run(
     profile_steps: int = 0,
     profile_start_step: int = 5,
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE,
+    data_source: DataSource = DataSource.HARRIER,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build a bounded diagnostic run for the production EP64 hero recipe.
@@ -176,6 +211,10 @@ def build_diagnostic_run(
         )
         if value is not None
     }
+    if data_source == DataSource.V16384:
+        if eval_every > 0:
+            raise ValueError("the v16384 data source has no validation sets; pass eval_every=0")
+        overrides["vocab_size"] = V16384_VOCAB_SIZE
     if overrides:
         model = dataclasses.replace(model, **overrides)
     model = with_transport_remat_mode(model)
@@ -290,7 +329,7 @@ def build_diagnostic_run(
                     wave_tag,
                     size_tag,
                     "gb200",
-                    HARRIER_MIX_2026_08_18_TAG,
+                    HARRIER_MIX_2026_08_18_TAG if data_source == DataSource.HARRIER else V16384_TOKENIZER,
                     "MHEP",
                 ],
                 group="moe-hero-ep",
@@ -313,14 +352,17 @@ def build_diagnostic_run(
         )
         if context_axis_size > 1:
             trainer = dataclasses.replace(trainer, mesh=grug_trainer_mesh_config(context_axis_size))
-        data = harrier_mix_2026_08_18_data_config(
-            ctx=ctx,
-            total_steps=total_schedule_steps,
-            batch_size=batch_size,
-            max_seq_len=model.max_seq_len,
-            experiment_flops=experiment_flops,
-            validation=validation,
-        )
+        if data_source == DataSource.V16384:
+            data = v16384_data_config()
+        else:
+            data = harrier_mix_2026_08_18_data_config(
+                ctx=ctx,
+                total_steps=total_schedule_steps,
+                batch_size=batch_size,
+                max_seq_len=model.max_seq_len,
+                experiment_flops=experiment_flops,
+                validation=validation,
+            )
         return GrugRunConfig(
             model=model,
             data=data,
@@ -352,7 +394,7 @@ def build_diagnostic_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(HARRIER_MIX_2026_08_18_STORE, *validation),
+        deps=(HARRIER_MIX_2026_08_18_STORE, *validation) if data_source == DataSource.HARRIER else (),
         runtime_args={"train_resources": train_resources},
     )
 
@@ -557,6 +599,13 @@ def build_diagnostic_run(
     help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to 1.0.",
 )
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
+@click.option(
+    "--data-source",
+    type=click.Choice([source.value for source in DataSource]),
+    default=DataSource.HARRIER.value,
+    show_default=True,
+    help="harrier: the hero's 128k-vocab mixture. v16384: the Belay 16k-vocab cache with vocab_size=16384.",
+)
 @build_options
 def main(
     run_id: str,
@@ -590,6 +639,7 @@ def main(
     qk_mult: float | None,
     qk_mult_long_scale: float | None,
     restore_from: str | None,
+    data_source: str,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
         run_id=run_id,
@@ -633,6 +683,7 @@ def main(
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
         training_data_mode=TrainingDataMode(training_data),
+        data_source=DataSource(data_source),
     )
 
 
