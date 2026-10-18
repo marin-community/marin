@@ -260,6 +260,8 @@ def main(argv=None):
     run_name = args.run_name
     args.output.mkdir(parents=True, exist_ok=True)
     if args.logging_check:
+        if os.environ.get("IRIS_JOB_ID"):
+            raise ValueError("Run the logging check once on the remote submit host before Iris submission")
         tracker = WandbConfig(
             entity=args.wandb_entity,
             project=args.wandb_project,
@@ -287,7 +289,7 @@ def main(argv=None):
     attempt = bytes(identity).hex()
     run_name = f"{args.run_name}-{attempt}"
     args.output = args.output / attempt
-    args.output.mkdir(parents=True, exist_ok=False)
+    args.output.mkdir(parents=True, exist_ok=True)
     artifact_root = args.artifact_root.rstrip("/") + "/" + attempt
     identities = json.loads(Path(__file__).with_name("tokenizer_identity.json").read_text())
     for name, expected in identities.items():

@@ -33,9 +33,10 @@ def test_grouped_histogram_counts(bins, concentrated):
 
 
 @pytest.mark.timeout(600)
+@pytest.mark.parametrize("histogram_method", ["flat", "two-stage"])
 @pytest.mark.parametrize("local_tokens", [8192, 32768])
 @pytest.mark.parametrize("constant", [False, True])
-def test_qb_thresholds_on_tpu_v4(constant, local_tokens):
+def test_qb_thresholds_on_tpu_v4(constant, local_tokens, histogram_method):
     """Exercise the full local histogram shape and cross-chip integer reduction."""
     devices = jax.local_devices()
     if devices[0].platform != "tpu" or devices[0].device_kind != "TPU v4":
@@ -69,6 +70,7 @@ def test_qb_thresholds_on_tpu_v4(constant, local_tokens):
                 target_share=jnp.asarray(share),
                 num_experts=experts,
                 n_bins=bins,
+                histogram_method=histogram_method,
                 batch_axes=("batch",),
             )
         )(sharded)
