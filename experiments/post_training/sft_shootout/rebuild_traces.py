@@ -129,6 +129,16 @@ def harbor_results(root: StoragePath) -> dict[str, dict]:
     return results
 
 
+def final_attempts(root: StoragePath) -> dict[str, dict]:
+    """The last Harbor attempt of each trial (highest retry), keyed by trial name and tagged with its trial_id."""
+    final: dict[str, dict] = {}
+    for trial_id, attempt in harbor_results(root).items():
+        current = final.get(attempt["trial_name"])
+        if current is None or attempt["retry"] > current["retry"]:
+            final[attempt["trial_name"]] = {**attempt, "trial_id": trial_id}
+    return final
+
+
 def token_counts(conversation: list[dict]) -> dict[str, dict[str, int]]:
     """Prompt, completion and reasoning tokens summed per author, as reported by the serving backends."""
     totals: dict[str, dict[str, int]] = defaultdict(lambda: {"turns": 0, "prompt": 0, "completion": 0, "reasoning": 0})

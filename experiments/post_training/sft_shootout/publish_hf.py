@@ -71,15 +71,24 @@ SCHEMA = pa.schema(
 )
 
 
+ROUND_DIR = re.compile(r"round-(\d+)")
+
+
+def round_number(prefix: str) -> int:
+    return int(prefix.rsplit("-", 1)[-1])
+
+
 def list_runs(root: str) -> list[str]:
     runs = []
     for kind in sorted(str(p).rstrip("/") for p in StoragePath(root).ls() if p.isdir()):
         if kind.rsplit("/", 1)[-1] == "shards":
             continue
         for shard in sorted(str(p).rstrip("/") for p in StoragePath(kind).ls() if p.isdir()):
-            for prefix in [f"{shard}/round-{r}" for r in range(1, 9)] if kind.endswith("-relay") else [shard]:
-                if StoragePath(f"{prefix}/rebuilt.jsonl").exists():
-                    runs.append(prefix)
+            prefixes = [shard]
+            if kind.endswith("-relay"):
+                rounds = [str(p).rstrip("/") for p in StoragePath(shard).ls() if p.isdir()]
+                prefixes = sorted((r for r in rounds if ROUND_DIR.fullmatch(r.rsplit("/", 1)[-1])), key=round_number)
+            runs.extend(prefix for prefix in prefixes if StoragePath(f"{prefix}/rebuilt.jsonl").exists())
     return runs
 
 

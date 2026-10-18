@@ -78,7 +78,7 @@ from experiments.post_training.sft_shootout.glm_proxy import (
     build_proxy,
     load_tokenizer,
 )
-from experiments.post_training.sft_shootout.rebuild_traces import harbor_results
+from experiments.post_training.sft_shootout.rebuild_traces import final_attempts
 from experiments.post_training.sft_shootout.relay import Author
 from experiments.post_training.sft_shootout.scrub_run import scrub_text
 
@@ -481,10 +481,7 @@ def unserved_trials(job_dir: Path, requests: Path) -> dict:
             record = json.loads(line)
             if record.get("status") == 200:
                 served.add(record.get("trial"))
-    final: dict[str, dict] = {}
-    for trial_id, attempt in harbor_results(StoragePath(str(job_dir))).items():
-        if attempt["trial_name"] not in final or attempt["retry"] > final[attempt["trial_name"]]["retry"]:
-            final[attempt["trial_name"]] = {**attempt, "trial_id": trial_id}
+    final = final_attempts(StoragePath(str(job_dir)))
     unserved = sum(1 for t in final.values() if t["exception"] and t["trial_id"] not in served)
     return {"trials": len(final), "unserved": unserved, "share": unserved / len(final) if final else 0.0}
 

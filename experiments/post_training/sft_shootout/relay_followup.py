@@ -21,16 +21,12 @@ from collections import Counter, defaultdict
 
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.sft_shootout.rebuild_traces import harbor_results
+from experiments.post_training.sft_shootout.rebuild_traces import final_attempts
 
 
 def round_counts(prefix: str) -> tuple[Counter, Counter]:
     """(relay episodes, runs) per task in one round. A trial that raised and has no GLM turn is not a run."""
-    final: dict[str, dict] = {}
-    for trial_id, attempt in harbor_results(StoragePath(prefix)).items():
-        current = final.get(attempt["trial_name"])
-        if current is None or attempt["retry"] > current["retry"]:
-            final[attempt["trial_name"]] = {**attempt, "trial_id": trial_id}
+    final = final_attempts(StoragePath(prefix))
     glm_turns: dict[str, int] = defaultdict(int)
     for line in StoragePath(f"{prefix}/rebuilt.jsonl").read_text().splitlines():
         row = json.loads(line)

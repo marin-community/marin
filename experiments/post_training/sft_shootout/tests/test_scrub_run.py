@@ -31,7 +31,7 @@ def test_scrubs_every_break_shape_and_keeps_fixtures():
         TOKEN,
         wrapped(TOKEN, "\n"),
         wrapped(TOKEN, "\\n"),
-        wrapped(TOKEN, "\\\\n"),  # a log line in a tool output, JSON inside JSON (#212 shard-01)
+        wrapped(TOKEN, "\\\\n"),  # a log line in a tool output, JSON inside JSON
         wrapped(TOKEN, "\\\\\\\\n  "),
         "e\\\\ny" + TOKEN[2:],  # a break inside the eyJ prefix
     ]

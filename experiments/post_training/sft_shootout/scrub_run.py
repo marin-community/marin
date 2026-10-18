@@ -24,7 +24,7 @@ import sys
 from rigging.filesystem.storage_path import StoragePath
 
 # A line break inside a token: whitespace, or an escaped n/r/t behind any number of backslashes (JSON inside
-# JSON doubles them, e.g. a tool output holding a log line, inside rebuilt.jsonl). Same class as #211's guard.
+# JSON doubles them, e.g. a tool output holding a log line, inside rebuilt.jsonl).
 BREAK = r"(?:\s|\\+[nrt])"
 BREAKS = re.compile(rf"{BREAK}+")
 SEGMENT = rf"[A-Za-z0-9_\-](?:[A-Za-z0-9_\-]|{BREAK})*"
@@ -74,8 +74,8 @@ def main() -> None:
             path = StoragePath(f"{directory}/{name}")
             try:
                 text = path.read_text()
-            except (UnicodeDecodeError, OSError):
-                continue
+            except UnicodeDecodeError:
+                continue  # binary output; every text output is checked, and a read failure is an error
             found = count_tokens(text)
             if not found:
                 continue

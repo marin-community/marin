@@ -250,7 +250,7 @@ def build_proxy(
                     record["withheld_student_turn"] = turn
                     response, latency = await call(teacher, body)
                     turn = turn_record(teacher, Trigger.COMPLETION_CLAIM, response, latency)
-        except Exception as error:  # an unlogged 500 hides proxy failures (#212 SWE relay shard-00 round 3)
+        except Exception as error:  # log it: a bare 500 tells the agent nothing and leaves no trace of the cause
             logger.exception("proxy failure for trial %s", trial)
             log.write(
                 {
