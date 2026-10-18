@@ -630,7 +630,7 @@ def _compute_flops(
         num_heads=model_config.num_heads,
         seq_len=model_config.max_seq_len,
         vocab_size=model_config.vocab_size,
-        glu=True,
+        glu=not model_config.ungated_relu2,
         num_experts=model_config.num_experts,
         num_shared_experts=model_config.num_shared_experts if model_config.shared_expert_intermediate_dim > 0 else 0,
         num_experts_per_tok=model_config.num_experts_per_token,
@@ -644,8 +644,11 @@ def _compute_flops(
     # or MFU is overstated by roughly the compression ratio.
     if model_config.latent_dim is not None:
         latent, hidden = model_config.latent_dim, model_config.hidden_dim
-        # Matches the routed term in `lm_flops_per_token`: 2 * 3 * width * intermediate * top_k.
-        routed_delta = 2 * 3 * model_config.intermediate_dim * model_config.num_experts_per_token * (latent - hidden)
+        # Matches the routed term in `lm_flops_per_token`: 2 * matrices * width * intermediate * top_k.
+        matrices = 2 if model_config.ungated_relu2 else 3
+        routed_delta = (
+            2 * matrices * model_config.intermediate_dim * model_config.num_experts_per_token * (latent - hidden)
+        )
         # W_down (hidden -> latent) and W_up (latent -> hidden), once per token each.
         projection = 2 * 2 * hidden * latent
         flops_per_token += model_config.num_layers * (routed_delta + projection)
