@@ -21,8 +21,8 @@ def _named(values, dtype=jnp.float32):
 
 
 def _visit(state, input_ids, loss_weights, token_loss):
-    keys, arrays = state.lookup(input_ids, loss_weights)
-    history = PlateauHistory(_named(arrays["previous"]), _named(arrays["last"]), _named(arrays["visits"], jnp.int32))
+    keys, host = state.lookup(input_ids, loss_weights)
+    history = PlateauHistory(_named(host.previous), _named(host.last), _named(host.visits, jnp.int32))
     dropped = np.asarray(plateau_mask(CONFIG, history, _named(token_loss)).array) & (loss_weights > 0)
     state.record(keys, loss_weights, token_loss)
     return dropped

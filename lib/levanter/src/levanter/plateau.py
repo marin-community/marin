@@ -27,14 +27,12 @@ import numpy as np
 from haliax import NamedArray, NamedOrNumeric
 from jax.experimental import multihost_utils
 
-import levanter.tracker
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import is_checkpoint_path
 from levanter.metrics import Metric, ReductionType
 from levanter.models.lm_model import LmExample, LmHeadModel, split_activations
 from levanter.models.loss import maybe_fused_next_token_loss, next_token_loss_weight
 from levanter.trainer import S, Trainer
-from levanter.tracker import capture_time
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 logger = logging.getLogger(__name__)
@@ -50,6 +48,14 @@ class PlateauDroppingConfig:
     """Floor on the earlier loss in each relative change, in nats."""
     min_visits: int = 3
     """The first visit at which a token can be dropped; the test needs that many losses."""
+
+
+class HostHistory(typing.NamedTuple):
+    """A batch's history on the host, laid out like ``example.tokens``; fields as in PlateauHistory."""
+
+    previous: np.ndarray
+    last: np.ndarray
+    visits: np.ndarray
 
 
 class PlateauHistory(typing.NamedTuple):
@@ -150,7 +156,7 @@ class PlateauState:
     def __init__(self):
         self.rows: dict[str, RowHistory] = {}
 
-    def lookup(self, input_ids: np.ndarray, loss_weights: np.ndarray) -> tuple[list[str], dict[str, np.ndarray]]:
+    def lookup(self, input_ids: np.ndarray, loss_weights: np.ndarray) -> tuple[list[str], HostHistory]:
         """Return each row's key and the batch's history arrays."""
         keys = [row_key(ids, weights) for ids, weights in zip(input_ids, loss_weights, strict=True)]
         previous = np.zeros(input_ids.shape, dtype=np.float32)
@@ -163,7 +169,7 @@ class PlateauState:
             previous[index, row.positions] = row.previous
             last[index, row.positions] = row.last
             visits[index, row.positions] = row.visits
-        return keys, {"previous": previous, "last": last, "visits": visits}
+        return keys, HostHistory(previous, last, visits)
 
     def record(self, keys: list[str], loss_weights: np.ndarray, token_loss: np.ndarray) -> None:
         """Add one visit per row. Positions are the supervised next-token targets."""
@@ -237,6 +243,7 @@ class PlateauTrainer(Trainer):
             raise ValueError("Plateau dropping normalizes over the global batch; microbatches are not supported")
         self.plateau = PlateauState()
         self._plateau_saved_updates = -1
+        self._pending: tuple[list[str], np.ndarray] = ([], np.zeros(0))
 
     @staticmethod
     def plateau_file(directory: str, updates: int) -> StoragePath:
@@ -246,9 +253,10 @@ class PlateauTrainer(Trainer):
         """Load the history saved with the checkpoint this run resumed from."""
         if updates == 0:
             return
-        directories = []
-        for path in self.checkpoint_search_paths:
-            directories.append(path.rstrip("/").rsplit("/", 1)[0] if is_checkpoint_path(path) else path)
+        directories = [
+            str(StoragePath(path).parent) if is_checkpoint_path(path) else path
+            for path in self.checkpoint_search_paths
+        ]
         for directory in directories:
             path = self.plateau_file(directory, updates)
             if path.exists():
@@ -274,38 +282,21 @@ class PlateauTrainer(Trainer):
         self.load_plateau_state(int(state.step))
         return super().training_steps(state, train_loader)
 
-    def train_step(self, state: S, *batch, **batch_kwargs) -> StepInfo[S]:
+    def _step_inputs(self, batch: tuple) -> tuple:
+        """Look up the batch's history; the compiled loss receives ``(example, history)``."""
         (example,) = batch
-        input_ids = _host(example.tokens.array)
         loss_weights = _host(example.loss_weight.array)
-        keys, arrays = self.plateau.lookup(input_ids, loss_weights)
-        history = PlateauHistory(**{name: _device(values, example.tokens) for name, values in arrays.items()})
+        keys, host = self.plateau.lookup(_host(example.tokens.array), loss_weights)
+        self._pending = (keys, loss_weights)
+        history = PlateauHistory(*(_device(values, example.tokens) for values in host))
+        return (example, history)
 
-        hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks)
-        with capture_time() as step_time:
-            if hooks_this_time:
-                result = self._maybe_save_jaxpr(
-                    "train_step", self._jit_train_step_fn, state, (example, history), batch_kwargs
-                )
-            else:
-                result = self._maybe_save_jaxpr(
-                    "train_step_hooks", self._jit_train_step_fn_no_hook, state, (example, history), batch_kwargs
-                )
-            loss = result.loss.item()
-        if self.config.crash_on_nan and jnp.isnan(loss):
-            raise RuntimeError("Loss is NaN")
-
-        metrics = dict(result.loss_metrics)
-        token_loss = _host(metrics.pop(f"train/{TOKEN_LOSS_METRIC}"))
-        self.plateau.record(keys, loss_weights, token_loss)
-
-        info = StepInfo(result.new_state, loss, step_time(), _event_handler=self.hooks.emit_event)
-        with capture_time() as hook_time:
-            self.run_hooks(info)
-            if hooks_this_time:
-                self.hooks.run_jit_hooks_outside_step(info, result.hook_infos)
-        levanter.tracker.log({**metrics, "throughput/hook_time": hook_time()}, step=info.step)
-        return info
+    def _step_metrics(self, result) -> dict[str, typing.Any]:
+        """Record this step's token losses before the hooks run, so a checkpoint saved now includes them."""
+        metrics = super()._step_metrics(result)
+        keys, loss_weights = self._pending
+        self.plateau.record(keys, loss_weights, _host(metrics.pop(f"train/{TOKEN_LOSS_METRIC}")))
+        return metrics
 
     def run_hooks(self, info: StepInfo, force: bool = False):
         """Run the hooks; if the checkpointer saved, save the history that matches it."""
