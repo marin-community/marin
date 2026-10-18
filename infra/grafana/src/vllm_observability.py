@@ -1436,8 +1436,7 @@ histogram_increments AS (
            CASE name
                WHEN 'generation_tokens_total' THEN 'generated_tokens'
                WHEN 'prompt_tokens_total' THEN 'prompt_tokens'
-               WHEN 'num_preemptions_total' THEN 'preemptions'
-               ELSE 'ttft_observations' END AS metric,
+               WHEN 'num_preemptions_total' THEN 'preemptions' END AS metric,
            'total' AS stat, name AS series, SUM(delta) AS value,
            CASE WHEN name = 'num_preemptions_total' THEN 'preemptions' ELSE 'tokens' END AS unit,
            CAST(NULL AS VARCHAR) AS status, CAST(COUNT(delta) AS BIGINT) AS samples,
