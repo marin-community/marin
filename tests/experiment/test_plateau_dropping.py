@@ -13,6 +13,7 @@ from levanter.main.train_lm import TrainLmConfig, main
 from levanter.models.llama import LlamaConfig
 from levanter.optim.config import AdamConfig
 from levanter.plateau import PlateauDroppingConfig, PlateauState
+from levanter.testing.cpu_devices import run_on_cpu_devices
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 from safetensors.numpy import load_file
@@ -178,3 +179,134 @@ def test_plateau_dropping_rises_over_epochs_and_resume_reproduces_the_mask(tmp_p
     (run_path / "checkpoints" / f"plateau-updates-{resume_at}.npz").unlink()
     with pytest.raises(FileNotFoundError, match="plateau-updates"):
         main(missing)
+
+
+@pytest.mark.timeout(900)
+def test_plateau_dropping_under_context_parallel_snowball_mesh():
+    run_on_cpu_devices(
+        "import runpy; runpy.run_path('tests/experiment/test_plateau_dropping.py')['_check_context_parallel_plateau']()",
+        device_count=8,
+    )
+
+
+def _check_context_parallel_plateau():
+    """Tiny Snowball on 8 CPU devices: 2-way context parallel and 4-way expert, against no context axis."""
+    import tempfile
+    from pathlib import Path
+
+    from levanter.models.snowball import SnowballConfig
+    from levanter.utils.mesh import MeshConfig
+
+    steps_per_epoch, epochs = 4, 6
+    rows = []
+    for index in range(32):
+        tokens = (jnp.arange(16, dtype=jnp.int32) * (index % 7 + 3) + index) % 60 + 2
+        weights = (jnp.arange(16) >= 3 + index % 4).astype(jnp.float32)
+        rows.append(GrugLmExample.causal(tokens, loss_weight=weights))
+    supervised = int(sum(float(row.loss_weight.sum()) for row in rows))
+    meshes = {
+        "context": MeshConfig(
+            axes={"data": 1, "replica": 1, "model": 1, "context": 2, "expert": -1},
+            compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context", "vocab": "model"},
+        ),
+        "no-context": MeshConfig(
+            axes={"data": 1, "replica": 1, "model": 1, "expert": -1},
+            compute_mapping={"batch": ["replica_dcn", "data", "expert"], "vocab": "model"},
+        ),
+    }
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        tokenizer_path = root / "tokenizer"
+        PreTrainedTokenizerFast(
+            tokenizer_object=Tokenizer(
+                models.WordLevel({"<pad>": 0, "<eos>": 1, **{f"t{i}": i for i in range(2, 64)}}, unk_token="<pad>")
+            ),
+            pad_token="<pad>",
+            eos_token="<eos>",
+        ).save_pretrained(tokenizer_path)
+
+        def train(name, mesh, resume_from=None):
+            output = root / name
+            main(
+                TrainLmConfig(
+                    data=LmDataConfig(
+                        components={"train": DirectDatasetComponent(datasets={"train": ListAsyncDataset(rows)})},
+                        tokenizer=str(tokenizer_path),
+                        shuffle=False,
+                        mixture_block_size=8,
+                    ),
+                    train_seq_len=16,
+                    model=SnowballConfig(
+                        vocab_size=64,
+                        hidden_dim=32,
+                        intermediate_dim=32,
+                        shared_expert_intermediate_dim=32,
+                        num_experts=8,
+                        num_experts_per_token=2,
+                        num_layers=1,
+                        num_heads=4,
+                        num_kv_heads=2,
+                        head_dim=8,
+                        max_seq_len=16,
+                        sliding_window=8,
+                        attention_implementation="reference",
+                        tokenizer=str(tokenizer_path),
+                    ),
+                    optimizer=AdamConfig(
+                        learning_rate=3e-3, weight_decay=0, warmup=0, lr_schedule="constant", max_grad_norm=1.0
+                    ),
+                    trainer=TrainerConfig(
+                        id=name,
+                        seed=42,
+                        mesh=mesh,
+                        use_explicit_mesh_axes=True,
+                        train_batch_size=8,
+                        num_train_steps=epochs * steps_per_epoch,
+                        max_eval_batches=0,
+                        load_checkpoint=resume_from is not None,
+                        load_checkpoint_path=resume_from,
+                        tracker=(
+                            (EpochTrackerConfig(str(output), steps_per_epoch, supervised),)
+                            if resume_from is None
+                            else (JsonLoggerConfig(),)
+                        ),
+                        checkpointer=CheckpointerConfig(
+                            base_path=str(output / "checkpoints"),
+                            append_run_id_to_base_path=False,
+                            keep=[dict(every=steps_per_epoch)],
+                            save_interval=None,
+                        ),
+                        require_accelerator=False,
+                        log_jaxprs=False,
+                        log_xla_hlo=False,
+                        distributed=DistributedConfig(initialize_jax_distributed=False),
+                    ),
+                    plateau_dropping=PlateauDroppingConfig(),
+                )
+            )
+            return _epoch_rows(output) if resume_from is None else None
+
+        parallel = train("context", meshes["context"])
+        plain = train("no-context", meshes["no-context"])
+        assert [row["completed_updates"] for row in parallel] == [steps_per_epoch * (e + 1) for e in range(epochs)]
+        assert parallel[0]["plateau_dropped_tokens"] == parallel[1]["plateau_dropped_tokens"] == 0
+        assert parallel[-1]["plateau_dropped_tokens"] > 0
+        for left, right in zip(parallel, plain, strict=True):
+            assert left["supervised_tokens"] == right["supervised_tokens"] == supervised
+            assert left["plateau_dropped_tokens"] == right["plateau_dropped_tokens"]
+            np.testing.assert_allclose(left["train_loss"], right["train_loss"], rtol=2e-3)
+
+        # The keep policy saves at step 12, after 13 updates: a resume in the middle of epoch 4.
+        checkpoints = root / "context" / "checkpoints"
+        resume_updates = 3 * steps_per_epoch + 1
+        assert (checkpoints / f"plateau-updates-{resume_updates}.npz").exists()
+        train("context-resumed", meshes["context"], resume_from=str(checkpoints / f"step-{resume_updates - 1}"))
+        final = f"plateau-updates-{epochs * steps_per_epoch}.npz"
+        expected = PlateauState.loads((checkpoints / final).read_bytes())
+        actual = PlateauState.loads((root / "context-resumed" / "checkpoints" / final).read_bytes())
+        assert expected.rows.keys() == actual.rows.keys()
+        for key, row in expected.rows.items():
+            assert row.visits == actual.rows[key].visits == epochs
+            np.testing.assert_array_equal(row.previous, actual.rows[key].previous)
+            np.testing.assert_array_equal(row.last, actual.rows[key].last)
