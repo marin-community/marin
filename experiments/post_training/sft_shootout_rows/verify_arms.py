@@ -9,7 +9,8 @@ padded_rows, a multiple of 16, with steps = padded_rows / 16; padding rows are p
 supervised and context tokens equal the split's totals; no training row comes from a held-out task (pool v5 ids in the
 manifest). Across arms: replay rows in every epoch file are the same multiset as plain's epoch 0. Plain: the three
 epoch files hold the same rows (as a multiset) in different orders. RS-multi: each epoch's agentic supervised tokens
-are within 1% of plain's B, on plain's task slots.
+are within 1% of plain's B, on plain's task slots. Recovery: plain's trials and B exactly, every row trains plain's
+target tokens, and rows not marked injected are byte-identical to plain's. Any other arm is refused.
 
     python -m experiments.post_training.sft_shootout_rows.verify_arms <plain prefix> [<other arm prefix> ...]
 """
@@ -64,6 +65,8 @@ def check_prefix(uri: str) -> ArmCheck:
         supervised, context = collections.Counter(), collections.Counter()
         replay = collections.Counter()
         agentic = collections.Counter()
+        # Per agentic trial: (row sha256, sha256 of the trained target tokens), for row-level comparison with plain.
+        by_trial = {}
         for number, line in enumerate(lines):
             row = json.loads(line)
             ids, weights = row["input_ids"], row["loss_weights"]
@@ -82,9 +85,19 @@ def check_prefix(uri: str) -> ArmCheck:
             context[entry["family"]] += entry["context_tokens"]
             digest = hashlib.sha256(line.encode()).hexdigest()
             (replay if entry["family"] == "replay" else agentic)[digest] += 1
+            if entry["family"] != "replay":
+                # loss_weights[i] scores the prediction of input_ids[i + 1].
+                targets = [ids[i + 1] for i, weight in enumerate(weights) if weight]
+                by_trial[entry["trial_id"]] = (digest, hashlib.sha256(json.dumps(targets).encode()).hexdigest())
         if dict(supervised) != split["supervised_tokens"] or dict(context) != split["context_tokens"]:
             raise ValueError(f"{uri}: epoch {epoch} token totals differ from the manifest")
-        epochs[epoch] = {"replay": replay, "agentic": agentic, "supervised": dict(supervised)}
+        epochs[epoch] = {
+            "replay": replay,
+            "agentic": agentic,
+            "supervised": dict(supervised),
+            "context": dict(context),
+            "by_trial": by_trial,
+        }
     report = {
         "prefix": uri,
         "arm": manifest["arm"],
@@ -102,6 +115,42 @@ def check_prefix(uri: str) -> ArmCheck:
         "heldout_rows": 0,
     }
     return ArmCheck(manifest, index, epochs, report)
+
+
+def check_recovery(uri: str, manifest: dict, index: list[dict], arm: dict, plain_manifest: dict, plain: dict) -> dict:
+    """Recovery: plain's rows with masked injections. Same trials and B as plain; every row trains exactly plain's
+    target tokens; a row not marked injected is byte-identical to plain's; an injected row only adds context."""
+    b = plain_manifest["B_supervised_tokens"]
+    if manifest["B_supervised_tokens"] != b or "handoff" in manifest["recovery"]:
+        raise ValueError(f"{uri}: recovery B differs from plain's or carries handoff rows")
+    injected = {item["trial_id"] for item in index if item.get("injected")}
+    growth = {}
+    for epoch in range(EPOCHS):
+        rows, plain_rows = arm[epoch]["by_trial"], plain[epoch]["by_trial"]
+        if set(rows) != set(plain_rows):
+            raise ValueError(f"{uri}: epoch {epoch} trials differ from plain's")
+        if sum(v for family, v in arm[epoch]["supervised"].items() if family != "replay") != b:
+            raise ValueError(f"{uri}: epoch {epoch} agentic supervised tokens differ from B {b}")
+        for trial, (digest, targets) in rows.items():
+            if targets != plain_rows[trial][1]:
+                raise ValueError(f"{uri}: epoch {epoch} trial {trial} trains different tokens than plain")
+            if (digest == plain_rows[trial][0]) == (trial in injected):
+                raise ValueError(f"{uri}: epoch {epoch} trial {trial} injected flag disagrees with its bytes")
+        growth[epoch] = {
+            family: tokens / plain[epoch]["context"][family] - 1 for family, tokens in arm[epoch]["context"].items()
+        }
+    families = collections.Counter(item["family"] for item in index if item["epoch"] == 0 and item["family"] != "replay")
+    shares = collections.Counter(item["family"] for item in index if item["epoch"] == 0 and item.get("injected"))
+    return {
+        "injected_share": {family: shares[family] / rows for family, rows in sorted(families.items())},
+        "context_growth": growth,
+        "per_family": {
+            family: {
+                key: stats[key] for key in ("rows", "selected", "injected", "reduced_to_fit", "skipped_over_context")
+            }
+            for family, stats in manifest["recovery"]["families"].items()
+        },
+    }
 
 
 def main() -> None:
@@ -136,6 +185,10 @@ def main() -> None:
                 if abs(deviations[epoch]) > 0.01:
                     raise ValueError(f"{uri}: epoch {epoch} agentic supervised {agentic} is not within 1% of B {b}")
             report["agentic_supervised_vs_B"] = deviations
+        elif manifest["arm"] == "recovery":
+            report["recovery"] = check_recovery(uri, manifest, index, arm, plain_manifest, plain)
+        else:
+            raise ValueError(f"{uri}: no verification rules for arm {manifest['arm']!r}")
         reports.append(report)
     print("ARMS_VERIFIED " + json.dumps(reports), flush=True)
 
