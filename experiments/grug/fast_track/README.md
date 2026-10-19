@@ -49,7 +49,7 @@ The examples in this file show only the CLI and its options.
 | [`quality_cli.py`](quality_cli.py) | Quality-track command |
 | [`downstream_tasks.py`](downstream_tasks.py), [`downstream_eval.py`](downstream_eval.py) | Frozen cloze, code, and math tasks, and the checkpoint scorer |
 | [`quality_judge.py`](quality_judge.py) | Capability-group judge of a candidate against its random control |
-| [`probe_scorers.py`](probe_scorers.py) | Probe selections (source sets, document length, whitespace, source quotas) that test the judge |
+| [`probe_scorers.py`](probe_scorers.py) | Probe selections that tested the judge |
 | [`model.py`](model.py) | the transformer: attention, GatedNorm, SConv, QB-routed MoE |
 | [`train.py`](train.py) | trainer/eval/loss wiring and runtime (XLA) defaults |
 | [`optimizer.py`](optimizer.py) | MuonH optimizer config: LR groups + hyperball step |
@@ -395,60 +395,24 @@ When the selected set does not change, the run gives no new treatment. Use the m
 
 ## Compare data-track runs
 
-Each data-track CLI runs one rung at a time.
-To promote a candidate, start the next rung only after the matched comparison passes its declared gate.
-Code-validation runs can use all rungs without a promotion claim.
+Do not gate a selection on one held-out loss: a selection moves the domain mix, and Paloma rewards web text and long context.
+In the [validation study](https://claude.ai/artifact/46KvN5W9qp7rMnMPCdcNc9), Paloma macro ordered selection pairs like the downstream target on 32–35% of pairs.
 
-### Why the quality track does not use one loss
-
-A selection can change the domain mix, and each held-out suite rewards a different mix.
-On the d512 probes, a raw-web selection improved Paloma and the English cloze tasks, but its code gold-solution BPB went from 1.23 to 2.70.
-Paloma macro ordered the selections like the weighted capability target on only 26% of the method pairs.
-A selection of short documents had a better short-context loss and better cloze scores than random,
-but on fixed targets its loss rose as the context grew, so Paloma macro called it worse.
-So the judge compares capability groups, and the held-out losses are cheap screens for these groups.
-
-### Score the checkpoints
-
-Train the candidate and the random control with `--dense --save-checkpoints`, with at least three matched seeds each.
-The scorer reads dense checkpoints only.
-Then score each final checkpoint on one H100:
+Train the candidate and the random control with `--dense --save-checkpoints` and three matched seeds each.
+Score each checkpoint on one H100, then judge:
 
 ```bash
 uv run iris --cluster=marin job run --no-wait --target-cluster cw-us-east-02a \
   --gpu H100x1 --enable-extra-resources --extra gpu --cpu 8 --memory 64GB --disk 64GB \
   --job-name <name> -- python -m experiments.grug.fast_track.downstream_eval \
   --checkpoint-root <run-output>/checkpoints --size d512 --output <run-output>/downstream
-```
 
-The scorer reads the frozen task copy (`downstream-cloze-v2`, 17 tasks) and the Paloma and Uncheatable caches.
-It writes `downstream_records.parquet` (one row for each choice) and `metrics.json` (task metrics,
-held-out loss by token class and by context length, and the fixed-target context test).
-
-### Apply the judge
-
-```bash
 uv run python -m experiments.grug.fast_track.quality_judge \
-  --candidate <candidate-run>/downstream --candidate <...> \
-  --control <random-run>/downstream --control <...>
+  --candidate <candidate-run>/downstream --candidate <...> --control <random-run>/downstream --control <...>
 ```
 
-The judge reports the relative gain against random for each group, with a 95% bootstrap interval over runs and paired examples:
-
-| group | target | cheap screen |
-|---|---|---|
-| E, English knowledge | correct-answer BPB of 11 cloze tasks | Paloma loss at context below 512 |
-| C, code | gold-solution BPB of HumanEval and MBPP | Uncheatable `github_cpp` and `github_python` loss |
-| M, math | gold-solution BPB of GSM8K and MATH-500 | Uncheatable `arxiv_*` loss |
-| L, long context | loss on fixed targets at 3968 tokens of context | the same |
-
-The weighted gain is the mean of E, C, and M. L is a guardrail.
-A candidate is better when the lower bound of the weighted gain is above zero and no group's lower bound is below its harm limit
-(E 1%, C 2%, M 2%, L 2%). It is worse when the upper bound of the weighted gain is below zero or a group's upper bound is below its harm limit.
-Otherwise the result is inconclusive.
-Freeze the weights and the harm limits before the candidate runs.
+The judge gives the gain against random for English (cloze BPB), code (HumanEval/MBPP gold BPB), math (GSM8K/MATH-500 gold BPB),
+and long context (fixed-target loss at 3968 tokens).
+It accepts a candidate when the mean of the first three is above zero at the 95% lower bound and no group loses more than its limit (1%, 2%, 2%, 2%).
 A rung that passes goes to the next rung with the same gate.
-
-For quality-head comparisons, build a second raw pool with a different `corpus_sample_cli --seed` for the final confirmation.
-On that pool, build new candidate and control selections, train matched seeds, and apply the same gate.
-Repeated selection on one pool can overfit that pool.
+Confirm a quality head on a second raw pool (`corpus_sample_cli --seed`), because repeated selection on one pool can overfit it.

@@ -106,11 +106,9 @@ LONG_CONTEXT_LOSS_KEY = f"fixed_target_context_{TARGET_CONTEXTS[-1]}_loss"
 TEXT_READ_BATCH = 256
 
 
-class TokenClass:
-    NEWLINE = "newline_whitespace"
-    SPACE = "other_whitespace"
-    CONTENT = "content"
-    SPECIAL = "special"
+# Classes of the held-out loss tokens, by index.
+CLASS_NAMES = ("newline_whitespace", "other_whitespace", "content", "special")
+NEWLINE, SPACE, CONTENT, SPECIAL = range(len(CLASS_NAMES))
 
 
 @dataclass(frozen=True)
@@ -145,15 +143,12 @@ def token_classes(tokenizer: MarinTokenizer, vocab_size: int) -> np.ndarray:
     for token_id in range(vocab_size):
         text = tokenizer.decode([token_id])
         if token_id in special:
-            classes[token_id] = CLASS_NAMES.index(TokenClass.SPECIAL)
+            classes[token_id] = SPECIAL
         elif text and not text.strip():
-            classes[token_id] = CLASS_NAMES.index(TokenClass.NEWLINE if "\n" in text else TokenClass.SPACE)
+            classes[token_id] = NEWLINE if "\n" in text else SPACE
         else:
-            classes[token_id] = CLASS_NAMES.index(TokenClass.CONTENT)
+            classes[token_id] = CONTENT
     return classes
-
-
-CLASS_NAMES = (TokenClass.NEWLINE, TokenClass.SPACE, TokenClass.CONTENT, TokenClass.SPECIAL)
 
 
 def collapse_whitespace(text: str) -> str:
