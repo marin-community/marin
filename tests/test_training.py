@@ -30,6 +30,7 @@ from marin.training.training import (
     resolve_training_env,
     temporary_checkpoint_base_path,
 )
+from rigging.filesystem.storage_path import prefix_join
 
 
 @pytest.fixture
@@ -135,9 +136,10 @@ def test_coreweave_resume_across_scratch_cutover_finds_latest_checkpoint(
     previous = f"s3://{previous_bucket}/tmp/ttl=14d/checkpoints-temp/{key}"
     filesystem = MemoryFileSystem()
     for root, step in [(permanent, 10), (destination, 20), (previous, 30)]:
-        filesystem.makedirs(f"{root}/step-{step}", exist_ok=True)
+        checkpoint = prefix_join(root, f"step-{step}")
+        filesystem.makedirs(checkpoint, exist_ok=True)
         filesystem.pipe(
-            f"{root}/step-{step}/metadata.json",
+            prefix_join(checkpoint, "metadata.json"),
             json.dumps({"step": step, "timestamp": "2026-10-19T00:00:00"}).encode(),
         )
 

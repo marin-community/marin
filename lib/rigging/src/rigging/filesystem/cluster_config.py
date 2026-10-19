@@ -130,6 +130,7 @@ class StoreConfig:
         key_secret_env: Variable holding the secret access key.
         temp_bucket: Shared lifecycle-managed scratch bucket for this backend.
             When absent, temporary paths stay in the source bucket.
+        checkpoint_read_buckets: Additional scratch buckets to search when resuming checkpoints.
     """
 
     endpoint: str
@@ -137,6 +138,7 @@ class StoreConfig:
     key_id_env: str
     key_secret_env: str
     temp_bucket: BucketSpec | None = None
+    checkpoint_read_buckets: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -324,7 +326,16 @@ def _parse_store_config(name: object, value: object) -> StoreConfig:
     temp_bucket = _parse_bucket_spec(value["temp_bucket"]) if value.get("temp_bucket") is not None else None
     if temp_bucket is not None and temp_bucket.store != StoreType(str(name)):
         raise ValueError(f"stores.{name}.temp_bucket must use the same store: {value['temp_bucket']!r}")
-    return StoreConfig(**{field: str(value[field]) for field in required}, temp_bucket=temp_bucket)
+    checkpoint_read_buckets = value.get("checkpoint_read_buckets", ())
+    if not isinstance(checkpoint_read_buckets, (list, tuple)) or any(
+        not isinstance(bucket, str) for bucket in checkpoint_read_buckets
+    ):
+        raise ValueError(f"stores.{name}.checkpoint_read_buckets must be a list of bucket names")
+    return StoreConfig(
+        **{field: str(value[field]) for field in required},
+        temp_bucket=temp_bucket,
+        checkpoint_read_buckets=tuple(checkpoint_read_buckets),
+    )
 
 
 def _parse_data_config(data: Mapping[str, object]) -> DataConfig:

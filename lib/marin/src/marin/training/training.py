@@ -200,8 +200,8 @@ def checkpoint_resume_paths(
 ) -> list[str]:
     """Return roots searched for the newest complete checkpoint.
 
-    CoreWeave defaults also search scratch in the output bucket and ``hero-checkpoints``
-    for resumes across the shared-scratch cutover. An explicit ``temp_prefix``
+    CoreWeave defaults also search scratch in the output bucket and additional
+    backend-configured read buckets. An explicit ``temp_prefix``
     restricts the search to permanent storage and that temporary destination.
     """
     paths = [
@@ -214,8 +214,9 @@ def checkpoint_resume_paths(
 
     # Search both mappings while old controllers still inject the former 08a override.
     # Keep the old roots readable until those writers finish and their checkpoint TTLs expire.
-    scratch_prefixes = [f"s3://{bucket.name}", "s3://hero-checkpoints"]
-    shared_bucket = store_configs()[bucket.store].temp_bucket
+    store = store_configs()[bucket.store]
+    scratch_prefixes = [f"s3://{name}" for name in (bucket.name, *store.checkpoint_read_buckets)]
+    shared_bucket = store.temp_bucket
     if shared_bucket is not None:
         scratch_prefixes.insert(0, f"s3://{shared_bucket.name}")
     for scratch_prefix in scratch_prefixes:
