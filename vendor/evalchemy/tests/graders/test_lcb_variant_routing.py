@@ -49,7 +49,7 @@ def test_lcb_run_is_bounded_not_unbounded_join():
 
     start = time.perf_counter()
     before = living_children()
-    result = module.lcb_run(problem, runaway, timeout, True)
+    result = module.lcb_run(problem, runaway, timeout)
     elapsed = time.perf_counter() - start
 
     assert elapsed < old_formula, f"routed lcb_run must be bounded, took {elapsed:.1f}s vs old join {old_formula:.0f}s"
@@ -63,12 +63,12 @@ def test_lcb_run_still_scores_a_correct_candidate():
     for _name, path in VARIANTS:
         module = _load_variant(path)
         problem = {"test": [{"testtype": "functional", "input": [1, 2], "output": 3}]}
-        result = module.lcb_run(problem, "def add(a, b):\n    return a + b\n", 6, True)
+        result = module.lcb_run(problem, "def add(a, b):\n    return a + b\n", 6)
         assert all(row[0] for row in result), f"{path} regressed a correct candidate"
 
 
 def test_lcb_run_scores_a_wrong_candidate_failed():
     module = _load_variant(VARIANTS[0][1])
     problem = {"test": [{"testtype": "functional", "input": [1, 2], "output": 999}]}
-    result = module.lcb_run(problem, "def add(a, b):\n    return a + b\n", 6, True)
+    result = module.lcb_run(problem, "def add(a, b):\n    return a + b\n", 6)
     assert not all(row[0] for row in result)

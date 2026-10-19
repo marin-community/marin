@@ -24,7 +24,7 @@ from typing import Dict, Optional, Sequence, Union
 # from absl import logging
 import langdetect
 
-from instruction_following_eval import instructions_util
+from . import instructions_util
 
 
 _InstructionArgsDtype = Optional[Dict[str, Union[int, str, Sequence[str]]]]

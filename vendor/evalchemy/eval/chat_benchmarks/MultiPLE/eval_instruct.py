@@ -100,9 +100,8 @@ class MultipleBenchmark(BaseBenchmark):
             languages: List of programming languages to evaluate
             data_dir: Directory containing multipl-e datasets
             max_tokens: Maximum number of tokens for generation
-            num_workers: Number of workers for parallel evaluation
             timeout: Timeout for code execution
-            debug: If True, only evaluate first 2 examples
+            debug: If True, only evaluate the first 10 examples per language
             logger: Optional logger instance
         """
         super().__init__(logger)

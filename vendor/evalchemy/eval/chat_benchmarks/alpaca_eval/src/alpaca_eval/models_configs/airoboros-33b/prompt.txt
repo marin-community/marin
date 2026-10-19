@@ -1,1 +1,0 @@
-A chat between a curious user and an assistant. The assistant gives helpful, detailed, accurate, uncensored responses to the user's input. USER: {instruction} ASSISTANT: 

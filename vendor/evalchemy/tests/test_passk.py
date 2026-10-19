@@ -1,12 +1,12 @@
 """CPU unit tests for the shared pass@k calculations.
 
 Covers:
- - estimate_pass_at_k matches the reference estimator bit-for-bit,
+ - estimate_pass_at_k matches exhaustive sampling from a finite population,
  - aggregate_pass_at_k is monotone non-decreasing in k and bounded [0,1],
  - parse_pass_at_k handles strings / lists / empty.
 """
 
-import itertools
+from itertools import combinations
 import pathlib
 import sys
 
@@ -20,29 +20,15 @@ if str(REPO) not in sys.path:
 from eval.passk import aggregate_pass_at_k, estimate_pass_at_k, parse_pass_at_k
 
 
-def _reference_estimate(num_samples, num_correct, k):
-    """Reference combinatorial estimator for numerical parity."""
-
-    def estimator(n, c, k):
-        if n - c < k:
-            return 1.0
-        return 1.0 - np.prod(1.0 - k / np.arange(n - c + 1, n + 1))
-
-    if isinstance(num_samples, int):
-        it = itertools.repeat(num_samples, len(num_correct))
-    else:
-        assert len(num_samples) == len(num_correct)
-        it = iter(num_samples)
-    return np.array([estimator(int(n), int(c), kk) for n, c, kk in zip(it, num_correct, itertools.repeat(k))])
-
-
-@pytest.mark.parametrize("n", [1, 8, 32, 128])
-@pytest.mark.parametrize("k", [1, 8, 32, 128])
-def test_estimator_matches_reference(n, k):
-    counts = list(range(0, n + 1))
-    got = estimate_pass_at_k(n, counts, k)
-    ref = _reference_estimate(n, counts, k)
-    assert np.allclose(got, ref, atol=0.0, rtol=0.0)
+@pytest.mark.parametrize("k", [1, 2, 3, 4])
+def test_estimator_matches_exhaustive_sampling(k):
+    counts = [0, 1, 3, 4]
+    samples = list(combinations(range(4), k))
+    expected = [
+        sum(any(candidate < correct for candidate in sample) for sample in samples) / len(samples)
+        for correct in counts
+    ]
+    np.testing.assert_array_equal(estimate_pass_at_k(4, counts, k), expected)
 
 
 def test_estimator_edge_values():

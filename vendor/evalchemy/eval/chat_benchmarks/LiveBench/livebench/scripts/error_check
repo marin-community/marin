@@ -1,5 +1,0 @@
-#!/bin/bash
-
-cd data
-find live_bench -type f -path '*/*/model_answer/*.jsonl' -exec grep -H "ERROR" {} +
-find live_bench -type f -path '*/*/model_answer/*.jsonl' -exec grep -H -F 'turns": [""]' {} +

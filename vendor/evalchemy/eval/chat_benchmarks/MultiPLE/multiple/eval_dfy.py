@@ -1,6 +1,5 @@
 from pathlib import Path
 from .safe_subprocess import run
-from .generic_eval import main
 
 
 # 0 – success

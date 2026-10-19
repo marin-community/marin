@@ -1,7 +1,6 @@
 """Named graders for fixed conversations."""
 
 import re
-from tempfile import TemporaryDirectory
 
 from eval.contracts.eval_spec import Grade, GraderSpec, JudgePlan, ModelRequest, RequestKind
 from eval.runtime.resources import prepare_nltk_tokenizers
@@ -44,15 +43,17 @@ def livebench(spec, responses):
     answer = {"choices": [{"turns": [str(response).strip() for response in responses]}]}
     if question["category"] == "instruction_following":
         prepare_nltk_tokenizers(("punkt", "punkt_tab"))
-        from eval.chat_benchmarks.LiveBench.livebench.if_runner.instruction_following_eval.evaluation_main import evaluator
+        from eval.chat_benchmarks.LiveBench.livebench.if_runner.instruction_following_eval.evaluation_main import (
+            InputExample, test_instruction_following_strict,
+        )
         from eval.chat_benchmarks.LiveBench.livebench.process_results.instruction_following.utils import score_results
 
-        question_id = question["question_id"]
-        answers = {"candidate": {question_id: {"question_id": question_id, **answer}}}
-        # The corpus route uses strict instruction checks and prompt/instruction
-        # partial credit; play_a_match_gt does not handle these questions.
-        with TemporaryDirectory(prefix="evalchemy-livebench-") as directory:
-            [result] = evaluator([question], answers, directory, "candidate")["strict"]
+        example = InputExample(
+            key=question["question_id"], instruction_id_list=question["instruction_id_list"],
+            prompt=question["turns"][0],
+            kwargs=[{key: value for key, value in item.items() if value is not None} for item in question["kwargs"]],
+        )
+        result = test_instruction_following_strict(example, {example.prompt: str(responses[0]).strip()})
         score = score_results(result.follow_all_instructions, result.follow_instruction_list)
         return Grade({"accuracy": 100 * score})
 

@@ -38,7 +38,6 @@ class BigCodeBenchBenchmark(BaseBenchmark):
         debug: bool = False,
         logger: Optional[logging.Logger] = None,
         instruction_prefix: str = None,
-        response_prefix: str = None,
         safe_mode: bool = False,
         system_instruction: Optional[str] = None,
     ):
@@ -46,10 +45,9 @@ class BigCodeBenchBenchmark(BaseBenchmark):
         Initialize BigCodeBench benchmark.
 
         Args:
-            languages: List of programming languages to evaluate
+            language: Programming language to evaluate
             data_dir: Directory containing BigCodeBench datasets
             max_tokens: Maximum number of tokens for generation
-            num_workers: Number of workers for parallel evaluation
             timeout: Timeout for code execution
             debug: If True, only evaluate first 2 examples
             logger: Optional logger instance

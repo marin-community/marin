@@ -2,7 +2,6 @@ import argparse
 from sys import exit
 import subprocess
 from pathlib import Path
-from .generic_eval import main as gmain
 
 
 def eval_script(path: Path):
@@ -31,7 +30,3 @@ def eval_script(path: Path):
         "stdout": "" if output.stdout is None else output.stdout.decode("utf-8"),
         "stderr": "" if output.stderr is None else output.stderr.decode("utf-8"),
     }
-
-
-if __name__ == "__main__":
-    gmain(eval_script, "Elixir", ".exs")

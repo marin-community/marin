@@ -62,7 +62,7 @@ class HMMTBenchmark(BaseBenchmark):
 
 
     def load_questions(self) -> List[Dict[str, str]]:
-        """Load HMMT questions from the data file."""
+        """Load HMMT questions from the configured Hugging Face dataset."""
         questions = [dict(example) for example in load_dataset(self.dataset_name, split="train")]
         if self.debug:
             questions = questions[:2]

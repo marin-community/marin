@@ -26,7 +26,3 @@ def eval_script(path: Path):
         "stdout": result.stdout,
         "stderr": result.stderr,
     }
-
-
-if __name__ == "__main__":
-    main()

@@ -10,8 +10,7 @@ import pandas as pd
 import pytest
 from alpaca_eval import constants, utils
 from alpaca_eval.annotators import SinglePairwiseAnnotator
-from alpaca_eval.annotators.pairwise_evaluator import PairwiseAnnotatorLocal
-from alpaca_eval.metrics import get_length_controlled_winrate, glm_winrate
+from alpaca_eval.metrics import glm_winrate
 
 from eval.chat_benchmarks.alpaca_eval.eval_instruct import AlpacaBenchmark
 from eval.contracts.eval_spec import EvalSpec, GraderSpec, ModelRequest, ReducerSpec, RequestKind, SourceRef
@@ -72,11 +71,19 @@ def test_alpaca_corpus_score_matches_original_indexed_annotations(alpaca_calibra
         text = prompt if isinstance(prompt, str) else "\n".join(message["content"] for message in prompt)
         return "invalid" if int(re.search(r"case-(\d+)", text).group(1)) == 2 else _ranking(prompt)
 
-    original = PairwiseAnnotatorLocal(annotators_config=name)
-    for annotator in original.annotators.values():
-        annotator.fn_completions = lambda prompts, **kwargs: {"completions": [saved_reply(prompt) for prompt in prompts]}
-    original_annotations = original(pairs)
-    expected = get_length_controlled_winrate(original_annotations, save_weights_dir=None)
+    # Captured from the original corpus annotator with these saved judge replies.
+    expected_preferences = {17: 1.5, 2: None, 11: 2, 4: 1, 0: 2, 13: 2, 8: 1, 19: 2, 6: 1, 1: 2}
+    expected = {
+        "win_rate": 61.111111111111114,
+        "standard_error": 16.1970885967925,
+        "n_wins": 5,
+        "n_wins_base": 3,
+        "n_draws": 1,
+        "n_total": 9,
+        "discrete_win_rate": 61.111111111111114,
+        "length_controlled_winrate": 50.0,
+        "lc_standard_error": 0.0,
+    }
 
     specs = []
     for pair in pairs:
@@ -114,6 +121,7 @@ def test_alpaca_corpus_score_matches_original_indexed_annotations(alpaca_calibra
     assert reduced["num_judged"] == len(pairs) - 1
     assert reduced["num_judge_failed"] == 1
     annotations = {result.spec.ordinal: result.grade.audit["alpaca_annotation"] for result in results}
+    assert {index: row["preference"] for index, row in annotations.items()} == expected_preferences
     assert annotations[17]["preference"] == 1.5
     assert annotations[2]["preference"] is None
     assert annotations[2]["output_1"] == pairs_by_index[2]["output_1"]

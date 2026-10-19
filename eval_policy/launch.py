@@ -10,56 +10,18 @@ from tempfile import TemporaryDirectory
 
 import yaml
 from marin.evaluation.eval_policy import (
-    DEFAULT_SEED,
-    FIXED_MAX_TOKENS,
-    NUPA_SEED,
     POLICIES,
     RUNTIME_COMMITS,
-    SEPTEMBER_16_IFBENCH_MAX_TOKENS,
     SEPTEMBER_16_VERSION,
     SEPTEMBER_24_VERSION,
-    ThinkingMode,
 )
 from marin.evaluation.model_config import load_model_config
 
 ROOT = Path(__file__).resolve().parents[1]
-EVALCHEMY_CONFIGS = ROOT / "experiments/evaluation/configs/evalchemy"
 HARBOR_CONFIGS = ROOT / "experiments/evaluation/configs/harbor"
 HARBOR_REGISTRY_16 = (
     "https://raw.githubusercontent.com/marin-community/harbor/" "7b18505a56e5624f55887e3b20f4de452f698a7a/registry.json"
 )
-POLICY_CONFIGS_24 = frozenset({"mmlu-pro", "gpqa-diamond", "cruxeval", "ifbench", "mrcr", "nupa"})
-
-
-def _evalchemy_source(version: str, name: str, artifact_dir: Path | None) -> Path:
-    if version == SEPTEMBER_24_VERSION and name in POLICY_CONFIGS_24:
-        assert artifact_dir is not None
-        stem = "nupa-full" if name == "nupa" else name
-        return artifact_dir / "policy-configs" / f"{stem}.yaml"
-    return EVALCHEMY_CONFIGS / f"{name}.yaml"
-
-
-def _evalchemy_config(version: str, name: str, artifact_dir: Path | None, output: Path) -> Path:
-    source = _evalchemy_source(version, name, artifact_dir)
-    config = yaml.safe_load(source.read_text())
-    policy = POLICIES[version][name]
-    assert policy.task is not None
-    config["task_options"][policy.task]["num_fewshot"] = policy.shots
-    if policy.thinking in (ThinkingMode.ON, ThinkingMode.OFF):
-        config["chat_template_kwargs"] = {"enable_thinking": policy.thinking is ThinkingMode.ON}
-        config["apply_chat_template"] = True
-    else:
-        config.pop("chat_template_kwargs", None)
-    if name == "aime24" and version == SEPTEMBER_24_VERSION:
-        config.pop("seed", None)
-    else:
-        config["seed"] = NUPA_SEED if name == "nupa" else DEFAULT_SEED
-    if name in FIXED_MAX_TOKENS:
-        config["max_tokens"] = FIXED_MAX_TOKENS[name]
-    if version == SEPTEMBER_16_VERSION and name == "ifbench":
-        config["max_tokens"] = SEPTEMBER_16_IFBENCH_MAX_TOKENS
-    output.write_text(yaml.safe_dump(config, sort_keys=False))
-    return output
 
 
 def _harbor_source(version: str, name: str, artifact_dir: Path | None) -> Path:

@@ -2,7 +2,6 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from .generic_eval import main
 
 LANG_NAME = "Rust"
 LANG_EXT = ".rs"
@@ -48,7 +47,3 @@ def eval_script(path: Path):
         "stdout": "" if output.stdout is None else output.stdout.decode("utf-8"),
         "stderr": "" if output.stderr is None else output.stderr.decode("utf-8"),
     }
-
-
-if __name__ == "__main__":
-    main(eval_script, LANG_NAME, LANG_EXT)

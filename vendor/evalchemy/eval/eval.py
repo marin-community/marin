@@ -13,14 +13,7 @@ from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Union
 
 import lm_eval.api.metrics
-import lm_eval.api.registry
 import lm_eval.api.task
-import lm_eval.models
-
-try:
-    import torch.distributed as dist
-except ModuleNotFoundError:
-    dist = None
 import yaml
 import numpy as np
 from lm_eval import utils
@@ -189,10 +182,8 @@ def evaluate(
     task_list: List[str],
     task_routes: Dict[str, str],
     batch_sizes_list: List[int],
-    verbosity: str = "INFO",
     args=None,
     output_sink: FineStoreOutput | None = None,
-    **eval_kwargs,
 ) -> Dict[str, Dict]:
     """Normalize every source into EvalSpec items and execute one shared flow."""
     run = RunSpec.from_args(args)
@@ -219,8 +210,8 @@ def evaluate(
                                  for size in batch_sizes_list))
     results = asyncio.run(run_evaluations(lm, plans, workers=workers, sink=output_sink, checkpoints=checkpoints,
                                          predict_only=run.predict_only, seeds=run.seeds,
-                                         supports_request_seed=args.model == "vllm",
-                                         batch_sizes=local_batches, batch_size_attribute="batch_size_per_gpu" if args.model == "hf" else "batch_size"))
+                                         supports_request_seed=False,
+                                         batch_sizes=local_batches, batch_size_attribute="batch_size"))
     results["task_preparations"] = getattr(args, "task_preparations", {})
     _attach_benchmark_metadata(results, args)
     return results
@@ -376,20 +367,12 @@ def cli_evaluate(args: Optional[argparse.Namespace] = None) -> None:
             task_list=task_list,
             task_routes=task_routes,
             batch_sizes_list=batch_sizes_list,
-            verbosity=args.verbosity,
             args=args,
             output_sink=output_sink,
         )
         output_sink.finish_task()
-        if lm.world_size > 1:
-            lm.barrier()
-
-        if lm.rank == 0:
-            add_results_metadata(results, batch_sizes_list, args, lm)
-            handle_evaluation_output(results, args, general_config_tracker, output_sink=output_sink)
-
-    if dist is not None and dist.is_initialized():
-        dist.destroy_process_group()
+        add_results_metadata(results, batch_sizes_list, args, lm)
+        handle_evaluation_output(results, args, general_config_tracker, output_sink=output_sink)
 
 
 def initialize_model(
@@ -403,7 +386,7 @@ def initialize_model(
 
     Args:
         model (Union[str, LM]):
-            Either a string identifier for the model to load from registry,
+            Either a string identifier for a local endpoint adapter,
             or an already instantiated LM object.
         model_args (Optional[str], optional):
             Additional arguments for model initialization as a string.
@@ -432,7 +415,9 @@ def initialize_model(
             "local-chat-completions": RetryingLocalChatCompletions,
             "local-completions": RetryingLocalCompletions,
         }
-        model_class = endpoint_models.get(model) or lm_eval.api.registry.get_model(model)
+        if model not in endpoint_models:
+            raise ValueError(f"Unsupported model adapter {model!r}; expected one of {', '.join(endpoint_models)}")
+        model_class = endpoint_models[model]
         lm = model_class.create_from_arg_string(
             model_args,
             config,
@@ -495,18 +480,6 @@ def add_results_metadata(results: Dict, batch_sizes_list: List[int], args: argpa
         "torch_seed": args.seed[2],
         "fewshot_seed": args.seed[3],
     }
-
-    # `import lm_eval.models` does NOT import the huggingface submodule (it is only
-    # registered lazily via the model registry), so `lm_eval.models.huggingface`
-    # raises AttributeError for a non-HF (e.g. API/endpoint) model -- which would
-    # crash this metadata step and discard an already-computed score. Resolve HFLM
-    # defensively; `isinstance(lm, ())` is a safe False on minimal installs.
-    try:
-        from lm_eval.models.huggingface import HFLM
-    except Exception:  # pragma: no cover - minimal installs may lack HF deps
-        HFLM = ()
-    if isinstance(lm, HFLM):
-        results["config"].update(lm.get_model_info())
 
     results["git_hash"] = get_git_commit_hash()
     results["date"] = time.time()

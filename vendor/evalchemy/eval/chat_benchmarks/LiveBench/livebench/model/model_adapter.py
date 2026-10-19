@@ -148,7 +148,6 @@ class BaseModelAdapter:
         return True
 
 
-
     def get_default_conv_template(self, model_path: str) -> Conversation:
         """Retrieve the default conversation template for the model"""
         return get_conv_template("one_shot")
@@ -184,18 +183,10 @@ def get_model_adapter(model_path: str) -> BaseModelAdapter:
     raise ValueError(f"No valid model adapter for {model_path}")
 
 
-
-
-
-
 def get_conversation_template(model_path: str) -> Conversation:
     """Get the default conversation template for the given model."""
     adapter = get_model_adapter(model_path)
     return adapter.get_default_conv_template(model_path)
-
-
-
-
 
 
 def remove_parent_directory_name(model_path):
@@ -203,30 +194,6 @@ def remove_parent_directory_name(model_path):
     if model_path[-1] == "/":
         model_path = model_path[:-1]
     return model_path.split("/")[-1]
-
-
-class PeftModelAdapter:
-    """Select the base model conversation template for a PEFT adapter."""
-
-    def match(self, model_path: str):
-        """Accepts any model path with "peft" in the name"""
-        if os.path.exists(os.path.join(model_path, "adapter_config.json")):
-            return True
-        return "peft" in model_path.lower()
-
-
-    def get_default_conv_template(self, model_path: str) -> Conversation:
-        """Uses the conv template of the base model"""
-        from peft import PeftConfig, PeftModel
-
-        config = PeftConfig.from_pretrained(model_path)
-        if "peft" in config.base_model_name_or_path:
-            raise ValueError(
-                f"PeftModelAdapter cannot load a base model with 'peft' in the name: {config.base_model_name_or_path}"
-            )
-        base_model_path = config.base_model_name_or_path
-        base_adapter = get_model_adapter(base_model_path)
-        return base_adapter.get_default_conv_template(config.base_model_name_or_path)
 
 
 class VicunaAdapter(BaseModelAdapter):
@@ -244,7 +211,6 @@ class VicunaAdapter(BaseModelAdapter):
         return get_conv_template("vicuna_v1.1")
 
 
-
 class AiroborosAdapter(BaseModelAdapter):
     """The model adapter for jondurbin/airoboros-*"""
 
@@ -259,7 +225,6 @@ class AiroborosAdapter(BaseModelAdapter):
         if "spicyboros" in model_path or re.search(r"-(2\.[2-9]+)", model_path):
             return get_conv_template("airoboros_v2")
         return get_conv_template("airoboros_v1")
-
 
 
 class LongChatAdapter(BaseModelAdapter):
@@ -280,7 +245,6 @@ class GoogleT5Adapter(BaseModelAdapter):
 
     def match(self, model_path: str):
         return any(model_str in model_path.lower() for model_str in ["flan-", "fastchat-t5", "codet5p"])
-
 
 
 class KoalaAdapter(BaseModelAdapter):
@@ -356,7 +320,6 @@ class OasstPythiaAdapter(BaseModelAdapter):
         return get_conv_template("oasst_pythia")
 
 
-
 class OasstLLaMAAdapter(BaseModelAdapter):
     """The model adapter for OpenAssistant/oasst-sft-7-llama-30b"""
 
@@ -401,7 +364,6 @@ class PythiaAdapter(BaseModelAdapter):
 
     def match(self, model_path: str):
         return "pythia" in model_path.lower()
-
 
 
 class StableLMAdapter(BaseModelAdapter):
@@ -964,7 +926,6 @@ class QwenChatAdapter(BaseModelAdapter):
         )
 
 
-
     def get_default_conv_template(self, model_path: str) -> Conversation:
         return get_conv_template("qwen-7b-chat")
 
@@ -1391,7 +1352,6 @@ class CohereAdapter(BaseModelAdapter):
 
 # Note: the registration order matters.
 # The one registered earlier has a higher matching priority.
-register_model_adapter(PeftModelAdapter)
 register_model_adapter(StableVicunaAdapter)
 register_model_adapter(VicunaAdapter)
 register_model_adapter(AiroborosAdapter)

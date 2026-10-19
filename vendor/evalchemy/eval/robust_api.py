@@ -12,6 +12,14 @@ from collections import Counter
 from collections.abc import Mapping
 from typing import Any
 
+from lm_eval.models.openai_completions import (
+    LocalChatCompletion,
+    LocalCompletionsAPI,
+    OpenAIChatCompletion,
+    OpenAICompletionsAPI,
+)
+from lm_eval.models.utils import handle_stop_sequences
+from lm_eval.utils import simple_parse_args_string
 
 from eval.completion_response import (
     MISSING_FINAL_CLASSIFICATIONS,
@@ -54,8 +62,6 @@ def openai_model_requires_fixed_generation(model: object) -> bool:
 
 def configure_generation_overrides(model: object, overrides: dict) -> None:
     """Retain caller settings separately from source defaults for API adapters."""
-    from lm_eval.models.openai_completions import LocalCompletionsAPI
-
     if isinstance(model, LocalCompletionsAPI):
         model._evalchemy_generation_overrides = dict(overrides)
 
@@ -67,8 +73,6 @@ def configured_generation_overrides(model: object) -> Mapping[str, Any]:
 
 def parse_generation_overrides(value: str | dict | None) -> dict:
     """Parse caller settings and make temperature decisive for local decoders."""
-    from lm_eval.utils import simple_parse_args_string
-
     overrides = simple_parse_args_string(value) if isinstance(value, str) else dict(value or {})
     if "temperature" in overrides and "do_sample" not in overrides:
         overrides["do_sample"] = float(overrides["temperature"]) > 0
@@ -88,8 +92,6 @@ def _parse_request_body_mapping(value: str | Mapping | None, name: str) -> dict 
 
 def apply_completion_normalization() -> bool:
     """Normalize each choice without retaining completed responses on the model."""
-    from lm_eval.models.openai_completions import LocalChatCompletion
-
     if getattr(LocalChatCompletion, _COMPLETION_PATCH_FLAG, False):
         return True
     original_init = LocalChatCompletion.__init__
@@ -125,13 +127,6 @@ def apply_completion_normalization() -> bool:
 
 def apply_openai_payload_controls() -> bool:
     """Bound API stops and restrict OpenAI-specific controls to OpenAI models."""
-    try:
-        from lm_eval.models.openai_completions import LocalChatCompletion, LocalCompletionsAPI, OpenAIChatCompletion, OpenAICompletionsAPI
-        from lm_eval.models.utils import handle_stop_sequences
-    except Exception as exc:  # noqa: BLE001 - never let the patch import break eval startup
-        logger.warning("OpenAI payload controls: could not import lm-eval adapter (%r); patch skipped.", exc)
-        return False
-
     if (
         getattr(LocalCompletionsAPI, _OPENAI_PAYLOAD_PATCH_FLAG, False)
         and getattr(LocalChatCompletion, _OPENAI_PAYLOAD_PATCH_FLAG, False)

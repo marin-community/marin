@@ -162,7 +162,7 @@ class SourceMetrics:
 
             coverage = {name: metrics[name] for name in ("num_total", "num_judged", "num_judge_failed", "judge_coverage") if name in metrics}
             if any(row["preference"] is not None for row in self.annotations):
-                metrics = get_length_controlled_winrate(self.annotations, save_weights_dir=None)
+                metrics = get_length_controlled_winrate(self.annotations)
             else:
                 metrics = {"win_rate": None, "length_controlled_winrate": None, "n_total": 0}
             metrics.update(coverage)

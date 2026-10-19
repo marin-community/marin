@@ -14,6 +14,10 @@ import json
 from typing import *
 import traceback
 
+# The test prelude imports numpy after reliability_guard disables os.putenv.
+# Load it before the sandbox forks so its initialization can update os.environ.
+import numpy  # noqa: F401
+
 java_exec = ""
 node_exec = ""
 tsc_exec = ""

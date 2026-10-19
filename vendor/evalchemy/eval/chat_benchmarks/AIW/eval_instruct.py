@@ -29,7 +29,7 @@ class AIWBenchmark(BaseBenchmark):
         max_tokens: int = 32768,
         logger: Optional[logging.Logger] = None,
         system_instruction: Optional[str] = None,
-        n_trials: int = 100,  # Run 100 trials
+        n_trials: int = 100,
     ):
         """
         Initialize AIW benchmark.

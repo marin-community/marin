@@ -28,16 +28,3 @@ def eval_script(path: Path):
         returncode = exc.returncode
         output = exc
     return {"status": status, "exit_code": returncode, "stdout": output.stdout, "stderr": output.stderr}
-
-
-def main():
-    directory = Path(Path(__file__).parent, "..", "datasets", "R-keep-code_davinci_001_temp_0.2").resolve()
-
-    for filename in os.listdir(directory):
-        r = eval_script(Path.joinpath(directory, filename))
-        filename = filename.split(".")[0]
-        print(f"R,{filename},{r['status']}")
-
-
-if __name__ == "__main__":
-    main()

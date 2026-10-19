@@ -1,4 +1,0 @@
-absl-py
-langdetect
-nltk
-immutabledict

@@ -27,12 +27,12 @@ class IFEvalBenchmark(BaseBenchmark):
         Initialize Instruction Following Benchmark
 
         Args:
-        data_dir: Directory containing MBPP datasets
+        data_dir: Directory containing IFEval datasets
         max_tokens: Maximum number of tokens for generation
         num_examples: Number of examples to show in few-shot prompt
         start_idx: Start index for evaluation examples
         end_idx: End index for evaluation examples
-        debug_size: If set, only evaluate this many examples
+        debug: If True, only evaluate the first 2 examples
         logger: Optional logger instance
         system_instruction: Optional system instruction for the model
         """

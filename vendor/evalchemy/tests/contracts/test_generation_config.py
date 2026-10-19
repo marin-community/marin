@@ -465,14 +465,13 @@ class _PlainLM(LM):
         raise AssertionError("generation task requested rolling loglikelihood")
 
 
-@pytest.mark.parametrize("model_kind,batch_attribute", [("hf", "batch_size_per_gpu"), ("vllm", "batch_size")])
 @pytest.mark.parametrize("batch_sizes", [[2, 3], ["auto", 3]])
-def test_driver_preserves_per_task_local_batches(tmp_path, model_kind, batch_attribute, batch_sizes):
+def test_driver_preserves_per_task_local_batches(tmp_path, batch_sizes):
     class BatchedModel(_PlainLM):
         def __init__(self):
             super().__init__()
             self.batches = []
-            setattr(self, batch_attribute, 1)
+            self.batch_size = 1
 
         def tok_encode(self, text):
             return list(text.encode())
@@ -483,7 +482,7 @@ def test_driver_preserves_per_task_local_batches(tmp_path, model_kind, batch_att
         def generate_until(self, requests):
             task = requests[0].metadata[0]
             assert all(request.metadata[0] == task for request in requests)
-            size = getattr(self, batch_attribute)
+            size = self.batch_size
             self.batches.append((task, size, len(requests)))
             return super().generate_until(requests)
 
@@ -493,7 +492,7 @@ def test_driver_preserves_per_task_local_batches(tmp_path, model_kind, batch_att
         data.write_text("".join(json.dumps({"id": index, "problem": f"{task} {index}", "answer": "42"}) + "\n" for index in range(6)))
         sources[task] = MATH500Benchmark(data_file=str(data))
     model = BatchedModel()
-    args = Namespace(model=model_kind, model_args="", seed=[0, 0, 0, 0], max_batch_size=4)
+    args = Namespace(model="fixture", model_args="", seed=[0, 0, 0, 0], max_batch_size=4)
 
     result = evaluate(
         model, SimpleNamespace(get_benchmark=sources.__getitem__), None,

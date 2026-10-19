@@ -103,9 +103,8 @@ class CruxEvalBenchmark(BaseBenchmark):
         Args:
             data_dir: Directory containing CruxEval datasets
             max_tokens: Maximum number of tokens for generation
-            num_workers: Number of workers for parallel evaluation
             timeout: Timeout for code execution
-            debug: If True, only evaluate first 2 examples
+            debug: If True, only evaluate the first 10 examples
             logger: Optional logger instance
             system_instruction: Optional system instruction for the model
         """

@@ -1,3 +1,0 @@
-<bos><start_of_turn>user
-{instruction}<end_of_turn>
-<start_of_turn>model

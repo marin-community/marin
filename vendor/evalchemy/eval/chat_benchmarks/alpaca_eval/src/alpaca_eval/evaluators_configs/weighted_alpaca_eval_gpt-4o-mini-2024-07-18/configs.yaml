@@ -1,6 +1,5 @@
 weighted_alpaca_eval_gpt-4o-mini-2024-07-18:
   prompt_template: "alpaca_eval_clf_gpt4_turbo/alpaca_eval_clf.txt"
-  fn_completions: "openai_completions"
   completions_kwargs:
     model_name: "gpt-4o-mini-2024-07-18"
     max_tokens: 1

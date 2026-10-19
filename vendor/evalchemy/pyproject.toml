@@ -29,29 +29,28 @@ dependencies = [
 ]
 
 [project.scripts]
-eval = "eval.serve_eval.cli:main"
 evalchemy = "eval.serve_eval.cli:main"
 
 [project.optional-dependencies]
 serve-eval = []
-bigcodebench = ["fire", "regex", "tree_sitter", "tree-sitter-python", "pqdm"]
+bigcodebench = []
 cruxeval = []
-humaneval = ["fire"]
-humanevalplus = ["fire"]
+humaneval = []
+humanevalplus = []
 ifeval = ["nltk", "langdetect", "absl-py", "immutabledict"]
 ifbench = ["nltk", "emoji", "syllapy"]
-livebench = ["psutil", "fschat", "shortuuid", "nltk", "langdetect", "immutabledict", "prettytable", "lark", "pyext @ git+https://github.com/penfever/PyExt"]
-mbpp = ["fire"]
-mbppplus = ["fire"]
-mtbench = ["fschat", "anthropic", "psutil", "shortuuid"]
-mixeval = ["nltk", "prettytable", "python-dotenv"]
+livebench = ["nltk", "langdetect", "immutabledict", "lark", "pyext @ git+https://github.com/penfever/PyExt"]
+mbpp = []
+mbppplus = []
+mtbench = []
+mixeval = []
 mrcr = ["tiktoken"]
-multiple = ["fire", "regex", "tree_sitter"]
-repobench = ["fuzzywuzzy", "codebleu"]
+multiple = ["regex"]
+repobench = ["fuzzywuzzy"]
 swebench = ["swebench>=3.0.4"]
-wildbench = ["jsonlines", "cohere", "anthropic", "reka-api", "together"]
+wildbench = []
 alpaca-eval = ["alpaca-eval", "patsy"]
-zeroeval = ["google-generativeai", "cohere", "anthropic", "reka-api", "together"]
+zeroeval = []
 aime24 = []
 aime25 = []
 aiw = []
@@ -85,7 +84,6 @@ dev = [{ include-group = "test" }]
 [tool.uv.sources]
 marin-finestore = { path = "../../lib/finestore", editable = true }
 marin-rigging = { path = "../../lib/rigging", editable = true }
-fschat = { path = "eval/chat_benchmarks/MTBench", editable = true }
 alpaca-eval = { path = "eval/chat_benchmarks/alpaca_eval", editable = true }
 torch = [
     { url = "https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },

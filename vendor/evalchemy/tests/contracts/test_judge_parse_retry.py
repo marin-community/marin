@@ -3,8 +3,8 @@
 import asyncio
 from dataclasses import replace
 import random
+from urllib.error import HTTPError
 
-import httpx
 import pytest
 
 from eval.chat_benchmarks.MixEval.eval_instruct import MixEvalBenchmark
@@ -102,8 +102,7 @@ def test_mixeval_exhaustion_is_ten_attempts_and_replay_stable(mix_specs, kind, r
 
 @pytest.mark.parametrize("failure", [
     ConnectionError("judge disconnected"),
-    httpx.HTTPStatusError("payment required", request=httpx.Request("POST", "https://judge.invalid"),
-                          response=httpx.Response(402)),
+    HTTPError("https://judge.invalid", 402, "payment required", None, None),
     FailedGeneration("model_transport"),
 ])
 def test_mixeval_infrastructure_failure_never_becomes_random_accuracy(mix_specs, failure):

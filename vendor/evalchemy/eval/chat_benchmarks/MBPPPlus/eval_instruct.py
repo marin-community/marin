@@ -41,7 +41,6 @@ class MBPPPlusBenchmark(BaseBenchmark):
         Args:
             data_dir: Directory containing MBPPPlus datasets
             max_tokens: Maximum number of tokens for generation
-            num_workers: Number of workers for parallel evaluation
             timeout: Timeout for code execution
             debug: If True, only evaluate first 2 examples
             logger: Optional logger instance

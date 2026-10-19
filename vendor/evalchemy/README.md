@@ -8,11 +8,14 @@ sources so evaluator changes and their storage dependencies can land together.
 The source comes from
 [`marin-community/evalchemy`](https://github.com/marin-community/evalchemy/tree/09d27c93a8846531e84fb30cfa11dacd2ef404c5)
 at commit `09d27c93a8846531e84fb30cfa11dacd2ef404c5`. It retains all 42 custom
-benchmark sources, their data and preparation scripts, lm-eval task overrides,
+benchmark dataset sources, their required data and preparation scripts, lm-eval task overrides,
 graders, streaming execution, FineStore output and resume support. Marin owns
 serving and evaluation orchestration. Database tracking, Curator dispatch,
 W&B reporting, standalone serving launchers, benchmark websites and unused
-leaderboard outputs have been removed.
+leaderboard outputs have been removed. Nested benchmark packages retain only
+the dataset, prompt-processing and scoring code used by this runtime. Their
+original model providers, rollout drivers and unused evaluator configurations
+are removed.
 
 The evaluator's import packages, `eval` and `evalchemy_config`, belong to this
 environment. Marin calls the `evalchemy` CLI in a child process.

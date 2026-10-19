@@ -1,3 +1,0 @@
-<|im_start|>user
-{instruction} Answer with as much detail as possible.
-<|im_end|>

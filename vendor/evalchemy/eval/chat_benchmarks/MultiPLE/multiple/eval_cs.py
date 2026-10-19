@@ -1,7 +1,6 @@
 import tempfile
 from pathlib import Path
 from .safe_subprocess import run
-from .generic_eval import main
 import subprocess
 import os
 
@@ -72,7 +71,3 @@ def eval_script(path: str):
         "stdout": output.stdout,
         "stderr": output.stderr,
     }
-
-
-if __name__ == "__main__":
-    main(eval_script, LANG_NAME, LANG_EXT)

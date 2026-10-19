@@ -1,6 +1,5 @@
 from pathlib import Path
 from .safe_subprocess import run
-from .generic_eval import main
 
 
 LANG_NAME = "Ada"
@@ -58,7 +57,3 @@ def eval_script(path: Path):
         "stdout": run_result.stdout,
         "stderr": run_result.stderr,
     }
-
-
-if __name__ == "__main__":
-    main(eval_script, LANG_NAME, LANG_EXT)

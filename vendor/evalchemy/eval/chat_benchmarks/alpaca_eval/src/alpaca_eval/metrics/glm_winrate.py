@@ -1,5 +1,4 @@
 import logging
-from pathlib import Path
 from typing import Optional, Sequence, Union
 
 import numpy as np
@@ -12,7 +11,7 @@ from sklearn.metrics import log_loss as sk_log_loss
 from sklearn.metrics import make_scorer
 from sklearn.model_selection import GroupKFold, StratifiedKFold
 
-from alpaca_eval import constants, types, utils
+from alpaca_eval import constants, utils
 
 from .winrate import get_winrate
 
@@ -24,68 +23,19 @@ GLM_INFO = {
         "regularize_to_baseline_lambda": 0.2,
         "kwargs": {"n_splits": 5},
     },
-    "length_controlled_noreg": {
-        "formula": "np.tanh(std_delta_len) + instruction_difficulty + not_gamed_baseline.astype(float) - 1",
-        "regularize_to_baseline_lambda": None,
-        "kwargs": {"n_splits": 5},
-    },
-    "length_controlled_minimal": {
-        "formula": "np.tanh(std_delta_len) + not_gamed_baseline.astype(float) - 1",
-        "regularize_to_baseline_lambda": None,
-        "kwargs": {"n_splits": 5},
-    },
+
 }
-DFLT_WEIGHT_PATH = (
-    Path(__file__).parent
-    / "weights/weighted_alpaca_eval_gpt4_turbo/length_controlled_v1/baseline_gpt4_1106_preview.csv"
-)
 
 
 def get_length_controlled_winrate(
     annotations: Union[pd.DataFrame, Sequence[dict]],
-    glm_name="length_controlled_v1",
-    save_weights_dir: Optional[Union[str, Path]] = "auto",
-    baseline: Optional[str] = None,
-    is_add_glm_preference_inplace: bool = True,
-    is_warn_extreme_changes: bool = True,
-    glm_info=None,
     df_gamed: Optional[pd.DataFrame] = None,
 ) -> dict[str, float]:
-    """Extract head2head metrics (n_wins, n_counts, win_rate) from a sequence preference, and also predict the length
-    controlled winrate using a GLM.
-
-    Parameters
-    ----------
-    annotations : pd.DataFrame or Sequence of dict
-        The annotations to compute the winrate from.
-
-    glm_name : str, optional
-        The name of the GLM to use.
-
-    save_weights_dir : Path, optional
-        The directory to save the weights of the GLM. If None, the weights are not saved. If "auto", we save the weights
-        weights / annotator / glm_name. Can only be "auto" if there's a unique annotator.
-
-    baseline : str, optional
-        The name of the baseline model to compare to. If None, we use the default for that annotation (i.e. output_2).
-
-    is_add_glm_preference_inplace : bool, optional
-        Whether to add the GLM preference to the annotations inplace. Only possible if annotations is a DataFrame.
-
-    is_warn_extreme_changes : bool, optional
-        Warn if the length controlled win rate is very different from the raw one.
-
-    glm_info : dict, optional
-        The information to use for the GLM. If None, we use the default for that glm_name.
-    """
-    glm_info = glm_info or GLM_INFO[glm_name]
+    """Compute native win rate and length-controlled regression metrics."""
+    glm_info = GLM_INFO["length_controlled_v1"]
 
     metrics = get_winrate(annotations)  # get the non-length controlled winrate
     df = utils.convert_to_dataframe(annotations)
-
-    if save_weights_dir == "auto":
-        assert len(df["annotator"].unique()) == 1
-        save_weights_dir = Path(__file__).parent / "weights" / df["annotator"].unique()[0]
 
     assert len(df["generator_2"].unique()) == 1
     model_name = list(df["generator_2"].unique())[0]
@@ -108,40 +58,16 @@ def get_length_controlled_winrate(
             df_XY_train, "preference", is_ytrue_proba=True, sample_weight=sample_weight, **glm_info["kwargs"]
         )
         predicted_preferences = model.predict_proba(df_X_test)[:, 1]
-        weights = dict(zip(df_X_test.columns, model.coef_[0]))
     else:
-        weights = {c.strip(): 0 for c in glm_info["formula"].split("-")[0].split("+")}
         predicted_preferences = (df["preference"] * 0) + 0.5  # by construction
 
-    if is_add_glm_preference_inplace and isinstance(annotations, pd.DataFrame):
+    if isinstance(annotations, pd.DataFrame):
         annotations["glm_preference"] = predicted_preferences
 
     metrics["length_controlled_winrate"] = predicted_preferences.mean() * 100
     metrics["lc_standard_error"] = pd.Series(predicted_preferences).sem() * 100
 
-    if save_weights_dir is not None:
-        save_weights_dir = Path(save_weights_dir) / glm_name
-        save_weights_dir.mkdir(exist_ok=True, parents=True)
-        weights_path = save_weights_dir / f"baseline_{baseline_name}.csv"
-        if weights_path.exists():
-            saved_weights = pd.read_csv(weights_path, index_col=0)
-            new_weights = pd.DataFrame(weights, index=[model_name])
-            saved_weights = pd.concat([saved_weights, new_weights], axis=0)
-        else:
-            saved_weights = pd.DataFrame(weights, index=[model_name])
-        saved_weights = saved_weights[~saved_weights.index.duplicated(keep="last")]
-        saved_weights.to_csv(weights_path, float_format="%.16f")
-
-    if baseline is not None:
-        assert save_weights_dir is not None
-        metrics["length_controlled_winrate"] = predict_winrate(
-            model=model_name,
-            baseline=baseline,
-            weights=weights_path,
-            glm_name=glm_name,
-        )
-
-    if is_warn_extreme_changes and get_is_extreme_changes(metrics["win_rate"], metrics["length_controlled_winrate"]):
+    if get_is_extreme_changes(metrics["win_rate"], metrics["length_controlled_winrate"]):
         logging.warning(
             f"Length controlled win rate is very different from the raw one: {metrics['length_controlled_winrate']:.1f}"
             f"% vs {metrics['win_rate']:.1f}%. This might be a sign of failure of the GLM."
@@ -151,40 +77,6 @@ def get_length_controlled_winrate(
 
 
 # helper functions specific to the glm
-def predict_winrate(
-    model: str,
-    baseline: str,
-    weights: types.AnyLoadableDF = DFLT_WEIGHT_PATH,
-    glm_name="length_controlled_v1",
-) -> float:
-    """Predict the length corrected winrate of a model compared to a baseline using a GLM.
-
-    Parameters
-    ----------
-    model : str
-        Model name to predict the winrate for.
-
-    baseline : str
-        Baseline model name.
-
-    weights: DataFrame or Path, optional
-        Dataframe (or path to load one) containing the weights of the GLM to use for predictions.
-
-    glm_name : str, optional
-        The name of the GLM to use.
-    """
-    assert glm_name == "length_controlled_v1"
-    instruction_difficulty = _get_instructions_difficulty()
-
-    weights = utils.load_or_convert_to_dataframe(weights)
-    delta_weights = weights.loc[model] - weights.loc[baseline]
-    p = _logistic(
-        delta_weights["not_gamed_baseline.astype(float)"]
-        + delta_weights["instruction_difficulty"] * instruction_difficulty
-    )
-    return p.mean()
-
-
 def get_is_extreme_changes(prev_winrate, new_winrate, abs_diff=10, rel_diff=4, min_warn=True, max_warn=True):
     """Whether the win-rate changed by more than abs_diff or rel_diff.  E.g. if  abs_diff=7, rel_diff=4 and old win
     rate is 20, this will return true if the new win rate is <10 (i.e. min(20-20/4, 20-10)) or > 40 (i.e. 20+(100-20)/2)
@@ -193,11 +85,6 @@ def get_is_extreme_changes(prev_winrate, new_winrate, abs_diff=10, rel_diff=4, m
     too_small = new_winrate < min(prev_winrate - (prev_winrate / rel_diff), prev_winrate - abs_diff)
     too_large = new_winrate > max(prev_winrate + ((100 - prev_winrate) / rel_diff), prev_winrate + abs_diff)
     return (too_small and min_warn) or (too_large and max_warn)
-
-
-def _logistic(x):
-    """Logistic function."""
-    return np.exp(-np.logaddexp(0, -x))
 
 
 def _get_featurized_data(
@@ -364,35 +251,3 @@ def fit_LogisticRegressionCV(data, col_y_true, is_ytrue_proba=True, n_splits=5, 
             **fit_kwargs,
         )
     return model
-
-
-def _get_instructions_difficulty():
-    out = hf_hub_download(
-        repo_id="tatsu-lab/alpaca_eval",
-        filename="instruction_difficulty.csv",
-        repo_type="dataset",
-        token=constants.DATASETS_TOKEN,
-        force_download=constants.DATASETS_FORCE_DOWNLOAD,
-        cache_dir=constants.DEFAULT_CACHE_DIR,
-    )
-    return pd.read_csv(out, index_col=0).squeeze()
-
-
-def _predicted_winrate_matrix(
-    models,
-    weights: types.AnyLoadableDF = DFLT_WEIGHT_PATH,
-):
-    instruction_difficulty = _get_instructions_difficulty()
-
-    weights = utils.load_or_convert_to_dataframe(weights)
-
-    winrate_matrix = dict()
-    for b in models:
-        winrate_matrix[b] = dict()
-        for m in models:
-            delta_weights = weights.loc[m] - weights.loc[b]
-            winrate_matrix[b][m] = _logistic(
-                delta_weights["not_gamed_baseline.astype(float)"]
-                + delta_weights["instruction_difficulty"] * instruction_difficulty
-            ).mean()
-    return pd.DataFrame(winrate_matrix) * 100

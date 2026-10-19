@@ -2,7 +2,6 @@ import argparse
 from sys import exit
 import subprocess
 from pathlib import Path
-from .generic_eval import main as gmain
 
 
 def eval_script(path: Path):
@@ -33,7 +32,3 @@ def eval_script(path: Path):
         "stdout": stdout,
         "stderr": stderr,
     }
-
-
-if __name__ == "__main__":
-    gmain(eval_script, "Go", ".go")

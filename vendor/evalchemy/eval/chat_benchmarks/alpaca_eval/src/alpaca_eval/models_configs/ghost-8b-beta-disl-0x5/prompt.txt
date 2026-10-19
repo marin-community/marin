@@ -1,5 +1,0 @@
-<|bos|><|role:begin|>system<|role:end|>
-<|cos|>
-<|role:begin|>user<|role:end|>
-{instruction}<|cos|>
-<|role:begin|>assistant<|role:end|>

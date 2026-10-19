@@ -73,7 +73,11 @@ def check_argument_types(parser: argparse.ArgumentParser):
 
 def setup_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("--model", "-m", type=str, default="hf", help="Name of model e.g. `hf`")
+    parser.add_argument(
+        "--model", "-m", type=str, default="local-chat-completions",
+        choices=("local-chat-completions", "local-completions"),
+        help="OpenAI-compatible endpoint adapter",
+    )
     parser.add_argument(
         "--tasks",
         "-t",
@@ -87,7 +91,7 @@ def setup_parser() -> argparse.ArgumentParser:
         "-a",
         default="",
         type=str,
-        help="Comma separated string arguments for model, e.g. `pretrained=EleutherAI/pythia-160m,dtype=float32`",
+        help="Comma-separated endpoint arguments, e.g. `model=served,base_url=http://localhost:8000/v1/chat/completions`",
     )
     parser.add_argument(
         "--num_fewshot",
@@ -141,25 +145,6 @@ def setup_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="N|0<N<1",
         help="Limit the number of examples per task. If <1, limit is a percentage of the total number of examples.",
-    )
-    parser.add_argument(
-        "--cache_requests",
-        type=str,
-        default=None,
-        choices=["true", "refresh", "delete"],
-        help="Speed up evaluation by caching the building of dataset requests. `None` if not caching.",
-    )
-    parser.add_argument(
-        "--check_integrity",
-        action="store_true",
-        help="Whether to run the relevant part of the test suite for the tasks.",
-    )
-    parser.add_argument(
-        "--write_out",
-        "-w",
-        action="store_true",
-        default=False,
-        help="Prints the prompt for the first few documents.",
     )
     parser.add_argument(
         "--system_instruction",
@@ -238,11 +223,6 @@ def setup_parser() -> argparse.ArgumentParser:
             "Here numpy's seed is not set since the second value is `None`.\n"
             "E.g, `--seed 42` sets all four seeds to 42."
         ),
-    )
-    parser.add_argument(
-        "--trust_remote_code",
-        action="store_true",
-        help="Sets trust_remote_code to True to execute code to create HF Datasets from the Hub",
     )
     parser.add_argument(
         "--confirm_run_unsafe_code",

@@ -167,17 +167,3 @@ def construct_prompt_freeform(entry):
     else:
         prompt = f"Question: {prompt}"
     return prompt
-
-
-if __name__ == "__main__":
-    # mp_input = {'context': "How to check your Facebook feed", 'prompt': "Which solution is correct?", 'options': ["Log in to Facebook. Click on the bell shaped button at the top right of your Facebook home window.", "Log in to Facebook. Click on the bell shaped button at the top left of your Facebook home window."]}
-    ff_input = {
-        "context": "According to some sources 363 civilians were killed in Kavadarci, 230 in Negotino and 40 in Vatasha.",
-        "prompt": "What were the 3 villages that people were killed in?",
-        "benchmark_name": "MATH",
-    }
-
-    # prompt_mp = construct_prompt_multichoice(mp_input)
-    # print(prompt_mp)
-    prompt_ff = construct_prompt_freeform(ff_input)
-    print(prompt_ff)

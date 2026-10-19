@@ -1,5 +1,0 @@
-
-
-Human: {instruction} Answer with as much detail as possible.
-
-Assistant:

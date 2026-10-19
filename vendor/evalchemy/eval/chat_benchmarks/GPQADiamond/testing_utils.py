@@ -17,7 +17,6 @@ def get_multiple_choice_answer(pred: str):
     else:
         pred = pred[-1]
 
-    # Remove the period at the end, again!
     pred = pred.rstrip(".").rstrip("/")
 
     return pred

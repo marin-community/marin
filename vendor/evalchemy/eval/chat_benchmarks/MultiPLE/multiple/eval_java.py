@@ -2,7 +2,6 @@ import os
 import tempfile
 from .safe_subprocess import run
 from pathlib import Path
-from .generic_eval import main
 
 LANG_NAME = "Java"
 LANG_EXT = ".java"
@@ -45,7 +44,3 @@ def eval_script(path: Path):
         "stdout": result.stdout,
         "stderr": result.stderr,
     }
-
-
-if __name__ == "__main__":
-    main(eval_script, LANG_NAME, LANG_EXT)

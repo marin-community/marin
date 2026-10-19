@@ -1,5 +1,0 @@
-,np.tanh(std_delta_len),instruction_difficulty,not_gamed_baseline.astype(float)
-"model_curator_model_args_pretrained=claude-3-5-haiku-20241022,tokenized_requests=False",-1.8366974017900992,0.7446564084265157,-7.2599824829397441
-"model_curator_model_args_pretrained=claude-3-5-haiku-20241022,tokenized_requests=False,batch_size=1",-2.2123505700477266,0.4430662251338714,0.0602887165933287
-"model_curator_model_args_pretrained=gemini__gemini-1.5-flash,tokenized_requests=False,batch_size=1",-2.0652896814524828,0.2909775910083418,0.0988106449800108
-"model_curator_model_args_pretrained=gemini__gemini-1.5-flash-8b,tokenized_requests=False,max_requests_per_minute=10000,max_tokens_per_minute=10000000,batch_size=1",-2.3695718018361474,0.3369055355846819,-0.6677889603940012

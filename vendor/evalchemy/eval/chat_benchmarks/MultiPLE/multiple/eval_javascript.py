@@ -35,16 +35,3 @@ def eval_script(path: Path):
         "stdout": "" if output.stdout is None else output.stdout.decode("utf-8"),
         "stderr": "" if output.stderr is None else output.stderr.decode("utf-8"),
     }
-
-
-def main():
-    directory = Path(Path(__file__).parent, "..", "datasets", "js-keep-code_davinci_001_temp_0.2").resolve()
-
-    for filename in os.listdir(directory):
-        r = eval_script(Path.joinpath(directory, filename))
-        filename = filename.split(".")[0]
-        print(f"JavaScript,{filename},{r['status']}")
-
-
-if __name__ == "__main__":
-    main()

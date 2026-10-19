@@ -1,7 +1,3 @@
-from dotenv import load_dotenv
-
-load_dotenv()
-
-from .main import *  # noqa
+"""AlpacaEval prompt processing and length-controlled grading for Evalchemy."""
 
 __version__ = "0.6.5"

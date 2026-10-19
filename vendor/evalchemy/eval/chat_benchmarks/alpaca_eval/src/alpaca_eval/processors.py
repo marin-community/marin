@@ -1,12 +1,9 @@
 """
 Helper classes for processing the data. Each of those should have a function preprocess and postprocess, which will
 respectively be called in SingleAnnotator._preprocess and SingleAnnotator._postprocess in reverse order.
-
-Note: not worth to make the changes but all the parsers could have been processors.
 """
 
 import abc
-import json
 from typing import Optional, Sequence
 
 import numpy as np
@@ -17,8 +14,6 @@ from . import utils
 __all__ = [
     "RandomSwitchTwoColumnsProcessor",
     "PaddingForBatchesProcessor",
-    "ChainOfThoughtProcessor",
-    "JsonKeysToColumnProcessor",
 ]
 
 
@@ -207,113 +202,3 @@ class PaddingForBatchesProcessor(BaseProcessor):
 
     def postprocess(self, df_annotated: pd.DataFrame) -> pd.DataFrame:
         return df_annotated[~df_annotated["is_padding"].astype(bool)].drop(columns=["is_padding"]).copy()
-
-
-class ChainOfThoughtProcessor(BaseProcessor):
-    r"""Processes the raw completions by extracting the chain of thought as a new column
-    by loading them as a JSON and, if chain of thought is used, adding a dictionary
-    "referenced_models" to better understand which model names correspond to which outputs in the chain of thought.
-
-    Examples
-    --------
-    >>> raw_completion = '{"concise_explanation": "M is better", "ordered_models": [{"rank": 1, "model": "M"}, {"rank": 2, "model": "m"}]}'
-    >>> df = pd.DataFrame([dict(preference=2, raw_completion=raw_completion),
-    ...                    dict(preference=1, raw_completion=raw_completion)])
-    >>> processor = ChainOfThoughtProcessor()
-    >>> processor.postprocess(df)[["referenced_models", "concise_explanation"]]
-                        referenced_models concise_explanation
-    0  {'M': 'output_2', 'm': 'output_1'}         M is better
-    1  {'M': 'output_1', 'm': 'output_2'}         M is better
-    """
-
-    # those columns should be added to the final result
-    other_output_keys_to_keep = ["referenced_models", "concise_explanation"]
-
-    def preprocess(self, df_to_annotate: pd.DataFrame) -> pd.DataFrame:
-        return df_to_annotate
-
-    @property
-    def _tmp_col(self):
-        return "json_" + self.completion_column
-
-    def postprocess(self, df_annotated: pd.DataFrame) -> pd.DataFrame:
-        """Load the raw completion as a JSON and add the referenced models to better understand chain of thought."""
-        df_annotated = df_annotated.copy()
-
-        if self.completion_column in df_annotated:
-            df_annotated[self._tmp_col] = df_annotated[self.completion_column].apply(_try_json_load)
-            self.add_referenced_model_(df_annotated)
-            # add the concise explanation
-            df_annotated["concise_explanation"] = df_annotated[self._tmp_col].apply(
-                lambda x: x.get("concise_explanation", None)
-            )
-            df_annotated = df_annotated.drop(columns=[self._tmp_col])
-
-        return df_annotated
-
-    def add_referenced_model_(self, df):
-        """Add a dictionary to better understand chain of thought in case it's useful"""
-        df["referenced_models"] = None
-
-        for i, r in df.iterrows():
-            if (
-                isinstance(r[self._tmp_col], dict)
-                and "concise_explanation" in r[self._tmp_col]
-                and "ordered_models" in r[self._tmp_col]
-            ):
-                preference = int(df.loc[i, "preference"])
-                ordered_models = df.loc[i, self._tmp_col]["ordered_models"]
-                for m in ordered_models:
-                    if m["rank"] == 1:
-                        first_model = m["model"]
-                    elif m["rank"] == 2:
-                        second_model = m["model"]
-                    else:
-                        assert False
-
-                df.at[i, "referenced_models"] = {
-                    first_model: f"output_{preference}",
-                    second_model: f"output_{3 - preference}",
-                }
-
-
-class JsonKeysToColumnProcessor(BaseProcessor):
-    r"""Processes the raw completions by extracting the chain of thought as a new column
-    by loading them as a JSON and, if chain of thought is used, adding a dictionary
-    "referenced_models" to better understand which model names correspond to which outputs in the chain of thought.
-    """
-
-    def __init__(self, *args, json_keys_to_keep: list[str], **kwargs):
-        self.json_keys_to_keep = json_keys_to_keep
-        super().__init__(*args, **kwargs)
-
-    @property
-    def other_output_keys_to_keep(self):
-        return self.json_keys_to_keep
-
-    def preprocess(self, df_to_annotate: pd.DataFrame) -> pd.DataFrame:
-        return df_to_annotate
-
-    @property
-    def _tmp_col(self):
-        return "json_" + self.completion_column
-
-    def postprocess(self, df_annotated: pd.DataFrame) -> pd.DataFrame:
-        """Load the raw completion as a JSON and add the referenced models to better understand chain of thought."""
-        df_annotated = df_annotated.copy()
-
-        if self.completion_column in df_annotated:
-            df_annotated[self._tmp_col] = df_annotated[self.completion_column].apply(_try_json_load)
-            for key in self.json_keys_to_keep:
-                df_annotated[key] = df_annotated[self._tmp_col].apply(lambda x: x.get(key, None))
-            df_annotated = df_annotated.drop(columns=[self._tmp_col])
-
-        return df_annotated
-
-
-def _try_json_load(el):
-    """Try to load as json"""
-    try:
-        return json.loads(el)
-    except:
-        return el

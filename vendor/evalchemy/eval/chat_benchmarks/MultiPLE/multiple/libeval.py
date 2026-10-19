@@ -1,11 +1,6 @@
 import subprocess
 from typing import List
-from .generic_eval import main as gmain
 from eval.runtime.program_process import program_session_active, stop_program_subprocess
-
-
-def testing_mail(x, y, z):
-    gmain(x, y, z)
 
 
 def run_without_exn(args: List[str]):

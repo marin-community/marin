@@ -384,19 +384,16 @@ def _infer_call_target_from_completion(completion):
     return prefix[-1] if prefix else None
 
 
-def run_lcb_tests(problem, completion, timeout, is_extracted=False):
-    """Score a normalized LCB problem through the bounded grader, per the vendored ``lcb_run`` contract.
+def run_lcb_tests(problem, completion, timeout):
+    """Score a normalized LCB problem through the bounded grader.
 
     Arguments:
         problem: ``{"test": [{"input":..., "output":..., "testtype":"functional"|"stdin"}...]}``
             (or ``problem["test"]`` as a JSON string, as produced by the dataset loaders).
         completion: The candidate's program (functions or a stdin script).
         timeout: Per-test wall-clock bound.
-        is_extracted: Preserved for call-site compatibility; the mode is derived from the
-            first test's ``testtype`` here.
 
-    Returns the per-test ``(passed, msg, val, elapsed)`` tuples the vendored
-    ``lcb_run`` used to return, so consumers do not need to change.
+    Returns per-test ``(passed, message, value, elapsed)`` tuples.
     """
     tests = problem["test"]
     if isinstance(tests, str):
