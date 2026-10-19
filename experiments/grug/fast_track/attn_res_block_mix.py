@@ -15,16 +15,25 @@ token tile reads only the ``num_valid`` filled slots (always a prefix), once for
 """
 
 import functools
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import triton as plt
 
-MIX_TOKEN_BLOCK = 16
-MIX_FEATURE_BLOCK = 256
-DOT_TOKEN_BLOCK = 16
-DOT_FEATURE_BLOCK = 256
+
+class Tiles(NamedTuple):
+    """A kernel's token and feature tile (each capped at its dimension) and Triton launch parameters."""
+
+    token_block: int
+    feature_block: int
+    num_warps: int
+    num_stages: int
+
+
+MIX_TILES = Tiles(16, 128, 8, 1)
+DOT_TILES = Tiles(8, 128, 8, 2)
 
 
 def block_mix_reference(sources: jax.Array, weights: jax.Array) -> jax.Array:
@@ -48,8 +57,7 @@ def _mix_kernel(num_valid_ref, sources_ref, weights_ref, out_ref, *, num_gates: 
 
     def body(n, acc):
         source = sources_ref[n].astype(jnp.float32)  # [TB, FB]
-        weights = weights_ref[n]  # [G, TB]
-        return tuple(acc[g] + weights[g][:, None] * source for g in range(num_gates))
+        return tuple(acc[g] + weights_ref[n, g][:, None] * source for g in range(num_gates))
 
     zero = jnp.zeros(out_ref.shape[1:], jnp.float32)
     acc = jax.lax.fori_loop(0, num_valid, body, tuple(zero for _ in range(num_gates)))
@@ -58,7 +66,7 @@ def _mix_kernel(num_valid_ref, sources_ref, weights_ref, out_ref, *, num_gates: 
 
 
 def block_mix_local(
-    sources: jax.Array, weights: jax.Array, num_valid: jax.Array, *, interpret: bool = False
+    sources: jax.Array, weights: jax.Array, num_valid: jax.Array, *, tiles: Tiles = MIX_TILES, interpret: bool = False
 ) -> jax.Array:
     """``block_mix`` on one device's tokens: ``sources [N, T, D]``, float32 ``weights [N, G, T]`` that are zero
     on slots ``>= num_valid`` (int32 scalar) -> ``[G, T, D]`` in the sources' dtype."""
@@ -66,7 +74,7 @@ def block_mix_local(
     g = weights.shape[1]
     if weights.shape != (n, g, t) or weights.dtype != jnp.float32:
         raise ValueError(f"weights {weights.shape} {weights.dtype} must be float32 [{n}, G, {t}]")
-    tb, fb = _blocks(t, d, MIX_TOKEN_BLOCK, MIX_FEATURE_BLOCK)
+    tb, fb = _blocks(t, d, tiles.token_block, tiles.feature_block)
     itemsize = sources.dtype.itemsize
     return pl.pallas_call(
         functools.partial(_mix_kernel, num_gates=g),
@@ -78,7 +86,7 @@ def block_mix_local(
         ],
         out_specs=pl.BlockSpec((g, tb, fb), lambda i, j: (0, i, j)),
         out_shape=jax.ShapeDtypeStruct((g, t, d), sources.dtype),
-        compiler_params=plt.CompilerParams(num_warps=4, num_stages=1),
+        compiler_params=plt.CompilerParams(num_warps=tiles.num_warps, num_stages=tiles.num_stages),
         # Upper bound (every slot filled): read the history and weights once, write G mixes.
         cost_estimate=pl.CostEstimate(
             flops=2 * n * g * t * d,
@@ -114,7 +122,7 @@ def _dot_kernel(num_valid_ref, sources_ref, d_mixed_ref, out_ref, *, num_gates: 
 
 
 def block_mix_weight_grads_local(
-    sources: jax.Array, d_mixed: jax.Array, num_valid: jax.Array, *, interpret: bool = False
+    sources: jax.Array, d_mixed: jax.Array, num_valid: jax.Array, *, tiles: Tiles = DOT_TILES, interpret: bool = False
 ) -> jax.Array:
     """``[N, G, T]`` float32: ``<d_mixed[g, t], sources[n, t]>`` for ``n < num_valid``, zero for the other slots.
 
@@ -123,7 +131,7 @@ def block_mix_weight_grads_local(
     g = d_mixed.shape[0]
     if d_mixed.shape != (g, t, d):
         raise ValueError(f"d_mixed {d_mixed.shape} must be [G, {t}, {d}]")
-    tb, fb = _blocks(t, d, DOT_TOKEN_BLOCK, DOT_FEATURE_BLOCK)
+    tb, fb = _blocks(t, d, tiles.token_block, tiles.feature_block)
     return pl.pallas_call(
         functools.partial(_dot_kernel, num_gates=g, num_chunks=d // fb),
         # Slots fastest: a token tile's d_mixed rows stay in L2 across the slots that read them.
@@ -135,7 +143,7 @@ def block_mix_weight_grads_local(
         ],
         out_specs=pl.BlockSpec((None, g, tb), lambda s, i: (s, 0, i)),
         out_shape=jax.ShapeDtypeStruct((n, g, t), jnp.float32),
-        compiler_params=plt.CompilerParams(num_warps=4, num_stages=2),
+        compiler_params=plt.CompilerParams(num_warps=tiles.num_warps, num_stages=tiles.num_stages),
         cost_estimate=pl.CostEstimate(
             flops=2 * n * g * t * d,
             transcendentals=0,

@@ -18,8 +18,9 @@ import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import triton as plt
 
-TOKEN_BLOCK = 16
-FEATURE_BLOCK = 256
+from experiments.grug.fast_track.attn_res_block_mix import Tiles
+
+SOURCE_GRAD_TILES = Tiles(16, 128, 8, 1)
 
 
 def _kernel(*refs, num_gates: int):
@@ -43,6 +44,7 @@ def accumulate_source_grads_local(
     d_mixes: tuple[jax.Array, ...],
     num_valid: jax.Array,
     *,
+    tiles: Tiles = SOURCE_GRAD_TILES,
     interpret: bool = False,
 ) -> jax.Array:
     """``d_sources + sum_g weights[g][..., None] * d_mixes[g][None]`` on one device's tokens.
@@ -50,7 +52,7 @@ def accumulate_source_grads_local(
     ``d_sources`` is ``[N, T, D]``, each ``weights[g]`` ``[N, T]`` (zero on slots ``>= num_valid``, an int32
     scalar) and each ``d_mixes[g]`` ``[T, D]``."""
     n, t, d = d_sources.shape
-    tb, fb = min(TOKEN_BLOCK, t), min(FEATURE_BLOCK, d)
+    tb, fb = min(tiles.token_block, t), min(tiles.feature_block, d)
     if t % tb or d % fb:
         raise ValueError(f"source cotangents [{n}, {t}, {d}] need T % {tb} == 0 and D % {fb} == 0")
     num_gates = len(weights)
@@ -67,7 +69,7 @@ def accumulate_source_grads_local(
         out_specs=pl.BlockSpec((None, tb, fb), lambda s, i, j: (s, i, j)),
         out_shape=jax.ShapeDtypeStruct(d_sources.shape, d_sources.dtype),
         input_output_aliases={1: 0},
-        compiler_params=plt.CompilerParams(num_warps=4, num_stages=1),
+        compiler_params=plt.CompilerParams(num_warps=tiles.num_warps, num_stages=tiles.num_stages),
         interpret=interpret,
         name="attn_res_source_grads",
     )(jnp.reshape(num_valid, (1,)).astype(jnp.int32), d_sources, *weights, *d_mixes)
