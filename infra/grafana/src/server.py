@@ -68,7 +68,6 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/alerts/arch_mismatch                 alert rows: cluster, node, image, value(count)
     GET /k8s/alerts/gpu_rack_trays                alert rows: cluster, rack_name, value(trays_ready)
     POST /alerts/loom                             firing Grafana groups become Loom automation runs
-    POST /alerts/slack                            Grafana groups announced in Slack, no Loom run
     GET /health                                  bridge liveness
 
 A dead controller or GitHub returns 5xx (not empty rows), and the failure is not
@@ -149,8 +148,6 @@ from loom_alerts import (
     LoomAlertDeliveryError,
     LoomAlertPayloadError,
     OperatorBehavior,
-    SlackAlertClient,
-    SlackAnnouncementError,
 )
 from loss_spikes import loss_spike_alert_rows, loss_window_query
 from nightly_config import NIGHTLY_LANES
@@ -591,7 +588,6 @@ def create_app(
     k8s_fleet: K8sFleet,
     wandb_source: WandbSource,
     loom_alerts: LoomAlertClient | None = None,
-    slack_alerts: SlackAlertClient | None = None,
 ) -> Starlette:
     """Build the ASGI app serving Grafana's data sources and alert webhooks."""
     finelog_cache: TtlCache = TtlCache(config.cache_ttl)
@@ -1380,28 +1376,10 @@ def create_app(
         logger.info("Grafana alert accepted by Loom: run=%s", result.get("id", "unknown"))
         return JSONResponse({"accepted": True, "run": result}, status_code=202)
 
-    async def slack_alert(request: Request) -> JSONResponse:
-        if slack_alerts is None:
-            return JSONResponse({"error": "Slack alert announcement is not configured"}, status_code=503)
-        try:
-            payload = await request.json()
-            thread = await slack_alerts.announce(payload)
-        except (json.JSONDecodeError, LoomAlertPayloadError) as err:
-            return JSONResponse({"error": str(err)}, status_code=400)
-        except SlackAnnouncementError as err:
-            # This receiver posts and stops, so a failed announcement is the whole
-            # notification. Fail so Grafana retries instead of counting it sent.
-            logger.warning("Slack alert announcement failed: %s", err)
-            return JSONResponse({"error": str(err)}, status_code=502)
-        if thread is None:
-            return JSONResponse({"announced": False, "reason": "no firing alerts"}, status_code=202)
-        return JSONResponse({"announced": True}, status_code=202)
-
     return Starlette(
         routes=[
             Route("/health", health),
             Route("/alerts/loom", loom_alert, methods=["POST"]),
-            Route("/alerts/slack", slack_alert, methods=["POST"]),
             Route("/github/ferries", github_ferries),
             Route("/github/builds", github_builds),
             Route("/github/nightlies", github_nightlies),
@@ -1498,13 +1476,10 @@ def main() -> None:
                 ),
             ),
         )
-    slack_alerts = SlackAlertClient(config.loom_alerts) if config.loom_alerts is not None else None
     logger.info("grafana bridge serving %s on :%d", sorted(finelog_sources), BRIDGE_PORT)
     # Loopback only: Grafana fetches from the same container.
     uvicorn.run(
-        create_app(
-            config, finelog_sources, iris_sources, github_source, k8s_fleet, wandb_source, loom_alerts, slack_alerts
-        ),
+        create_app(config, finelog_sources, iris_sources, github_source, k8s_fleet, wandb_source, loom_alerts),
         host="127.0.0.1",
         port=BRIDGE_PORT,
         access_log=False,

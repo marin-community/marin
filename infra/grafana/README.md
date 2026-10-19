@@ -536,8 +536,8 @@ standalone Pushover monitor applies — see
 `telemetry_gone` while Iris still counts the tasks and `run_down` when it no
 longer does, a loss floor a whole unit above its trailing floor that the
 six-sigma band did not catch, a gradient norm above 2, or three skipped steps in
-fifteen minutes. `TrainingRunHealthDegraded` takes the announce-only
-`notification=slack` exception for token drops, router collapse, a throughput or
+fifteen minutes. `TrainingRunHealthDegraded` takes the `notification=slack`
+route for token drops, router collapse, a throughput or
 MFU floor, a worse evaluation, a stale `iris.task_state` row, and retries.
 
 These three watch a wider enrolment: a run that either the Iris rollup or fresh
@@ -556,8 +556,8 @@ execution ID separates concurrent pipelines under one root job. The stuck-pod
 rule groups by node and links the cordon-first
 recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
 The CoreWeave storage-telemetry freshness warning and `TrainingRunHealthDegraded`
-carry the explicit `notification=slack` exception, so they announce without
-launching an ops agent.
+carry the explicit `notification=slack` exception, so they announce in Slack
+and open a session on the default `operator` channel.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
 dashboard panels rather than alert rules because they have expected benign
 causes. `severity=critical` routes to `ops-critical` (email
@@ -597,15 +597,11 @@ Grafana posts cannot be joined by anything else — and the timestamp is exactly
 what Loom needs to route the thread to the triage session. The bridge posts
 instead, which also means one message per alert rather than two side by side.
 
-Both receivers post through the bridge, so every alert lands in one channel with
-one credential and one rendering, and alert text is escaped the same way either
-way. They differ only in what follows: `ops-critical` opens a Loom triage run on
-the thread it announced, while `ops-slack` — the fallback for malformed or
-unlabeled alerts — announces and stops, because an alert carrying no severity to
-route on carries no incident to triage. The tradeoff is that a fallback
-notification does not reach Slack while the bridge is down; email remains an
-independent path for critical alerts, and the fallback sees almost no traffic
-because every alert rule sets a severity.
+Both receivers post through the bridge and open a Loom triage run on the alert's
+Slack thread. They share one channel, credential, and rendering. `ops-critical`
+also sends email; `ops-slack` handles explicitly notified warnings and the root
+fallback for unlabeled alerts. A fallback notification does not reach Slack while
+the bridge is down; email remains an independent path for critical alerts.
 
 The Loom receiver posts to the bridge on `127.0.0.1`; it is not exposed through
 Grafana or IAP. For each firing group the bridge first posts the alert to
@@ -738,7 +734,7 @@ Creating the secrets:
    `printf '%s' "<app-password>" | gcloud secrets create marin-grafana-smtp-credentials --project=hai-gcp-models --data-file=-`
 6. Send a test notification to `ops-critical` and confirm email arrives, one alert
    message lands in the channel, and its thread gains a triage-session link. Test
-   `ops-slack` too: it should post one message and no session link.
+   `ops-slack` too: it should post one message with a session link in its thread.
 
 ## Develop
 

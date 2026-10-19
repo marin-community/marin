@@ -16,8 +16,6 @@ from loom_alerts import (
     LoomAlertDeliveryError,
     LoomAlertPayloadError,
     OperatorBehavior,
-    SlackAlertClient,
-    SlackAnnouncementError,
 )
 
 SLACK_CHANNEL = "C0123ABCD"
@@ -426,57 +424,19 @@ def test_invalid_payload_is_rejected_before_authentication():
         asyncio.run(client_for(FakeSlack()).submit({}))
 
 
-def announce_only_client(slack: FakeSlack) -> SlackAlertClient:
-    """The fallback receiver's client. Any non-Slack request is a bug: this path
-    must not reach Google metadata or Loom."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "slack.com":
-            return slack.respond(request)
-        raise AssertionError(f"the announce-only path must not call {request.url}")
-
-    return SlackAlertClient(loom_config(), transport=httpx.MockTransport(handler))
-
-
-def test_the_fallback_announces_the_alert_and_opens_no_run():
-    """Malformed and unlabeled alerts carry no severity to route on and no incident
-    to triage, so they are announced and left alone."""
+def test_notified_warning_uses_default_operator_channel_and_links_its_session():
     slack = FakeSlack()
+    runs: list[dict] = []
+    payload = alert_payload()
+    payload["receiver"] = "ops-slack"
+    payload["commonLabels"].update(severity="warning", notification="slack")
+    payload["alerts"][0]["labels"].update(severity="warning", notification="slack")
 
-    thread = asyncio.run(announce_only_client(slack).announce(alert_payload()))
+    asyncio.run(client_for(slack, runs=runs).submit(payload))
 
-    assert thread is not None
+    assert runs[0]["channel"] == "operator"
     assert len(slack.roots) == 1
-    card = slack.roots[0]["text"]
-    assert "K8sClusterUnreachable on cw-a" in card
-    assert slack.replies == [], "no triage session to link"
-
-
-def test_the_fallback_shares_the_announcement_rules():
-    """It reuses the announcer, so a retry does not announce twice and a resolution
-    joins the thread rather than starting a new message."""
-    slack = FakeSlack()
-    client = announce_only_client(slack)
-
-    asyncio.run(client.announce(alert_payload()))
-    asyncio.run(client.announce(alert_payload()))
-    assert asyncio.run(client.announce(alert_payload(status="resolved"))) is None
-
-    assert len(slack.roots) == 1
-    assert any("Resolved" in text for text in slack.reply_texts)
-
-
-def test_the_fallback_rejects_a_malformed_body():
-    with pytest.raises(LoomAlertPayloadError, match="alerts list"):
-        asyncio.run(announce_only_client(FakeSlack()).announce({}))
-
-
-def test_a_fallback_announcement_slack_refused_is_raised_so_grafana_retries():
-    """The critical receiver can swallow a Slack failure because the triage session
-    still opens. This one posts and stops, so a swallowed failure would drop the
-    notification entirely."""
-    with pytest.raises(SlackAnnouncementError, match="did not accept"):
-        asyncio.run(announce_only_client(FakeSlack(ok=False)).announce(alert_payload()))
+    assert slack.reply_texts == ["Triage session: https://loom.example.com/s/session-1"]
 
 
 def test_alert_card_escapes_text_and_drops_links_that_could_break_out():
