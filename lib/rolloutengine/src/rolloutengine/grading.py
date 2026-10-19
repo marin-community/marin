@@ -33,7 +33,7 @@ async def _grade_rollout(
     stop_reason: str,
     judge_connection: JudgeConnection | None,
 ) -> GradeResult:
-    """Grade in process, or in a fresh verifier machine that the attempt owns.
+    """Grade in process, through a configured host judge, or in a fresh verifier machine.
 
     ``outputs`` holds the task's ``output_paths`` that the engine captured after the turn loop.
     """

@@ -131,7 +131,7 @@ async def test_remote_judge_grades_on_host_without_creating_verifier_machine(
         grader=verifyit_package(
             JudgeSpec(
                 rubric="labels",
-                references=("The answer is twelve",),
+                references=("The answer is 12",),
                 model="fixture-judge",
                 system_prompt="Grade the answer",
                 prompt_template="{reference}\n{candidate}",
