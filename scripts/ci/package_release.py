@@ -171,7 +171,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
             source_patterns=("lib/iris/rust/**", "rust/iris-*/**"),
             build_legs=(
                 ("ubuntu-latest", BuildOperation.LINUX),
-                ("macos-14", BuildOperation.MACOS),
+                ("macos-15", BuildOperation.MACOS),
                 ("ubuntu-latest", BuildOperation.SDIST),
             ),
             build=NativeBuild(
@@ -203,7 +203,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
             ),
             build_legs=(
                 ("ubuntu-latest", BuildOperation.LINUX),
-                ("macos-14", BuildOperation.MACOS),
+                ("macos-15", BuildOperation.MACOS),
                 ("ubuntu-latest", BuildOperation.SDIST),
             ),
             build=NativeBuild(
@@ -234,7 +234,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
             ),
             build_legs=(
                 ("ubuntu-latest", BuildOperation.LINUX),
-                ("macos-14", BuildOperation.MACOS),
+                ("macos-15", BuildOperation.MACOS),
                 ("ubuntu-latest", BuildOperation.SDIST),
             ),
             build=NativeBuild(

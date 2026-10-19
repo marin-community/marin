@@ -2,46 +2,50 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Curriculum atlas · RL Data Atlas</title>
+  <title>Curriculum · RL Data Atlas</title>
   <link rel="stylesheet" href="style.css"><link rel="stylesheet" href="curriculum.css">
   <script src="common.js" defer></script><script src="curriculum.js" defer></script>
 </head>
 <body>
 <main>
-  <header class="atlas-header"><h1>RL Data Atlas</h1><div><a href="./">Curation grades</a><a href="archive.html">Historical reviews</a></div></header>
-  <nav class="atlas-tabs" aria-label="Atlas views"><a href="#view=sources" data-view="sources">By source</a><a href="#view=map" data-view="map" aria-current="page">By curriculum</a></nav>
-  <section class="metrics" aria-label="Alignment totals">
-    <div><span class="metric-label" id="count-label">TASK INSTANCES</span><strong id="task-count">—</strong><small id="source-count">Loading sources</small></div>
-    <div><span class="metric-label">WITH A CURRICULUM HOME</span><strong id="mapped-count">—</strong><small>Subject or capability within the release cutoffs</small></div>
-    <div><span class="metric-label">CAPABILITY MATCHES</span><strong id="capability-count">—</strong><small id="broad-count">Loading subject-only coverage</small></div>
+  <header class="atlas-header"><a class="atlas-name" href="./">RL Data Atlas</a><a href="archive.html">Review archive</a></header>
+  <nav class="atlas-tabs" aria-label="Atlas views"><a href="./">By source</a><a href="curriculum.html" aria-current="page">By curriculum</a></nav>
+  <section class="page-heading">
+    <div><h1>Curriculum</h1><p id="message" role="status" aria-live="polite">Loading coverage…</p></div>
+    <div class="coverage-totals"><span><strong id="task-count">—</strong> examples</span><span id="source-count"></span></div>
   </section>
-  <p id="message" class="sync-banner" role="status" aria-live="polite">Loading curriculum coverage…</p>
-  <p id="source-ledger" class="sync-banner" hidden></p>
+  <form id="controls" class="browse-controls" role="search">
+    <label class="search-control"><span>Find an area</span><input id="search" type="search" placeholder="Search subjects or skills…" aria-label="Search the curriculum"></label>
+    <label><span>Domain</span><select id="domain"><option value="">All domains</option></select></label>
+    <label><span>Source</span><select id="source"><option value="">All sources</option></select></label>
+    <label><span>Use</span><select id="use"><option value="all">All uses</option><option value="train">Training</option><option value="eval">Evaluation</option></select></label>
+    <button id="reset-view" class="text-button" type="button">Clear filters</button>
+  </form>
   <section class="catalog">
-    <form id="controls" class="coverage-controls">
-      <div class="control-row">
-        <label>Sources<select id="source"><option value="">All sources</option></select></label>
-        <label>Use<select id="use"><option value="all">Train + evaluation</option><option value="train">Training</option><option value="eval">Evaluation</option></select></label>
-        <label id="map-detail-control">Detail<select id="map-detail"><option value="topics">Domains &amp; topics</option><option value="capabilities">All skills</option></select></label>
-        <label id="source-options" class="include-empty" hidden><input type="checkbox" id="include-empty"> Show sources without processed tasks</label>
-      </div>
-      <div class="control-row"><span id="sample-note"></span><button id="reset-view" class="text-button" type="button">Reset view</button></div>
-    </form>
-    <div class="matrix-heading"><nav id="breadcrumbs" aria-label="Curriculum path"></nav><label class="search"><input id="search" type="search" placeholder="Find a subject or skill…" aria-label="Search the curriculum"></label></div>
-    <p id="coverage-scope" hidden></p>
-    <div class="matrix-help"><span id="level-help">Domain totals include broad subject matches. Topics and skills count capability matches.</span><span class="heat-legend">0 <span aria-hidden="true"></span> <b id="heat-max">—</b> · log scale</span></div>
-    <div id="curriculum-map" class="curriculum-map" aria-label="All curriculum domains and topics"></div>
-    <div id="source-matrix" hidden class="table-scroller coverage-scroller" tabindex="0" aria-label="Curriculum heatmap"><table id="heatmap"><caption class="sr-only">Task counts by curriculum area and source</caption><thead id="matrix-head"></thead><tbody id="matrix-body"></tbody></table><p id="empty" class="empty" hidden>No matching curriculum areas.</p></div>
-    <footer class="table-footer"><span id="matrix-summary"></span><span>Darker cells mean more tasks. Empty areas remain visible.</span></footer>
+    <div class="matrix-heading"><nav id="breadcrumbs" aria-label="Curriculum path"></nav><span class="heat-legend">0 <span aria-hidden="true"></span> <b id="heat-max">—</b><span class="legend-unit">examples · log scale</span></span></div>
+    <p id="coverage-scope" class="scope-note" hidden></p>
+    <div id="curriculum-map" class="curriculum-map" aria-label="Curriculum coverage heatmap"></div>
+    <footer class="table-footer"><span id="matrix-summary"></span><span>Select an area to explore it, or a count to read examples.</span></footer>
   </section>
-  <div id="outcomes" class="outcome-bar" aria-label="Browse tasks by matching outcome"></div>
+  <div id="outcomes" class="outcome-bar" aria-label="Browse examples by matching outcome"></div>
   <section id="task-panel" class="catalog task-panel" hidden>
-    <div class="catalog-top"><div><p class="eyebrow">SAMPLED TASK INSTANCES</p><h2 id="task-heading">Tasks</h2><p id="task-scope"></p></div><button id="close-tasks" class="text-button">Close task list</button></div>
-    <div id="task-list" class="task-list"></div><p id="task-message" class="sync-banner" role="status" aria-live="polite"></p><button id="more-tasks" class="secondary" hidden>Load more tasks</button>
+    <div class="catalog-top"><div><h2 id="task-heading">Sampled examples</h2><p id="task-scope"></p></div><button id="close-tasks" class="text-button">Close examples</button></div>
+    <div id="task-list" class="task-list"></div><p id="task-message" class="status-line" role="status" aria-live="polite"></p><button id="more-tasks" class="secondary" hidden>Load more</button>
   </section>
-  <section class="notes"><div><p><b>Coverage describes the selected population.</b> Converted tasks have passed format conversion, before curation admission. Training and evaluation use remain separate. Counts include repeated task instances; each task may appear in several curriculum rollups.</p></div><div><p><b>Similarity is a retrieval score.</b> A broad subject match can remain useful when the nearest capability is weak. Inspect sampled instructions, embedding text and alternatives. The release uses fixed score cutoffs; these do not change curation decisions.</p></div></section>
-  <details class="release-details"><summary>Release and provenance</summary><pre id="provenance"></pre></details>
+  <details class="data-notes"><summary>About counts and matching</summary>
+    <p>Counts cover converted examples before curation admission, including repeated instances. Domain counts include broad subject matches; topic and skill counts require a capability match. Empty areas remain visible.</p>
+    <p><strong id="mapped-count">—</strong> have a curriculum match. <strong id="capability-count">—</strong> have a capability match; <span id="broad-count"></span>.</p>
+    <p id="sample-note"></p><p id="source-ledger" hidden></p>
+    <details><summary>Release record</summary><pre id="provenance"></pre></details>
+  </details>
 </main>
-<dialog id="task-detail"><div class="drawer-header"><p class="eyebrow">TASK AND CURRICULUM MATCHES</p><button id="close-detail" class="close" aria-label="Close task details">×</button></div><h2 id="detail-title">Task details</h2><span id="detail-status" class="population-chip"></span><p id="detail-source"></p><p id="detail-task-id"></p><details><summary>Embedding text</summary><p id="detail-description" class="description"></p></details><div id="detail-matches"></div><h3>Public instructions</h3><p id="preview-note"></p><pre id="detail-instructions"></pre><details><summary>Task lineage</summary><pre id="detail-provenance"></pre></details></dialog>
+<dialog id="task-detail" aria-labelledby="detail-title">
+  <div class="drawer-header"><span>Sampled example</span><button id="close-detail" class="close" aria-label="Close task details">×</button></div>
+  <h2 id="detail-title">Task details</h2><span id="detail-status" class="population-chip"></span><p id="detail-source"></p><p id="detail-task-id"></p>
+  <h3>Public instructions</h3><p id="preview-note"></p><pre id="detail-instructions"></pre>
+  <h3>Curriculum matches</h3><div id="detail-matches"></div>
+  <details><summary>Embedding text</summary><p id="detail-description" class="description"></p></details>
+  <details><summary>Task lineage</summary><pre id="detail-provenance"></pre></details>
+</dialog>
 </body>
 </html>

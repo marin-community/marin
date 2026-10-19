@@ -102,6 +102,7 @@ nav:
       - Default Steps: references/default-steps.md
       - Launching RL experiments: references/rl-launching.md
       - RL Data Atlas: references/rl-data-atlas.md
+      - Snowball Model Family Tree: references/snowball-family-tree.md
       - Building Marina apps: references/marina.md
       - Task rollouts: references/task-rollouts.md
       - Training Configuration: references/train-config.md

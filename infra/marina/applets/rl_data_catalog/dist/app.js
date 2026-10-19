@@ -1,89 +1,154 @@
 /* Copyright The Marin Authors. SPDX-License-Identifier: Apache-2.0 */
-const number = new Intl.NumberFormat("en-US");
-const labels = {good: "Good", some_issues: "Some issues", bad: "Bad", unknown: "Unknown", unassessed: "Unassessed"};
-const state = {sources: [], sort: "display_name", direction: 1};
-const columns = [["display_name", "Source"], ["origin", "Catalog"], ["task_count", "Input rows"], ["admitted", "Retained rows"], ["quality", "Sampled grade"], ["sample", "Retained / excluded sample"], ["curation", "Curation"], ["controls", "Executed controls"], ["type", "Type"], ["status", "Availability"]];
-function grade(row) {return row.assessment.status === "complete" ? row.assessment.admitted.grade : "unassessed";}
+const number = new Intl.NumberFormat('en-US');
+const labels = {good: 'Good', some_issues: 'Some issues', bad: 'Bad', unknown: 'Unknown', unassessed: 'Not assessed'};
+const useLabels = {train: 'Training', eval: 'Evaluation', unprocessed: 'Not processed'};
+const columns = [['display_name', 'Source'], ['examples', 'Examples'], ['use', 'Use'], ['quality', 'Quality'], ['area', 'Top curriculum area']];
+const state = {sources: [], sort: 'examples', direction: -1};
+
+function grade(row) {
+  return row.assessment.status === 'complete' ? row.assessment.admitted.grade : 'unassessed';
+}
 function value(row, key) {
-  if (key === "quality") return grade(row);
-  if (key === "curation") return row.curation?.status || "inventory";
-  if (key === "admitted") return row.curation?.admission_counts?.admitted;
-  if (key === "sample") return row.assessment.admitted?.sample_count || 0;
-  if (key === "controls") return row.curation?.verification?.status || "Not measured";
+  if (key === 'examples') return row.coverage?.example_count;
+  if (key === 'use') return row.coverage?.intended_use || 'unprocessed';
+  if (key === 'quality') return grade(row);
+  if (key === 'area') return row.coverage?.top_area?.name;
   return row[key];
 }
 function filtered() {
-  const search = $("search").value.trim().toLowerCase();
-  return state.sources.filter(row => ["origin", "quality", "curation", "type"].every(key => $(key).value === "all" || $(key).value === value(row, key)) && (!search || [row.display_name, row.name, row.family, ...(row.tags || [])].join(" ").toLowerCase().includes(search))).sort((a, b) => {
+  const search = $('search').value.trim().toLowerCase();
+  return state.sources.filter(row => {
+    const matches = ['origin', 'quality', 'use'].every(key => $(key).value === 'all' || $(key).value === value(row, key));
+    const text = [row.display_name, row.name, row.dataset_id, row.family, ...(row.tags || [])].join(' ').toLowerCase();
+    return matches && (!search || text.includes(search));
+  }).sort((a, b) => {
     const x = value(a, state.sort), y = value(b, state.sort);
     if (x === null || x === undefined) return y === null || y === undefined ? a.id.localeCompare(b.id) : 1;
     if (y === null || y === undefined) return -1;
-    return (typeof x === "number" ? x - y : String(x).localeCompare(String(y), undefined, {numeric: true})) * state.direction || a.id.localeCompare(b.id);
+    const order = typeof x === 'number' ? x - y : String(x).localeCompare(String(y), undefined, {numeric: true});
+    return order * state.direction || a.id.localeCompare(b.id);
   });
 }
+function curriculumLink(row, area) {
+  const params = new URLSearchParams({source_id: row.id});
+  if (area) { params.set('subject_id', area.subject_id); params.set('parent_id', area.node_id); }
+  return `curriculum.html#${params}`;
+}
 function render() {
-  $("headers").replaceChildren();
-  for (const [key, title] of columns) {
-    const th = node("th"), button = node("button", title);
-    th.scope = "col";
-    th.setAttribute("aria-sort", state.sort === key ? state.direction === 1 ? "ascending" : "descending" : "none");
-    button.addEventListener("click", () => {state.direction = state.sort === key ? -state.direction : 1; state.sort = key; render();});
-    th.append(button); $("headers").append(th);
-  }
-  const rows = filtered(), fragment = document.createDocumentFragment();
-  for (const row of rows) {
-    const tr = node("tr");
-    tr.dataset.sourceId = row.id;
-    for (const [key] of columns) {
-      const td = node("td"), item = value(row, key);
-      if (key === "display_name") {const button = node("button", row.display_name, "text-button"); button.addEventListener("click", () => details(row)); td.append(button, node("div", row.dataset_id, "source-subtitle"));}
-      else if (key === "quality") {const badge = node("span", labels[item], `chip quality-${item}`); if (row.assessment.status === "complete") {const anchor = node("a"); anchor.href = `assessment.html?source=${encodeURIComponent(row.id)}`; anchor.append(badge); td.append(anchor);} else td.append(badge);}
-      else if (key === "sample") td.textContent = row.assessment.status === "complete" ? `${row.assessment.admitted.sample_count} / ${row.assessment.excluded.sample_count}` : "—";
-      else td.textContent = item === null || item === undefined ? "—" : typeof item === "number" ? number.format(item) : item;
-      if (key === "quality" && row.assessment.status === "complete") {
-        const summary = row.assessment.admitted;
-        td.title = summary.grade_reason;
-        if (summary.good_fraction !== null) td.append(node("div", `${(100 * summary.good_fraction).toFixed(1)}% Good`, "source-subtitle"));
-      }
-      tr.append(td);
-    }
-    fragment.append(tr);
-  }
-  $("rows").replaceChildren(fragment); $("empty").hidden = rows.length > 0;
-  $("visible-count").textContent = `${number.format(rows.length)} of ${number.format(state.sources.length)} sources`;
+  const headings = columns.map(([key, title]) => {
+    const th = node('th'), button = node('button', title);
+    th.scope = 'col';
+    th.setAttribute('aria-sort', state.sort === key ? state.direction === 1 ? 'ascending' : 'descending' : 'none');
+    if (key === 'examples') th.className = 'num';
+    if (state.sort === key) button.append(node('span', state.direction === 1 ? '↑' : '↓', 'sort-indicator'));
+    button.addEventListener('click', () => {
+      state.direction = state.sort === key ? -state.direction : key === 'examples' ? -1 : 1;
+      state.sort = key; update();
+    });
+    th.append(button); return th;
+  });
+  $('headers').replaceChildren(...headings);
+  const rows = filtered();
+  $('rows').replaceChildren(...rows.map(row => {
+    const tr = node('tr'); tr.dataset.sourceId = row.id;
+    const name = node('td');
+    const open = node('button', row.display_name, 'source-name');
+    open.title = row.display_name; open.addEventListener('click', () => details(row));
+    name.append(open, node('span', row.origin, 'source-subtitle'));
+    const examples = node('td', row.coverage ? number.format(row.coverage.example_count) : '—', 'num');
+    examples.title = row.coverage ? 'Converted examples before curation admission' : 'No processed examples in this release';
+    const use = node('td', row.coverage ? useLabels[row.coverage.intended_use] : '—', 'use-cell');
+    const quality = node('td');
+    const badge = node('span', labels[grade(row)], `chip quality-${grade(row)}`);
+    if (row.assessment.status === 'complete') {
+      const anchor = node('a'); anchor.href = `assessment.html?source=${encodeURIComponent(row.id)}`;
+      anchor.title = row.assessment.admitted.grade_reason; anchor.append(badge);
+      quality.append(anchor, node('span', `${number.format(row.assessment.admitted.reviewed)} reviewed`, 'source-subtitle'));
+    } else quality.append(badge);
+    const area = node('td');
+    if (row.coverage?.top_area) {
+      const anchor = node('a', row.coverage.top_area.name, 'area-link');
+      anchor.href = curriculumLink(row, row.coverage.top_area);
+      anchor.title = `${number.format(row.coverage.top_area.instances)} examples in this area`;
+      area.append(anchor);
+    } else area.append(node('span', '—', 'muted'));
+    tr.append(name, examples, use, quality, area); return tr;
+  }));
+  $('empty').hidden = rows.length > 0;
+  $('visible-count').textContent = `${number.format(rows.length)} of ${number.format(state.sources.length)} sources`;
 }
 function details(row) {
-  $("detail-name").textContent = row.display_name; $("detail-notes").textContent = row.notes;
+  $('detail-name').textContent = row.display_name; $('detail-notes').textContent = row.notes;
   const controls = row.curation?.verification;
-  const fields = [["Source ID", row.id], ["Dataset revision", row.dataset_revision], ["Pipeline", row.pipeline?.name], ["Grade", labels[grade(row)]], ["Assessment scope", row.assessment.scope], ["Model", row.assessment.model?.model], ["Admitted opinions", row.assessment.admitted?.verdict_counts], ["Excluded opinions", row.assessment.excluded?.verdict_counts], ["Curation", row.curation?.status], ["Admission counts", row.curation?.admission_counts], ["Control status", controls?.status], ["Control counts", controls?.counts], ["Control sample / eligible", controls ? `${controls.sample_count ?? "—"} / ${controls.eligible_count ?? "—"}` : undefined], ["Assessment note", row.assessment.reason]];
-  $("detail-fields").replaceChildren();
-  for (const [title, item] of fields) {if (item === null || item === undefined) continue; const field = node("dl", undefined, "field"); field.append(node("dt", title), node("dd", typeof item === "object" ? JSON.stringify(item) : String(item))); $("detail-fields").append(field);}
-  $("detail-links").replaceChildren();
-  if (row.url?.startsWith("https://")) {const anchor = node("a", "Pinned dataset ↗"); anchor.href = row.url; anchor.rel = "noopener"; anchor.target = "_blank"; $("detail-links").append(anchor);}
-  if (row.assessment.status === "complete") {const anchor = node("a", "Read assessment and task evidence ↗"); anchor.href = `assessment.html?source=${encodeURIComponent(row.id)}`; $("detail-links").append(anchor);}
-  $("details").showModal();
+  const fields = [
+    ['Catalog', row.origin], ['Converted examples', row.coverage?.example_count],
+    ['Use', useLabels[row.coverage?.intended_use]], ['Quality', labels[grade(row)]],
+    ['Top curriculum area', row.coverage?.top_area?.name],
+    ['Input rows', row.task_count], ['Source ID', row.id], ['Dataset revision', row.dataset_revision],
+    ['Pipeline', row.pipeline?.name], ['Curation', row.curation?.status],
+    ['Assessment model', row.assessment.model?.model], ['Assessment note', row.assessment.reason],
+    ['Admission counts', row.curation?.admission_counts], ['Control status', controls?.status], ['Control counts', controls?.counts],
+  ];
+  $('detail-fields').replaceChildren(...fields.filter(([, item]) => item !== null && item !== undefined).map(([title, item]) => {
+    const field = node('dl', undefined, 'field');
+    field.append(node('dt', title), node('dd', typeof item === 'object' ? JSON.stringify(item) : String(item)));
+    return field;
+  }));
+  const links = [];
+  if (row.coverage) { const anchor = node('a', 'Curriculum coverage'); anchor.href = curriculumLink(row); links.push(anchor); }
+  if (row.assessment.status === 'complete') {
+    const anchor = node('a', 'Quality assessment'); anchor.href = `assessment.html?source=${encodeURIComponent(row.id)}`; links.push(anchor);
+  }
+  if (row.url?.startsWith('https://')) {
+    const anchor = node('a', 'Original dataset ↗'); anchor.href = row.url; anchor.rel = 'noopener'; anchor.target = '_blank'; links.push(anchor);
+  }
+  $('detail-links').replaceChildren(...links); $('details').showModal();
 }
 async function load() {
-  const response = await fetch("api/sources", {cache: "no-store"});
-  if (!response.ok) throw new Error(`Catalog read failed (${response.status})`);
-  const data = await response.json(); state.sources = data.sources;
-  $("source-count").textContent = number.format(data.sources.length);
-  $("assessment-count").textContent = `${data.sources.filter(row => row.assessment.status === "complete").length} complete assessments`;
-  $("sample-count").textContent = number.format(data.sources.reduce((total, row) => total + (row.assessment.admitted?.sample_count || 0) + (row.assessment.excluded?.sample_count || 0), 0));
-  $("snapshot-date").textContent = new Date(data.created_at).toLocaleDateString(); $("snapshot-id").textContent = data.snapshot_id;
-  const selection = $("origin").value;
-  $("origin").replaceChildren(node("option", "All catalogs")); $("origin").firstChild.value = "all";
-  for (const origin of [...new Set(data.sources.map(row => row.origin))].sort()) {const option = node("option", origin); option.value = origin; $("origin").append(option);}
-  $("origin").value = [...$("origin").options].some(option => option.value === selection) ? selection : "all"; render();
+  const data = await json('api/sources');
+  state.sources = data.sources;
+  const processed = data.sources.filter(row => row.coverage);
+  const examples = processed.reduce((total, row) => total + row.coverage.example_count, 0);
+  $('message').textContent = `${number.format(data.sources.length)} sources · ${number.format(examples)} examples · ${processed.length} sources processed`;
+  $('snapshot-info').textContent = `Curation inventory dated ${new Date(data.created_at).toLocaleDateString()}.`;
+  for (const origin of [...new Set(data.sources.map(row => row.origin))].sort()) {
+    const option = node('option', origin); option.value = origin; $('origin').append(option);
+  }
+  readLocation();
+  render();
 }
-for (const id of ["origin", "quality", "curation", "type"]) $(id).addEventListener("change", render);
-$("search").addEventListener("input", render); $("close-details").addEventListener("click", () => $("details").close());
-$("reset").addEventListener("click", () => {for (const id of ["origin", "quality", "curation", "type"]) $(id).value = "all"; $("search").value = ""; render();});
-$("export").addEventListener("click", () => {
-  const quote = item => `"${String(item ?? "").replaceAll('"', '""')}"`;
-  const cell = (row, key) => key === "sample" ? `${row.assessment.admitted?.sample_count || 0} / ${row.assessment.excluded?.sample_count || 0}` : value(row, key);
-  const csv = [columns.map(([, title]) => quote(title)).join(","), ...filtered().map(row => columns.map(([key]) => quote(cell(row, key))).join(","))].join("\r\n");
-  const url = URL.createObjectURL(new Blob([csv], {type: "text/csv;charset=utf-8"}));
-  const anchor = node("a"); anchor.href = url; anchor.download = "rl-data-atlas.csv"; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+function viewUrl() {
+  const params = new URLSearchParams();
+  for (const id of ['search', 'origin', 'quality', 'use']) {
+    const item = $(id).value.trim();
+    if (item && item !== 'all') params.set(id, item);
+  }
+  if (state.sort !== 'examples') params.set('sort', state.sort);
+  if (state.direction !== -1) params.set('direction', state.direction);
+  return location.pathname + (params.size ? `#${params}` : '');
+}
+function readLocation() {
+  const params = new URLSearchParams(location.hash.slice(1));
+  $('filters').reset();
+  for (const id of ['search', 'origin', 'quality', 'use']) if (params.has(id)) $(id).value = params.get(id);
+  state.sort = params.get('sort') || 'examples';
+  state.direction = params.get('direction') === '1' ? 1 : -1;
+}
+function update(replace = false) {
+  history[replace ? 'replaceState' : 'pushState'](null, '', viewUrl());
+  render();
+}
+for (const id of ['origin', 'quality', 'use']) $(id).addEventListener('change', () => update());
+$('filters').addEventListener('submit', event => event.preventDefault());
+$('search').addEventListener('input', () => update(true));
+$('close-details').addEventListener('click', () => $('details').close());
+$('clear-filters').addEventListener('click', () => { $('filters').reset(); update(); });
+window.addEventListener('popstate', () => { readLocation(); render(); });
+$('export').addEventListener('click', () => {
+  const quote = item => `"${String(item ?? '').replaceAll('"', '""')}"`;
+  const csv = [columns.map(([, title]) => quote(title)).join(','), ...filtered().map(row => columns.map(([key]) => quote(value(row, key))).join(','))].join('\r\n');
+  const url = URL.createObjectURL(new Blob([csv], {type: 'text/csv;charset=utf-8'}));
+  const anchor = node('a'); anchor.href = url; anchor.download = 'rl-data-atlas.csv'; anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
-load().then(() => {$("message").textContent = "Showing the loaded curation catalog.";}).catch(error => {$("message").textContent = error.message;});
+load().catch(error => { $('message').textContent = error.message; $('message').classList.add('error'); });

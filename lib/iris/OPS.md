@@ -74,9 +74,20 @@ uv run --package marin-iris --extra controller iris \
 The base `uv run iris` environment omits this dependency and can report every
 CoreWeave prerequisite as missing even when the objects exist.
 
+Tracked configs may use `principal:` references in role, admission, and budget
+policy. The `marin` Pulumi stack publishes their private directory from
+`iam_data.yaml`; apply the reviewed IAM stack before deploying those configs.
+Start and restart read the directory during preflight, before building images
+or stopping a controller. Controllers resolve identities at startup before
+checkpoint or database changes. GCP loads the Secret Manager reference at
+runtime; CoreWeave projects the directory through the controller-only
+`iris-controller-env` Secret. ConfigMaps and bootstrap configs retain IDs.
+Ordinary clients use the tracked config and do not read the directory.
+See [cluster configs](config/README.md).
+
 Workflow: confirm the tree holds exactly the code to ship (`git status`, `git log -1`) -> capture baseline (`iris cluster status`) -> restart -> verify.
 
-The restart preflight resolves operator-side controller secrets before taking a checkpoint, building images, or writing a rollout record. CoreWeave keeps the resolved signing key in memory and uses that value when it projects `iris-controller-env`. A missing Secret Manager dependency or inaccessible secret leaves the running controller and rollout record unchanged.
+The restart preflight resolves operator-side controller secrets before taking a checkpoint, building images, or writing a rollout record. CoreWeave keeps the resolved signing key and principal directory in memory and projects those values through `iris-controller-env`. A missing Secret Manager dependency, inaccessible secret, or unresolved principal leaves the running controller and rollout record unchanged.
 
 `iris cluster controller serve --dry-run` is not a restart-validation step: it boots a full local controller that serves until killed (task dispatch, VM changes, and checkpoint writes suppressed) for interactive state inspection — e.g. replaying a checkpoint to debug scheduling. Rely on the unit suite / CI on the tree as the pre-restart gate.
 
