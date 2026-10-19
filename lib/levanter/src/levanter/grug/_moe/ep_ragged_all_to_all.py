@@ -257,12 +257,6 @@ class _CuteRelu2ExpertMlp:
         return _relu2_expert_mlp_quack_backward(residuals, cotangent)
 
 
-def _mxfp8_wgrads_fn():
-    from levanter.grug._moe.quack_mxfp8 import expert_mlp_mxfp8_wgrads  # noqa: PLC0415
-
-    return expert_mlp_mxfp8_wgrads
-
-
 @dataclasses.dataclass(frozen=True)
 class _CuteRelu2Mxfp8ExpertMlp:
     """``_CuteRelu2ExpertMlp`` with MXFP8 operands in the three activation-path GEMMs (QuACK block-scaled SM100).
@@ -291,12 +285,16 @@ class _CuteRelu2Mxfp8ExpertMlp:
         return out, residuals[3]
 
     def backward(self, residuals, cotangent):
-        from levanter.grug._moe.quack_mxfp8 import relu2_expert_mlp_mxfp8_backward_input  # noqa: PLC0415
+        from levanter.grug._moe.quack_mxfp8 import (  # noqa: PLC0415
+            relu2_expert_mlp_mxfp8_backward,
+            relu2_expert_mlp_mxfp8_backward_input,
+        )
         from levanter.grug._moe.sonic_cute import _relu2_expert_mlp_quack_wgrads  # noqa: PLC0415
 
+        if self.mxfp8_wgrads:
+            return relu2_expert_mlp_mxfp8_backward(residuals, cotangent)
         dx, output_dot, wgrad_args = relu2_expert_mlp_mxfp8_backward_input(residuals, cotangent)
-        wgrads = _mxfp8_wgrads_fn() if self.mxfp8_wgrads else _relu2_expert_mlp_quack_wgrads
-        dw_up, dw_down = wgrads(*wgrad_args)
+        dw_up, dw_down = _relu2_expert_mlp_quack_wgrads(*wgrad_args)
         return dx, dw_up, dw_down, output_dot
 
 
@@ -329,12 +327,17 @@ class _CuteSwigluMxfp8ExpertMlp:
         return out, residuals[3]
 
     def backward(self, residuals, cotangent):
-        from levanter.grug._moe.quack_mxfp8 import swiglu_expert_mlp_mxfp8_backward_input  # noqa: PLC0415
+        from levanter.grug._moe.quack_mxfp8 import (  # noqa: PLC0415
+            swiglu_expert_mlp_mxfp8_backward,
+            swiglu_expert_mlp_mxfp8_backward_input,
+        )
         from levanter.grug._moe.sonic_cute import _swiglu_expert_mlp_quack_wgrads  # noqa: PLC0415
 
-        dx, output_dot, wgrad_args = swiglu_expert_mlp_mxfp8_backward_input(residuals, cotangent)
-        wgrads = _mxfp8_wgrads_fn() if self.mxfp8_wgrads else _swiglu_expert_mlp_quack_wgrads
-        dw13_interleaved, dw2 = wgrads(*wgrad_args)
+        if self.mxfp8_wgrads:
+            dx, dw13_interleaved, dw2, output_dot = swiglu_expert_mlp_mxfp8_backward(residuals, cotangent)
+        else:
+            dx, output_dot, wgrad_args = swiglu_expert_mlp_mxfp8_backward_input(residuals, cotangent)
+            dw13_interleaved, dw2 = _swiglu_expert_mlp_quack_wgrads(*wgrad_args)
         return dx, _deinterleave_gate_up(dw13_interleaved), dw2, output_dot
 
 

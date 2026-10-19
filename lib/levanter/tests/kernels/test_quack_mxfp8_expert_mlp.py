@@ -13,12 +13,18 @@ import pytest
 
 from levanter.grug.mxfp8 import (
     _ragged_wgrad,
+    mx_dequantize_rows,
     mx_pack_rows,
     mx_quantize_dequantize_groups,
     mx_quantize_row_blocks,
+    mx_quantize_rows,
     mx_swiglu_experts,
 )
-from levanter.grug.mxfp8_pallas import mx_quantize_row_blocks_pallas
+from levanter.grug.mxfp8_pallas import (
+    mx_quantize_row_blocks_pallas,
+    mx_quantize_rows_and_row_blocks_pallas,
+    mx_requantize_row_blocks_pallas,
+)
 
 # Three experts with the middle one empty; group boundaries off the 128-row scale tiles.
 _GROUP_SIZES = (97, 0, 259)
@@ -211,6 +217,22 @@ def test_row_block_quantizer_kernel_matches_xla():
     np.testing.assert_array_equal(np.asarray(exponents), np.asarray(want_exponents))
     np.testing.assert_array_equal(np.asarray(values, np.float32), np.asarray(want_values, np.float32))
     assert np.all(np.asarray(exponents[5:]) == 127)
+    # Fused with the row quantization, and requantized from MXFP8 rows.
+    (row_values, row_exponents), (values, exponents) = mx_quantize_rows_and_row_blocks_pallas(
+        x, starts, counts, interpret=True
+    )
+    want_row_values, want_row_exponents = mx_quantize_rows(x)
+    np.testing.assert_array_equal(np.asarray(row_values, np.float32), np.asarray(want_row_values, np.float32))
+    np.testing.assert_array_equal(np.asarray(row_exponents), np.asarray(want_row_exponents))
+    np.testing.assert_array_equal(np.asarray(values, np.float32), np.asarray(want_values, np.float32))
+    np.testing.assert_array_equal(np.asarray(exponents), np.asarray(want_exponents))
+    values, exponents = mx_requantize_row_blocks_pallas(
+        want_row_values, want_row_exponents, starts, counts, interpret=True
+    )
+    dequantized = mx_dequantize_rows(want_row_values, want_row_exponents, jnp.float32)
+    want_values, want_exponents = mx_quantize_row_blocks(dequantized, starts, counts)
+    np.testing.assert_array_equal(np.asarray(values, np.float32), np.asarray(want_values, np.float32))
+    np.testing.assert_array_equal(np.asarray(exponents), np.asarray(want_exponents))
 
 
 def _simulated_wgrad(a, g, group_sizes):
@@ -262,36 +284,68 @@ def test_mxfp8_grouped_wgrad_matches_simulated_and_exact_wgrads(tail_rows):
     assert 0 < relative < 0.06, f"vs exact: relative L2 {relative:.3e}"
 
 
+@pytest.mark.parametrize("dispatch", ["bf16", "mxfp8_bytes"])
 @pytest.mark.parametrize("gated", [True, False], ids=["swiglu", "relu2"])
-def test_mxfp8_expert_wgrads_stay_within_mxfp8_error_of_the_exact_mlp(gated):
+def test_mxfp8_expert_backward_wgrads_stay_within_mxfp8_error_of_the_exact_mlp(gated, dispatch):
     _require_sm100()
     mx = importlib.import_module("levanter.grug._moe.quack_mxfp8")
-    x, w13_il, w_down, dy = _inputs(0)
+    sonic = importlib.import_module("levanter.grug._moe.sonic_cute")
+    tail_rows = 133
+    x, w13_il, w_down, dy = _inputs(tail_rows)
     cu = jnp.asarray(np.concatenate([[0], np.cumsum(_GROUP_SIZES)]), jnp.int32)
+    rows = mx_pack_rows(x) if dispatch == "mxfp8_bytes" else x
+    # Unused capacity must not reach any block scale or gradient.
+    nan_tail = jnp.zeros((_NUM_TOKENS + tail_rows, 1), jnp.bfloat16).at[_NUM_TOKENS:].set(jnp.nan)
+    dy = dy + nan_tail
+    if dispatch == "bf16":
+        rows = rows + nan_tail
+    fwd, backward_input, backward, bf16_wgrads = (
+        (
+            mx.swiglu_expert_mlp_mxfp8_fwd,
+            mx.swiglu_expert_mlp_mxfp8_backward_input,
+            mx.swiglu_expert_mlp_mxfp8_backward,
+            sonic._swiglu_expert_mlp_quack_wgrads,
+        )
+        if gated
+        else (
+            mx.relu2_expert_mlp_mxfp8_fwd,
+            mx.relu2_expert_mlp_mxfp8_backward_input,
+            mx.relu2_expert_mlp_mxfp8_backward,
+            sonic._relu2_expert_mlp_quack_wgrads,
+        )
+    )
 
     def run(x, w_up, w_down, dy):
-        if gated:
-            _, residuals = mx.swiglu_expert_mlp_mxfp8_fwd(x, w_up, w_down, cu)
-            _, _, wgrad_args = mx.swiglu_expert_mlp_mxfp8_backward_input(residuals, dy)
-        else:
-            _, residuals = mx.relu2_expert_mlp_mxfp8_fwd(x, w_up, w_down, cu)
-            _, _, wgrad_args = mx.relu2_expert_mlp_mxfp8_backward_input(residuals, dy)
-        sonic = importlib.import_module("levanter.grug._moe.sonic_cute")
-        bf16 = (sonic._swiglu_expert_mlp_quack_wgrads if gated else sonic._relu2_expert_mlp_quack_wgrads)(*wgrad_args)
-        return mx.expert_mlp_mxfp8_wgrads(*wgrad_args), bf16
+        _, residuals = fwd(x, w_up, w_down, cu)
+        dx, row_dot, wgrad_args = backward_input(residuals, dy)
+        return (
+            backward(residuals, dy),
+            (dx, row_dot),
+            bf16_wgrads(*wgrad_args),
+            mx.expert_mlp_mxfp8_wgrads(*wgrad_args),
+        )
 
     w_up = w13_il if gated else w13_il[..., :_WIDTH]
     reference = _exact_swiglu_experts if gated else _exact_relu2_experts
-    mxfp8_wgrads, bf16_wgrads = jax.jit(run)(x, w_up, w_down, dy)
-    _, exact_dw_up, exact_dw_down = jax.jit(lambda *a: _reference_run(reference, *a))(x, w_up, w_down, dy)
-    for name, got, bf16, want in zip(
-        ("dw_up", "dw_down"), mxfp8_wgrads, bf16_wgrads, (exact_dw_up, exact_dw_down), strict=True
-    ):
+    fused, (dx, row_dot), bf16_wgrads, unfused_wgrads = jax.jit(run)(rows, w_up, w_down, dy)
+    active = slice(0, _NUM_TOKENS)
+    _, exact_dw_up, exact_dw_down = jax.jit(lambda *a: _reference_run(reference, *a))(
+        x[active], w_up, w_down, dy[active]
+    )
+    # The fused backward's input gradient is the activation-only path's: its row quantization is the same.
+    np.testing.assert_array_equal(np.asarray(fused[0][active], np.float32), np.asarray(dx[active], np.float32))
+    np.testing.assert_array_equal(np.asarray(fused[3][active]), np.asarray(row_dot[active]))
+    for index, name, want in ((1, "dw_up", exact_dw_up), (2, "dw_down", exact_dw_down)):
+        got, bf16 = fused[index], bf16_wgrads[index - 1]
         relative, bf16_relative = _relative_l2(got, want), _relative_l2(bf16, want)
         max_error, mean_error = _normalized_errors(got, want)
         print(
-            f"{name}: mxfp8 wgrad relative L2 {relative:.3e} (bf16 wgrad {bf16_relative:.3e}), "
-            f"max normalized {max_error:.3e}, mean {mean_error:.3e}"
+            f"{'swiglu' if gated else 'relu2'} {dispatch} {name}: mxfp8 wgrad relative L2 {relative:.3e} "
+            f"(bf16 wgrad {bf16_relative:.3e}), max normalized {max_error:.3e}, mean {mean_error:.3e}"
         )
         assert 0 < relative < 0.1, f"{name}: relative L2 error {relative:.3e}"
         assert not np.any(np.asarray(got[1], np.float32)), f"{name}: the empty expert must get a zero gradient"
+        # The unfused weight gradients quantize the same bf16 operands, except ReLU^2's ``d pre``, which the fused
+        # path requantizes from its MXFP8 rows and the unfused one from their bf16 dequantization: equal values.
+        max_error, _ = _normalized_errors(unfused_wgrads[index - 1], got)
+        assert max_error <= 1e-2, f"{name}: fused vs unfused max normalized {max_error:.2e}"
