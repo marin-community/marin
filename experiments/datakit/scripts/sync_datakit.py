@@ -16,8 +16,7 @@ only the normalize output, ``raw`` syncs only the download leaves, ``all``
 syncs both. Per-scope shard markers and step-status are namespaced so
 different scopes never collide on cache state.
 
-Typical use is GCS -> CoreWeave (e.g. ``gs://marin-us-central1`` to
-``s3://marin-us-east-02a/marin``); the reverse works too.
+Typical use is GCS -> CoreWeave; the reverse works too.
 
 For each source, this script builds a single :class:`StepSpec`. The step's
 ``fn`` runs a Zephyr pipeline that:
@@ -57,12 +56,12 @@ comparable anyway — GCS ETag vs S3 ETag are different schemes for the same
 bytes). The status prefix is the permanent record of what has been copied;
 there's no TTL to worry about.
 
-Usage::
+Set ``DEST_PREFIX`` to the destination root. Usage::
 
     CW_KEY_ID=... CW_KEY_SECRET=... \\
     uv run python experiments/datakit/scripts/sync_datakit.py \\
         --src-prefix gs://marin-us-central1 \\
-        --dest-prefix s3://marin-us-east-02a/marin
+        --dest-prefix "$DEST_PREFIX"
 """
 
 import argparse
@@ -472,7 +471,7 @@ def sync_source_step(
     Args:
         source: The DatakitSource to copy.
         src_prefix: Source root to read from (e.g. ``gs://marin-us-central1``).
-        dest_prefix: Destination root to write to (e.g. ``s3://marin-us-east-02a/marin``).
+        dest_prefix: Destination root to write to.
         scope: Which subset of ``source``'s paths to sync (default: NORMALIZED).
         files_per_shard: Files per Zephyr shard (default 64). The shard
             boundaries are deterministic; ``Dataset.from_list`` preserves
@@ -561,7 +560,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dest-prefix",
         required=True,
-        help="Destination root to write to, e.g. 's3://marin-us-east-02a/marin'.",
+        help="Destination root to write to.",
     )
     parser.add_argument(
         "--source",

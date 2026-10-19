@@ -76,7 +76,7 @@ The declared R2 policy preserves seven-day incomplete-multipart cleanup and the 
 CoreWeave bucket lifecycle configurations apply the same nine expiration prefixes and abort
 incomplete multipart uploads after seven days.
 
-`marin-us-east-08a` is shared scratch storage for every CoreWeave cluster. It is declared as
+The shared scratch bucket for every CoreWeave cluster is declared as
 `data.stores.coreweave.temp_bucket` in `config/coreweave.yaml`, separately from the region
 mirror set. Permanent east-region artifacts remain in `marin-us-east-02a`; `hero-checkpoints`
 is reserved for hero checkpoints.

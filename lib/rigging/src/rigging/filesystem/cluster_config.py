@@ -551,7 +551,7 @@ def marin_temp_bucket(
     For a known S3-compatible prefix, use its backend's configured shared
     scratch bucket, or the source bucket when none is configured::
 
-        s3://marin-us-east-08a/tmp/ttl={N}d/{prefix}
+        s3://{scratch_bucket}/tmp/ttl={N}d/{prefix}
 
     Otherwise falls back to a flat path under the marin prefix::
 

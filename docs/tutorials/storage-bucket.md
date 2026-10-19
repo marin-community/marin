@@ -74,7 +74,7 @@ Clearing the policy ensures that once a training job deletes temporary files the
 
 For intermediate checkpoints and other short-lived data, Marin reserves a `tmp/` prefix on each managed data bucket with lifecycle rules that delete objects based on a `tmp/ttl=Nd/` path prefix — for example, objects under `gs://marin-us-central2/tmp/ttl=3d/my-job/` are deleted three days after they are written.
 
-Supported TTLs: 1, 2, 3, 4, 5, 6, 7, 14, and 30 days. The canonical list lives in `config/marin.yaml` (`data.temp.ttl_days`). Use `marin_temp_bucket` for lifecycle-managed scratch. GCS uses the input or output bucket; all CoreWeave buckets use the shared `s3://marin-us-east-08a` scratch bucket. `MARIN_TEMP_PREFIX` overrides this routing, including an explicit `source_prefix`.
+Supported TTLs: 1, 2, 3, 4, 5, 6, 7, 14, and 30 days. The canonical list lives in `config/marin.yaml` (`data.temp.ttl_days`). Use `marin_temp_bucket` for lifecycle-managed scratch. GCS uses the input or output bucket; all CoreWeave buckets use the shared scratch bucket declared by `data.stores.coreweave.temp_bucket` in `config/coreweave.yaml`. `MARIN_TEMP_PREFIX` overrides this routing, including an explicit `source_prefix`.
 
 The shared data buckets on GCS, CoreWeave, and R2 are declared by `DataBuckets` in
 [`infra/buckets`](https://github.com/marin-community/marin/blob/main/infra/buckets/README.md).

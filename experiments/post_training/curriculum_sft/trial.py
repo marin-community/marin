@@ -18,7 +18,6 @@ from marin.evaluation.model_config import GenerationConfig, ModelConfig, Resourc
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.checkpoints import hf_to_levanter
 from marin.experiment.namespacing import user_owned_name
-from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.models import SNOWBALL_VLLM_ARGS
@@ -34,13 +33,8 @@ from experiments.sft.launcher import (
 HF_MODEL = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.20"
 HF_REVISION = "9f2ee50f3d4a12c79b0808bb2414ddba2cdf0098"
 CLUSTER = "cw-rno2a"
-# Generated data outlives individual trials; checkpoints and evaluations expire sooner.
+# Historical generation inputs retain their explicit location.
 SOURCE_PREFIX = "s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math-20260924"
-S3_TRIAL_PREFIX = marin_temp_bucket(
-    ttl_days=7,
-    prefix="curriculum-math-20260924",
-    source_prefix="s3://marin-us-east-02a/marin",
-)
 CONVERSION_VERSION = "2026.09.25.2"
 CONTEXT_LENGTH = 4096
 BATCH_SIZE = 64

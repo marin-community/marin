@@ -75,8 +75,8 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 scratch = marin_temp_bucket(ttl_days=1, prefix="my-experiment")
 ```
 
-All CoreWeave clusters share `s3://marin-us-east-08a` for temporary data. The
-CoreWeave backend in `config/coreweave.yaml` declares this scratch bucket, so
+All CoreWeave clusters share the scratch bucket declared by
+`data.stores.coreweave.temp_bucket` in `config/coreweave.yaml`, so
 `marin_temp_bucket` also selects it when called on a launch host with a
 CoreWeave `source_prefix`. Paths use `tmp/ttl=Nd/` lifecycle prefixes.
 
