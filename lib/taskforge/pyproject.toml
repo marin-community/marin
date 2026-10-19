@@ -18,7 +18,7 @@ dependencies = [
     "click",
     "marin-iris",
     # Its failed-run analysis runs a managed agent on a chat endpoint.
-    "marin-rolloutengine[chat]",
+    "marin-rolloutengine",
 ]
 
 [dependency-groups]
