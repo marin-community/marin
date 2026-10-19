@@ -27,7 +27,7 @@ from shellbox.machine import (
     Result,
     UnsupportedMachineSpec,
 )
-from verifyit.spec import ScriptSpec, render_spec, spec_from_table
+from verifyit.spec import RUBRIC_LABELS, JudgeSpec, ScriptSpec, render_spec, spec_from_table
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradingFailure, Outcome
@@ -44,6 +44,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     ExitCodeReward,
     FileReward,
+    FinalAction,
     FunctionCall,
     FunctionDefinition,
     GradingAttempt,
@@ -278,8 +279,8 @@ class LocalGradingMachine:
             if SPEC_PATH in command.argv:
                 spec_path = self.local(SPEC_PATH)
                 spec = spec_from_table(tomllib.loads(spec_path.read_text()))
-                assert isinstance(spec, ScriptSpec)
-                spec_path.write_text(render_spec(replace(spec, workspace=str(self.local("/app")))))
+                if isinstance(spec, ScriptSpec):
+                    spec_path.write_text(render_spec(replace(spec, workspace=str(self.local("/app")))))
                 argv.extend(("--logs-dir", str(self.local("/logs/verifier"))))
         else:
             assert program in {"bash", "sh"}, command.argv
@@ -412,6 +413,44 @@ def test_script_grader_scores_captured_files_in_sandbox_and_task_grading(
     assert all(machine.closed for machine in factory.machines)
 
 
+def test_native_action_judge_exact_gate_receives_the_semantic_action(shell_task):
+    candidate = '{"arguments":{"index":3},"name":"lookup","type":"function_call"}'
+    package = verifyit_package(
+        JudgeSpec(
+            references=("Use the lookup function.",),
+            rubric=RUBRIC_LABELS,
+            system_prompt="Grade the proposed action.",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+            exact_gate_answers=(candidate,),
+            exact_gate_label="PASS",
+        ),
+        environment=GRADER_ENVIRONMENT,
+    )
+    task = shell_task.model_copy(
+        update={
+            "context": ConversationInput(events=(TextMessage(role="user", content="Look up index 3."),)),
+            "final_tools": (FunctionDefinition(name="lookup", parameters={"type": "object"}),),
+            "answer_type": AnswerType.NATIVE_ACTION,
+            "answer_format": FinalAction(require_call=True, max_calls=1),
+            "grader": package.grader,
+            "resources": ResourceGroups(verifier=package.resources),
+            "output_paths": (),
+        }
+    )
+    action = AssistantToolCalls(
+        calls=(ConversationToolCall(call_id="transport-only", name="lookup", arguments={"index": 3}),)
+    )
+    attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, action)))
+
+    result = grade_task(
+        task,
+        attempt,
+    )
+
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+
+
 @pytest.mark.parametrize("state,reward", [('{"ready":true}', 1.0), ('{"ready":false}', 0.0)])
 def test_script_grader_reads_captured_state(tmp_path, script_grading_task, state, reward):
     task = script_grading_task.model_copy(update={"answer_type": AnswerType.STATE, "output_paths": ()})
@@ -452,15 +491,13 @@ async def test_shell_uploads_public_files_without_oracle_and_captures_submission
     task = shell_task.model_copy(
         update={
             "environment_requirements": EnvironmentRequirements(
-                command_semantics=CommandSemantics.SHELL_SIMULATOR, capabilities=("shell", "filesystem", "python")
+                command_semantics=CommandSemantics.SHELL_SIMULATOR, capabilities=("shell", "filesystem")
             )
         }
     )
     factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(PackageSpec()), {}, 1, 1024)
     env = await factory.create(task)
     try:
-        python = await env.machine.run(Command(("python3", "-c", "print(6 * 7)")))
-        assert (python.exit_code, python.stdout) == (0, b"42\n")
         public = await env.machine.run(Command(("cat", "/workspace/people.csv")))
         assert b"person-0-0" in public.stdout
         oracle = await env.machine.run(Command(("test", "-e", CONTROL_PATH)))

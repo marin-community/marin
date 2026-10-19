@@ -49,6 +49,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
 _GATED_NORM_RANK = 128
+_LONG_LAYER_EVERY = 4
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
@@ -78,6 +79,11 @@ def _partition_spec_of(x: jax.Array) -> P | None:
 
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
     return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
+
+
+def long_layer_flags(num_layers: int) -> tuple[bool, ...]:
+    """Return full-attention flags for every fourth layer and the final layer."""
+    return tuple(i % _LONG_LAYER_EVERY == _LONG_LAYER_EVERY - 1 or i == num_layers - 1 for i in range(num_layers))
 
 
 class GrugMoeHfConfig(HfConfig):
@@ -682,11 +688,8 @@ class Transformer(eqx.Module):
         else:
             remat_policy = None
 
-        num_blocks = len(self.blocks)
         moe_router_stats: list[dict[str, jax.Array]] = []
-        for i, block in enumerate(self.blocks):
-            is_last = i == num_blocks - 1
-            is_long = i % 4 == 3 or is_last
+        for block, is_long in zip(self.blocks, long_layer_flags(len(self.blocks)), strict=True):
             layer_mask = long_mask if is_long else short_mask
             use_pko = is_long and not cfg.disable_pko
             disable_rope = is_long and cfg.disable_long_rope

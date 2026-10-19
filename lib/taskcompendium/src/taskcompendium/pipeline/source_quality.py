@@ -27,11 +27,13 @@ from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, se
 from taskcompendium.runtime.resources import resource_bytes
 
 SOURCE_QUALITY_REVISION = "8"
+MAX_SOURCE_QUALITY_SAMPLE_SIZE = 100
+SOURCE_QUALITY_SAMPLE_SIZE = MAX_SOURCE_QUALITY_SAMPLE_SIZE
 
 
 @dataclass(frozen=True)
 class SourceQualityPolicy:
-    sample_size: int = 100
+    sample_size: int = SOURCE_QUALITY_SAMPLE_SIZE
     seed: int = 0
     reject_above: float = 0.50
 

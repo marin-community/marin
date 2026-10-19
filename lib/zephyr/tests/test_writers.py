@@ -15,6 +15,7 @@ import pyarrow.parquet as pq
 import pytest
 import vortex
 from pyarrow import fs as pa_fs
+from zephyr.readers import load_jsonl
 from zephyr.writers import (
     ThreadedBatchWriter,
     _pyarrow_filesystem,
@@ -106,6 +107,16 @@ def test_write_jsonl_file_zstd_compresses(tmp_path, ext):
     assert result["count"] == 5
     with open(output_path, "rb") as f:
         assert f.read(4) == _ZSTD_MAGIC
+
+
+def test_write_jsonl_file_xz_round_trips(tmp_path):
+    output_path = str(tmp_path / "data.jsonl.xz")
+    records = [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]
+
+    result = write_jsonl_file(records, output_path)
+
+    assert result == {"path": output_path, "count": len(records)}
+    assert list(load_jsonl(output_path)) == records
 
 
 def test_write_parquet_file_basic():

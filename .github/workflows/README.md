@@ -74,6 +74,38 @@ Canary failure workflows launch an independent triage session and continue to
 send the immediate Slack fallback notification. The Iris smoke test still
 uploads screenshots for inspection through the `Marin - Unit` run.
 
+## Holistic review and deslop
+
+`ops-loom-holistic-review.yaml` launches a whole-change review session for a
+non-draft pull request from this repository whose author has write access or
+is `marin-ops-agent[bot]` or `loom-oa-dev[bot]`. A gate step reads the pull
+request's size and file patches through the API: the review runs when the
+change has at least 250 changed lines or adds a class, dataclass, or
+`Protocol` under `lib/*/src/` or `experiments/`. The session runs the
+`review-pr-holistic` skill with the `pr-holistic-review` profile and maintains
+one compact overview ending in
+`<!-- marin-holistic-review:<sha> -->`. Re-reviews replace the original
+overview by comment ID, preserving finding numbers and updating their status.
+A separate new top-level comment may announce only new or materially changed
+actionable findings; it links to the overview and uses
+`<!-- marin-holistic-followup:<sha> -->` so it cannot become the overview.
+Unlike the correctness review, the workflow also launches on `synchronize`;
+runs for an earlier head are cancelled, and the session posts nothing when the
+delta since the last reviewed head is under 100 changed lines, touches only
+fixtures or documentation, or consists only of `Deslop` commits. The review is
+advisory and is not a required check.
+
+The `deslop` job in `ops-loom-github.yaml` launches a `github-automation`
+session when a holistic packet is posted on a pull request carrying
+`agent-generated`, or when a maintainer review contains `deslop`. The session
+applies only the packet's mechanical items and the `noslop` skill, pushes one
+`Deslop` commit after the narrow checks pass, and replies with
+`<!-- marin-deslop:<sha> -->`. The launcher's per-PR idempotency key permits
+one automatic deslop session; follow-up findings are advisory.
+Pull requests without `agent-generated` receive
+committable suggestions and no push. The holistic session ignores a head whose
+delta is only `Deslop` commits, which closes the review-then-deslop loop.
+
 ## External dependency updates
 
 `ops-external-dependencies.yaml` advances the isolated Evalchemy, Harbor, and

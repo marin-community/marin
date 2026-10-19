@@ -7,6 +7,7 @@ Marin caches stage records; Buildomatic owns recipe scheduling and BATCH worker
 placement. A source checkout is needed only while an uncached stage executes.
 """
 
+import logging
 import re
 import subprocess
 import sys
@@ -27,27 +28,25 @@ CACHE_PREFIX = "s3://marin-us-east-02a/marin/shellsim/buildomatic/v2"
 PUBLICATION_PREFIX = "s3://marin-us-east-02a/marin/shellsim/ports"
 ASSET_URL_PREFIX = "https://ports.oa.dev"
 SOURCE_REPOSITORY = "https://github.com/rjpower/shellsim.git"
-WORKER_IMAGE = (
-    "ghcr.io/marin-community/iris-task@sha256:47f018672e5c868ac4fcec30901a522197a52c33ccecbec31d70d18d535322cc"
-)
 STATE_FILES = ("graph.json", "results.json")
 RELEASE_DIRECTORY = "releases"
 CATALOG_FILENAME = "catalog.json"
 RUNTIME_FIELDS = ("work_directory", "max_workers", "worker_cpus", "worker_memory_gb", "worker_disk_gb")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class ReleaseConfig:
-    """Pinned source and image, with driver storage and worker resources explicit."""
+    """Source and worker image, with driver storage and worker resources explicit."""
 
     source_revision: str
     version: str
     work_directory: str
+    worker_image: str
     cache_prefix: str = CACHE_PREFIX
     publication_prefix: str = PUBLICATION_PREFIX
     asset_url_prefix: str = ASSET_URL_PREFIX
     source_repository: str = SOURCE_REPOSITORY
-    worker_image: str = WORKER_IMAGE
     max_workers: int = 8
     worker_cpus: int = 64
     worker_memory_gb: int = 32
@@ -161,8 +160,15 @@ def publish_ports(config: StageConfig) -> None:
     publication = StoragePath(config.release.publication_prefix)
     with step_lock(str(StoragePath(config.output_path).parent / ".promotion"), "ports stable catalog", force_rerun=True):
         current = publication / "release-version"
-        if current.exists() and Version(current.read_text()) > Version(config.release.version):
-            return
+        if current.exists():
+            current_version = Version(current.read_text())
+            if current_version > Version(config.release.version):
+                logger.info(
+                    "Published snapshot %s; skipping stable promotion because %s is newer",
+                    config.release.version,
+                    current_version,
+                )
+                return
         current.write_text(config.release.version)
         _run_ports(
             config,
@@ -214,6 +220,8 @@ def ports_release(config: ReleaseConfig) -> ArtifactStep[Artifact]:
 @click.command()
 @click.option("--source-revision", required=True, help="Full Shellsim source commit SHA, including ports recipes.")
 @click.option("--version", required=True, help="Immutable release version; bump when source or runtime changes.")
+@click.option("--worker-image", help="Override the worker image published by the Pulumi stack.")
+@click.option("--stack", default="cw-us-east-02a", show_default=True, help="Shellsim ports Pulumi stack.")
 @click.option("--url-prefix", default=ASSET_URL_PREFIX, show_default=True)
 @click.option("--work-directory", default="build/ports-release", show_default=True)
 @click.option("--max-workers", default=ReleaseConfig.max_workers, type=click.IntRange(1, 32), show_default=True)
@@ -226,6 +234,8 @@ def ports_release(config: ReleaseConfig) -> ArtifactStep[Artifact]:
 def main(
     source_revision: str,
     version: str,
+    worker_image: str | None,
+    stack: str,
     work_directory: str,
     url_prefix: str,
     max_workers: int,
@@ -235,11 +245,21 @@ def main(
     do_run: bool,
 ) -> None:
     configure_logging()
+    if worker_image is None:
+        worker_image = subprocess.run(
+            ["pulumi", "stack", "output", "workerImage", "--stack", stack],
+            cwd=Path(__file__).parent,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    logger.info("Using ports worker image %s", worker_image)
     handle = ports_release(
         ReleaseConfig(
             source_revision,
             version,
             work_directory,
+            worker_image=worker_image,
             asset_url_prefix=url_prefix,
             max_workers=max_workers,
             worker_cpus=worker_cpus,

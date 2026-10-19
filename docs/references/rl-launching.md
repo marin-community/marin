@@ -43,8 +43,10 @@ Outside Iris, `--run` submits a 4-CPU coordinator with 16 GB RAM and 64 GB disk.
 `IrisSkyRLExecution` sets the coordinator deadline for its workload. CoreWeave coordinators route
 through the Marin hub to their target cluster. The coordinator runs the same module and arguments
 inside Iris, where `--run` executes the artifact graph. This preserves one construction and
-validation path. The submitter forwards `DAYTONA_API_KEY`, `HF_TOKEN`, and `WANDB_API_KEY` when they
-are present in its environment.
+validation path. The submitter forwards `DAYTONA_API_KEY`, `DAYTONA_RL_API_KEY`,
+`DAYTONA_EVAL_API_KEY`, `HF_TOKEN`, and `WANDB_API_KEY` when they
+are present in its environment. The RL and eval keys let rollout and evaluation
+workloads use separate Daytona credentials.
 
 ## One Hydra launch document
 

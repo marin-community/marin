@@ -18,6 +18,7 @@ from taskcompendium.pipeline.models import ReviewStatus
 
 DEFAULT_MAX_BATCH_REQUESTS = 64
 DEFAULT_MAX_BATCH_BYTES = 4 * 1024 * 1024
+DEFAULT_BATCH_POLL_SECONDS = 5.0
 BATCH_UPLOAD_FILENAME = "task-curation.jsonl"
 
 
@@ -62,7 +63,7 @@ class TypedBatchValue(Protocol):
 
 
 @dataclass(frozen=True)
-class TypedBatchRecord[T: TypedBatchValue]:
+class TypedBatchRecord[T]:
     task_id: str
     status: ReviewStatus
     value: T | None

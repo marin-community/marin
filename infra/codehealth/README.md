@@ -5,9 +5,10 @@ weekly agent can inspect gaps in the lint catalog.
 
 ## Production lint telemetry
 
-`log_stats.py` records every `pre-commit.py --review`, `/code-review`, and
-`/review-pr` invocation in Finelog. The two primary namespaces are
-`codehealth.autolint.invocations` and `codehealth.autolint.findings`, joined by
+`log_stats.py` records every `pre-commit.py --review`, `/code-review`,
+`/review-pr`, and `/review-pr-holistic` invocation in Finelog. The two primary
+namespaces are `codehealth.autolint.invocations` and
+`codehealth.autolint.findings`, joined by
 `invocation_id`. A successful run that emitted no finding still has an
 invocation row with `finding_count = 0`; omitting it would bias firing rates.
 

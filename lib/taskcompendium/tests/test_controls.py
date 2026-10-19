@@ -43,7 +43,13 @@ from taskcompendium.pipeline.models import CheckStatus, Controls, OracleCommand,
 from taskcompendium.runtime.local import LocalGraderMachines
 from taskcompendium.runtime.resources import inline_resource
 
-from .pipeline_stages import GRADER_IMAGE, FixtureGradingMachines, ShellSimImages, UnavailableImages, script_graded
+from .pipeline_stages import (
+    GRADER_IMAGE,
+    FixtureGradingMachines,
+    ShellSimImages,
+    UnavailableImages,
+    script_graded,
+)
 
 PASS, FAIL, DEFECT = CheckStatus.PASS, CheckStatus.FAIL, CheckStatus.DEFECT
 ROW = RawRow("task", Source(dataset="fixture", revision="1", row="0", importer_revision="1"), {})

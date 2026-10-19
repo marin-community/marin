@@ -17,6 +17,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
+from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import Mode
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -48,10 +49,18 @@ from taskcompendium.pipeline.execution_telemetry import (
     execute_phase,
 )
 from taskcompendium.pipeline.inputs import SourceFileOverride
-from taskcompendium.pipeline.models import Admission, Disposition, FilterPolicy, SourceRecipe, SourceStatus
+from taskcompendium.pipeline.models import (
+    Admission,
+    Disposition,
+    FilterPolicy,
+    GraderReadiness,
+    SourceRecipe,
+    SourceStatus,
+)
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.pipeline.shard_outputs import ShardOutput, write_shard_outputs
 from taskcompendium.pipeline.source_quality import (
+    MAX_SOURCE_QUALITY_SAMPLE_SIZE,
     SOURCE_QUALITY_REVISION,
     QualitySampleCoverage,
     SourceQualityPolicy,
@@ -60,6 +69,7 @@ from taskcompendium.pipeline.source_quality import (
 )
 from taskcompendium.pipeline.source_verification import (
     SOURCE_VERIFICATION_REVISION,
+    VERIFICATION_REPORT_FILENAME,
     SourceVerificationPolicy,
     SourceVerificationStatus,
     VerificationCounts,
@@ -70,6 +80,7 @@ from taskcompendium.pipeline.sources import (
     SourceShard,
     conversion_context,
     conversion_shards,
+    raw_input_sha256,
     row_locator,
     source_files_identity,
     source_shards,
@@ -93,7 +104,7 @@ from taskcompendium.pipeline.stages import (
 )
 from taskcompendium.pipeline.transforms import admit_converted_row
 
-SOURCE_PIPELINE_REVISION = "13"
+SOURCE_PIPELINE_REVISION = "14"
 PANEL_ROWS_PER_SHARD = 16
 ROWS_PER_SHARD = 1000
 MAX_PREPARATION_SHARDS = 64
@@ -104,7 +115,6 @@ SCRATCH_PHASES = ("sample", "full", "quality", "audited", "filtered", "verified"
 VERIFY_REPORT_PATH = "verify/report.json"
 """A source's verification report, relative to its output."""
 NO_CONTROLS_REASON = "The source declares no controls"
-JUDGE_GRADED_REASON = "judge grader; no control path yet"
 EXPANDED_QUALITY = frozenset({SourceQualityStatus.UNREVIEWED, SourceQualityStatus.TRUST, SourceQualityStatus.CENSUS})
 """Panel decisions that let a full-mode run convert every row; rows outside the panel inherit the decision."""
 
@@ -119,7 +129,8 @@ class SourceProcessingMode(StrEnum):
 class SourcePipelineConfig:
     """Campaign settings shared by every source.
 
-    ``machines`` runs sandbox grader controls; ``None`` permits only in-process graders.
+    ``machines`` runs sandbox grader controls. Remote judge controls use ``judge_connection``
+    without a grading machine; other external graders require ``machines``.
     ``review=None`` supports recipes without a model-review rubric.
     ``normalized_shards`` caps the export partitions; small populations use fewer shards.
     """
@@ -132,6 +143,7 @@ class SourcePipelineConfig:
     filter_policy: FilterPolicy
     normalized_shards: int
     machines: GradingMachines | None
+    judge_connection: JudgeConnection | None = None
 
 
 @dataclass(frozen=True)
@@ -198,22 +210,9 @@ def _raw_dataset(
     return Dataset.from_list(list(shards)).flat_map(rows)
 
 
-def _binary_hash_identity(value: Any) -> dict[str, Any]:
-    if isinstance(value, bytes):
-        return {"binary_sha256": hashlib.sha256(value).hexdigest(), "size": len(value)}
-    raise TypeError(f"Unsupported raw source value: {type(value).__name__}")
-
-
-def _raw_input_sha256(data: dict[str, Any]) -> str:
-    document = json.dumps(
-        data, default=_binary_hash_identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
-    )
-    return hashlib.sha256(document.encode()).hexdigest()
-
-
 def _admit_conversion(converted: ConvertedRow, *, recipe: SourceRecipe) -> dict[str, Any]:
     result = admit_converted_row(converted, recipe)
-    result["audit"]["raw"]["raw_input_sha256"] = _raw_input_sha256(converted.original_data)
+    result["audit"]["raw"]["raw_input_sha256"] = raw_input_sha256(converted.original_data)
     result["audit"]["raw"]["source_locator"] = converted.raw.source.row
     return result
 
@@ -244,7 +243,7 @@ def _locator_identity(locator: str, raw_input_sha256: str | None, recipe: Source
 
 
 def _source_identity(row: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any]:
-    return _locator_identity(row["locator"], _raw_input_sha256(row["data"]), recipe)
+    return _locator_identity(row["locator"], raw_input_sha256(row["data"]), recipe)
 
 
 def _ledger_path(output: StoragePath, name: str) -> StoragePath:
@@ -328,7 +327,7 @@ def _judge_grader(grader: Grader) -> bool:
 
 
 def row_admission(row: dict[str, Any], verification: SourceVerificationStatus) -> Admission:
-    """Admit kept rows whose grader runs in process, is a judge, or passed source verification."""
+    """Admit kept rows with runnable graders, individually validated or covered by a passing sample."""
     if row["filter_status"] == Disposition.REJECT.value:
         return Admission.REJECTED
     if row["filter_status"] == Disposition.DEFER.value:
@@ -336,7 +335,12 @@ def row_admission(row: dict[str, Any], verification: SourceVerificationStatus) -
     grader = TaskSpec.model_validate_json(row["task_json"]).grader
     if isinstance(grader, NoGrader):
         return Admission.NO_GRADER
-    if grades_in_process(grader) or _judge_grader(grader) or verification == SourceVerificationStatus.PASSED:
+    if (
+        grades_in_process(grader)
+        or _judge_grader(grader)
+        or row["grader_readiness"] == GraderReadiness.READY
+        or verification == SourceVerificationStatus.PASSED
+    ):
         return Admission.ADMITTED
     return Admission.UNVERIFIED
 
@@ -417,10 +421,9 @@ class _SourceRun:
 
 @dataclass(frozen=True)
 class _Panel:
-    """The bounded raw panel, its normalized rows, and whether it covers the whole population."""
+    """The bounded raw panel, its converted rows, and whether it covers the whole population."""
 
     sample: RawSample
-    normalized: list[dict[str, Any]]
     converted: list[ConvertedRow]
     coverage: QualitySampleCoverage
 
@@ -468,7 +471,7 @@ def _indexed_raw_sample(run: _SourceRun, telemetry: PhaseTelemetry) -> RawSample
     ).results
     if sorted(row["locator"] for row in rows) != sorted(row_locator(file, index) for file, index in chosen):
         raise ValueError("The source parts did not produce exactly the sampled rows")
-    hashes = {row["locator"]: _raw_input_sha256(row["data"]) for row in rows}
+    hashes = {row["locator"]: raw_input_sha256(row["data"]) for row in rows}
     for file, size in sizes.items():
         write_parquet_file(
             (
@@ -523,7 +526,6 @@ def _sample_panel(run: _SourceRun) -> _Panel:
     census = sample.population_count <= policy.sample_size
     return _Panel(
         sample,
-        [row.normalized for row in checked],
         [converted for converted, _ in converted_and_checked],
         QualitySampleCoverage.CENSUS if census else QualitySampleCoverage.RAW_SAMPLE,
     )
@@ -615,19 +617,9 @@ def _filter(run: _SourceRun) -> None:
         )
 
 
-def _judge_graded(panel: _Panel) -> bool:
-    """Whether a verifyit judge grades every task the panel converted."""
-    tasks = [row["audit"]["normalized"] for row in panel.normalized if row["audit"]["normalized"] is not None]
-    return bool(tasks) and all(_judge_grader(TaskSpec.model_validate(task).grader) for task in tasks)
-
-
-def _verify(run: _SourceRun, panel: _Panel) -> tuple[dict[str, Any], StoragePath]:
+def _verify(run: _SourceRun) -> tuple[dict[str, Any], StoragePath]:
     """Run the recipe's controls on the filtered rows; return the verified manifest and its stage directory."""
     filtered = run.scratch("filtered")
-    # TODO(rl-data): judge test path. A judge control would verify judge-graded sources here
-    # instead of skipping them; see the rl-data judge test path issue.
-    if _judge_graded(panel):
-        return _skipped_verification(filtered, JUDGE_GRADED_REASON), filtered
     if run.recipe.controls is None:
         return _skipped_verification(filtered, NO_CONTROLS_REASON), filtered
     verified = run.scratch("verified")
@@ -636,7 +628,7 @@ def _verify(run: _SourceRun, panel: _Panel) -> tuple[dict[str, Any], StoragePath
             str(filtered),
             str(verified),
             run.config.verification_policy,
-            control_suite(run.recipe.controls, run.config.machines),
+            control_suite(run.recipe.controls, run.config.machines, run.config.judge_connection),
             run.config.execution.max_workers,
             run.config.execution.worker_resources,
             context=run.context,
@@ -792,14 +784,12 @@ def _source_status(
     quality: SourceQualityStatus,
     verification: SourceVerificationStatus,
     *,
-    verification_infra_errors: int,
     processed_all: bool,
 ) -> SourceStatus:
-    # Unavailable reviews only defer their rows. The source is incomplete when the
-    # quality gate could not decide or a control trial hit an infrastructure error.
-    if quality == SourceQualityStatus.INCOMPLETE or verification_infra_errors > 0:
+    # Per-task validation defers unavailable rows without blocking the whole source.
+    if quality == SourceQualityStatus.INCOMPLETE or verification == SourceVerificationStatus.INCONCLUSIVE:
         return SourceStatus.INCOMPLETE
-    if quality == SourceQualityStatus.REJECT or verification == SourceVerificationStatus.REJECTED:
+    if quality == SourceQualityStatus.REJECT:
         return SourceStatus.GATED
     if processed_all:
         return SourceStatus.COMPLETED
@@ -819,7 +809,9 @@ def _write_manifest(
 ) -> None:
     """Write the review and verify reports and manifests, then the source manifest that joins every view."""
     output, recipe, config = run.output, run.recipe, run.config
-    report = verification["verification"]
+    report = {key: value for key, value in verification["verification"].items() if key not in {"results", "evidence"}}
+    if run.recipe.controls is not None and report["status"] != SourceVerificationStatus.SKIPPED:
+        report["trial_report"] = str(run.scratch("verified") / VERIFICATION_REPORT_FILENAME)
     telemetry = str(output / TELEMETRY_FILENAME)
     manifest = {
         "telemetry": telemetry,
@@ -906,8 +898,8 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
     config = run.config
     if config.normalized_shards < 1:
         raise ValueError("Canonical normalized shard count must be positive")
-    if config.quality_policy.sample_size > 100:
-        raise ValueError("The initial raw task panel is capped at 100")
+    if config.quality_policy.sample_size > MAX_SOURCE_QUALITY_SAMPLE_SIZE:
+        raise ValueError(f"The initial raw task panel is capped at {MAX_SOURCE_QUALITY_SAMPLE_SIZE}")
     panel = _sample_panel(run)
     review = config.review if run.recipe.rubric is not None else None
     decision = _gate_quality(run, panel, review)
@@ -915,7 +907,7 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
     prepared = _expand_full(run, panel) if expanded and not panel.census else run.scratch("sample")
     unavailable_reviews = _audit(run, prepared, review)
     _filter(run)
-    verification, checked = _verify(run, panel)
+    verification, checked = _verify(run)
     verification_status = SourceVerificationStatus(verification["verification"]["status"])
     _write_download_manifest(run, panel.sample.population_count)
     admissions = _export_sidecars(run, panel, decision, checked, verification_status, expanded=expanded)
@@ -925,7 +917,6 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
         config.mode,
         decision.status,
         verification_status,
-        verification_infra_errors=verification["verification"]["counts"]["infra_error"],
         processed_all=expanded or panel.census,
     )
     _write_manifest(
@@ -1071,6 +1062,7 @@ def _run_quick(
                 "source_dataset": recipe.source.dataset,
                 "source_revision": recipe.source.revision,
                 "recipe_revision": recipe.version,
+                "intended_use": recipe.intended_use.value,
                 "source_input": source_input,
                 "source_file_overrides": {name: asdict(file) for name, file in (source_overrides or {}).items()},
                 "reviewed": False,
