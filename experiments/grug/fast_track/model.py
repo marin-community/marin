@@ -52,6 +52,7 @@ from levanter.grug.grug_moe import (
     MoeActivation,
     MoEExpertMlp,
     MoeOverlapWork,
+    OverlapParamGather,
     moe_mlp,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
@@ -961,6 +962,9 @@ class GrugModelConfig:
     mxfp8_fused_grad_quant: bool = False
     """Real-MXFP8 dense projections quantize the output gradient along rows and columns in one Pallas pass."""
     moe_ragged_chunks: int = 2
+    moe_overlap_param_gather: OverlapParamGather = OverlapParamGather.IN_WORK
+    """``moe_shared_placement=overlap``: where the EP shard all-gathers the shared experts' FSDP-sharded weights,
+    which places their gradients' reduce-scatter (``OverlapParamGather``). Same math."""
     moe_overlap_weight_grads: bool = False
     """``ragged_all_to_all``: run the routed experts' weight gradients while their input cotangent's return
     all-to-all is in flight (``ragged_overlap_weight_grads``). Same math."""
@@ -3764,6 +3768,7 @@ def _run_expert_bank(
             ragged_expert_mxfp8_dispatch=cfg.moe_mxfp8_dispatch,
             expert_remat=em.expert_remat,
             overlap=overlap,
+            overlap_param_gather=cfg.moe_overlap_param_gather,
             ragged_expert_chunks=cfg.moe_ragged_chunks,
             expert_serial_pair=cfg.moe_serial_pair,
             ragged_overlap_weight_grads=cfg.moe_overlap_weight_grads,
@@ -3777,6 +3782,7 @@ def _run_expert_bank(
         mesh=get_abstract_mesh(),
         report_capacity_overflow=True,
         overlap=overlap,
+        overlap_param_gather=cfg.moe_overlap_param_gather,
         report_assignment_keep=cfg.moe_drop_renorm,
         ragged_expert_mxfp8=_ragged_expert_mxfp8(cfg),
         ragged_expert_mxfp8_dispatch=cfg.moe_mxfp8_dispatch,

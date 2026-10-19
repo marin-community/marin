@@ -15,6 +15,7 @@ Implementation overview:
 """
 
 from collections.abc import Callable
+from enum import StrEnum
 from functools import partial
 from typing import Any, cast
 
@@ -251,6 +252,17 @@ def estimate_qb_beta_topk(
     )(s_minus_alpha, token_valid)
 
 
+class OverlapParamGather(StrEnum):
+    """Where the EP shard all-gathers the FSDP-sharded ``MoeOverlapWork`` parameters (same math in both)."""
+
+    IN_WORK = "in_work"
+    """Inside the overlap work: the gather runs under the first dispatch all-to-all and its transpose, the
+    gradients' reduce-scatter, under the first return-cotangent all-to-all."""
+    BEFORE_TRANSPORT = "before_transport"
+    """Ahead of the routed experts: the work reads the gathered parameters, so the gather and the gradients'
+    reduce-scatter sit outside the all-to-all windows, where the scheduler can overlap them with expert GEMMs."""
+
+
 class QBRoutedMoE(eqx.Module):
     """QB router and expert MLP composition for flat token batches.
 
@@ -424,6 +436,7 @@ class MoEExpertMlp(eqx.Module):
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
         overlap: MoeOverlapWork | None = None,
+        overlap_param_gather: OverlapParamGather = OverlapParamGather.IN_WORK,
         report_assignment_keep: bool = False,
         ragged_expert_mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
         ragged_expert_mxfp8_dispatch: bool = False,
@@ -449,6 +462,7 @@ class MoEExpertMlp(eqx.Module):
             fp8_dispatch=self.fp8_dispatch,
             expert_remat=self.expert_remat,
             overlap=overlap,
+            overlap_param_gather=overlap_param_gather,
             ragged_expert_mxfp8=ragged_expert_mxfp8,
             ragged_expert_mxfp8_dispatch=ragged_expert_mxfp8_dispatch,
         )
@@ -468,14 +482,29 @@ def _gathering_overlap_fn(fn: Callable, param_specs: Any) -> Callable:
     """``fn`` on parameters all-gathered from ``param_specs`` inside the shard_map. The gather's transpose is a
     reduce-scatter, so the parameter gradients leave the EP shard sharded (half an all-reduce's traffic)."""
 
+    def gathered(tokens, params):
+        return fn(tokens, _gather_overlap_params(params, param_specs))
+
+    return gathered
+
+
+def _gather_overlap_params(params: Any, param_specs: Any) -> Any:
     def gather(leaf: jax.Array, spec: P) -> jax.Array:
         for dim, entry in enumerate(spec):
             if entry is not None:
                 leaf = jax.lax.all_gather(leaf, entry, axis=dim, tiled=True)
         return leaf
 
-    def gathered(tokens, params):
-        return fn(tokens, jax.tree.map(gather, params, param_specs, is_leaf=lambda x: isinstance(x, P)))
+    return jax.tree.map(gather, params, param_specs, is_leaf=lambda x: isinstance(x, P))
+
+
+def _gathering_shard_fn(shard_local_fn: Callable, param_specs: Any) -> Callable:
+    """``shard_local_fn`` whose trailing overlap parameters are all-gathered before it runs
+    (``OverlapParamGather.BEFORE_TRANSPORT``)."""
+
+    def gathered(*args, **kwargs):
+        *rest, params = args
+        return shard_local_fn(*rest, _gather_overlap_params(params, param_specs), **kwargs)
 
     return gathered
 
@@ -502,6 +531,7 @@ def moe_mlp(
     expert_mxfp8_sim: bool = False,
     expert_remat: bool = True,
     overlap: MoeOverlapWork | None = None,
+    overlap_param_gather: OverlapParamGather = OverlapParamGather.IN_WORK,
     ragged_expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
     ragged_overlap_weight_grads: bool = False,
     ragged_expert_mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
@@ -544,6 +574,7 @@ def moe_mlp(
     activation-path GEMMs block-scaled on QuACK, and with ``ExpertMxfp8.ALL`` the weight gradients too
     (``ACTIVATIONS``: they stay bf16); `ragged_expert_mxfp8_dispatch` also sends the dispatched rows as MXFP8 bytes
     instead of quantizing them on arrival.
+    `overlap_param_gather` places the all-gather of the FSDP-sharded overlap parameters (``OverlapParamGather``).
     `ragged_expert_chunks` splits `ragged_all_to_all`'s local experts into that many sequential
     dispatch / MLP / return rounds (fewer live transport buffers, more collectives).
     `ragged_overlap_weight_grads` (``ragged_all_to_all``) pins each round's expert weight gradients under its
@@ -775,7 +806,14 @@ def moe_mlp(
             overlap_param_specs = jax.tree.map(
                 lambda leaf: _token_axes_spec(leaf, token_sharding_axes), overlap.params
             )
-            shard_local_fn = partial(shard_local_fn, overlap_fn=_gathering_overlap_fn(overlap.fn, overlap_param_specs))
+            if overlap_param_gather == OverlapParamGather.IN_WORK:
+                shard_local_fn = partial(
+                    shard_local_fn, overlap_fn=_gathering_overlap_fn(overlap.fn, overlap_param_specs)
+                )
+            else:
+                shard_local_fn = _gathering_shard_fn(
+                    partial(shard_local_fn, overlap_fn=overlap.fn), overlap_param_specs
+                )
             in_specs = (*in_specs, overlap_token_specs, overlap_param_specs)
             out_specs = (*out_specs, token_spec)
             args = (
