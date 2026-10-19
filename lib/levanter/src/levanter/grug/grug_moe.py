@@ -61,7 +61,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _moe_mlp_ep_ragged_a2a_local,
 )
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
-from levanter.grug.mxfp8 import ExpertMxfp8
+from levanter.grug.mxfp8 import MX_BLOCK, ExpertMxfp8, mx_quantize_cols
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
     _axis_names,
@@ -265,6 +265,11 @@ class OverlapParamGather(StrEnum):
     BEFORE_TRANSPORT = "before_transport"
     """Ahead of the routed experts: the work reads the gathered parameters, so the gather and the gradients'
     reduce-scatter sit outside the all-to-all windows, where the scheduler can overlap them with expert GEMMs."""
+    BEFORE_TRANSPORT_MXFP8 = "before_transport_mxfp8"
+    """``BEFORE_TRANSPORT``, gathering each 2-D weight as MXFP8 (e4m3 bytes and exponents, 32-row blocks along its
+    first axis, half the bf16 traffic) and dequantizing it after the gather. Exact for a consumer that quantizes the
+    weight along that axis (the MXFP8 forward GEMM); the input-gradient GEMM's transposed quantization then rounds an
+    already-rounded weight. The gradient's reduce-scatter stays bf16."""
 
 
 class QBRoutedMoE(eqx.Module):
@@ -492,8 +497,10 @@ def _gathering_overlap_fn(fn: Callable, param_specs: Any) -> Callable:
     return gathered
 
 
-def _gather_overlap_params(params: Any, param_specs: Any) -> Any:
+def _gather_overlap_params(params: Any, param_specs: Any, mxfp8: bool = False) -> Any:
     def gather(leaf: jax.Array, spec: P) -> jax.Array:
+        if mxfp8 and _mx_gatherable(leaf, spec):
+            return _mx_gather(leaf, spec)
         for dim, entry in enumerate(spec):
             if entry is not None:
                 leaf = jax.lax.all_gather(leaf, entry, axis=dim, tiled=True)
@@ -502,13 +509,48 @@ def _gather_overlap_params(params: Any, param_specs: Any) -> Any:
     return jax.tree.map(gather, params, param_specs, is_leaf=lambda x: isinstance(x, P))
 
 
-def _gathering_shard_fn(shard_local_fn: Callable, param_specs: Any) -> Callable:
+def _mx_gatherable(leaf: jax.Array, spec: P) -> bool:
+    """A 2-D sharded weight whose local shard holds whole 32-row MX blocks along its first axis."""
+    return leaf.ndim == 2 and any(entry is not None for entry in spec) and leaf.shape[0] % MX_BLOCK == 0
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(1,))
+def _mx_gather(leaf: jax.Array, spec: P) -> jax.Array:
+    """All-gather a local weight shard over ``spec`` as MXFP8 along its first axis, dequantized after the gather;
+    the transpose is the bf16 reduce-scatter (straight-through)."""
+    values, exponents = mx_quantize_cols(leaf)
+    values = jax.lax.bitcast_convert_type(values, jnp.uint8)
+    for dim, entry in enumerate(spec):
+        if entry is not None:
+            values = jax.lax.all_gather(values, entry, axis=dim, tiled=True)
+            exponents = jax.lax.all_gather(exponents, entry, axis=dim, tiled=True)
+    k, n = values.shape
+    scale = jax.lax.bitcast_convert_type(exponents.astype(jnp.int32) << 23, jnp.float32)  # [K / 32, N]
+    blocks = jax.lax.bitcast_convert_type(values, jnp.float8_e4m3fn).astype(jnp.float32)
+    return (blocks.reshape(k // MX_BLOCK, MX_BLOCK, n) * scale[:, None, :]).reshape(k, n).astype(leaf.dtype)
+
+
+def _mx_gather_fwd(leaf, spec):
+    return _mx_gather(leaf, spec), None
+
+
+def _mx_gather_bwd(spec, _, g):
+    for dim, entry in reversed(list(enumerate(spec))):
+        if entry is not None:
+            g = jax.lax.psum_scatter(g, entry, scatter_dimension=dim, tiled=True)
+    return (g,)
+
+
+_mx_gather.defvjp(_mx_gather_fwd, _mx_gather_bwd)
+
+
+def _gathering_shard_fn(shard_local_fn: Callable, param_specs: Any, mxfp8: bool) -> Callable:
     """``shard_local_fn`` whose trailing overlap parameters are all-gathered before it runs
     (``OverlapParamGather.BEFORE_TRANSPORT``)."""
 
     def gathered(*args, **kwargs):
         *rest, params = args
-        return shard_local_fn(*rest, _gather_overlap_params(params, param_specs), **kwargs)
+        return shard_local_fn(*rest, _gather_overlap_params(params, param_specs, mxfp8), **kwargs)
 
     return gathered
 
@@ -823,7 +865,9 @@ def moe_mlp(
                 )
             else:
                 shard_local_fn = _gathering_shard_fn(
-                    partial(shard_local_fn, overlap_fn=overlap.fn), overlap_param_specs
+                    partial(shard_local_fn, overlap_fn=overlap.fn),
+                    overlap_param_specs,
+                    mxfp8=overlap_param_gather == OverlapParamGather.BEFORE_TRANSPORT_MXFP8,
                 )
             in_specs = (*in_specs, overlap_token_specs, overlap_param_specs)
             out_specs = (*out_specs, token_spec)

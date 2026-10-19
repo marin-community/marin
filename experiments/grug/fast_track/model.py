@@ -964,8 +964,8 @@ class GrugModelConfig:
     """Real-MXFP8 dense projections quantize the output gradient along rows and columns in one Pallas pass."""
     moe_ragged_chunks: int = 2
     moe_overlap_param_gather: OverlapParamGather = OverlapParamGather.IN_WORK
-    """``moe_shared_placement=overlap``: where the EP shard all-gathers the shared experts' FSDP-sharded weights,
-    which places their gradients' reduce-scatter (``OverlapParamGather``). Same math."""
+    """``moe_shared_placement=overlap``: where (and in what precision) the EP shard all-gathers the shared experts'
+    FSDP-sharded weights, which places their gradients' reduce-scatter (``OverlapParamGather``)."""
     moe_overlap_window: OverlapWindow = OverlapWindow.FIRST_DISPATCH
     """``moe_shared_placement=overlap`` on ``ragged_all_to_all``: the forward all-to-all the shared experts run under
     (``OverlapWindow``). Same math."""

@@ -2533,3 +2533,54 @@ def test_transport_buffer_sites_prevent_cse():
     assert (
         _optimized_hlo_opcode_count(repeated_site, MINIMUM_OPCODE) == 1
     ), "the CSE probe no longer merges repeated sites, so this test can no longer detect a site collision"
+
+
+def test_mxfp8_overlap_param_gather_matches_quantizing_the_gathered_weight():
+    """``OverlapParamGather.BEFORE_TRANSPORT_MXFP8`` gathers each shard as MXFP8: the gathered weight equals the
+    full weight quantized along its first axis, and the gradient is the bf16 reduce-scatter of the cotangent."""
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.grug.grug_moe import _gather_overlap_params
+        from levanter.grug.mxfp8 import mx_quantize_dequantize
+
+        mesh = Mesh(np.asarray(jax.devices()), axis_names=("expert",), axis_types=(AxisType.Explicit,))
+        w_up = jax.random.normal(jax.random.key(0), (256, 96), jnp.float32)  # sharded on its first (MX) axis
+        w_down = jax.random.normal(jax.random.key(1), (64, 128), jnp.float32)  # sharded on its second axis
+        cot = jax.random.normal(jax.random.key(2), (256, 96), jnp.float32)
+        specs = {"up": P("expert", None), "down": P(None, "expert")}
+
+        def gathered(params, mxfp8=True):
+            return jax.shard_map(
+                lambda p: _gather_overlap_params(p, specs, mxfp8=mxfp8),
+                mesh=mesh,
+                in_specs=(specs,),
+                out_specs={"up": P(), "down": P()},
+                check_vma=False,
+            )(params)
+
+        params = {
+            "up": jax.device_put(w_up, NamedSharding(mesh, specs["up"])),
+            "down": jax.device_put(w_down, NamedSharding(mesh, specs["down"])),
+        }
+        with jax.set_mesh(mesh):
+            out = jax.jit(gathered)(params)
+            np.testing.assert_array_equal(out["up"], mx_quantize_dequantize(w_up, 0))
+            np.testing.assert_array_equal(out["down"], mx_quantize_dequantize(w_down, 0))
+            grads = [
+                jax.jit(jax.grad(lambda p, mx=mx: jnp.sum(gathered(p, mx)["up"] * cot)))(params) for mx in (True, False)
+            ]
+        # Straight through: the same gradient as the bf16 gather's transpose.
+        np.testing.assert_array_equal(grads[0]["up"], grads[1]["up"])
+        assert np.any(np.asarray(grads[0]["up"]))
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)], env=env, text=True, capture_output=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
