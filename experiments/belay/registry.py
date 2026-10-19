@@ -48,7 +48,9 @@ class Status(StrEnum):
     REMOVED = "removed"
     """Was adopted, later taken out."""
     CLOSED = "closed"
-    """Decided against (lost, neutral, or not worth its cost)."""
+    """Tested and decided against (lost, neutral, or not worth its cost)."""
+    SKIPPED = "skipped"
+    """Dropped before any trial was run."""
 
 
 class Source(StrEnum):
@@ -64,6 +66,7 @@ class EventType(StrEnum):
     ADOPTED = "adopted"
     REMOVED = "removed"
     CLOSED = "closed"
+    SKIPPED = "skipped"
 
 
 @dataclass(frozen=True)
@@ -239,6 +242,9 @@ def validate(experiments: list[Experiment]) -> None:
         numbers = [int(i[1:]) for i in trial_ids]
         if numbers != sorted(set(numbers)):
             raise ValueError(f"{e.id}: trial ids must increase down the file, with no repeats")
+        skipped = e.status is Status.SKIPPED or any(ev.type is EventType.SKIPPED for ev in e.events)
+        if skipped and e.trials:
+            raise ValueError(f"{e.id}: a skipped experiment can't have trials")
 
 
 def write_experiment(experiment: Experiment, directory: Path = REGISTRY_DIR) -> Path:

@@ -4,7 +4,7 @@ name: KITE KV-invariant depth expansion
 category: Depth connections
 summary: Mid-training depth expansion where a decoder tower reuses the prefiller tower's K/V.
 source: maintainer
-status: closed
+status: skipped
 tags:
 - kite
 - depth-growth
@@ -14,7 +14,7 @@ papers:
 - arxiv: '2609.27294'
   title: KITE
 events:
-- type: closed
+- type: skipped
   batch: kite-read
   date: '2026-09-28'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5874512320

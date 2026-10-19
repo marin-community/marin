@@ -90,6 +90,13 @@ def test_load_names_the_file_and_the_missing_key(tmp_path):
         R.load_registry(tmp_path)
 
 
+def test_validate_rejects_trials_on_a_skipped_experiment():
+    skip = R.Event(type=R.EventType.SKIPPED, batch="1", date="2026-10-01", comment_url="u")
+    R.validate([_experiment(status=R.Status.SKIPPED, trials=(), events=(skip,))])
+    with pytest.raises(ValueError):
+        R.validate([_experiment(status=R.Status.SKIPPED, events=(skip,))])
+
+
 def test_validate_rejects_duplicate_slugs():
     with pytest.raises(ValueError):
         R.validate([_experiment(), _experiment(id="X0002")])

@@ -22,7 +22,8 @@ uv run python -m experiments.belay.registry new --slug ... --name ... --category
 | `done` | trials finished, no decision yet |
 | `adopted` | **in the current checkpoint recipe** (today Belay Ckpt 1, `marin_belay_v1_ckpt1`) |
 | `removed` | adopted at some point, not in the current checkpoint |
-| `closed` | decided against |
+| `closed` | tested and decided against |
+| `skipped` | dropped before any trial was run |
 
 `adopted` always means "in the latest checkpoint": when a new checkpoint drops a feature, its entry gets a `removed`
 event naming the checkpoint, and a feature added by the checkpoint gets an `adopted` event.
@@ -54,5 +55,5 @@ Required: `id`, `slug`, `name`, `category` (one of `CATEGORIES` in `registry.py`
 and optionally `baseline`, `steps`, `delta` and `loss` (one per seed), `wandb`, `settings`, `commit`,
 `step_time_change`, `tuned`, `note`, `derived`.
 A trial id is `t001`, `t002`, ... in run order, unique within its experiment and never reused; cite a trial elsewhere as `<experiment id>.<trial id>`, e.g. `X0014.t005`.
-An event is `adopted`, `removed` or `closed`, with `batch`, `date`,
+An event is `adopted`, `removed`, `closed` or `skipped`, with `batch`, `date`,
 `comment_url` and optionally `note`, `candidate`, `as_adopted`.
