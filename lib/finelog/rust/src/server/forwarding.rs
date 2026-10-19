@@ -127,7 +127,7 @@ const FORWARD_BATCH_SEGMENTS: usize = 128;
 
 /// Encoded bytes per outbound request. Keep ten MiB below the receiving store's hard
 /// Arrow IPC limit. [`chunk_by_bytes`] halves oversized batches until they fit.
-pub const FORWARD_BATCH_BYTES: usize = MAX_WRITE_ROWS_BYTES - (10 << 20);
+const FORWARD_BATCH_BYTES: usize = MAX_WRITE_ROWS_BYTES - (10 << 20);
 
 const FORWARD_REQUEST_COMPRESSION: &str = "zstd";
 const FINELOG_ZSTD_LEVEL: i32 = 1;
@@ -303,22 +303,8 @@ fn build_client(target: &str) -> Result<StatsServiceClient<HttpsTransport>, Stri
     Ok(StatsServiceClient::new(transport, config))
 }
 
-/// Bounds for one namespace turn; `rows` caps its source sequence span.
-pub fn forward_read_budget(namespace: &str) -> ReadBudget {
-    ReadBudget {
-        rows: if namespace == LOG_NAMESPACE_NAME {
-            FORWARD_LOG_BATCH_ROWS as usize
-        } else {
-            FORWARD_BATCH_ROWS as usize
-        },
-        bytes: FORWARD_READ_BYTES,
-        segments: FORWARD_BATCH_SEGMENTS,
-        timeout: FORWARD_READ_TIMEOUT,
-    }
-}
-
 /// Configure the forwarding wire codec, compression, and message limits.
-pub fn forward_client_config(uri: http::Uri) -> ClientConfig {
+pub(super) fn forward_client_config(uri: http::Uri) -> ClientConfig {
     let compression = CompressionRegistry::new()
         .register(GzipProvider::default())
         .register(ZstdProvider::with_level(FINELOG_ZSTD_LEVEL));
@@ -963,7 +949,16 @@ where
             name,
             cursor,
             persisted,
-            forward_read_budget(name),
+            ReadBudget {
+                rows: if name == LOG_NAMESPACE_NAME {
+                    FORWARD_LOG_BATCH_ROWS as usize
+                } else {
+                    FORWARD_BATCH_ROWS as usize
+                },
+                bytes: FORWARD_READ_BYTES,
+                segments: FORWARD_BATCH_SEGMENTS,
+                timeout: FORWARD_READ_TIMEOUT,
+            },
         )
         .await?;
         Ok(Batch {
@@ -1161,7 +1156,7 @@ struct Batch {
 /// batches, drop the server-assigned `seq` column (the hub assigns its own), and
 /// stamp the origin column with this store's cluster. `None` when the scan matched no
 /// rows. Returns the dropped seqs alongside, so the caller can advance its cursor.
-pub fn ship_batch(
+fn ship_batch(
     schema: Arc<ArrowSchema>,
     mut batches: Vec<RecordBatch>,
     cluster: &str,
@@ -1208,7 +1203,7 @@ pub fn ship_batch(
 /// Encode `ship` into IPC chunks bounded by `max_bytes`, pairing each with the largest
 /// `seq` it carries. A single row that exceeds the budget is emitted alone so it cannot
 /// stall every later row behind the forwarding cursor.
-pub fn chunk_by_bytes(
+fn chunk_by_bytes(
     ship: &RecordBatch,
     seqs: &Int64Array,
     max_bytes: usize,

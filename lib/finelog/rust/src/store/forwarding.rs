@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 use arrow::array::{AsArray, BooleanArray, RecordBatch};
 use arrow::compute::{concat_batches, filter_record_batch, sort_to_indices, take};
 use arrow::datatypes::{Int64Type, SchemaRef};
-use futures::{stream, StreamExt, TryStreamExt};
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use parquet::file::statistics::Statistics;
 
@@ -19,7 +18,6 @@ use crate::store::schema::{IMPLICIT_CLUSTER_COLUMN, IMPLICIT_SEQ_COLUMN};
 use crate::store::string_column::StringColumn;
 use crate::store::Store;
 
-const SOURCE_PREFETCH: usize = 8;
 const DECODE_BATCH_ROWS: usize = 8_192;
 const SLOW_READ: Duration = Duration::from_secs(5);
 
@@ -29,9 +27,9 @@ struct ForwardSource {
 }
 
 /// Limits for one source prefix. A single oversized row may exceed the byte
-/// target; decoding and ordering also need working space.
+/// target; decoding, ordering, and cold object downloads need extra working space.
 #[derive(Clone, Copy)]
-pub struct ReadBudget {
+pub(crate) struct ReadBudget {
     pub rows: usize,
     pub bytes: usize,
     pub segments: usize,
@@ -39,7 +37,7 @@ pub struct ReadBudget {
 }
 
 /// A complete examined source prefix, including positions excluded by origin.
-pub struct ForwardRead {
+pub(crate) struct ForwardRead {
     pub schema: SchemaRef,
     pub batches: Vec<RecordBatch>,
     pub resume_at: Option<i64>,
@@ -48,7 +46,7 @@ pub struct ForwardRead {
 
 /// Read ordered, locally produced rows after `cursor` under the host's durability
 /// boundary. Missing objects fail the read; they never count as examined rows.
-pub async fn read_forwarding(
+pub(crate) async fn read_forwarding(
     store: Arc<Store>,
     namespace: &str,
     cursor: i64,
@@ -110,28 +108,21 @@ async fn read_source(
         .collect();
     let selected_segments = paths.len();
     let localize_started = Instant::now();
-    let paths = stream::iter(paths.into_iter().map(|path| {
-        let sources = &snapshot.sources;
+    let mut sources = Vec::with_capacity(paths.len());
+    // Cache misses materialize whole objects. Resolve one at a time to avoid
+    // holding several object download buffers for one namespace read.
+    for path in paths {
         let bounds = snapshot.seq_bounds.get(&path).copied();
-        async move {
-            let Some((objects, segments)) = sources else {
-                return Ok::<_, StatsError>(ForwardSource {
-                    path: PathBuf::from(path),
-                    bounds,
-                });
-            };
+        let path = if let Some((objects, segments)) = &snapshot.sources {
             let source = segments.get(&path).ok_or_else(|| {
                 StatsError::Internal(format!("forward source reference missing for {path:?}"))
             })?;
-            Ok(ForwardSource {
-                path: objects.local_path(&source.source).await?,
-                bounds,
-            })
-        }
-    }))
-    .buffered(SOURCE_PREFETCH)
-    .try_collect::<Vec<_>>()
-    .await?;
+            objects.local_path(&source.source).await?
+        } else {
+            PathBuf::from(path)
+        };
+        sources.push(ForwardSource { path, bounds });
+    }
     let localize_ms = localize_started.elapsed().as_millis() as u64;
     let schema = snapshot.schema;
     let decode_schema = Arc::clone(&schema);
@@ -141,7 +132,7 @@ async fn read_source(
         // Keep its paths visible until that decoder actually releases them.
         let _visibility = visibility;
         decode_prefix(
-            paths,
+            sources,
             decode_schema,
             read_from,
             scanned_through,

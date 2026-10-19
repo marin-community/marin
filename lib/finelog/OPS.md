@@ -568,7 +568,17 @@ other tables span up to 200,000. The retained decoded Arrow budget is 256 MiB,
 with extra working space for one decoder batch, ordering, and IPC encoding.
 A wide read shortens its examined source prefix and resumes on the next turn;
 one oversized row can exceed the retained budget to preserve progress. Missing
-objects fail the turn and preserve its cursor. Requests retain their byte limit, and log chunks ship serially
+objects fail the turn and preserve its cursor.
+
+Cold cache misses download whole encoded objects before Parquet row-group pruning
+and the decoded-byte target take effect. Localization is serial within one
+namespace turn; up to four namespace turns can localize concurrently. Include an
+encoded-object download buffer per active localization, cache writes, and their
+latency in the resource budget. The 256 MiB target covers retained Arrow only;
+object downloads and cache I/O consume the same 60-second read deadline. The
+local benchmark did not measure cold recovery throughput.
+
+Requests retain their byte limit, and log chunks ship serially
 to preserve order. Independent tables can overlap their durable hub writes.
 Hub or network failures get three attempts, then leave the affected cursor in place and yield to
 the next namespace. The same batch is retried on the next sweep; exhaustion does
