@@ -1630,7 +1630,7 @@ schema = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=atqamar%2Fthundersync-probe#395df81137a07235cf2c51d952a8b9faa26b6601" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=atqamar%2Fthundersync-probe#75271d7f830fbf424d3dc33fef2c696ca1b2ac2a" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },

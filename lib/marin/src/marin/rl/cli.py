@@ -114,6 +114,7 @@ def _coordinator_request(
         ),
         environment=create_environment(workspace=str(workspace), env_vars=dict(env_vars), extras=["cpu"]),
         priority=priority_band_value(route.priority),
+        max_retries_preemption=0,
         timeout=Duration.from_hours(route.timeout_hours),
     )
     return route.cluster_config, request
