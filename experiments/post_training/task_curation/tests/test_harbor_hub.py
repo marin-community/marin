@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import base64
 import json
 from types import SimpleNamespace
 
@@ -52,3 +53,28 @@ def test_export_preserves_distinct_references_and_resumes_downloads(tmp_path, mo
         identities.append(rows)
     assert identities[0][refs[0]] == identities[1][refs[0]]
     assert attempts == {"one": 2, "two": 2 if interrupt else 1}
+
+
+def test_export_round_trips_large_binary_files_and_chunk_boundaries(tmp_path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "tests").mkdir()
+    sizes = [0, 1, 2, 3, 196607, 196608, 196609, 9 * 1024 * 1024 + 1]
+    for index, size in enumerate(sizes):
+        path = package / f'tests/file-{index}-"-é.bin'
+        path.write_bytes((bytes(range(256)) * (size // 256 + 1))[:size])
+        path.chmod(0o755 if index == 0 else 0o644)
+    digest, paths = harbor_hub.Packager.compute_content_hash(package)
+    task_ref = f"fixture/large@sha256:{digest}"
+    output = tmp_path / "task.jsonl"
+    with output.open("wb") as stream:
+        for chunk in harbor_hub.export_task(package, task_ref, "fixture/release"):
+            stream.write(chunk)
+    row = json.loads(output.read_text())
+    assert row["task_ref"] == task_ref
+    assert row["release"] == "fixture/release"
+    assert set(row["files"]) == {path.relative_to(package).as_posix() for path in paths}
+    for index in range(len(sizes)):
+        name = f'tests/file-{index}-"-é.bin'
+        assert base64.b64decode(row["files"][name], validate=True) == (package / name).read_bytes()
+        assert row["modes"][name] == ("755" if index == 0 else "644")

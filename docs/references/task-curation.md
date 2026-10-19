@@ -247,7 +247,7 @@ The `CurationRecipe` configuration has these fields:
 | `controls` | Optional `Controls(golden, negative, memory_mb, negative_reward)` for grader verification. |
 | `inputs` | Auxiliary pinned sources, staged by name in `ConversionContext.inputs`. |
 | `grader` | The `Environment` that grade scripts need, such as `GRADER_PACKAGES` from `datasets/environments.py`. The pipeline builds it and decides where it runs (see [Environments](#environments)); the converter reads the result as `ConversionContext.grader_environment`. |
-| `resource_budget_bytes` | Decoded resource bytes admitted by reviewed modes, default 1,000,000; larger tasks are deferred as `resources_over_budget`. Quick mode skips this budget. Harbor Hub export has a separate 8 MiB ceiling (`export_size_ceiling`) before conversion. |
+| `resource_budget_bytes` | Decoded resource bytes admitted by reviewed modes, default 1,000,000; larger tasks are deferred as `resources_over_budget`. Quick mode skips this budget. |
 
 Families whose members differ only by data are tables: one module builds every
 declaration of the family in a loop.
@@ -264,8 +264,9 @@ Harbor resolves the requested release digest and verifies each task's content
 before writing `tasks/<task-reference-hash>.jsonl` and a release manifest.
 Each filename hashes the full immutable task reference, so differently named
 tasks with identical contents remain separate. The manifest records the resolved
-task list. Dataset-level scoring files are not supported. Packages with links or
-more than 8 MiB of exported files produce explicit unsupported rows.
+task list. Dataset-level scoring files are not supported. Packages with links
+produce explicit unsupported rows. File contents are streamed into JSONL without a per-task export size cutoff; downstream conversion still
+loads individual task rows into memory.
 
 Release membership is resolved by Harbor using the pinned release digest.
 
