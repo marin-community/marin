@@ -59,10 +59,10 @@ class AgentHarness:
             completions.end()
         if agent.done():
             completions.reported = True
-            # A CancelledError with no cancel request, for example from a cancelled child task, is the agent's own
-            # failure. A requested cancel stays a cancellation.
-            if agent.cancelled() and not agent.cancelling():
-                raise RuntimeError("The agent ended with a CancelledError that no task requested")
+            # The engine cancels the agent only in the cleanup, after this. Thus an agent that ended cancelled, for
+            # example from a cancelled child task or from its own cancel, failed.
+            if agent.cancelled():
+                raise RuntimeError("The agent ended with a CancelledError before the engine stopped it")
             agent.result()
 
 

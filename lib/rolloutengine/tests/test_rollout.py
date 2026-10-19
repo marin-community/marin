@@ -581,12 +581,19 @@ async def test_agent_harness_failure_retains_the_generated_turn():
     )
 
 
-async def test_an_unrequested_cancellation_of_the_agent_fails_its_attempt_instead_of_cancelling_the_caller():
+@pytest.mark.parametrize("cancel", ["child", "self"])
+async def test_an_agent_that_ends_cancelled_fails_its_attempt_instead_of_cancelling_the_caller(cancel):
     async def agent(complete):
         await complete(Prompt(({"role": "user", "content": "Return 12."},), {}))
-        child = asyncio.create_task(asyncio.sleep(60))
-        child.cancel()
-        await child  # The child's CancelledError ends the agent, although no task cancelled the agent.
+        if cancel == "child":
+            child = asyncio.create_task(asyncio.sleep(60))
+            child.cancel()
+            await child  # The child's CancelledError ends the agent, although no task cancelled the agent.
+        else:
+            task = asyncio.current_task()
+            assert task is not None
+            task.cancel()
+            await asyncio.sleep(1)
 
     runner = engine(
         ReplayModel([{"role": "assistant", "content": "12"}]),
@@ -596,7 +603,8 @@ async def test_an_unrequested_cancellation_of_the_agent_fails_its_attempt_instea
         await runner.run_task(rollout_spec(arithmetic_task(), harness="agent"))
     assert caught.value.operation == RolloutOperation.ADVANCE
     assert caught.value.rollout.failure == RolloutFailure(
-        "RuntimeError", {"operation": "advance", "error": "The agent ended with a CancelledError that no task requested"}
+        "RuntimeError",
+        {"operation": "advance", "error": "The agent ended with a CancelledError before the engine stopped it"},
     )
     assert caught.value.rollout.conversations[-1].response_token_ids == (20,)
 
@@ -2700,29 +2708,6 @@ async def test_closing_answers_a_server_request_before_the_agent_drains_its_hand
 
     assert isinstance(handlers[-1].exception(), RolloutEnded)
     assert "cleanup_errors" not in record.grade.diagnostics
-
-
-async def test_an_agent_cancelled_by_another_task_propagates_its_cancellation():
-    agent_task = None
-    entered = asyncio.Event()
-
-    async def agent(_context, complete):
-        nonlocal agent_task
-        agent_task = asyncio.current_task()
-        await complete(Prompt(({"role": "user", "content": "Return 12."},), {}))
-
-    async def model(_request):
-        entered.set()
-        await asyncio.Future()
-
-    pending = asyncio.create_task(
-        harness_rollout(AgentHarness(agent), arithmetic_task(), model, limits=rollout_limits())
-    )
-    await asyncio.wait_for(entered.wait(), timeout=5)
-    assert agent_task is not None
-    agent_task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await pending
 
 
 async def test_a_cancelled_stop_propagates_and_lets_the_agent_finish_stopping():

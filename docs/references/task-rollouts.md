@@ -467,8 +467,8 @@ A turn that the harness did not finish handling retains a terminal step with `me
 `RolloutInterrupted.rollout.failure` names the exception type. Its `diagnostics` hold the `operation`, the first
 2,000 characters of the message as `error`, and the `notes`. Pickle keeps the `rollout`, `operation`, and `grade`.
 Token-contract failures propagate as `RolloutContractError`.
-External cancellation remains cancellation. An `AgentHarness` agent that ends with a `CancelledError` that no
-task requested fails its attempt.
+External cancellation remains cancellation. An `AgentHarness` agent that ends with a `CancelledError` before the
+engine stops it fails its attempt.
 
 Cleanup errors preserve a completed grade or the original execution failure.
 `grade.diagnostics.cleanup_errors` contains cleanup operation names and exception types.
