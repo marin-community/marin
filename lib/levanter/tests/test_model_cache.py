@@ -3,7 +3,6 @@
 
 """Tests for the distributed-locked model snapshot cache."""
 
-import hashlib
 import json
 import os
 import threading
@@ -26,17 +25,8 @@ from levanter.model_cache import (
 )
 
 
-def _repo_file(path: str, contents: bytes, *, lfs: bool = False) -> RepoFile:
-    if lfs:
-        return RepoFile(
-            path=path,
-            size=len(contents),
-            oid="0" * 40,
-            lfs={"size": len(contents), "oid": hashlib.sha256(contents).hexdigest(), "pointerSize": 0},
-        )
-    return RepoFile(
-        path=path, size=len(contents), oid=hashlib.sha1(f"blob {len(contents)}\0".encode() + contents).hexdigest()
-    )
+def _repo_file(path: str, contents: bytes) -> RepoFile:
+    return RepoFile(path=path, size=len(contents), oid="0" * 40)
 
 
 def _make_populate(call_count: list[int], lock: threading.Lock, *, delay: float = 0.0):
@@ -150,7 +140,7 @@ def test_cache_hf_model_does_not_copy_repository_completion_marker(tmp_path, mon
         "list_repo_tree",
         lambda model_id, revision=None, recursive=False: [
             _repo_file(DEFAULT_COMPLETE_MARKER, b'{"source_revision": "parent"}'),
-            _repo_file("model.safetensors", b"weights", lfs=True),
+            _repo_file("model.safetensors", b"weights"),
         ],
     )
 
@@ -175,7 +165,7 @@ def test_cache_hf_model_does_not_copy_repository_completion_marker(tmp_path, mon
     assert json.loads(Path(cache_path, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": revision}
 
 
-def test_cache_hf_model_resumes_verified_files_and_repairs_corruption(tmp_path, monkeypatch):
+def test_cache_hf_model_resumes_complete_files_and_replaces_partial_files(tmp_path, monkeypatch):
     revision = "a" * 40
     contents = {
         "model.safetensors": b"weight shard",
@@ -183,15 +173,15 @@ def test_cache_hf_model_resumes_verified_files_and_repairs_corruption(tmp_path, 
         "tokenizer.json": b'{"vocab": 2}',
     }
     cache_path = str(tmp_path / "cache" / "model")
+    fs = fsspec.filesystem("file")
     downloaded: list[str] = []
     interrupt = True
 
+    monkeypatch.setattr(model_cache, "url_to_fs", lambda path: (fs, path))
     monkeypatch.setattr(
         model_cache,
         "list_repo_tree",
-        lambda *_args, **_kwargs: [
-            _repo_file(path, data, lfs=path == "model.safetensors") for path, data in contents.items()
-        ],
+        lambda *_args, **_kwargs: [_repo_file(path, data) for path, data in contents.items()],
     )
 
     def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
@@ -216,7 +206,15 @@ def test_cache_hf_model_resumes_verified_files_and_repairs_corruption(tmp_path, 
     assert not Path(cache_path, DEFAULT_COMPLETE_MARKER).exists()
 
     os.utime(shard, ns=(1_000_000_000, 1_000_000_000))
-    config.write_bytes(b'{"model": 9}')  # Same size, wrong content.
+    config.write_bytes(b"partial")
+    real_open = fs.open
+
+    def reject_cached_reads(path, mode="rb", *args, **kwargs):
+        if path.startswith(cache_path) and "r" in mode:
+            pytest.fail(f"unexpected cache read: {path}")
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(fs, "open", reject_cached_reads)
     downloaded.clear()
     interrupt = False
 
@@ -229,7 +227,7 @@ def test_cache_hf_model_resumes_verified_files_and_repairs_corruption(tmp_path, 
     assert json.loads(Path(cache_path, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": revision}
 
 
-def test_cache_hf_model_rejects_corrupt_upload_before_completion(tmp_path, monkeypatch):
+def test_cache_hf_model_rejects_partial_upload_before_completion(tmp_path, monkeypatch):
     contents = b"valid weights"
     cache_path = str(tmp_path / "cache" / "model")
     fs = fsspec.filesystem("file")
@@ -239,7 +237,7 @@ def test_cache_hf_model_rejects_corrupt_upload_before_completion(tmp_path, monke
     monkeypatch.setattr(
         model_cache,
         "list_repo_tree",
-        lambda *_args, **_kwargs: [_repo_file("model.safetensors", contents, lfs=True)],
+        lambda *_args, **_kwargs: [_repo_file("model.safetensors", contents)],
     )
 
     def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
@@ -247,14 +245,14 @@ def test_cache_hf_model_rejects_corrupt_upload_before_completion(tmp_path, monke
         local_path.write_bytes(contents)
         return str(local_path)
 
-    def corrupt_put_file(local_path, remote_path):
+    def partial_put_file(local_path, remote_path):
         real_put_file(local_path, remote_path)
-        Path(remote_path).write_bytes(b"x" * len(contents))
+        Path(remote_path).write_bytes(contents[:-1])
 
     monkeypatch.setattr(model_cache, "hf_hub_download", fake_hf_hub_download)
-    monkeypatch.setattr(fs, "put_file", corrupt_put_file)
+    monkeypatch.setattr(fs, "put_file", partial_put_file)
 
-    with pytest.raises(OSError, match="does not match pinned metadata"):
+    with pytest.raises(OSError, match="wrong size"):
         cache_hf_model(cache_path, "org/model", revision="a" * 40)
 
     assert not Path(cache_path, DEFAULT_COMPLETE_MARKER).exists()
