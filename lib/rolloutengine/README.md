@@ -17,7 +17,7 @@ result = await engine.run_task(spec, model)
 - The model is the policy under rollout, an async function from `ModelRequest` to `ModelTurn`. Pass it to each
   `engine.run_task` call.
 - A harness is the agent loop of a task. It implements `Harness`: `check(task, limits)` rejects a task before
-  any machine starts, and `run(context, recorder)` runs one attempt. The harness calls the model only through
+  any machine starts, and `run(context, recorder)` runs one attempt. The harness calls the model through
   its `RolloutRecorder` (`start`, `reply`, and `record`), which records the exact tokens and applies the turn
   and token limits. Register each harness in the `harnesses` mapping; `TaskRolloutSpec.harness` selects one by
   its key.

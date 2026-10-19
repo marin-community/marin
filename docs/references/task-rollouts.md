@@ -105,7 +105,7 @@ It implements the `Harness` protocol from `rolloutengine.harness`:
   before any machine starts.
 - `run(context, recorder)` runs one attempt and returns when the task is done. `HarnessContext` holds the
   task, the prepared task machine or `None`, an event sink, the attempt's cleanup scope, and its run ID. The
-  harness calls the model only through `recorder`, a `RolloutRecorder`.
+  harness calls the model through `recorder`, a `RolloutRecorder`.
 
 A harness does not grade. After `run` returns, the engine grades the rollout with the task's grader (see
 [Grading](#grading)). A harness can attach its own reward to a step with `record(data=...)`. The engine does
@@ -113,8 +113,8 @@ not read it.
 
 ### Recorder
 
-`RolloutRecorder` is the only way that a harness calls the model. It records the exact tokens and applies the
-turn and token limits:
+A harness calls the model through its `RolloutRecorder`, which records the exact tokens and applies the turn
+and token limits:
 
 - `start(prompt)` starts a new conversation with a `Prompt`: public messages, model options, and optionally
   exact prompt `token_ids`. It returns the model's turn. A later `start` starts another conversation, for

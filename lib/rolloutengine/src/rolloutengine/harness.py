@@ -4,7 +4,7 @@
 """The harness contract: the agent loop of one task attempt, and the recorder that it calls the model through.
 
 A harness runs the loop: it sends prompts, runs tools, and decides when the attempt ends. It calls the model
-only through its ``RolloutRecorder``, which records the exact tokens and applies the turn and token limits.
+through its ``RolloutRecorder``, which records the exact tokens and applies the turn and token limits.
 The harness does not grade: the engine grades the rollout with the task's grader after the harness ends.
 """
 
@@ -48,7 +48,7 @@ class HarnessContext:
 
 
 class RolloutRecorder(Protocol):
-    """The only way that a harness calls the model. It records the exact tokens and applies the limits.
+    """The model, as the harness of one attempt calls it. It records the exact tokens and applies the limits.
 
     One request can be open at a time. A request that is cancelled while the model generates changes
     nothing, so the harness can send it again. If the harness ends before its next request, the record
