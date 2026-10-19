@@ -227,3 +227,26 @@ def test_a_moved_student_is_re_resolved(tmp_path, monkeypatch):
     assert calls == ["student-old", "student-new"]
     (record,) = [json.loads(line) for line in log_path.read_text().splitlines()]
     assert record["status"] == 200 and record["author"] == Author.STUDENT.value
+
+
+def test_a_student_behind_a_capability_url_is_retried_through_gateway_errors(tmp_path, monkeypatch):
+    monkeypatch.setattr("experiments.post_training.sft_shootout.glm_proxy.RESOLVE_INTERVAL_S", 0)
+    statuses = [502, 404, 200]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status = statuses.pop(0)
+        return httpx.Response(status, json=reply("ls") if status == 200 else {"error": "endpoint moving"})
+
+    url = "https://iris.example/proxy/t/cluster=c/token/serve.v0/v1"
+    student = Backend(
+        author=Author.STUDENT, base_url=url, model="v0", tokenizer=WordTokenizer(), headers={}, resolve=lambda: url
+    )
+    log_path = tmp_path / "requests.jsonl"
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app = build_proxy(
+        backend(Author.TEACHER, "http://teacher/v1"), 100, RequestLog(log_path), RelayPolicy(student, 50), client=client
+    )
+    response = post(TestClient(app), [{"role": "user", "content": "fix the bug"}])
+    assert response.status_code == 200 and statuses == []
+    (record,) = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert record["status"] == 200 and record["author"] == Author.STUDENT.value

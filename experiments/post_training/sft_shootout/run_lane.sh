@@ -12,7 +12,7 @@
 #          (default 4). Before each new round, a lane stops once <out>/STOP exists (the family's relay target
 #          is met) and moves to its next shard once <out>/shard-NN/STOP exists (that shard's target is met).
 #
-# Needs GLM_BULK_TOKEN and DAYTONA_API_KEY in the environment.
+# Needs GLM_BULK_TOKEN and DAYTONA_API_KEY in the environment, and for relay STUDENT_BASE_URL (serve_student.py).
 #   bash experiments/post_training/sft_shootout/run_lane.sh <plain|relay> <family> <agent> <k> <concurrency> \
 #     <tasks parquet> <package revision> <shards dir> <out> <shard numbers...>
 set -uo pipefail
