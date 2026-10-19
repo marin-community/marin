@@ -68,7 +68,7 @@ def test_validate_rejects_malformed_entries(overrides):
         R.validate([_experiment(**overrides)])
 
 
-@pytest.mark.parametrize("trial_ids", [("t1",), ("T01",), ("01",), ("t01", "t01"), ("t02", "t01")])
+@pytest.mark.parametrize("trial_ids", [("t1",), ("T01",), ("01",), ("t00",), ("t001",), ("t01", "t01"), ("t02", "t01")])
 def test_validate_rejects_malformed_repeated_or_out_of_order_trial_ids(trial_ids):
     (trial,) = _experiment().trials
     trials = tuple(dataclasses.replace(trial, id=i) for i in trial_ids)
@@ -79,6 +79,18 @@ def test_validate_rejects_malformed_repeated_or_out_of_order_trial_ids(trial_ids
 def test_validate_accepts_gaps_in_trial_ids():
     (trial,) = _experiment().trials
     R.validate([_experiment(trials=(trial, dataclasses.replace(trial, id="t03")))])
+
+
+def test_validate_accepts_three_digit_trial_ids():
+    (trial,) = _experiment().trials
+    R.validate([_experiment(trials=(trial, dataclasses.replace(trial, id="t100")))])
+
+
+def test_load_names_the_file_and_the_missing_key(tmp_path):
+    text = R.write_experiment(_experiment(), tmp_path).read_text().replace("- id: t01\n  variant", "- variant")
+    (tmp_path / "X0001-sqrt-softplus-router.yaml").write_text(text)
+    with pytest.raises(ValueError, match=r"X0001-sqrt-softplus-router.yaml: Trial: missing keys \['id'\]"):
+        R.load_registry(tmp_path)
 
 
 def test_validate_rejects_duplicate_slugs():

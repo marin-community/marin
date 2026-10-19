@@ -29,7 +29,7 @@ REGISTRY_DIR = Path(__file__).parent / "registry"
 ID_RE = re.compile(r"^X\d{4}$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # A trial id is local to its experiment; elsewhere a trial is cited as "<experiment id>.<trial id>", e.g. X0014.t05.
-TRIAL_ID_RE = re.compile(r"^t\d{2,}$")
+TRIAL_ID_RE = re.compile(r"^t(0[1-9]|[1-9]\d+)$")
 # One list shared with the intake bot (scripts/ci/belay_intake.py), which reads it from this branch.
 CATEGORIES: tuple[str, ...] = tuple(json.loads((REGISTRY_DIR / "categories.json").read_text()))
 
@@ -143,7 +143,8 @@ class Experiment:
 
 
 def _build(cls, data: dict):
-    """``cls`` from a YAML mapping, rejecting unknown keys and converting nested records, enums and sequences."""
+    """``cls`` from a YAML mapping, rejecting unknown and missing keys and converting nested records, enums and
+    sequences."""
     fields = {f.name: f for f in dataclasses.fields(cls)}
     unknown = set(data) - set(fields)
     if unknown:
@@ -165,6 +166,14 @@ def _build(cls, data: dict):
             kwargs[key] = {str(k): str(v) for k, v in value.items()}
         else:
             kwargs[key] = value
+    required = {
+        name
+        for name, f in fields.items()
+        if f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING
+    }
+    missing = required - set(kwargs)
+    if missing:
+        raise ValueError(f"{cls.__name__}: missing keys {sorted(missing)}")
     return cls(**kwargs)
 
 
@@ -189,7 +198,11 @@ def _plain(value):
 
 def load_experiment(path: Path) -> Experiment:
     with open(path) as f:
-        experiment = _build(Experiment, yaml.safe_load(f))
+        data = yaml.safe_load(f)
+    try:
+        experiment = _build(Experiment, data)
+    except ValueError as e:
+        raise ValueError(f"{path.name}: {e}") from e
     if path.name != experiment.filename:
         raise ValueError(f"{path.name}: file must be named {experiment.filename}")
     return experiment
