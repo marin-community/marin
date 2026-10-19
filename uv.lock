@@ -7732,6 +7732,7 @@ dependencies = [
     { name = "marin-rolloutengine" },
     { name = "marin-shellbox", extra = ["shellsim"] },
     { name = "marin-taskcompendium" },
+    { name = "marin-verifyit" },
     { name = "openai" },
     { name = "pydantic" },
 ]
@@ -7754,6 +7755,7 @@ requires-dist = [
     { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
     { name = "marin-shellbox", extras = ["shellsim"], editable = "lib/shellbox" },
     { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
+    { name = "marin-verifyit", editable = "lib/verifyit" },
     { name = "openai" },
     { name = "pydantic", specifier = ">=2.0" },
 ]
