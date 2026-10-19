@@ -81,3 +81,15 @@ def test_scanned_layers_match_the_unrolled_loop(overrides, two_phase):
     assert gate_logs and gate_logs == sorted(k for k in scan_metrics if k.startswith("train/attn_res/w_g"))
     for key in gate_logs:
         np.testing.assert_allclose(np.asarray(scan_metrics[key]), np.asarray(metrics[key]), rtol=1e-5, atol=1e-7)
+
+
+@pytest.mark.timeout(240)
+def test_prefetched_partials_match_the_unprefetched_scan():
+    overrides = dict(num_layers=10, attn_res_num_blocks=3, latent_out_full_layers=(9,), scan_layers=True)
+    loss, grads, _ = _loss_grads_metrics(scan_offload_partials=True, **overrides)
+    prefetched_loss, prefetched_grads, _ = _loss_grads_metrics(
+        scan_offload_partials=True, scan_prefetch_partials=True, **overrides
+    )
+    assert prefetched_loss == loss
+    for want, got in zip(grads, prefetched_grads, strict=True):
+        np.testing.assert_array_equal(got, want)

@@ -879,6 +879,10 @@ class GrugModelConfig:
     """With ``scan_layers``, keep the scan's backward residuals in pinned host memory: the per-layer incoming AttnRes
     partials (one ``[B, S, D]`` per scanned layer, 33 GiB per GPU at hero width, brought back one unit at a time in
     the reverse scan) and the final history sources. As the GB200 hero offloads its layer carry. Same math."""
+    scan_prefetch_partials: bool = False
+    """With ``scan_offload_partials``, the reverse scan copies unit ``u - 1``'s offloaded residuals back to HBM while
+    unit ``u``'s backward runs, instead of at the start of unit ``u - 1`` (one more unit's residuals stay in HBM).
+    Same math."""
     scan_save_routed_output: bool = False
     """``scan_layers``: keep each layer's combined routed-expert output from the forward (offloaded with the
     partials under ``scan_offload_partials``) and hand it to the backward's per-layer recompute, so the recompute
@@ -1026,6 +1030,8 @@ class GrugModelConfig:
             len(self.moe_k_layers) != self.num_layers or max(self.moe_k_layers) > self.num_experts_per_token
         ):
             raise ValueError("moe_k_layers needs one count per layer, each <= num_experts_per_token")
+        if self.scan_prefetch_partials and not self.scan_offload_partials:
+            raise ValueError("scan_prefetch_partials prefetches the residuals scan_offload_partials offloads")
         if self.layer_carry_offload and self.attn_res:
             raise ValueError("layer_carry_offload offloads the plain layer scan's carry (attn_res=false)")
         if self.scan_save_routed_output and not self.scan_layers:
@@ -5075,6 +5081,7 @@ class _ScanArgs(NamedTuple):
     eps: float
     route_key: jax.Array | None
     offload_partials: bool
+    prefetch_partials: bool
 
 
 @jax.custom_vjp
@@ -5250,11 +5257,21 @@ def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
         *(jnp.zeros_like(x) if d is None else d for d, x in zip(d_history, (sources, logits, sources[0]), strict=True))
     )
 
+    def unit_residuals(u):
+        return jax.tree.map(lambda a: jax.lax.dynamic_index_in_dim(a, u, axis=0, keepdims=False), partials)
+
     def unit_step(carry, xs):
-        d_history, d_queries = carry
-        unit_diff, unit_static, (unit_partials, unit_routed), u = xs
-        if args.offload_partials:
-            unit_partials, unit_routed = _to_memory_kind((unit_partials, unit_routed), "device")
+        if args.prefetch_partials:
+            # Unit u's residuals arrived during unit u + 1's step; start unit u - 1's copy now, so it overlaps
+            # this unit's backward instead of stalling the next one.
+            d_history, d_queries, (unit_partials, unit_routed) = carry
+            unit_diff, unit_static, u = xs
+            next_saved = _to_memory_kind(unit_residuals(jnp.maximum(u - 1, 0)), "device")
+        else:
+            d_history, d_queries = carry
+            unit_diff, unit_static, (unit_partials, unit_routed), u = xs
+            if args.offload_partials:
+                unit_partials, unit_routed = _to_memory_kind((unit_partials, unit_routed), "device")
         d_unit: dict[bool, list[Block | None]] = {kind: [None] * plan.kind_count(kind) for kind in unit_diff}
         for j in reversed(range(len(plan.unit))):
             unit_layer = plan.unit[j]
@@ -5298,9 +5315,19 @@ def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
             d_queries = d_queries + d_q
             d_unit[unit_layer.is_kda][unit_layer.index] = d_layer
         stacked = {kind: jax.tree.map(lambda *xs: jnp.stack(xs), *layers) for kind, layers in d_unit.items()}
+        if args.prefetch_partials:
+            return (d_history, d_queries, next_saved), stacked
         return (d_history, d_queries), stacked
 
-    xs = (units_diff, args.units_static, partials, jnp.arange(plan.num_units, dtype=jnp.int32))
+    units = jnp.arange(plan.num_units, dtype=jnp.int32)
+    if args.prefetch_partials:
+        last = _to_memory_kind(unit_residuals(plan.num_units - 1), "device")
+        xs = (units_diff, args.units_static, units)
+        (d_history, d_queries, _), d_units = jax.lax.scan(
+            unit_step, (d_history, jnp.zeros_like(queries), last), xs, reverse=True
+        )
+        return d_units, d_queries, d_history
+    xs = (units_diff, args.units_static, partials, units)
     (d_history, d_queries), d_units = jax.lax.scan(unit_step, (d_history, jnp.zeros_like(queries)), xs, reverse=True)
     return d_units, d_queries, d_history
 
@@ -6147,7 +6174,15 @@ class Transformer(eqx.Module):
         )
         units_diff, units_static = eqx.partition(units, eqx.is_inexact_array)
         args = _ScanArgs(
-            scan, units_static, long_mask, short_mask, token_ids, eps, route_key, self.config.scan_offload_partials
+            scan,
+            units_static,
+            long_mask,
+            short_mask,
+            token_ids,
+            eps,
+            route_key,
+            self.config.scan_offload_partials,
+            self.config.scan_prefetch_partials,
         )
         return _scan_layers((units_diff, queries, history), args)
 
