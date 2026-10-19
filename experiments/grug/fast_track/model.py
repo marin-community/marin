@@ -3110,8 +3110,11 @@ def _moe_and_shared_hero(
         projected.append(_proj(cfg, x_flat, mlp.w_latent_down.astype(x_flat.dtype), out_sharding=_batch_spec()))
     routed, stats = mlp(x, projected=projected, **routed_kwargs)
     gated = shared[0].w_gate is not None
-    up_weights = tuple([e.w_gate for e in shared if gated] + [e.w_up for e in shared])
-    parts = _proj_parts(cfg, x_flat, up_weights)
+    up_weights = [e.w_gate for e in shared if gated] + [e.w_up for e in shared]
+    # Token-sharded like ``x_flat``: left to the projection, the output takes the weights' column sharding and
+    # the down projection reshards it back with an all-to-all.
+    up = _proj(cfg, x_flat, jnp.concatenate(up_weights, axis=1), out_sharding=_batch_spec())
+    parts = jnp.split(up, list(itertools.accumulate(w.shape[1] for w in up_weights[:-1])), axis=-1)
     if not gated:
         stats = {**stats, _SHARED_PRE: jnp.concatenate(parts, axis=-1)}
     w_down = jnp.concatenate([e.w_down for e in shared], axis=0)
