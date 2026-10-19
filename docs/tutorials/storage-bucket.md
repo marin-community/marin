@@ -74,13 +74,14 @@ Clearing the policy ensures that once a training job deletes temporary files the
 
 For intermediate checkpoints and other short-lived data, Marin reserves a `tmp/` prefix on each managed data bucket with lifecycle rules that delete objects based on a `tmp/ttl=Nd/` path prefix — for example, objects under `gs://marin-us-central2/tmp/ttl=3d/my-job/` are deleted three days after they are written.
 
-Supported TTLs: 1, 2, 3, 4, 5, 6, 7, 14, and 30 days. The canonical list lives in `config/marin.yaml` (`data.temp.ttl_days`). Use `marin_temp_bucket` for lifecycle-managed scratch co-located with an input or output prefix. A cluster can set `MARIN_TEMP_PREFIX` to override that routing for every temporary write.
+Supported TTLs: 1, 2, 3, 4, 5, 6, 7, 14, and 30 days. The canonical list lives in `config/marin.yaml` (`data.temp.ttl_days`). Use `marin_temp_bucket` for lifecycle-managed scratch. GCS uses the input or output bucket; all CoreWeave buckets use the shared scratch bucket declared by `data.stores.coreweave.temp_bucket` in `config/coreweave.yaml`. `MARIN_TEMP_PREFIX` overrides this routing, including an explicit `source_prefix`.
 
 The shared data buckets on GCS, CoreWeave, and R2 are declared by `DataBuckets` in
 [`infra/buckets`](https://github.com/marin-community/marin/blob/main/infra/buckets/README.md).
 Their names and regions come from `config/marin.yaml` and `config/coreweave.yaml`; Pulumi owns
 the complete lifecycle policy on every backend and GCS soft-delete disablement.
-To add a region or specialized bucket, add its entry to the reviewed `data.region_buckets` map and preview
+To add a region, add its entry to the reviewed `data.region_buckets` map. Shared scratch
+buckets are declared under `data.stores.<backend>.temp_bucket`. Preview
 the manually operated `marin-buckets` stack:
 
 ```bash
