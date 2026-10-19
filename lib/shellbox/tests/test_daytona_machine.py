@@ -27,6 +27,7 @@ from daytona import (
     DaytonaConfig,
     DaytonaNotFoundError,
     DaytonaRateLimitError,
+    Resources,
 )
 from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.machine import (
@@ -35,6 +36,7 @@ from shellbox.backends.daytona.machine import (
     DaytonaNetworkMode,
     DaytonaNetworkPolicy,
     _create_sandbox,
+    ensure_snapshot,
 )
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.image import DockerfileSource, RegistryImage
@@ -226,6 +228,23 @@ class LocalDaytona:
 
     async def __aexit__(self, _exc_type, _exc, _traceback):
         self.closed = True
+
+
+@pytest.mark.parametrize("name", [None, "approved-stage1"])
+def test_snapshot_preflight_builds_without_starting_sandbox_and_reuses_image(name):
+    client = LocalDaytona()
+
+    async def scenario():
+        first = await ensure_snapshot(client, RegistryImage("fixture@sha256:" + "a" * 64), Resources(cpu=2), name=name)
+        second = await ensure_snapshot(client, RegistryImage("fixture@sha256:" + "a" * 64), Resources(cpu=2), name=name)
+        assert first == second
+        assert len(client.snapshot.snapshots) == 1
+        assert (await client.snapshot.get(first)).state == SnapshotState.ACTIVE
+        assert client.params is None
+        if name is not None:
+            assert first == name
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("policy", [None, DaytonaNetworkPolicy(DaytonaNetworkMode.DOMAIN_ALLOW_LIST, "example.org")])

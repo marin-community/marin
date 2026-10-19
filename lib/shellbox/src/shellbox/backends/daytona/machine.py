@@ -77,10 +77,22 @@ def _control_command(script: str) -> str:
     )
 
 
-async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSource, resources: Resources) -> str:
-    """Get an active snapshot within the caller's startup deadline."""
-    identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
-    name = f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
+async def ensure_snapshot(
+    client: AsyncDaytona,
+    source: RegistryImage | DockerfileSource,
+    resources: Resources,
+    *,
+    name: str | None = None,
+) -> str:
+    """Build or await an active snapshot within the caller's startup deadline.
+
+    Launchers can prepare snapshots without starting a sandbox. An explicit name
+    uses the caller's image-to-snapshot mapping; otherwise the name includes the
+    image contents and resource requirements, as it does during machine creation.
+    """
+    if name is None:
+        identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
+        name = f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
     try:
         snapshot = await client.snapshot.get(name)
     except DaytonaNotFoundError:
@@ -452,7 +464,7 @@ class DaytonaMachineFactory:
             client = await lifetime.enter_async_context(self.client_factory())
             timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
             async with asyncio.timeout(timeout):
-                snapshot = await _snapshot(client, source, resources)
+                snapshot = await ensure_snapshot(client, source, resources)
                 sandbox = await _create_sandbox(
                     client,
                     CreateSandboxFromSnapshotParams(
