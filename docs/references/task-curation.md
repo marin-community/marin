@@ -239,7 +239,7 @@ The `CurationRecipe` configuration has these fields:
 | Field | Meaning |
 |---|---|
 | `name` | Catalog key and artifact name. |
-| `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)` or `HarborHubSource(name, revision)`. |
+| `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)` or `HarborHubSource(name, revision, read)`. |
 | `convert` | `(RawRow, ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection`; it fixes the task's grader. |
 | `version` | Converter revision; bump it when conversion or bundled grader code changes. |
 | `intended_use` | `train` or `eval`. |
@@ -258,26 +258,21 @@ two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, th
 `None` when the declaration names no `grader`.
 `required_grader_environment(context)` returns the environment or raises.
 
-Harbor Hub sources acquire the complete pinned release through the existing cached
-source-download step. The isolated `config/external/harbor` runtime checks that
-Harbor resolves the requested release digest and verifies each task's content
-before writing `tasks/<task-reference-hash>.jsonl` and a release manifest.
-Each filename hashes the full immutable task reference, so differently named
-tasks with identical contents remain separate. The manifest records the resolved
-task list. Dataset-level scoring files are not supported. Packages with links
-produce explicit unsupported rows. File contents are streamed into JSONL without a per-task export size cutoff; downstream conversion still
-loads individual task rows into memory.
+`HarborHubSource(name, revision, read)` acquires a complete release pinned by
+`sha256:...`. It caches the original task archives as
+`tasks/<task-reference-hash>.tar.gz`, verifies their extracted contents with the
+pinned Harbor runtime, and records the task references in `release.json`.
+The recipe's `read(StoragePath, ConversionContext)` yields rows from each archive,
+using the same custom-reader interface as HF sources. Acquisition does not
+convert task files or impose a package size cutoff. Dataset-level scoring files
+are not supported.
 
-Release membership is resolved by Harbor using the pinned release digest.
-
-The download identity includes the release, exporter code, and pinned Harbor commit;
-unrelated runtime dependency updates do not invalidate downloaded tasks.
-Curation sampling happens after acquisition. Existing `--input-root` and
-`--input-file` overrides bypass acquisition; for a bounded local export, run
+The existing download cache, sampling, and local-input overrides apply. Retries
+reuse completed archives; use a fresh override directory for a different release
+or task selection. The cache identity includes the release, acquisition code, and
+pinned Harbor commit. To acquire selected tasks locally, run
 `python -m experiments.post_training.task_curation.harbor_hub --help` in the
-pinned Harbor environment. Retries reuse completed task rows; partial writes are
-not treated as completed exports. Use a fresh directory when changing the release
-or selected task set.
+pinned Harbor environment.
 
 ## Environments
 

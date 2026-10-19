@@ -176,10 +176,11 @@ class UrlSource:
 
 @dataclass(frozen=True)
 class HarborHubSource:
-    """A pinned Harbor Hub release exported to task-reference-keyed JSONL files."""
+    """Native archives from a pinned Harbor Hub release, parsed by the recipe reader."""
 
     name: str
     revision: str
+    read: FileReader
 
     def __post_init__(self) -> None:
         if re.fullmatch(r"sha256:[0-9a-f]{64}", self.revision) is None:
@@ -191,11 +192,11 @@ class HarborHubSource:
 
     @property
     def files(self) -> tuple[str, ...]:
-        return ("tasks/*.jsonl",)
+        return ("tasks/*.tar.gz",)
 
     @property
     def format(self) -> SourceFormat:
-        return SourceFormat.JSONL
+        return SourceFormat.GENERATED
 
 
 type RecipeSource = HfSource | UrlSource | HarborHubSource
@@ -505,7 +506,7 @@ def review_rubric(pipeline: CurationRecipe) -> ReviewRubric | None:
 
 def source_files(source: RecipeSource) -> SourceFiles:
     if isinstance(source, HarborHubSource):
-        return SourceFiles(source.name, source.revision, source.files, source.format)
+        return SourceFiles(source.name, source.revision, source.files, source.format, read=source.read)
     if isinstance(source, HfSource):
         return SourceFiles(
             source.repo,
