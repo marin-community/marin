@@ -30,6 +30,8 @@ import numpy as np
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from experiments.grug.fast_track.downstream_eval import LONG_CONTEXT_LOSS_KEY, METRICS_FILE, RECORDS_FILE
+
 CLOZE_TASKS = (
     "arc_easy",
     "arc_challenge",
@@ -47,7 +49,6 @@ GROUP_TASKS = {"E": CLOZE_TASKS, "C": ("humaneval", "mbpp"), "M": ("gsm8k", "mat
 WEIGHTED_GROUPS = ("E", "C", "M")
 # The largest relative loss in each group that a better candidate may have at the 95% lower bound.
 HARM_LIMITS = {"E": 0.01, "C": 0.02, "M": 0.02, "L": 0.02}
-LONG_CONTEXT_KEY = "fixed_target_context_3968_loss"
 LONG_CONTEXT_MIN_DOCUMENTS = 5
 BOOTSTRAP_SAMPLES = 1000
 
@@ -76,17 +77,17 @@ class Judgement:
 
 def read_run_scores(downstream_dir: str) -> RunScores:
     """Read the records and metrics that ``downstream_eval`` wrote to ``downstream_dir``."""
-    with StoragePath(prefix_join(downstream_dir, "downstream_records.parquet")).open("rb") as stream:
+    with StoragePath(prefix_join(downstream_dir, RECORDS_FILE)).open("rb") as stream:
         records = pq.read_table(stream).to_pandas()
-    with StoragePath(prefix_join(downstream_dir, "metrics.json")).open("r") as stream:
+    with StoragePath(prefix_join(downstream_dir, METRICS_FILE)).open("r") as stream:
         text = json.load(stream)["text"]
     correct = records[records.choice == records.label].sort_values(["task", "example_id"])
     bpb = -correct.log_likelihood / (math.log(2) * correct["bytes"].clip(lower=1))
     gold_bpb = {task: bpb[correct.task == task].to_numpy() for task in correct.task.unique()}
     long_sets = [
-        values[LONG_CONTEXT_KEY]
+        values[LONG_CONTEXT_LOSS_KEY]
         for values in text.values()
-        if LONG_CONTEXT_KEY in values and values["fixed_target_documents"] >= LONG_CONTEXT_MIN_DOCUMENTS
+        if LONG_CONTEXT_LOSS_KEY in values and values["fixed_target_documents"] >= LONG_CONTEXT_MIN_DOCUMENTS
     ]
     return RunScores(gold_bpb, float(np.mean(long_sets)))
 

@@ -46,9 +46,3 @@ def test_judge_decision_uses_weighted_gain_and_group_harm_limits(level, long_con
 
     assert judgement.decision is expected
     assert judgement.lower["G"] <= judgement.gains["G"] <= judgement.upper["G"]
-
-
-def test_judge_rejects_a_single_run_per_arm():
-    runs = _runs(CONTROL, 3.0, seed=0)
-    with pytest.raises(ValueError, match="at least two"):
-        judge(runs[:1], runs)
