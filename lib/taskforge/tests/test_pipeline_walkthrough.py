@@ -39,7 +39,13 @@ from taskforge.stage30_author.program import (
     rl_env_build_sink,
     rl_env_build_step,
 )
-from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
+from taskforge.stage40_build_with_program.context import (
+    BuildExpired,
+    BuildFailure,
+    BuildInfrastructureFailure,
+    ExpiredClock,
+    RLEnvBuildContext,
+)
 from taskforge.stage40_build_with_program.outputs import Grader
 from taskforge.stage40_build_with_program.run import (
     DRAFT_DIR,
@@ -579,8 +585,12 @@ async def test_an_unavailable_model_fails_the_workpiece_at_the_author_with_its_r
 
 @pytest.mark.parametrize(
     "error",
-    [HOST_FAILURE, FileNotFoundError("blobs/ab/abcdef is missing")],
-    ids=["build host", "missing file"],
+    [
+        HOST_FAILURE,
+        FileNotFoundError("blobs/ab/abcdef is missing"),
+        BuildExpired("ran for more than 1800 seconds without returning", ExpiredClock.STEP, "numbers"),
+    ],
+    ids=["build host", "missing file", "expired clock"],
 )
 async def test_a_failure_outside_the_program_fails_the_workpiece_at_build_and_a_relaunch_resumes_there(tmp_path, error):
     stages = replace(STAGES, author=SourceAuthor(), build=FailsOnce(error))

@@ -20,8 +20,8 @@ Each stage runs through an adapter in this module. The adapter calls the caller'
 the round's files, and returns the stage's event. The coordinator spends a build revision on:
 
 * a build raising ``BuildFailure`` or any other error, recorded as ``BUILD_FAILED``, unless the
-  error is a ``BuildInfrastructureFailure``, ``ModelUnavailable``, or an ``OSError`` raised outside
-  the program's own frames: a storage fault, a missing blob or memo, or a corrupt one
+  error is a ``BuildInfrastructureFailure``, a ``BuildExpired``, ``ModelUnavailable``, or an
+  ``OSError`` raised outside the program's own frames: a storage fault, a missing blob or memo, or a corrupt one
   (``StoreCorruption``). An ``OSError`` raised in the program, a step opening a file that is not
   there, is the program's and spends a revision like any other error of its code;
 * an author raising ``StructuredOutputError``, recorded as ``AUTHOR_FAILED``. The author's
@@ -79,7 +79,7 @@ from taskforge.stage30_author.author import (
     program_manifest,
 )
 from taskforge.stage30_author.program import RLEnvBuildProgram
-from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure
+from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, BuildInfrastructureFailure
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, load_draft
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import CacheStatus
@@ -193,9 +193,9 @@ async def run_workpiece(
 
     A build failure, or an author raising ``StructuredOutputError``, spends one of the workpiece's build
     revisions and sends the workpiece back to the author. When the build raises
-    ``BuildInfrastructureFailure``, ``ModelUnavailable`` or an ``OSError`` from outside the program's
-    frames, the workpiece fails in place with its revisions unspent, and the next ``run_workpiece`` builds the
-    same program again. Such an ``OSError`` is a storage fault, a missing blob or memo, or a corrupt
+    ``BuildInfrastructureFailure``, ``BuildExpired``, ``ModelUnavailable`` or an ``OSError`` from
+    outside the program's frames, the workpiece fails in place with its revisions unspent, and the next
+    ``run_workpiece`` builds the same program again. Such an ``OSError`` is a storage fault, a missing blob or memo, or a corrupt
     one (``StoreCorruption``); one raised by the program's own code is the program's.
 
     Raises:
@@ -331,6 +331,8 @@ async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent
     revision:
 
     * ``BuildInfrastructureFailure``, raised when the build host fails;
+    * ``BuildExpired``, raised when the build, a step or the grader ran past its clock, which is
+      neither the program's fault nor the host's until someone reads the record;
     * ``ModelUnavailable``, raised when the model stays unreachable;
     * ``OSError`` and its subclasses raised outside the program's frames (``_raised_in_program``): a
       storage fault, a missing blob or memo, or a corrupt one (``StoreCorruption``). An ``OSError``
@@ -352,7 +354,7 @@ async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent
             research=coordinator.research,
             model_digest=coordinator.model_digest,
         )
-    except (BuildInfrastructureFailure, ModelUnavailable):
+    except (BuildInfrastructureFailure, BuildExpired, ModelUnavailable):
         raise
     except Exception as error:
         if isinstance(error, OSError) and not _raised_in_program(error, program):

@@ -375,11 +375,11 @@ From `done`, a `TERMINAL` event closes the workpiece as accepted, rejected or ab
 raising an exception closes it as failed. `WorkpieceBudget` bounds the build and author failures a
 workpiece may revise after and the review retries it may follow. The coordinator spends the budget
 when it records the event, choosing revise or reject, retry or abandon. A build error costs a
-revision, except `BuildInfrastructureFailure`, `ModelUnavailable` and `OSError`, which fail the
-workpiece at the build stage. An author call raising `StructuredOutputError` costs a revision from
-the same budget. Its structured reply stayed invalid through the repair turns, as when the output
-limit cut it, and the next author call samples again with `Revision(AUTHOR_FAILURE, ...)`. Any other
-author error fails the workpiece at the author stage.
+revision, except `BuildInfrastructureFailure`, `BuildExpired`, `ModelUnavailable` and `OSError`,
+which fail the workpiece at the build stage. An author call raising `StructuredOutputError` costs a
+revision from the same budget. Its structured reply stayed invalid through the repair turns, as when
+the output limit cut it, and the next author call samples again with `Revision(AUTHOR_FAILURE,
+...)`. Any other author error fails the workpiece at the author stage.
 
 The author returns an `AuthoredProgram`, the program with the Python source it came from. The
 coordinator writes the source to `authored/<k>/program.py` in the round directory, with `k` the
@@ -423,6 +423,8 @@ so does an author call whose structured reply stays invalid after its repairs
 
 - the build host fails (`BuildInfrastructureFailure`), and the relaunch builds the same program
   again;
+- the build, a step or the grader runs past its clock (`BuildExpired`), which holds the workpiece
+  until someone reads the record;
 - the model is unavailable (`ModelUnavailable`), at the author or the build stage;
 - storage fails, or a blob or memo is missing or corrupt (`OSError`, with `StoreCorruption` for a
   corrupt one).
