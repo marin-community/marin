@@ -96,6 +96,16 @@ def test_prefetched_partials_match_the_unprefetched_scan():
 
 
 @pytest.mark.timeout(240)
+def test_device_sources_match_the_offloaded_scan():
+    overrides = dict(num_layers=10, attn_res_num_blocks=3, latent_out_full_layers=(9,), scan_layers=True)
+    loss, grads, _ = _loss_grads_metrics(scan_offload_partials=True, **overrides)
+    device_loss, device_grads, _ = _loss_grads_metrics(scan_offload_partials=True, scan_device_sources=True, **overrides)
+    assert device_loss == loss
+    for want, got in zip(grads, device_grads, strict=True):
+        np.testing.assert_array_equal(got, want)
+
+
+@pytest.mark.timeout(240)
 def test_released_weight_grads_match_the_barriered_scan():
     overrides = dict(num_layers=10, attn_res_num_blocks=3, latent_out_full_layers=(9,), scan_layers=True)
     loss, grads, _ = _loss_grads_metrics(**overrides)

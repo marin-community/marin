@@ -884,6 +884,9 @@ class GrugModelConfig:
     """With ``scan_offload_partials``, the reverse scan copies unit ``u - 1``'s offloaded residuals back to HBM while
     unit ``u``'s backward runs, instead of at the start of unit ``u - 1`` (one more unit's residuals stay in HBM).
     Same math."""
+    scan_device_sources: bool = False
+    """With ``scan_offload_partials``, the final history sources stay in HBM between the forward and the backward
+    instead of a pinned-host round trip at the forward/backward turn, where no compute hides the copies. Same math."""
     scan_release_weight_grads: bool = False
     """``scan_layers`` backward: each layer's end barrier holds the previous layer's weight gradients instead of its
     own, so a layer's weight gradients and their FSDP reduce-scatters can finish under the next layer's backward
@@ -1038,6 +1041,8 @@ class GrugModelConfig:
             len(self.moe_k_layers) != self.num_layers or max(self.moe_k_layers) > self.num_experts_per_token
         ):
             raise ValueError("moe_k_layers needs one count per layer, each <= num_experts_per_token")
+        if self.scan_device_sources and not self.scan_offload_partials:
+            raise ValueError("scan_device_sources keeps on device the sources scan_offload_partials offloads")
         if self.scan_prefetch_partials and not self.scan_offload_partials:
             raise ValueError("scan_prefetch_partials prefetches the residuals scan_offload_partials offloads")
         if self.layer_carry_offload and self.attn_res:
@@ -5092,6 +5097,7 @@ class _ScanArgs(NamedTuple):
     route_key: jax.Array | None
     offload_partials: bool
     prefetch_partials: bool
+    offload_sources: bool
     release_weight_grads: bool
 
 
@@ -5251,7 +5257,7 @@ def _scan_layers_fwd(perturbed, diff, args: _ScanArgs):
     del perturbed
     units_diff, queries, history = diff
     history, (stats, partials) = _scan_forward(units_diff, queries, history, args, save_partials=True)
-    sources = _to_memory_kind(history.sources, "pinned_host") if args.offload_partials else history.sources
+    sources = _to_memory_kind(history.sources, "pinned_host") if args.offload_sources else history.sources
     return (history, stats), (sources, history.logits, partials)
 
 
@@ -5259,7 +5265,7 @@ def _scan_layers_fwd(perturbed, diff, args: _ScanArgs):
 def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
     del perturbed
     sources, logits, partials = residuals
-    if args.offload_partials:
+    if args.offload_sources:
         sources = _to_memory_kind(sources, "device")
     units_diff, queries, _ = diff
     plan = args.plan
@@ -6209,6 +6215,7 @@ class Transformer(eqx.Module):
             route_key,
             self.config.scan_offload_partials,
             self.config.scan_prefetch_partials,
+            self.config.scan_offload_partials and not self.config.scan_device_sources,
             self.config.scan_release_weight_grads,
         )
         return _scan_layers((units_diff, queries, history), args)
