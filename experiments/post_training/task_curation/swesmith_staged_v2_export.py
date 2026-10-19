@@ -15,16 +15,13 @@ from pathlib import Path
 
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.spec import LoweredTaskSpec, TraceMode
-from taskcompendium.models import ConversationInput, InlineFile, ResourceGroups, TaskResource, TextMessage
+from taskcompendium.models import ConversationInput, ResourceGroups, TextMessage
+from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.swesmith_staged import is_test_path, sha256, source_tasks, write_json
 from experiments.post_training.task_curation.swesmith_staged_export import CommandModel
 from experiments.post_training.task_curation.swesmith_staged_runtime import BACKEND_NAME, LocalArtifactDockerFactory
 from experiments.post_training.task_curation.swesmith_staged_v2_runtime import SESSION_NAME, session_factory
-
-
-def resource(name: str, payload: bytes) -> TaskResource:
-    return TaskResource(path=name, source=InlineFile(content_base64=base64.b64encode(payload).decode()))
 
 
 def export(previous: Path, output: Path) -> list[dict]:
@@ -102,7 +99,7 @@ def export(previous: Path, output: Path) -> list[dict]:
                 ):
                     raise ValueError("Partial lacks original-test pre/post witness")
                 contract["handoff_sha256"] = sha256(payload)
-                workers = (resource("handoff-files.json", payload),)
+                workers = (inline_resource("handoff-files.json", payload),)
             prompt = (
                 "Take over the unverified repair in /testbed. Inspect the implementation, run appropriate checks, "
                 "repair it if necessary, and submit a final response. The handoff may already be correct; no source "
@@ -125,7 +122,8 @@ def export(previous: Path, output: Path) -> list[dict]:
                     ),
                     "output_paths": tuple("/testbed/" + p for p in sorted(repository["tracked_sha256"])),
                     "resources": ResourceGroups(
-                        worker=workers, verifier=(resource("staged-contract.json", json.dumps(contract).encode()),)
+                        worker=workers,
+                        verifier=(inline_resource("staged-contract.json", json.dumps(contract).encode()),),
                     ),
                     "source": lowered.task.source.model_copy(
                         update={"row": parent["parent_id"], "importer_revision": sha256(Path(__file__).read_bytes())}

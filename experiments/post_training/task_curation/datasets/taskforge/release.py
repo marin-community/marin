@@ -250,7 +250,7 @@ def main(run_root: str, run_label: str, output: Path, repo: str | None, push: bo
     if output.exists() and any(output.iterdir()):
         raise click.UsageError(f"{output} is not empty")
     configure_coreweave_s3()
-    root = StoragePath.parse(run_root.rstrip("/"))
+    root = StoragePath.parse(run_root)
     items = accepted_items(root)
     logger.info("%d accepted items in %s", len(items), root)
     with ThreadPoolExecutor(READ_WORKERS) as pool:
