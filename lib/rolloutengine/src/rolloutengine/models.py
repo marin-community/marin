@@ -194,7 +194,7 @@ class RolloutInterrupted(RuntimeError):
         super().__init__(f"Rollout interrupted during {operation}")
 
     def __reduce__(self) -> tuple[Any, ...]:
-        # Pickle keeps the rollout and the operation, not the cause. ``rollout.failure`` holds the cause's message.
+        # The cause is not serialized; ``rollout.failure`` retains its message.
         return type(self), (self.rollout, self.operation)
 
 
