@@ -15,7 +15,7 @@ from dashboard_dataset import DashboardDataset
 from dashboard_stitch import stitch_all
 from jobs_observability import jobs_overview_dataset
 from node_observability import node_overview_dataset
-from rl_attempt_observability import rl_attempt_dataset
+from rl_execution_observability import rl_execution_dataset
 from rl_observability import recent_rl_runs_dataset, rl_gpu_dataset, rl_overview_dataset
 from runs_observability import runs_overview_dataset
 from server import create_app
@@ -221,8 +221,8 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
         "accelerator": frozenset(accelerator_overview_dataset(("cw-a",), start_ms, end_ms, 15_000).views),
         "jobs": frozenset(jobs_overview_dataset(("cw-a",), ("job",), start_ms, end_ms, 15_000).views),
         "recent_rl": frozenset(recent_rl_runs_dataset(start_ms, end_ms).views),
-        "rl_attempt": frozenset(
-            rl_attempt_dataset(("cw-a",), "run", "job", ("execution",), start_ms, end_ms, 15_000).views
+        "rl_execution": frozenset(
+            rl_execution_dataset(("cw-a",), "run", "job", ("execution",), start_ms, end_ms, 15_000).views
         ),
     }
     expected = {
@@ -233,7 +233,7 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
         "rl_runs.json": {
             "/v1/rl/overview": (10, sections["rl"]),
             "/v1/rl/gpu": (5, sections["rl_gpu"]),
-            "/v1/rl/attempt": (58, sections["rl_attempt"]),
+            "/v1/rl/execution": (58, sections["rl_execution"]),
         },
         "jobs.json": {"/v1/jobs/overview": (17, sections["jobs"])},
         "accelerators.json": {"/v1/accelerator/overview": (18, sections["accelerator"])},
@@ -291,7 +291,7 @@ def test_domain_source_counts_stay_within_the_declared_budget() -> None:
         "accelerator": accelerator_overview_dataset(("cw-a",), start_ms, end_ms, 15_000),
         "jobs": jobs_overview_dataset(("cw-a",), ("job",), start_ms, end_ms, 15_000),
         "recent_rl": recent_rl_runs_dataset(start_ms, end_ms),
-        "rl_attempt": rl_attempt_dataset(("cw-a",), "run", "job", ("execution",), start_ms, end_ms, 15_000),
+        "rl_execution": rl_execution_dataset(("cw-a",), "run", "job", ("execution",), start_ms, end_ms, 15_000),
     }
     assert {name: len(dataset.sources) for name, dataset in datasets.items()} == {
         "node": 1,
@@ -303,7 +303,7 @@ def test_domain_source_counts_stay_within_the_declared_budget() -> None:
         "accelerator": 3,
         "jobs": 5,
         "recent_rl": 1,
-        "rl_attempt": 10,
+        "rl_execution": 10,
     }
 
 

@@ -274,7 +274,7 @@
       "id": 150,
       "type": "stat",
       "title": "Current step",
-      "description": "Most recently observed completed optimizer step in the selected attempts. A flat value can mean progress stopped; compare the step and record ages. The newest reporting execution wins after a restart, even if its step number is lower.",
+      "description": "Most recently observed completed optimizer step in the selected executions. A flat value can mean progress stopped; compare the step and record ages. The newest reporting execution wins after a restart, even if its step number is lower.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -282,7 +282,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "noValue": "No matching attempt observations in this window.",
+          "noValue": "No matching execution observations in this window.",
           "color": {
             "mode": "thresholds"
           },
@@ -313,8 +313,8 @@
       "targets": [
         {
           "refId": "A",
-          "targetRef": "rl_attempt",
-          "url": "/v1/rl/attempt",
+          "targetRef": "rl_execution",
+          "url": "/v1/rl/execution",
           "view": "status",
           "format": "table",
           "columns": [
@@ -347,7 +347,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "No matching attempt observations in this window.",
+          "noValue": "No matching execution observations in this window.",
           "color": {
             "mode": "thresholds"
           },
@@ -378,8 +378,8 @@
       "targets": [
         {
           "refId": "A",
-          "targetRef": "rl_attempt",
-          "url": "/v1/rl/attempt",
+          "targetRef": "rl_execution",
+          "url": "/v1/rl/execution",
           "view": "status",
           "format": "table",
           "columns": [
@@ -404,7 +404,7 @@
       "id": 152,
       "type": "stat",
       "title": "Latest raw reward",
-      "description": "Latest raw training reward in the selected attempts. Compare its trend and evaluation scores before judging learning. The latest observation wins regardless of reward magnitude; requires trainer.training_metrics.",
+      "description": "Latest raw training reward in the selected executions. Compare its trend and evaluation scores before judging learning. The latest observation wins regardless of reward magnitude; requires trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -412,7 +412,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "noValue": "No matching attempt observations in this window.",
+          "noValue": "No matching execution observations in this window.",
           "color": {
             "mode": "thresholds"
           },
@@ -443,8 +443,8 @@
       "targets": [
         {
           "refId": "A",
-          "targetRef": "rl_attempt",
-          "url": "/v1/rl/attempt",
+          "targetRef": "rl_execution",
+          "url": "/v1/rl/execution",
           "view": "status",
           "format": "table",
           "columns": [
@@ -477,7 +477,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "tps",
-          "noValue": "No matching attempt observations in this window.",
+          "noValue": "No matching execution observations in this window.",
           "color": {
             "mode": "thresholds"
           },
@@ -508,8 +508,8 @@
       "targets": [
         {
           "refId": "A",
-          "targetRef": "rl_attempt",
-          "url": "/v1/rl/attempt",
+          "targetRef": "rl_execution",
+          "url": "/v1/rl/execution",
           "view": "status",
           "format": "table",
           "columns": [
@@ -542,7 +542,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "noValue": "No matching attempt observations in this window.",
+          "noValue": "No matching execution observations in this window.",
           "color": {
             "mode": "thresholds"
           },
@@ -581,8 +581,8 @@
       "targets": [
         {
           "refId": "A",
-          "targetRef": "rl_attempt",
-          "url": "/v1/rl/attempt",
+          "targetRef": "rl_execution",
+          "url": "/v1/rl/execution",
           "view": "status",
           "format": "table",
           "columns": [
@@ -607,7 +607,7 @@
       "id": 155,
       "type": "stat",
       "title": "Since last record",
-      "description": "Age of the latest record across every record type in the selected attempts. Old steps with fresh records suggest a trainer stall; both ages rising suggests missing telemetry. Green is under 300 seconds, orange is 300–899 and red is at least 900. Age is measured to the end of the selected range, so a finished run also reads as old; check its terminal event in Diagnostics.",
+      "description": "Age of the latest record across every record type in the selected executions. Old steps with fresh records suggest a trainer stall; both ages rising suggests missing telemetry. Green is under 300 seconds, orange is 300–899 and red is at least 900. Age is measured to the end of the selected range, so a finished run also reads as old; check its terminal event in Diagnostics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -615,7 +615,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "noValue": "No matching attempt observations in this window.",
+          "noValue": "No matching execution observations in this window.",
           "color": {
             "mode": "thresholds"
           },
@@ -654,8 +654,8 @@
       "targets": [
         {
           "refId": "A",
-          "targetRef": "rl_attempt",
-          "url": "/v1/rl/attempt",
+          "targetRef": "rl_execution",
+          "url": "/v1/rl/execution",
           "view": "status",
           "format": "table",
           "columns": [
@@ -762,7 +762,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "noValue": "No matching attempt observations in this window.",
+          "noValue": "No matching execution observations in this window.",
           "color": {
             "mode": "thresholds"
           },
@@ -793,8 +793,8 @@
       "targets": [
         {
           "refId": "A",
-          "targetRef": "rl_attempt",
-          "url": "/v1/rl/attempt",
+          "targetRef": "rl_execution",
+          "url": "/v1/rl/execution",
           "view": "status",
           "format": "table",
           "columns": [
@@ -880,8 +880,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "policy_step"
         }
       ],
@@ -906,7 +906,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "tps",
-          "noValue": "No matching attempt observations. Check the window, Job/Execution and Services reporting.",
+          "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
           "custom": {
             "drawStyle": "line",
             "lineWidth": 1,
@@ -939,8 +939,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "token_rates"
         }
       ],
@@ -993,7 +993,7 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
+          "url": "/v1/rl/execution",
           "columns": [
             {
               "selector": "t",
@@ -1011,7 +1011,7 @@
               "type": "number"
             }
           ],
-          "targetRef": "rl_attempt",
+          "targetRef": "rl_execution",
           "view": "rollout_progress"
         }
       ],
@@ -1082,8 +1082,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "reward"
         }
       ],
@@ -1141,8 +1141,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "evaluation"
         }
       ],
@@ -1228,8 +1228,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "evaluation_lengths"
         }
       ],
@@ -1286,8 +1286,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "evaluation_contributions"
         }
       ],
@@ -1346,8 +1346,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "length_stops"
         }
       ],
@@ -1404,8 +1404,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "optimizer"
         }
       ],
@@ -1485,8 +1485,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "optimizer"
         }
       ],
@@ -1680,8 +1680,8 @@
       "targets": [
         {
           "refId": "A",
-          "targetRef": "rl_attempt",
-          "url": "/v1/rl/attempt",
+          "targetRef": "rl_execution",
+          "url": "/v1/rl/execution",
           "view": "step_composition",
           "format": "timeseries"
         }
@@ -1707,7 +1707,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "noValue": "No matching attempt observations. Check the window, Job/Execution and Services reporting.",
+          "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
           "custom": {
             "drawStyle": "line",
             "lineWidth": 1,
@@ -1740,8 +1740,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "driver_walls"
         }
       ],
@@ -1766,7 +1766,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "noValue": "No matching attempt observations. Check the window, Job/Execution and Services reporting.",
+          "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
           "custom": {
             "drawStyle": "line",
             "lineWidth": 1,
@@ -1799,8 +1799,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "sync_walls"
         }
       ],
@@ -1873,7 +1873,7 @@
         {
           "refId": "A",
           "format": "table",
-          "url": "/v1/rl/attempt",
+          "url": "/v1/rl/execution",
           "columns": [
             {
               "selector": "start",
@@ -1896,7 +1896,7 @@
               "type": "string"
             }
           ],
-          "targetRef": "rl_attempt",
+          "targetRef": "rl_execution",
           "view": "weight_sync_stages"
         }
       ],
@@ -1975,8 +1975,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "core_cycle"
         }
       ],
@@ -2033,8 +2033,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "core_fractions"
         }
       ],
@@ -2105,8 +2105,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "worker_waits"
         }
       ],
@@ -2131,7 +2131,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "No matching attempt observations. Check the window, Job/Execution and Services reporting.",
+          "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
           "custom": {
             "drawStyle": "line",
             "lineWidth": 1,
@@ -2164,8 +2164,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "buffer"
         }
       ],
@@ -2223,8 +2223,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "buffer_dwell"
         }
       ],
@@ -2282,8 +2282,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "rollout_latency"
         }
       ],
@@ -2308,7 +2308,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "noValue": "No matching attempt observations. Check the window, Job/Execution and Services reporting.",
+          "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
           "custom": {
             "drawStyle": "line",
             "lineWidth": 1,
@@ -2341,8 +2341,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "policy_staleness"
         }
       ],
@@ -2455,8 +2455,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "group_dispositions"
         }
       ],
@@ -2514,8 +2514,8 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
           "view": "group_tokens"
         }
       ],
@@ -2565,7 +2565,7 @@
         {
           "refId": "A",
           "format": "table",
-          "url": "/v1/rl/attempt",
+          "url": "/v1/rl/execution",
           "columns": [
             {
               "selector": "execution_uid",
@@ -2593,7 +2593,7 @@
               "type": "number"
             }
           ],
-          "targetRef": "rl_attempt",
+          "targetRef": "rl_execution",
           "view": "training_overlap"
         }
       ],
@@ -2724,7 +2724,7 @@
         {
           "refId": "A",
           "format": "table",
-          "url": "/v1/rl/attempt",
+          "url": "/v1/rl/execution",
           "columns": [
             {
               "selector": "execution",
@@ -2777,7 +2777,7 @@
               "type": "number"
             }
           ],
-          "targetRef": "rl_attempt",
+          "targetRef": "rl_execution",
           "view": "inference_service"
         }
       ],
@@ -3266,7 +3266,7 @@
           "fieldConfig": {
             "defaults": {
               "unit": "none",
-              "noValue": "No matching attempt observations. Check the window, Job/Execution and Services reporting.",
+              "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
               "custom": {
                 "drawStyle": "bars",
                 "lineWidth": 0,
@@ -3299,8 +3299,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "staleness_groups"
             }
           ],
@@ -3358,8 +3358,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "staleness_tokens"
             }
           ],
@@ -3416,8 +3416,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "mismatch_staleness0"
             }
           ],
@@ -3474,8 +3474,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "mismatch_by_staleness"
             }
           ],
@@ -3555,8 +3555,8 @@
               ],
               "format": "table",
               "refId": "A",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "uniform_staleness_coverage"
             }
           ],
@@ -3663,8 +3663,8 @@
               ],
               "format": "table",
               "refId": "A",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "uniform_staleness"
             }
           ],
@@ -3738,8 +3738,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "megatron_policy_wall"
             }
           ],
@@ -3809,7 +3809,7 @@
             {
               "refId": "A",
               "format": "table",
-              "url": "/v1/rl/attempt",
+              "url": "/v1/rl/execution",
               "columns": [
                 {
                   "selector": "execution",
@@ -3867,7 +3867,7 @@
                   "type": "number"
                 }
               ],
-              "targetRef": "rl_attempt",
+              "targetRef": "rl_execution",
               "view": "learner_memory"
             }
           ],
@@ -3938,7 +3938,7 @@
             {
               "refId": "A",
               "format": "table",
-              "url": "/v1/rl/attempt",
+              "url": "/v1/rl/execution",
               "columns": [
                 {
                   "selector": "execution_uid",
@@ -3971,7 +3971,7 @@
                   "type": "number"
                 }
               ],
-              "targetRef": "rl_attempt",
+              "targetRef": "rl_execution",
               "view": "megatron_phases"
             }
           ],
@@ -4303,8 +4303,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "drift"
             }
           ],
@@ -4361,8 +4361,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "clip_pressure"
             }
           ],
@@ -4419,8 +4419,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "drift_coverage"
             }
           ],
@@ -4477,8 +4477,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "log_ratio_squared"
             }
           ],
@@ -4536,8 +4536,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "correction_weights"
             }
           ],
@@ -4594,8 +4594,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "corrections"
             }
           ],
@@ -4652,8 +4652,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "learner_drift"
             }
           ],
@@ -4710,8 +4710,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "position_dependence"
             }
           ],
@@ -4771,8 +4771,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "loss_token_rates"
             }
           ],
@@ -4818,8 +4818,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "role_gpu_tokens"
             }
           ],
@@ -4865,8 +4865,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "role_gpus"
             }
           ],
@@ -4912,8 +4912,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "core_gpu_hours"
             }
           ],
@@ -5217,7 +5217,7 @@
             {
               "refId": "A",
               "format": "table",
-              "url": "/v1/rl/attempt",
+              "url": "/v1/rl/execution",
               "columns": [
                 {
                   "selector": "execution_uid",
@@ -5265,7 +5265,7 @@
                   "type": "timestamp_epoch"
                 }
               ],
-              "targetRef": "rl_attempt",
+              "targetRef": "rl_execution",
               "view": "lifecycle"
             }
           ],
@@ -5276,7 +5276,7 @@
           "id": 120,
           "type": "table",
           "title": "Span coverage: clock domain and failed steps",
-          "description": "Observed steps and failed steps by role and timing clock domain. Use coverage to check which timing panels represent the selected attempts; higher failure counts identify interrupted work. Missing outcomes leave failure counts empty.",
+          "description": "Observed steps and failed steps by role and timing clock domain. Use coverage to check which timing panels represent the selected executions; higher failure counts identify interrupted work. Missing outcomes leave failure counts empty.",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
             "uid": "finelog-marin"
@@ -5310,8 +5310,8 @@
           "targets": [
             {
               "refId": "A",
-              "targetRef": "rl_attempt",
-              "url": "/v1/rl/attempt",
+              "targetRef": "rl_execution",
+              "url": "/v1/rl/execution",
               "view": "span_coverage",
               "format": "table",
               "columns": [
@@ -5374,7 +5374,7 @@
             {
               "refId": "A",
               "format": "table",
-              "url": "/v1/rl/attempt",
+              "url": "/v1/rl/execution",
               "columns": [
                 {
                   "selector": "execution_uid",
@@ -5402,7 +5402,7 @@
                   "type": "timestamp_epoch"
                 }
               ],
-              "targetRef": "rl_attempt",
+              "targetRef": "rl_execution",
               "view": "exporter"
             }
           ],
@@ -5427,7 +5427,7 @@
           "fieldConfig": {
             "defaults": {
               "unit": "s",
-              "noValue": "No matching attempt observations. Check the window, Job/Execution and Services reporting.",
+              "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
               "custom": {
                 "drawStyle": "line",
                 "lineWidth": 1,
@@ -5459,8 +5459,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "residuals"
             }
           ],
@@ -5518,8 +5518,8 @@
             {
               "refId": "A",
               "format": "timeseries",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
               "view": "event_loop_lag"
             }
           ],

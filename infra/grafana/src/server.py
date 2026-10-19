@@ -18,7 +18,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/{cluster}/v1/rl/overview         bounded shared RL core/engine dataset
     GET /finelog/{cluster}/v1/rl/gpu              node-GPU detail for ranges up to 7h
     GET /finelog/{cluster}/v1/rl/recent           bounded recent RL runs
-    GET /finelog/{cluster}/v1/rl/attempt          bounded shared RL attempt dataset
+    GET /finelog/{cluster}/v1/rl/execution        selected job's executions
     GET /finelog/{cluster}/v1/accelerator/overview bounded shared accelerator dataset
     GET /finelog/{cluster}/v1/jobs/overview       five namespace-bounded Jobs sources
     GET /finelog/{cluster}/v1/vllm/overview       bounded per-job/run vLLM telemetry
@@ -156,7 +156,7 @@ from loss_spikes import loss_spike_alert_rows, loss_window_query
 from nightly_config import NIGHTLY_LANES
 from node_observability import node_overview_dataset
 from relay_health import relay_alert_rows
-from rl_attempt_observability import rl_attempt_dataset
+from rl_execution_observability import rl_execution_dataset
 from rl_observability import recent_rl_runs_dataset, rl_gpu_dataset, rl_overview_dataset
 from rl_producers import check_window, collect_producers
 from runs_observability import runs_overview_dataset
@@ -781,11 +781,11 @@ def create_app(
             lambda _params, start_ms, end_ms: recent_rl_runs_dataset(start_ms, end_ms),
         )
 
-    def rl_attempt(request: Request) -> JSONResponse:
+    def rl_execution(request: Request) -> JSONResponse:
         return dashboard_dataset_response(
             request,
-            "RL attempt",
-            lambda params, start_ms, end_ms: rl_attempt_dataset(
+            "RL execution",
+            lambda params, start_ms, end_ms: rl_execution_dataset(
                 _csv_values(params, "clusters"),
                 _require(params, "run"),
                 _require(params, "job"),
@@ -1430,7 +1430,7 @@ def create_app(
             Route("/finelog/{cluster}/v1/jobs/overview", jobs_overview),
             Route("/finelog/{cluster}/v1/rl/overview", rl_overview),
             Route("/finelog/{cluster}/v1/rl/gpu", rl_gpu),
-            Route("/finelog/{cluster}/v1/rl/attempt", rl_attempt),
+            Route("/finelog/{cluster}/v1/rl/execution", rl_execution),
             Route("/finelog/{cluster}/v1/rl/recent", recent_rl_runs),
             Route("/finelog/{cluster}/v1/runs/overview", runs_overview),
             Route("/finelog/{cluster}/v1/training/overview", training_overview),

@@ -20,7 +20,7 @@ def test_stitch_dashboard_merges_fragment_with_local_id_and_grid_pos():
     assert panel == {**FRAGMENT, "id": 7, "gridPos": grid}
 
 
-@pytest.mark.parametrize("parameter_set", ["rl_run", "rl_attempt"])
+@pytest.mark.parametrize("parameter_set", ["rl_run", "rl_execution"])
 def test_stitch_dashboard_expands_target_refs_in_fragments_and_collapsed_rows(parameter_set):
     columns = [
         {"selector": "t", "text": "time", "type": "timestamp_epoch"},
@@ -30,7 +30,7 @@ def test_stitch_dashboard_expands_target_refs_in_fragments_and_collapsed_rows(pa
     short = {
         "refId": "A",
         "targetRef": parameter_set,
-        "url": "/v1/rl/overview" if parameter_set == "rl_run" else "/v1/rl/attempt",
+        "url": "/v1/rl/overview" if parameter_set == "rl_run" else "/v1/rl/execution",
         "view": "spans",
         "format": "timeseries",
     }
@@ -56,7 +56,7 @@ def test_stitch_dashboard_expands_target_refs_in_fragments_and_collapsed_rows(pa
         {"key": "bucket_ms", "value": "${__interval_ms}"},
         {"key": "view", "value": "spans"},
     ]
-    if parameter_set == "rl_attempt":
+    if parameter_set == "rl_execution":
         params[2:2] = [{"key": "job", "value": "${job}"}, {"key": "executions", "value": "${execution:csv}"}]
     expanded = {
         "refId": "A",

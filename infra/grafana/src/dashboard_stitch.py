@@ -37,7 +37,7 @@ _TIMESERIES_COLUMNS = [
 _RANGE_PARAMS = (("from", "${__from}"), ("to", "${__to}"), ("bucket_ms", "${__interval_ms}"))
 _SHARED_TARGET_PARAMS = {
     "rl_run": (("clusters", "${cluster:csv}"), ("run", "${run}"), *_RANGE_PARAMS),
-    "rl_attempt": (
+    "rl_execution": (
         ("clusters", "${cluster:csv}"),
         ("run", "${run}"),
         ("job", "${job}"),

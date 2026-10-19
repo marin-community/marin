@@ -1,23 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded attempt sources shared by synchronous and asynchronous RL runs."""
+"""Bounded execution sources shared by synchronous and asynchronous RL runs."""
 
 from dashboard_dataset import DashboardDataset, SourceQuery, bounded_bucket_ms, validate_value, validate_values
 from vllm_observability import sql_string, sql_values
 
-RL_ATTEMPT_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
-RL_ATTEMPT_MAX_POINTS = 360
-RL_ATTEMPT_MIN_BUCKET_MS = 30_000
-RL_ATTEMPT_MAX_CLUSTERS = 16
-RL_ATTEMPT_MAX_EXECUTIONS = 32
-RL_ATTEMPT_MAX_IDENTITY_LENGTH = 512
-RL_ATTEMPT_MAX_CORE_ROWS = 100_000
-RL_ATTEMPT_MAX_METRIC_ROWS = 100_000
-RL_ATTEMPT_MAX_SPAN_ROWS = 50_000
-RL_ATTEMPT_MAX_STEP_ROWS = 50_000
-RL_ATTEMPT_MAX_PROCESS_ROWS = 10_000
-RL_ATTEMPT_MAX_RESULT_ROWS = 200_000
+RL_EXECUTION_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+RL_EXECUTION_MAX_POINTS = 360
+RL_EXECUTION_MIN_BUCKET_MS = 30_000
+RL_EXECUTION_MAX_CLUSTERS = 16
+RL_EXECUTION_MAX_SELECTED = 32
+RL_EXECUTION_MAX_IDENTITY_LENGTH = 512
+RL_EXECUTION_MAX_CORE_ROWS = 100_000
+RL_EXECUTION_MAX_METRIC_ROWS = 100_000
+RL_EXECUTION_MAX_SPAN_ROWS = 50_000
+RL_EXECUTION_MAX_STEP_ROWS = 50_000
+RL_EXECUTION_MAX_PROCESS_ROWS = 10_000
+RL_EXECUTION_MAX_RESULT_ROWS = 200_000
 MEGATRON_DETAIL_ROWS = 5_000
 ROLLOUT_OVERLAP_DETAIL_STEPS = 50
 GIB = 1073741824
@@ -254,7 +254,7 @@ ORDER BY 1
 """.strip()
 
 
-def rl_attempt_dataset(
+def rl_execution_dataset(
     clusters: tuple[str, ...],
     run: str,
     job: str,
@@ -263,25 +263,25 @@ def rl_attempt_dataset(
     end_ms: int,
     requested_bucket_ms: int,
 ) -> DashboardDataset:
-    """Build bounded sources for a job and selected attempts of either training type."""
-    validate_values("clusters", clusters, max_values=RL_ATTEMPT_MAX_CLUSTERS, max_length=128)
-    validate_value("run", run, max_length=RL_ATTEMPT_MAX_IDENTITY_LENGTH)
-    validate_value("job", job, max_length=RL_ATTEMPT_MAX_IDENTITY_LENGTH)
+    """Build bounded sources for the selected job's executions of either training type."""
+    validate_values("clusters", clusters, max_values=RL_EXECUTION_MAX_CLUSTERS, max_length=128)
+    validate_value("run", run, max_length=RL_EXECUTION_MAX_IDENTITY_LENGTH)
+    validate_value("job", job, max_length=RL_EXECUTION_MAX_IDENTITY_LENGTH)
     if executions == ("__all",):
         execution_filter = "AND execution_uid IS NOT NULL"
     else:
         validate_values(
-            "executions", executions, max_values=RL_ATTEMPT_MAX_EXECUTIONS, max_length=RL_ATTEMPT_MAX_IDENTITY_LENGTH
+            "executions", executions, max_values=RL_EXECUTION_MAX_SELECTED, max_length=RL_EXECUTION_MAX_IDENTITY_LENGTH
         )
         execution_filter = f"AND execution_uid IN ({sql_values(executions)})"
     bucket_ms = bounded_bucket_ms(
         start_ms,
         end_ms,
         requested_bucket_ms,
-        max_window_ms=RL_ATTEMPT_MAX_WINDOW_MS,
-        max_window_error="RL attempt range must not exceed 7 days",
-        min_bucket_ms=RL_ATTEMPT_MIN_BUCKET_MS,
-        max_points=RL_ATTEMPT_MAX_POINTS,
+        max_window_ms=RL_EXECUTION_MAX_WINDOW_MS,
+        max_window_error="RL execution range must not exceed 7 days",
+        min_bucket_ms=RL_EXECUTION_MIN_BUCKET_MS,
+        max_points=RL_EXECUTION_MAX_POINTS,
     )
     bucket = f"{start_ms} + (timestamp_ms - {start_ms}) - (timestamp_ms - {start_ms}) % {bucket_ms}"
     identity = f"""service = 'marinskyrl'
@@ -374,7 +374,7 @@ SELECT * FROM aggregates
 UNION ALL BY NAME SELECT * FROM latest
 UNION ALL BY NAME SELECT * FROM percentiles
 ORDER BY t, name, execution_uid
-LIMIT {RL_ATTEMPT_MAX_CORE_ROWS + 1}
+LIMIT {RL_EXECUTION_MAX_CORE_ROWS + 1}
 """.strip()
     metrics_sql = f"""
 SELECT timestamp_ms, seq, job_id, execution_uid,
@@ -390,7 +390,7 @@ WHERE {identity}
        OR json_get(attributes_json, 'metric') LIKE 'eval/%'
        OR json_get(attributes_json, 'metric') LIKE 'reward/avg_pass_at_%')
 ORDER BY timestamp_ms, seq
-LIMIT {RL_ATTEMPT_MAX_METRIC_ROWS + 1}
+LIMIT {RL_EXECUTION_MAX_METRIC_ROWS + 1}
 """.strip()
     staleness_sql = f"""
 SELECT job_id, execution_uid, name, step, staleness,
@@ -410,7 +410,7 @@ FROM (
 )
 GROUP BY 1, 2, 3, 4, 5
 ORDER BY observed_ms, execution_uid, name, staleness
-LIMIT {RL_ATTEMPT_MAX_STEP_ROWS + 1}
+LIMIT {RL_EXECUTION_MAX_STEP_ROWS + 1}
 """.strip()
     process = (
         "COALESCE(json_get(resource_attributes_json, 'actor_uid'), json_get(resource_attributes_json, 'ray_task_id'), "
@@ -470,7 +470,7 @@ SELECT CAST(NULL AS VARCHAR) AS execution_uid,
 FROM {MARINSKYRL_TABLE}
 WHERE {identity}
 ORDER BY last_record_ms DESC, execution_uid, name
-LIMIT {RL_ATTEMPT_MAX_PROCESS_ROWS + 1}
+LIMIT {RL_EXECUTION_MAX_PROCESS_ROWS + 1}
 """.strip()
     memory_sql = f"""
 WITH m AS (
@@ -496,7 +496,7 @@ SELECT execution_uid AS execution,
 FROM m
 GROUP BY execution_uid, resource_attributes_json, rank, gpu, phase
 ORDER BY execution, rank, phase
-LIMIT {RL_ATTEMPT_MAX_PROCESS_ROWS + 1}
+LIMIT {RL_EXECUTION_MAX_PROCESS_ROWS + 1}
 """.strip()
     megatron_sql = f"""
 WITH selected AS (
@@ -536,7 +536,7 @@ WITH selected AS (
 SELECT * FROM ranks
 UNION ALL SELECT * FROM detail
 ORDER BY statistic, timestamp_ms DESC NULLS LAST, rank, execution_uid, step DESC NULLS LAST, phase
-LIMIT {RL_ATTEMPT_MAX_SPAN_ROWS + 1}
+LIMIT {RL_EXECUTION_MAX_SPAN_ROWS + 1}
 """.strip()
     coverage_sql = f"""
 SELECT COALESCE(json_get(attributes_json, 'role'), json_get(resource_attributes_json, 'role')) AS role,
@@ -548,7 +548,7 @@ SELECT COALESCE(json_get(attributes_json, 'role'), json_get(resource_attributes_
 FROM {MARINSKYRL_TABLE}
 WHERE {identity} AND name = 'phase_duration_seconds'
 GROUP BY 1, 2 ORDER BY 1, 2
-LIMIT {RL_ATTEMPT_MAX_PROCESS_ROWS + 1}
+LIMIT {RL_EXECUTION_MAX_PROCESS_ROWS + 1}
 """.strip()
     windows_sql = f"""
 SELECT execution_uid, name,
@@ -562,7 +562,7 @@ WHERE {identity}
   AND name IN ('async_phase_window', 'weight_sync_completed')
   AND (name = 'weight_sync_completed' OR json_get(attributes_json, 'phase') IN ('training', 'weight_sync'))
 ORDER BY start_ms, execution_uid
-LIMIT {RL_ATTEMPT_MAX_SPAN_ROWS + 1}
+LIMIT {RL_EXECUTION_MAX_SPAN_ROWS + 1}
 """.strip()
     overlap_sql = f"""
 WITH r AS (
@@ -602,7 +602,7 @@ LEFT JOIN c ON p.execution_uid = c.execution_uid
            AND c.started < p.finished AND c.finished >= p.started AND c.finished < p.finished
 GROUP BY p.execution_uid, p.step
 ORDER BY p.step, p.execution_uid
-LIMIT {RL_ATTEMPT_MAX_STEP_ROWS + 1}
+LIMIT {RL_EXECUTION_MAX_STEP_ROWS + 1}
 """.strip()
     service_sql = f"""
 WITH r AS (
@@ -669,7 +669,7 @@ SELECT execution_uid AS execution,
 FROM per_window
 GROUP BY execution_uid, resource_attributes_json, phase, engine, model, name
 ORDER BY execution, phase, engine, counter
-LIMIT {RL_ATTEMPT_MAX_PROCESS_ROWS + 1}
+LIMIT {RL_EXECUTION_MAX_PROCESS_ROWS + 1}
 """.strip()
     views = {
         "status": (
@@ -1012,21 +1012,21 @@ FROM windows ORDER BY start, execution
         "corrections": _train_metric_points(_CORRECTION_METRICS),
     }
     return DashboardDataset(
-        name="RL attempt",
+        name="RL execution",
         cache_key=(clusters, run, job, executions, start_ms, end_ms, bucket_ms),
         sources=(
-            SourceQuery("core", core_sql, RL_ATTEMPT_MAX_CORE_ROWS),
-            SourceQuery("metrics", metrics_sql, RL_ATTEMPT_MAX_METRIC_ROWS),
-            SourceQuery("staleness", staleness_sql, RL_ATTEMPT_MAX_STEP_ROWS),
-            SourceQuery("processes", processes_sql, RL_ATTEMPT_MAX_PROCESS_ROWS),
-            SourceQuery("memory", memory_sql, RL_ATTEMPT_MAX_PROCESS_ROWS),
-            SourceQuery("megatron", megatron_sql, RL_ATTEMPT_MAX_SPAN_ROWS),
-            SourceQuery("windows", windows_sql, RL_ATTEMPT_MAX_SPAN_ROWS),
-            SourceQuery("overlap", overlap_sql, RL_ATTEMPT_MAX_STEP_ROWS),
-            SourceQuery("service", service_sql, RL_ATTEMPT_MAX_PROCESS_ROWS),
-            SourceQuery("coverage", coverage_sql, RL_ATTEMPT_MAX_PROCESS_ROWS),
+            SourceQuery("core", core_sql, RL_EXECUTION_MAX_CORE_ROWS),
+            SourceQuery("metrics", metrics_sql, RL_EXECUTION_MAX_METRIC_ROWS),
+            SourceQuery("staleness", staleness_sql, RL_EXECUTION_MAX_STEP_ROWS),
+            SourceQuery("processes", processes_sql, RL_EXECUTION_MAX_PROCESS_ROWS),
+            SourceQuery("memory", memory_sql, RL_EXECUTION_MAX_PROCESS_ROWS),
+            SourceQuery("megatron", megatron_sql, RL_EXECUTION_MAX_SPAN_ROWS),
+            SourceQuery("windows", windows_sql, RL_EXECUTION_MAX_SPAN_ROWS),
+            SourceQuery("overlap", overlap_sql, RL_EXECUTION_MAX_STEP_ROWS),
+            SourceQuery("service", service_sql, RL_EXECUTION_MAX_PROCESS_ROWS),
+            SourceQuery("coverage", coverage_sql, RL_EXECUTION_MAX_PROCESS_ROWS),
         ),
         setup_sql=(),
         views=views,
-        max_result_rows=RL_ATTEMPT_MAX_RESULT_ROWS,
+        max_result_rows=RL_EXECUTION_MAX_RESULT_ROWS,
     )

@@ -14,11 +14,11 @@ import pytest
 from config import ClusterTarget
 from conftest import bridge_config, dashboard_panels, install_finelog_dialect_macros
 from dashboard_stitch import stitch_all
-from rl_attempt_observability import (
+from rl_execution_observability import (
     _METRIC_NAMES,
-    RL_ATTEMPT_MAX_RESULT_ROWS,
-    RL_ATTEMPT_MIN_BUCKET_MS,
-    rl_attempt_dataset,
+    RL_EXECUTION_MAX_RESULT_ROWS,
+    RL_EXECUTION_MIN_BUCKET_MS,
+    rl_execution_dataset,
 )
 from rl_observability import _DCGM_SERIES, rl_gpu_dataset, rl_overview_dataset
 from server import create_app
@@ -26,7 +26,7 @@ from starlette.testclient import TestClient
 
 GRAFANA_DIR = Path(__file__).parents[1]
 DASHBOARD = stitch_all(GRAFANA_DIR / "dashboards", GRAFANA_DIR / "dashboards/panels")["rl_runs.json"]
-ENDPOINT = "/v1/rl/attempt"
+ENDPOINT = "/v1/rl/execution"
 
 
 PANELS = {
@@ -81,7 +81,7 @@ def run_variable_sql():
 
 def dataset(*, window_ms=WINDOW_MS, bucket_ms=WINDOW_MS):
     """The dataset every panel requests for the selected identity over this suite's window."""
-    return rl_attempt_dataset(
+    return rl_execution_dataset(
         (CLUSTER,), RUN_ID, JOB_ID, (DRIVER, WORKER), WINDOW_START_MS, WINDOW_START_MS + window_ms, bucket_ms
     )
 
@@ -444,7 +444,7 @@ def store(telemetry_table):
 
 # Complete panel results for the seeded observations, including timestamps and identities.
 # The quantiles use linear interpolation; token rates use the endpoint's 30-second bucket.
-EXPECTED_PANELS = json.loads((Path(__file__).parent / "fixtures/rl_attempt_panels.json").read_text())
+EXPECTED_PANELS = json.loads((Path(__file__).parent / "fixtures/rl_execution_panels.json").read_text())
 
 
 def _target_params(target, *, run=RUN_ID):
@@ -455,7 +455,7 @@ def _target_params(target, *, run=RUN_ID):
         "${execution:csv}": f"{DRIVER},{WORKER}",
         "${__from}": str(WINDOW_START_MS),
         "${__to}": str(WINDOW_START_MS + WINDOW_MS),
-        "${__interval_ms}": str(RL_ATTEMPT_MIN_BUCKET_MS),
+        "${__interval_ms}": str(RL_EXECUTION_MIN_BUCKET_MS),
     }
     params = {}
     for param in target["url_options"]["params"]:
@@ -467,7 +467,7 @@ def _target_params(target, *, run=RUN_ID):
     return params
 
 
-def test_every_panel_view_returns_declared_fields_for_selected_attempt(store):
+def test_every_panel_view_returns_declared_fields_for_selected_execution(store):
     app, queries = _bridge(store)
     with TestClient(app) as client:
         assert client.get("/finelog/marin/v1/async-rl/overview").status_code == 404
@@ -609,39 +609,39 @@ REQUEST = {
     "executions": f"{DRIVER},{WORKER}",
     "from": WINDOW_START_MS,
     "to": WINDOW_START_MS + WINDOW_MS,
-    "bucket_ms": RL_ATTEMPT_MIN_BUCKET_MS,
+    "bucket_ms": RL_EXECUTION_MIN_BUCKET_MS,
 }
 
 
-def test_all_attempts_match_picker_values_and_keep_job_scope(telemetry_table):
+def test_all_executions_match_picker_values_and_keep_job_scope(telemetry_table):
     all_value = next(
         variable["allValue"] for variable in DASHBOARD["templating"]["list"] if variable["name"] == "execution"
     )
-    rows = [telemetry_row("policy_step", i + 1, execution=f"attempt-{i}") for i in range(3)]
+    rows = [telemetry_row("policy_step", i + 1, execution=f"execution-{i}") for i in range(3)]
     rows += [
         telemetry_row("policy_step", 1000, execution=None),
-        telemetry_row("policy_step", 1000, execution="attempt-0", job="other-job"),
+        telemetry_row("policy_step", 1000, execution="execution-0", job="other-job"),
     ]
     seed(telemetry_table, rows)
     app, _ = _bridge(telemetry_table)
     selected = {**REQUEST, "view": "policy_step"}
     expected = [
-        {"section": "policy_step", "t": BASE_EPOCH_MS, "series": f"policy_step · attempt-{i}", "value": i + 1}
+        {"section": "policy_step", "t": BASE_EPOCH_MS, "series": f"policy_step · execution-{i}", "value": i + 1}
         for i in range(3)
     ]
     with TestClient(app) as client:
-        for executions in (all_value, "attempt-0,attempt-1,attempt-2"):
+        for executions in (all_value, "execution-0,execution-1,execution-2"):
             response = client.get(f"/finelog/marin{ENDPOINT}", params={**selected, "executions": executions})
             assert response.status_code == 200, response.text
             assert sorted(response.json(), key=lambda row: row["series"]) == expected
-        seed(telemetry_table, [telemetry_row("policy_step", i + 1, execution=f"attempt-{i}") for i in range(3, 35)])
+        seed(telemetry_table, [telemetry_row("policy_step", i + 1, execution=f"execution-{i}") for i in range(3, 35)])
         # A new app has a cold cache after the external source changes.
     app, _ = _bridge(telemetry_table)
     with TestClient(app) as client:
         response = client.get(f"/finelog/marin{ENDPOINT}", params={**selected, "executions": all_value})
         assert response.status_code == 200, response.text
         expected += [
-            {"section": "policy_step", "t": BASE_EPOCH_MS, "series": f"policy_step · attempt-{i}", "value": i + 1}
+            {"section": "policy_step", "t": BASE_EPOCH_MS, "series": f"policy_step · execution-{i}", "value": i + 1}
             for i in range(3, 35)
         ]
         assert sorted(response.json(), key=lambda row: row["series"]) == sorted(expected, key=lambda row: row["series"])
@@ -649,7 +649,7 @@ def test_all_attempts_match_picker_values_and_keep_job_scope(telemetry_table):
             f"/finelog/marin{ENDPOINT}",
             params={
                 **selected,
-                "executions": ",".join(f"attempt-{i}" for i in range(35)),
+                "executions": ",".join(f"execution-{i}" for i in range(35)),
             },
         )
         assert explicit.status_code == 400
@@ -759,17 +759,17 @@ def test_a_request_past_the_budget_asks_the_operator_to_narrow_it(store):
         )
 
     assert capped.status_code == 400
-    assert capped.json()["error"].endswith("narrow the RL attempt filters or time range")
+    assert capped.json()["error"].endswith("narrow the RL execution filters or time range")
     assert too_wide.status_code == 400
-    assert too_wide.json() == {"error": "RL attempt range must not exceed 7 days"}
+    assert too_wide.json() == {"error": "RL execution range must not exceed 7 days"}
     window_ms = _long_run_store(store)
     selected = dataset(window_ms=window_ms, bucket_ms=30000)
-    app, _ = _bridge(store, max_rows=RL_ATTEMPT_MAX_RESULT_ROWS)
+    app, _ = _bridge(store, max_rows=RL_EXECUTION_MAX_RESULT_ROWS)
     long_params = {**REQUEST, "to": WINDOW_START_MS + window_ms}
     with TestClient(app) as client:
         response = client.get(f"/finelog/marin{ENDPOINT}", params=long_params)
         assert response.status_code == 200, response.text
-        assert 0 < len(response.json()) <= RL_ATTEMPT_MAX_RESULT_ROWS
+        assert 0 < len(response.json()) <= RL_EXECUTION_MAX_RESULT_ROWS
         assert 0 < len({row["t"] for row in response.json() if row["section"] == "policy_step"}) <= 360
         for source in selected.sources:
             rows = store.execute(_duckdb_sql(source.sql)).fetch_arrow_table()
@@ -792,7 +792,7 @@ def test_a_request_past_the_budget_asks_the_operator_to_narrow_it(store):
         rows = store.execute(_duckdb_sql(source.sql)).fetch_arrow_table()
         assert 0 < rows.num_rows <= source.max_rows, (source.name, rows.num_rows, source.max_rows)
         assert rows.num_rows == narrow_counts[source.name] + (7 * 8 * 2 if source.name == "gpu" else 0)
-    app, _ = _bridge(store, max_rows=RL_ATTEMPT_MAX_RESULT_ROWS)
+    app, _ = _bridge(store, max_rows=RL_EXECUTION_MAX_RESULT_ROWS)
     with TestClient(app) as client:
         response = client.get("/finelog/marin/v1/rl/overview", params={**long_params, "bucket_ms": 60000})
         assert response.status_code == 200, response.text
@@ -809,7 +809,7 @@ def test_a_request_past_the_budget_asks_the_operator_to_narrow_it(store):
             assert response.json()[0]["status"] == "range_limit"
 
 
-def test_step_composition_closes_on_the_mean_step_and_keeps_attempts_separate(telemetry_table):
+def test_step_composition_closes_on_the_mean_step_and_keeps_executions_separate(telemetry_table):
     rows = []
     for execution, step, duration, children in (
         (DRIVER, 1, 20, (("prepare", 5), ("train", 10))),

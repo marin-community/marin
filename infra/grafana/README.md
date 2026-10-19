@@ -34,7 +34,7 @@ GET /finelog/{cluster}/v1/{node,training,runs,rl,accelerator,jobs}/overview
                                                     bounded shared dashboard datasets
 GET /finelog/{cluster}/v1/zephyr/overview        bounded ranked shuffle snapshot
 GET /finelog/{cluster}/v1/rl/recent              bounded recent RL runs
-GET /finelog/{cluster}/v1/rl/attempt             bounded selected-job attempts
+GET /finelog/{cluster}/v1/rl/execution           selected job's executions
 GET /finelog/{cluster}/v1/rl/gpu                 node-GPU detail for ranges up to 7h
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
 GET /finelog/marin/relay_status                  direct regional relay heartbeats
@@ -154,7 +154,7 @@ identity and time input, runs a small fixed set of domain queries, and projects 
 panel views locally. Concurrent panel requests coalesce on one logical cache key;
 the `view` parameter only filters the cached result. A cold traversal uses one
 Finelog source for Node and Zephyr, three for Training, two for Runs, two for RL
-overview, one for RL GPU detail, ten for RL attempts, three for Accelerators,
+overview, one for RL GPU detail, ten for RL executions, three for Accelerators,
 and five for Jobs. Those boundaries are intentional:
 crossing namespaces or mixing fleet-wide per-device data with compact summaries
 just to reach one RPC would make the query less predictable.
@@ -336,22 +336,22 @@ of repeating the Kubernetes object name.
 The training-type picker filters the RL Post-training run picker. A run is async when any
 lifecycle, policy-step or rollout-call record in the selected clusters and window carries
 `training_type=async`; every other run, including a run with no stamp, is sync. The Job and
-Execution pickers select the same attempt data for both types. All executions includes every
+Execution pickers select the same execution data for both types. All executions includes every
 identified execution of the selected job. Run-wide panels state that they ignore these two
 pickers. MarinSkyRL documents telemetry export at `docs/grafana-rl-runs.md`.
 
 Status tiles lead into progress, learning, step-wall, generation and
 vLLM questions. Evaluation response lengths and stop-class score contributions
 sit beside evaluation scores. All collapsed rows follow the open rows.
-The attempt tiles share the dataset's one-row `status` view; the services
+The execution tiles share the dataset's one-row `status` view; the services
 tile counts distinct services from the same producer result as the diagnostic
 table. No status tile adds a Finelog source: overview still reads two sources,
-GPU detail one, attempts ten, and the producer census reads each available
+GPU detail one, executions ten, and the producer census reads each available
 namespace among MarinSkyRL, vLLM and Harbor.
 
 Status ages are relative to the selected range end. The newest step-reporting execution supplies
 the current step and its observed step rate; two distinct observation times are needed for a
-rate. Record age covers every record type in the selected attempts. A fresh record age beside an
+rate. Record age covers every record type in the selected executions. A fresh record age beside an
 old step age can distinguish a trainer stall from missing telemetry. A finished run reads as old
 because ages use the range end; check its terminal event in Diagnostics. Both turn orange at 300
 seconds and red at 900 seconds. Staleness p95 uses the newest bucket of the newest reporting
@@ -362,12 +362,12 @@ reference. Phase-throughput bars include sampled-interval coverage on a separate
 bars retain the newest 50 execution/step windows by finish time. The latest generated-token rate
 uses a display bucket whose width grows with the selected range.
 
-RL panels have a 360-point budget. Overview, GPU and attempt requests pass
-Grafana's interval. Attempt panels use a 30-second minimum; run-wide charts use one minute.
+RL panels have a 360-point budget. Overview, GPU and execution requests pass
+Grafana's interval. Execution panels use a 30-second minimum; run-wide charts use one minute.
 The bridge raises either interval as needed to keep each trend within 360 points.
 
-Attempt panels require an Iris `job_id`. Runs without one show missing-job errors on the
-attempt panels; the run-wide panels still render.
+Execution panels require an Iris `job_id`. Runs without one show missing-job errors on the
+execution panels; the run-wide panels still render.
 
 Node-GPU detail uses `/v1/rl/gpu` for ranges of 7h or less. Longer ranges show
 "Zoom to 7h or less for GPU detail." without querying Finelog. The other run-wide
