@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 import click
@@ -593,6 +594,7 @@ def run_iris_job(
     dashboard_url: str | None = None,
     target_cluster: str | None = None,
     bundle_exclude: re.Pattern[str] | None = None,
+    extra_bundle_includes: Sequence[str] = (),
 ) -> int:
     """Core job submission logic.
 
@@ -616,6 +618,7 @@ def run_iris_job(
         bundle_exclude: Regex matched against each candidate bundle path (POSIX,
             relative to the workspace); matching paths are dropped from the bundle
             so a job can trim otherwise-tracked files it does not need.
+        extra_bundle_includes: Globs for required files excluded by default, such as tests.
 
     Returns:
         Exit code: 0 for success, 1 for failure
@@ -716,6 +719,7 @@ def run_iris_job(
         dashboard_url=dashboard_url,
         task_image=task_image,
         bundle_exclude=bundle_exclude,
+        extra_bundle_includes=extra_bundle_includes,
     )
 
 
@@ -744,6 +748,7 @@ def _submit_and_wait_job(
     dashboard_url: str | None = None,
     task_image: str | None = None,
     bundle_exclude: re.Pattern[str] | None = None,
+    extra_bundle_includes: Sequence[str] = (),
 ) -> int:
     """Submit job and optionally wait for completion.
 
@@ -751,7 +756,11 @@ def _submit_and_wait_job(
     are logged and re-raised without killing the job.
     """
     client = IrisClient.remote(
-        controller_url, workspace=Path.cwd(), credentials=credentials, bundle_exclude=bundle_exclude
+        controller_url,
+        workspace=Path.cwd(),
+        credentials=credentials,
+        bundle_exclude=bundle_exclude,
+        extra_bundle_includes=extra_bundle_includes,
     )
     entrypoint = Entrypoint.from_command(*command)
 
@@ -994,6 +1003,15 @@ Examples:
     help="Cancel the Job on Ctrl+C. Tunnel failures leave it running.",
 )
 @click.option(
+    "--include",
+    multiple=True,
+    help=(
+        "Glob relative to the workspace for required files excluded by default, "
+        "such as tests. Repeat to add globs. Explicit --exclude patterns and "
+        "exclusions for credentials, caches, and local builds still apply."
+    ),
+)
+@click.option(
     "--exclude",
     multiple=True,
     help=(
@@ -1034,6 +1052,7 @@ def run(
     container_profile: str | None,
     egress_policy: str | None,
     cancel_on_exit: bool,
+    include: tuple[str, ...],
     exclude: tuple[str, ...],
     cmd: tuple[str, ...],
 ):
@@ -1100,6 +1119,7 @@ def run(
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,
             bundle_exclude=bundle_exclude,
+            extra_bundle_includes=include,
         )
     except Exception:
         bundle = ctx.obj.get("provider_bundle")
