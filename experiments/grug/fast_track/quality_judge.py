@@ -6,14 +6,16 @@
 One held-out loss does not rank data selections the way downstream tasks do. A selection can
 move the domain mix, and each loss suite rewards a different mix: Paloma rewards web text,
 Uncheatable rewards code and arXiv. So the judge reads the ``downstream_eval`` outputs and
-compares four groups against the matched random selection:
+compares these groups against the matched random selection:
 
-- E: English knowledge and commonsense (correct-answer BPB of the cloze tasks)
+- K: English knowledge (correct-answer BPB of ARC, MMLU, SciQ, OpenBookQA)
+- S: English commonsense and narrative (HellaSwag, PIQA, SIQA, Winogrande, CSQA, LAMBADA)
 - C: code (gold-solution BPB of HumanEval and MBPP)
 - M: math (gold-solution BPB of GSM8K and MATH-500)
 - L: long-context use (loss on fixed targets at 3968 tokens of context), a guardrail only
 
-A gain is the relative decrease against random. The weighted gain is the mean of E, C, and M.
+Quality classifiers trade S for K, so the two English groups have separate harm limits. A gain is
+the relative decrease against random. The weighted gain is the mean of English ((K + S) / 2), C, and M.
 A candidate is better only when the lower bound of the weighted gain is above zero and no group
 can lose more than its harm limit. The bounds come from a bootstrap over training runs and
 paired evaluation examples.
@@ -32,23 +34,14 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.grug.fast_track.downstream_eval import LONG_CONTEXT_LOSS_KEY, METRICS_FILE, RECORDS_FILE
 
-CLOZE_TASKS = (
-    "arc_easy",
-    "arc_challenge",
-    "hellaswag",
-    "piqa",
-    "sciq",
-    "winogrande",
-    "lambada",
-    "mmlu",
-    "csqa",
-    "openbookqa",
-    "siqa",
-)
-GROUP_TASKS = {"E": CLOZE_TASKS, "C": ("humaneval", "mbpp"), "M": ("gsm8k", "math500")}
-WEIGHTED_GROUPS = ("E", "C", "M")
+GROUP_TASKS = {
+    "K": ("arc_easy", "arc_challenge", "mmlu", "sciq", "openbookqa"),
+    "S": ("hellaswag", "piqa", "siqa", "winogrande", "csqa", "lambada"),
+    "C": ("humaneval", "mbpp"),
+    "M": ("gsm8k", "math500"),
+}
 # The largest relative loss in each group that a better candidate may have at the 95% lower bound.
-HARM_LIMITS = {"E": 0.01, "C": 0.02, "M": 0.02, "L": 0.02}
+HARM_LIMITS = {"K": 0.01, "S": 0.01, "C": 0.02, "M": 0.02, "L": 0.02}
 LONG_CONTEXT_MIN_DOCUMENTS = 5
 BOOTSTRAP_SAMPLES = 1000
 
@@ -117,7 +110,7 @@ def relative_gains(
     candidate_long = np.mean([run.long_context_loss for run in candidate])
     control_long = np.mean([run.long_context_loss for run in control])
     gains["L"] = float((control_long - candidate_long) / control_long)
-    gains["G"] = float(np.mean([gains[group] for group in WEIGHTED_GROUPS]))
+    gains["G"] = float(np.mean([(gains["K"] + gains["S"]) / 2, gains["C"], gains["M"]]))
     return gains
 
 

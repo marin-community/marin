@@ -411,8 +411,10 @@ uv run python -m experiments.grug.fast_track.quality_judge \
   --candidate <candidate-run>/downstream --candidate <...> --control <random-run>/downstream --control <...>
 ```
 
-The judge gives the gain against random for English (cloze BPB), code (HumanEval/MBPP gold BPB), math (GSM8K/MATH-500 gold BPB),
-and long context (fixed-target loss at 3968 tokens).
-It accepts a candidate when the mean of the first three is above zero at the 95% lower bound and no group loses more than its limit (1%, 2%, 2%, 2%).
+The judge gives the gain against random for English knowledge (ARC, MMLU, SciQ, OpenBookQA), English commonsense
+(HellaSwag, PIQA, SIQA, Winogrande, CSQA, LAMBADA), code (HumanEval/MBPP gold BPB), math (GSM8K/MATH-500 gold BPB),
+and long context (fixed-target loss at 3968 tokens). Quality classifiers trade commonsense for knowledge, so the two English groups are separate.
+It accepts a candidate when the mean of English, code, and math is above zero at the 95% lower bound and no group loses more than its limit
+(1% for each English group, 2% for the others).
 A rung that passes goes to the next rung with the same gate.
 Confirm a quality head on a second raw pool (`corpus_sample_cli --seed`), because repeated selection on one pool can overfit it.

@@ -23,20 +23,22 @@ def _runs(level: dict[str, float], long_context_loss: float, *, seed: int) -> li
     return [_run(rng, level, long_context_loss) for _ in range(3)]
 
 
-CONTROL = {"E": 1.8, "C": 1.2, "M": 1.5}
+CONTROL = {"K": 1.8, "S": 1.8, "C": 1.2, "M": 1.5}
 
 
 @pytest.mark.parametrize(
     ("level", "long_context_loss", "expected"),
     [
         # Every group improves by about 3%.
-        ({"E": 1.75, "C": 1.16, "M": 1.45}, 3.0, Decision.BETTER),
+        ({"K": 1.75, "S": 1.75, "C": 1.16, "M": 1.45}, 3.0, Decision.BETTER),
         # English improves, but code loses more than its 2% harm limit: the web-only failure.
-        ({"E": 1.65, "C": 1.5, "M": 1.45}, 3.0, Decision.WORSE),
+        ({"K": 1.65, "S": 1.65, "C": 1.5, "M": 1.45}, 3.0, Decision.WORSE),
+        # Knowledge gains hide a commonsense loss: the quality-classifier trade-off.
+        ({"K": 1.6, "S": 1.95, "C": 1.16, "M": 1.45}, 3.0, Decision.WORSE),
         # The groups improve, but long-context use loses 10%: the short-document failure.
-        ({"E": 1.7, "C": 1.1, "M": 1.45}, 3.3, Decision.WORSE),
+        ({"K": 1.7, "S": 1.7, "C": 1.1, "M": 1.45}, 3.3, Decision.WORSE),
         # The changes are smaller than the example noise.
-        ({"E": 1.8, "C": 1.2, "M": 1.5}, 3.0, Decision.INCONCLUSIVE),
+        ({"K": 1.8, "S": 1.8, "C": 1.2, "M": 1.5}, 3.0, Decision.INCONCLUSIVE),
     ],
 )
 def test_judge_decision_uses_weighted_gain_and_group_harm_limits(level, long_context_loss, expected):
