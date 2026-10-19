@@ -1,8 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from experiments.post_training.sft_shootout_rows.arms import Attempt, match_plain_to_relay, relay_subsample
-from experiments.post_training.sft_shootout_rows.build import plain_family_b
+from experiments.post_training.sft_shootout_rows.arms import (
+    Attempt,
+    fewest_reasoning,
+    match_plain_to_relay,
+    relay_subsample,
+)
+from experiments.post_training.sft_shootout_rows.build import clean_completion, plain_family_b
 
 
 def episode(family: str, number: int, supervised: int) -> Attempt:
@@ -47,3 +52,25 @@ def test_plain_family_b_excludes_replay_and_sums_to_b():
         "splits": {"epoch-0": {"supervised_tokens": {"replay": 8, "swesmith": 10, "tmax": 20}}},
     }
     assert plain_family_b(plain) == {"swesmith": 10, "tmax": 20}
+
+
+def test_clean_completion_needs_the_agents_own_finish_in_the_last_turn():
+    submit = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"function": {"arguments": '{"command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"}'}}],
+    }
+    work = {"role": "assistant", "content": "Let me run the tests again."}
+    prompt = {"role": "user", "content": "To finish, run `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`."}
+    assert clean_completion({"family": "swesmith", "messages": [prompt, work, submit]})
+    assert not clean_completion({"family": "swesmith", "messages": [prompt, submit, work]})
+    done = {"role": "assistant", "content": '{"analysis": "ok", "commands": [], "task_complete": true}'}
+    assert clean_completion({"family": "tmax", "messages": [prompt, done]})
+    assert not clean_completion({"family": "tmax", "messages": [prompt, work]})
+
+
+def test_fewest_reasoning_picks_the_least_reasoning_pass():
+    attempts = [episode("tmax", n, 100) for n in range(3)]
+    for attempt, reasoning in zip(attempts, (50, 10, 30), strict=True):
+        attempt.task_id, attempt.reasoning = "task", reasoning
+    assert fewest_reasoning(attempts)["task"].reasoning == 10

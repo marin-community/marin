@@ -55,6 +55,7 @@ from experiments.post_training.sft_shootout_rows import recovery
 from experiments.post_training.sft_shootout_rows.arms import (
     SEED,
     Attempt,
+    fewest_reasoning,
     first_passing,
     match_plain_to_relay,
     relay_subsample,
@@ -112,6 +113,9 @@ FAMILY_NOTES = {
         "mini-swe-agent resends earlier reasoning, so rows match the harness; v0/GLM length ratio p50 1.03, p99 1.07"
     ),
 }
+SWE_SUBMIT = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+TASK_COMPLETE = re.compile(r'"task_complete"\s*:\s*true')
+START_THINK, END_THINK = 128002, 128003
 # Written into a relay component prefix (some families, no replay); verify_arms and trainers refuse it as an arm.
 COMPONENT_MARKER = "COMPONENT_NOT_AN_ARM"
 # Changes to row semantics or manifest accounting, newest last; recorded in every manifest.
@@ -136,6 +140,8 @@ CHANGELOG = (
     "over the context takes a smaller injection (task #225)",
     "RELAYFAMILY relay subsample per family: each family's episodes to its share of plain's B, own seeded order; "
     "--relay-families builds a component (no replay); --match-relay cuts plain to a short relay family (fallback)",
+    "CLEAN --require-clean-completion drops passes that did not end on the agent's own submit / task_complete; "
+    "--plain-selection fewest-reasoning picks each task's pass with the fewest trained reasoning tokens",
 )
 # The generation proxy's capability URL carries a secret JWT (three base64url segments starting 'eyJ', payload
 # aud == 'iris-proxy'); a trace that printed it (e.g. GLM running 'env') must never become a training row. Tokens are
@@ -242,13 +248,44 @@ class Candidate(NamedTuple):
     trace: dict
 
 
+def clean_completion(trace: dict) -> bool:
+    """The trial ended on the agent's own completion: its last assistant turn issues mini-swe-agent's submit command
+    (SWE-smith) or sets Terminus-2's task_complete to true (TMax), rather than being cut at the context limit."""
+    assistant = [m for m in trace["messages"] if m["role"] == "assistant"]
+    if not assistant:
+        return False
+    last = (assistant[-1].get("content") or "") + json.dumps(assistant[-1].get("tool_calls") or [])
+    if trace["family"] == "swesmith":
+        return SWE_SUBMIT in last
+    return bool(TASK_COMPLETE.search(last))
+
+
+def think_tokens(rendered: RenderedTrace) -> int:
+    """Trained tokens strictly inside <|start_think|> ... <|end_think|>."""
+    count, inside = 0, False
+    for token, trained in zip(rendered.ids, rendered.mask, strict=True):
+        if token == START_THINK:
+            inside = True
+        elif token == END_THINK:
+            inside = False
+        elif inside and trained:
+            count += 1
+    return count
+
+
 def candidates(
-    arm: Arm, traces: list[dict], pool: dict[str, dict], tokenizer, allow_summarized: bool = False
+    arm: Arm,
+    traces: list[dict],
+    pool: dict[str, dict],
+    tokenizer,
+    allow_summarized: bool = False,
+    require_clean_completion: bool = False,
 ) -> tuple[dict[str, Candidate], list[dict]]:
     """Render every attempt the arm may use; return ({trial_id: Candidate}, dropped records).
 
     allow_summarized (recovery handoff rows only) keeps the conversations of a summarized trial, whose echoed history
-    turns are tagged HISTORY by recovery.handoff_traces.
+    turns are tagged HISTORY by recovery.handoff_traces. require_clean_completion also drops passing trials that did
+    not end on the agent's own completion (clean_completion).
     """
     kept, dropped = {}, []
     for trace in traces:
@@ -272,6 +309,9 @@ def candidates(
         elif trace.get("exception"):
             # A trial that still passed after a harness exception (e.g. AgentTimeoutError) stops mid-task.
             reason = "harness_exception"
+        elif require_clean_completion and not clean_completion(trace):
+            # Passed because the verifier scored the working tree after a context-limit cutoff, not a completion.
+            reason = "no_clean_completion"
         elif has_capability_token(json.dumps([trace["messages"], trace.get("tools")])):
             reason = "contains_proxy_capability_token"
         elif AGENT_TOOL_ENV.search(json.dumps(trace["messages"])):
@@ -314,6 +354,7 @@ def candidates(
             supervised=rendered.supervised,
             context=len(rendered.ids),
             authors=rendered.authors,
+            reasoning=think_tokens(rendered),
         )
         kept[trace["trial_id"]] = Candidate(attempt, rendered, trace)
     return kept, dropped
@@ -476,6 +517,17 @@ def parse_args() -> argparse.Namespace:
             "relay total ended below plain's B for it are cut to relay's total (needs --plain)"
         ),
     )
+    parser.add_argument(
+        "--require-clean-completion",
+        action="store_true",
+        help="drop passing trials that did not end on the agent's own submit / task_complete (see clean_completion)",
+    )
+    parser.add_argument(
+        "--plain-selection",
+        choices=("first", "fewest-reasoning"),
+        default="first",
+        help="plain only: per task, the first passing attempt (default) or the one with the fewest reasoning tokens",
+    )
     parser.add_argument("--output", required=True)
     parser.add_argument("--tokenizer-dir", help="local v0 tokenizer files (hash-checked); default: the regional copy")
     parser.add_argument(
@@ -580,6 +632,7 @@ def build_rows(
     out: Path,
     relay_families: list[str] | None = None,
     match_relay: dict | None = None,
+    plain_selection: str = "first",
 ) -> ArmRows:
     """Select the arm's attempts and write its split files into `out`.
 
@@ -588,8 +641,8 @@ def build_rows(
     relay's total, and replay stays plain's cut."""
     splits: dict = {}
     if arm == "plain":
-        chosen = first_passing(attempts)
-        extra = {}
+        chosen = (fewest_reasoning if plain_selection == "fewest-reasoning" else first_passing)(attempts)
+        extra = {"plain_selection": plain_selection}
         replay_b = b_tokens = sum(a.supervised for a in chosen.values())
         if match_relay is not None:
             if plain is None or sorted(chosen) != plain["task_slots"]:
@@ -992,7 +1045,9 @@ def main() -> None:
         trace_files: list[dict] = []
         traces = load_traces(args.traces, trace_files)
         gate = token_gate(trace_files)
-        kept, dropped = candidates(args.arm, traces, pool, tokenizer)
+        kept, dropped = candidates(
+            args.arm, traces, pool, tokenizer, require_clean_completion=args.require_clean_completion
+        )
         attempts = [candidate.attempt for candidate in kept.values()]
         replay = Replay(args.replay, plain)
         out = directory / "out"
@@ -1004,7 +1059,9 @@ def main() -> None:
             match_relay = (
                 json.loads((StoragePath(args.match_relay) / "manifest.json").read_text()) if args.match_relay else None
             )
-            rows = build_rows(args.arm, kept, attempts, plain, replay, out, args.relay_families, match_relay)
+            rows = build_rows(
+                args.arm, kept, attempts, plain, replay, out, args.relay_families, match_relay, args.plain_selection
+            )
         index_name = "validation-index.jsonl" if args.arm == "validation" else "train-index.jsonl"
         (out / index_name).write_text("".join(json.dumps(item) + "\n" for item in rows.index))
         (out / "selection.jsonl").write_text("".join(json.dumps(item) + "\n" for item in rows.selection))
@@ -1015,6 +1072,7 @@ def main() -> None:
         manifest = build_manifest(args, pool, kept, dropped, attempts, trace_files, gate, eligible, rows, replay, out)
         if recovery_stats is not None:
             manifest["recovery"] = recovery_stats
+        manifest["require_clean_completion"] = args.require_clean_completion
         upload(out, output, manifest, production=not args.test_inputs)
         print(
             "ARM_BUILT " + json.dumps({k: v for k, v in manifest.items() if k not in ("task_slots", "traces")}),

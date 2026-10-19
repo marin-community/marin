@@ -30,12 +30,22 @@ class Attempt:
     supervised: int
     context: int
     authors: list[str] = field(default_factory=list)
+    # Trained tokens inside think blocks (reasoning), for the fewest-reasoning selection.
+    reasoning: int = 0
 
 
 def first_passing(attempts: list[Attempt]) -> dict[str, Attempt]:
     """Plain/RS-1: per task, the passing attempt with the lowest sample index (ties: lowest retry, trial id)."""
     chosen: dict[str, Attempt] = {}
     for attempt in sorted(attempts, key=lambda a: (a.task_id, a.sample, a.retry, a.trial_id)):
+        chosen.setdefault(attempt.task_id, attempt)
+    return chosen
+
+
+def fewest_reasoning(attempts: list[Attempt]) -> dict[str, Attempt]:
+    """Per task, the passing attempt with the fewest trained reasoning tokens (ties: sample, retry, trial id)."""
+    chosen: dict[str, Attempt] = {}
+    for attempt in sorted(attempts, key=lambda a: (a.task_id, a.reasoning, a.sample, a.retry, a.trial_id)):
         chosen.setdefault(attempt.task_id, attempt)
     return chosen
 
