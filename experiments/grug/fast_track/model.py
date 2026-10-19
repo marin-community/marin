@@ -4918,17 +4918,23 @@ def _accumulate_source_grads(
     At a block boundary the slot was written from the incoming partial, so its cotangent moves onto
     ``d_partial`` and the slot's (overwritten) previous value gets none."""
     boundary, slot = _roll_slot(schedule, layer_index)
-    d_slot = jax.lax.dynamic_index_in_dim(d_sources, slot, axis=0, keepdims=False).astype(jnp.float32)
-    for weights, d_mix in zip(gate_weights, d_mixes, strict=True):
-        d_slot = d_slot + jax.lax.dynamic_index_in_dim(weights, slot, axis=0, keepdims=False)[..., None] * d_mix
-    d_partial = d_partial + jnp.where(boundary, d_slot, 0).astype(d_partial.dtype)
     if fused:
         block = layer_index // schedule.seg_size
         num_valid = schedule.num_extra + jnp.minimum(block + 1, schedule.block_cap)
         updated = _fused_source_grads(d_sources, gate_weights, d_mixes, num_valid)
-        # The rolled slot's previous value gets no cotangent; only that one source is rewritten.
-        zeroed = jnp.where(boundary, jnp.zeros_like(updated[0]), jax.lax.dynamic_index_in_dim(updated, slot, 0, False))
-        return jax.lax.dynamic_update_index_in_dim(updated, zeroed, slot, axis=0), d_partial
+
+        def roll_back(updated: jax.Array, d_partial: jax.Array) -> tuple[jax.Array, jax.Array]:
+            # The kernel already summed the slot's cotangent (one rounding, as below); it moves onto the partial
+            # and the slot's overwritten previous value gets none. Off a boundary nothing moves.
+            d_slot = jax.lax.dynamic_index_in_dim(updated, slot, axis=0, keepdims=False)
+            cleared = jax.lax.dynamic_update_index_in_dim(updated, jnp.zeros_like(d_slot), slot, axis=0)
+            return cleared, d_partial + d_slot.astype(d_partial.dtype)
+
+        return jax.lax.cond(boundary, roll_back, lambda u, p: (u, p), updated, d_partial)
+    d_slot = jax.lax.dynamic_index_in_dim(d_sources, slot, axis=0, keepdims=False).astype(jnp.float32)
+    for weights, d_mix in zip(gate_weights, d_mixes, strict=True):
+        d_slot = d_slot + jax.lax.dynamic_index_in_dim(weights, slot, axis=0, keepdims=False)[..., None] * d_mix
+    d_partial = d_partial + jnp.where(boundary, d_slot, 0).astype(d_partial.dtype)
     acc = d_sources.astype(jnp.float32)
     for weights, d_mix in zip(gate_weights, d_mixes, strict=True):
         acc = acc + weights[..., None] * d_mix[None]
