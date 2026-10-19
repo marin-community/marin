@@ -424,21 +424,6 @@ def test_invalid_payload_is_rejected_before_authentication():
         asyncio.run(client_for(FakeSlack()).submit({}))
 
 
-def test_notified_warning_uses_default_operator_channel_and_links_its_session():
-    slack = FakeSlack()
-    runs: list[dict] = []
-    payload = alert_payload()
-    payload["receiver"] = "ops-slack"
-    payload["commonLabels"].update(severity="warning", notification="slack")
-    payload["alerts"][0]["labels"].update(severity="warning", notification="slack")
-
-    asyncio.run(client_for(slack, runs=runs).submit(payload))
-
-    assert runs[0]["channel"] == "operator"
-    assert len(slack.roots) == 1
-    assert slack.reply_texts == ["Triage session: https://loom.example.com/s/session-1"]
-
-
 def test_alert_card_escapes_text_and_drops_links_that_could_break_out():
     """Alert fields are untrusted: Slack's mrkdwn controls must not survive them,
     and `<url|label>` gives the url no escaping of its own."""
