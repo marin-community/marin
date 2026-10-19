@@ -66,22 +66,26 @@ Build and validate from the repository root:
 
 ```bash
 uv run marina validate infra/marina/applets/snowball_family_tree
-uv run marina publish infra/marina/applets/snowball_family_tree --local --mode public
+uv run marina release infra/marina/applets/snowball_family_tree --dry-run --json
+uv run marina release infra/marina/applets/snowball_family_tree --local --json
 ```
 
 The local command starts a disposable Marina/Postgres instance and prints its
-revision URL. Ctrl-C removes it. Before updating the public applet, inspect its
-current revision:
+revision URL. Ctrl-C removes it. The manifest declares the existing applet UUID.
+For production updates, use a clean checkout at current remote main and inspect
+the release status and live revision:
 
 ```bash
+uv run marina release-status infra/marina/applets/snowball_family_tree --json
 uv run marina applets versions d3b5517a-c119-4fd9-999d-362183422bf3 --json
-uv run marina publish infra/marina/applets/snowball_family_tree \
-  --update d3b5517a-c119-4fd9-999d-362183422bf3 \
-  --base-version CURRENT_VERSION --mode public
+uv run marina release infra/marina/applets/snowball_family_tree \
+  --base-version CURRENT_VERSION --json
 ```
 
-Replace `CURRENT_VERSION` with the reported current version. The manifest's build
-command produces `dist/` from the HTML, JavaScript, CSS, graph and token-count
-extracts. Publication uses that generated package. Generated files are ignored by
-Git. Asset URLs are relative, and executable scripts use packaged files to satisfy
-Marina's content security policy.
+Replace `CURRENT_VERSION` with the inspected current version. Release preserves
+the applet's public mode and records Git source provenance. The manifest's build
+command validates graph lineage and produces `dist/` from the HTML, JavaScript,
+CSS, graph and token-count extracts. Release packages that output and restores
+previous local build output afterward. Generated files are ignored by Git. Asset
+URLs are relative, and executable scripts use packaged files to satisfy Marina's
+content security policy.

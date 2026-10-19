@@ -1,3 +1,4 @@
+applet_id = "d3b5517a-c119-4fd9-999d-362183422bf3"
 title = "Snowball model family tree"
 description = "Explore Snowball 67B A2B checkpoint lineage, experiment evidence, compute estimates and cooldown-family timelines."
 build_command = "uv run --no-project python build.py"

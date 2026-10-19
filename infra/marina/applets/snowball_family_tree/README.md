@@ -18,7 +18,7 @@ and Read all views derive from it. Copy a nearby node and preserve its fields.
   Follow the actual checkpoint and long-context extension variant.
   Architecture metadata and evaluation comparisons do not establish weight
   ancestry. Set `edge_kind` to `initialization` or
-  `retained checkpoint` for progression within the same run.
+  `retained checkpoint` for progression within the same training-state chain.
 - Use `lane: "2.7T"`, `"5.7T"` or `"10T"` according to cooldown ancestry.
   Set `org` to `open-athena` or `community` for experiment ownership. All existing
   2.7T checkpoints belong to open-athena, including exports in other namespaces.
@@ -46,16 +46,16 @@ View counts are computed automatically.
 
 ## Check and submit
 
-From the repository root, check that every new ID is unique, its parent exists,
-the parent chain has no cycle and its cooldown agrees with `lane`. For merge
-nodes or layout changes also run `node
-infra/marina/applets/snowball_family_tree/verify_layout.js`, which drives the
-scripts under a stub DOM and checks that every visible node is placed once and
-every parent arrow ends at its child. Then run:
+The build rejects duplicate IDs, missing parents, cycles and cross-cooldown
+parent links. From the repository root, run the layout harness to check that
+every visible node is placed once and every parent arrow ends at its child,
+then validate the package and preview it:
 
 ```bash
+node infra/marina/applets/snowball_family_tree/verify_layout.js
 uv run marina validate infra/marina/applets/snowball_family_tree
-uv run marina publish infra/marina/applets/snowball_family_tree --local --mode public
+uv run marina release infra/marina/applets/snowball_family_tree --dry-run --json
+uv run marina release infra/marina/applets/snowball_family_tree --local --json
 ```
 
 Open the printed local URL. Search for the new model, expand it, check its selected
