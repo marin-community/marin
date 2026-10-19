@@ -92,6 +92,17 @@ TRACE_FAMILIES = ("swesmith", "tmax")
 # moved aside to round-N.failed-<id>/, is not a finished shard.
 SHARD_PATH = re.compile(r"/(?:swesmith|tmax)(?:-relay)?/shard-[0-9a-z]+/(?:round-[0-9]+/)?rebuilt\.jsonl$")
 DRY_RUN_MARKER = "DRY_RUN_NOT_FOR_TRAINING"
+# The base each arm fine-tunes and the relay student (v7, decided 2026-10-19): Snowball v0.1 at its weights revision
+# (later commits change only the README).
+PARENT_MODEL = {
+    "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+    "revision": "6783e9743478bd25a9ce03ab3460e84d6a9814b0",
+}
+TOKENIZER_NOTE = (
+    "rows are rendered with v0's hash-checked tokenizer files; v0.1's tokenizer.json, tokenizer_config.json, "
+    "chat_template.jinja and generation_config.json are byte-identical (config.json differs only in pad_token_id, "
+    "null vs 128001, the rows' pad id); this is not the parent model"
+)
 # Pool v5, the frozen pool.
 POOL_MANIFEST_SHA256 = "7f3d6f7dbef1ed80d302f251540c72a5c548edb871fd0afed729653d7b6def68"
 EPOCHS = 3
@@ -159,7 +170,8 @@ CHANGELOG = (
     "RECOVERYVARIANTS recovery TMax failures: seeded variants within each style (v0 TBLite-100 parser errors) and "
     "v0's measured repeats within a point (same style 125/221, identical text 0/221)",
     "TRACEPREFIX inputs default to every finished shard of the arm's run type under --trace-prefix (traces-v7/); "
-    "--dry-run builds with production pins, a DRY_RUN marker and no _SUCCESS",
+    "--dry-run builds with production pins, a DRY_RUN marker and no _SUCCESS; manifests name tokenizer_source (v0), "
+    "parent_model and relay_student (Snowball v0.1) instead of student_model",
 )
 # The generation proxy's capability URL carries a secret JWT (three base64url segments starting 'eyJ', payload
 # aud == 'iris-proxy'); a trace that printed it (e.g. GLM running 'env') must never become a training row. Tokens are
@@ -971,8 +983,9 @@ def build_manifest(
     manifest = {
         "task": 211,
         "arm": args.arm,
-        "student_model": STUDENT_MODEL,
-        "student_revision": STUDENT_REVISION,
+        "tokenizer_source": {"model": STUDENT_MODEL, "revision": STUDENT_REVISION, "note": TOKENIZER_NOTE},
+        "parent_model": PARENT_MODEL,
+        "relay_student": PARENT_MODEL,
         "pad_token_id": PAD_TOKEN,
         "max_sequence_tokens": CONTEXT,
         "batch_size": BATCH,
