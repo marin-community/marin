@@ -31,7 +31,14 @@ def save(root: Path, message: str) -> str:
 
 
 @pytest.fixture
-def snapshot_dir(tmp_path: Path) -> Path:
+def snapshot_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    for key, value in {
+        "GIT_AUTHOR_NAME": "Test User",
+        "GIT_AUTHOR_EMAIL": "test@example.com",
+        "GIT_COMMITTER_NAME": "Test User",
+        "GIT_COMMITTER_EMAIL": "test@example.com",
+    }.items():
+        monkeypatch.setenv(key, value)
     directory = tmp_path / "snapshot"
     source = directory / "source"
     source.mkdir(parents=True)
