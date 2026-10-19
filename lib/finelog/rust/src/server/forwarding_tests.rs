@@ -1381,6 +1381,16 @@ async fn a_dense_backlog_is_forwarded_in_one_read_batch() {
         1,
         "the large WriteRows body is zstd encoded while the small registration stays identity"
     );
+    assert_eq!(
+        hub_column(fx.target_store(), "events", "id").await,
+        (0..FORWARD_BATCH_ROWS)
+            .map(|row| Some(row.to_string()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        fx.target_store().namespace_persisted_seq("events").unwrap(),
+        FORWARD_BATCH_ROWS
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
