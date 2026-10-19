@@ -42,6 +42,10 @@ src/taskforge/
                                step_store.py: step keys, memos, the memo store and `memoized`;
                                run.py: `run_program`, `run_build`, `build_model_digest`, the draft and
                                `WorkpieceBuildProvenance`
+  stage50_validate/            trials.py: trials on RolloutEngine; classify.py: the failure classifier;
+                               lowering.py: `lower`, a task lowered for the validating host;
+                               control_drafts.py: `write_controls`, the controls of a draft round;
+                               controls.py: control replay; outcome.py, evidence.py: outcomes and their totals
   stage60_review/              decision.py: the Decision types (Accept, Reject, Retry, Modify)
 ```
 
@@ -437,6 +441,43 @@ A process killed mid-workpiece leaves `events.json` as the workpiece's last term
 leaves none, so the next run starts again from that terminal or from triage, and the step store
 serves the build steps already run. A file-backed `WorkpieceEventLog` saving each event on append is
 planned with the ledger.
+
+## Validation
+
+`stage50_validate.lowering.lower(task, host, factories)` lowers a draft's task for the validating
+host. `stage50_validate.control_drafts.write_controls(task, grader, proposal, ...)` asks the model
+for the round's fixed controls from the proposal's control plan and writes them to
+`controls.json`. It reads the reference answer and the rejection ceiling from the draft's `grader`
+step output: negative and malformed controls demand at most the ceiling, positive controls more
+(`spec.controls.check_expectations`), and a control that repeats a candidate the grader step
+graded, other than the reference and the empty answer, goes back to the model. A trial whose
+reward lies outside the grader's declared score range is `Ungraded(GRADER_REWARD_RANGE)`.
+
+`stage50_validate.preflight.preflight(task, host, factories, settings, deadlines)` lowers the task
+and, when its grader-base task machine lands on the local backend, runs the engine's own preparation
+once (machine start, resources, setup commands) with a probe that answers at once. A setup command that fails or a
+spec the backend refuses (`FALLBACK_CAUSES`) moves the task machine alone to the container backend,
+the verifier and its grader requirements staying as first lowered, and the result carries a
+`BackendFallback` (backends, cause, detail) for the lower record. A machine that did not start, or not
+in time, is as often the host's state as the task's, so the probe runs once more and a second such
+failure raises `BuildInfrastructureFailure` rather than moving the solver's machine. Any other probe
+outcome keeps the first lowering, and the probe records no evidence. A verifier machine never falls
+back, and a package machine, which runs on the local backend alone, is not probed: the fallback only
+ever moves the grader-base CPython between the two backends that run it, never the declared machine.
+
+`stage50_validate.trials.run_trials(lowered, plan, settings, model)` runs k trials of a
+`LoweredTaskSpec` through `RolloutEngine`. Each attempt runs on
+`model.for_step("<kind>/<trial>/<attempt>")`, so a `GlmRolloutModel` records and routes every trial
+attempt under its own step. `TrialPlan.deadlines` and `EngineSettings`
+replace the builder's session limits, and `task_digest(lowered)` hashes what runs, answer format
+included. Each trial is `Graded` or `Ungraded` with one typed `Cause`, and
+`stage50_validate.classify.classify` is the only failure classifier. Every trial runs under the
+engine's messages trace (`EngineSettings.apply`): a trial is graded, never trained on, so the engine
+does not hold its turns to exact tokens. A trial is attempted again for a retryable cause;
+`TrialPlan.first_attempt` numbers attempts after the ones on disk, so a re-entered trial continues
+where it stopped. `stage50_validate.evidence.Evidence(outcomes).reward_stats(kind)` totals the graded
+trials. `stage50_validate.controls.replay(lowered, controls, plan, settings)` replays each control as
+one `CONTROL` trial named by its id.
 
 ## Testing
 

@@ -41,6 +41,7 @@ from taskforge.stage40_build_with_program.sandbox_effects import (
     publish_image,
 )
 from taskforge.stage40_build_with_program.sdk import GRADER_TIMEOUT
+from taskforge.stage50_validate.lowering import VERIFIER_TIMEOUT
 from tests.sandbox.fixture_images import PortlessShellSimFactory, ShellGraderImageFactory, shell_grader
 from tests.stage40_build_with_program.conftest import FACTORIES, SAMPLING, WORKPIECE, RecordingImageBuilder, declaring
 
@@ -325,6 +326,7 @@ def test_verifier_deadlines_outlast_the_sandbox_scheduling_timeout():
     deadlines leave the factory its whole budget and the grader its own on top.
     """
     assert GRADE_CANDIDATE_VERIFIER_TIMEOUT >= SANDBOX_SCHEDULING_TIMEOUT + GRADER_TIMEOUT
+    assert VERIFIER_TIMEOUT >= SANDBOX_SCHEDULING_TIMEOUT + GRADER_TIMEOUT
     assert GRADE_CANDIDATE_MACHINE.startup_timeout is not None
     assert GRADE_CANDIDATE_MACHINE.startup_timeout > SANDBOX_SCHEDULING_TIMEOUT
 

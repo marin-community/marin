@@ -9,11 +9,15 @@ from collections.abc import Mapping
 from dataclasses import replace
 
 import pytest
+from rolloutengine.contracts import ModelRequest, ModelTurn
+from rolloutengine.engine import RolloutEngine
 from shellbox.machine import Backend, PackageSpec
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ArtifactKind, ScriptGrader, VerifyitGrader
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.spec import ExactSpec
 
+from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import draft
 from taskforge.spec.draft import VERDICT_REWARD, answer_grader
@@ -36,6 +40,7 @@ from taskforge.stage40_build_with_program.sdk import (
 )
 from taskforge.stage40_build_with_program.step_store import CacheStatus
 from taskforge.stage40_build_with_program.template import standard
+from taskforge.stage50_validate.lowering import lower
 from tests.sandbox.fixture_images import SlowGraderFactory
 from tests.stage40_build_with_program.conftest import (
     FACTORIES,
@@ -119,6 +124,10 @@ async def build(program, proposal, services, glm_client, tmp_path, queries):
     )
 
 
+async def answer(request: ModelRequest) -> ModelTurn:
+    return ModelTurn({"role": "assistant", "content": "ANSWER = 42"}, (1, 2), (3,), None, "stop")
+
+
 async def test_the_template_builds_a_task_validation_can_run_and_rebuilds_from_the_store(
     proposal, services, glm_client, fake_glm, tmp_path
 ):
@@ -159,6 +168,12 @@ async def test_the_template_builds_a_task_validation_can_run_and_rebuilds_from_t
         (REFERENCE_REPLY, 1.0),
         ("", 0.0),
     ]
+
+    lowered = lower(task, MachineHost.LAPTOP, FACTORIES)
+    assert lowered.runtime.task_machine is not None and lowered.runtime.task_machine.backend == Backend.SHELLSIM
+    assert lowered.runtime.verifier_machine is not None and lowered.runtime.verifier_machine.backend == Backend.DOCKER
+    rollout = await RolloutEngine(answer, FACTORIES).run(lowered)
+    assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 1.0)
 
 
 async def test_a_grader_that_rejects_its_own_reference_answer_fails_the_build(
