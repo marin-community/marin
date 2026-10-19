@@ -47,7 +47,7 @@ class HarnessContext:
 
 
 class ModelSession(Protocol):
-    """The model, as the harness of one attempt calls it. It records the exact tokens and applies the limits.
+    """One attempt's session with the model. It records the exact tokens of each turn and applies the limits.
 
     One request can be open at a time. A request that is cancelled while the model generates changes
     nothing, so the harness can send it again. If the harness ends before its next request, the record

@@ -362,7 +362,7 @@ async def test_declared_outputs_return_in_the_record_and_reach_the_grader():
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
 
 
-class OutputWritingSession:
+class OutputWritingEpisode:
     """Write ``command``'s files in the first transition, and end."""
 
     def __init__(self, context, command: str):
@@ -416,7 +416,7 @@ def report_task(**update) -> TaskSpec:
 async def test_deadline_during_grading_keeps_captured_outputs(deadline):
     # The verifier machine is the second machine, so grading blocks after the outputs are captured.
     factory = BlockingFactory()
-    harness = StepHarness(lambda context: OutputWritingSession(context, "echo ready > /workspace/report.txt"))
+    harness = StepHarness(lambda context: OutputWritingEpisode(context, "echo ready > /workspace/report.txt"))
     spec = rollout_spec(
         report_task(output_paths=("/workspace/report.txt",)),
         machine=machine_runtime(),
@@ -445,7 +445,7 @@ async def test_output_capture_over_the_file_budget_interrupts_grading():
         await engine(
             ReplayModel([{"role": "assistant", "content": "ready"}]),
             {"local": factory},
-            harnesses={"fixture": StepHarness(lambda context: OutputWritingSession(context, command))},
+            harnesses={"fixture": StepHarness(lambda context: OutputWritingEpisode(context, command))},
         ).run_task(
             rollout_spec(
                 report_task(output_paths=("/workspace/out",)),
@@ -571,7 +571,7 @@ async def test_agent_harness_failure_retains_the_generated_turn():
     assert "cleanup_errors" not in caught.value.grade.diagnostics
 
 
-async def test_agent_request_open_at_the_turn_limit_fails_when_the_episode_closes():
+async def test_agent_request_open_at_the_turn_limit_fails_at_the_attempt_cleanup():
     handlers = []
 
     async def agent(_context, complete):
@@ -687,7 +687,7 @@ async def test_a_new_conversation_replaces_the_model_options(next_options):
 async def test_session_replays_exact_initial_tokens_and_rejects_transport_changes(alter_prefix, trace):
     prefix = (128000, 42, 128005)
 
-    class Session:
+    class Episode:
         async def prepare(self):
             return Prompt(({"role": "user", "content": "Replay case"},), {}, token_ids=prefix)
 
@@ -702,7 +702,7 @@ async def test_session_replays_exact_initial_tokens_and_rejects_transport_change
         served = (*prefix[:-1], 99) if alter_prefix else prefix
         return ModelTurn({"role": "assistant", "content": "done"}, served, (5, 6), (-0.1, -0.2), "stop")
 
-    runner = RolloutEngine({}, {"fixture": StepHarness(lambda _context: Session())})
+    runner = RolloutEngine({}, {"fixture": StepHarness(lambda _context: Episode())})
     task = rollout_spec(arithmetic_task(), harness="fixture", trace=trace)
     if alter_prefix:
         # A chat endpoint cannot serve pinned tokens either, so the replay check holds in every trace mode.
@@ -852,7 +852,7 @@ async def test_unknown_provider_fails_before_startup(provider):
     assert factory.machines == []
 
 
-async def test_machine_user_applies_to_custom_sessions_without_replacing_explicit_command_users():
+async def test_machine_user_applies_to_custom_episodes_without_replacing_explicit_command_users():
     closed = asyncio.Event()
 
     class Machine:
@@ -868,7 +868,7 @@ async def test_machine_user_applies_to_custom_sessions_without_replacing_explici
         async def create(self, spec):
             return Machine()
 
-    class Session:
+    class Episode:
         def __init__(self, context):
             self.machine = context.machine
 
@@ -886,7 +886,7 @@ async def test_machine_user_applies_to_custom_sessions_without_replacing_explici
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "Done."}]),
         {"local": Factory()},
-        harnesses={"identity": StepHarness(Session)},
+        harnesses={"identity": StepHarness(Episode)},
     ).run_task(
         rollout_spec(
             arithmetic_task(environment_requirements=GRADER_ENVIRONMENT),
@@ -1385,7 +1385,7 @@ async def test_a_spec_that_the_engine_cannot_run_is_rejected_before_machines_and
 
     factory = RecordingShellSimFactory()
     model = ReplayModel([{"role": "assistant", "content": "12"}])
-    harnesses = {"step": StepHarness(lambda _context: FinishingSession()), "agent": AgentHarness(agent)}
+    harnesses = {"step": StepHarness(lambda _context: FinishingEpisode()), "agent": AgentHarness(agent)}
     with pytest.raises(error, match=message):
         await engine(model, {"local": factory}, harnesses=harnesses).run_task(spec())
     assert factory.machines == []
@@ -1527,7 +1527,7 @@ async def test_context_limit_keeps_served_evidence_and_grades_only_completed_ope
     ],
 )
 async def test_token_budget_stops_model_requests_and_grades_the_last_response(usage, budget, requests, stop_reason):
-    class Session:
+    class Episode:
         async def prepare(self):
             return Prompt(({"role": "user", "content": "Return 12."},), {})
 
@@ -1542,7 +1542,7 @@ async def test_token_budget_stops_model_requests_and_grades_the_last_response(us
             return replace(await super().complete(request), usage=usage)
 
     model = Model([{"role": "assistant", "content": "12"}] * 3)
-    record = await engine(model, harnesses={"fixture": StepHarness(lambda _context: Session())}).run_task(
+    record = await engine(model, harnesses={"fixture": StepHarness(lambda _context: Episode())}).run_task(
         rollout_spec(arithmetic_task(), harness="fixture", max_total_tokens=budget)
     )
     assert len(model.requests) == requests
@@ -1786,13 +1786,13 @@ async def test_one_task_supports_independent_turn_deadlines():
         ("advance", "total_turn"),
     ],
 )
-async def test_deadlines_keep_generated_tokens_and_close_sessions(phase, budget):
+async def test_deadlines_keep_generated_tokens_and_close_episodes(phase, budget):
     closed = asyncio.Event()
     # A sandbox grader blocks while its verifier machine starts, the only machine of this attempt.
     factory = BlockingFactory(blocked=0)
     entered = factory.entered
 
-    class Session:
+    class Episode:
         async def prepare(self):
             return Prompt(({"role": "user", "content": "Return 12."},), {})
 
@@ -1829,7 +1829,7 @@ async def test_deadlines_keep_generated_tokens_and_close_sessions(phase, budget)
         engine(
             Model([{"role": "assistant", "content": "12"}]),
             {"local": factory},
-            harnesses={"fixture": StepHarness(lambda _context: Session())},
+            harnesses={"fixture": StepHarness(lambda _context: Episode())},
         ).run_task(rollout_spec(task, verifier_machine=verifier, **limits))
     )
     try:
@@ -1866,7 +1866,7 @@ async def test_deadlines_keep_generated_tokens_and_close_sessions(phase, budget)
 async def test_turn_budget_covers_all_turns_and_excludes_final_grading():
     close = asyncio.Event()
 
-    class Session:
+    class Episode:
         async def prepare(self):
             return Prompt(({"role": "user", "content": "Return 12."},), {})
 
@@ -1888,7 +1888,7 @@ async def test_turn_budget_covers_all_turns_and_excludes_final_grading():
         engine(
             Model([{"role": "assistant", "content": "12"}]),
             {"local": factory},
-            harnesses={"fixture": StepHarness(lambda _context: Session())},
+            harnesses={"fixture": StepHarness(lambda _context: Episode())},
         ).run_task(rollout_spec(task, verifier_machine=machine_runtime(), harness="fixture", total_turn_timeout=0.05))
     )
     try:
@@ -2062,7 +2062,7 @@ async def test_external_cancellation_at_attempt_deadline_remains_cancellation(ph
             asyncio.current_task().cancel()
             raise
 
-    class Session:
+    class Episode:
         async def prepare(self):
             return Prompt(({"role": "user", "content": "Return twelve."},), {})
 
@@ -2097,7 +2097,7 @@ async def test_external_cancellation_at_attempt_deadline_remains_cancellation(ph
         await engine(
             ReplayModel([{"role": "assistant", "content": "12"}]),
             {"local": Factory()},
-            harnesses={"fixture": StepHarness(lambda _context: Session())},
+            harnesses={"fixture": StepHarness(lambda _context: Episode())},
         ).run_task(rollout_spec(task, machine=machine_runtime(), harness="fixture", attempt_timeout=0.01))
     assert closed.is_set()
 
@@ -2126,7 +2126,7 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
         async def create(self, spec):
             return Machine()
 
-    class Session:
+    class Episode:
         def __init__(self, context):
             self.machine = context.machine
 
@@ -2153,7 +2153,7 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "12"}]),
         {"local": Factory()},
-        harnesses={"fixture": StepHarness(Session)},
+        harnesses={"fixture": StepHarness(Episode)},
     ).run_task(rollout_spec(task, machine=machine_runtime(user="learner"), harness="fixture"))
     assert record.grade.reward == 1.0
     assert closed.is_set()
@@ -2567,7 +2567,7 @@ async def test_blocked_observer_does_not_hold_the_rollout():
 
 
 async def test_steps_keep_the_harness_data_of_each_transition():
-    class Session:
+    class Episode:
         def __init__(self):
             self.turns = 0
 
@@ -2585,7 +2585,7 @@ async def test_steps_keep_the_harness_data_of_each_transition():
 
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "12"}] * 2),
-        harnesses={"fixture": StepHarness(lambda _context: Session())},
+        harnesses={"fixture": StepHarness(lambda _context: Episode())},
     ).run_task(rollout_spec(arithmetic_task(), harness="fixture"))
     assert [step.transition.data for step in record.rollout.conversations[-1].steps] == [("reward", 1), ("reward", 2)]
     # The engine grades with the task's grader; the episode only handled the turns.
@@ -2790,7 +2790,7 @@ async def test_a_harness_that_ignores_a_limit_runs_until_the_turn_deadline():
     assert (record.rollout.stop_reason, record.grade.reward) == ("max_turns", 1.0)
 
 
-class FinishingSession:
+class FinishingEpisode:
     async def prepare(self):
         return Prompt(({"role": "user", "content": "Return 12."},), {})
 
@@ -2802,7 +2802,7 @@ class FinishingSession:
 
 
 async def test_a_failed_close_is_a_cleanup_error_of_a_graded_attempt():
-    class FailingClose(FinishingSession):
+    class FailingClose(FinishingEpisode):
         async def close(self):
             raise OSError("close failed")
 

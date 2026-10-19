@@ -197,9 +197,9 @@ for example an installed agent behind an HTTP proxy. `agent(context, complete)` 
 `complete` and receives the exact `ModelTurn`:
 
 ```python
+from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.external import AgentHarness
 from rolloutengine.models import Prompt
-from rolloutengine.engine import RolloutEngine
 
 
 async def run_agent(context, complete):
@@ -598,10 +598,9 @@ Construct a `TaskRolloutSpec`, and check it with `RolloutEngine.check` before yo
 One engine serves every attempt; each run passes its model:
 
 ```python
-from rolloutengine.models import GradedRollout
-from rolloutengine.engine import Model, RolloutEngine
+from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.shell import ShellHarness
-from rolloutengine.models import TaskRolloutSpec
+from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The default shell harness.
+"""The built-in shell harness.
 
 This supplies a single shell tool on the task machine as well as specified host tools.
 """
