@@ -70,6 +70,11 @@ _SM100_COMPUTE_CAPABILITY = 10.0
 # Default sequential local-expert chunks per MoE layer (``expert_chunks``); capacity splits evenly
 # across chunks. Falls back to a single chunk when the local expert count is not divisible.
 DEFAULT_RAGGED_EXPERT_CHUNKS = 2
+# Each chunk's receiver buffer rounds up to a multiple of this many rows. The MXFP8 single-pass Pallas
+# quantizers need row counts divisible by their row tile (16) and the 32-row MX block; an unaligned capacity
+# (the hero's 1.15 x 524288 = 602932 rows) sends every expert-row quantization to XLA's slower two-pass
+# fusions. The extra rows are padding the group sizes already cover; drop clipping uses the logical capacity.
+_CHUNK_CAPACITY_ROW_ALIGN = 128
 
 # Selects the device-initiated ragged all-to-all kernel. The second entry is scoped to that op, so
 # every other collective keeps NCCL's host-launched kernels.
@@ -978,6 +983,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     chunks = expert_chunks if local_experts % expert_chunks == 0 else 1
     chunk_experts = local_experts // chunks
     chunk_capacity = max(chunk_experts, int(math.ceil(physical_capacity / chunks)))
+    chunk_capacity = -(-chunk_capacity // _CHUNK_CAPACITY_ROW_ALIGN) * _CHUNK_CAPACITY_ROW_ALIGN
 
     with jax.named_scope("dispatch"):
         assignment_valid = _assignment_validity(token_valid_local, tokens=tokens_per_shard, topk=topk)
