@@ -23,15 +23,17 @@ from taskcompendium.models import (
 )
 from verifyit.spec import ExactSpec
 
-from taskforge.spec import draft
+from taskforge.spec import decision, draft
 from taskforge.spec.decision import (
     QUESTION_ID,
     REJECTED_REWARD_MAX,
     SOLVER_TURN_STATE,
     DecisionGrader,
+    DecisionUnavailable,
     StateSource,
     decision_grade,
     grade_decision_answer,
+    host_graded,
     known_correct_check,
     run_decision_trial,
     task_decision_grader,
@@ -69,7 +71,7 @@ def task(grader) -> TaskSpec:
 
 async def graded(grader: DecisionGrader, messages: list[dict], client: FakeDecisionClient):
     """The host's grade of ``messages`` on the ledger task carrying ``grader``."""
-    return await grade_decision_answer(task(grader), GradingAttempt(chat_conversation(messages)), client)
+    return await grade_decision_answer(task(grader), GradingAttempt(chat_conversation(messages)), client, timeout=30)
 
 
 def uncalibrated() -> DecisionGrader:
@@ -207,3 +209,72 @@ async def test_the_no_grader_trial_has_the_same_conversation_as_the_judge_spec_r
     assert trial.messages == judged.messages
     assert trial.messages[-1]["content"] == REPLY
     assert [step.messages for step in trial.steps] == [step.messages for step in judged.steps]
+
+
+@pytest.fixture
+def no_backoff(monkeypatch):
+    monkeypatch.setattr(decision, "DECISION_RETRY_BACKOFF", 0.0)
+
+
+async def trial_rollout():
+    """A finished NoGrader trial of the ledger task, before the host grades it, and the model that served it."""
+    model = ReplayModel([dict(SOLVER_TURN)])
+    rollout = await engine(model).run(decision.trial_form(lowered(task(uncalibrated()))))
+    return rollout, model
+
+
+async def test_a_transient_failure_re_reads_the_kept_conversation_once(no_backoff):
+    rollout, model = await trial_rollout()
+    client = FakeDecisionClient({REPLY: 3.2}, failures=[DecisionUnavailable("503 clef_unavailable")])
+
+    graded = await host_graded(rollout, task(uncalibrated()), client, deadline=30)
+
+    assert (graded.grade.status, graded.grade.reward) == (Outcome.GRADED, 1.0)
+    assert (len(client.requests), len(model.requests)) == (2, 1)
+    assert graded.messages == rollout.messages
+
+
+async def test_a_second_transient_failure_ends_the_grade_as_decision_unavailable(no_backoff):
+    rollout, _ = await trial_rollout()
+    client = FakeDecisionClient({REPLY: 3.2}, failures=[DecisionUnavailable("first"), DecisionUnavailable("second")])
+
+    with pytest.raises(RolloutInterrupted) as interrupted:
+        await host_graded(rollout, task(uncalibrated()), client, deadline=30)
+
+    assert interrupted.value.operation is RolloutOperation.GRADE and interrupted.value.rollout == rollout
+    assert isinstance(interrupted.value.__cause__, DecisionUnavailable) and str(interrupted.value.__cause__) == "second"
+    assert len(client.requests) == 2
+
+
+async def test_a_permanent_failure_is_a_grader_failure_without_a_retry(no_backoff):
+    rollout, _ = await trial_rollout()
+    client = FakeDecisionClient({REPLY: 3.2}, failures=[ValueError("answers ['x'] != questions")])
+
+    with pytest.raises(RolloutInterrupted) as interrupted:
+        await host_graded(rollout, task(uncalibrated()), client, deadline=30)
+
+    assert isinstance(interrupted.value.__cause__, ValueError)
+    assert len(client.requests) == 1
+
+
+async def test_a_read_past_the_verifier_deadline_is_transient_and_bounded(no_backoff):
+    rollout, _ = await trial_rollout()
+    client = FakeDecisionClient({REPLY: 3.2}, delay=5.0)
+
+    with pytest.raises(RolloutInterrupted) as interrupted:
+        await host_graded(rollout, task(uncalibrated()), client, deadline=0.05)
+
+    assert isinstance(interrupted.value.__cause__, DecisionUnavailable)
+    assert client.timeouts == [0.05, 0.05]
+
+
+async def test_the_trial_passes_its_verifier_deadline_to_the_decision_client():
+    client = FakeDecisionClient({REPLY: 3.2})
+
+    await run_decision_trial(
+        engine(ReplayModel([dict(SOLVER_TURN)])),
+        lowered(task(uncalibrated()), verifier_timeout=7),
+        client,
+    )
+
+    assert client.timeouts == [7]

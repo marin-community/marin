@@ -62,6 +62,7 @@ from shellbox.machine import Backend, Command, ExecutionRequirements, Machine, M
 
 from taskforge.sandbox.factories import MachineHost, container_backend
 from taskforge.sandbox.host_failures import machine_create_failed, machine_lost
+from taskforge.spec.decision import DecisionUnavailable
 from taskforge.stage10_proposal.model import SolverMachine, TaskProposal
 from taskforge.stage40_build_with_program.context import BuildInfrastructureFailure
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
@@ -87,6 +88,8 @@ class InfrastructureCause(StrEnum):
     NO_IMAGE_BUILDER = "no_image_builder"
     NO_DECISION_MODEL = "no_decision_model"
     """The build grades a decision-model grader on a host whose services have no decision client."""
+    DECISION_UNAVAILABLE = "decision_unavailable"
+    """The host's decision model failed transiently on a grade and on its one retry."""
     SCHEDULING_TIMEOUT = "scheduling_timeout"
     SANDBOX_DEADLINE = "sandbox_deadline"
     """A startup or verifier deadline expired while a machine started, received files or ran a command."""
@@ -144,6 +147,14 @@ def infrastructure_failure(error: BaseException) -> BuildInfrastructureFailure |
         if isinstance(link, BuildInfrastructureFailure):
             return BuildInfrastructureFailure(link.cause, link.message)
     return None
+
+
+def decision_failure(error: RolloutInterrupted) -> BuildInfrastructureFailure | None:
+    """The ``DECISION_UNAVAILABLE`` failure of a grade whose decision reads failed transiently, or ``None``."""
+    unavailable = next((link for link in _chain(error) if isinstance(link, DecisionUnavailable)), None)
+    if unavailable is None:
+        return None
+    return BuildInfrastructureFailure(InfrastructureCause.DECISION_UNAVAILABLE, f"{error}: {unavailable}")
 
 
 def deadline_failure(error: RolloutInterrupted) -> BuildInfrastructureFailure | None:

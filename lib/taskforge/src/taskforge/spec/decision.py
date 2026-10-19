@@ -15,6 +15,13 @@ nothing of the grader enters the engine, and the host grades the trial's final c
 ``RolloutData.messages``, afterwards (``host_graded``, through ``grade_decision_answer``).
 ``run_decision_trial`` does both; validation and the build's ``grade_candidate`` grade through it.
 
+Every decision read is bounded by the trial's verifier deadline, which the caller passes to the client. A read
+that fails transiently (``DecisionUnavailable``: a connection error, the deadline, a 5xx, the service reporting
+itself unavailable) is read once more after ``DECISION_RETRY_BACKOFF`` seconds, on the same conversation, as a
+grader command that timed out is graded once more on fresh machines; the solver's rollout is kept, never re-run.
+A second transient failure, or any other error (a bad request, a schema mismatch), ends the grade as an
+interrupted ``GRADE``, with the error as its cause.
+
 TaskSpec has no decision grader type yet (it is proposed upstream). Until it has, ``task_package`` is the thin
 adapter where a TaskSpec is built: the grader travels as a ``NoGrader`` whose ``contract`` holds it, and
 ``task_decision_grader`` reads it back.
@@ -23,6 +30,7 @@ The acceptance level (the bar) is set at build time from the reads of the refere
 variants by ``known_correct_check``, whose one caller is ``sandbox_effects.calibrate_decision_grader``.
 """
 
+import asyncio
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -64,6 +72,10 @@ EQUIVALENT_LEVEL = 3.0
 """A calibrated bar never lies above "equivalent": an equivalent answer always passes."""
 REJECTED_REWARD_MAX = 0.5
 """A candidate below the bar earns at most this; it is the rejection ceiling of every decision grader."""
+DECISION_ATTEMPTS = 2
+"""Reads of one grade: the first, and one retry after a transient failure."""
+DECISION_RETRY_BACKOFF = 2.0
+"""Seconds before the retry of a decision read that failed transiently."""
 QUESTION_ID = "whole"
 QUESTION = (
     "Compare the whole candidate answer with the reference answer (which earned full credit), against the whole "
@@ -148,15 +160,24 @@ class ScoreQuestion:
     levels: tuple[str, ...]
 
 
+class DecisionUnavailable(Exception):
+    """The decision model gave no answer for a reason a later read can fix.
+
+    A ``DecisionClient`` raises it for a connection error, a timeout, a 5xx, or the service reporting itself
+    unavailable. Any other exception from ``decide`` is permanent: a bad request or a schema mismatch.
+    """
+
+
 class DecisionClient(Protocol):
     """A decision model: for each question, the probability of each of its levels, in order.
 
     The host supplies one (``RLEnvBuildServices.decision``, ``EngineSettings.decision``); a build program and
-    an author never construct one.
+    an author never construct one. ``decide`` answers within ``timeout`` seconds, the caller's deadline, and
+    raises ``DecisionUnavailable`` for a transient failure.
     """
 
     async def decide(
-        self, state: Mapping[str, JsonValue], questions: Mapping[str, ScoreQuestion]
+        self, state: Mapping[str, JsonValue], questions: Mapping[str, ScoreQuestion], *, timeout: float
     ) -> Mapping[str, tuple[float, ...]]: ...
 
 
@@ -255,14 +276,18 @@ def decision_state(grader: DecisionGrader, solver_output: str) -> dict[str, Json
     return {key: values[source] for key, source in grader.state.items()}
 
 
-async def grade_decision_answer(task: TaskSpec, attempt: GradingAttempt, client: DecisionClient) -> GradeResult:
+async def grade_decision_answer(
+    task: TaskSpec, attempt: GradingAttempt, client: DecisionClient, *, timeout: float
+) -> GradeResult:
     """Grade one decision-model task: one comparative read of the solver's final turn against the bar.
 
-    A final turn without visible text is a ``SUBMISSION_FAILURE`` with reward 0, decided without a read.
-    ``detail`` carries the expected ``level``, the ``bar`` and whether the answer was ``accepted``.
+    The read is bounded by ``timeout`` seconds, the caller's verifier deadline. A final turn without visible
+    text is a ``SUBMISSION_FAILURE`` with reward 0, decided without a read. ``detail`` carries the expected
+    ``level``, the ``bar`` and whether the answer was ``accepted``.
 
     Raises:
         TypeError: ``task`` does not carry a decision grader.
+        DecisionUnavailable: the read failed transiently, or did not answer within ``timeout`` seconds.
     """
     grader = task_decision_grader(task)
     if grader is None:
@@ -271,7 +296,12 @@ async def grade_decision_answer(task: TaskSpec, attempt: GradingAttempt, client:
         output = solver_turn_output(attempt.conversation)
     except SubmissionFailure as error:
         return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
-    reads = await client.decide(decision_state(grader, output), {QUESTION_ID: comparative_question()})
+    state, questions = decision_state(grader, output), {QUESTION_ID: comparative_question()}
+    try:
+        async with asyncio.timeout(timeout):
+            reads = await client.decide(state, questions, timeout=timeout)
+    except TimeoutError as error:
+        raise DecisionUnavailable(f"no decision within the {timeout:.0f}-second verifier deadline") from error
     grade = decision_grade(expected_level(reads[QUESTION_ID]), grader.bar)
     detail = {"level": grade.level, "bar": grade.bar, "accepted": grade.accepted}
     return GradeResult(Outcome.GRADED, grade.reward, detail=detail, passed=grade.accepted)
@@ -296,25 +326,45 @@ def trial_form(lowered: LoweredTaskSpec) -> LoweredTaskSpec:
     return lowered.model_copy(update={"task": task})
 
 
-async def host_graded(rollout: RolloutData, task: TaskSpec, client: DecisionClient) -> RolloutData:
+async def host_graded(rollout: RolloutData, task: TaskSpec, client: DecisionClient, *, deadline: float) -> RolloutData:
     """``rollout``, a ``trial_form`` trial, with the host's grade of its final conversation.
 
-    A rollout the engine ended before its grading step (a deadline or the generation limit before the first
-    reply) keeps the engine's grade.
+    Each read is bounded by ``deadline`` seconds. A transient failure is read once more after
+    ``DECISION_RETRY_BACKOFF``, on the same conversation. A rollout the engine ended before its grading step (a
+    deadline or the generation limit before the first reply) keeps the engine's grade.
 
     Raises:
-        RolloutInterrupted: the decision read raised; the original error is the cause, the rollout is kept.
+        RolloutInterrupted: the second read failed transiently (its cause a ``DecisionUnavailable``), or a read
+            failed permanently; the rollout is kept.
     """
     if rollout.grade.status is not Outcome.UNAVAILABLE or rollout.grade.error != TRIAL_GRADER_REASON:
         return rollout
     try:
         attempt = GradingAttempt(chat_conversation(list(rollout.messages)), stop_reason=rollout.stop_reason)
-        grade = await grade_decision_answer(task, attempt, client)
-    except Exception as error:
+    except ValueError as error:
         raise RolloutInterrupted(rollout, RolloutOperation.GRADE) from error
-    return replace(rollout, grade=grade)
+    for read in range(1, DECISION_ATTEMPTS + 1):
+        try:
+            grade = await grade_decision_answer(task, attempt, client, timeout=deadline)
+        except DecisionUnavailable as error:
+            if read == DECISION_ATTEMPTS:
+                raise RolloutInterrupted(rollout, RolloutOperation.GRADE) from error
+            await asyncio.sleep(DECISION_RETRY_BACKOFF)
+        except Exception as error:
+            raise RolloutInterrupted(rollout, RolloutOperation.GRADE) from error
+        else:
+            return replace(rollout, grade=grade)
+    raise AssertionError("unreachable: the last read returns or raises")
 
 
 async def run_decision_trial(engine: RolloutEngine, lowered: LoweredTaskSpec, client: DecisionClient) -> RolloutData:
-    """One trial of a decision task: the engine runs ``trial_form(lowered)``, then the host grades it."""
-    return await host_graded(await engine.run(trial_form(lowered)), lowered.task, client)
+    """One trial of a decision task: the engine runs ``trial_form(lowered)``, then the host grades it within the
+    session's verifier deadline.
+
+    Raises:
+        ValueError: the session has no verifier deadline to bound the decision read with.
+    """
+    deadline = lowered.session.verifier_timeout
+    if deadline is None:
+        raise ValueError("a decision task's session needs a verifier_timeout: it bounds every decision read")
+    return await host_graded(await engine.run(trial_form(lowered)), lowered.task, client, deadline=deadline)

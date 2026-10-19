@@ -69,6 +69,10 @@ class Cause(StrEnum):
     """The grader returned a reward outside its declared score range: a grader defect, and the trial
     has no usable grade."""
     GRADER_EXECUTION = "grader_execution"
+    DECISION_UNAVAILABLE = "decision_unavailable"
+    """The host's decision model failed transiently on a decision task's grade and on its one retry: the
+    infrastructure's fault. Not in ``RETRYABLE``: the grade was already retried, and re-running the trial would
+    sample the solver again for a service that is down."""
     GRADER_INFRA = "grader_infra"
     """An infrastructure grade with no ``GradingFailure``."""
     OUTPUT_CAPTURE = "output_capture"

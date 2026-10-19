@@ -21,8 +21,8 @@ from verifyit.spec import ExactSpec
 
 from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
-from taskforge.spec import draft
-from taskforge.spec.decision import DecisionGrader
+from taskforge.spec import decision, draft
+from taskforge.spec.decision import DecisionGrader, DecisionUnavailable
 from taskforge.spec.draft import VERDICT_REWARD, answer_grader
 from taskforge.stage10_proposal.model import SolverMachine, TaskProposal, parse
 from taskforge.stage30_author.loader import load_program_source
@@ -498,3 +498,15 @@ async def test_a_decision_grader_on_a_host_without_a_decision_model_is_the_hosts
 
     with pytest.raises(BuildInfrastructureFailure, match="no_decision_model"):
         await standard.grader.fn(context(), decision_proposal(), replace(FIXTURES, private_files=()), SHELLSIM)
+
+
+async def test_a_decision_model_down_twice_on_a_calibration_read_is_the_hosts_failure(context, fake_glm, monkeypatch):
+    monkeypatch.setattr(decision, "DECISION_RETRY_BACKOFF", 0.0)
+    client = FakeDecisionClient({}, failures=[DecisionUnavailable("503"), DecisionUnavailable("503")])
+    fake_glm.stream(content=json.dumps(decision_call(DECISION_VARIANTS)))
+
+    with pytest.raises(BuildInfrastructureFailure, match="decision_unavailable"):
+        await standard.grader.fn(
+            context(decision=client), decision_proposal(), replace(FIXTURES, private_files=()), SHELLSIM
+        )
+    assert len(client.requests) == 2
