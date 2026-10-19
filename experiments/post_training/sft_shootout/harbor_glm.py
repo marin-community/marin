@@ -61,7 +61,7 @@ from marin.evaluation.harbor.agent_context import (
     served_model_info,
 )
 from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
-from marin.evaluation.model_config import load_model_config
+from marin.evaluation.model_config import ModelConfig, load_model_config
 from marin.evaluation.serving_config import inference_config_for_model, resolved_serve_config
 from marin.inference.config import RemoteInferenceConfig
 from marin.inference.dashboard_server import bind_serving_socket
@@ -94,13 +94,19 @@ AGENT_DOMAIN_ALLOW_LIST = "iris.oa.dev"
 HARBOR_PROJECT = "config/external/harbor"
 AGENTS_PATH = Path(__file__).parent / "harbor_agents"
 MINI_SWE_CONSTRAINTS = AGENTS_PATH / "mini-swe-agent-2.1.0-constraints.txt"
-# v0: the policy's serving config for Snowball v0, at the revision pinned for the sweep (4eeb756b has
-# the same weights as the config's 271c4b3c; the later commit only corrects the model card).
-STUDENT_CONFIG = Path(
-    "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/model-configs/"
-    "open-athena-Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12.yaml"
-)
-STUDENT_REVISION = "4eeb756b404db25bc04e4daf49dfb9817bceb741"
+# Relay students: each one's eval serving config and pinned revision.
+STUDENTS = {
+    # Snowball v0 (4eeb756b has the same weights as the config's 271c4b3c; the later commit only corrects the card).
+    "v0": (
+        Path(
+            "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/model-configs/"
+            "open-athena-Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12.yaml"
+        ),
+        "4eeb756b404db25bc04e4daf49dfb9817bceb741",
+    ),
+    # Snowball v0.1 (head fbc8c3a0 differs from 6783e974 only in the README).
+    "v0.1": (Path(__file__).parent / "students" / "snowball-v0.1.yaml", "6783e9743478bd25a9ce03ab3460e84d6a9814b0"),
+}
 # The relay student's OpenAI base URL: a capability URL (a bearer credential) for serve_student.py's endpoint,
 # passed only through the environment.
 STUDENT_URL_ENV = "STUDENT_BASE_URL"
@@ -172,9 +178,14 @@ def capability_endpoint(app: Starlette, name: str) -> Iterator[str]:
         yield (minted.capability_url or f"{CAPABILITY_ORIGIN}{capability_path(endpoint_name, minted.token)}").rstrip("/")
 
 
-def student_inference_config(cluster: str) -> RemoteInferenceConfig:
-    """v0 served exactly as the eval policy does: 8xH100 vLLM in ``cluster`` (see serve_student.py)."""
-    model = replace(load_model_config(STUDENT_CONFIG), revision=STUDENT_REVISION)
+def student_model(student: str) -> ModelConfig:
+    config, revision = STUDENTS[student]
+    return replace(load_model_config(config), revision=revision)
+
+
+def student_inference_config(student: str, cluster: str) -> RemoteInferenceConfig:
+    """The student served exactly as the eval policy does: 8xH100 vLLM in ``cluster`` (see serve_student.py)."""
+    model = student_model(student)
     accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster=cluster)
     accelerator = replace(accelerator, geometry=serving_geometry(resolved_serve_config(model), accelerator))
     # Iris defaults GPU jobs to NCCL_DEBUG=INFO, which floods the log forwarder; this vLLM path gets no
@@ -189,7 +200,7 @@ def teacher_overrides(reasoning_effort: str | None) -> dict:
     return {} if reasoning_effort is None else {"chat_template_kwargs": {"reasoning_effort": reasoning_effort}}
 
 
-def served_student() -> Backend:
+def served_student(student: str) -> Backend:
     """v0 behind the capability URL in ``STUDENT_BASE_URL`` (serve_student.py), once it answers."""
     base_url = os.environ[STUDENT_URL_ENV].rstrip("/")
     while True:
@@ -202,13 +213,13 @@ def served_student() -> Backend:
         logger.info("waiting for v0 to serve")
         time.sleep(STUDENT_POLL_S)
     (served,) = response.json()["data"]
-    model = load_model_config(STUDENT_CONFIG)
-    logger.info("v0 is serving %s", served["id"])
+    model = student_model(student)
+    logger.info("the student is serving %s", served["id"])
     return Backend(
         author=Author.STUDENT,
         base_url=base_url,
         model=served["id"],
-        tokenizer=load_tokenizer(model.tokenizer or model.location, STUDENT_REVISION),
+        tokenizer=load_tokenizer(model.tokenizer or model.location, model.revision),
         headers={},
         # The URL names the endpoint, not a host: while Iris moves a preempted v0 the proxy answers with a gateway
         # error, and the same URL works again once v0 re-registers.
@@ -334,6 +345,9 @@ def main() -> None:
     )
     parser.add_argument("--glm-relay-job", default=DEFAULT_GLM_RELAY_JOB)
     parser.add_argument(
+        "--student", choices=sorted(STUDENTS), default="v0", help="Relay student (recorded in every run)."
+    )
+    parser.add_argument(
         "--reasoning-effort",
         choices=["low", "high"],
         help="GLM 5.3 template reasoning effort for every teacher request (default: none sent, so the template's Max).",
@@ -369,11 +383,9 @@ def main() -> None:
             agent = AGENTS[args.agent]
             config = job_config(args, agent, None, work / "jobs")
         else:
-            student_model = load_model_config(STUDENT_CONFIG)
+            student = student_model(args.student)
             served_info = (
-                served_model_info(student_model.serve.max_model_len, student_model.generation.max_gen_toks)
-                if args.relay
-                else None
+                served_model_info(student.serve.max_model_len, student.generation.max_gen_toks) if args.relay else None
             )
             agent = policy_agent(args, served_info)
             window = agent["kwargs"][MODEL_INFO_KEY][MAX_INPUT_TOKENS_KEY]
@@ -387,7 +399,9 @@ def main() -> None:
             )
             relay = None
             if args.relay:
-                relay = RelayPolicy(student=served_student(), budget_tokens=int(window * args.budget_fraction))
+                relay = RelayPolicy(
+                    student=served_student(args.student), budget_tokens=int(window * args.budget_fraction)
+                )
             app = build_proxy(teacher, window, RequestLog(work / "requests.jsonl"), relay)
             capability = stack.enter_context(capability_endpoint(app, args.name))
             if urlparse(capability).hostname != AGENT_DOMAIN_ALLOW_LIST:
@@ -470,7 +484,7 @@ def main() -> None:
             None
             if not args.relay
             else {
-                "student": f"{STUDENT_CONFIG}@{STUDENT_REVISION}",
+                "student": f"{args.student}: {STUDENTS[args.student][0]}@{STUDENTS[args.student][1]}",
                 "student_serving": "serve_student.py root job, reached through its capability URL",
                 "budget_fraction": args.budget_fraction,
                 "budget_tokens": int(window * args.budget_fraction),

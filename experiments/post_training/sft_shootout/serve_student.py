@@ -23,7 +23,7 @@ from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest
 from marin.inference.iris import IrisServiceConfig, run_iris_service
 
-from experiments.post_training.sft_shootout.harbor_glm import student_inference_config
+from experiments.post_training.sft_shootout.harbor_glm import STUDENTS, student_inference_config
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +31,12 @@ logger = logging.getLogger(__name__)
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--cluster", required=True, help="This job's cluster.")
+    parser.add_argument("--student", choices=sorted(STUDENTS), default="v0")
     parser.add_argument("--endpoint", required=True, help="Fixed endpoint name, e.g. /serve/v0-student-tmax-lane1.")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    config = student_inference_config(args.cluster)
+    config = student_inference_config(args.student, args.cluster)
     iris = config.iris
     service = IrisServiceConfig(
         model=config.model,

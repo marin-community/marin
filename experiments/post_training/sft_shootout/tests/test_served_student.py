@@ -27,7 +27,7 @@ def test_the_student_backend_waits_for_v0_and_uses_its_served_model_id(monkeypat
     monkeypatch.setattr(harbor_glm.httpx, "get", get)
     monkeypatch.setattr(harbor_glm, "STUDENT_POLL_S", 0)
     monkeypatch.setattr(harbor_glm, "load_tokenizer", lambda name, revision: (name, revision))
-    student = harbor_glm.served_student()
+    student = harbor_glm.served_student("v0.1")
     assert requested == [f"{url}/models"] * 3
     assert (student.author, student.base_url, student.model) == (Author.STUDENT, url, "org/v0")
     assert student.resolve is not None and student.resolve() == url
