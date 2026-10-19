@@ -124,6 +124,8 @@ CHANGELOG = (
     "token gate over the inputs, held-out ids, _SUCCESS marker (task #234)",
     "RECOVERY recovery arm: plain's rows with masked failed attempts before teacher turns of 20% of rows; a row "
     "over the context takes a smaller injection (task #225)",
+    "RECOVERYVARIANTS recovery TMax failures: seeded variants within each style (v0 TBLite-100 parser errors) and "
+    "v0's measured repeats within a point (same style 125/221, identical text 0/221)",
 )
 # The generation proxy's capability URL carries a secret JWT (three base64url segments starting 'eyJ', payload
 # aud == 'iris-proxy'); a trace that printed it (e.g. GLM running 'env') must never become a training row. Tokens are
