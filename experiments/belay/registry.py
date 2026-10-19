@@ -30,6 +30,8 @@ ID_RE = re.compile(r"^X\d{4}$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # A trial id is local to its experiment; elsewhere a trial is cited as "<experiment id>.<trial id>", e.g. X0014.t005.
 TRIAL_ID_RE = re.compile(r"^t\d{3}$")
+# A git commit SHA, full or abbreviated to at least 10 characters.
+COMMIT_RE = re.compile(r"^[0-9a-f]{10,40}$")
 # One list shared with the intake bot (scripts/ci/belay_intake.py), which reads it from this branch.
 CATEGORIES: tuple[str, ...] = tuple(json.loads((REGISTRY_DIR / "categories.json").read_text()))
 
@@ -101,6 +103,7 @@ class Trial:
     wandb: tuple[str, ...] = ()
     settings: dict[str, str] = field(default_factory=dict)
     commit: str | None = None
+    """The commit the trial ran, on GitHub."""
     step_time_change: str | None = None
     tuned: str | None = None
     note: str | None = None
@@ -239,6 +242,11 @@ def validate(experiments: list[Experiment]) -> None:
         numbers = [int(i[1:]) for i in trial_ids]
         if numbers != sorted(set(numbers)):
             raise ValueError(f"{e.id}: trial ids must increase down the file, with no repeats")
+        for t in e.trials:
+            if t.commit is not None and not COMMIT_RE.match(t.commit):
+                raise ValueError(
+                    f"{e.id}.{t.id}: commit {t.commit!r} must be a lowercase hex SHA of 10 to 40 characters"
+                )
 
 
 def write_experiment(experiment: Experiment, directory: Path = REGISTRY_DIR) -> Path:

@@ -90,6 +90,26 @@ def test_load_names_the_file_and_the_missing_key(tmp_path):
         R.load_registry(tmp_path)
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"commit": "e8cd1b9"},
+        {"commit": "E8CD1B97EC"},
+        {"commit": "e8cd1b97ec133ea54cd42ac520bf069ee659d2d3a"},
+    ],
+)
+def test_validate_rejects_malformed_commits(overrides):
+    (trial,) = _experiment().trials
+    with pytest.raises(ValueError):
+        R.validate([_experiment(trials=(dataclasses.replace(trial, **overrides),))])
+
+
+@pytest.mark.parametrize("commit", ["e8cd1b97ec", "e8cd1b97ec133ea54cd42ac520bf069ee659d2d3"])
+def test_validate_accepts_short_and_full_commits(commit):
+    (trial,) = _experiment().trials
+    R.validate([_experiment(trials=(dataclasses.replace(trial, commit=commit),))])
+
+
 def test_validate_rejects_duplicate_slugs():
     with pytest.raises(ValueError):
         R.validate([_experiment(), _experiment(id="X0002")])
