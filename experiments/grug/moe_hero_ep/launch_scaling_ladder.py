@@ -53,7 +53,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
-from marin.training.training import temporary_checkpoint_base_path
+from marin.training.training import checkpoint_resume_paths, temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -318,7 +318,11 @@ def build_ladder_run(
             ttl_days=RESUME_CHECKPOINT_TTL_DAYS,
             temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX if size == "d6144" else None,
         )
-        load_checkpoint_path = [permanent_checkpoint_path, temporary_checkpoint_path]
+        load_checkpoint_path = checkpoint_resume_paths(
+            ctx.output_path,
+            ttl_days=RESUME_CHECKPOINT_TTL_DAYS,
+            temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX if size == "d6144" else None,
+        )
         if initialize_from_checkpoint is not None:
             load_checkpoint_path.append(initialize_from_checkpoint)
         trainer = hero_trainer_config(

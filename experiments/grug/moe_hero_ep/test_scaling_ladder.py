@@ -185,10 +185,16 @@ def test_scaling_ladder_keeps_hero_checkpoints_separate_from_shared_scratch(monk
 
     trainer = step.build_config(ctx).trainer.trainer
     temporary_path = f"s3://{bucket}/tmp/ttl=3d/checkpoints-temp/marin-us-east-02a/marin/grug/{run_id}/v/checkpoints"
-    assert trainer.checkpoint_search_paths(run_id) == [
+    search_paths = [
         f"{output_path}/checkpoints",
         temporary_path,
     ]
+    if size != "d6144":
+        search_paths.extend(
+            f"s3://{previous}/tmp/ttl=3d/checkpoints-temp/marin-us-east-02a/marin/grug/{run_id}/v/checkpoints"
+            for previous in ("marin-us-east-02a", "hero-checkpoints")
+        )
+    assert trainer.checkpoint_search_paths(run_id) == search_paths
     assert trainer.checkpointer.temporary_base_path == temporary_path
 
 
