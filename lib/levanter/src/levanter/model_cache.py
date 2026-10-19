@@ -54,7 +54,7 @@ class CacheMetadata:
 
 @dataclass(frozen=True)
 class HfModelCacheEntry:
-    """Immutable Hugging Face snapshot and its region-local cache path."""
+    """Resolved Hugging Face revision and its region-local cache path."""
 
     repo: str
     revision: str
