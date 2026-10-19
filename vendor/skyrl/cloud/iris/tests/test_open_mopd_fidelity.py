@@ -479,7 +479,7 @@ def test_plan_rejects_non_durable_or_root_output_prefix(output_uri: str) -> None
 
 def test_cli_dry_run_does_not_submit(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     root = fidelity.DEFAULT_CONFIG.parents[3]
-    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
+    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("dry run submitted a process"))
 
     assert (
@@ -493,7 +493,7 @@ def test_submission_requires_deviation_acknowledgement(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = fidelity.DEFAULT_CONFIG.parents[3]
-    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
+    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("guard did not stop submission"))
 
     with pytest.raises(SystemExit, match="allow-known-deviations"):

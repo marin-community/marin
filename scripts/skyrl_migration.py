@@ -422,6 +422,26 @@ class PullOutcome:
     diagnostic: str = ""
 
 
+@dataclass
+class StageReport:
+    snapshot: str
+    source_sha: str
+    patches: list[dict]
+    retained: int
+    discarded: int
+    pulls: list[PullOutcome]
+    issues: list[dict]
+    dynamic_imports: list[str]
+    missing_imports: list[str]
+    production_ready: bool = False
+
+
+def read_stage_report(path: Path) -> StageReport:
+    value = read_json(path)
+    value["pulls"] = [PullOutcome(**(item | {"status": PullStatus(item["status"])})) for item in value["pulls"]]
+    return StageReport(**value)
+
+
 def stage(snapshot_dir: Path, output: Path) -> None:
     """Copy the candidate and test each complete Git delta on its staged parent."""
     snapshot_dir = snapshot_dir.resolve()
@@ -464,22 +484,21 @@ def stage(snapshot_dir: Path, output: Path) -> None:
         git(tree, "add", ".")
         baseline = commit(tree, "Apply migration runtime fixes")
     pulls = transplant_pulls(snapshot_dir, output, baseline)
-    report = {
-        "snapshot": str(snapshot_dir),
-        "source_sha": record["source_sha"],
-        "patches": chosen["patches"],
-        "retained": len(chosen["retained"]),
-        "discarded": len(chosen["discarded"]),
-        "pulls": pulls,
-        "issues": [{"number": issue["number"], "url": issue["html_url"]} for issue in record["issues"]],
-        "dynamic_imports": chosen["dynamic_imports"],
-        "missing_imports": chosen["missing_imports"],
-        "production_ready": False,
-    }
+    report = StageReport(
+        snapshot=str(snapshot_dir),
+        source_sha=record["source_sha"],
+        patches=chosen["patches"],
+        retained=len(chosen["retained"]),
+        discarded=len(chosen["discarded"]),
+        pulls=pulls,
+        issues=[{"number": issue["number"], "url": issue["html_url"]} for issue in record["issues"]],
+        dynamic_imports=chosen["dynamic_imports"],
+        missing_imports=chosen["missing_imports"],
+    )
     write_report(output, report)
 
 
-def transplant_pulls(snapshot_dir: Path, output: Path, baseline: str) -> list[dict]:
+def transplant_pulls(snapshot_dir: Path, output: Path, baseline: str) -> list[PullOutcome]:
     """Apply each source PR on its staged parent and return publication outcomes."""
     record = read_json(snapshot_dir / "snapshot.json")
     chosen = read_json(snapshot_dir / "selection.json")
@@ -557,16 +576,16 @@ def transplant_pulls(snapshot_dir: Path, output: Path, baseline: str) -> list[di
         outcome.status = PullStatus.NEEDS_DECISION if excluded else PullStatus.READY
         outcome.commit = commit(tree, f"Transplant {SOURCE}#{number}\n\nSource-head: {pull['head']['sha']}")
     git(tree, "checkout", "--quiet", "main")
-    return [asdict(outcome) for outcome in outcomes.values()]
+    return list(outcomes.values())
 
 
-def write_report(output: Path, report: dict) -> None:
+def write_report(output: Path, report: StageReport) -> None:
     """Write the machine-readable outcomes and their review summary."""
-    write_json(output / "report.json", report)
+    write_json(output / "report.json", asdict(report))
     rows = [
         "# SkyRL migration dry run",
         "",
-        f"Source: `{report['source_sha']}`. Retained {report['retained']} files; discarded {report['discarded']}.",
+        f"Source: `{report.source_sha}`. Retained {report.retained} files; discarded {report.discarded}.",
         "",
         "This is a source candidate. Runtime bootstrap and nightly acceptance remain required.",
         "",
@@ -574,13 +593,12 @@ def write_report(output: Path, report: dict) -> None:
         "| --- | --- | --- | --- |",
     ]
     rows += [
-        f"| [#{item['number']}]({item['url']}) | {item['parent'] or ''} | "
-        f"{item['status']} | {len(item.get('excluded', []))} |"
-        for item in report["pulls"]
+        f"| [#{item.number}]({item.url}) | {item.parent or ''} | {item.status} | {len(item.excluded)} |"
+        for item in report.pulls
     ]
     rows += [
         "",
-        f"Selected issues: {len(report['issues'])}. Complete source patches and review history remain in the snapshot.",
+        f"Selected issues: {len(report.issues)}. Complete source patches and review history remain in the snapshot.",
         "",
         "See docs/dev-guide/skyrl-migration.md for cutover and archive requirements.",
     ]
@@ -595,10 +613,10 @@ def audit_wheel(wheel: Path) -> list[str]:
             raise ValueError("Wheel is missing runtime provenance or the launcher bundle manifest")
         provenance = json.loads(archive.read(PROVENANCE))
         expected = {PROVENANCE}
-        runtime_packages = {"cloud", "marinskyrl", "skyrl_train", "skyrl_gym", "chat_templates"}
+        runtime_roots = {"cloud", "marinskyrl", "skyrl_train", "skyrl_gym", "chat_templates", "open_mopd_versions.py"}
         for name, digest in provenance["files"].items():
             packaged = name.removeprefix("skyrl-train/").removeprefix("skyrl-gym/")
-            if packaged.split("/")[0] not in runtime_packages:
+            if packaged.split("/")[0] not in runtime_roots:
                 continue
             if name.endswith(".pyc"):
                 continue
@@ -606,7 +624,7 @@ def audit_wheel(wheel: Path) -> list[str]:
             if packaged not in members or hashlib.sha256(archive.read(packaged)).hexdigest() != digest:
                 raise ValueError(f"Wheel member missing or changed: {packaged}")
         unexpected = {
-            name for name in members if name.split("/")[0] in runtime_packages and not name.endswith("/")
+            name for name in members if name.split("/")[0] in runtime_roots and not name.endswith("/")
         } - expected
         if unexpected:
             raise ValueError(f"Wheel contains runtime files outside staged provenance: {sorted(unexpected)}")
@@ -623,6 +641,19 @@ def verify_vendor(source: Path) -> None:
             raise ValueError(f"Vendored source changed after staging: {name}")
 
 
+@dataclass(frozen=True)
+class BuiltWheel:
+    path: Path
+    sha256: str
+    members: list[str]
+
+
+def build_audited_wheel(source: Path, output: Path) -> BuiltWheel:
+    run("uv", "build", "--wheel", "--project", str(source), "--out-dir", str(output))
+    [wheel] = output.glob("*.whl")
+    return BuiltWheel(wheel, file_digest(wheel), audit_wheel(wheel))
+
+
 def check_vendor(source: Path) -> None:
     """Check the independent lock and build the wheel without installing SkyRL."""
     verify_vendor(source)
@@ -631,10 +662,8 @@ def check_vendor(source: Path) -> None:
             raise ValueError(f"Migration patch differs from the staged candidate: {patch['path']}")
     run("uv", "lock", "--project", str(source), "--check")
     with tempfile.TemporaryDirectory(prefix="skyrl-wheel-") as temporary:
-        run("uv", "build", "--wheel", "--project", str(source), "--out-dir", temporary)
-        [wheel] = Path(temporary).glob("*.whl")
-        members = audit_wheel(wheel)
-        print(json.dumps({"wheel_sha256": file_digest(wheel), "members": len(members)}))
+        wheel = build_audited_wheel(source, Path(temporary))
+        print(json.dumps({"wheel_sha256": wheel.sha256, "members": len(wheel.members)}))
 
 
 def build_wheel(candidate: Path) -> None:
@@ -643,10 +672,8 @@ def build_wheel(candidate: Path) -> None:
     verify_vendor(source)
     wheels = candidate.resolve() / "wheels"
     wheels.mkdir(exist_ok=False)
-    run("uv", "build", "--wheel", "--project", str(source), "--out-dir", str(wheels))
-    [wheel] = wheels.glob("*.whl")
-    members = audit_wheel(wheel)
-    write_json(candidate / "wheel.json", {"path": str(wheel), "sha256": file_digest(wheel), "members": members})
+    wheel = build_audited_wheel(source, wheels)
+    write_json(candidate / "wheel.json", {"path": str(wheel.path), "sha256": wheel.sha256, "members": wheel.members})
     runtime_dependencies = candidate / "runtime-dependencies"
     runtime_dependencies.mkdir()
     for name in ("pyproject.toml", "uv.lock"):
@@ -683,7 +710,7 @@ def build_wheel(candidate: Path) -> None:
         'dependencies = ["marinskyrl"]\n\n[tool.uv]\npackage = false\nprerelease = "allow"\n'
         + policy_lines
         + '\n[tool.uv.sources]\nmarinskyrl = { path = "../wheels/'
-        + wheel.name
+        + wheel.path.name
         + '" }\n'
     )
 
@@ -811,12 +838,12 @@ def transfer_issues(snapshot_dir: Path, state_path: Path, cutover: int) -> None:
 
 def publish_prs(candidate: Path, cutover: int) -> None:
     """Create draft PRs with preserved stack bases, without replacing existing branches."""
-    report = read_json(candidate / "report.json")
-    snapshot_dir = Path(report["snapshot"])
+    report = read_stage_report(candidate / "report.json")
+    snapshot_dir = Path(report.snapshot)
     record = read_json(snapshot_dir / "snapshot.json")
-    cutover_pull = validate_cutover(cutover, record["source_sha"], report["patches"])
+    cutover_pull = validate_cutover(cutover, record["source_sha"], report.patches)
     validate_fresh(record)
-    incomplete = [item["number"] for item in report["pulls"] if item["status"] != PullStatus.READY]
+    incomplete = [item.number for item in report.pulls if item.status != PullStatus.READY]
     target = gh(f"repos/{TARGET}")
     default = target["default_branch"]
     workspace = candidate / "publication"
@@ -840,10 +867,10 @@ def publish_prs(candidate: Path, cutover: int) -> None:
     state_path = candidate / "published-prs.json"
     state = read_json(state_path) if state_path.exists() else {}
     pulls = {pull["number"]: pull for pull in record["pulls"]}
-    for outcome in report["pulls"]:
-        if outcome["status"] != PullStatus.READY:
+    for outcome in report.pulls:
+        if outcome.status != PullStatus.READY:
             continue
-        number, parent, branch = outcome["number"], outcome["parent"], outcome["branch"]
+        number, parent, branch = outcome.number, outcome.parent, outcome.branch
         pull = pulls[number]
         marker = f"<!-- skyrl-migration: source={SOURCE}#{number} head={pull['head']['sha']} -->"
         existing = github_items(

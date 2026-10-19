@@ -15,6 +15,8 @@ PAYLOAD = Path(__file__).resolve().parent
 
 
 def main() -> None:
+    receipt = json.loads((PAYLOAD / "receipt.json").read_text())
+    extras = [argument for extra in receipt["runtime_extras"] for argument in ("--extra", extra)]
     exported = subprocess.run(
         [
             "uv",
@@ -26,12 +28,7 @@ def main() -> None:
             "--no-header",
             "--project",
             str(PAYLOAD / "dependencies"),
-            "--extra",
-            "megatron",
-            "--extra",
-            "vllm",
-            "--extra",
-            "telemetry",
+            *extras,
         ],
         check=True,
         capture_output=True,
@@ -70,7 +67,8 @@ def main() -> None:
     output = Path(os.environ["IRIS_OUTPUT_DIR"])
     output.mkdir(parents=True, exist_ok=True)
     (output / "dependency-check.json").write_text(json.dumps(result, indent=2) + "\n")
-    print(f"Verified {len(checked)} installed packages against the frozen Megatron+vLLM+telemetry profile", flush=True)
+    profile = "+".join(receipt["runtime_extras"])
+    print(f"Verified {len(checked)} installed packages against the frozen {profile} profile", flush=True)
 
 
 if __name__ == "__main__":

@@ -29,10 +29,10 @@ flowchart LR
     Outputs --> Eval["Marin evaluation artifact"]
 ```
 
-`SkyRLRuntime.commit` contains the SHA-256 of the vendored provenance document.
+`SkyRLRuntime.source_digest` contains the SHA-256 of the vendored provenance document.
 The document binds the captured fork commit, migration patches, independent
 lock, and source file hashes. Use a fresh artifact version when it changes.
-The nested project currently selects qualified published or Git-pinned Marin
+The nested project currently selects published or Git-pinned Marin
 packages; local editable Marin packages are not wired into its bundle.
 
 The migration tool rebuilds source candidates and prepares active work. It

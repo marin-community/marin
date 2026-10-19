@@ -101,6 +101,7 @@ def build_smoke(version: str) -> Smoke:
         for callback in config["trainer"]["callbacks"]:
             if callback["type"] == "evaluation":
                 callback["additional_evaluations"] = {}
+                callback["metric_groups"] = {}
         return skyrl_step(
             SkyRLSpec(
                 name=user_owned_name(f"checkpoints/skyrl-port-smoke/{name}"),

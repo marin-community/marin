@@ -451,7 +451,7 @@ def argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-uri", required=True)
     parser.add_argument("--gpu-slice", required=True)
     parser.add_argument("--task-image", required=True)
-    parser.add_argument("--launcher-commit", required=True)
+    parser.add_argument("--source-digest", required=True)
     parser.add_argument("--checkpoint-uri")
     parser.add_argument("--checkpoint-step", type=int)
     parser.add_argument("--model-export-uri")
@@ -491,7 +491,7 @@ def main(argv: list[str] | None = None) -> int:
         "planned_completions": planned_completions,
         "maximum_output_tokens": maximum_output_tokens,
         "task_image": args.task_image,
-        "launcher_commit": args.launcher_commit,
+        "source_digest": args.source_digest,
         "gpu_slice": args.gpu_slice,
         "vllm_port_seed": vllm_port_seed,
         "checkpoint_uri": args.checkpoint_uri,

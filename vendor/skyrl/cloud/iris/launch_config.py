@@ -62,7 +62,7 @@ class RunConfig:
 class RuntimeConfig:
     """MarinSkyRL runtime provenance."""
 
-    launcher_commit: str = MISSING
+    source_digest: str = MISSING
     profile: str = MISSING
     entrypoint: str = ""
     training_type: str | None = None

@@ -243,7 +243,7 @@ def test_native_model_stage_rejects_incomplete_weight_index(tmp_path: Path) -> N
 
 def test_native_model_evaluation_plan_selects_export_without_reference_model(monkeypatch: pytest.MonkeyPatch) -> None:
     root = evaluation.DEFAULT_CONFIG.parents[3]
-    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
+    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
     export_uri = "s3://bucket/native/exports/step-2"
 
     plan = evaluation.build_plan(
@@ -286,7 +286,7 @@ def test_dry_run_exposes_immutable_inputs_without_submitting(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = evaluation.DEFAULT_CONFIG.parents[3]
-    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
+    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("dry run submitted a process"))
 
     assert (
@@ -316,7 +316,7 @@ def test_submission_requires_omission_acknowledgement(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = evaluation.DEFAULT_CONFIG.parents[3]
-    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
+    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("guard did not stop submission"))
 
     with pytest.raises(SystemExit, match="allow-known-omissions"):
@@ -336,7 +336,7 @@ def test_submission_requires_omission_acknowledgement(
 
 def test_distinct_output_prefixes_produce_distinct_job_names(monkeypatch: pytest.MonkeyPatch) -> None:
     root = evaluation.DEFAULT_CONFIG.parents[3]
-    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
+    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
     config = evaluation.load_evaluation_config(evaluation.DEFAULT_CONFIG)
     common = {
         "config_path": evaluation.DEFAULT_CONFIG,
@@ -353,7 +353,7 @@ def test_distinct_output_prefixes_produce_distinct_job_names(monkeypatch: pytest
 
 def test_checkpoint_evaluation_plan_selects_durable_actor_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     root = evaluation.DEFAULT_CONFIG.parents[3]
-    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
+    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
     checkpoint_uri = "s3://bucket/run/checkpoints/global_step_2/actor"
 
     plan = evaluation.build_plan(

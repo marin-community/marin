@@ -494,11 +494,13 @@ jobs:
           cache-dependency-glob: "vendor/skyrl/uv.lock"
       - name: Check independent lock, source provenance, and built wheel
         run: uv run --no-project python -m scripts.skyrl_migration check-vendor
-      - name: Exercise the isolated source bundle and math verifier
+      - name: Exercise the isolated source bundle, OPD launcher, and verifier
         working-directory: vendor/skyrl
         run: |
           uv run --isolated --frozen --no-group dev --with pytest==8.4.2 pytest -q \
             cloud/iris/tests/test_vendored_runtime_bundle.py \
+            cloud/iris/tests/test_open_mopd_fidelity.py \
+            cloud/iris/tests/test_open_mopd_evaluation.py \
             skyrl-gym/tests/test_aime_answer_normalization.py
 
   unit_tests:

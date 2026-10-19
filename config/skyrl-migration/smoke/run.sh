@@ -3,9 +3,13 @@ set -euo pipefail
 
 payload="$(cd -- "$(dirname -- "$0")" && pwd)"
 environment="${IRIS_VENV:-$payload/.venv}"
+runtime_extra_flags=$(python3.12 -c \
+  'import json, sys; print(" ".join("--extra=" + extra for extra in json.load(open(sys.argv[1]))["runtime_extras"]))' \
+  "$payload/receipt.json")
+read -r -a runtime_extras <<< "$runtime_extra_flags"
 UV_PROJECT_ENVIRONMENT="$environment" uv sync --frozen --no-install-project \
   --project "$payload/dependencies" --python python3.12 --no-python-downloads \
-  --no-group dev --extra megatron --extra vllm --extra telemetry --link-mode symlink
+  --no-group dev "${runtime_extras[@]}" --link-mode symlink
 uv pip install --python "$environment/bin/python" --no-deps "$payload/"*.whl
 "$environment/bin/python" "$payload/check_dependencies.py"
 "$environment/bin/python" -m marinskyrl.environment_contract write-frozen-cuda-runtime "$payload/runtime.sh"

@@ -26,6 +26,7 @@ def write_json(path: Path, value: object) -> None:
 
 
 def inputs() -> tuple[list[dict], dict]:
+    """Return the verified Math500 rows and the candidate's identity receipt."""
     receipt = json.loads((PAYLOAD / "receipt.json").read_text())
     data = (PAYLOAD / "math500.json").read_bytes()
     assert hashlib.sha256(data).hexdigest() == receipt["dataset_sha256"]

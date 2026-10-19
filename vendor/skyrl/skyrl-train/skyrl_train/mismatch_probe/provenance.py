@@ -27,7 +27,7 @@ def software_provenance(probe, trainer) -> dict[str, str | None]:
     return {
         "python": platform.python_version(),
         "torch": str(torch.__version__),
-        "marinskyrl_commit": probe.cfg.get("runtime", {}).get("launcher_commit"),
+        "marinskyrl_source_digest": probe.cfg.get("runtime", {}).get("source_digest"),
         "marinskyrl_version": version("marinskyrl"),
         "marin_finestore_version": version("marin-finestore"),
         "vllm_version": version("vllm"),
@@ -47,7 +47,7 @@ def manifest(probe, trainer, *, status: mismatch.ArchiveStatus):
             or trainer.cfg.trainer.resume_path
             or trainer.cfg.trainer.policy.model.path
         ),
-        runtime_commit=software["marinskyrl_commit"],
+        runtime_commit=software["marinskyrl_source_digest"],
         source_probe_archive=probe.spec.reuse_probe,
         tokenizer_fingerprint=probe.tokenizer_fingerprint,
         starting_global_step=probe.starting_global_step,

@@ -30,7 +30,7 @@ from marin.rl.skyrl import (
     TaskTroveSelection,
     TaskTroveTagMatch,
     run_skyrl,
-    skyrl_runtime_revision,
+    skyrl_runtime_digest,
     skyrl_step,
     skyrl_temporary_run_path,
 )
@@ -476,7 +476,7 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert launch["iris"]["timeout"] == 1800
     assert launch["schema_version"] == 1
     assert launch["run"]["export_hf"] is True
-    assert launch["runtime"]["launcher_commit"] == skyrl_runtime_revision()
+    assert launch["runtime"]["source_digest"] == skyrl_runtime_digest()
     assert launch["iris"]["allocation"] == {
         "num_nodes": 1,
         "gpus_per_node": 4,

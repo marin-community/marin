@@ -61,7 +61,7 @@ class LaunchResult:
     state: LaunchState
     iris_job_id: str | None
     iris_job_state: str | None
-    launcher_commit: str
+    source_digest: str
     runtime_profile: str
     model: ExportedPolicy | None
     failure: str | None
@@ -135,7 +135,7 @@ def _result(
         state=state,
         iris_job_id=outcome.job_id if outcome else None,
         iris_job_state=outcome.job_state if outcome else None,
-        launcher_commit=str(config.runtime.launcher_commit),
+        source_digest=str(config.runtime.source_digest),
         runtime_profile=str(config.runtime.profile),
         model=model,
         failure=failure,
@@ -163,7 +163,7 @@ def _record_failure(
 def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -> LaunchResult:
     """Execute the lifecycle declared by one resolved launch config."""
     config = _prepare_config(load_launch_config(config_path))
-    runtime_bundle_inputs(str(config.runtime.launcher_commit))
+    runtime_bundle_inputs(str(config.runtime.source_digest))
     terminal_manifest_uri = str(config.artifacts.terminal_manifest_uri)
     if StoragePath(terminal_manifest_uri).exists():
         raise ValueError(f"Terminal manifest is immutable and already exists: {terminal_manifest_uri}")

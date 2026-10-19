@@ -45,8 +45,8 @@ SKYRL_PROJECT = Path("vendor/skyrl")
 SKYRL_PROVENANCE = Path("marinskyrl/_vendor_provenance.json")
 
 
-def skyrl_runtime_revision() -> str:
-    """Identify the independently locked source without importing SkyRL into Marin."""
+def skyrl_runtime_digest() -> str:
+    """Return the SHA-256 digest identifying the vendored SkyRL source and lock."""
     workspace = find_project_root(Path(__file__))
     if workspace is None:
         raise RuntimeError("The SkyRL runtime requires a Marin checkout")
@@ -71,7 +71,7 @@ class SkyRLRuntime:
     """Content-addressed SkyRL source and independently locked dependency profile."""
 
     profile: SkyRLRuntimeProfile
-    commit: str = field(init=False, default_factory=skyrl_runtime_revision)
+    source_digest: str = field(init=False, default_factory=skyrl_runtime_digest)
 
 
 @dataclass(frozen=True)
@@ -696,7 +696,7 @@ def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
-    """Run the pinned external launcher and return its validated result."""
+    """Run the nested SkyRL executable and return its validated result."""
     response: _SkyRLLaunchResponse | None = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as launch_file:
@@ -795,7 +795,7 @@ def _launch_config_yaml(
             "export_hf": export_hf,
         },
         "runtime": {
-            "launcher_commit": spec.runtime.commit,
+            "source_digest": spec.runtime.source_digest,
             "profile": spec.runtime.profile.value,
             "entrypoint": "",
             "experiments_dir": "/app/experiments",

@@ -94,7 +94,7 @@ class EvaluationLaunchPlan:
     gate: str
     job_name: str
     gpu_slice: str
-    launcher_commit: str
+    source_digest: str
     source_commit: str
     protocol_source_commit: str
     model_repository: str | None
@@ -391,8 +391,8 @@ def build_plan(
         selected_slice,
         "--task-image",
         task_image,
-        "--launcher-commit",
-        source.commit,
+        "--source-digest",
+        source.digest,
     )
     if normalized_checkpoint_uri is not None and checkpoint_step is not None:
         task_args += ("--checkpoint-uri", normalized_checkpoint_uri, "--checkpoint-step", str(checkpoint_step))
@@ -442,7 +442,7 @@ def build_plan(
         gate=gate,
         job_name=job_name,
         gpu_slice=selected_slice,
-        launcher_commit=source.commit,
+        source_digest=source.digest,
         source_commit=fidelity.source.commit,
         protocol_source_commit=config.protocol.source_commit,
         model_repository=(

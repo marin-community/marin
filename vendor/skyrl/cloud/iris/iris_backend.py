@@ -288,7 +288,7 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
         rendezvous_dir=ray["rendezvous_dir"],
         cluster=iris["cluster"],
         cluster_config=iris["cluster_config"],
-        runtime_commit=runtime["launcher_commit"],
+        source_digest=runtime["source_digest"],
         runtime_profile=RuntimeProfile(runtime["profile"]),
         job_name=iris["job_name"],
         priority=iris["priority"],
@@ -324,7 +324,7 @@ class IrisBackend:
         if config.run.submission == SubmissionMode.PREPARE:
             raise ValueError("Prepare mode validates a launch without submitting it")
         with contextlib.redirect_stdout(sys.stderr):
-            return launch(args, config.runtime.launcher_commit)
+            return launch(args, config.runtime.source_digest)
 
     def export_terminal_policy(self, config_path: Path) -> None:
         export_terminal_policy(config_path)
@@ -805,9 +805,9 @@ def build_config_task_command(args: SimpleNamespace) -> list[str]:
     return _build_task_shell(args, controller_cmd, pythonpath)
 
 
-def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcome:
+def launch(args: SimpleNamespace, expected_source_digest: str) -> LaunchOutcome:
     """Submit a resolved launch config and, unless detached, wait for its terminal state."""
-    workspace = build_runtime_bundle(expected_launcher_commit)
+    workspace = build_runtime_bundle(expected_source_digest)
 
     if not args.job_name:
         args.job_name = f"rl-iris-{time.strftime('%Y%m%d-%H%M%S')}"
@@ -839,7 +839,7 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
     user = os.environ.get("USER") or os.environ.get("USERNAME") or "user"
     print(f"[rl-iris] Job:        /{user}/{args.job_name}", flush=True)
     print(f"[rl-iris] Cluster:    {args.cluster}  ({args.cluster_config})", flush=True)
-    print(f"[rl-iris] Runtime:    {args.runtime_commit} ({args.runtime_profile.value})", flush=True)
+    print(f"[rl-iris] Runtime:    {args.source_digest} ({args.runtime_profile.value})", flush=True)
     print(
         f"[rl-iris] Topology:   {args.num_nodes} node(s) x {gpu_spec}  "
         f"(= {args.num_nodes * args.gpus_per_node} GPUs, exclusive, gang/leafgroup)",
@@ -1098,7 +1098,7 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
             environment=EnvironmentSpec(
                 env_vars=env_vars,
                 extras=["gpu"],
-                setup_scripts=[task_setup_script(args.runtime_commit, args.runtime_profile)],
+                setup_scripts=[task_setup_script(args.source_digest, args.runtime_profile)],
             ),
             constraints=constraints or None,
             coscheduling=coscheduling,

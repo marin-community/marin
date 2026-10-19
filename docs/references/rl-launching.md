@@ -64,7 +64,7 @@ may depend on Marin packages inside its own environment; Marin calls SkyRL only
 through the executable.
 
 The launch document records the SHA-256 of the vendored provenance document in
-`runtime.launcher_commit`. That document binds the source, migration patches,
+`runtime.source_digest`. That document binds the source, migration patches,
 runtime assets, and independent lock. The launcher verifies their hashes before
 bundling them for Iris. Workers install the bundled project in editable mode
 with the frozen Megatron/vLLM profile. They do not fetch the fork or require Git.
@@ -172,7 +172,7 @@ temporary-storage helper for checkpoints and trajectories so paths have a bounde
 not repeat a source bucket prefix.
 
 The temporary checkpoint root is derived from the RL artifact name and version, not only from the
-runtime commit. When `SkyRLRuntime.commit` changes, use a fresh RL artifact version. Reusing the old
+runtime source digest. When `SkyRLRuntime.source_digest` changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old
 runtime. Reuse a version across a runtime repin only after establishing checkpoint compatibility or
 selecting a fresh checkpoint root.

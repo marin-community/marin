@@ -43,7 +43,7 @@ def runtime_profile_for_strategy(
     raise ValueError(f"Unsupported training strategy: {strategy}")
 
 
-def task_setup_script(commit: str, profile: RuntimeProfile) -> str:
+def task_setup_script(source_digest: str, profile: RuntimeProfile) -> str:
     """Verify bundled source and install its independently frozen dependency profile."""
     checkout = MARINSKYRL_TASK_ROOT
     activation_file = MARINSKYRL_ACTIVATION_FILE
@@ -51,7 +51,7 @@ def task_setup_script(commit: str, profile: RuntimeProfile) -> str:
     return f"""set -euo pipefail
 checkout={shlex.quote(checkout)}
 cd "$checkout"
-python3.12 -c {shlex.quote('from cloud.iris.runtime_bundle import validate_bundled_runtime; assert validate_bundled_runtime() == ' + repr(commit))}
+python3.12 -c {shlex.quote('from cloud.iris.runtime_bundle import validate_bundled_runtime; assert validate_bundled_runtime() == ' + repr(source_digest))}
 bash {shlex.quote(bootstrap_script)} \
   "$checkout" \
   "$IRIS_VENV" \

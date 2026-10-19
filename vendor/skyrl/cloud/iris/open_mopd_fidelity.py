@@ -135,7 +135,7 @@ class FidelityLaunchPlan:
     steps: int
     gpu_slice: str
     source_commit: str
-    launcher_commit: str
+    source_digest: str
     task_image: str
     output_uri: str
     evaluation_reference: ModelArtifact
@@ -372,7 +372,7 @@ def validate_output_uri(output_uri: str, *, option_name: str = "--output-uri") -
 def _provenance(task_image: str, source: LauncherSource) -> tuple[str, str]:
     if not re.fullmatch(r"[^@]+@sha256:[0-9a-f]{64}", task_image):
         raise ValueError("--task-image must be a digest-addressed image reference")
-    return source.commit, task_image
+    return source.digest, task_image
 
 
 def _deviations(config: FidelityConfig, gpu_slice: str) -> tuple[str, ...]:
@@ -390,7 +390,7 @@ def _iris_command(
     cluster_config: Path,
     output_uri: str,
     task_image: str,
-    launcher_commit: str,
+    source_digest: str,
     launcher_root: Path,
     gpu_slice: str,
 ) -> tuple[str, ...]:
@@ -441,8 +441,8 @@ def _iris_command(
         gpu_slice,
         "--task-image",
         task_image,
-        "--launcher-commit",
-        launcher_commit,
+        "--source-digest",
+        source_digest,
     )
 
 
@@ -462,7 +462,7 @@ def build_plan(
     gpu_slice = gpu_slice or config.hardware.gpu
     gpu_count(gpu_slice)
     launcher_source = resolve_launcher_source()
-    launcher_commit, pinned_image = _provenance(task_image, launcher_source)
+    source_digest, pinned_image = _provenance(task_image, launcher_source)
     command = _iris_command(
         config,
         config_path=config_path,
@@ -470,7 +470,7 @@ def build_plan(
         cluster_config=cluster_config,
         output_uri=output_uri,
         task_image=pinned_image,
-        launcher_commit=launcher_commit,
+        source_digest=source_digest,
         launcher_root=launcher_source.root,
         gpu_slice=gpu_slice,
     )
@@ -479,7 +479,7 @@ def build_plan(
         steps=GATES[gate],
         gpu_slice=gpu_slice,
         source_commit=config.source.commit,
-        launcher_commit=launcher_commit,
+        source_digest=source_digest,
         task_image=pinned_image,
         output_uri=output_uri,
         evaluation_reference=config.evaluation_reference,

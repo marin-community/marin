@@ -14,7 +14,14 @@ from cloud.iris.paths import PROJECT_ROOT
 BUNDLE_FILE_MANIFEST = Path("cloud/iris/runtime_bundle_files.txt")
 BUNDLE_IDENTITY_FILE = ".marinskyrl-runtime.json"
 PROVENANCE_FILE = Path("marinskyrl/_vendor_provenance.json")
-RUNTIME_SOURCE_PREFIXES = ("cloud/", "marinskyrl/", "chat_templates/", "skyrl-train/skyrl_train/", "skyrl-gym/skyrl_gym/")
+RUNTIME_SOURCE_PREFIXES = (
+    "cloud/",
+    "marinskyrl/",
+    "chat_templates/",
+    "skyrl-train/skyrl_train/",
+    "skyrl-gym/skyrl_gym/",
+    "open_mopd_versions.py",
+)
 
 
 @dataclass(frozen=True)
@@ -22,7 +29,7 @@ class LauncherSource:
     """Immutable source selected for launcher runtime files."""
 
     root: Path
-    commit: str
+    digest: str
 
 
 @dataclass(frozen=True)
@@ -33,13 +40,13 @@ class RuntimeBundleFile:
 
 @dataclass(frozen=True)
 class RuntimeBundleIdentity:
-    launcher_commit: str
+    source_digest: str
     files: tuple[RuntimeBundleFile, ...]
 
 
 def resolve_launcher_source() -> LauncherSource:
     """Identify the nested source from its captured source and dependency hashes."""
-    return LauncherSource(root=PROJECT_ROOT, commit=_sha256(PROJECT_ROOT / PROVENANCE_FILE))
+    return LauncherSource(root=PROJECT_ROOT, digest=_sha256(PROJECT_ROOT / PROVENANCE_FILE))
 
 
 def _bundle_relative_path(value: str) -> Path:
@@ -86,7 +93,7 @@ def _sha256(path: Path) -> str:
 
 
 def validate_bundled_runtime(workspace: Path | None = None) -> str:
-    """Verify the files synced into an Iris task and return their launcher commit."""
+    """Verify the files synced into an Iris task and return their source digest."""
     root = workspace or PROJECT_ROOT
     identity_path = root / BUNDLE_IDENTITY_FILE
     if not identity_path.is_file():
@@ -94,9 +101,9 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
     value = json.loads(identity_path.read_text())
     if not isinstance(value, dict):
         raise RuntimeError(f"Runtime bundle identity is invalid: {identity_path}")
-    launcher_commit = value.get("launcher_commit")
+    source_digest = value.get("source_digest")
     file_values = value.get("files")
-    if not isinstance(launcher_commit, str) or not isinstance(file_values, list):
+    if not isinstance(source_digest, str) or not isinstance(file_values, list):
         raise RuntimeError(f"Runtime bundle identity is invalid: {identity_path}")
     files: list[RuntimeBundleFile] = []
     for entry in file_values:
@@ -112,27 +119,27 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
         bundled_file = root / relative_path
         if not bundled_file.is_file() or _sha256(bundled_file) != entry.sha256:
             raise RuntimeError(f"Runtime bundle file does not match its recorded identity: {entry.path}")
-    source = LauncherSource(root=root, commit=_sha256(root / PROVENANCE_FILE))
-    if source.commit != launcher_commit:
+    source = LauncherSource(root=root, digest=_sha256(root / PROVENANCE_FILE))
+    if source.digest != source_digest:
         raise ValueError("Bundled source provenance does not match the selected runtime identity")
     _bundle_paths(source)
-    return launcher_commit
+    return source_digest
 
 
-def runtime_bundle_inputs(expected_launcher_commit: str) -> tuple[LauncherSource, tuple[Path, ...]]:
+def runtime_bundle_inputs(expected_source_digest: str) -> tuple[LauncherSource, tuple[Path, ...]]:
     """Validate and return the runtime files identified by a launch request."""
     source = resolve_launcher_source()
-    if source.commit != expected_launcher_commit:
+    if source.digest != expected_source_digest:
         raise ValueError(
-            f"Selected runtime source identity {source.commit} does not match requested {expected_launcher_commit}"
+            f"Selected runtime source identity {source.digest} does not match requested {expected_source_digest}"
         )
     paths = _bundle_paths(source)
     return source, paths
 
 
-def build_runtime_bundle(expected_launcher_commit: str) -> Path:
+def build_runtime_bundle(expected_source_digest: str) -> Path:
     """Copy the selected runtime files into an Iris workspace."""
-    source, paths = runtime_bundle_inputs(expected_launcher_commit)
+    source, paths = runtime_bundle_inputs(expected_source_digest)
 
     workspace = Path(tempfile.mkdtemp(prefix="marinskyrl-runtime-bundle-"))
     files: list[RuntimeBundleFile] = []
@@ -141,6 +148,6 @@ def build_runtime_bundle(expected_launcher_commit: str) -> Path:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source.root / relative_path, destination)
         files.append(RuntimeBundleFile(path=relative_path.as_posix(), sha256=_sha256(destination)))
-    identity = RuntimeBundleIdentity(launcher_commit=source.commit, files=tuple(files))
+    identity = RuntimeBundleIdentity(source_digest=source.digest, files=tuple(files))
     (workspace / BUNDLE_IDENTITY_FILE).write_text(json.dumps(asdict(identity), indent=2, sort_keys=True) + "\n")
     return workspace

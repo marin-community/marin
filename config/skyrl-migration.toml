@@ -46,11 +46,17 @@ reason = "independently built marinskyrl wheel and GPU dependency profiles"
 glob = "uv.lock"
 reason = "independent frozen runtime; never merged into Marin's lock"
 [[keep]]
+glob = "open_mopd_versions.py"
+reason = "Open-MOPD task and image preflights import this root-level helper"
+[[keep]]
+glob = "cloud/iris/configs/open_mopd_*.json"
+reason = "default manifests loaded by the retained Open-MOPD fidelity and evaluation commands"
+[[keep]]
 glob = "cloud/iris/runtime_bundle_files.txt"
 reason = "launcher bundle inventory"
 [[keep]]
 glob = "cloud/iris/bootstrap_runtime.sh"
-reason = "frozen GPU setup; requires binary-bootstrap adaptation before cutover"
+reason = "frozen GPU setup for the independently locked bundled source"
 [[keep]]
 glob = "chat_templates/**"
 reason = "templates loaded by path and included in the wheel"

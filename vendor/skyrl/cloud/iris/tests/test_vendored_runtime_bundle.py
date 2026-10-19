@@ -33,7 +33,7 @@ def bundled_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     provenance.write_text(json.dumps({"files": hashes}))
     monkeypatch.setattr(runtime_bundle, "PROJECT_ROOT", project)
     source = runtime_bundle.resolve_launcher_source()
-    workspace = runtime_bundle.build_runtime_bundle(source.commit)
+    workspace = runtime_bundle.build_runtime_bundle(source.digest)
     yield source, workspace
     shutil.rmtree(workspace)
 
@@ -42,7 +42,7 @@ def test_vendored_runtime_bundles_frozen_dependencies_and_assets_without_git(bun
     source, workspace = bundled_source
     assert (workspace / "uv.lock").read_bytes() == (source.root / "uv.lock").read_bytes()
     assert (workspace / "chat_templates/model.jinja2").read_text() == "{{ messages }}"
-    assert runtime_bundle.validate_bundled_runtime(workspace) == source.commit
+    assert runtime_bundle.validate_bundled_runtime(workspace) == source.digest
 
 
 def test_changed_bundled_training_config_is_rejected(bundled_source):
