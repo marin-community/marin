@@ -190,6 +190,21 @@ class _Segment:
     finished: float
 
 
+def _without_logprobs(chunk: ChatCompletionChunk) -> ChatCompletionChunk:
+    """``chunk`` with its choices' logprobs dropped, for the SDK's stream accumulator only.
+
+    ``ChatCompletionStreamState.handle_chunk`` rebuilds the whole accumulated snapshot, logprobs list included, on
+    every chunk, so a reply with per-token logprobs costs quadratic CPU on the event loop (8,000 tokens: 43 s in one
+    call), which starves every other request in the process. The raw events keep the logprobs; ``rollout_model``
+    reads tokens and logprobs from them, never from the snapshot.
+    """
+    if not any(choice.logprobs is not None for choice in chunk.choices):
+        return chunk
+    return chunk.model_copy(
+        update={"choices": [choice.model_copy(update={"logprobs": None}) for choice in chunk.choices]}
+    )
+
+
 def _carries_token(chunk: ChatCompletionChunk) -> bool:
     """Check a chunk for generated text in its content, reasoning or tool-call deltas.
 
@@ -634,7 +649,7 @@ class GlmClient:
                     except StopAsyncIteration:
                         break
                     events.append(chunk.model_dump_json())
-                    state.handle_chunk(chunk)
+                    state.handle_chunk(_without_logprobs(chunk))
                     if _carries_token(chunk):
                         last_token = time.monotonic()
                         if ttft is None:
