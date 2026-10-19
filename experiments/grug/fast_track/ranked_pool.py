@@ -7,7 +7,6 @@ Records must carry a positive integer ``token_count`` column.
 """
 
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import ExitStack
 from dataclasses import dataclass
 from itertools import islice
 from typing import Any
@@ -17,7 +16,7 @@ import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.writers import ensure_parent_dir
+from zephyr.writers import write_parquet_file
 
 RANKED_BATCH_ROWS = 1024
 RANGE_FILE_PREFIX = "range-"
@@ -47,21 +46,9 @@ class PrefixResult:
 
 
 def write_parquet_tables(path: str, tables: Iterable[pa.Table], *, schema: pa.Schema | None = None) -> int:
-    """Stream tables into one Parquet file and return its row count.
-
-    The first table sets the file schema unless ``schema`` is given.
-    """
-    ensure_parent_dir(path)
-    rows = 0
-    with ExitStack() as stack:
-        stream = stack.enter_context(StoragePath(path).open("wb"))
-        writer = None
-        for table in tables:
-            if writer is None:
-                writer = stack.enter_context(pq.ParquetWriter(stream, schema or table.schema))
-            writer.write_table(table)
-            rows += table.num_rows
-    return rows
+    """Stream tables into one Parquet file with Zephyr's writer and return its row count."""
+    batches = (batch for table in tables for batch in table.to_batches())
+    return write_parquet_file(batches, path, schema=schema)["count"]
 
 
 def _write_range(output_path: str) -> Callable[[int, Iterator[dict[str, Any]]], RangeTokenTotal]:

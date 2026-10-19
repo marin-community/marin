@@ -270,7 +270,7 @@ def task_examples(task: str) -> list[TaskExample]:
     return examples
 
 
-STAGED_TASKS_ROOT = f"s3://marin-us-east-02a/marin/user/rav/projects/quality-loss-eval/{DOWNSTREAM_TASKS_VERSION}"
+STAGED_TASKS_ROOT = f"s3://marin-us-east-02a/marin/fast-track/downstream-tasks/{DOWNSTREAM_TASKS_VERSION}"
 
 
 def staged_task_examples(task: str) -> list[TaskExample]:
@@ -281,6 +281,8 @@ def staged_task_examples(task: str) -> list[TaskExample]:
 
 def stage_tasks(root: str) -> None:
     """Freeze every task's examples as JSONL under ``root``, so every checkpoint sees the same requests."""
+    if StoragePath(root).exists():
+        raise FileExistsError(f"{root} exists; bump DOWNSTREAM_TASKS_VERSION to stage new tasks")
     for task in TASK_BUILDERS:
         examples = task_examples(task)
         with StoragePath(prefix_join(root, f"{task}.jsonl")).open("w") as stream:
