@@ -38,7 +38,7 @@ from taskcompendium.submission import (
     submission_instruction,
 )
 
-from rolloutengine.harness.core import HarnessContext, RolloutRecorder
+from rolloutengine.harness.core import HarnessContext, ModelSession
 from rolloutengine.models import (
     LENGTH_STOP_REASON,
     EventSink,
@@ -200,7 +200,7 @@ class ShellHarness:
             if tool != provider_tools[tool.name].definition:
                 raise ValueError(f"Interaction tool {tool.name!r} differs from its provider's definition")
 
-    async def run(self, context: HarnessContext, recorder: RolloutRecorder) -> None:
+    async def run(self, context: HarnessContext, session: ModelSession) -> None:
         task, machine = context.task, context.machine
         shell_tool = resolve_shell_tool(task, self.shell_tool)
         provider_tools = _provider_tools(task, shell_tool, self.tools)
@@ -212,18 +212,18 @@ class ShellHarness:
             tools[shell_tool.definition.name] = _ShellToolSession(machine, shell_tool, self.command_timeout)
         for name, bound in provider_tools.items():
             if bound.requirement_name not in sessions:
-                session = await bound.provider.open(ToolContext(machine, bound.requirement))
-                context.cleanup.push("tool_provider_close", session.close)
-                sessions[bound.requirement_name] = session
+                provider_session = await bound.provider.open(ToolContext(machine, bound.requirement))
+                context.cleanup.push("tool_provider_close", provider_session.close)
+                sessions[bound.requirement_name] = provider_session
             tools[name] = sessions[bound.requirement_name]
         definitions = tuple(tool.definition for tool in provider_tools.values())
-        turn = await recorder.start(task_prompt(task, shell_tool, definitions))
+        turn = await session.start(task_prompt(task, shell_tool, definitions))
         while True:
             transition = await _call_tools(task, machine, tools, context.events, turn)
             if transition.done:
-                recorder.record(observations=transition.observations, metrics=transition.metrics)
+                session.record(observations=transition.observations, metrics=transition.metrics)
                 return
-            turn = await recorder.reply(transition.observations)
+            turn = await session.reply(transition.observations)
 
 
 class _ShellToolSession:

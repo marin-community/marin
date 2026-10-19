@@ -126,7 +126,7 @@ class RolloutFailure:
 
 @dataclass(frozen=True)
 class ConversationRecord:
-    """One conversation of an attempt: from a ``RolloutRecorder.start`` to the next one, or to the end."""
+    """One conversation of an attempt: from a ``ModelSession.start`` to the next one, or to the end."""
 
     messages: tuple[dict[str, Any], ...]
     """The chat of this conversation, through its last model response. The grader reads the last one with a turn."""
@@ -146,7 +146,7 @@ class ConversationRecord:
 class Rollout:
     """What happened in one attempt: its conversations, with their token evidence and steps, and the run outputs.
 
-    Each ``RolloutRecorder.start`` starts a new conversation, and the rollout keeps all of them. A trainer can use
+    Each ``ModelSession.start`` starts a new conversation, and the rollout keeps all of them. A trainer can use
     each conversation as a sample, or only the last one.
     """
 

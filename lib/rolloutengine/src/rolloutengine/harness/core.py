@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The harness contract: the agent loop of one task attempt, and the recorder that it calls the model through.
+"""The harness contract: the agent loop of one task attempt, and its session with the model.
 
 A harness runs the loop: it sends prompts, runs tools, and decides when the attempt ends. It calls the model
-through its ``RolloutRecorder``, which records the exact tokens and applies the turn and token limits.
+through its ``ModelSession``, which records the exact tokens and applies the turn and token limits.
 The harness does not grade: the engine grades the rollout with the task's grader after the harness ends.
 """
 
@@ -46,7 +46,7 @@ class HarnessContext:
     run_id: str
 
 
-class RolloutRecorder(Protocol):
+class ModelSession(Protocol):
     """The model, as the harness of one attempt calls it. It records the exact tokens and applies the limits.
 
     One request can be open at a time. A request that is cancelled while the model generates changes
@@ -105,6 +105,6 @@ class Harness(Protocol):
         """Raise an error if this harness cannot run ``task`` under ``limits``, before any machine starts."""
         ...
 
-    async def run(self, context: HarnessContext, recorder: RolloutRecorder) -> None:
+    async def run(self, context: HarnessContext, session: ModelSession) -> None:
         """Run one attempt. Return when the task is done, and let ``RolloutEnded`` and ``LimitReached`` propagate."""
         ...

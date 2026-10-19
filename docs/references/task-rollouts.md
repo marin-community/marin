@@ -5,7 +5,7 @@
 The engine holds the machine factories and the harnesses; each run passes the model, the policy under rollout.
 The caller owns concurrency, retries, group grading, and training projections.
 TaskCompendium defines `TaskSpec`, its graders, and grading outcomes. VerifyIT supplies grading modes and their implementations.
-Shellbox supplies machine backends. RolloutEngine supplies the harness contract, the recorder that calls the model, and the built-in harnesses.
+Shellbox supplies machine backends. RolloutEngine supplies the harness contract, the model session that records each model turn, and the built-in harnesses.
 
 ```mermaid
 flowchart TD
@@ -15,8 +15,8 @@ flowchart TD
     Spec --> Caller[Caller: task scheduler or rollout worker]
     Caller --> Engine[RolloutEngine: machines, grading, cleanup]
     Engine --> Harness[Harness: prompts, tools, and the loop]
-    Harness --> Recorder[RolloutRecorder: limits and exact tokens]
-    Recorder --> Model[Model: public messages and exact tokens]
+    Harness --> Session[ModelSession: limits and exact tokens]
+    Session --> Model[Model: public messages and exact tokens]
     Harness --> Machine[Shellbox task machine]
     Engine --> Grader[Grader: in process, through a judge service, or in a verifier machine]
     Engine --> Record[Rollout: conversations, tokens, masks, logprobs, grade]
@@ -103,17 +103,17 @@ It implements the `Harness` protocol from `rolloutengine.harness.core`:
 
 - `check(task, limits)` rejects a task that the harness cannot run under the limits. The engine calls it
   before any machine starts.
-- `run(context, recorder)` runs one attempt and returns when the task is done. `HarnessContext` holds the
+- `run(context, session)` runs one attempt and returns when the task is done. `HarnessContext` holds the
   task, the prepared task machine or `None`, an event sink, the attempt's cleanup scope, and its run ID. The
-  harness calls the model through `recorder`, a `RolloutRecorder`.
+  harness calls the model through `session`, a `ModelSession`.
 
 A harness does not grade. After `run` returns, the engine grades the rollout with the task's grader (see
 [Grading](#grading)). A harness can attach its own reward to a step with `record(data=...)`. The engine does
 not read it.
 
-### Recorder
+### Model session
 
-A harness calls the model through its `RolloutRecorder`, which records the exact tokens and applies the turn
+A harness calls the model through its `ModelSession`, which records the exact tokens and applies the turn
 and token limits:
 
 - `start(prompt)` starts a new conversation with a `Prompt`: public messages, model options, and optionally
@@ -127,7 +127,7 @@ and token limits:
   recorded observations takes no `reply`.
 - `limits` holds the attempt's `RolloutLimits`, for example to tell the model that one turn is left.
 
-The recorder applies these rules:
+The session applies these rules:
 
 - One request can be open at a time. A second one raises `RuntimeError`.
 - The record holds the assistant message that the model returns. A harness can parse it, but must not change it.
@@ -141,7 +141,7 @@ The recorder applies these rules:
   or attempt deadline stops it. After a refusal, `record(data=..., metrics=...)` still adds to the step of the
   last turn until the record is final, for example to attach a final reward. If no turn exists, `record` raises
   the refusal again, so the refusal stays the outcome of the attempt.
-- The record is final when `run` returns or raises, or when a turn deadline expires. The recorder then cancels
+- The record is final when `run` returns or raises, or when a turn deadline expires. The session then cancels
   a model call that is still open, for example in an agent's HTTP handler, and ignores its result. Thus the
   grader and the returned rollout see the same record.
 
@@ -389,10 +389,10 @@ Durations are wall-clock seconds.
 | --- | --- | --- |
 | `AttemptStarted` | After validation, before machine acquisition | |
 | `MachineReady` | After task-machine setup; not emitted without a task machine | `duration` |
-| `ConversationStarted` | When the recorder records the first request of a conversation: the model answered or failed, or the harness ended | the request's `messages` and `options`; `duration` from the start of the harness, or from the last model turn, to the request |
+| `ConversationStarted` | When the session records the first request of a conversation: the model answered or failed, or the harness ended | the request's `messages` and `options`; `duration` from the start of the harness, or from the last model turn, to the request |
 | `ModelTurnCompleted` | After a model turn passes the token checks | `turn_index`, assistant `message`, `stop_reason`, prompt and response token counts (as reported and unchecked under `TraceMode.MESSAGES`), `usage`, `ModelTurn.metadata`, `duration` |
 | `ToolCallCompleted` | By a harness, per tool call that returns an observation | `call_id`, `name`, `observation_bytes`, `done`, `duration` |
-| `TransitionCompleted` | When the recorder records what followed a turn: the harness's next request, a refusal at a limit, or the end of the harness | `turn_index`, `done`, `observations`; `duration` from the turn to the next request or the end |
+| `TransitionCompleted` | When the session records what followed a turn: the harness's next request, a refusal at a limit, or the end of the harness | `turn_index`, `done`, `observations`; `duration` from the turn to the next request or the end |
 | `Graded` | After grading returns | `status`, `reward`, `error`, `failure`, `duration` of output capture and grading |
 | `AttemptEnded` | After cleanup, when `run_task()` returns or raises `RolloutInterrupted` | `stop_reason`, or the interrupted `operation` and its `error`; `duration` of the whole attempt |
 
@@ -444,7 +444,7 @@ earlier turns, so a request charges the full prefix again; a new conversation do
 If the model callable sets `ModelTurn.usage` (`TokenUsage(prompt_tokens, completion_tokens)`), the engine
 charges those counts. Otherwise it charges `len(prompt_token_ids) + len(response_token_ids)`.
 Without a new conversation, the next prompt holds at least the previous request's prompt and response.
-After each response, the recorder refuses the next request when the tokens spent plus that request's count reach
+After each response, the session refuses the next request when the tokens spent plus that request's count reach
 `max_total_tokens`. The new observations of the next request are not in that count, so the last request sent
 can exceed the budget by its observation and response tokens.
 The harness handles the last response; its next request raises `LimitReached`, and the engine grades with
@@ -548,7 +548,7 @@ they end. The transport tokenizes only the messages after that index and appends
 If `Prompt.token_ids` or the `token_ids` of `reply` is set, `ModelRequest.prompt_token_ids` carries that exact
 prompt to the model transport, and the request has no continuation. The returned turn must report the same
 prompt tokens. Under `TraceMode.EXACT_TOKENS`, the pinned tokens of a `reply` must start with the served
-tokens. If they do not, the recorder sends no request, and the engine raises `RolloutContractError`.
+tokens. If they do not, the session sends no request, and the engine raises `RolloutContractError`.
 `ModelTurn.prompt_token_ids` contains the exact prompt sent to inference. `response_token_ids` contains the sampled response.
 Optional log probabilities align with response tokens.
 A continuation prompt preserves the full served prefix, including earlier response tokens.

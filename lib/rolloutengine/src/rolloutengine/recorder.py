@@ -148,7 +148,7 @@ class _Request:
 
 
 class _Recorder:
-    """The ``RolloutRecorder`` of one attempt: send the harness's requests, record them, and apply the limits.
+    """The ``ModelSession`` of one attempt: send the harness's requests, record them, and apply the limits.
 
     It is outside the attempt deadline, so an interrupted attempt keeps all that it recorded. A request
     changes the record only when the model answers or fails. Thus a request that is cancelled while the

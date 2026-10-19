@@ -665,10 +665,10 @@ async def test_a_new_conversation_replaces_the_model_options(next_options):
         def check(self, task, limits):
             pass
 
-        async def run(self, context, recorder):
-            await recorder.start(Prompt(({"role": "user", "content": "Use a tool."},), initial_options))
-            await recorder.start(Prompt(revised_messages, next_options))
-            await recorder.reply(())
+        async def run(self, context, session):
+            await session.start(Prompt(({"role": "user", "content": "Use a tool."},), initial_options))
+            await session.start(Prompt(revised_messages, next_options))
+            await session.reply(())
 
     model = ReplayModel([{"role": "assistant", "content": "12"}] * 3)
     result = await engine(model, harnesses={"fixture": Restarting()}).run_task(
@@ -1556,10 +1556,10 @@ async def test_token_budget_skips_a_new_conversation_and_grades_the_last_respons
         def check(self, task, limits):
             pass
 
-        async def run(self, context, recorder):
+        async def run(self, context, session):
             prompt = Prompt(({"role": "user", "content": "Return 12."},), {})
             while True:
-                await recorder.start(prompt)
+                await session.start(prompt)
                 prompt = Prompt(({"role": "user", "content": "Start again."},), {})
 
     model = ReplayModel([{"role": "assistant", "content": "12"}] * 3)
@@ -2776,11 +2776,11 @@ async def test_a_harness_that_ignores_a_limit_runs_until_the_turn_deadline():
         def check(self, task, limits):
             pass
 
-        async def run(self, context, recorder):
-            await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+        async def run(self, context, session):
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
             while True:
                 try:
-                    await recorder.reply(({"role": "user", "content": "Again."},))
+                    await session.reply(({"role": "user", "content": "Again."},))
                 except LimitReached:
                     continue
 
@@ -2856,9 +2856,9 @@ async def test_recorded_step_data_keeps_the_tool_deadline():
         def check(self, task, limits):
             pass
 
-        async def run(self, context, recorder):
-            await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
-            recorder.record(metrics={"reward": 1.0})
+        async def run(self, context, session):
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+            session.record(metrics={"reward": 1.0})
             await asyncio.Future()
 
     with pytest.raises(RolloutInterrupted) as caught:
@@ -2874,8 +2874,8 @@ async def test_a_harness_failure_after_the_turn_deadline_is_not_a_normal_stop(er
         def check(self, task, limits):
             pass
 
-        async def run(self, context, recorder):
-            await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+        async def run(self, context, session):
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
             try:
                 await asyncio.Future()
             except asyncio.CancelledError:
@@ -2896,10 +2896,10 @@ async def test_observations_recorded_before_a_new_conversation_stay_in_the_earli
         def check(self, task, limits):
             pass
 
-        async def run(self, context, recorder):
-            await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
-            recorder.record(observations=(note,))
-            await recorder.start(Prompt(({"role": "user", "content": "Start again."},), {}))
+        async def run(self, context, session):
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+            session.record(observations=(note,))
+            await session.start(Prompt(({"role": "user", "content": "Start again."},), {}))
 
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "12"}] * 2), harnesses={"fixture": Restarting()}
@@ -2961,15 +2961,15 @@ async def test_a_harness_that_catches_its_tool_deadline_cannot_block_the_event_l
         def check(self, task, limits):
             pass
 
-        async def run(self, context, recorder):
-            await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+        async def run(self, context, session):
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
             try:
                 await asyncio.Future()
             except asyncio.CancelledError:
                 pass
             while True:
                 try:
-                    await recorder.reply(({"role": "user", "content": "Again."},))
+                    await session.reply(({"role": "user", "content": "Again."},))
                 except RolloutEnded:
                     continue
 
@@ -2985,10 +2985,10 @@ async def test_a_turn_with_recorded_observations_takes_no_reply():
         def check(self, task, limits):
             pass
 
-        async def run(self, context, recorder):
-            await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
-            recorder.record(observations=({"role": "user", "content": "Raw result."},))
-            await recorder.reply(({"role": "user", "content": "Summary."},))
+        async def run(self, context, session):
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+            session.record(observations=({"role": "user", "content": "Raw result."},))
+            await session.reply(({"role": "user", "content": "Summary."},))
 
     with pytest.raises(RolloutInterrupted) as caught:
         await engine(
@@ -3032,10 +3032,10 @@ async def test_a_harness_that_fails_after_a_model_failure_is_a_harness_failure()
         def check(self, task, limits):
             pass
 
-        async def run(self, context, recorder):
-            await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+        async def run(self, context, session):
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
             try:
-                await recorder.reply(({"role": "user", "content": "Again."},))
+                await session.reply(({"role": "user", "content": "Again."},))
             except RolloutEnded:
                 raise RuntimeError("The harness gave up after the model failed") from None
 
@@ -3166,13 +3166,13 @@ async def test_final_observations_replace_a_cancelled_reply():
         def check(self, task, limits):
             pass
 
-        async def run(self, context, recorder):
-            await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
-            call = asyncio.create_task(recorder.reply(({"role": "user", "content": "Again."},)))
+        async def run(self, context, session):
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+            call = asyncio.create_task(session.reply(({"role": "user", "content": "Again."},)))
             await asyncio.sleep(0)
             call.cancel()
             await asyncio.wait({call})
-            recorder.record(observations=(final,))
+            session.record(observations=(final,))
 
     record = await engine(
         FirstTurnModel([{"role": "assistant", "content": "12"}]), harnesses={"fixture": CancelsItsReply()}
@@ -3186,13 +3186,13 @@ async def test_a_harness_cannot_change_the_record_after_its_turn_deadline():
         def check(self, task, limits):
             pass
 
-        async def run(self, context, recorder):
-            await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+        async def run(self, context, session):
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
             try:
                 await asyncio.Future()
             except asyncio.CancelledError:
                 with pytest.raises(RolloutEnded):
-                    recorder.record(data={"reward": 1.0})
+                    session.record(data={"reward": 1.0})
                 raise
 
     record = await engine(
@@ -3266,12 +3266,12 @@ async def test_a_harness_records_step_data_only_between_model_requests():
         def check(self, task, limits):
             pass
 
-        async def run(self, context, recorder):
-            await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
-            call = asyncio.create_task(recorder.reply(({"role": "user", "content": "Again."},)))
+        async def run(self, context, session):
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+            call = asyncio.create_task(session.reply(({"role": "user", "content": "Again."},)))
             await asyncio.sleep(0)
             try:
-                recorder.record(observations=({"role": "user", "content": "Lost."},))
+                session.record(observations=({"role": "user", "content": "Lost."},))
             finally:
                 call.cancel()
 
@@ -3338,9 +3338,9 @@ async def test_a_new_conversation_cut_off_by_the_end_of_the_harness_is_recorded_
         def check(self, task, limits):
             pass
 
-        async def run(self, context, recorder):
-            await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
-            call = asyncio.create_task(recorder.start(Prompt(({"role": "user", "content": "Start again."},), {})))
+        async def run(self, context, session):
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+            call = asyncio.create_task(session.start(Prompt(({"role": "user", "content": "Start again."},), {})))
 
             async def close():
                 # The cut-off request ends in the cleanup, before the rollout is built.
@@ -3405,10 +3405,10 @@ class StartsTwice:
     def check(self, task, limits):
         pass
 
-    async def run(self, context, recorder):
-        await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
-        recorder.record(metrics={"score": 1.0})
-        await recorder.start(Prompt(({"role": "user", "content": "Start again."},), {}))
+    async def run(self, context, session):
+        await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+        session.record(metrics={"score": 1.0})
+        await session.start(Prompt(({"role": "user", "content": "Start again."},), {}))
 
 
 async def test_a_model_failure_in_a_new_conversation_grades_the_earlier_one():
@@ -3430,7 +3430,7 @@ async def test_a_model_failure_in_a_new_conversation_grades_the_earlier_one():
 
 
 class RecordsAfterARefusal:
-    """Records a final reward after the recorder refuses the second request."""
+    """Records a final reward after the session refuses the second request."""
 
     def __init__(self, second: str):
         self.second = second
@@ -3438,25 +3438,25 @@ class RecordsAfterARefusal:
     def check(self, task, limits):
         pass
 
-    async def run(self, context, recorder):
-        await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
-        recorder.record(data="turn", metrics={"score": 0.0})
+    async def run(self, context, session):
+        await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+        session.record(data="turn", metrics={"score": 0.0})
         try:
             if self.second == "start":
-                await recorder.start(Prompt(({"role": "user", "content": "Start again."},), {}))
+                await session.start(Prompt(({"role": "user", "content": "Start again."},), {}))
             else:
-                await recorder.reply(({"role": "user", "content": "Continue."},))
+                await session.reply(({"role": "user", "content": "Continue."},))
         except RolloutEnded:
             with pytest.raises(RuntimeError, match="no more observations"):
-                recorder.record(observations=({"role": "user", "content": "Late."},))
-            recorder.record(data="final", metrics={"score": 1.0})
+                session.record(observations=({"role": "user", "content": "Late."},))
+            session.record(data="final", metrics={"score": 1.0})
             raise
 
 
 @pytest.mark.parametrize(
     "second,refusal", [("reply", "limit"), ("reply", "model"), ("start", "model")], ids=["limit", "model", "new"]
 )
-async def test_a_harness_records_a_final_reward_after_the_recorder_refuses_a_request(second, refusal):
+async def test_a_harness_records_a_final_reward_after_the_session_refuses_a_request(second, refusal):
     class FailingModel(ReplayModel):
         async def complete(self, request):
             if self.requests:
@@ -3484,13 +3484,13 @@ async def test_recording_after_a_failed_first_request_raises_the_refusal_again()
         def check(self, task, limits):
             pass
 
-        async def run(self, context, recorder):
+        async def run(self, context, session):
             try:
-                await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+                await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
             except RolloutEnded:
                 # Without a turn there is no step for the reward, and the refusal stays the outcome.
                 with pytest.raises(RolloutEnded):
-                    recorder.record(data="final")
+                    session.record(data="final")
                 raise
 
     class FailingModel(ReplayModel):
@@ -3512,13 +3512,13 @@ async def test_a_pinned_prompt_that_does_not_start_with_the_served_tokens_is_not
         def check(self, task, limits):
             pass
 
-        async def run(self, context, recorder):
-            await recorder.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+        async def run(self, context, session):
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
             try:
-                await recorder.reply(({"role": "user", "content": "Again."},), token_ids=(1, 2, 3))
+                await session.reply(({"role": "user", "content": "Again."},), token_ids=(1, 2, 3))
             except RolloutEnded:
                 # The refused request ended the turn's step, so the step still takes data.
-                recorder.record(data="final")
+                session.record(data="final")
                 recorded.append(True)
                 raise
 

@@ -9,7 +9,7 @@ from typing import Protocol
 
 from taskcompendium.models import TaskSpec
 
-from rolloutengine.harness.core import HarnessContext, RolloutRecorder
+from rolloutengine.harness.core import HarnessContext, ModelSession
 from rolloutengine.models import ModelTurn, Prompt, RolloutLimits, Transition
 
 
@@ -37,14 +37,14 @@ class StepHarness:
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
         pass
 
-    async def run(self, context: HarnessContext, recorder: RolloutRecorder) -> None:
+    async def run(self, context: HarnessContext, session: ModelSession) -> None:
         episode = self.open_episode(context)
         context.cleanup.push("episode_close", episode.close)
-        turn = await recorder.start(await episode.prepare())
+        turn = await session.start(await episode.prepare())
         while True:
             transition = await episode.advance(turn)
             final = transition.observations if transition.done else ()
-            recorder.record(observations=final, data=transition.data, metrics=transition.metrics)
+            session.record(observations=final, data=transition.data, metrics=transition.metrics)
             if transition.done:
                 return
-            turn = await recorder.reply(transition.observations, token_ids=transition.token_ids)
+            turn = await session.reply(transition.observations, token_ids=transition.token_ids)

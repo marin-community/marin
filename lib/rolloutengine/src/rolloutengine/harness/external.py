@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run an agent that owns its prompts and tool loop, and that sends each model request through the recorder."""
+"""Run an agent that owns its prompts and tool loop, and that sends each model request through the model session."""
 
 import asyncio
 from collections.abc import Callable, Coroutine
@@ -11,7 +11,7 @@ from typing import Any, Protocol
 from taskcompendium.models import TaskSpec
 
 from rolloutengine.cleanup import _retain_task
-from rolloutengine.harness.core import HarnessContext, RolloutRecorder
+from rolloutengine.harness.core import HarnessContext, ModelSession
 from rolloutengine.harness.shell import task_prompt
 from rolloutengine.models import ModelTurn, Prompt, RolloutEnded, RolloutLimits
 
@@ -48,8 +48,8 @@ class AgentHarness:
         if tools:
             raise NotImplementedError(f"The agent harness does not give these task tools to the agent: {tools}")
 
-    async def run(self, context: HarnessContext, recorder: RolloutRecorder) -> None:
-        completions = _Completions(recorder)
+    async def run(self, context: HarnessContext, session: ModelSession) -> None:
+        completions = _Completions(session)
         agent = asyncio.create_task(self.agent(context, completions.complete))
         context.cleanup.push("agent_stop", lambda: completions.stop(agent))
         try:
@@ -69,10 +69,10 @@ class _Answered:
 
 
 class _Completions:
-    """Answer the agent's completion calls with the recorder, each call in its caller's task."""
+    """Answer the agent's completion calls with the model session, each call in its caller's task."""
 
-    def __init__(self, recorder: RolloutRecorder):
-        self.recorder = recorder
+    def __init__(self, session: ModelSession):
+        self.session = session
         self.last: _Answered | None = None
         self.ended: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self.released = asyncio.Event()
@@ -96,9 +96,9 @@ class _Completions:
                     and prompt.options == last.prompt.options
                     and prompt.messages[: len(history)] == history
                 ):
-                    turn = await self.recorder.reply(prompt.messages[len(history) :], token_ids=prompt.token_ids)
+                    turn = await self.session.reply(prompt.messages[len(history) :], token_ids=prompt.token_ids)
                 else:
-                    turn = await self.recorder.start(prompt)
+                    turn = await self.session.start(prompt)
             except RolloutEnded:
                 self.end()
             else:
