@@ -42,11 +42,11 @@ class BuildInfrastructureFailure(Exception):
 
 @dataclass(frozen=True)
 class RLEnvBuildContext:
-    """The first argument of every step: the item being built, and the model with its sampling policy.
+    """The first argument of every step: the workpiece being built, and the model with its sampling policy.
 
     A step calls ``context.model.complete_structured(messages, Output, context.sampling)``.
     """
 
-    item_id: str
+    workpiece_id: str
     model: ModelClient
     sampling: LLMPolicy

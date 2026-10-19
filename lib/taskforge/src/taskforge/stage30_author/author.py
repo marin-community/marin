@@ -22,7 +22,7 @@ PROGRAM_FILE = "program.py"
 
 
 class RevisionKind(StrEnum):
-    """The reason for authoring an item again."""
+    """The reason for authoring a workpiece again."""
 
     NONE = "none"
     BUILD_FAILURE = "build_failure"

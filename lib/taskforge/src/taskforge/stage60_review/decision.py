@@ -5,8 +5,8 @@
 
 Review returns one of four decisions:
 
-* ``Accept`` ends the item with its task, labelled with where the solve rate fell against the band.
-* ``Reject`` ends the item for the reason in its ``RejectKind``.
+* ``Accept`` ends the workpiece with its task, labelled with where the solve rate fell against the band.
+* ``Reject`` ends the workpiece for the reason in its ``RejectKind``.
 * ``Retry`` sends the same draft through validation again.
 * ``Modify`` sends the program back to the author for the next round, with the review's findings.
 """
@@ -19,7 +19,7 @@ class RejectKind(StrEnum):
     TASK = "task"
     """The evidence shows a defect in the task."""
     BUDGET = "budget"
-    """The item used up its build revisions."""
+    """The workpiece used up its build revisions."""
     HOST = "host"
     """This host cannot run the task."""
 

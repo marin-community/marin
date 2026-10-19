@@ -13,8 +13,8 @@ library, such as ``TaskSpec``, falls under it.
 ``RLEnvBuildStepStore`` reads and writes through rigging's ``StoragePath``, so ``root`` may be a
 local path or an object-store URL. Under it the store keeps:
 
-* ``blobs/<sha256>``: each output as canonical JSON, written once and shared by all items;
-* ``items/<item_id>/steps/<name>/<key digest>.json``: the memo of each key an item stored.
+* ``blobs/<sha256>``: each output as canonical JSON, written once and shared by all workpieces;
+* ``workpieces/<workpiece_id>/steps/<name>/<key digest>.json``: the memo of each key a workpiece stored.
 
 A memo holds a step's stored output under one key; the ledger calls its own rows entries.
 
@@ -46,10 +46,10 @@ SDK_VERSION = "taskforge.builder/8"
 FILE_SAFE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
-def check_item_id(item_id: str) -> None:
-    """Raise ``ValueError`` unless ``item_id`` is safe to use as a directory name."""
-    if not FILE_SAFE.fullmatch(item_id):
-        raise ValueError(f"Item id {item_id!r} must match {FILE_SAFE.pattern}")
+def check_workpiece_id(workpiece_id: str) -> None:
+    """Raise ``ValueError`` unless ``workpiece_id`` is safe to use as a directory name."""
+    if not FILE_SAFE.fullmatch(workpiece_id):
+        raise ValueError(f"Workpiece id {workpiece_id!r} must match {FILE_SAFE.pattern}")
 
 
 def model_digest(model: ModelClient, sampling: LLMPolicy) -> str:
@@ -106,7 +106,7 @@ class RLEnvBuildStepMemo:
 
     ``RLEnvBuildStepStore.load`` reads it back. The memo repeats the key's fields except
     ``model_digest``. That digest, defined by ``model_digest``, enters every key, and
-    ``ItemBuildProvenance.model_digest`` keeps a copy for the build. A build pairs each memo with
+    ``WorkpieceBuildProvenance.model_digest`` keeps a copy for the build. A build pairs each memo with
     the ``CacheStatus`` it observed in an ``RLEnvBuildStepOutcome``, defined in ``run.py``.
 
     Attributes:
@@ -129,20 +129,20 @@ class RLEnvBuildStepMemo:
 
 
 class RLEnvBuildStepStore:
-    """Step outputs for the item ``item_id``, under ``root``.
+    """Step outputs for the workpiece ``workpiece_id``, under ``root``.
 
-    Memos are per item: ``load`` looks only under this item, so two items that compute the same
+    Memos are per workpiece: ``load`` looks only under this workpiece, so two workpieces that compute the same
     key each run the step once, while the blob they write is shared. A hit therefore says that this
-    item stored that key in an earlier build.
+    workpiece stored that key in an earlier build.
 
     A step receives no store, so a program written by the language model cannot memoize anything
     of its own; ``run_program`` is the store's one caller.
     """
 
-    def __init__(self, root: str, item_id: str):
-        check_item_id(item_id)
+    def __init__(self, root: str, workpiece_id: str):
+        check_workpiece_id(workpiece_id)
         self.root = StoragePath(root)
-        self.item_id = item_id
+        self.workpiece_id = workpiece_id
 
     def load[T](self, key: RLEnvBuildStepKey, name: str, output_type: type[T]) -> tuple[RLEnvBuildStepMemo, T] | None:
         """Read the memo stored for ``name`` under ``key`` and decode its blob as ``output_type``.
@@ -193,7 +193,7 @@ class RLEnvBuildStepStore:
     def _memo_path(self, key: RLEnvBuildStepKey, name: str) -> StoragePath:
         if not FILE_SAFE.fullmatch(name):
             raise ValueError(f"Step name {name!r} must match {FILE_SAFE.pattern}")
-        return self.root / "items" / self.item_id / "steps" / name / f"{key.digest}.json"
+        return self.root / "workpieces" / self.workpiece_id / "steps" / name / f"{key.digest}.json"
 
 
 def _write(path: StoragePath, content: bytes) -> None:

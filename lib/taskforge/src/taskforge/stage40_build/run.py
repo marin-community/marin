@@ -7,7 +7,7 @@
 step's key and calls ``memoized``, which loads a stored output when one exists and otherwise calls
 the step and stores what it returns.
 ``run_build`` runs the program for one proposal and writes the sink's ``TaskSpec`` with the
-build's ``ItemBuildProvenance`` to ``<round_dir>/draft/``.
+build's ``WorkpieceBuildProvenance`` to ``<round_dir>/draft/``.
 """
 
 import asyncio
@@ -54,14 +54,14 @@ class RLEnvBuildStepOutcome:
 
 
 @dataclass(frozen=True)
-class ItemBuildProvenance:
-    """The provenance of an attempt to build an item.
+class WorkpieceBuildProvenance:
+    """The provenance of an attempt to build a workpiece.
 
     It holds the build's inputs by digest and the outcome of each step. ``run_build`` writes it to
     ``provenance.json`` beside the task.
 
     Attributes:
-        item_id: The item the caller built.
+        workpiece_id: The workpiece the caller built.
         proposal_digest: ``content_hash.digest`` of the proposal.
         program_digest: ``RLEnvBuildProgram.digest``.
         sdk_version: ``SDK_VERSION`` during the build.
@@ -76,7 +76,7 @@ class ItemBuildProvenance:
             cache reuse from this list.
     """
 
-    item_id: str
+    workpiece_id: str
     proposal_digest: str
     program_digest: str
     sdk_version: str
@@ -89,7 +89,7 @@ class ItemBuildProvenance:
 @dataclass(frozen=True)
 class TaskDraft:
     task: TaskSpec
-    provenance: ItemBuildProvenance
+    provenance: WorkpieceBuildProvenance
 
 
 async def _memoized[T](
@@ -136,7 +136,9 @@ async def run_program(
         BuildFailure: a step raised one. When the step left ``step`` unset, the runner sets it to
             the step's name.
     """
-    assert store.item_id == context.item_id, f"store is for {store.item_id}, context for {context.item_id}"
+    assert (
+        store.workpiece_id == context.workpiece_id
+    ), f"store is for {store.workpiece_id}, context for {context.workpiece_id}"
     outputs: dict[str, Any] = {PROPOSAL_INPUT: proposal}
     digests: dict[str, str] = {PROPOSAL_INPUT: digest(proposal)}
     outcomes: dict[str, RLEnvBuildStepOutcome] = {}
@@ -182,7 +184,7 @@ async def run_program(
 async def run_build(
     program: RLEnvBuildProgram,
     proposal: object,
-    item_id: str,
+    workpiece_id: str,
     round_dir: Path,
     store_root: str,
     model: ModelClient,
@@ -195,25 +197,25 @@ async def run_build(
     Args:
         program: The build program.
         proposal: A JSON-serialisable value, passed to steps taking ``PROPOSAL_INPUT``.
-        item_id: The caller's id for the item; ``check_item_id`` must accept it.
-        round_dir: The item's directory for this round.
-        store_root: The local path or URL of the step store shared by all items.
+        workpiece_id: The caller's id for the workpiece; ``check_workpiece_id`` must accept it.
+        round_dir: The workpiece's directory for this round.
+        store_root: The local path or URL of the step store shared by all workpieces.
         model: The model steps call.
         sampling: The sampling policy steps pass to ``model``.
         model_digest: The model part of every step key, usually ``model_digest(model, sampling)``.
-        round: The build round, copied into ``ItemBuildProvenance``.
+        round: The build round, copied into ``WorkpieceBuildProvenance``.
 
     Raises:
         BuildFailure: a step failed.
-        ValueError: ``check_item_id`` refused ``item_id``.
+        ValueError: ``check_workpiece_id`` refused ``workpiece_id``.
     """
-    store = RLEnvBuildStepStore(store_root, item_id)
-    context = RLEnvBuildContext(item_id=item_id, model=model, sampling=sampling)
+    store = RLEnvBuildStepStore(store_root, workpiece_id)
+    context = RLEnvBuildContext(workpiece_id=workpiece_id, model=model, sampling=sampling)
     task, outcomes = await run_program(program, context, proposal, store, model_digest)
     draft = TaskDraft(
         task=task,
-        provenance=ItemBuildProvenance(
-            item_id=item_id,
+        provenance=WorkpieceBuildProvenance(
+            workpiece_id=workpiece_id,
             proposal_digest=digest(proposal),
             program_digest=program.digest,
             sdk_version=SDK_VERSION,
@@ -246,4 +248,4 @@ def load_draft(directory: Path) -> TaskDraft:
     )
 
 
-_PROVENANCE: TypeAdapter[ItemBuildProvenance] = TypeAdapter(ItemBuildProvenance)
+_PROVENANCE: TypeAdapter[WorkpieceBuildProvenance] = TypeAdapter(WorkpieceBuildProvenance)

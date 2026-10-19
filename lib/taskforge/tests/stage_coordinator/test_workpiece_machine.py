@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The item state as a fold over its events, and the fold's refusal of a broken log."""
+"""The workpiece state as a fold over its events, and the fold's refusal of a broken log."""
 
 from dataclasses import replace
 
@@ -9,38 +9,40 @@ import pytest
 
 from taskforge.stage30_author.author import RevisionKind
 from taskforge.stage60_review.decision import RejectKind
-from taskforge.stage_coordinator.item_machine import (
+from taskforge.stage_coordinator.workpiece_machine import (
     EXIT,
     EventKind,
-    ItemEvent,
     Stage,
     Terminal,
+    WorkpieceEvent,
     derive_state,
 )
 
-OPENED = ItemEvent(EventKind.OPENED, 0, "p1", {"budget_digest": "b1"})
-TRIAGED = ItemEvent(EventKind.TRIAGED, 0, "p1", {EXIT: "accept"})
-AUTHORED = ItemEvent(EventKind.AUTHORED, 0, "prog1", {EXIT: "authored", "revision": "none"})
-BUILT = ItemEvent(EventKind.BUILT, 0, "task1", {EXIT: "built", "program_digest": "prog1", "steps": "3", "hits": "0"})
-VALIDATED = ItemEvent(EventKind.VALIDATED, 0, "task1", {EXIT: "validated", "summary_digest": "s1"})
+OPENED = WorkpieceEvent(EventKind.OPENED, 0, "p1", {"budget_digest": "b1"})
+TRIAGED = WorkpieceEvent(EventKind.TRIAGED, 0, "p1", {EXIT: "accept"})
+AUTHORED = WorkpieceEvent(EventKind.AUTHORED, 0, "prog1", {EXIT: "authored", "revision": "none"})
+BUILT = WorkpieceEvent(
+    EventKind.BUILT, 0, "task1", {EXIT: "built", "program_digest": "prog1", "steps": "3", "hits": "0"}
+)
+VALIDATED = WorkpieceEvent(EventKind.VALIDATED, 0, "task1", {EXIT: "validated", "summary_digest": "s1"})
 
 
-def decided(**attrs: str) -> ItemEvent:
-    return ItemEvent(EventKind.DECIDED, 0, "task1", attrs)
+def decided(**attrs: str) -> WorkpieceEvent:
+    return WorkpieceEvent(EventKind.DECIDED, 0, "task1", attrs)
 
 
-def terminal(**attrs: str) -> ItemEvent:
-    return ItemEvent(EventKind.TERMINAL, 0, None, attrs)
+def terminal(**attrs: str) -> WorkpieceEvent:
+    return WorkpieceEvent(EventKind.TERMINAL, 0, None, attrs)
 
 
-def numbered(*events: ItemEvent) -> list[ItemEvent]:
+def numbered(*events: WorkpieceEvent) -> list[WorkpieceEvent]:
     return [replace(event, seq=seq) for seq, event in enumerate(events, start=1)]
 
 
 VALIDATED_LOG = (OPENED, TRIAGED, AUTHORED, BUILT, VALIDATED)
 
 
-def test_a_built_and_validated_item_folds_to_review_with_its_digests():
+def test_a_built_and_validated_workpiece_folds_to_review_with_its_digests():
     state = derive_state(numbered(*VALIDATED_LOG))
 
     assert (state.stage, state.round, state.seq) == (Stage.REVIEW, 0, 5)
@@ -70,7 +72,7 @@ def test_a_retry_past_the_budget_abandons_and_a_relaunch_re_enters_validation_wi
     [("revise", Stage.AUTHOR, None), ("reject", Stage.DONE, (Terminal.REJECTED, RejectKind.BUDGET))],
 )
 def test_a_build_failure_revises_or_rejects_as_its_event_says(way, stage, closing):
-    failed = ItemEvent(
+    failed = WorkpieceEvent(
         EventKind.BUILD_FAILED, 0, "prog1", {EXIT: way, "step": "grader", "failure": "boom", "failure_file": "f"}
     )
 
@@ -85,7 +87,7 @@ def test_a_build_failure_revises_or_rejects_as_its_event_says(way, stage, closin
     [("revise", Stage.AUTHOR, None), ("reject", Stage.DONE, (Terminal.REJECTED, RejectKind.BUDGET))],
 )
 def test_an_author_failure_revises_or_rejects_as_its_event_says(way, stage, closing):
-    failed = ItemEvent(EventKind.AUTHOR_FAILED, 0, "p1", {EXIT: way, "failure": "cut", "failure_file": "f"})
+    failed = WorkpieceEvent(EventKind.AUTHOR_FAILED, 0, "p1", {EXIT: way, "failure": "cut", "failure_file": "f"})
 
     state = derive_state(numbered(OPENED, TRIAGED, failed))
 
@@ -94,10 +96,12 @@ def test_an_author_failure_revises_or_rejects_as_its_event_says(way, stage, clos
 
 
 def test_an_author_failure_after_a_build_failure_spends_the_same_budget():
-    build_failed = ItemEvent(
+    build_failed = WorkpieceEvent(
         EventKind.BUILD_FAILED, 0, "prog1", {EXIT: "revise", "step": "", "failure": "boom", "failure_file": "f1"}
     )
-    author_failed = ItemEvent(EventKind.AUTHOR_FAILED, 0, "p1", {EXIT: "revise", "failure": "cut", "failure_file": "f2"})
+    author_failed = WorkpieceEvent(
+        EventKind.AUTHOR_FAILED, 0, "p1", {EXIT: "revise", "failure": "cut", "failure_file": "f2"}
+    )
 
     state = derive_state(numbered(OPENED, TRIAGED, AUTHORED, build_failed, author_failed, AUTHORED))
 
@@ -107,7 +111,7 @@ def test_an_author_failure_after_a_build_failure_spends_the_same_budget():
 def test_a_modify_decision_starts_the_next_round_and_its_revision_holds_until_built():
     log = [*VALIDATED_LOG, decided(exit="modify", findings="too easy")]
     modified = derive_state(numbered(*log))
-    log.append(ItemEvent(EventKind.AUTHORED, 1, "prog2", {EXIT: "authored", "revision": "modify"}))
+    log.append(WorkpieceEvent(EventKind.AUTHORED, 1, "prog2", {EXIT: "authored", "revision": "modify"}))
     authored = derive_state(numbered(*log))
     built = derive_state(numbered(*log, replace(BUILT, round=1, digest="task2")))
 
@@ -133,7 +137,7 @@ def test_an_accept_closes_accepted_with_where_the_task_fell(band, reason):
     assert accepted.terminal is Terminal.ACCEPTED
 
 
-def test_a_failed_item_keeps_its_stage_and_a_final_terminal_ends_the_log():
+def test_a_failed_workpiece_keeps_its_stage_and_a_final_terminal_ends_the_log():
     log = [*VALIDATED_LOG, terminal(terminal="failed", reason="RuntimeError: boom")]
     failed = derive_state(numbered(*log))
     log += [decided(exit="reject", kind="host", reasons="no machine"), terminal(terminal="rejected", reason="r")]
@@ -148,8 +152,11 @@ def test_a_failed_item_keeps_its_stage_and_a_final_terminal_ends_the_log():
 @pytest.mark.parametrize(
     ("log", "message"),
     [
-        ((OPENED, TRIAGED, VALIDATED), "recorded by stage validate, but the item is in stage author"),
-        ((OPENED, ItemEvent(EventKind.TRIAGED, 0, "p1", {EXIT: "retry"})), "exits retry, which stage triage has no"),
+        ((OPENED, TRIAGED, VALIDATED), "recorded by stage validate, but the workpiece is in stage author"),
+        (
+            (OPENED, WorkpieceEvent(EventKind.TRIAGED, 0, "p1", {EXIT: "retry"})),
+            "exits retry, which stage triage has no",
+        ),
         ((*VALIDATED_LOG, terminal(terminal="accepted", reason="r")), "TERMINAL accepted in stage review"),
         ((TRIAGED,), "starts with OPENED"),
     ],

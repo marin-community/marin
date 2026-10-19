@@ -7,10 +7,11 @@ Taskforge turns task ideas into TaskCompendium `TaskSpec`s with a model's help. 
 
 ```
 src/taskforge/
-  stage_coordinator/  item_machine.py: Stage, Exit, TRANSITIONS, `transition`, `derive_state`;
-                      event_log.py: ItemEventLog, InMemoryEventLog, ItemEventStore, JsonEventStore;
+  stage_coordinator/  workpiece_machine.py: Stage, Exit, TRANSITIONS, `transition`, `derive_state`;
+                      event_log.py: WorkpieceEventLog, InMemoryEventLog, WorkpieceEventStore,
+                      JsonEventStore;
                       stage_functions.py: the stage Protocols and `StageFunctions`;
-                      coordinator.py: ItemBudget, StageCoordinator, `run_item`
+                      coordinator.py: WorkpieceBudget, StageCoordinator, `run_workpiece`
   content_hash.py     canonical JSON and its sha256 digests
   llm/                the ModelClient protocol, the GLM client, sampling policy, structured output
   stage20_triage/     verdict.py: TriageDecision and `accept`
@@ -20,7 +21,7 @@ src/taskforge/
                       loader.py: `load_program_source`, the plain loader of a program's source
   stage40_build/      context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure;
                       step_store.py: step keys, memos, the memo store and `memoized`;
-                      run.py: `run_program`, `run_build`, the draft and `ItemBuildProvenance`
+                      run.py: `run_program`, `run_build`, the draft and `WorkpieceBuildProvenance`
   stage60_review/     decision.py: the Decision types (Accept, Reject, Retry, Modify)
 ```
 
@@ -39,7 +40,7 @@ returning a value of its annotated type. The final step returns a `TaskSpec` and
 `@rl_env_build_sink` in place of `@rl_env_build_step`. The author passes the steps, and the sink as
 the keyword `sink`, to `rl_env_build_program`. That call orders the steps so each runs after its
 inputs, puts the sink last, and refuses a step whose output reaches neither another step nor the
-sink. A step receives an `RLEnvBuildContext` (item id, model, sampling policy) as its first
+sink. A step receives an `RLEnvBuildContext` (workpiece id, model, sampling policy) as its first
 parameter. The decorator reads the step's inputs from the parameters after it, and the runner
 passes each one by name: another step's output, or the caller's proposal for a parameter called
 `proposal`. `tests/stage40_build/test_run.py` builds this toy program, abridged here:
@@ -79,9 +80,9 @@ consumers cached.
 
 ## The stage machine
 
-`run_item` runs an item through the stages with the functions a caller passes in
+`run_workpiece` runs a workpiece through the stages with the functions a caller passes in
 `StageFunctions`. Each stage returns an event with an exit, and `TRANSITIONS` in
-`stage_coordinator/item_machine.py` gives the next stage:
+`stage_coordinator/workpiece_machine.py` gives the next stage:
 
 | stage    | event           | exit      | next     |
 |----------|-----------------|-----------|----------|
@@ -100,53 +101,52 @@ consumers cached.
 | review   | `DECIDED`       | abandon   | done     |
 | review   | `DECIDED`       | modify    | author   |
 
-From `done`, a `TERMINAL` event closes the item as accepted, rejected or abandoned. A stage
-raising an exception closes it as failed. `ItemBudget` bounds the build and author failures an item
-may revise after and the review retries it may follow. The coordinator spends the budget when it
-records the event, choosing revise or reject, retry or abandon. A build error costs a revision,
-except `BuildInfrastructureFailure`, `ModelUnavailable` and `OSError`, which fail the item at the
-build stage. An author call raising `StructuredOutputError` costs a revision from the same budget.
-Its structured reply stayed invalid through the repair turns, as when the output limit cut it, and
-the next author call samples again with `Revision(AUTHOR_FAILURE, ...)`. Any other author error
-fails the item at the author stage.
+From `done`, a `TERMINAL` event closes the workpiece as accepted, rejected or abandoned. A stage
+raising an exception closes it as failed. `WorkpieceBudget` bounds the build and author failures a
+workpiece may revise after and the review retries it may follow. The coordinator spends the budget
+when it records the event, choosing revise or reject, retry or abandon. A build error costs a
+revision, except `BuildInfrastructureFailure`, `ModelUnavailable` and `OSError`, which fail the
+workpiece at the build stage. An author call raising `StructuredOutputError` costs a revision from
+the same budget. Its structured reply stayed invalid through the repair turns, as when the output
+limit cut it, and the next author call samples again with `Revision(AUTHOR_FAILURE, ...)`. Any other
+author error fails the workpiece at the author stage.
 
 The author returns an `AuthoredProgram`, the program with the Python source it came from. The
 coordinator writes the source to `authored/<k>/program.py` in the round directory, with `k` the
-item's build and author failures so far, and the build stage loads the program from that file with
-`StageFunctions.load_program`, so the author runs once per revision. Each author call writes a new
-`authored/<k>/`, so a relaunch resuming at build finds the program its `AUTHORED` event records
-even when a killed process re-authored the item after the last save. A program defined in
-Python, as `static_author` returns, has no source, and the build stage asks the author for it
-again.
+workpiece's build and author failures so far, and the build stage loads the program from that file
+with `StageFunctions.load_program`, so the author runs once per revision. Each author call writes a
+new `authored/<k>/`, so a relaunch resuming at build finds the program its `AUTHORED` event records
+even when a killed process re-authored the workpiece after the last save. A program defined in
+Python, as `static_author` returns, has no source, and the build stage asks the author for it again.
 
 The `OPENED` event records the digests of the proposal and the budget, and the coordinator's model
-digest. A relaunch of the item with another proposal, budget or model digest raises `ValueError`,
-and so does a build whose program has another digest than the `AUTHORED` event.
+digest. A relaunch of the workpiece with another proposal, budget or model digest raises
+`ValueError`, and so does a build whose program has another digest than the `AUTHORED` event.
 
 A run root holds:
 
 ```
-items/<item_id>/events.json
-items/<item_id>/rounds/<n>/
+workpieces/<workpiece_id>/events.json
+workpieces/<workpiece_id>/rounds/<n>/
     authored/<k>/program.json      the manifest of the program authored after k build and author failures
     authored/<k>/program.py        its source, when the author returned it
     draft/                         task.json, provenance.json
     build-failures/<k>.txt         the k-th build or author failure: its step and program line, then its traceback
     validation.json                the summary returned by validate
     decision.json                  the decision returned by review
-store/                             the step store: blobs/, items/<item_id>/steps/
+store/                             the step store: blobs/, workpieces/<workpiece_id>/steps/
 ```
 
-While an item runs, its events stay in the caller's `ItemEventLog`, and `run_item` writes
-`events.json` once, as the last file, when the item reaches a terminal. On the next `run_item` with
-an empty log, the coordinator loads `events.json` back into the log and folds it. An accepted or
-rejected item then returns its terminal without calling a stage or writing a byte. A retry with
-the caller's own log after a failed save of `events.json` writes the file and returns. An abandoned
-item goes back to validation with its retries reset, and a failed one resumes at the stage that
-raised, with the step store serving the build steps already run. A build failure in the program's
-own code spends a revision and sends the item back to the author, and so does an author call whose
-structured reply stays invalid after its repairs (`StructuredOutputError`). The item fails in place
-instead, with its revisions unspent, when:
+While a workpiece runs, its events stay in the caller's `WorkpieceEventLog`, and `run_workpiece`
+writes `events.json` once, as the last file, when the workpiece reaches a terminal. On the next
+`run_workpiece` with an empty log, the coordinator loads `events.json` back into the log and folds
+it. An accepted or rejected workpiece then returns its terminal without calling a stage or writing a
+byte. A retry with the caller's own log after a failed save of `events.json` writes the file and
+returns. An abandoned workpiece goes back to validation with its retries reset, and a failed one
+resumes at the stage that raised, with the step store serving the build steps already run. A build
+failure in the program's own code spends a revision and sends the workpiece back to the author, and
+so does an author call whose structured reply stays invalid after its repairs
+(`StructuredOutputError`). The workpiece fails in place instead, with its revisions unspent, when:
 
 - the build host fails (`BuildInfrastructureFailure`), and the relaunch builds the same program
   again;
@@ -156,10 +156,10 @@ instead, with its revisions unspent, when:
 
 The relaunch then resumes at the stage that raised.
 
-A process killed mid-item leaves `events.json` as the item's last terminal wrote it, or leaves
-none, so the next run starts again from that terminal or from triage, and the step store serves the
-build steps already run. A file-backed `ItemEventLog` saving each event on append is planned with
-the ledger.
+A process killed mid-workpiece leaves `events.json` as the workpiece's last terminal wrote it, or
+leaves none, so the next run starts again from that terminal or from triage, and the step store
+serves the build steps already run. A file-backed `WorkpieceEventLog` saving each event on append is
+planned with the ledger.
 
 ## Testing
 
@@ -169,4 +169,4 @@ uv run --package marin-taskforge --frozen --group test pytest -c lib/taskforge/p
 cd lib/taskforge && uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
-`tests/test_pipeline_walkthrough.py` exercises `run_item` with a two-step toy program.
+`tests/test_pipeline_walkthrough.py` exercises `run_workpiece` with a two-step toy program.

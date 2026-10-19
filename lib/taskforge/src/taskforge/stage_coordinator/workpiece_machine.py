@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The item machine: the stages of an item, and the item's state as a fold over its events.
+"""The workpiece machine: the stages of a workpiece, and the workpiece's state as a fold over its events.
 
-The coordinator runs the stage in ``ItemState.stage`` and appends the stage's event to the item's
+The coordinator runs the stage in ``WorkpieceState.stage`` and appends the stage's event to the workpiece's
 log. ``transition`` then looks up the event's exit in ``TRANSITIONS``, the table below, to move the
-item to its next stage::
+workpiece to its next stage::
 
     stage     event          exit       next      bookkeeping
     --------  -------------  ---------  --------  ------------------------------------------------
@@ -26,22 +26,22 @@ item to its next stage::
     DONE      TERMINAL       -          -         terminal = the closing's terminal
     any       TERMINAL       -          (stays)   terminal failed, when ``terminal`` is ``failed``
 
-The coordinator checks the item's budget when it records the event spending it. It picks revise or
+The coordinator checks the workpiece's budget when it records the event spending it. It picks revise or
 reject for ``AUTHOR_FAILED`` and ``BUILD_FAILED``, and retry or abandon for ``DECIDED``, so
 ``transition`` reads no budget. ``AUTHOR_FAILED`` and ``BUILD_FAILED`` both count toward
 ``build_revisions``.
 
-``derive_state`` folds an item's events into its ``ItemState`` by calling ``transition`` on each
+``derive_state`` folds a workpiece's events into its ``WorkpieceState`` by calling ``transition`` on each
 event in turn. The state is computed again from the events on every read and is stored nowhere.
 The fold raises ``ValueError`` on a gap or a repeat in ``seq``, on an event recorded outside its
 stage, and on an exit its stage has no edge for.
 
-An item ending ``ACCEPTED`` or ``REJECTED`` is finished, and the fold refuses any later event. An
-item ending ``ABANDONED`` or ``FAILED`` continues when it runs again, and its next event clears the
+A workpiece ending ``ACCEPTED`` or ``REJECTED`` is finished, and the fold refuses any later event. A
+workpiece ending ``ABANDONED`` or ``FAILED`` continues when it runs again, and its next event clears the
 terminal:
 
-* an abandoned item returns to ``VALIDATE`` with its retry count at zero;
-* a failed item resumes at the stage it failed in.
+* an abandoned workpiece returns to ``VALIDATE`` with its retry count at zero;
+* a failed workpiece resumes at the stage it failed in.
 """
 
 from collections.abc import Iterable, Mapping
@@ -93,7 +93,7 @@ class Stage(StrEnum):
     VALIDATE = "validate"
     REVIEW = "review"
     DONE = "done"
-    """A closing is recorded, and the item's ``TERMINAL`` event comes next."""
+    """A closing is recorded, and the workpiece's ``TERMINAL`` event comes next."""
 
 
 class Exit(StrEnum):
@@ -145,9 +145,9 @@ class Terminal(StrEnum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
     ABANDONED = "abandoned"
-    """Validation retries ran out. A relaunch returns the item to ``VALIDATE``."""
+    """Validation retries ran out. A relaunch returns the workpiece to ``VALIDATE``."""
     FAILED = "failed"
-    """A stage raised. A relaunch resumes the item at that stage."""
+    """A stage raised. A relaunch resumes the workpiece at that stage."""
 
 
 FINAL = frozenset({Terminal.ACCEPTED, Terminal.REJECTED})
@@ -163,8 +163,8 @@ class Closing:
 
 
 @dataclass(frozen=True)
-class ItemEvent:
-    """An event of an item's log.
+class WorkpieceEvent:
+    """An event of a workpiece's log.
 
     Attributes:
         kind: The event's kind.
@@ -184,8 +184,8 @@ class ItemEvent:
 
 
 @dataclass(frozen=True)
-class ItemState:
-    """An item's status, folded from its events.
+class WorkpieceState:
+    """A workpiece's status, folded from its events.
 
     Attributes:
         stage: The stage to run next.
@@ -197,9 +197,9 @@ class ItemState:
         revision: The kind of revision the next author call answers. A build of a program without
             source asks the author again with it, so only ``BUILT`` clears it.
         build_revisions: The build failures and failed author calls so far.
-        retries: The review ``Retry`` decisions since the item opened or was last abandoned.
+        retries: The review ``Retry`` decisions since the workpiece opened or was last abandoned.
         closing: The ``TERMINAL`` event due, while the stage is ``DONE``.
-        terminal: The item's terminal, until a later event clears it.
+        terminal: The workpiece's terminal, until a later event clears it.
     """
 
     stage: Stage
@@ -215,12 +215,12 @@ class ItemState:
     terminal: Terminal | None
 
 
-def opened(event: ItemEvent) -> ItemState:
-    """Start an item at ``TRIAGE`` in round 0 from its ``OPENED`` event."""
+def opened(event: WorkpieceEvent) -> WorkpieceState:
+    """Start a workpiece at ``TRIAGE`` in round 0 from its ``OPENED`` event."""
     if event.kind is not EventKind.OPENED or event.seq != 1:
-        raise ValueError(f"an item's log starts with OPENED at seq 1, not {event.kind} at seq {event.seq}")
+        raise ValueError(f"a workpiece's log starts with OPENED at seq 1, not {event.kind} at seq {event.seq}")
     assert event.digest is not None, "OPENED carries the proposal digest"
-    return ItemState(
+    return WorkpieceState(
         stage=Stage.TRIAGE,
         round=0,
         seq=1,
@@ -235,10 +235,10 @@ def opened(event: ItemEvent) -> ItemState:
     )
 
 
-def transition(state: ItemState, event: ItemEvent) -> ItemState:
-    """Return the state after ``event``, the item's next event.
+def transition(state: WorkpieceState, event: WorkpieceEvent) -> WorkpieceState:
+    """Return the state after ``event``, the workpiece's next event.
 
-    A ``TERMINAL`` event ends the item at its closing, or marks it failed in place. Any other event
+    A ``TERMINAL`` event ends the workpiece at its closing, or marks it failed in place. Any other event
     belongs to the stage in ``EVENT_STAGES``. Its exit picks the next stage from ``TRANSITIONS``, and its
     kind and exit select the bookkeeping in the module docstring's table.
 
@@ -256,9 +256,9 @@ def transition(state: ItemState, event: ItemEvent) -> ItemState:
         return _terminal(state, Terminal(attrs[TERMINAL_ATTR]))
     stage = EVENT_STAGES.get(kind)
     if stage is None:
-        raise ValueError(f"{kind} after the item's first event")
+        raise ValueError(f"{kind} after the workpiece's first event")
     if stage is not state.stage:
-        raise ValueError(f"{kind} is recorded by stage {stage}, but the item is in stage {state.stage}")
+        raise ValueError(f"{kind} is recorded by stage {stage}, but the workpiece is in stage {state.stage}")
     way = Exit(attrs[EXIT])
     if (state.stage, way) not in TRANSITIONS:
         raise ValueError(f"{kind} exits {way}, which stage {state.stage} has no edge for")
@@ -296,15 +296,15 @@ def transition(state: ItemState, event: ItemEvent) -> ItemState:
             raise ValueError(f"{kind} cannot exit {way}")
 
 
-def _out_of_revisions(state: ItemState, revision: RevisionKind) -> ItemState:
-    """Count the failure that spent the last build revision, and close the item as rejected on its budget."""
+def _out_of_revisions(state: WorkpieceState, revision: RevisionKind) -> WorkpieceState:
+    """Count the failure that spent the last build revision, and close the workpiece as rejected on its budget."""
     failures = state.build_revisions + 1
     reason = f"no buildable program after {failures} build and author failures"
     closing = Closing(Terminal.REJECTED, reason, RejectKind.BUDGET)
     return replace(state, build_revisions=failures, revision=revision, closing=closing)
 
 
-def _terminal(state: ItemState, terminal: Terminal) -> ItemState:
+def _terminal(state: WorkpieceState, terminal: Terminal) -> WorkpieceState:
     if terminal is Terminal.FAILED:
         return replace(state, terminal=terminal)
     closing = state.closing
@@ -317,8 +317,8 @@ def _terminal(state: ItemState, terminal: Terminal) -> ItemState:
     return state
 
 
-def derive_state(events: Iterable[ItemEvent]) -> ItemState:
-    """Fold an item's events into its ``ItemState``: ``opened`` on the first, then ``transition`` on each.
+def derive_state(events: Iterable[WorkpieceEvent]) -> WorkpieceState:
+    """Fold a workpiece's events into its ``WorkpieceState``: ``opened`` on the first, then ``transition`` on each.
 
     Raises:
         ValueError: the log is empty, does not start with ``OPENED``, or fails a ``transition`` check.
@@ -326,7 +326,7 @@ def derive_state(events: Iterable[ItemEvent]) -> ItemState:
     events = iter(events)
     first = next(events, None)
     if first is None:
-        raise ValueError("an item's log starts with OPENED, and this log is empty")
+        raise ValueError("a workpiece's log starts with OPENED, and this log is empty")
     state = opened(first)
     for event in events:
         state = transition(state, event)

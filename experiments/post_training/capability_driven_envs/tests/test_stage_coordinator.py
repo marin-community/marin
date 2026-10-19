@@ -22,10 +22,10 @@ from taskforge.stage40_build.context import RLEnvBuildContext
 from taskforge.stage40_build.run import DRAFT_DIR, TaskDraft, load_draft, run_build
 from taskforge.stage40_build.step_store import model_digest
 from taskforge.stage60_review.decision import Accept, BandOutcome, Decision
-from taskforge.stage_coordinator.coordinator import ItemBudget, StageCoordinator, run_item
+from taskforge.stage_coordinator.coordinator import StageCoordinator, WorkpieceBudget, run_workpiece
 from taskforge.stage_coordinator.event_log import InMemoryEventLog, JsonEventStore
-from taskforge.stage_coordinator.item_machine import Terminal
 from taskforge.stage_coordinator.stage_functions import StageFunctions
+from taskforge.stage_coordinator.workpiece_machine import Terminal
 
 from experiments.post_training.capability_driven_envs.catalog import (
     capability_idea_record,
@@ -35,7 +35,7 @@ from experiments.post_training.capability_driven_envs.catalog import (
 from experiments.post_training.capability_driven_envs.example_program import task_spec
 
 CAPABILITY = "d43.culinary.scaling"
-ITEM = f"{CAPABILITY}--00"
+WORKPIECE = f"{CAPABILITY}--00"
 
 
 class UnusedModel:
@@ -52,7 +52,7 @@ class UnusedModel:
 
 @rl_env_build_sink
 async def task(context: RLEnvBuildContext, proposal: dict[str, object]) -> TaskSpec:
-    return task_spec(context.item_id)
+    return task_spec(context.workpiece_id)
 
 
 async def validate(draft: TaskDraft) -> dict[str, int]:
@@ -63,7 +63,7 @@ async def review(summary: object) -> Decision:
     return Accept(band=BandOutcome.IN_BAND)
 
 
-async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_item_id(tmp_path):
+async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_workpiece_id(tmp_path):
     proposal = capability_idea_record(load_capability_ideas(example_catalog_path())[CAPABILITY])
     stages = StageFunctions(
         triage=accept,
@@ -77,7 +77,7 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_item
     sampling = LLMPolicy()
     coordinator = StageCoordinator(
         stages=stages,
-        budget=ItemBudget(max_build_revisions=0, max_validation_retries=0),
+        budget=WorkpieceBudget(max_build_revisions=0, max_validation_retries=0),
         root=tmp_path,
         event_store=JsonEventStore(tmp_path),
         model=model,
@@ -85,7 +85,7 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_item
         model_digest=model_digest(model, sampling),
     )
 
-    assert await run_item(coordinator, ITEM, proposal, InMemoryEventLog()) is Terminal.ACCEPTED
-    written = load_draft(tmp_path / "items" / ITEM / "rounds" / "0" / DRAFT_DIR).task
-    assert written.id == ITEM
+    assert await run_workpiece(coordinator, WORKPIECE, proposal, InMemoryEventLog()) is Terminal.ACCEPTED
+    written = load_draft(tmp_path / "workpieces" / WORKPIECE / "rounds" / "0" / DRAFT_DIR).task
+    assert written.id == WORKPIECE
     assert written.tags == (CAPABILITY,)

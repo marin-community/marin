@@ -51,7 +51,7 @@ class Build(Protocol):
         self,
         program: RLEnvBuildProgram,
         proposal: object,
-        item_id: str,
+        workpiece_id: str,
         round_dir: Path,
         store_root: str,
         model: ModelClient,

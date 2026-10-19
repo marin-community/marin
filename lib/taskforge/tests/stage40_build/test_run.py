@@ -35,7 +35,7 @@ from taskforge.stage40_build.context import BuildFailure, RLEnvBuildContext
 from taskforge.stage40_build.run import DRAFT_DIR, load_draft, run_build, run_program
 from taskforge.stage40_build.step_store import CacheStatus, RLEnvBuildStepStore, model_digest
 
-ITEM = "toy-0"
+WORKPIECE = "toy-0"
 PROPOSAL = {"id": "toy/0", "task": "Multiply the two numbers in /workspace/numbers.txt."}
 SAMPLING = LLMPolicy()
 
@@ -76,9 +76,9 @@ async def grader(context: RLEnvBuildContext) -> GraderPackage:
     return verifyit_package(NumericSpec(expected="42", tolerance_abs=0.0, tolerance_rel=0.0))
 
 
-def toy_task(item_id: str, prompt: str, numbers: TaskResource, grader: GraderPackage) -> TaskSpec:
+def toy_task(workpiece_id: str, prompt: str, numbers: TaskResource, grader: GraderPackage) -> TaskSpec:
     return TaskSpec(
-        id=item_id,
+        id=workpiece_id,
         context=ConversationInput(events=(TextMessage(role="user", content=prompt),)),
         environment_requirements=EnvironmentRequirements(
             capabilities=("shell", "filesystem"),
@@ -88,14 +88,14 @@ def toy_task(item_id: str, prompt: str, numbers: TaskResource, grader: GraderPac
         answer_type=AnswerType.TEXT,
         answer_format=PlainText(),
         grader=grader.grader,
-        source=Source(dataset="taskforge", revision="test", row=item_id, importer_revision="test"),
+        source=Source(dataset="taskforge", revision="test", row=workpiece_id, importer_revision="test"),
         resources=ResourceGroups(worker=(numbers,), verifier=grader.resources),
     )
 
 
 @rl_env_build_sink
 async def task(context: RLEnvBuildContext, numbers: TaskResource, grader: GraderPackage, proposal: dict) -> TaskSpec:
-    return toy_task(context.item_id, f"{proposal['task']} Reply alone.", numbers, grader)
+    return toy_task(context.workpiece_id, f"{proposal['task']} Reply alone.", numbers, grader)
 
 
 PROGRAM = rl_env_build_program(numbers, grader, sink=task)
@@ -106,7 +106,7 @@ async def build(tmp_path, program=PROGRAM, proposal=PROPOSAL):
     return await run_build(
         program,
         proposal,
-        ITEM,
+        WORKPIECE,
         tmp_path / "round",
         str(tmp_path / "store"),
         model,
@@ -139,7 +139,7 @@ async def test_steps_without_a_dependency_between_them_run_together_and_outcomes
         context: RLEnvBuildContext, slow_numbers: TaskResource, slow_grader: GraderPackage, proposal: dict
     ) -> TaskSpec:
         await linger("joined")
-        return toy_task(context.item_id, proposal["task"], slow_numbers, slow_grader)
+        return toy_task(context.workpiece_id, proposal["task"], slow_numbers, slow_grader)
 
     program = rl_env_build_program(slow_numbers, slow_grader, sink=joined)
     draft = await build(tmp_path, program)
@@ -258,7 +258,7 @@ async def hint(context: RLEnvBuildContext, proposal: dict) -> Hint:
 
 @rl_env_build_sink
 async def hinted_task(context: RLEnvBuildContext, numbers: TaskResource, grader: GraderPackage, hint: Hint) -> TaskSpec:
-    return toy_task(context.item_id, hint.text, numbers, grader)
+    return toy_task(context.workpiece_id, hint.text, numbers, grader)
 
 
 def prompt_of(task: TaskSpec) -> str:
@@ -270,10 +270,10 @@ def prompt_of(task: TaskSpec) -> str:
 async def test_the_model_and_sampling_enter_every_step_key(tmp_path):
     model = FakeModel()
     program = rl_env_build_program(numbers, grader, hint, sink=hinted_task)
-    store = RLEnvBuildStepStore(str(tmp_path), ITEM)
+    store = RLEnvBuildStepStore(str(tmp_path), WORKPIECE)
 
     async def run(sampling: LLMPolicy) -> tuple[str, set[CacheStatus]]:
-        context = RLEnvBuildContext(item_id=ITEM, model=model, sampling=sampling)
+        context = RLEnvBuildContext(workpiece_id=WORKPIECE, model=model, sampling=sampling)
         task, outcomes = await run_program(program, context, PROPOSAL, store, model_digest(model, sampling))
         return prompt_of(task), {outcome.status for outcome in outcomes}
 
