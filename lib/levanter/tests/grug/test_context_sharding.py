@@ -11,6 +11,7 @@ import textwrap
 import pytest
 
 _PRELUDE = """
+import itertools
 import math
 
 import jax
@@ -131,11 +132,13 @@ def test_fused_cross_entropy_reduces_over_the_sequence_instead_of_gathering_it()
             (activation_spec(True), TOKEN_AXES),
             (P(None, "context", None), ("context",)),  # batch replicated, sequence split
         )
+        # A 3-row grad-in-forward block pads each 4-token shard to two blocks.
         for hidden_spec, expected_psum_axes in layouts:
-            for reduction in ("sum", "mean"):
-                def sharded(hidden, lm_head, hidden_spec=hidden_spec, reduction=reduction):
+            for reduction, grad_in_forward_block in itertools.product(("sum", "mean"), (None, 3)):
+                def sharded(hidden, lm_head, hidden_spec=hidden_spec, reduction=reduction, block=grad_in_forward_block):
                     return fused_linear_softmax_cross_entropy_loss(
                         reshard(hidden, hidden_spec), lm_head, labels, weight=weight, reduction=reduction,
+                        grad_in_forward_token_block_size=block,
                     )
 
                 with set_mesh(mesh):
@@ -150,7 +153,7 @@ def test_fused_cross_entropy_reduces_over_the_sequence_instead_of_gathering_it()
                 for actual, expected in zip(grads, expected_grads, strict=True):
                     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
 
-                context = (hidden_spec, reduction)
+                context = (hidden_spec, reduction, grad_in_forward_block)
                 (shard_map_params,) = equation_params(jaxpr, "shard_map")
                 assert shard_map_params["in_specs"][0] == hidden_spec, (context, shard_map_params["in_specs"])
                 psum_axes = [tuple(params["axes"]) for params in equation_params(jaxpr, "psum")]
