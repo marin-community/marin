@@ -99,6 +99,7 @@ def test_extra_exclude_is_matched_literally_not_verbose(workspace):
     assert "my dir/keep.txt" in rel
 
 
+@pytest.mark.timeout(60)
 def test_zip_rejects_oversized_bundles(workspace):
     large_file = workspace / "large_file.bin"
     large_file.write_bytes(os.urandom(MAX_BUNDLE_SIZE_BYTES + 1024 * 1024))
@@ -131,6 +132,7 @@ def vendor_bundle(tmp_path_factory):
 
 
 @pytest.mark.parametrize("consumer", ["worker", "kubernetes"])
+@pytest.mark.timeout(60)
 def test_large_vendor_bundle_round_trips_runtime_resources(vendor_bundle, tmp_path, monkeypatch, consumer):
     bundle, resources, excluded = vendor_bundle
     store = BundleStore(str(tmp_path / "bundles"))

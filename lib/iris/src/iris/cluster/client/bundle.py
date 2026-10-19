@@ -122,7 +122,7 @@ def create_workspace_zip(
     fd, tmp_path = tempfile.mkstemp(suffix=".zip", prefix="workspace_")
     os.close(fd)
     try:
-        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_LZMA) as zf:
             for file in files:
                 zf.write(file, file.relative_to(workspace))
         buf = Path(tmp_path).read_bytes()
