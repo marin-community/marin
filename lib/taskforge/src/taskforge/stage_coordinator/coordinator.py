@@ -69,6 +69,7 @@ from taskforge.ledger.records import check_workpiece_id
 from taskforge.llm.client import ModelClient, ModelUnavailable
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.structured import StructuredOutputError
+from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage20_triage.verdict import TriageDecision
 from taskforge.stage30_author.author import (
     PROGRAM_FILE,
@@ -79,7 +80,8 @@ from taskforge.stage30_author.author import (
 )
 from taskforge.stage30_author.program import RLEnvBuildProgram
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure
-from taskforge.stage40_build_with_program.run import DRAFT_DIR, load_draft
+from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, load_draft
+from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import CacheStatus
 from taskforge.stage60_review.decision import Accept, Decision, Modify, Reject, Retry
 from taskforge.stage_coordinator.event_log import WORKPIECES_DIR, WorkpieceEventLog, WorkpieceEventStore
@@ -142,8 +144,11 @@ class StageCoordinator:
         event_store: The store each workpiece's events are saved to on reaching a terminal.
         model: The model build steps call.
         sampling: The sampling policy build steps pass to ``model``.
-        model_digest: The model part of every step key, usually ``step_store.model_digest(model, sampling)``.
-            ``OPENED`` records it.
+        services: The build host's machines, images, web tools, ledger and agent-loop settings, passed
+            to every build.
+        research: The research requirement of every build (``run_build``'s ``research``).
+        model_digest: The model part of every step key, usually
+            ``run.build_model_digest(model, sampling, services)``. ``OPENED`` records it.
     """
 
     stages: StageFunctions
@@ -152,6 +157,8 @@ class StageCoordinator:
     event_store: WorkpieceEventStore
     model: ModelClient
     sampling: LLMPolicy
+    services: RLEnvBuildServices
+    research: ResearchRequirement
     model_digest: str
 
 
@@ -159,7 +166,7 @@ class StageCoordinator:
 class _Workpiece:
     coordinator: StageCoordinator
     workpiece_id: str
-    proposal: object
+    proposal: TaskProposal
     log: WorkpieceEventLog
 
     @property
@@ -175,7 +182,7 @@ class _Workpiece:
 
 
 async def run_workpiece(
-    coordinator: StageCoordinator, workpiece_id: str, proposal: object, log: WorkpieceEventLog
+    coordinator: StageCoordinator, workpiece_id: str, proposal: TaskProposal, log: WorkpieceEventLog
 ) -> Terminal:
     """Run ``proposal`` as workpiece ``workpiece_id`` to a terminal, resuming from ``log`` or the event store.
 
@@ -340,8 +347,10 @@ async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent
             str(coordinator.root / STORE_DIR),
             coordinator.model,
             coordinator.sampling,
-            coordinator.model_digest,
+            coordinator.services,
             state.round,
+            research=coordinator.research,
+            model_digest=coordinator.model_digest,
         )
     except (BuildInfrastructureFailure, ModelUnavailable):
         raise

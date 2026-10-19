@@ -16,7 +16,8 @@ as they are and may also call any stage directly::
     review        Review       a caller's function
 
 The Protocols defined here take positional-only parameters, so a caller's function may use its own
-parameter names. ``Author`` comes from ``stage30_author.author``, and the coordinator calls it with
+parameter names; ``Build`` passes ``run_build``'s keyword-only ``research`` and ``model_digest`` by
+name. ``Author`` comes from ``stage30_author.author``, and the coordinator calls it with
 ``proposal`` and ``revision`` in that order. The build stage calls ``load_program`` on the source
 the author returned, read back from ``authored/<k>/program.py``. The coordinator writes the summary returned by
 validate to ``validation.json`` and hands review the JSON read back from that file, so a resumed
@@ -29,15 +30,17 @@ from typing import Protocol
 
 from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy
+from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage20_triage.verdict import TriageDecision
 from taskforge.stage30_author.author import Author
 from taskforge.stage30_author.program import RLEnvBuildProgram
-from taskforge.stage40_build_with_program.run import TaskDraft
+from taskforge.stage40_build_with_program.run import ResearchRequirement, TaskDraft
+from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage60_review.decision import Decision
 
 
 class Triage(Protocol):
-    async def __call__(self, proposal: object, /) -> TriageDecision: ...
+    async def __call__(self, proposal: TaskProposal, /) -> TriageDecision: ...
 
 
 class LoadProgram(Protocol):
@@ -50,15 +53,18 @@ class Build(Protocol):
     async def __call__(
         self,
         program: RLEnvBuildProgram,
-        proposal: object,
+        proposal: TaskProposal,
         workpiece_id: str,
         round_dir: Path,
         store_root: str,
         model: ModelClient,
         sampling: LLMPolicy,
-        model_digest: str,
+        services: RLEnvBuildServices,
         round: int,  # noqa: A002 - run_build's round number
         /,
+        *,
+        research: ResearchRequirement,
+        model_digest: str,
     ) -> TaskDraft: ...
 
 

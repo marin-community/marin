@@ -1,40 +1,35 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exercise the coordinator with a two-step toy workpiece and controlled stage failures.
+"""Exercise the coordinator with a three-step toy workpiece and controlled stage failures.
 
-``numbers`` writes a resource used by the ``task`` sink. ``SOURCE`` holds the same program as
-module text, as an author writing Python would return it.
+``numbers`` writes a resource and ``grader`` the grader, and the ``task`` sink uses both. ``SOURCE``
+holds the same program as module text, as an author writing Python would return it, and passes the
+restricted loader.
 """
 
 import base64
 import inspect
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, NoReturn
 
 import pytest
 from pydantic import BaseModel
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import Backend
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import (
-    AnswerType,
-    CommandSemantics,
-    ConversationInput,
-    EnvironmentRequirements,
-    InlineFile,
-    PlainText,
-    ResourceGroups,
-    Source,
-    TaskResource,
-    TaskSpec,
-    TextMessage,
-)
+from taskcompendium.models import AnswerType, InlineFile, PlainText, Source, TaskResource, TaskSpec
 from verifyit.spec import NumericSpec
 
+from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, FinishReason, ModelUnavailable, StructuredResult, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
+from taskforge.sandbox.factories import MachineHost
+from taskforge.spec.draft import assemble, requirements
+from taskforge.stage10_proposal.model import TaskProposal, parse
 from taskforge.stage20_triage.verdict import accept
 from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision, RevisionKind, static_author
 from taskforge.stage30_author.loader import load_program_source
@@ -45,8 +40,17 @@ from taskforge.stage30_author.program import (
     rl_env_build_step,
 )
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
-from taskforge.stage40_build_with_program.run import DRAFT_DIR, TASK_FILE, TaskDraft, run_build
-from taskforge.stage40_build_with_program.step_store import StoreCorruption, model_digest
+from taskforge.stage40_build_with_program.outputs import Grader
+from taskforge.stage40_build_with_program.run import (
+    DRAFT_DIR,
+    TASK_FILE,
+    ResearchRequirement,
+    TaskDraft,
+    build_model_digest,
+    run_build,
+)
+from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
+from taskforge.stage40_build_with_program.step_store import StoreCorruption
 from taskforge.stage60_review.decision import Accept, BandOutcome, Decision, Modify, RejectKind
 from taskforge.stage_coordinator.coordinator import (
     AUTHORED_DIR,
@@ -63,9 +67,52 @@ from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import EXIT, Stage, Terminal, WorkpieceEvent, derive_state
 
 WORKPIECE = "toy-0"
-PROPOSAL = {"id": "toy/0", "task": "Multiply the two numbers in /workspace/numbers.txt."}
+PROPOSAL = parse(
+    """---
+id: "toy/0"
+source: {kind: capability, ref: "toy", hash: "0"}
+grounding: unverified
+null_reason: null
+environment: shellsim
+verification: simple
+research_need: not_needed
+research_reason: "the numbers are in the task's own file"
+research: []
+build:
+  - "numbers": "the file holding the two numbers"
+  - "grader": "checks the product"
+resources: ["workspace/numbers.txt"]
+---
+## Task
+Multiply the two numbers in /workspace/numbers.txt.
+
+## Realism and workflow
+A clerk checks a product.
+
+## Research plan
+None.
+
+## Build plan
+Write the numbers and the grader.
+
+## Grader design and controls
+Full credit only for 42.
+
+## Risks and null conditions
+None.
+"""
+)
 BUDGET = WorkpieceBudget(max_build_revisions=1, max_validation_retries=1)
 SAMPLING = LLMPolicy()
+SERVICES = RLEnvBuildServices(
+    host=MachineHost.LAPTOP,
+    factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
+    images=None,
+    web_tools=(),
+    ledger=None,
+    reasoning_replay=ReasoningReplay.KEEP,
+    agent_limits=AgentLimits(max_turns=1, max_tokens=1024),
+)
 SUMMARY = {"graded": 4, "solved": 2}
 
 
@@ -74,7 +121,9 @@ class UnusedModel:
 
     model = "unused"
 
-    async def complete(self, messages: Sequence[Message], policy: LLMPolicy) -> Completion:
+    async def complete(
+        self, messages: Sequence[Message], policy: LLMPolicy, request_fields: Mapping[str, object] | None = None
+    ) -> Completion:
         raise AssertionError("no step calls the model")
 
     async def complete_structured[T: BaseModel](
@@ -90,60 +139,59 @@ async def numbers(context: RLEnvBuildContext) -> TaskResource:
     )
 
 
-@rl_env_build_sink
-async def task(context: RLEnvBuildContext, numbers: TaskResource, proposal: dict[str, str]) -> TaskSpec:
-    grader = verifyit_package(NumericSpec(expected="42", tolerance_abs=0.0, tolerance_rel=0.0))
-    return TaskSpec(
-        id=context.workpiece_id,
-        context=ConversationInput(events=(TextMessage(role="user", content=proposal["task"]),)),
-        environment_requirements=EnvironmentRequirements(
-            capabilities=("shell", "filesystem"),
-            command_semantics=CommandSemantics.SHELL_SIMULATOR,
-            working_directory="/workspace",
-        ),
-        answer_type=AnswerType.TEXT,
-        answer_format=PlainText(),
-        grader=grader.grader,
-        source=Source(dataset="taskforge", revision="test", row=context.workpiece_id, importer_revision="test"),
-        resources=ResourceGroups(worker=(numbers,), verifier=grader.resources),
+@rl_env_build_step
+async def grader(context: RLEnvBuildContext) -> Grader:
+    return Grader(
+        package=verifyit_package(NumericSpec(expected="42", tolerance_abs=0.0, tolerance_rel=0.0)),
+        answer_contract="Reply with the product alone.",
+        reference_reply="42",
+        reference_files=(),
+        secret_values=("42",),
+        prototyped=(),
     )
 
 
 @rl_env_build_sink
-async def broken(context: RLEnvBuildContext, proposal: dict[str, str]) -> TaskSpec:
+async def task(context: RLEnvBuildContext, numbers: TaskResource, grader: Grader, proposal: TaskProposal) -> TaskSpec:
+    return assemble(
+        context.workpiece_id,
+        proposal.body,
+        AnswerType.TEXT,
+        PlainText(),
+        grader.package,
+        Source(dataset="taskforge", revision="test", row=context.workpiece_id, importer_revision="test"),
+        environment=requirements(image=None),
+        files=(numbers,),
+    )
+
+
+@rl_env_build_sink
+async def broken(context: RLEnvBuildContext, proposal: TaskProposal) -> TaskSpec:
     raise BuildFailure("the numbers do not multiply to the answer")
 
 
-PROGRAM = rl_env_build_program(numbers, sink=task)
+PROGRAM = rl_env_build_program(numbers, grader, sink=task)
 FAILING = rl_env_build_program(sink=broken)
 SOURCE_IMPORTS = """\
 import base64
 
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import (
-    AnswerType,
-    CommandSemantics,
-    ConversationInput,
-    EnvironmentRequirements,
-    InlineFile,
-    PlainText,
-    ResourceGroups,
-    Source,
-    TaskResource,
-    TaskSpec,
-    TextMessage,
-)
+from taskcompendium.models import AnswerType, InlineFile, PlainText, Source, TaskResource, TaskSpec
 from verifyit.spec import NumericSpec
 
+from taskforge.spec.draft import assemble, requirements
+from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build_with_program.context import RLEnvBuildContext
+from taskforge.stage40_build_with_program.outputs import Grader
 """
 SOURCE = "\n\n".join(
     [
         SOURCE_IMPORTS,
         inspect.getsource(numbers.fn),
+        inspect.getsource(grader.fn),
         inspect.getsource(task.fn),
-        "PROGRAM = rl_env_build_program(numbers, sink=task)\n",
+        "PROGRAM = rl_env_build_program(numbers, grader, sink=task)\n",
     ]
 )
 """``PROGRAM`` as module text. The steps keep their text, so the loaded program has ``PROGRAM``'s digest."""
@@ -169,7 +217,7 @@ STAGES = StageFunctions(
     validate=validate,
     review=review,
 )
-UNUSED_MODEL_DIGEST = model_digest(UnusedModel(), SAMPLING)
+UNUSED_MODEL_DIGEST = build_model_digest(UnusedModel(), SAMPLING, SERVICES)
 
 
 class RecordingAuthor:
@@ -179,7 +227,7 @@ class RecordingAuthor:
         self.programs = list(programs)
         self.revisions: list[Revision | None] = []
 
-    async def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(self, proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
         self.revisions.append(revision)
         return AuthoredProgram(self.programs.pop(0) if len(self.programs) > 1 else self.programs[0], None)
 
@@ -191,7 +239,7 @@ class SourceAuthor:
         self.source = source
         self.revisions: list[Revision | None] = []
 
-    async def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(self, proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
         self.revisions.append(revision)
         return AuthoredProgram(load_program_source(self.source), self.source)
 
@@ -206,11 +254,11 @@ class FailsOnce:
         self.error = error
         self.calls = 0
 
-    async def __call__(self, *args: Any) -> TaskDraft:
+    async def __call__(self, *args: Any, **kwargs: Any) -> TaskDraft:
         self.calls += 1
         if self.calls == 1:
             raise self.error
-        return await run_build(*args)
+        return await run_build(*args, **kwargs)
 
 
 class SaveFailsOnce(JsonEventStore):
@@ -230,7 +278,9 @@ class SaveFailsOnce(JsonEventStore):
 def coordinator(
     root: Path, stages: StageFunctions = STAGES, budget: WorkpieceBudget = BUDGET, digest: str = UNUSED_MODEL_DIGEST
 ) -> StageCoordinator:
-    return StageCoordinator(stages, budget, root, JsonEventStore(root), UnusedModel(), SAMPLING, digest)
+    return StageCoordinator(
+        stages, budget, root, JsonEventStore(root), UnusedModel(), SAMPLING, SERVICES, ResearchRequirement.OFF, digest
+    )
 
 
 def exits(log: InMemoryEventLog) -> list[tuple[str, str | None]]:
@@ -308,7 +358,7 @@ async def test_an_author_returning_source_runs_once_and_the_build_loads_its_prog
 @pytest.mark.parametrize(
     ("proposal", "budget", "digest", "refusal"),
     [
-        ({**PROPOSAL, "task": "Add the two numbers."}, BUDGET, UNUSED_MODEL_DIGEST, "opened for proposal"),
+        (replace(PROPOSAL, body=PROPOSAL.body.replace("Multiply", "Add")), BUDGET, UNUSED_MODEL_DIGEST, "opened for proposal"),
         (PROPOSAL, replace(BUDGET, max_build_revisions=2), UNUSED_MODEL_DIGEST, "opened under budget"),
         (PROPOSAL, BUDGET, "another-model", "opened with model digest"),
     ],
@@ -416,8 +466,12 @@ async def test_a_name_error_in_a_step_reports_its_program_line_to_the_author(tmp
 
 
 async def test_an_os_error_raised_by_a_step_is_the_programs_failure(tmp_path):
-    """A step opening a missing file is a program bug, not the storage fault the OSError pass-through covers."""
-    source = SOURCE.replace(NUMBERS_FILE, 'InlineFile(content_base64=open("/workspace/does-not-exist.txt").read())')
+    """A step raising a missing file's error is a program bug, not the storage fault the OSError pass-through covers.
+
+    The restricted loader gives a program no ``open``, so the step raises the error itself.
+    """
+    missing = '    raise FileNotFoundError(2, "No such file or directory", "/workspace/does-not-exist.txt")\n'
+    source = SOURCE.replace("    return TaskResource(\n", missing + "    return TaskResource(\n", 1)
     assert source != SOURCE
     expected = (
         "FileNotFoundError: [Errno 2] No such file or directory: '/workspace/does-not-exist.txt' at numbers, "
@@ -459,7 +513,7 @@ class CutAuthor:
         self.cuts = cuts
         self.revisions: list[Revision | None] = []
 
-    async def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(self, proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
         self.revisions.append(revision)
         if len(self.revisions) <= self.cuts:
             raise StructuredOutputError(ValueError("the reply was cut at the output limit"), (CUT_REPLY, CUT_REPLY))
@@ -504,7 +558,7 @@ async def test_author_replies_cut_past_the_budget_reject_the_workpiece_on_its_bu
     ]
 
 
-async def unavailable_author(proposal: object, revision: Revision | None) -> AuthoredProgram:
+async def unavailable_author(proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
     raise ModelUnavailable("the hold ran out", ())
 
 
@@ -536,8 +590,8 @@ async def test_a_failure_outside_the_program_fails_the_workpiece_at_build_and_a_
     assert exits(log) == [*ACCEPTED_EXITS[:3], ("terminal", "failed"), *ACCEPTED_EXITS[3:]]
 
 
-async def builds_then_the_host_fails(*args: Any) -> TaskDraft:
-    await run_build(*args)
+async def builds_then_the_host_fails(*args: Any, **kwargs: Any) -> TaskDraft:
+    await run_build(*args, **kwargs)
     raise HOST_FAILURE
 
 
@@ -556,7 +610,7 @@ async def test_a_corrupt_memo_fails_the_workpiece_at_build_with_its_revisions_un
     assert not (tmp_path / "workpieces" / WORKPIECE / "rounds" / "0" / FAILURES_DIR).exists()
 
 
-async def fails_in_the_program(*args: Any) -> TaskDraft:
+async def fails_in_the_program(*args: Any, **kwargs: Any) -> TaskDraft:
     raise BuildFailure("the numbers do not multiply to the answer", "task")
 
 

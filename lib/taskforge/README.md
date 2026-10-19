@@ -303,6 +303,9 @@ new `authored/<k>/`, so a relaunch resuming at build finds the program its `AUTH
 even when a killed process re-authored the workpiece after the last save. A program defined in
 Python, as `static_author` returns, has no source, and the build stage asks the author for it again.
 
+`StageCoordinator` holds the build host's `RLEnvBuildServices` and the `ResearchRequirement`, and
+passes them to every build with its model, sampling policy and model digest.
+
 The `OPENED` event records the digests of the proposal and the budget, and the coordinator's model
 digest. A relaunch of the workpiece with another proposal, budget or model digest raises
 `ValueError`, and so does a build whose program has another digest than the `AUTHORED` event.
@@ -377,7 +380,7 @@ uv run --package marin-taskforge --frozen --group test pytest -c lib/taskforge/p
 cd lib/taskforge && uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
-`tests/test_pipeline_walkthrough.py` exercises `run_workpiece` with a two-step toy program.
+`tests/test_pipeline_walkthrough.py` exercises `run_workpiece` with a three-step toy program.
 
 Live tests carry `@pytest.mark.live_glm`. The default marker expression excludes them, and they
 skip with a reason when their inputs are missing. They call GLM-5.3's high pool through the router
