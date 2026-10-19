@@ -19,8 +19,14 @@ from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.schedule import BatchSchedule
 from mergedeep import mergedeep
-from rigging.filesystem.cluster_config import check_gcs_paths_same_region, marin_temp_bucket
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.cluster_config import (
+    StoreType,
+    check_gcs_paths_same_region,
+    data_buckets,
+    marin_temp_bucket,
+    store_configs,
+)
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.processing.tokenize import read_tokenized_cache_stats
 from marin.training.run_environment import add_run_env_variables
@@ -49,7 +55,7 @@ def _cli_helpers_module():
 
 def resolve_checkpointer_output_path(checkpointer: CheckpointerConfig, output_path: str) -> CheckpointerConfig:
     """Point ``checkpointer`` at ``output_path``: rolling checkpoints under ``<output_path>/checkpoints``
-    and time-policy (temporary) checkpoints on region-local storage keyed by ``output_path``.
+    and time-policy (temporary) checkpoints in configured scratch storage keyed by ``output_path``.
 
     ``append_run_id_to_base_path`` is ``False`` because ``output_path`` already encodes the run's
     identity, so a run id suffix would double it up. Every other checkpointer field is preserved.
@@ -62,6 +68,40 @@ def resolve_checkpointer_output_path(checkpointer: CheckpointerConfig, output_pa
     )
 
 
+def checkpoint_resume_paths(
+    output_path: str,
+    ttl_days: int = TEMPORARY_CHECKPOINT_TTL_DAYS,
+    *,
+    temp_prefix: str | None = None,
+) -> list[str]:
+    """Return roots searched for the newest complete checkpoint.
+
+    CoreWeave defaults also search scratch in the output bucket and additional
+    backend-configured read buckets. An explicit ``temp_prefix``
+    restricts the search to permanent storage and that temporary destination.
+    """
+    paths = [
+        prefix_join(output_path, DEFAULT_CHECKPOINTS_PATH),
+        temporary_checkpoint_base_path(output_path, ttl_days, temp_prefix=temp_prefix),
+    ]
+    bucket = data_buckets().get(StoragePath(output_path).bucket)
+    if temp_prefix is not None or bucket is None or bucket.store is not StoreType.COREWEAVE:
+        return paths
+
+    # Search both mappings while old controllers still inject the former 08a override.
+    # Keep the old roots readable until those writers finish and their checkpoint TTLs expire.
+    store = store_configs()[bucket.store]
+    scratch_prefixes = [f"s3://{name}" for name in (bucket.name, *store.checkpoint_read_buckets)]
+    shared_bucket = store.temp_bucket
+    if shared_bucket is not None:
+        scratch_prefixes.insert(0, f"s3://{shared_bucket.name}")
+    for scratch_prefix in scratch_prefixes:
+        path = temporary_checkpoint_base_path(output_path, ttl_days, temp_prefix=scratch_prefix)
+        if path not in paths:
+            paths.append(path)
+    return paths
+
+
 def apply_output_path(train_config: TrainConfigT, output_path: str) -> TrainConfigT:
     """Set every run-scoped path on ``train_config`` from ``output_path``.
 
@@ -69,11 +109,15 @@ def apply_output_path(train_config: TrainConfigT, output_path: str) -> TrainConf
     Adapter LM/DPO exports PEFT rather than a merged HF model, so for those the merged ``hf_save_path``
     is cleared and ``peft_save_path`` takes the HF location.
     """
+    load_checkpoint_path = train_config.trainer.load_checkpoint_path
+    if load_checkpoint_path is None:
+        load_checkpoint_path = checkpoint_resume_paths(output_path)
     config = replace(  # type: ignore[bad-specialization]
         train_config,
         trainer=replace(
             train_config.trainer,
             checkpointer=resolve_checkpointer_output_path(train_config.trainer.checkpointer, output_path),
+            load_checkpoint_path=load_checkpoint_path,
         ),
         hf_save_path=prefix_join(output_path, DEFAULT_HF_CHECKPOINTS_PATH),
     )
@@ -270,18 +314,14 @@ def _disable_xla_autotune_subcache(env: dict) -> None:
 
 
 def _add_gpu_collective_watchdog_env(env: dict[str, str]) -> None:
-    """Set the NCCL collective-watchdog timeout and NCCL_DEBUG in ``env`` (in place).
+    """Set the NCCL collective-watchdog timeout in ``env`` (in place).
 
-    Defers to an explicit termination timeout already in ``XLA_FLAGS`` and to a
-    preset ``NCCL_DEBUG``.
+    Defers to an explicit termination timeout already in ``XLA_FLAGS``.
     """
     xla_flags = env.get("XLA_FLAGS", "")
     if GPU_NCCL_TERMINATION_TIMEOUT_FLAG not in xla_flags:
         flag = f"--{GPU_NCCL_TERMINATION_TIMEOUT_FLAG}={DEFAULT_GPU_NCCL_TERMINATION_TIMEOUT}"
         env["XLA_FLAGS"] = f"{xla_flags} {flag}".strip()
-
-    # WARN surfaces the abort and transport errors without INFO's per-collective volume.
-    env.setdefault("NCCL_DEBUG", "WARN")
 
 
 def resolve_training_env(

@@ -9,8 +9,9 @@ from unittest.mock import patch
 
 import pytest
 from fray.types import ResourceConfig
+from fsspec.implementations.memory import MemoryFileSystem
 from levanter.adaptor import LoraAdaptorConfig
-from levanter.checkpoint import CheckpointerConfig
+from levanter.checkpoint import CheckpointerConfig, discover_checkpoint_candidates
 from levanter.data.text.datasets import DatasetComponent
 from levanter.data.text.preference import PreferenceChatLmDatasetFormat, PreferenceLmDataConfig
 from levanter.infra.cli_helpers import CliConfig
@@ -31,6 +32,7 @@ from marin.training.training import (
     TrainLmOnPodConfig,
     temporary_checkpoint_base_path,
 )
+from rigging.filesystem.storage_path import prefix_join
 
 
 @pytest.fixture
@@ -111,6 +113,48 @@ def test_apply_output_path_sets_run_specific_temp_checkpoints(trainer_config):
     )
     assert checkpointer.append_run_id_to_base_path is False
     assert updated.hf_save_path == "gs://marin-us-east5/experiments/grug/base-trial/hf"
+
+
+@pytest.mark.parametrize(
+    ("previous_bucket", "temp_override", "write_bucket"),
+    [
+        ("marin-us-east-02a", None, "marin-us-east-08a"),
+        ("hero-checkpoints", None, "marin-us-east-08a"),
+        ("marin-us-east-08a", "s3://hero-checkpoints", "hero-checkpoints"),
+    ],
+)
+def test_coreweave_resume_across_scratch_cutover_finds_latest_checkpoint(
+    trainer_config, previous_bucket, temp_override, write_bucket, monkeypatch, tmp_path
+):
+    monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
+    if temp_override is not None:
+        monkeypatch.setenv("MARIN_TEMP_PREFIX", temp_override)
+    output_path = f"s3://marin-us-east-02a/marin/{tmp_path.name}"
+    updated = apply_output_path(train_lm.TrainLmConfig(trainer=trainer_config), output_path)
+    trainer = updated.trainer
+    permanent = f"{output_path}/checkpoints"
+    key = f"marin-us-east-02a/marin/{tmp_path.name}/checkpoints"
+    destination = f"s3://{write_bucket}/tmp/ttl=14d/checkpoints-temp/{key}"
+    previous = f"s3://{previous_bucket}/tmp/ttl=14d/checkpoints-temp/{key}"
+    filesystem = MemoryFileSystem()
+    for root, step in [(permanent, 10), (destination, 20), (previous, 30)]:
+        checkpoint = prefix_join(root, f"step-{step}")
+        filesystem.makedirs(checkpoint, exist_ok=True)
+        filesystem.pipe(
+            prefix_join(checkpoint, "metadata.json"),
+            json.dumps({"step": step, "timestamp": "2026-10-19T00:00:00"}).encode(),
+        )
+
+    paths = trainer.checkpoint_search_paths("test-run")
+    assert discover_checkpoint_candidates(*paths, fs=filesystem)[-1].path == f"{previous}/step-30"
+    assert trainer.checkpointer.temporary_base_path == destination
+
+
+def test_apply_output_path_preserves_explicit_restore_roots(trainer_config, monkeypatch):
+    monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
+    trainer = dataclasses.replace(trainer_config, load_checkpoint_path=["s3://marin-us-east-02a/recovery"])
+    updated = apply_output_path(train_lm.TrainLmConfig(trainer=trainer), "s3://marin-us-east-02a/marin/run")
+    assert updated.trainer.checkpoint_search_paths("test-run") == ["s3://marin-us-east-02a/recovery"]
 
 
 def test_apply_output_path_does_not_enable_adapter_hf_export_without_steps(trainer_config):

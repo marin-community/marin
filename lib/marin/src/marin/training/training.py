@@ -124,8 +124,13 @@ def _temporary_checkpoint_key(output_path: str) -> str:
     return str(StoragePath(path.bucket) / path.key) if path.bucket else path.key
 
 
-def temporary_checkpoint_base_path(output_path: str, ttl_days: int = TEMPORARY_CHECKPOINT_TTL_DAYS) -> str:
-    """Return the region-local temporary checkpoint base for an executor output path.
+def temporary_checkpoint_base_path(
+    output_path: str,
+    ttl_days: int = TEMPORARY_CHECKPOINT_TTL_DAYS,
+    *,
+    temp_prefix: str | None = None,
+) -> str:
+    """Return the temporary checkpoint base, optionally on an explicit scratch destination.
 
     Objects under the base expire ``ttl_days`` after they are written. A running job's newest temporary
     checkpoint is at most one save interval old, so the TTL mainly bounds how long checkpoints left
@@ -134,6 +139,7 @@ def temporary_checkpoint_base_path(output_path: str, ttl_days: int = TEMPORARY_C
     temporary_root = marin_temp_bucket(
         ttl_days=ttl_days,
         source_prefix=output_path,
+        temp_prefix=temp_prefix,
     )
     return str(
         StoragePath(temporary_root)
