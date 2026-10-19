@@ -457,12 +457,12 @@ class _Recorder:
 
 
 async def _run_harness(
-    harness: Harness, context: HarnessContext, recorder: _Recorder, *, attempt: asyncio.Timeout | None
+    harness: Harness, context: HarnessContext, recorder: _Recorder, *, attempt_deadline: asyncio.Timeout | None
 ) -> tuple[RolloutOperation, BaseException] | None:
     """Run the harness under the turn deadlines, and return its failure. A token-contract violation propagates.
 
-    ``attempt`` is the engine's attempt deadline. After it expires, the session refuses requests, and the attempt
-    fails also when the harness caught the cancellation.
+    After the engine's ``attempt_deadline`` expires, the session refuses requests, and the attempt fails also
+    when the harness caught the cancellation.
     """
     failure: Exception | None = None
     recorder.turn_ended = time.monotonic()
@@ -470,7 +470,7 @@ async def _run_harness(
     total, tool = asyncio.timeout(None), asyncio.timeout(None)
     try:
         async with total, tool:
-            recorder.deadlines = _Deadlines(total, tool, attempt)
+            recorder.deadlines = _Deadlines(total, tool, attempt_deadline)
             try:
                 await harness.run(context, recorder)
             except Exception as error:
@@ -488,7 +488,7 @@ async def _run_harness(
         raise recorder.model_error
     if isinstance(failure, RolloutContractError):
         raise failure
-    if refused and attempt is not None and attempt.expired():
+    if refused and attempt_deadline is not None and attempt_deadline.expired():
         return RolloutOperation.ATTEMPT, TimeoutError("Attempt deadline expired")
     if recorder.model_error is not None and refused:
         return RolloutOperation.MODEL, recorder.model_error
@@ -528,7 +528,7 @@ async def harness_rollout(
     cleanup = _Cleanup(limits.cleanup_timeout)
     async with AsyncExitStack() as resources:
         context = HarnessContext(task, machine, events, _CleanupScope(resources, cleanup), run_id)
-        failure = await _run_harness(harness, context, recorder, attempt=None)
+        failure = await _run_harness(harness, context, recorder, attempt_deadline=None)
     rollout = recorder.rollout(run_id, {})
     if cleanup.errors:
         rollout = replace(rollout, metrics={**rollout.metrics, "cleanup_error_count": float(len(cleanup.errors))})

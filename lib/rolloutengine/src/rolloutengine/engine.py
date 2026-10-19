@@ -182,7 +182,7 @@ class RolloutEngine:
             events.emit(MachineReady(time.monotonic() - started))
         # The harness's resources close after grading, before the machines.
         context = HarnessContext(task, machine, events, _CleanupScope(resources, attempt.cleanup), attempt.run_id)
-        failure = await _run_harness(attempt.harness, context, attempt.recorder, attempt=deadline)
+        failure = await _run_harness(attempt.harness, context, attempt.recorder, attempt_deadline=deadline)
         # A model failure leaves the completed turns intact, so the engine grades them.
         if attempt.recorder.has_response and (failure is None or failure[0] == RolloutOperation.MODEL):
             try:
