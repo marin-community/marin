@@ -51,6 +51,7 @@ from levanter.kernels.pallas.fused_cross_entropy_loss.batched_xla import (
     linear_softmax_cross_entropy_loss_batched_xla,
 )
 from levanter.kernels.pallas.fused_cross_entropy_loss.config import BlockSizes
+from levanter.kernels.pallas.fused_cross_entropy_loss.grad_in_forward import linear_softmax_cross_entropy_weighted_sum
 from levanter.kernels.pallas.fused_cross_entropy_loss.xla import (
     linear_softmax_cross_entropy_loss_xla,
 )
@@ -71,12 +72,14 @@ HERO_B_BLOCK = 1_024
 @dataclass(frozen=True)
 class Variant:
     name: str
-    impl: str = "xla"  # "xla" | "batched_xla"
+    impl: str = "xla"  # "xla" | "batched_xla" | "grad_in_fwd"
     b_block_size: int = HERO_B_BLOCK
     v_block_size: int = HERO_V_BLOCK
     fast_backward: bool = False
     bwd_batch_block_size: Optional[int] = None
     bwd_v_block_size: Optional[int] = None
+    # grad_in_fwd only: rows per scan step; each step materializes [token_block, V] fp32 logits.
+    token_block: int = 0
     note: str = ""
 
 
@@ -111,6 +114,11 @@ VARIANTS: tuple[Variant, ...] = (
     ),
     # --- the GB10 ladder implementation as shipped, unmodified ---
     Variant("batched_xla", impl="batched_xla", note="existing GB10-keyed ladder; may raise on GB200"),
+    # --- Liger-style: the forward computes both gradients, so value+grad is 3 GEMMs, not 4.
+    # fwd_s times the loss-only primal, so only total_s is comparable to the other variants.
+    Variant("grad_in_fwd-tb4096", impl="grad_in_fwd", b_block_size=HERO_B, token_block=4096),
+    Variant("grad_in_fwd-tb8192", impl="grad_in_fwd", b_block_size=HERO_B, token_block=8192),
+    Variant("grad_in_fwd-tb16384", impl="grad_in_fwd", b_block_size=HERO_B, token_block=16384),
 )
 VARIANTS_BY_NAME = {v.name: v for v in VARIANTS}
 
@@ -184,8 +192,33 @@ def _make_inputs(b: int, h: int, v: int, dtype, seed: int):
     return jax.block_until_ready((x, w, labels))
 
 
+def _build_grad_in_forward_fns(token_block: int, labels: jax.Array):
+    """Mean CE through ``linear_softmax_cross_entropy_weighted_sum``, which computes its gradients in the forward.
+
+    Its undifferentiated call returns the scalar mean, so the correctness gate compares means.
+    """
+
+    def mean_loss(x, w):
+        total = linear_softmax_cross_entropy_weighted_sum(
+            x,
+            labels,
+            w,
+            jnp.ones(labels.shape, jnp.float32),
+            logsumexp_weight=None,
+            token_block_size=token_block,
+        )
+        return total / x.shape[0]
+
+    def forward(x, w):
+        return mean_loss(x, w), None
+
+    return jax.jit(forward), jax.jit(jax.value_and_grad(mean_loss, argnums=(0, 1)))
+
+
 def _build_fns(variant: Variant, labels: jax.Array):
     """Return (forward_only_fn, value_and_grad_fn)."""
+    if variant.impl == "grad_in_fwd":
+        return _build_grad_in_forward_fns(variant.token_block, labels)
     block_sizes = BlockSizes(b_block_size=variant.b_block_size, v_block_size=variant.v_block_size)
 
     def call(x, w):
@@ -507,12 +540,15 @@ def run_variant(variant: Variant, args) -> Result:
         base_fwd, _ = _build_fns(VARIANTS_BY_NAME["baseline"], labels)
         base_loss, _ = jax.block_until_ready(base_fwd(x, w))
         base_np = np.asarray(base_loss, dtype=np.float64)
+        # grad_in_fwd returns the mean loss, so its gate compares means.
+        per_token = loss_np.ndim == 1
+        base_np = base_np if per_token else base_np.mean()
         res.loss_bitwise_equal_vs_baseline = bool(np.array_equal(loss_np, base_np))
         res.loss_max_abs_diff_vs_baseline = float(np.abs(loss_np - base_np).max())
         del base_fwd, base_loss
 
         ref_loss, ref_gx, ref_gw = _fp32_reference(x, labels, w, args.check_chunk)
-        d = np.abs(loss_np - ref_loss)
+        d = np.abs(loss_np - (ref_loss if per_token else ref_loss.mean()))
         res.loss_max_abs_diff_vs_fp32 = float(d.max())
         res.loss_mean_abs_diff_vs_fp32 = float(d.mean())
         res.gx_max_abs_diff, res.gx_rel_rms = _diff(gx, ref_gx)

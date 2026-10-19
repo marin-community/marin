@@ -109,6 +109,7 @@ def build_diagnostic_run(
     restore_from: str | None = None,
     moe_implementation: str | None = None,
     gated_norm_implementation: GatedNormImplementation | None = None,
+    ce_grad_in_forward_token_block_size: int | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
@@ -173,6 +174,7 @@ def build_diagnostic_run(
             ("qk_mult", qk_mult),
             ("moe_implementation", moe_implementation),
             ("gated_norm_implementation", gated_norm_implementation),
+            ("ce_grad_in_forward_token_block_size", ce_grad_in_forward_token_block_size),
         )
         if value is not None
     }
@@ -433,6 +435,12 @@ def build_diagnostic_run(
     help="How each RMSNorm -> GatedNorm pair runs. Defaults to the hero spec.",
 )
 @click.option(
+    "--ce-grad-in-forward-token-block-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Compute the training cross-entropy's gradients in its forward, in blocks of this many rows per rank.",
+)
+@click.option(
     "--master-params",
     type=click.Choice([mode.value for mode in MasterParamMode]),
     default=HERO_MASTER_PARAM_MODE.value,
@@ -567,6 +575,7 @@ def main(
     latent_dim: int | None,
     moe_implementation: str | None,
     gated_norm_implementation: str | None,
+    ce_grad_in_forward_token_block_size: int | None,
     master_params: str,
     processes_per_task: int,
     save_checkpoints: bool,
@@ -607,6 +616,7 @@ def main(
         gated_norm_implementation=(
             None if gated_norm_implementation is None else GatedNormImplementation(gated_norm_implementation)
         ),
+        ce_grad_in_forward_token_block_size=ce_grad_in_forward_token_block_size,
         master_param_mode=MasterParamMode(master_params),
         processes_per_task=processes_per_task,
         save_checkpoints=save_checkpoints,
